@@ -1658,8 +1658,13 @@ func runInPostureTx(
 		return err
 	}
 	// Rollback, not Commit: nothing was written, and it must succeed even if
-	// ctx is already done.
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	// ctx is already done. It is bounded on its own; pgx closes the connection
+	// when it cannot finish.
+	defer func() {
+		rollbackCtx, cancel := detachedPostureContext(ctx, postureDiagnoseTimeout)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
 	if _, err := tx.Exec(ctx, "SELECT set_config('statement_timeout', $1, true)",
 		strconv.FormatInt(timeout.Milliseconds(), 10)); err != nil {
 		return err
@@ -1688,6 +1693,30 @@ func queryPostureAnswer(
 // on a detached context of its own.
 const postureDiagnoseTimeout = 5 * time.Second
 
+// postureOwnerKey carries the lifetime of the CachedPostureCheck that runs a
+// posture statement (its Close cancels it).
+type postureOwnerKey struct{}
+
+func withPostureOwner(owner context.Context) context.Context {
+	return context.WithValue(owner, postureOwnerKey{}, owner)
+}
+
+// detachedPostureContext is a context with its own timeout for a step that must
+// outlive ctx's deadline (the rollback, the diagnostic pass after a refusal). It
+// still ends when the CachedPostureCheck running the step is closed.
+func detachedPostureContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	owner, ok := ctx.Value(postureOwnerKey{}).(context.Context)
+	if !ok {
+		return detached, cancel
+	}
+	stop := context.AfterFunc(owner, cancel)
+	return detached, func() {
+		stop()
+		cancel()
+	}
+}
+
 // firstPostureMismatch names the first declared-vs-actual gap behind a
 // refusal, in the redacted PostureGap.String form (checked-in table and column
 // names plus SQL privilege keywords only -- safe to log and to wrap into a
@@ -1697,7 +1726,7 @@ const postureDiagnoseTimeout = 5 * time.Second
 // rolePostureQuery does (ownership, database-level and River-schema
 // privileges), so an empty result is reported as such, never as "no problem".
 func firstPostureMismatch(ctx context.Context, pool *pgxpool.Pool, expectedRole string, posture RolePosture) string {
-	diagnoseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), postureDiagnoseTimeout)
+	diagnoseCtx, cancel := detachedPostureContext(ctx, postureDiagnoseTimeout)
 	defer cancel()
 	if mismatch := identityMismatchForDiagnosis(ctx, pool, expectedRole); mismatch != "" {
 		return mismatch

@@ -3,6 +3,7 @@ package schedulerservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"log/slog"
@@ -60,6 +61,13 @@ type postgresSchedulerDatabase struct {
 	queueProbe       postgres.LazyProbeCheck
 	coordinatorProbe postgres.LazyProbeCheck
 	riverSchemaProbe postgres.LazyProbeCheck
+	// postures are the cached domain posture checks handed out by DomainPostureCheck; Close seals the
+	// list (a later DomainPostureCheck answers ErrUnavailable) and stops them. A second Close waits for
+	// the first (closeOnce).
+	posturesMu     sync.Mutex
+	posturesClosed bool
+	postures       []*postgres.CachedPostureCheck
+	closeOnce      sync.Once
 }
 
 // openSchedulerDatabase opts into the coordinator boundary via
@@ -149,10 +157,19 @@ func (database *postgresSchedulerDatabase) DomainPostureCheck(logger *slog.Logge
 	if database == nil || database.pools == nil || database.pools.Domain == nil {
 		return nil
 	}
-	return postgres.NewCachedPostureCheck(
+	database.posturesMu.Lock()
+	defer database.posturesMu.Unlock()
+	if database.posturesClosed {
+		return func(context.Context) error {
+			return fmt.Errorf("%w: domain posture check closed", postgres.ErrUnavailable)
+		}
+	}
+	check := postgres.NewCachedPostureCheck(
 		database.pools.ReadinessPool(), database.domainRole, database.riverSchema, postgres.DomainPosture(),
 		postgres.PostureCheckOptions{Logger: logger},
-	).Check
+	)
+	database.postures = append(database.postures, check)
+	return check.Check
 }
 
 // ReadinessPool is the one-connection probe pool every domain-role readiness
@@ -274,8 +291,28 @@ func (database *postgresSchedulerDatabase) CoordinatorPool() (*pgxpool.Pool, err
 	return database.pools.CoordinatorPool()
 }
 
+// Close stops the readiness checks (each running one ends and logs first), then closes the pools
+// they run on.
 func (database *postgresSchedulerDatabase) Close() {
-	if database != nil && database.pools != nil {
+	if database == nil {
+		return
+	}
+	database.closeOnce.Do(database.close)
+}
+
+func (database *postgresSchedulerDatabase) close() {
+	database.posturesMu.Lock()
+	database.posturesClosed = true
+	postures := database.postures
+	database.postures = nil
+	database.posturesMu.Unlock()
+	database.queueProbe.Close()
+	database.coordinatorProbe.Close()
+	database.riverSchemaProbe.Close()
+	for _, check := range postures {
+		check.Close()
+	}
+	if database.pools != nil {
 		database.pools.Close()
 	}
 }
@@ -929,6 +966,13 @@ func (component schedulerRuntime) Start(ctx context.Context) error {
 	}
 	component.fixedGate.attach(component.fixedLoop)
 	return nil
+}
+
+// Release closes the database when the runtime never started this component.
+func (component schedulerRuntime) Release() {
+	if component.database != nil {
+		component.database.Close()
+	}
 }
 
 // Shutdown stops whichever loops are running and always closes the database,

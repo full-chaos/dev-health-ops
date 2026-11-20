@@ -34,6 +34,7 @@ func phasePipeline(t *testing.T, materializer func(context.Context) error) *Muta
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
+		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {

@@ -250,10 +250,14 @@ func executeBreakdownRaw(ctx context.Context, client QueryClient, q compiledQuer
 
 	var out []breakdownRow
 	for rows.Next() {
-		var dimValue string
+		var dimValueValue *string
 		var value *float64 // nullable scan destination -- see breakdownRow.Value's doc comment (CHAOS-4650)
-		if scanErr := rows.Scan(&dimValue, &value); scanErr != nil {
+		if scanErr := rows.Scan(&dimValueValue, &value); scanErr != nil {
 			return nil, fmt.Errorf("scan: %w", scanErr)
+		}
+		var dimValue string
+		if dimValueValue != nil {
+			dimValue = *dimValueValue
 		}
 		out = append(out, breakdownRow{DimensionValue: dimValue, Value: value})
 	}

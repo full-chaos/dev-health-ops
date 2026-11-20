@@ -149,7 +149,7 @@ func (handler PagerDutyOnCallsRouteHandler) Collect(
 	counted.Doer = pagerDutyOnCallsCountingDoer{delegate: client.Doer, attempts: &requests}
 	pages, err := providerfoundation.CollectPagerDutyOffsetPages(
 		ctx, &counted, providerfoundation.PagerDutyOffsetOptions{
-			Path: "/oncalls", Route: "/oncalls", DataKey: "oncalls", PerPage: perPage, MaxPages: maxPages,
+			Path: "/oncalls", Route: pagerDutyOnCallsRoute, DataKey: "oncalls", PerPage: perPage, MaxPages: maxPages,
 		},
 	)
 	if err != nil {
@@ -160,9 +160,9 @@ func (handler PagerDutyOnCallsRouteHandler) Collect(
 	}
 	rows := make([]pagerDutyOnCallRow, 0, len(pages.Items))
 	for _, raw := range pages.Items {
-		var payload pagerDutyOnCallPayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+		payload, err := decodePagerDutyOnCallItem(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(pagerDutyOnCallsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		row, err := normalizePagerDutyOnCall(
 			claim, providerInstance, payload, normalizedAt,
@@ -388,3 +388,14 @@ func fillPagerDutyOnCallOrdering(row *pagerDutyOnCallRow) error {
 }
 
 var _ CompleteRouteHandler = PagerDutyOnCallsRouteHandler{}
+
+// pagerDutyOnCallsRoute is the route template of the /oncalls list.
+const pagerDutyOnCallsRoute = "/oncalls"
+
+func decodePagerDutyOnCallItem(raw json.RawMessage) (pagerDutyOnCallPayload, error) {
+	var payload pagerDutyOnCallPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
+}

@@ -54,7 +54,7 @@ func shape(t *testing.T, markdown string) (string, string) {
 }
 
 // inlineSite is one free-text field; forms are the shapes the value takes in the report (a section name shows as a
-// title-cased heading and as the raw provenance id), marker a value that survives each form.
+// heading and as the raw provenance id), marker a value that survives each form.
 var entityPattern = regexp.MustCompile(`^&(#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]*);`)
 
 // decodeInline reads text as a CommonMark reader does: a backslash before ASCII punctuation is that character, and an
@@ -83,16 +83,13 @@ type inlineSite struct {
 }
 
 func plainFold(value string) string { return strings.TrimSpace(markdownLineBreaks.Replace(value)) }
-func titled(value string) string    { return titleCase(plainFold(value)) }
 
 func inlineSites() []inlineSite {
 	raw := []func(string) string{plainFold}
-	title := []func(string) string{titled}
-	both := []func(string) string{titled, plainFold}
 	return []inlineSite{
-		{"report type", "Mark0", func(p *Plan, _ *ChartResult, v string) { p.ReportType = v }, title},
+		{"report type", "Mark0", func(p *Plan, _ *ChartResult, v string) { p.ReportType = v }, raw},
 		{"window", "Mark0", func(p *Plan, _ *ChartResult, v string) { p.TimeRangeStart, p.TimeRangeEnd = v, v }, raw},
-		{"section", "mark0", func(p *Plan, _ *ChartResult, v string) { p.Sections = append(p.Sections, v) }, both},
+		{"section", "mark0", func(p *Plan, _ *ChartResult, v string) { p.Sections = append(p.Sections, v) }, raw},
 		{"chart title", "Mark0", func(_ *Plan, c *ChartResult, v string) { c.Title = v }, raw},
 		{"not applicable", "Mark0", func(_ *Plan, c *ChartResult, v string) { c.NotApplicable = v }, raw},
 		{"note", "Mark0", func(_ *Plan, c *ChartResult, v string) { c.Note = v }, raw},
@@ -104,7 +101,7 @@ func inlineSites() []inlineSite {
 		}, raw},
 		{"provenance artifact id", "Mark0", func(_ *Plan, c *ChartResult, v string) { c.Spec.ChartID = v }, raw},
 		{"provenance source", "Mark0", func(_ *Plan, c *ChartResult, v string) { c.SourceTable = v }, raw},
-		{"metric name", "mark0", func(_ *Plan, c *ChartResult, v string) { c.Spec.Metric = v }, both},
+		{"metric name", "mark0", func(_ *Plan, c *ChartResult, v string) { c.Spec.Metric = v }, raw},
 		{"team scope", "Mark0", func(p *Plan, _ *ChartResult, v string) { p.ScopeTeams = []string{v} }, raw},
 		{"repo scope", "Mark0", func(p *Plan, _ *ChartResult, v string) { p.ScopeRepos = []string{v} }, raw},
 		{"service scope", "Mark0", func(p *Plan, _ *ChartResult, v string) { p.ScopeServices = []string{v} }, raw},
@@ -237,12 +234,12 @@ func TestRenderFreeTextShowsEdgeTrimmed(t *testing.T) {
 	}
 }
 
-// The title-cased fields (custom report type, section name, fallback metric name) show title-case(value): the escaper
-// makes that text literal, and the existing title-case rule (lower case, "_" as a space) still applies first.
-func TestRenderTitleCasedFieldsShowTitleCaseOfTheValue(t *testing.T) {
+// The custom report type, section name and fallback metric name show as written: the escaper makes the text literal,
+// and no title-case rule applies to it (the literal cells are in render_literal_free_text_test.go).
+func TestRenderCustomNamesShowTheValueAsWritten(t *testing.T) {
 	const value = "Release _Candidate_ *x*"
 	want := map[string]string{
-		"report type": "\n# Release Candidate \\*x\\* Report — ", "section": "\n## Release Candidate \\*x\\*\n", "metric name": "Release Candidate \\*x\\* appears near",
+		"report type": "\n# Release \\_Candidate\\_ \\*x\\* Report — ", "section": "\n## Release \\_Candidate\\_ \\*x\\*\n", "metric name": "Release \\_Candidate\\_ \\*x\\* appears near",
 	}
 	for _, site := range inlineSites() {
 		fragment, ok := want[site.name]

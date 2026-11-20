@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 )
@@ -267,15 +268,15 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 			if metricName == "" {
 				metricName = "n/a"
 			}
-			lines = append(lines, fmt.Sprintf("- **%s:%s** — sources: %s; metrics: %s",
-				markdownText(trimMarkdownEdge(record.ArtifactType)), markdownText(trimMarkdownEdge(record.ArtifactID)), markdownText(source), markdownText(metricName)))
+			lines = append(lines, fmt.Sprintf("- %s — sources: %s; metrics: %s",
+				wrapEmphasis("**", markdownText(trimMarkdownEdge(record.ArtifactType))+":"+markdownText(trimMarkdownEdge(record.ArtifactID))), markdownText(source), markdownText(metricName)))
 		}
 	}
 	scope := formatScope(plan)
 	generated := strings.TrimSuffix(plan.CreatedAt.UTC().Format(time.RFC3339), "Z") + "+00:00"
 	lines = append(lines, "", "---",
 		fmt.Sprintf("Generated at %s | Confidence: %s | Scope: %s", generated, markdownText(plan.ConfidenceThreshold), scope))
-	return strings.TrimSpace(strings.Join(lines, "\n")) + "\n"
+	return trimMarkdownEdge(strings.Join(lines, "\n")) + "\n"
 }
 
 func renderChart(chart ChartResult) string {
@@ -337,13 +338,22 @@ func asciiAlnum(r rune) bool {
 	return r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
 }
 
-// emphasisLine writes "_label: value_". Surrounding space of the value is dropped: a closing "_" after a space does
-// not close the emphasis and the line would show its underscores.
+// emphasisLine writes "_label: value_". A closing "_" after Unicode space does not close the emphasis, so edge
+// space of the text is written outside the delimiters (wrapEmphasis).
 func emphasisLine(label, value string) string {
-	if value = trimMarkdownEdge(markdownLineBreaks.Replace(value)); value == "" {
+	value = trimMarkdownEdge(markdownLineBreaks.Replace(value))
+	if value == "" {
 		return "_" + label + ":_"
 	}
-	return "_" + label + ": " + markdownText(value) + "_"
+	return wrapEmphasis("_", label+": "+markdownText(value))
+}
+
+// wrapEmphasis puts delim around inner with its leading and trailing Unicode space outside: GFM opens a span only
+// before non-space and closes it only after non-space, and it shows NBSP and narrow NBSP.
+func wrapEmphasis(delim, inner string) string {
+	rest := strings.TrimLeftFunc(inner, unicode.IsSpace)
+	core := strings.TrimRightFunc(rest, unicode.IsSpace)
+	return inner[:len(inner)-len(rest)] + delim + core + delim + rest[len(core):]
 }
 
 // markdownListStart writes the first text of a list item as one table-cell escaped label, with leading space dropped

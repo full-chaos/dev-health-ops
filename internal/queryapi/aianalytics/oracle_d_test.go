@@ -181,12 +181,11 @@ func (f *fixtureClientD) Query(_ context.Context, st string, b []clickhouse.Bind
 	case strings.Contains(st, "title_prefix"):
 		var rows [][]any
 		for _, m := range c.Rep {
-			// The recorded Python rows carry no cluster_author, cluster_work_type or cluster_anchor (the Python read
-			// did not select them): they read as "", "" and 0.
-			author, _ := m["cluster_author"].(string)
+			// The recorded Python rows carry no cluster_work_type or cluster_anchor (the Python read did not select
+			// them): they read as "" and 0.
 			workType, _ := m["cluster_work_type"].(string)
 			anchor, _ := m["cluster_anchor"].(float64)
-			rows = append(rows, []any{m["repo_id"].(string), m["title_prefix"].(string), uint64(m["prs_total"].(float64)), strList(m["pr_refs"]), author, workType, uint32(anchor)})
+			rows = append(rows, []any{m["repo_id"].(string), m["title_prefix"].(string), uint64(m["prs_total"].(float64)), strList(m["pr_refs"]), workType, uint32(anchor)})
 		}
 		return &scriptedRows{rows: rows}, nil
 	case strings.Contains(st, "LEFT ANTI JOIN"):

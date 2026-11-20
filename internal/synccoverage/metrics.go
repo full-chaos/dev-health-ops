@@ -169,3 +169,84 @@ func (m *FoldedKeyResolutionMetrics) WritePrometheus(writer io.Writer) error {
 	}
 	return nil
 }
+
+// Backfill resolution outcomes: how a coverage build resolved each backfill_jobs row of the config.
+const (
+	backfillOutcomeSyncRun             = "sync_run"
+	backfillOutcomeOccurrence          = "occurrence"
+	backfillOutcomeOccurrenceUnplanned = "occurrence_unplanned"
+	backfillOutcomeUnresolved          = "unresolved"
+)
+
+var backfillResolutionOutcomes = []string{
+	backfillOutcomeOccurrence, backfillOutcomeOccurrenceUnplanned, backfillOutcomeSyncRun, backfillOutcomeUnresolved,
+}
+
+// BackfillResolutionMetrics counts, per projection read, the backfill jobs a coverage build read, by how it resolved
+// them to a run (CHAOS-14298). Jobs the build does not read (no enabled scope source, before the history cutoff) are
+// not counted. occurrence_unplanned (no run planned for an admin backfill's occurrence) and unresolved (no run marker
+// at all) are the read jobs coverage cannot read units for.
+type BackfillResolutionMetrics struct {
+	mu       sync.Mutex
+	outcomes map[string]uint64
+}
+
+var backfillResolutionMetrics = NewBackfillResolutionMetrics()
+
+func NewBackfillResolutionMetrics() *BackfillResolutionMetrics {
+	return &BackfillResolutionMetrics{outcomes: make(map[string]uint64)}
+}
+
+// BackfillResolutionMetricsSource returns the process-wide backfill resolution counters as a
+// health.MetricsSource-shaped value.
+func BackfillResolutionMetricsSource() *BackfillResolutionMetrics { return backfillResolutionMetrics }
+
+func (m *BackfillResolutionMetrics) observe(outcomes map[string]int) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, outcome := range backfillResolutionOutcomes {
+		if count := outcomes[outcome]; count > 0 {
+			m.outcomes[outcome] += uint64(count)
+		}
+	}
+}
+
+// outcomeCount reports the counter value for one outcome. Test-facing.
+func (m *BackfillResolutionMetrics) outcomeCount(outcome string) uint64 {
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.outcomes[outcome]
+}
+
+func (m *BackfillResolutionMetrics) WritePrometheus(writer io.Writer) error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	snapshot := make(map[string]uint64, len(backfillResolutionOutcomes))
+	for _, outcome := range backfillResolutionOutcomes {
+		snapshot[outcome] = m.outcomes[outcome]
+	}
+	m.mu.Unlock()
+
+	if _, err := io.WriteString(writer,
+		"# HELP dev_health_sync_coverage_backfill_resolutions_total "+
+			"Backfill jobs a sync coverage build resolved, by outcome (sync_run, occurrence, occurrence_unplanned, unresolved).\n"+
+			"# TYPE dev_health_sync_coverage_backfill_resolutions_total counter\n"); err != nil {
+		return err
+	}
+	for _, outcome := range backfillResolutionOutcomes {
+		if _, err := fmt.Fprintf(writer,
+			"dev_health_sync_coverage_backfill_resolutions_total{outcome=%q} %d\n",
+			outcome, snapshot[outcome]); err != nil {
+			return err
+		}
+	}
+	return nil
+}

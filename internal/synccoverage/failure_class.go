@@ -34,7 +34,7 @@ func FailureClass(err error) string {
 		return "config_not_found"
 	case errors.Is(err, ErrPoolUnavailable):
 		return "pool_unavailable"
-	case errors.As(err, &limit):
+	case errors.As(err, &limit) && limit != nil:
 		return limit.Bound + "_limit"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "deadline_exceeded"
@@ -103,7 +103,7 @@ func (limit *LimitError) Error() string {
 // FailureDetail is the loggable text of a rebuild failure: a LimitError's text, else "".
 func FailureDetail(err error) string {
 	var limit *LimitError
-	if errors.As(err, &limit) {
+	if errors.As(err, &limit) && limit != nil {
 		return limit.Error()
 	}
 	return ""

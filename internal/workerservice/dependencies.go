@@ -968,6 +968,11 @@ func configureWorkerDependenciesWithSources(
 		dependencies.close()
 		return nil, err
 	}
+	// CHAOS-14298: same registration shape; backfill jobs a coverage build could not read units for.
+	if err := registry.RegisterMetrics("sync_coverage_backfill_resolution", synccoverage.BackfillResolutionMetricsSource()); err != nil {
+		dependencies.close()
+		return nil, err
+	}
 	// CHAOS-4806 (ruling R73): same process-wide-singleton-needs-registration
 	// shape as the writer counters above -- internal/jobs/metrics/finite is
 	// the ONE non-finite-value write boundary every metric writer and

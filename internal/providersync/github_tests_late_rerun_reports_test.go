@@ -318,7 +318,7 @@ func TestGitHubTestsLateRerunRefusesBadSettings(t *testing.T) {
 
 // lateRerunLooseDoer is a GitHub whose created filter is loose on the deep range: a deep listing answers every run. Each route
 // must still read a run created at or after the regular floor only once, in the regular range.
-// With every set, every listing is loose, not only the deep one. A run created at the zero time is served with created_at null.
+// With every set, every listing is loose, not only the deep one. A zero created or updated time is served as null.
 type lateRerunLooseDoer struct {
 	*listingFake
 	deep  *int
@@ -346,7 +346,8 @@ func (doer lateRerunLooseDoer) Do(request *http.Request) (*http.Response, error)
 	if err != nil {
 		return nil, err
 	}
-	response.Body = io.NopCloser(strings.NewReader(strings.ReplaceAll(string(body), `"created_at":"0001-01-01T00:00:00Z"`, `"created_at":null`)))
+	undated := strings.NewReplacer(`"created_at":"0001-01-01T00:00:00Z"`, `"created_at":null`, `"updated_at":"0001-01-01T00:00:00Z"`, `"updated_at":null`)
+	response.Body = io.NopCloser(strings.NewReader(undated.Replace(string(body))))
 	return response, nil
 }
 
@@ -457,6 +458,48 @@ func TestGitHubTestsLateRerunDeepRangeResumeInsideAPageIsFree(t *testing.T) {
 		stops := lateRerunIncompleteOf(githubTestsSaturatedObservations(walk.cursor), githubTestsLateRerunReportsComponent)
 		if len(stops) != 0 || fake.artifactGets[late.id] != 1 {
 			t.Errorf("chunk %d: stops=%+v late reads=%d, want no stop (3 pages on a 3-page budget) and 1 read", chunk, stops, fake.artifactGets[late.id])
+		}
+	}
+}
+
+// A run with no last-updated time is never read by the deep range (no late change can be shown), on either route; the regular
+// range still reads it (its rule never excludes a run it cannot date), on either route.
+func TestGitHubTestsLateRerunNilUpdatedIsNotReadByTheDeepRange(t *testing.T) {
+	deep := listingRun{id: 12, created: time.Date(2026, 7, 1, 0, 50, 0, 0, time.UTC), startedAt: time.Date(2026, 7, 4, 1, 0, 0, 0, time.UTC), status: "completed", conclusion: "success"}
+	inWindow := listingRun{id: 13, created: time.Date(2026, 7, 4, 22, 5, 0, 0, time.UTC), status: "completed", conclusion: "success"}
+	owning := lateRerunClaim(time.Date(2026, 7, 4, 23, 0, 0, 0, time.UTC), time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC))
+	regular := lateRerunClaim(time.Date(2026, 7, 4, 22, 0, 0, 0, time.UTC), time.Date(2026, 7, 4, 23, 0, 0, 0, time.UTC))
+	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	for _, cell := range []struct {
+		name  string
+		claim Claim
+		run   listingRun
+		want  int
+	}{
+		{"deep range", owning, deep, 0},
+		{"regular range unchanged", regular, inWindow, 1},
+	} {
+		for _, route := range []string{"chunked", "oracle"} {
+			t.Run(cell.name+"/"+route, func(t *testing.T) {
+				fake, listedDeep := newListingFake(t, []listingRun{cell.run}), 0
+				client := githubTestsClient(t, fakehttp.Client(lateRerunLooseDoer{listingFake: fake, deep: &listedDeep}))
+				var err error
+				if route == "chunked" {
+					err = (GitHubTestsRouteHandler{}).CollectChunks(context.Background(), cell.claim, providerfoundation.Credential{}, client, now, "",
+						func(ChunkRouteEmission) error { return nil })
+				} else {
+					_, err = (GitHubTestsRouteHandler{}).Collect(context.Background(), cell.claim, providerfoundation.Credential{}, client, now)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if cell.want == 0 && listedDeep != 1 {
+					t.Fatalf("deep listings=%d, want the deep listing to answer the run", listedDeep)
+				}
+				if fake.artifactGets[cell.run.id] != cell.want {
+					t.Errorf("reads=%d, want %d", fake.artifactGets[cell.run.id], cell.want)
+				}
+			})
 		}
 	}
 }

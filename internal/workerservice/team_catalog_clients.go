@@ -724,7 +724,7 @@ func recordSyncRunDegradedLegs(pool *pgxpool.Pool) func(ctx context.Context, org
 		}
 		tag, err := pool.Exec(ctx, `
 UPDATE public.sync_runs
-SET result = (COALESCE(result::jsonb, '{}'::jsonb) || jsonb_build_object('degraded', $3::jsonb))::json
+SET result = (CASE WHEN jsonb_typeof(result::jsonb) = 'object' THEN result::jsonb ELSE '{}'::jsonb END || jsonb_build_object('degraded', $3::jsonb))::json
 WHERE id = $1::uuid AND org_id = $2`, runID, orgID, string(payload))
 		if err != nil {
 			return err

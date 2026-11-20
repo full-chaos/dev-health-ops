@@ -121,3 +121,38 @@ func TestRebuildFailuresOnARealPoolAreClassed(t *testing.T) {
 		}
 	}
 }
+
+func TestIsDeterministicFailureWalksTheErrorTree(t *testing.T) {
+	t.Parallel()
+	limit := newLimitError("compact_window", 30002, maxCompactWindows)
+	pgErr := &pgconn.PgError{Code: "40001"}
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"nil":                       {nil, false},
+		"flags":                     {ErrInvalidProcessorFlags, true},
+		"flags wrapped":             {fmt.Errorf("x: %w", ErrInvalidProcessorFlags), true},
+		"not found wrapped":         {fmt.Errorf("lock: %w", ErrConfigNotFound), true},
+		"limit":                     {limit, true},
+		"limit wrapped":             {fmt.Errorf("build: %w", limit), true},
+		"typed nil limit":           {(*LimitError)(nil), false},
+		"pool unavailable":          {fmt.Errorf("x: %w", ErrPoolUnavailable), false},
+		"postgres":                  {fmt.Errorf("x: %w", pgErr), false},
+		"deadline":                  {fmt.Errorf("x: %w", context.DeadlineExceeded), false},
+		"canceled":                  {fmt.Errorf("x: %w", context.Canceled), false},
+		"eof":                       {io.EOF, false},
+		"other":                     {errors.New("other"), false},
+		"decode":                    {fmt.Errorf("x: %w", &json.SyntaxError{}), false},
+		"join not found + eof":      {errors.Join(ErrConfigNotFound, io.EOF), false},
+		"join not found + limit":    {errors.Join(ErrConfigNotFound, limit), true},
+		"wrapped join flags + pg":   {fmt.Errorf("%w", errors.Join(ErrInvalidProcessorFlags, pgErr)), false},
+		"wrapped join flags + flag": {fmt.Errorf("%w", errors.Join(ErrInvalidProcessorFlags, ErrConfigNotFound)), true},
+		"multi %w mixed":            {fmt.Errorf("%w and %w", ErrConfigNotFound, io.EOF), false},
+		"empty join":                {errors.Join(), false},
+	} {
+		if got := IsDeterministicFailure(tc.err); got != tc.want {
+			t.Errorf("%s: IsDeterministicFailure = %v, want %v", name, got, tc.want)
+		}
+	}
+}

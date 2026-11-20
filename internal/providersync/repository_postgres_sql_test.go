@@ -74,7 +74,7 @@ func TestProviderBudgetContentionStampIsDistinctAndDurable(t *testing.T) {
 		"status = 'dispatching'",
 		"attempts = GREATEST(unit.attempts - 1, 0)",
 		"available_at = $4",
-		"COALESCE(unit.result::jsonb, jsonb_build_object()) ||",
+		"CASE WHEN jsonb_typeof(unit.result::jsonb) = 'object' THEN unit.result::jsonb ELSE jsonb_build_object() END ||",
 		"'error_category', 'provider_budget_contention'",
 		"'provider_budget_contention_deferrals'",
 		"first_blocked_at = COALESCE(unit.first_blocked_at, $3)",

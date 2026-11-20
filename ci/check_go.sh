@@ -1788,8 +1788,8 @@ GO_RACE_SOLO="${GO_RACE_SOLO:-${ROOT}/ci/go_race_solo.tsv}"
 # CHAOS-13833: race-leg test-name parts. ci/go_race_splits.tsv (package<TAB>parts) cuts a package into parts by
 # ci/go_race_split_weights.tsv (package<TAB>TestName<TAB>seconds: the largest hosted race time of each top-level test), with the
 # cutter of the test legs; a listed test with no row goes to the last part (never dropped). A part runs alone after the leg's
-# other packages and before its solo packages, and a top-level test of 30 s or more with no row fails the leg
-# (ci/go_race_unweighted_slow.awk).
+# other packages and before its solo packages, and a top-level test of 45 s or more with no row fails the leg (30 s up to 45 s warns
+# and prints the row to add; DEV_HEALTH_GO_RACE_UNWEIGHTED_FAIL_SECONDS, CHAOS-14277) (ci/go_race_unweighted_slow.awk).
 GO_RACE_SPLITS="${GO_RACE_SPLITS:-${ROOT}/ci/go_race_splits.tsv}"
 GO_RACE_SPLIT_WEIGHTS="${GO_RACE_SPLIT_WEIGHTS:-${ROOT}/ci/go_race_split_weights.tsv}"
 # CHAOS-13958: the race plan weighs a leg's race parts and solo packages as serial time after its parallel batch (ci/go_race_shard.awk
@@ -1873,7 +1873,7 @@ check_providersync_race_shard() {
       | tee "${json}" \
       | jq -rj 'select(.Action == "output") | .Output'
   ) || run_rc=$?
-  awk -v weights="${weights}" -v thresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${weights#"${ROOT}/"}" \
+  awk -v weights="${weights}" -v thresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS:-30}" -v failthresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_FAIL_SECONDS:-45}" -v summary="${GITHUB_STEP_SUMMARY:-}" -v label="${weights#"${ROOT}/"}" \
     -f "${GO_RACE_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_race_unweighted_slow.awk}" "${json}" || guard_rc=$?
   [ "${run_rc}" -ge "${guard_rc}" ] || run_rc="${guard_rc}"
   return "${run_rc}"
@@ -2046,7 +2046,7 @@ check_race_shard() {
         go_test_leg "${racelog}" "${partjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" -run "^($(printf '%s\n' "${names}" | paste -sd'|' -))\$" "${pkg}"
       ) || { cat -- "${partjson}" >>"${legjson}"; rm -f -- "${racelog}" "${partjson}"; return 1; }
       awk -v weights=<(awk -F'\t' -v k="${key}" '!/^#/ && $1 == k { print $2 "\t" $3 }' "${GO_RACE_SPLIT_WEIGHTS}") \
-        -v thresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${GO_RACE_SPLIT_WEIGHTS#"${ROOT}/"} (${key})" \
+        -v thresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS:-30}" -v failthresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_FAIL_SECONDS:-45}" -v summary="${GITHUB_STEP_SUMMARY:-}" -v rowprefix="${key}"$'\t' -v rowunit=s -v label="${GO_RACE_SPLIT_WEIGHTS#"${ROOT}/"} (${key})" \
         -f "${GO_RACE_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_race_unweighted_slow.awk}" "${partjson}" \
         || { cat -- "${partjson}" >>"${legjson}"; rm -f -- "${racelog}" "${partjson}"; return 1; }
       cat -- "${partjson}" >>"${legjson}" || die "cannot append the race part's go test -json to ${legjson}"

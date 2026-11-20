@@ -51,7 +51,21 @@ const (
 // holds a deadline or any other failure is a failure, and so is a tree too
 // large to read to its end.
 func clientCancelled(ctx context.Context, err error) bool {
-	if ctx == nil || err == nil || !errors.Is(ctx.Err(), context.Canceled) {
+	if ctx == nil {
+		return false
+	}
+	return clientCancelledAt(ctx.Err(), err)
+}
+
+// clientCancelledAt is clientCancelled for a read whose end was judged with
+// the context state ctxErr seen when it ended, not the state at report time.
+// An error that a read ended as a failure (endedAsFailure) stays one.
+func clientCancelledAt(ctxErr, err error) bool {
+	if err == nil || !errors.Is(ctxErr, context.Canceled) {
+		return false
+	}
+	var failed *endedAsFailure
+	if logging.ErrorAs(err, &failed) {
 		return false
 	}
 	leaves, complete := logging.ErrorLeaves(err)
@@ -90,7 +104,13 @@ func defaultRecordClientCancel(ctx context.Context, phase string, attrs ...any) 
 // phase reported already (ClientCancelReported) is not reported again: one
 // read shared by several phases is one report.
 func reportedAsClientCancel(ctx context.Context, err error, phase string, attrs ...any) bool {
-	if !clientCancelled(ctx, err) {
+	return reportedAsClientCancelAt(ctx, ctx.Err(), err, phase, attrs...)
+}
+
+// reportedAsClientCancelAt is reportedAsClientCancel for a read that ended
+// when the context state was ctxErr.
+func reportedAsClientCancelAt(ctx context.Context, ctxErr, err error, phase string, attrs ...any) bool {
+	if !clientCancelledAt(ctxErr, err) {
 		return false
 	}
 	if !ClientCancelReported(err) {
@@ -111,6 +131,28 @@ func (r *reportedClientCancel) Unwrap() error { return r.err }
 // and returns it marked as reported; any other err is returned as it is.
 func markedIfClientCancel(ctx context.Context, err error, phase string, attrs ...any) error {
 	if !reportedAsClientCancel(ctx, err, phase, attrs...) {
+		return err
+	}
+	return &reportedClientCancel{err: err}
+}
+
+// endedAsFailure marks an error of a read that ended as a failure while the
+// request was still alive: a client that leaves afterwards does not turn it
+// into a cancel (a server-side 394, for one).
+type endedAsFailure struct{ err error }
+
+func (f *endedAsFailure) Error() string { return f.err.Error() }
+func (f *endedAsFailure) Unwrap() error { return f.err }
+
+// markedIfClientCancelAt is markedIfClientCancel for a read that ended when
+// the context state was ctxErr. Any other error comes back as it is, marked
+// as a failure when the read ended on a live request: a client that leaves
+// later, also after this report, does not turn it into a cancel.
+func markedIfClientCancelAt(ctx context.Context, ctxErr, err error, phase string, attrs ...any) error {
+	if !reportedAsClientCancelAt(ctx, ctxErr, err, phase, attrs...) {
+		if ctxErr == nil {
+			return &endedAsFailure{err: err}
+		}
 		return err
 	}
 	return &reportedClientCancel{err: err}

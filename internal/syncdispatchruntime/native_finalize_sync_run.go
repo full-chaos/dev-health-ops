@@ -449,6 +449,9 @@ VALUES ($1::uuid, $2, $3::uuid, $4, $5)`,
 	}
 
 	if committed, err := commit(); err != nil {
+		if errors.Is(err, ErrFinalizeSyncRunUnavailable) {
+			return err
+		}
 		return ErrFinalizeSyncRunUnavailable
 	} else if !committed {
 		return nil

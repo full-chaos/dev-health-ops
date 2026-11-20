@@ -14,9 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -31,9 +29,11 @@ import (
 type commitLockSQLKey struct{}
 
 type commitLockTracer struct {
-	mu     sync.Mutex
-	busy   int
-	onBusy func()
+	mu                  sync.Mutex
+	busy                int
+	onBusy              func()
+	rollbacks           int
+	onSavepointRollback func()
 }
 
 func (tracer *commitLockTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
@@ -42,6 +42,16 @@ func (tracer *commitLockTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn
 
 func (tracer *commitLockTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
 	sql, _ := ctx.Value(commitLockSQLKey{}).(string)
+	if data.Err == nil && strings.HasPrefix(sql, "rollback to savepoint") {
+		tracer.mu.Lock()
+		tracer.rollbacks++
+		first, onRollback := tracer.rollbacks == 1, tracer.onSavepointRollback
+		tracer.mu.Unlock()
+		if first && onRollback != nil {
+			onRollback()
+		}
+		return
+	}
 	var pgErr *pgconn.PgError
 	if !isCommitCheck(sql) || !errors.As(data.Err, &pgErr) || pgErr.Code != "55P03" {
 		return
@@ -157,29 +167,17 @@ func TestDispatchCommitsAfterAWakeOfItsOwnRunReleasesTheOutboxRow(t *testing.T) 
 // once per backoff step, then returns ErrDispatchSyncRunUnavailable naming the reason, logs one WARN line and counts
 // one give-up, with nothing of the pass committed.
 func TestDispatchGivesUpOnAnOutboxRowHeldPastTheRetryBound(t *testing.T) {
-	reader := sdkmetric.NewManualReader()
-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	previous := otel.GetMeterProvider()
-	otel.SetMeterProvider(provider)
-	t.Cleanup(func() {
-		otel.SetMeterProvider(previous)
-		_ = provider.Shutdown(context.Background())
-	})
+	reader := installBusyMeter(t)
 	withCommitLockPools(t, func(ctx context.Context, pool, other *pgxpool.Pool, tracer *commitLockTracer) {
 		args := seedContentionRuns(t, ctx, other, 1)
 		service, logs := newLoggedContentionDispatchService(t, pool)
 		holder := holdWithOwnRunWake(t, ctx, other, args[0].RunID)
 		defer func() { _ = holder.Rollback(context.Background()) }()
+		installFakeSnapshotClock(t)
 
-		var bound time.Duration
-		for _, wait := range commitSnapshotLockBackoff {
-			bound += wait
-		}
 		passCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
-		start := time.Now()
 		err := service.Dispatch(passCtx, args[0])
-		elapsed := time.Since(start)
 
 		if !errors.Is(err, ErrDispatchSyncRunUnavailable) || !strings.Contains(err.Error(), commitSnapshotBusyReason) {
 			t.Fatalf("pass on a row held past the bound: %v, want %v naming %s", err, ErrDispatchSyncRunUnavailable, commitSnapshotBusyReason)
@@ -187,49 +185,132 @@ func TestDispatchGivesUpOnAnOutboxRowHeldPastTheRetryBound(t *testing.T) {
 		if want := len(commitSnapshotLockBackoff) + 1; tracer.busyReads() != want {
 			t.Fatalf("commit snapshot 55P03 reads = %d, want %d (one per backoff step and the first)", tracer.busyReads(), want)
 		}
-		if elapsed < bound || elapsed > bound+5*time.Second {
-			t.Fatalf("pass took %s, want at least the bound %s and well under the pass deadline", elapsed, bound)
+		assertOneDispatchGiveUp(t, ctx, other, reader, logs, args[0].RunID)
+	})
+}
+
+// assertOneDispatchGiveUp: one WARN naming the run, outbox kind and reason, the counter at exactly 1 for
+// dispatch_sync_run, and nothing of the pass committed.
+func assertOneDispatchGiveUp(t *testing.T, ctx context.Context, other *pgxpool.Pool, reader *sdkmetric.ManualReader, logs *lockedLogBuffer, runID string) {
+	t.Helper()
+	var warns []string
+	for _, line := range logs.lines() {
+		if strings.Contains(line, "msg=sync_dispatch_fence.commit_snapshot_busy") {
+			warns = append(warns, line)
 		}
-		var warns []string
-		for _, line := range logs.lines() {
-			if strings.Contains(line, "msg=sync_dispatch_fence.commit_snapshot_busy") {
-				warns = append(warns, line)
+	}
+	if len(warns) != 1 || !strings.Contains(warns[0], "level=WARN") ||
+		!strings.Contains(warns[0], "reason="+commitSnapshotBusyReason) || !strings.Contains(warns[0], "outbox_kind="+outboxKindDispatchSyncRun) ||
+		!strings.Contains(warns[0], "sync_run_id="+runID) {
+		t.Fatalf("give-up lines = %q, want one WARN naming the run, outbox kind and reason", warns)
+	}
+	counted := busyCounts(t, reader)
+	if want := outboxKindDispatchSyncRun + "/" + commitSnapshotBusyReason; counted[want] != 1 || len(counted) != 1 {
+		t.Fatalf("%s = %v, want exactly {%s: 1}", FenceCommitSnapshotBusyCounter, counted, want)
+	}
+	if got := runStatus(t, ctx, other, runID); got == syncRunStatusDispatching {
+		t.Fatal("the pass committed while the row was held")
+	}
+	var unitStatus string
+	if err := other.QueryRow(ctx, `SELECT status FROM sync_run_units WHERE sync_run_id = $1::uuid`, runID).Scan(&unitStatus); err != nil {
+		t.Fatal(err)
+	}
+	if unitStatus != "planned" {
+		t.Fatalf("unit status = %s, want planned (the pass rolled back)", unitStatus)
+	}
+}
+
+// TestDispatchGivesUpWhenTheRetryWindowEndsBeforeALateRelease is the round 1 repro shape: the same-run wake holds the
+// row until 365 ms into the window, and the first rollback to the savepoint takes 125 ms (a query hook advances the
+// injected window clock; no product sleep). Reads 2..6 go out at 130, 140, 160, 200 and 280 ms; the last wait is cut
+// at the deadline (315 ms), where no read is sent. The pass gives up with the reason, one WARN and the counter at 1,
+// and the late release never happens inside the pass.
+//
+// RED CONTROL (round 1 tip): the waits did not count the round trips; read 7 went out at 440 ms, after the release,
+// and the pass committed.
+func TestDispatchGivesUpWhenTheRetryWindowEndsBeforeALateRelease(t *testing.T) {
+	reader := installBusyMeter(t)
+	withCommitLockPools(t, func(ctx context.Context, pool, other *pgxpool.Pool, tracer *commitLockTracer) {
+		args := seedContentionRuns(t, ctx, other, 1)
+		service, logs := newLoggedContentionDispatchService(t, pool)
+		holder := holdWithOwnRunWake(t, ctx, other, args[0].RunID)
+		defer func() { _ = holder.Rollback(context.Background()) }()
+		clock := installFakeSnapshotClock(t)
+		released := false
+		var releaseErr error
+		clock.onAdvance = func(offset time.Duration) {
+			if !released && offset >= 365*time.Millisecond {
+				released = true
+				releaseErr = holder.Commit(ctx)
 			}
 		}
-		if len(warns) != 1 || !strings.Contains(warns[0], "level=WARN") ||
-			!strings.Contains(warns[0], "reason="+commitSnapshotBusyReason) || !strings.Contains(warns[0], "outbox_kind="+outboxKindDispatchSyncRun) ||
-			!strings.Contains(warns[0], "sync_run_id="+args[0].RunID) {
-			t.Fatalf("give-up lines = %q, want one WARN naming the run, outbox kind and reason", warns)
+		tracer.onSavepointRollback = func() { clock.advance(125 * time.Millisecond) }
+
+		passCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		err := service.Dispatch(passCtx, args[0])
+
+		if releaseErr != nil {
+			t.Fatalf("late release: %v", releaseErr)
 		}
-		var resource metricdata.ResourceMetrics
-		if err := reader.Collect(context.Background(), &resource); err != nil {
+		if released {
+			t.Fatalf("the window ran past the late release (pass err=%v): a read was sent after the deadline", err)
+		}
+		if !errors.Is(err, ErrDispatchSyncRunUnavailable) || !strings.Contains(err.Error(), commitSnapshotBusyReason) {
+			t.Fatalf("pass whose window ended with the row held: %v, want %v naming %s", err, ErrDispatchSyncRunUnavailable, commitSnapshotBusyReason)
+		}
+		if tracer.busyReads() != 6 {
+			t.Fatalf("commit snapshot 55P03 reads = %d, want 6 (none at the deadline)", tracer.busyReads())
+		}
+		assertOneDispatchGiveUp(t, ctx, other, reader, logs, args[0].RunID)
+	})
+}
+
+// TestFinalizeFirstPostSyncArmKeepsTheBusyReason: a finalize that arms post_sync for the first time (no
+// sync_run_post_dispatches row yet) and finds its outbox row held to the end of the window returns
+// ErrFinalizeSyncRunUnavailable WITH the busy reason, and commits nothing.
+//
+// RED CONTROL (round 1 tip): that branch replaced the fence's error with the bare ErrFinalizeSyncRunUnavailable.
+func TestFinalizeFirstPostSyncArmKeepsTheBusyReason(t *testing.T) {
+	reader := installBusyMeter(t)
+	kind := fenceKinds()[0]
+	withCommitLockPools(t, func(ctx context.Context, pool, other *pgxpool.Pool, tracer *commitLockTracer) {
+		kind.seed(t, ctx, other)
+		if _, err := other.Exec(ctx, `UPDATE sync_dispatch_outbox SET attempts = 1 WHERE id = $1`, kind.outbox); err != nil {
 			t.Fatal(err)
 		}
-		counted := map[string]int64{}
-		for _, scope := range resource.ScopeMetrics {
-			for _, m := range scope.Metrics {
-				if m.Name != FenceCommitSnapshotBusyCounter {
-					continue
-				}
-				for _, point := range m.Data.(metricdata.Sum[int64]).DataPoints {
-					kind, _ := point.Attributes.Value("kind")
-					reason, _ := point.Attributes.Value("reason")
-					counted[kind.AsString()+"/"+reason.AsString()] += point.Value
-				}
-			}
-		}
-		if want := outboxKindDispatchSyncRun + "/" + commitSnapshotBusyReason; counted[want] != 1 || len(counted) != 1 {
-			t.Fatalf("%s = %v, want exactly {%s: 1}", FenceCommitSnapshotBusyCounter, counted, want)
-		}
-		if got := runStatus(t, ctx, other, args[0].RunID); got == syncRunStatusDispatching {
-			t.Fatal("the pass committed while the row was held")
-		}
-		var unitStatus string
-		if err := other.QueryRow(ctx, `SELECT status FROM sync_run_units WHERE sync_run_id = $1::uuid`, args[0].RunID).Scan(&unitStatus); err != nil {
+		var armed int
+		if err := other.QueryRow(ctx, `SELECT count(*) FROM sync_run_post_dispatches WHERE sync_run_id = $1::uuid`, kind.run).Scan(&armed); err != nil {
 			t.Fatal(err)
 		}
-		if unitStatus != "planned" {
-			t.Fatalf("unit status = %s, want planned (the pass rolled back)", unitStatus)
+		if armed != 0 {
+			t.Fatalf("post_sync already armed (%d rows): the cell must take the first-arm branch", armed)
+		}
+		holder, err := other.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = holder.Rollback(context.Background()) }()
+		if _, err := holder.Exec(ctx, rearmOutboxSQL, uuid.NewString(), kind.org, kind.run, kind.kind); err != nil {
+			t.Fatal(err)
+		}
+		installFakeSnapshotClock(t)
+
+		err = kind.pass(t, ctx, pool, 1)
+		if !errors.Is(err, ErrFinalizeSyncRunUnavailable) || !strings.Contains(err.Error(), commitSnapshotBusyReason) {
+			t.Fatalf("finalize first arm on a held row: %v, want %v naming %s", err, ErrFinalizeSyncRunUnavailable, commitSnapshotBusyReason)
+		}
+		if want := len(commitSnapshotLockBackoff) + 1; tracer.busyReads() != want {
+			t.Fatalf("commit snapshot 55P03 reads = %d, want %d", tracer.busyReads(), want)
+		}
+		if want := outboxKindFinalizeSyncRun + "/" + commitSnapshotBusyReason; busyCounts(t, reader)[want] != 1 {
+			t.Fatalf("%s = %v, want {%s: 1}", FenceCommitSnapshotBusyCounter, busyCounts(t, reader), want)
+		}
+		if err := other.QueryRow(ctx, `SELECT count(*) FROM sync_run_post_dispatches WHERE sync_run_id = $1::uuid`, kind.run).Scan(&armed); err != nil {
+			t.Fatal(err)
+		}
+		if armed != 0 || kind.wrote(t, ctx, other) {
+			t.Fatalf("finalize committed on a held row: post_dispatches=%d wrote=%t", armed, kind.wrote(t, ctx, other))
 		}
 	})
 }

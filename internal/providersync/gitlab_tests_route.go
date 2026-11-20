@@ -98,12 +98,22 @@ type GitLabTestsRouteHandler struct {
 type gitLabTestsCountingDoer struct {
 	delegate providerfoundation.HTTPDoer
 	attempts *int
+	// date, when set, receives GitLab's clock: the Date header of the first 2xx response that carries a valid one (the
+	// chunked route reads it right after the project read, so it is the project read's Date).
+	date *time.Time
 }
 
 func (doer gitLabTestsCountingDoer) Do(request *http.Request) (*http.Response, error) {
 	attempts := doer.attempts
 	*attempts = *attempts + 1
-	return doer.delegate.Do(request)
+	response, err := doer.delegate.Do(request)
+	if err == nil && doer.date != nil && doer.date.IsZero() && response != nil &&
+		response.StatusCode >= 200 && response.StatusCode < 300 {
+		if at, parseErr := http.ParseTime(response.Header.Get("Date")); parseErr == nil {
+			*doer.date = at.UTC()
+		}
+	}
+	return response, err
 }
 
 func (handler GitLabTestsRouteHandler) Collect(

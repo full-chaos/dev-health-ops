@@ -62,8 +62,12 @@ func crashToken(err error, fn string) string {
 
 // crash ends the run as the kit's traceback does: rc 1, the stdout printed so far, and one stderr line.
 func (r *run) crash(err error, fn string) {
+	panic(r.crashCode(err, fn))
+}
+
+func (r *run) crashCode(err error, fn string) exitCode {
 	fmt.Fprintf(r.stderr, "full-render-diff: crash %s\n", crashToken(err, fn))
-	panic(exitCode(crashRC))
+	return exitCode(crashRC)
 }
 
 // Main runs the kit tool on argv (without the program name) and returns its exit code.
@@ -71,6 +75,9 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) (rc int) {
 	r := &run{stdin: stdin, stdout: stdout, stderr: stderr}
 	defer func() {
 		if p := recover(); p != nil {
+			if ce, ok := p.(*crashError); ok {
+				p = r.crashCode(ce, "main")
+			}
 			c, ok := p.(exitCode)
 			if !ok {
 				panic(p)
@@ -168,7 +175,7 @@ func (r *run) main(argv []string) int {
 	sa := r.newSide("A", pos[0], rcA)
 	sb := r.newSide("B", pos[1], rcB)
 	for _, s := range []*side{sa, sb} {
-		r.print("render %s: helm rc=%s docs=%d", s.label, s.rc.String(), s.shown(opts.live))
+		r.print("render %s: helm rc=%s docs=%d", s.label, pyIntStr(s.rc), s.shown(opts.live))
 	}
 	var names *[2]map[string]bool
 	if opts.names != nil {
@@ -181,10 +188,10 @@ func (r *run) main(argv []string) int {
 			reasons = append(reasons, s.err)
 		}
 		if s.rc.Sign() != 0 {
-			reasons = append(reasons, fmt.Sprintf("render %s: helm rc=%s", s.label, s.rc.String()))
+			reasons = append(reasons, fmt.Sprintf("render %s: helm rc=%s", s.label, pyIntStr(s.rc)))
 		}
 		if big.NewInt(int64(shown)).Cmp(opts.minDocs) < 0 {
-			reasons = append(reasons, fmt.Sprintf("render %s: docs=%d below --min-docs %s", s.label, shown, opts.minDocs.String()))
+			reasons = append(reasons, fmt.Sprintf("render %s: docs=%d below --min-docs %s", s.label, shown, pyIntStr(opts.minDocs)))
 		}
 	}
 	if names != nil {
@@ -481,8 +488,7 @@ func (r *run) parseArgs(argv []string) ([2]string, *big.Int, *big.Int, options) 
 			if !intArg.MatchString(v) {
 				r.usage(a + " must be an integer")
 			}
-			n, _ := new(big.Int).SetString(v, 10)
-			rcs[a] = n
+			rcs[a] = r.parseInt(v)
 		case a == "--expect-added":
 			opts.expectAdded = splitList(val(a))
 		case a == "--expect-rows":
@@ -497,7 +503,7 @@ func (r *run) parseArgs(argv []string) ([2]string, *big.Int, *big.Int, options) 
 			if !natArg.MatchString(v) {
 				r.usage("--min-docs must be a non-negative integer")
 			}
-			opts.minDocs, _ = new(big.Int).SetString(v, 10)
+			opts.minDocs = r.parseInt(v)
 		case a == "--names":
 			if i+2 >= len(argv) {
 				r.usage("--names needs two files")
@@ -540,6 +546,15 @@ func (r *run) parseArgs(argv []string) ([2]string, *big.Int, *big.Int, options) 
 		r.usage("--names needs --expect-names-added (only --info may print the names sets alone)")
 	}
 	return [2]string{pos[0], pos[1]}, rcs["--rc-a"], rcs["--rc-b"], opts
+}
+
+// parseInt is parse_args' int(v) on a value its regex already checked; past maxStrDigits digits Python raises.
+func (r *run) parseInt(v string) *big.Int {
+	if len(strings.TrimPrefix(v, "-")) > maxStrDigits {
+		r.crash(&crashError{msg: "ValueError: Exceeds the limit (4300 digits) for integer string conversion"}, "parse_args")
+	}
+	n, _ := new(big.Int).SetString(v, 10)
+	return n
 }
 
 // readNames is the kit's read_names: the set of stripped, non-empty lines.

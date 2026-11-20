@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Pod
+metadata: {name: p}
+spec:
+  containers:
+  - name: c
+    env:
+    - {name: PRİVATE_X, value: one}
+    - {name: paſsword, value: one}
+    - {name: API_KEY, value: one}
+    - {name: PRıVATE_Y, value: one}
+    - {name: plain, value: one}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: c}
+data:
+  paſsword: one
+  Key1: one
+  secİret: one
+  credentıal: one
+  plain: one

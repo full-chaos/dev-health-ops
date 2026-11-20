@@ -420,7 +420,7 @@ func pyRepr(v any) string {
 		}
 		return "False"
 	case *big.Int:
-		return x.String()
+		return pyIntStr(x)
 	case float64:
 		return pyFloatRepr(x)
 	case string:
@@ -471,6 +471,29 @@ func pyRepr(v any) string {
 		return "<none>"
 	}
 	return fmt.Sprintf("%v", v)
+}
+
+// maxStrDigits is CPython's default int_max_str_digits: int <-> decimal str conversions above it raise ValueError.
+const maxStrDigits = 4300
+
+// pyIntStr is str(int); past maxStrDigits it raises ValueError (a panic the kit-function frames label).
+func pyIntStr(x *big.Int) string {
+	s := x.String()
+	if len(strings.TrimPrefix(s, "-")) > maxStrDigits {
+		panic(&crashError{msg: "ValueError: Exceeds the limit (4300 digits) for integer string conversion"})
+	}
+	return s
+}
+
+// kitFrame, deferred in a ported kit function, names that function on a crash raised below it (the innermost kit
+// frame of the kit's traceback) and lets the crash go on up.
+func kitFrame(name string) {
+	if p := recover(); p != nil {
+		if ce, ok := p.(*crashError); ok && ce.fn == "" {
+			ce.fn = name
+		}
+		panic(p)
+	}
 }
 
 func tzRepr(off int) string {

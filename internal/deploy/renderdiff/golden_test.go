@@ -35,6 +35,11 @@ const goldens3ManifestSHA256 = "b7710e41570e205851b895bac71e14e1f1446fefae6ba6fd
 // the kit's nested sig() (a rows-file "old" that is an int), so the crash token names "sig".
 const goldens4ManifestSHA256 = "e68d0e273cf0998f4810fe43c761871bd3da2194b6533089a3c72e50da8a3e0d"
 
+// goldens5ManifestSHA256 pins testdata/goldens-5/MANIFEST.tsv: 29 kit cases (same form as goldens-2) for the
+// classes the first r1 log showed: Python re.IGNORECASE on secret-like names (U+0130, U+0131, U+017F, U+212A), the
+// 4300-digit int<->str limit at every site, int()/float() text under an explicit tag, a bare sign, base64 padding.
+const goldens5ManifestSHA256 = "bec4f83df092b025e887fc9d2f007a1788201036cff552f7a1e940a02661382d"
+
 const tracebackHead = "Traceback (most recent call last):\n"
 
 type goldenCase struct {
@@ -88,7 +93,7 @@ func runGoldens(t *testing.T, dir string) (byteEqual, tracebacks int) {
 		t.Fatal(err)
 	}
 	cases := readManifest(t, dir)
-	t.Chdir(filepath.Join(dir, "in"))
+	t.Chdir(kitInputs(t, filepath.Join(dir, "in")))
 	for _, c := range cases {
 		want, err := os.ReadFile(filepath.Join(dir, "out", c.name+".out"))
 		if err != nil {
@@ -174,14 +179,20 @@ func checkCrash(t *testing.T, c goldenCase, stderr string) bool {
 	return true
 }
 
-// kitCrashToken derives the class token from a kit traceback with plain string steps: the exception type of the
-// first unindented line after the header (every yaml.* type as its base class YAMLError) and the function of the
-// last frame in the kit file.
+// kitCrashToken derives the class token from a kit traceback with plain string steps. In the LAST traceback block
+// (a chained exception prints one block per exception): the exception type of the first unindented line after the
+// header (every yaml.* type as its base class YAMLError) and the function of the last frame in the kit file.
 func kitCrashToken(kitStream string) string {
 	if !strings.HasPrefix(kitStream, tracebackHead) {
 		return "-"
 	}
 	lines := strings.Split(kitStream, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if lines[i]+"\n" == tracebackHead {
+			lines = lines[i:]
+			break
+		}
+	}
 	fn, typ := "", ""
 	for _, l := range lines[1:] {
 		if strings.HasPrefix(l, "  File \"") && strings.Contains(l, "full-render-diff.py\", line ") {
@@ -201,7 +212,7 @@ func kitCrashToken(kitStream string) string {
 // gives (a "-" row has no traceback), so no token is chosen by hand.
 func TestTheCrashTokensAreTheKitsOwn(t *testing.T) {
 	crashes := 0
-	for _, dir := range []string{"testdata/goldens-1", "testdata/goldens-2", "testdata/goldens-3", "testdata/goldens-4"} {
+	for _, dir := range []string{"testdata/goldens-1", "testdata/goldens-2", "testdata/goldens-3", "testdata/goldens-4", "testdata/goldens-5"} {
 		for _, c := range readManifest(t, dir) {
 			stream := filepath.Join(dir, "out", c.name+".out")
 			if c.errSHA != "" {
@@ -219,8 +230,8 @@ func TestTheCrashTokensAreTheKitsOwn(t *testing.T) {
 			}
 		}
 	}
-	if crashes != 15 {
-		t.Fatalf("%d crash rows, want 15 (2 in goldens-1, 12 in goldens-2, 1 in goldens-4)", crashes)
+	if crashes != 35 {
+		t.Fatalf("%d crash rows, want 35 (2 in goldens-1, 12 in goldens-2, 1 in goldens-4, 20 in goldens-5)", crashes)
 	}
 }
 
@@ -254,6 +265,35 @@ func TestACrashLineHoldsNoInputBytes(t *testing.T) {
 	}
 }
 
+// invalidJSONSuffix marks a rows file the kit reads that is NOT JSON on purpose (a JSON error case). Every *.json
+// under a testdata dir must parse (the golden secret scan reads them all), so such a file is stored with this
+// suffix and gets its kit name back in the run copy.
+const invalidJSONSuffix = ".json.invalid"
+
+// kitInputs copies an in/ dir to a temp dir with the kit's own file names (the kit prints them) and returns it.
+func kitInputs(t *testing.T, in string) string {
+	t.Helper()
+	tmp := t.TempDir()
+	entries, err := os.ReadDir(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		raw, err := os.ReadFile(filepath.Join(in, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := e.Name()
+		if strings.HasSuffix(name, invalidJSONSuffix) {
+			name = strings.TrimSuffix(name, invalidJSONSuffix) + ".json"
+		}
+		if err := os.WriteFile(filepath.Join(tmp, name), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return tmp
+}
+
 func firstDiff(a, b []byte) int {
 	for i := range a {
 		if i >= len(b) || a[i] != b[i] {
@@ -275,6 +315,7 @@ func TestTheGoldensManifestsArePinned(t *testing.T) {
 		"testdata/goldens-2/MANIFEST.tsv": goldens2ManifestSHA256,
 		"testdata/goldens-3/MANIFEST.tsv": goldens3ManifestSHA256,
 		"testdata/goldens-4/MANIFEST.tsv": goldens4ManifestSHA256,
+		"testdata/goldens-5/MANIFEST.tsv": goldens5ManifestSHA256,
 	} {
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -319,5 +360,12 @@ func TestTheSigCrashGoldenIsReproduced(t *testing.T) {
 	byteEqual, tracebacks := runGoldens(t, "testdata/goldens-4")
 	if byteEqual != 0 || tracebacks != 1 {
 		t.Fatalf("byte-equal %d (want 0), crash-token cases %d (want 1)", byteEqual, tracebacks)
+	}
+}
+
+func TestTheRoundOneClassGoldensAreReproduced(t *testing.T) {
+	byteEqual, tracebacks := runGoldens(t, "testdata/goldens-5")
+	if byteEqual != 9 || tracebacks != 20 {
+		t.Fatalf("byte-equal %d (want 9), crash-token cases %d (want 20)", byteEqual, tracebacks)
 	}
 }

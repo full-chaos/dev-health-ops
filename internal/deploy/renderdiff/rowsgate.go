@@ -174,6 +174,9 @@ func (r *run) rowsGate(path, final string, added, removed []string, rows []row, 
 		if _, ok := err.(*pyJSONError); ok {
 			r.usage(fmt.Sprintf("cannot read the rows file %s: %s", path, err.Error()))
 		}
+		if _, ok := err.(*pyValueError); ok {
+			r.usage(fmt.Sprintf("cannot read the rows file %s: %s", path, err.Error()))
+		}
 		r.crash(err, "rows_gate")
 	}
 	wd, isDict := want.(*pyDict)

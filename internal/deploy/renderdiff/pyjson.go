@@ -27,6 +27,11 @@ func (e *pyJSONError) Error() string {
 	return fmt.Sprintf("%s: line %d column %d (char %d)", e.msg, line, e.pos-last, e.pos)
 }
 
+// pyValueError is a ValueError json.loads raises that is not a JSONDecodeError; the kit's rows_gate catches it.
+type pyValueError struct{ msg string }
+
+func (e *pyValueError) Error() string { return e.msg }
+
 type stopIteration struct{ pos int }
 
 func (stopIteration) Error() string { return "StopIteration" }
@@ -153,6 +158,9 @@ func (p *jsonParser) number(start int) (any, int, error) {
 			return nil, 0, &crashError{msg: "ValueError: " + err.Error()}
 		}
 		return f, i, nil
+	}
+	if digits := len(strings.TrimPrefix(text, "-")); digits > maxStrDigits {
+		return nil, 0, &pyValueError{msg: fmt.Sprintf("Exceeds the limit (%d digits) for integer string conversion: value has %d digits; use sys.set_int_max_str_digits() to increase the limit", maxStrDigits, digits)}
 	}
 	v, _ := new(big.Int).SetString(text, 10)
 	return v, i, nil

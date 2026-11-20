@@ -2,7 +2,6 @@ package renderdiff
 
 import (
 	"bytes"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
@@ -340,9 +340,29 @@ func constructScalar(tag, value string) (any, error) {
 	return nil, unknownTag(tag)
 }
 
+// pyNumText is what int()/float() parse: the text without outer whitespace, every Unicode decimal digit as ASCII.
+func pyNumText(s string) string {
+	s = strings.TrimFunc(s, pyIsSpace)
+	return strings.Map(func(r rune) rune {
+		if r > 0x7f && unicode.Is(unicode.Nd, r) {
+			start := r
+			for unicode.Is(unicode.Nd, start-1) {
+				start--
+			}
+			return '0' + (r-start)%10
+		}
+		return r
+	}, s)
+}
+
+// intOf is int(s, base); base 10 keeps CPython's maxStrDigits limit (power-of-two bases have none).
 func intOf(s string, base int) (*big.Int, error) {
-	v, ok := new(big.Int).SetString(s, base)
-	if !ok {
+	t := pyNumText(s)
+	if base == 10 && len(strings.TrimLeft(t, "+-")) > maxStrDigits {
+		return nil, &crashError{msg: "ValueError: Exceeds the limit (4300 digits) for integer string conversion"}
+	}
+	v, ok := new(big.Int).SetString(t, base)
+	if !ok || strings.HasPrefix(t, "+-") || strings.HasPrefix(t, "-+") {
 		return nil, &crashError{msg: "ValueError: invalid literal for int()"}
 	}
 	return v, nil
@@ -359,6 +379,9 @@ func constructInt(value string) (any, error) {
 	}
 	if value[0] == '+' || value[0] == '-' {
 		value = value[1:]
+	}
+	if value == "" {
+		return nil, &crashError{msg: "IndexError: string index out of range"}
 	}
 	var v *big.Int
 	var err error
@@ -393,7 +416,10 @@ func constructInt(value string) (any, error) {
 }
 
 func pyFloatOf(s string) (float64, error) {
-	t := strings.TrimSpace(s)
+	t := pyNumText(s)
+	if strings.ContainsAny(strings.ToLower(t), "xp") {
+		return 0, &crashError{msg: "ValueError: could not convert string to float"}
+	}
 	f, err := strconv.ParseFloat(t, 64)
 	if err != nil {
 		var ne *strconv.NumError
@@ -500,12 +526,49 @@ func constructTimestamp(value string) (any, error) {
 
 // pyDecodeBase64 is base64.decodebytes: non-alphabet bytes are skipped, padding is required.
 func pyDecodeBase64(s string) ([]byte, error) {
-	var clean strings.Builder
+	// binascii.a2b_base64, non-strict: skip bytes outside the alphabet; enough '=' after two or three data
+	// characters ends the input; a lone '=' elsewhere is skipped.
+	var out []byte
+	quadPos, pads := 0, 0
+	var left byte
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '+' || c == '/' || c == '=' {
-			clean.WriteByte(c)
+		if c == '=' {
+			if quadPos >= 2 {
+				pads++
+				if quadPos+pads >= 4 {
+					return out, nil
+				}
+			}
+			continue
+		}
+		v := strings.IndexByte(b64Alphabet, c)
+		if v < 0 {
+			continue
+		}
+		b := byte(v)
+		pads = 0
+		switch quadPos {
+		case 0:
+			quadPos, left = 1, b
+		case 1:
+			quadPos = 2
+			out = append(out, left<<2|b>>4)
+			left = b & 0x0f
+		case 2:
+			quadPos = 3
+			out = append(out, left<<4|b>>2)
+			left = b & 0x03
+		case 3:
+			quadPos = 0
+			out = append(out, left<<6|b)
+			left = 0
 		}
 	}
-	return base64.StdEncoding.DecodeString(clean.String())
+	if quadPos != 0 {
+		return nil, errors.New("incorrect padding")
+	}
+	return out, nil
 }
+
+const b64Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"

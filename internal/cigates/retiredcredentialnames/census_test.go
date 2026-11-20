@@ -174,6 +174,13 @@ var allowed = map[string]allowance{
 	"internal/testsupport/recordedfiles/beforestamp_dayone_test.go":                                           {[]string{nameLegacyIngest}, history},
 	"internal/cigates/retiredcredentialnames/census_test.go":                                                  {[]string{nameSvcAcr, nameSvcAuthsess, nameSvcWorker, nameSessionIssueToken, nameLegacyIngest, nameClassAcr, nameClassAuthsess, nameClassWorker}, history},
 	"internal/cigates/retiredcredentialnames/planted_test.go":                                                 {[]string{nameSvcAcr, nameSvcAuthsess, nameSvcWorker, nameSessionIssueToken, nameLegacyIngest, nameClassAcr, nameClassAuthsess, nameClassWorker}, history},
+
+	// The prod kit's frozen render goldens (renders of one past roll): retired evidence, kept byte-for-byte.
+	"internal/deploy/renderdiff/testdata/goldens-1/in/v3n-741-a.yaml":             {[]string{nameSessionIssueToken, nameLegacyIngest}, history},
+	"internal/deploy/renderdiff/testdata/goldens-1/in/v3n-741-b.yaml":             {[]string{nameSessionIssueToken}, history},
+	"internal/deploy/renderdiff/testdata/goldens-1/out/filter-v3n-741-a.yaml.out": {[]string{nameSessionIssueToken, nameLegacyIngest}, history},
+	"internal/deploy/renderdiff/testdata/goldens-1/out/filter-v3n-741-b.yaml.out": {[]string{nameSessionIssueToken}, history},
+	"internal/deploy/renderdiff/testdata/goldens-1/out/info-v3n.out":              {[]string{nameLegacyIngest}, history},
 }
 
 type hit struct {

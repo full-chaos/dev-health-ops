@@ -321,6 +321,7 @@ internal/cigates/workflows	workflows_venue_shards_test.go	unexpressed	-	-
 internal/clicredentials	opensites_test.go	cmd	tree	*.go
 internal/clicredentials	opensites_test.go	internal	tree	*.go
 internal/deploy/inputs	hookrender_test.go	unexpressed	-	-
+internal/deploy/renderdiff	golden_test.go	unexpressed	-	-
 internal/egressguard	egressguard_test.go	unexpressed	-	*.go
 internal/faultproxy	noship_test.go	.	tree	*
 internal/fixturescli	dropped_columns_census_test.go	internal/chmigrate/archive/sql	dir	*

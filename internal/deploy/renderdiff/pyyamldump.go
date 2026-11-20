@@ -71,7 +71,7 @@ func (r *representer) represent(v any) (*rnode, error) {
 		}
 		return &rnode{kind: rScalar, tag: yamlTag + "bool", value: val}, nil
 	case *big.Int:
-		return &rnode{kind: rScalar, tag: yamlTag + "int", value: x.String()}, nil
+		return &rnode{kind: rScalar, tag: yamlTag + "int", value: pyIntStr(x)}, nil
 	case float64:
 		var val string
 		switch {
@@ -781,6 +781,11 @@ func prepareTag(tag string) string {
 	return "!<" + chunks.String() + ">"
 }
 
+// withEnd is text plus one -1 rune: the emitter loops of PyYAML step one past the last character (Python's ch = None).
+func withEnd(text []rune) []rune {
+	return append(append(make([]rune, 0, len(text)+1), text...), -1)
+}
+
 func isBreakRune(ch rune) bool { return ch == '\n' || ch == 0x85 || ch == 0x2028 || ch == 0x2029 }
 
 func isSpaceOrBreak0(ch rune) bool {
@@ -953,11 +958,9 @@ func (e *emitter) writeSingleQuoted(text []rune, split bool) {
 	e.writeIndicator("'", true, false, false)
 	spaces, breaks := false, false
 	start, end := 0, 0
-	for end <= len(text) {
-		var ch rune = -1
-		if end < len(text) {
-			ch = text[end]
-		}
+	chars := withEnd(text)
+	for end < len(chars) {
+		ch := chars[end]
 		if spaces {
 			if ch == -1 || ch != ' ' {
 				if start+1 == end && e.column > e.bestWidth && split && start != 0 && end != len(text) {
@@ -1006,11 +1009,9 @@ var escapeReplacements = map[rune]string{
 func (e *emitter) writeDoubleQuoted(text []rune, split bool) {
 	e.writeIndicator("\"", true, false, false)
 	start, end := 0, 0
-	for end <= len(text) {
-		var ch rune = -1
-		if end < len(text) {
-			ch = text[end]
-		}
+	chars := withEnd(text)
+	for end < len(chars) {
+		ch := chars[end]
 		if ch == -1 || strings.ContainsRune("\"\\\u0085\u2028\u2029\ufeff", ch) || !(ch >= 0x20 && ch <= 0x7E) {
 			if start < end {
 				e.writeRunes(text[start:end])
@@ -1079,11 +1080,9 @@ func (e *emitter) writeFolded(text []rune) {
 	e.writeLineBreak("")
 	leadingSpace, spaces, breaks := true, false, true
 	start, end := 0, 0
-	for end <= len(text) {
-		var ch rune = -1
-		if end < len(text) {
-			ch = text[end]
-		}
+	chars := withEnd(text)
+	for end < len(chars) {
+		ch := chars[end]
 		if breaks {
 			if ch == -1 || !isBreakRune(ch) {
 				if !leadingSpace && ch != -1 && ch != ' ' && text[start] == '\n' {
@@ -1131,11 +1130,9 @@ func (e *emitter) writeLiteral(text []rune) {
 	e.writeLineBreak("")
 	breaks := true
 	start, end := 0, 0
-	for end <= len(text) {
-		var ch rune = -1
-		if end < len(text) {
-			ch = text[end]
-		}
+	chars := withEnd(text)
+	for end < len(chars) {
+		ch := chars[end]
 		if breaks {
 			if ch == -1 || !isBreakRune(ch) {
 				e.writeBreaks(text[start:end])
@@ -1175,11 +1172,9 @@ func (e *emitter) writePlain(text []rune, split bool) {
 	e.indention = false
 	spaces, breaks := false, false
 	start, end := 0, 0
-	for end <= len(text) {
-		var ch rune = -1
-		if end < len(text) {
-			ch = text[end]
-		}
+	chars := withEnd(text)
+	for end < len(chars) {
+		ch := chars[end]
 		if spaces {
 			if ch != ' ' {
 				if start+1 == end && e.column > e.bestWidth && split {

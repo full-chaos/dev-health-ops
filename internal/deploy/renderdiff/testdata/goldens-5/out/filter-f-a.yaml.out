@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: p
+spec:
+  containers:
+  - env:
+    - name: "PR\u0130VATE_X"
+      value: <redacted>
+    - name: "pa\u017Fsword"
+      value: <redacted>
+    - name: "API_\u212AEY"
+      value: <redacted>
+    - name: "PR\u0131VATE_Y"
+      value: <redacted>
+    - name: plain
+      value: one
+    name: c
+---
+apiVersion: v1
+data:
+  "credent\u0131al": <redacted>
+  "pa\u017Fsword": <redacted>
+  plain: one
+  "sec\u0130ret": one
+  "\u212Aey1": <redacted>
+kind: ConfigMap
+metadata:
+  name: c

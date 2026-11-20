@@ -7,15 +7,33 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // The kit's redaction regexes (full-render-diff.py:48-50). Python's `$` also matches before a final newline, and
 // Python's `\s` on str is every Unicode whitespace code point, so both are spelled out for RE2.
 var (
-	secretyRe  = regexp.MustCompile(`(?i)(PASSWORD|PASSWD|SECRET|TOKEN|PRIVATE|DSN|CREDENTIAL|_URI\n?$|KEY\n?$)`)
-	cmKeyRe    = regexp.MustCompile(`(?i)(password|secret|token|key|dsn|credential)`)
+	secretyRe  = pyIgnoreCase{regexp.MustCompile(`(password|passwd|secret|token|private|dsn|credential|_uri\n?$|key\n?$)`)}
+	cmKeyRe    = pyIgnoreCase{regexp.MustCompile(`(password|secret|token|key|dsn|credential)`)}
 	userinfoRe = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\t\n\v\f\r\x1c-\x1f \x{85}\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}/]*@`)
 )
+
+// pyIgnoreCase is Python's re.IGNORECASE on a str for a pattern of ASCII lower-case letters: a code point matches a
+// letter when its simple lower-case mapping is that letter (U+0130 and U+212A too), or when it is one of the two
+// extra equivalences of sre_compile (U+0131 for i, U+017F for s). RE2's (?i) uses case folding, which misses U+0130.
+type pyIgnoreCase struct{ re *regexp.Regexp }
+
+func (p pyIgnoreCase) MatchString(s string) bool {
+	return p.re.MatchString(strings.Map(func(r rune) rune {
+		switch r {
+		case 0x131:
+			return 'i'
+		case 0x17f:
+			return 's'
+		}
+		return unicode.ToLower(r)
+	}, s))
+}
 
 const (
 	redacted    = "<redacted>"
@@ -24,6 +42,7 @@ const (
 
 // redact is the kit's redact(o): a fresh copy with every secret-like value replaced, applied on load.
 func redact(o any) any {
+	defer kitFrame("redact")
 	switch x := o.(type) {
 	case *pyDict:
 		d := x.copy()
@@ -126,6 +145,7 @@ func docName(d *pyDict) (any, error) {
 
 // key is the kit's key(d): "<kind>/<name>".
 func key(d *pyDict) (string, error) {
+	defer kitFrame("key")
 	kind, _ := d.getS("kind")
 	name, err := docName(d)
 	if err != nil {
@@ -141,6 +161,7 @@ type leaf struct {
 
 // flat is the kit's flat(o, pre): the leaves, an empty container counting as one.
 func flat(o any, pre string, out *[]leaf) {
+	defer kitFrame("flat")
 	switch x := o.(type) {
 	case *pyDict:
 		if x.Len() > 0 {
@@ -201,13 +222,14 @@ func pctD(v any) string {
 		}
 		return "0"
 	case *big.Int:
-		return x.String()
+		return pyIntStr(x)
 	}
 	return pyStr(v)
 }
 
 // listKeys is the kit's list_keys(lst): ("name"|"port", keys) or ok=false.
 func listKeys(lst []any) (string, []string, bool) {
+	defer kitFrame("list_keys")
 	if len(lst) == 0 {
 		return "", nil, false
 	}
@@ -298,6 +320,7 @@ func unionKeys(a, b *pyDict) []any {
 }
 
 func (df *differ) walk(a, b any, path string) {
+	defer kitFrame("walk")
 	fa, fb := form(a), form(b)
 	if fa != "" && fb != "" {
 		if fa != fb {
@@ -396,6 +419,7 @@ func leafMap(v any, path string) (map[string]any, bool) {
 }
 
 func (df *differ) leaves(a, b any, path string) {
+	defer kitFrame("leaves")
 	fa, _ := leafMap(a, path)
 	fb, _ := leafMap(b, path)
 	var paths []string
@@ -424,6 +448,7 @@ func (df *differ) leaves(a, b any, path string) {
 }
 
 func (df *differ) keyed(a, b []any, kind string, namesA, namesB []string, path string) {
+	defer kitFrame("keyed")
 	ia := map[string]any{}
 	for i, n := range namesA {
 		ia[n] = a[i]
@@ -471,6 +496,7 @@ func (df *differ) keyed(a, b []any, kind string, namesA, namesB []string, path s
 }
 
 func findDups(o any, doc, path, label string, out *[]string) {
+	defer kitFrame("find_dups")
 	switch x := o.(type) {
 	case *pyDict:
 		for _, k := range sortedByStr(x.keys) {

@@ -181,11 +181,12 @@ func (f *fixtureClientD) Query(_ context.Context, st string, b []clickhouse.Bind
 	case strings.Contains(st, "title_prefix"):
 		var rows [][]any
 		for _, m := range c.Rep {
-			// The recorded Python rows carry no cluster_author or cluster_work_type (the Python read did not select
-			// them): they read as "".
+			// The recorded Python rows carry no cluster_author, cluster_work_type or cluster_anchor (the Python read
+			// did not select them): they read as "", "" and 0.
 			author, _ := m["cluster_author"].(string)
 			workType, _ := m["cluster_work_type"].(string)
-			rows = append(rows, []any{m["repo_id"].(string), m["title_prefix"].(string), uint64(m["prs_total"].(float64)), strList(m["pr_refs"]), author, workType})
+			anchor, _ := m["cluster_anchor"].(float64)
+			rows = append(rows, []any{m["repo_id"].(string), m["title_prefix"].(string), uint64(m["prs_total"].(float64)), strList(m["pr_refs"]), author, workType, uint32(anchor)})
 		}
 		return &scriptedRows{rows: rows}, nil
 	case strings.Contains(st, "LEFT ANTI JOIN"):
@@ -567,7 +568,7 @@ var recordedRepetitiveRationale = regexp.MustCompile(`^([0-9]+) AI-assisted PRs 
 
 // declareRepetitiveIDs is the DECLARED divergence of CHAOS-14266: the recorded Python id of a REPETITIVE_CHANGE
 // recommendation is stableOpportunityID("repetitive_change", repo, ""), one id per repository, so two clusters of
-// one repository shared it. Go hashes the cluster's whole GROUP BY key (title prefix, author, work type). The
+// one repository shared it. Go hashes the cluster's title prefix, work type and anchor (its oldest pull request). The
 // declaration is path-scoped: ONLY the opportunityId of REPETITIVE_CHANGE recommendations. For each it requires (1)
 // the recorded id is the Python form, (2) exactly one of the case's cluster rows has the recorded repository, count
 // and prefix, and (3) the Go id is the new form of that row; then it sets the recorded id to that id, so every other
@@ -609,9 +610,9 @@ func declareRepetitiveIDs(got, expected map[string]any, c oracleDCase) []string 
 			if !ok || rowRepo != repo || strconv.Itoa(int(row["prs_total"].(float64))) != m[1] || shown != m[2] || len(strList(row["pr_refs"])) == 0 {
 				continue
 			}
-			author, _ := row["cluster_author"].(string)
 			workType, _ := row["cluster_work_type"].(string)
-			keys = append(keys, repetitiveClusterKey(prefix, author, workType))
+			anchor, _ := row["cluster_anchor"].(float64)
+			keys = append(keys, repetitiveClusterKey(prefix, workType, uint32(anchor)))
 		}
 		if len(keys) != 1 {
 			problems = append(problems, fmt.Sprintf("recommendations[%d]: %d cluster rows match the recorded repository, count and prefix, want exactly 1", i, len(keys)))

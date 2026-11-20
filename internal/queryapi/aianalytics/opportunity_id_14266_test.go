@@ -3,10 +3,13 @@ package aianalytics
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -14,7 +17,8 @@ import (
 )
 
 // CHAOS-14266: a repository has one repetitive-change cluster per author, work type and title prefix; each
-// cluster is one recommendation and must have its own opportunityId, the same on every read.
+// cluster is one recommendation and must have its own opportunityId, the same on every read. The id is the hash of
+// the prefix, the work type and the cluster's anchor (its oldest pull request); the author is never id input.
 
 const (
 	repo14266 = "11111111-1111-1111-1111-111111111111"
@@ -23,13 +27,15 @@ const (
 	secretName14266  = "Bob Hidden-Name"
 )
 
+// cluster14266 is one cluster row; its anchor (the oldest pull request) is the first number given.
 func cluster14266(prefix, author, workType string, n int, numbers ...string) map[string]any {
 	refs := []any{}
 	for _, number := range numbers {
 		refs = append(refs, "git_pull_requests:"+repo14266+":"+number)
 	}
+	anchor, _ := strconv.ParseUint(numbers[0], 10, 32)
 	return map[string]any{"repo_id": repo14266, "title_prefix": prefix, "prs_total": float64(n), "pr_refs": refs,
-		"cluster_author": author, "cluster_work_type": workType}
+		"cluster_author": author, "cluster_work_type": workType, "cluster_anchor": float64(anchor)}
 }
 
 // repetitiveIDs14266 answers aiOpportunities over the clusters and returns each REPETITIVE_CHANGE id by its first
@@ -68,8 +74,8 @@ func TestCell14266TwoClustersOneRepoDistinctIDs(t *testing.T) {
 	if ids[ref14266("1")] == ids[ref14266("3")] {
 		t.Errorf("two clusters of one repository share opportunityId %s", ids[ref14266("1")])
 	}
-	if want := stableOpportunityID("repetitive_change", repo14266, `["bump deps for","a@example.com","pull_request"]`); ids[ref14266("1")] != want {
-		t.Errorf("id = %s, want %s: the hash of the cluster's prefix, author and work type", ids[ref14266("1")], want)
+	if want := stableOpportunityID("repetitive_change", repo14266, `["bump deps for","pull_request","1"]`); ids[ref14266("1")] != want {
+		t.Errorf("id = %s, want %s: the hash of the cluster's prefix, work type and anchor", ids[ref14266("1")], want)
 	}
 }
 
@@ -261,12 +267,12 @@ func TestRepetitiveIDDeclarationStillFindsDefects(t *testing.T) {
 		}},
 		{"repetitive id of another cluster key", func(got map[string]any) {
 			r := firstOf(got, true)
-			r["opportunityId"] = stableOpportunityID("repetitive_change", r["repoId"].(string), repetitiveClusterKey("other", "", ""))
+			r["opportunityId"] = stableOpportunityID("repetitive_change", r["repoId"].(string), repetitiveClusterKey("other", "", 0))
 		}},
 		{"another kind's id changed", func(got map[string]any) { firstOf(got, false)["opportunityId"] = "000000000000000000000000" }},
 		{"another kind's id given a cluster key", func(got map[string]any) {
 			r := firstOf(got, false)
-			r["opportunityId"] = stableOpportunityID("high_rework", r["repoId"].(string), repetitiveClusterKey("", "", ""))
+			r["opportunityId"] = stableOpportunityID("high_rework", r["repoId"].(string), repetitiveClusterKey("", "", 0))
 		}},
 		{"repetitive rationale changed", func(got map[string]any) {
 			r := firstOf(got, true)
@@ -335,5 +341,125 @@ func TestCell14266TiedClustersKeepOneServedOrder(t *testing.T) {
 	}
 	if ids := served(5, a, b); len(ids) != 2 || ids[0] == ids[1] {
 		t.Errorf("want two ids, got %v", ids)
+	}
+}
+
+// (b) The same rows read twice serve the same ids.
+func TestCell14266SameInputSameID(t *testing.T) {
+	rows := func() []map[string]any {
+		return []map[string]any{
+			cluster14266("bump deps for", "a@example.com", "pull_request", 6, "1", "2"),
+			cluster14266("bump deps for", "b@example.com", "pull_request", 6, "3", "4"),
+		}
+	}
+	first, second := repetitiveIDs14266(t, rows()...), repetitiveIDs14266(t, rows()...)
+	if len(first) != 2 || !reflect.DeepEqual(first, second) {
+		t.Errorf("the same input served other ids: %v vs %v", first, second)
+	}
+}
+
+// (c) The id input holds no author: each served id is exactly the hash of (prefix, work type, anchor), it does not
+// move when only the author of a cluster changes, and no candidate author, put into the id input in any position,
+// gives a served id.
+func TestCell14266IDInputHoldsNoAuthor(t *testing.T) {
+	authors := []string{secretEmail14266, secretName14266}
+	rows := []map[string]any{
+		cluster14266("bump deps for", authors[0], "pull_request", 6, "1", "2"),
+		cluster14266("bump deps for", authors[1], "pull_request", 6, "3", "4"),
+	}
+	ids := repetitiveIDs14266(t, rows...)
+	for ref, anchor := range map[string]uint32{ref14266("1"): 1, ref14266("3"): 3} {
+		if want := stableOpportunityID("repetitive_change", repo14266, repetitiveClusterKey("bump deps for", "pull_request", anchor)); ids[ref] != want {
+			t.Errorf("%s: id %s, want %s: the id input is not exactly (prefix, work type, anchor)", ref, ids[ref], want)
+		}
+	}
+	renamed := repetitiveIDs14266(t,
+		cluster14266("bump deps for", "someone.else@example.com", "pull_request", 6, "1", "2"),
+		cluster14266("bump deps for", "", "pull_request", 6, "3", "4"))
+	if !reflect.DeepEqual(ids, renamed) {
+		t.Errorf("the ids moved with the author alone: %v vs %v", ids, renamed)
+	}
+	served := map[string]bool{}
+	for _, id := range ids {
+		served[id] = true
+	}
+	for _, candidate := range append(authors, "a@example.com", "") {
+		for _, anchor := range []string{"1", "3"} {
+			for _, parts := range [][]string{
+				{"bump deps for", candidate, "pull_request"},
+				{"bump deps for", "pull_request", candidate},
+				{"bump deps for", "pull_request", anchor, candidate},
+				{"bump deps for", candidate, "pull_request", anchor},
+				{candidate, "bump deps for", "pull_request", anchor},
+			} {
+				key, _ := json.Marshal(parts)
+				if id := stableOpportunityID("repetitive_change", repo14266, string(key)); served[id] && candidate != "" {
+					t.Errorf("candidate author %q with key %s matches served id %s", candidate, key, id)
+				}
+			}
+		}
+	}
+}
+
+// (d) Every served field other than opportunityId is byte-equal to fc1736531814 on the same seed (digests of the answer
+// with the ids blanked, recorded there).
+func TestCell14266OtherFieldsByteEqualToFC17(t *testing.T) {
+	pinned := map[string]string{
+		"14266/two-authors":    "e6dd93fb9c81db813a19ddcc75af84616183fef64c8ba70dca146fbbe4798026",
+		"14266/two-prefixes":   "c1ecde99c34a03c87a6861931ccdffabac625d1bbf8d42c0d6cbf90519a58522",
+		"14266/two-work-types": "e6dd93fb9c81db813a19ddcc75af84616183fef64c8ba70dca146fbbe4798026",
+		"ai/boundaries":        "d408533f8d1b064d58784649497a72fba0cd44146fc7dfaf5ef827602e423ea8",
+		"ai/everything":        "7bb46b6d1a1c28590cb72a24fcc5e1c62b4f230848e9d63b661733fe41e08565",
+		"ai/exactMinimums":     "7af548b1910c5a2777cc8d8647ee22f506b81d148d211c854b25e525a6a95ff1",
+		"ai/formats":           "7f7e0c454c2414272b44b35c06c3cd640697e235e7b1aeaf58d122097ee79a7e",
+		"ai/limitNegative":     "7bb46b6d1a1c28590cb72a24fcc5e1c62b4f230848e9d63b661733fe41e08565",
+		"ai/limitOver":         "7bb46b6d1a1c28590cb72a24fcc5e1c62b4f230848e9d63b661733fe41e08565",
+		"ai/limitTwo":          "119496eee95898adb380752fd4248ebd7650b91cf9cb2fdb2c6a5fdbc7df65a3",
+		"ai/limitZero":         "7bb46b6d1a1c28590cb72a24fcc5e1c62b4f230848e9d63b661733fe41e08565",
+		"ai/metricsOnly":       "3a4a43543664ae99668fbc027e0003c1497924ca4bb0aea23ccbc956263cadbe",
+		"ai/none":              "dcd84ffe7fb91c6954b5abecf2bb66f1974ee649b2430889b3701671c922d5ae",
+		"ai/repoBlank":         "7bb46b6d1a1c28590cb72a24fcc5e1c62b4f230848e9d63b661733fe41e08565",
+		"ai/repoSlug":          "31026d8e6bd93aeff507bdc8ccf7577468785f84a221e1080e85340724cb01ec",
+		"ai/repoUnresolved":    "dcd84ffe7fb91c6954b5abecf2bb66f1974ee649b2430889b3701671c922d5ae",
+		"ai/repoUuid":          "53d26a96d237f719b9ea961adbff0a652bb5e490e7985266d8da148f77196424",
+		"ai/reworkDeltaExact":  "fa70917b47a20a127b41aef36c4a9b9f0190ccf3e592494e462937248cd68e83",
+		"ai/team":              "3a4a43543664ae99668fbc027e0003c1497924ca4bb0aea23ccbc956263cadbe",
+		"ai/teamBlank":         "7bb46b6d1a1c28590cb72a24fcc5e1c62b4f230848e9d63b661733fe41e08565",
+		"ai/ties":              "ea73500e2919641f413a5717d3e8b7f7ad81246a3db1e5501bf0f86773fafd12",
+	}
+	seeds := map[string]oracleDCase{
+		"14266/two-prefixes":   {Rep: []map[string]any{cluster14266("bump deps for", "a@example.com", "pull_request", 6, "1", "2"), cluster14266("fix flaky test", "a@example.com", "pull_request", 7, "3", "4")}},
+		"14266/two-authors":    {Rep: []map[string]any{cluster14266("bump deps for", "a@example.com", "pull_request", 6, "1", "2"), cluster14266("bump deps for", "b@example.com", "pull_request", 6, "3", "4")}},
+		"14266/two-work-types": {Rep: []map[string]any{cluster14266("bump deps for", "a@example.com", "pull_request", 6, "1", "2"), cluster14266("bump deps for", "a@example.com", "bug", 6, "3", "4")}},
+	}
+	for name, c := range loadDCases(t) {
+		if c.Kind == "ai" {
+			seeds[name] = c
+		}
+	}
+	if len(seeds) != len(pinned) {
+		t.Fatalf("%d seeds, %d pins", len(seeds), len(pinned))
+	}
+	for name, c := range seeds {
+		var in *model.AIScopeInput
+		if c.Scope != nil {
+			in = &model.AIScopeInput{RepoID: c.Scope.RepoID, TeamID: c.Scope.TeamID}
+		}
+		limit := c.Limit
+		if strings.HasPrefix(name, "14266/") {
+			limit = 100
+		}
+		got, err := AiOpportunities(context.Background(), &fixtureClientD{c: c}, "org-1", in, limit)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for i := range got.Recommendations {
+			got.Recommendations[i].OpportunityID = ""
+		}
+		body, _ := json.Marshal(got)
+		sum := sha256.Sum256(body)
+		if hex.EncodeToString(sum[:]) != pinned[name] {
+			t.Errorf("%s: the answer without ids differs from fc1736531814", name)
+		}
 	}
 }

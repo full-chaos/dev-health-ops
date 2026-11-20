@@ -629,12 +629,22 @@ const nullableIntoPlainSites = `
 //	loadClusters (title toil) 0dcb9c7aceb8 -> 4ae1cede92ca
 //	loadDocDrift f049a4598b46 -> ee855478db42
 //	loadFlaky be2a35ea7bc8 -> 74566417b303
+//
+// CHAOS-14266 anchor (acp ruling: no author in the id input): repetitiveStatement selects one more column,
+// cluster_anchor = argMin(pr.number, (pr.created_at, pr.number)), UInt32 (the number column, not Nullable), scanned into
+// *uint32; cluster_author stays selected (a GROUP BY key and a sort value) and is scanned but never read. Re-pinned by
+// hand, digests copied from the local TestScanTypeCensus failure output (not computed):
+//
+//	loadClusters (repetitive) 4ae1cede92ca -> b1659de79ad1, scan +*uint32
+//	loadClusters (title toil) 4ae1cede92ca -> b1659de79ad1
+//	loadDocDrift ee855478db42 -> 84c1bc669446
+//	loadFlaky 74566417b303 -> 32baba4ff289
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*string|4ae1cede92ca|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|4ae1cede92ca|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|ee855478db42|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|74566417b303|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*string,*uint32|b1659de79ad1|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|b1659de79ad1|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|84c1bc669446|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|32baba4ff289|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadRepoFlowRows|*string,*uint64,**float64,**float64,**float64,**float64|39a7e63ddf0e|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*uint64,**float64,**float64,**float64|2653b84e5b21|not-describable
 internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|ffbc61d0410c|spliced-select-list

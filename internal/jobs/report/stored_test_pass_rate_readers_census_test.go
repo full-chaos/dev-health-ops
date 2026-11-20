@@ -49,7 +49,7 @@ var pinnedTableFiles = map[string]censusPin{
 		"not a reader of pass_rate: suite duration percentiles"},
 	"internal/jobs/report/tablereads.go": {"90914bad43fc7f67f51fe068101b4808e68a525bd171c42e2c3f11c3c8db128f",
 		"not a reader: the newest-row key of the table"},
-	"internal/queryapi/aianalytics/ai_opportunities.go": {"516f4fb662e248368ef23f99ba7c01f7feedb33aa0b87881d69738de8ad2a94c",
+	"internal/queryapi/aianalytics/ai_opportunities.go": {"e1b8cc9f0d1d30e122be8ea3e5f0bbd3d7e5f8309b7bc8c3d23b98f0319ddb7b",
 		"reader rule applied: newest-row subquery then the live-row filter, the outer query names flake and case counts"},
 	"internal/queryapi/analytics/testopsownership.go": {"488386f9a7d8ebfc6e109f4e8ffa94971c36298f8650a2bfd5e12626983f3f37",
 		"not a reader: table name switch"},

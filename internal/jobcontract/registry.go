@@ -545,6 +545,7 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 		KindDailyMetricsPartition:        {"partition_id"},
 		KindDailyMetricsFinalize:         {"run_id"},
 		KindTeamAutoimport:               {"sync_run_id"},
+		KindBucketSweep:                  {"org_id", "provider", "cost_class"},
 		KindTeamRepoOwnershipDerivation:  {"sync_run_id"},
 		KindRemainingCapacity:            {"partition_id"},
 		KindRemainingComplexity:          {"partition_id"},
@@ -591,6 +592,18 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 	}
 	if kind == KindTeamAutoimport || kind == KindTeamRepoOwnershipDerivation {
 		return validateUUIDProperty(properties["sync_run_id"])
+	}
+	if kind == KindBucketSweep {
+		if err := validateUUIDProperty(properties["org_id"]); err != nil {
+			return err
+		}
+		for _, field := range []string{"provider", "cost_class"} {
+			property, ok := properties[field].(map[string]any)
+			if !ok || property["type"] != "string" || property["pattern"] != "^[a-z][a-z0-9_]{0,31}$" {
+				return fmt.Errorf("%s schema drifts from compiled label type", field)
+			}
+		}
+		return nil
 	}
 	if kind == KindWorkGraphBuild || kind == KindInvestmentMaterialize {
 		return validateUUIDProperty(properties["request_id"])

@@ -68,6 +68,16 @@ type LeaseRepair struct {
 	// countdown. The production constructor always sets it; only the
 	// begin-func constructor the unit tests use leaves it nil.
 	wake syncrunrollup.Execer
+	// sweeps, when set, receives the slots a repair frees (CHAOS-14250); nil keeps each run's own wake.
+	sweeps syncrunrollup.BucketSweepEnqueuer
+}
+
+// WithBucketSweeps hands the slots this repair frees to their buckets' sync.bucket_sweep (CHAOS-14250).
+func (repair *LeaseRepair) WithBucketSweeps(sweeps syncrunrollup.BucketSweepEnqueuer) *LeaseRepair {
+	if repair != nil {
+		repair.sweeps = sweeps
+	}
+	return repair
 }
 
 func NewLeaseRepair(pool *pgxpool.Pool) (*LeaseRepair, error) {
@@ -234,7 +244,7 @@ func (repair *LeaseRepair) Step(ctx context.Context, now time.Time, limit int) (
 	if err := tx.Commit(ctx); err != nil {
 		return LeaseRepairResult{}, ErrUnavailable
 	}
-	wakeDispatchAfterCommit(ctx, repair.wake, wakeRuns, now, syncrunrollup.DispatchWakePathLeaseRepair)
+	wakeDispatchAfterCommit(ctx, repair.wake, repair.sweeps, wakeRuns, now, syncrunrollup.DispatchWakePathLeaseRepair)
 	return result, nil
 }
 

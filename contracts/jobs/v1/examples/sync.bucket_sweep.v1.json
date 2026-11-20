@@ -1,0 +1,15 @@
+{
+  "contract_version": 1,
+  "organization_id": "00000000-0000-4000-8000-000000000010",
+  "correlation_id": "bucket-sweep-00000000-0000-4000-8000-000000000010-github-medium",
+  "idempotency_key": "sync.bucket_sweep:00000000-0000-4000-8000-000000000010:github:medium",
+  "domain": {
+    "type": "sync_bucket",
+    "id": "00000000-0000-4000-8000-000000000010"
+  },
+  "payload": {
+    "org_id": "00000000-0000-4000-8000-000000000010",
+    "provider": "github",
+    "cost_class": "medium"
+  }
+}

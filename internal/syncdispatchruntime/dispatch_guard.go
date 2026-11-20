@@ -107,11 +107,11 @@ type guardDecision struct {
 	// heldBackRunIDs are the older runs this pass left free slots to (CHAOS-8880), oldest first per bucket.
 	heldBackRunIDs []string
 	// grantedSlots are the slots each bucket gave this run after the cap, the hold-back and the backfill share; a
-	// pass that claims fewer hands the rest to the next run of its class (CHAOS-14250).
+	// pass that claims fewer gives the rest back through the bucket's sweep (CHAOS-14250).
 	grantedSlots map[dispatchBucket]int
-	// nonHeadRearm is the re-arm of a run capped only in buckets where a run of its class waits ahead of it; zero
-	// when the run is a head of a capped bucket or was not capped (CHAOS-14250).
-	nonHeadRearm time.Duration
+	// cappedBuckets are the buckets whose cap held units of this run back; their sweep, not a timer of this run,
+	// brings the run's next pass when a slot frees (CHAOS-14250).
+	cappedBuckets []dispatchBucket
 	// runMode and runTriggeredBy are the deciding run's stored mode and trigger, for the capped log line.
 	runMode        string
 	runTriggeredBy string
@@ -272,9 +272,6 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, orgID,
 		},
 		self:      self,
 		olderRuns: func(bucket dispatchBucket) ([]olderRun, error) { return readOlderRuns(ctx, tx, bucket, self, now) },
-		bucketQueue: func(bucket dispatchBucket) (bool, int, error) {
-			return readBucketQueue(ctx, tx, bucket, self, now)
-		},
 	}
 	source := func(fold func(dispatchGuardUnit) error) error {
 		return forEachDispatchGuardUnit(ctx, tx, runID, fold)
@@ -295,9 +292,6 @@ type guardEnv struct {
 	// (CHAOS-8880).
 	self      runOrder
 	olderRuns func(dispatchBucket) ([]olderRun, error)
-	// bucketQueue reports, for a bucket the run is capped in, whether a run of its class waits ahead of it and how
-	// many runs wait (bounded). Nil skips the non-head re-arm.
-	bucketQueue func(dispatchBucket) (olderInClass bool, depth int, err error)
 }
 
 // guardUnitSource folds every unit of the run in id order; each call is one full paged read.
@@ -517,20 +511,14 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 	var cappedUnitIDs []string
 	slotHeadroom := make(map[dispatchBucket]int, len(allBuckets))
 	grantedSlots := make(map[dispatchBucket]int, len(allBuckets))
-	cappedBuckets, headOfCapped, queueDepth := 0, false, 0
+	var cappedBuckets []dispatchBucket
 	for _, bucket := range allBuckets {
 		fold := folds[bucket]
 		grantedSlots[bucket] = fold.slots
 		capped := fold.cappedIDs()
 		cappedUnitIDs = append(cappedUnitIDs, capped...)
-		if len(capped) > 0 && env.bucketQueue != nil {
-			olderInClass, depth, err := env.bucketQueue(bucket)
-			if err != nil {
-				return guardDecision{}, err
-			}
-			cappedBuckets++
-			headOfCapped = headOfCapped || !olderInClass
-			queueDepth = max(queueDepth, depth)
+		if len(capped) > 0 {
+			cappedBuckets = append(cappedBuckets, bucket)
 		}
 		headroom := fold.slots - (fold.reclaimCount + fold.newCount)
 		if headroom < 0 {
@@ -544,10 +532,6 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 		env.emit(bucket, activeCounts[bucket], reclaimedStale, len(capped)-len(fold.cappedReclaims), len(fold.cappedReclaims), headroom, heldBack[bucket])
 	}
 
-	var nonHeadRearm time.Duration
-	if cappedBuckets > 0 && !headOfCapped {
-		nonHeadRearm = nonHeadRearmCountdown(queueDepth, env.self.id)
-	}
 	if len(cappedUnitIDs) > 0 {
 		return guardDecision{
 			allowed:           true,
@@ -559,7 +543,7 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 			authorizedUnitIDs: authorizedUnitIDs,
 			heldBackRunIDs:    heldBackRunIDs,
 			grantedSlots:      grantedSlots,
-			nonHeadRearm:      nonHeadRearm,
+			cappedBuckets:     cappedBuckets,
 		}, nil
 	}
 	return guardDecision{allowed: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs, heldBackRunIDs: heldBackRunIDs,

@@ -162,11 +162,11 @@ func TestOlderRunWhoseFinalizeRowOnlyBacksOffHoldsNothing(t *testing.T) {
 	})
 }
 
-// TestOlderRunWaitingPastTheScanLimitHoldsNothing (CHAOS-8880 Q2, accepted fail-open): the waiting count reads at most
-// olderRunWaitingScanLimit planned or retrying units of an older run, with no bucket filter in the index. A live older
-// run whose first 300 planned units are in another bucket and whose 2 medium units lie past them holds nothing back
-// in medium -- the behavior before CHAOS-8880, never more hold-back. This pins the limit until an index lands.
-func TestOlderRunWaitingPastTheScanLimitHoldsNothing(t *testing.T) {
+// TestOlderRunWaitingPastOtherBucketUnitsHoldsBack (CHAOS-14250 r1b P1-2; it replaces the CHAOS-8880 Q2 fail-open):
+// the waiting count reads the bucket's own units, filter before limit. A live older run whose first 300 planned units
+// are in another bucket and whose 2 medium units lie past them is a medium waiter, and holds the free medium slots
+// back for itself.
+func TestOlderRunWaitingPastOtherBucketUnitsHoldsBack(t *testing.T) {
 	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		now := pgNow()
 		for i := 0; i < 3; i++ {
@@ -201,9 +201,9 @@ func TestOlderRunWaitingPastTheScanLimitHoldsNothing(t *testing.T) {
 			Status: syncRunUnitStatusRunning, UpdatedAt: &now, LeaseExpiresAt: &liveLease, LeaseOwner: ptrString("past-scan-owner"),
 		})
 		decision := authorizeLivenessCase(t, ctx, pool, now)
-		if len(decision.cappedUnitIDs) != 1 || len(decision.heldBackRunIDs) != 0 {
-			t.Fatalf("older live run whose medium units lie past the scan limit: capped=%d heldBack=%v, want 1 and none",
-				len(decision.cappedUnitIDs), decision.heldBackRunIDs)
+		if len(decision.cappedUnitIDs) != 3 || len(decision.heldBackRunIDs) != 1 || decision.heldBackRunIDs[0] != admissionOlderRun {
+			t.Fatalf("older live run whose medium units lie behind 300 light units: capped=%d heldBack=%v, want 3 and [%s]",
+				len(decision.cappedUnitIDs), decision.heldBackRunIDs, admissionOlderRun)
 		}
 	})
 }
@@ -294,7 +294,7 @@ func TestOlderRunsInBucketReadIsBoundedOnALargeOpenRun(t *testing.T) {
 		var raw string
 		if err := tx.QueryRow(ctx, "EXPLAIN (ANALYZE, FORMAT JSON) "+olderRunsInBucketSQL,
 			bucket.orgID, bucket.provider, bucket.costClass, self.createdAt, self.id, self.backfill, now,
-			concurrencyCapForCostClass(bucket.costClass), admissionLivenessBound().Seconds(), olderRunsReadLimit, olderRunWaitingScanLimit,
+			concurrencyCapForCostClass(bucket.costClass), admissionLivenessBound().Seconds(), olderRunsReadLimit,
 		).Scan(&raw); err != nil {
 			t.Fatal(err)
 		}
@@ -305,7 +305,7 @@ func TestOlderRunsInBucketReadIsBoundedOnALargeOpenRun(t *testing.T) {
 			t.Fatalf("parse plan: %v (%d plans)", err, len(plans))
 		}
 		visits := rowVisits(plans[0].Plan, "sync_run_units")
-		const bound = 2 * olderRunWaitingScanLimit
+		const bound = 512
 		t.Logf("sync_run_units rows visited: %.0f (bound %d)", visits, bound)
 		if visits > bound {
 			t.Fatalf("the older-run read visits %.0f sync_run_units rows of an open 10,000-unit run, want <= %d:\n%s", visits, bound, raw)

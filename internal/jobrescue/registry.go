@@ -149,6 +149,8 @@ func registerKind(workers *river.Workers, kind string, descriptor jobruntime.Des
 		return add[jobruntime.ProviderUnitArgs](workers, descriptor)
 	case jobcontract.KindTeamAutoimport:
 		return add[syncdispatchruntime.TeamAutoimportJobArgs](workers, descriptor)
+	case jobcontract.KindBucketSweep:
+		return add[syncdispatchruntime.BucketSweepJobArgs](workers, descriptor)
 	case jobcontract.KindTeamRepoOwnershipDerivation:
 		return add[syncdispatchruntime.TeamRepoOwnershipDerivationJobArgs](workers, descriptor)
 	case jobcontract.KindHeartbeat:

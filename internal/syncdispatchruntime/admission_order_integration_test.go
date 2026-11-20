@@ -145,7 +145,7 @@ func TestOlderRunsInBucketReadUsesTheActiveRunIndex(t *testing.T) {
 
 		rows, err := pool.Query(ctx, "EXPLAIN (ANALYZE, BUFFERS) "+olderRunsInBucketSQL,
 			bucket.orgID, bucket.provider, bucket.costClass, self.createdAt, self.id, self.backfill, now,
-			concurrencyCapForCostClass(bucket.costClass), admissionLivenessBound().Seconds(), olderRunsReadLimit, olderRunWaitingScanLimit)
+			concurrencyCapForCostClass(bucket.costClass), admissionLivenessBound().Seconds(), olderRunsReadLimit)
 		if err != nil {
 			t.Fatal(err)
 		}

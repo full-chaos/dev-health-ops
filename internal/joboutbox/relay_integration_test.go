@@ -123,6 +123,7 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 		jobcontract.KindLLMBudgetStaleReservations:   true,
 		jobcontract.KindProviderOAuthRevocations:     true,
 		jobcontract.KindExternalPushExpirySweep:      true,
+		jobcontract.KindBucketSweep:                  true,
 		jobcontract.KindInvestmentMaterialize:        true,
 		jobcontract.KindDailyMetricsDispatch:         true,
 		jobcontract.KindDailyMetricsFinalize:         true,

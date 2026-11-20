@@ -71,6 +71,17 @@ type NativeDispatchSyncRunService struct {
 	// denial/exhaustion rollup bumps. See the constructor's variadic
 	// metrics parameter doc comment for why production wiring is deferred.
 	metrics *providerfoundation.Metrics
+	// sweeps enqueues a bucket's sync.bucket_sweep (CHAOS-14250). Nil keeps the per-run re-arm for capped work.
+	sweeps syncrunrollup.BucketSweepEnqueuer
+}
+
+// WithBucketSweeps hands this service's capped buckets and unused slots to their buckets' sync.bucket_sweep
+// (CHAOS-14250): a pass capped by a bucket then arms no timer of its own for the cap.
+func (service *NativeDispatchSyncRunService) WithBucketSweeps(sweeps syncrunrollup.BucketSweepEnqueuer) *NativeDispatchSyncRunService {
+	if service != nil {
+		service.sweeps = sweeps
+	}
+	return service
 }
 
 // NewNativeDispatchSyncRunService constructs the native dispatch_sync_run
@@ -621,14 +632,12 @@ WHERE id = $1::uuid`,
 	if len(decision.heldBackRunIDs) > 0 {
 		defer wakeHeldBackRuns(ctx, service.pool, decision.heldBackRunIDs, service.nowUTC())
 	}
-	// CHAOS-14250: a bucket gave this pass slots it did not fill (budget, cooldown, a deferred or terminalized unit,
-	// or fewer units than slots). The slot-free wake reached this run as the head, so nobody else is coming for them:
-	// hand them to the next waiting run of this run's class, after the commit and the re-arm below, each wake its own
-	// statement outside this pass's transaction. Only the first run of its class hands off (the chain bound in
-	// syncrunrollup.WakeBucketHeadSQL), so one freed slot buys at most one hand-off.
-	for _, bucket := range handOffBuckets(decision.grantedSlots, claimedUnits) {
-		defer syncrunrollup.WakeNextInClass(ctx, service.pool, bucket.orgID, bucket.provider, bucket.costClass, run.id, service.nowUTC())
-	}
+	// CHAOS-14250: after the commit, each bucket that capped this run, and each bucket that gave this pass slots it
+	// did not fill (a budget or cooldown refusal, a deferred or terminalized unit, fewer units than slots), gets its
+	// sync.bucket_sweep: the sweep, not a timer of this run, brings the next pass of the bucket's oldest eligible
+	// waiter. A refused unit is retrying with a future available_at, so the sweep passes over this run until then.
+	capCovered := service.enqueueBucketSweeps(ctx, decision.cappedBuckets, handOffBuckets(decision.grantedSlots, claimedUnits)) &&
+		decision.concurrencyCapped
 
 	if riverQueued > 0 {
 		switch {
@@ -649,7 +658,7 @@ WHERE id = $1::uuid`,
 				dueNowRearmAt(nextDeferredAt, armAt), armAt)
 		case nextDeferredAt != nil:
 			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nextDeferredAt, service.nowUTC())
-		case len(cappedIDs) > 0:
+		case len(cappedIDs) > 0 && !capCovered:
 			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nil, service.nowUTC())
 		}
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunDispatched, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, riverQueued))
@@ -690,17 +699,24 @@ WHERE id = $1::uuid`,
 		// alone put a pass here), and made far more reachable by this ticket's
 		// allow-list, which is precisely what leaves a unit dispatchable rather
 		// than claiming it. Same rule, same helper, as the riverQueued > 0 arm.
+		// CHAOS-14250: the cap holds this run's work back and every capped
+		// bucket's sweep is enqueued: the sweep hands a freed slot to the
+		// bucket's oldest eligible waiter and re-arms itself, so the run arms
+		// no timer for the cap (a timer per waiting run made the passes grow
+		// with the queue). Only a budget or cooldown deferral keeps its own
+		// wakeup.
+		if capCovered && len(deferredOutsideSnapshot) == 0 {
+			if counts.nextDeferredAt != nil {
+				scheduleRedispatch(ctx, service.pool, service.logger, run.id, counts.nextDeferredAt, service.nowUTC())
+			}
+			service.logger.Info(ctx, synclog.MsgDispatchSyncRunNoop, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Count(synclog.KeyPendingUnits, counts.dispatchable))
+			return nil
+		}
 		armAt := service.nowUTC()
 		// CHAOS-8459: this pass claimed nothing, so the run is waiting on a
 		// cap or a long unit; the re-arm backs off with the idle time and a
 		// unit end wakes the pass at once (CHAOS-10013).
 		backoff, backoffAttrs := rearmBackoff(ctx, service.pool, service.logger, run.id, armAt)
-		// CHAOS-14250: a run with a run of its class ahead of it in every bucket it is capped in waits for the
-		// slot-free wake of the head; its own re-arm only bounds a lost wake.
-		if decision.nonHeadRearm > backoff {
-			backoff = decision.nonHeadRearm
-			backoffAttrs = []synclog.Attr{synclog.Count(synclog.KeyBackoffSeconds, int(backoff.Seconds()))}
-		}
 		scheduleRedispatch(ctx, service.pool, service.logger, run.id, dueNowRearmAtAfter(counts.nextDeferredAt, armAt, backoff), armAt, backoffAttrs...)
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunNoop, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Count(synclog.KeyPendingUnits, counts.dispatchable))
 		return nil
@@ -965,6 +981,43 @@ WHERE id = $1::uuid`,
 	flushPostCommitLogs(ctx)
 	flushRollupBumpTally(ctx, service.metrics)
 	return nil
+}
+
+// enqueueBucketSweeps enqueues the sweep of every bucket in capped and in unused, once each, and reports whether every
+// capped bucket's sweep was enqueued (false without an enqueuer). A failed enqueue is logged; the caller then keeps
+// the run's own re-arm for the cap.
+func (service *NativeDispatchSyncRunService) enqueueBucketSweeps(ctx context.Context, capped, unused []dispatchBucket) bool {
+	if service.sweeps == nil {
+		return false
+	}
+	done := make(map[dispatchBucket]bool, len(capped)+len(unused))
+	allCapped := true
+	release := make(map[dispatchBucket]bool, len(unused))
+	for _, bucket := range unused {
+		release[bucket] = true
+	}
+	for _, bucket := range append(append([]dispatchBucket(nil), unused...), capped...) {
+		if _, seen := done[bucket]; seen {
+			continue
+		}
+		// A slot this pass was given and did not use is a release (the sweep is due now); a cap only needs the
+		// bucket to have a sweep.
+		var err error
+		if release[bucket] {
+			err = service.sweeps.EnqueueBucketSweep(ctx, bucket.orgID, bucket.provider, bucket.costClass)
+		} else {
+			err = service.sweeps.EnsureBucketSweep(ctx, bucket.orgID, bucket.provider, bucket.costClass)
+		}
+		done[bucket] = err == nil
+		if err != nil {
+			service.logger.Warn(ctx, synclog.MsgDispatchSyncRunUnitCompletionWakeFailed,
+				synclog.Text(synclog.KeyPath, synclog.ParseLabel(syncrunrollup.DispatchWakePathBucketSweep)), synclog.Failure(err))
+		}
+	}
+	for _, bucket := range capped {
+		allCapped = allCapped && done[bucket]
+	}
+	return allCapped
 }
 
 // handOffBuckets lists the buckets that granted this pass more slots than it claimed there, in bucket order.

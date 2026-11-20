@@ -489,6 +489,39 @@
       }
     },
     {
+      "kind": "sync.bucket_sweep",
+      "current_version": 1,
+      "supported_versions": [
+        1
+      ],
+      "queue": "sync",
+      "handler_owner": "internal/syncdispatchruntime",
+      "execution_mode": "command",
+      "priority": 2,
+      "timeout_seconds": 120,
+      "max_attempts": 5,
+      "retry_policy": "bounded_exponential_jitter",
+      "cancellation": "cooperative_checkpoint",
+      "delivery": "replay_safe_at_least_once",
+      "idempotency": "sync_bucket",
+      "concurrency": {
+        "scope": "organization",
+        "limit": 16
+      },
+      "sensitive_fields": [],
+      "domain_link": "sync_bucket",
+      "organization_scope": "tenant",
+      "schema_versions": {
+        "1": "schemas/sync.bucket_sweep.v1.schema.json"
+      },
+      "fixtures": {
+        "1": [
+          "examples/sync.bucket_sweep.v1.json"
+        ]
+      },
+      "go_only": true
+    },
+    {
       "kind": "sync.external_push_expiry_sweep",
       "current_version": 1,
       "supported_versions": [

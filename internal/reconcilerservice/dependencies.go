@@ -465,6 +465,16 @@ func buildSyncMutationPipeline(
 	if err != nil {
 		return nil, err
 	}
+	// CHAOS-14250: the slots lease repair and the unreclaimable sweep free go to their buckets' sync.bucket_sweep,
+	// inserted by the same insert-only client.
+	bucketSweeps, err := syncdispatchruntime.NewRiverBucketSweepEnqueuer(riverClient)
+	if err != nil {
+		return nil, err
+	}
+	repair.WithBucketSweeps(bucketSweeps)
+	if unreclaimable, ok := sweep.(*syncreconciler.UnreclaimableSweep); ok {
+		unreclaimable.WithBucketSweeps(bucketSweeps)
+	}
 	kernel, err := syncreconciler.NewKernel(
 		domainPool,
 		queuePool,

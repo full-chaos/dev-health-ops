@@ -18,16 +18,17 @@ func appendWakeRun(runs []syncrunrollup.SlotFree, slot syncrunrollup.SlotFree) [
 	return append(runs, slot)
 }
 
-// wakeDispatchAfterCommit arms each slot's bucket head and run (CHAOS-10013). It
+// wakeDispatchAfterCommit releases each slot (CHAOS-10013, CHAOS-14250): the bucket's sweep when sweeps is set, else
+// the run's own wake. It
 // is called only after the writer's transaction committed, one bounded
 // statement per run, and it never fails the writer: see
 // syncrunrollup.WakeDispatch. db is nil only on the begin-func constructors the
 // unit tests use, which have no pool to wake through.
-func wakeDispatchAfterCommit(ctx context.Context, db syncrunrollup.Execer, runs []syncrunrollup.SlotFree, now time.Time, path string) {
+func wakeDispatchAfterCommit(ctx context.Context, db syncrunrollup.Execer, sweeps syncrunrollup.BucketSweepEnqueuer, runs []syncrunrollup.SlotFree, now time.Time, path string) {
 	if db == nil {
 		return
 	}
 	for _, slot := range runs {
-		syncrunrollup.WakeAfterSlotFree(ctx, db, slot, now, path)
+		syncrunrollup.ReleaseSlot(ctx, db, sweeps, slot, now, path)
 	}
 }

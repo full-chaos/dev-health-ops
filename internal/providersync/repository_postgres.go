@@ -30,6 +30,9 @@ type PostgresRepository struct {
 	// RepositoryIdentities, when set, is the auth outbox a `repos` effect commit
 	// appends its repository identity events to (WORKER_REPO_IDENTITY_OUTBOX).
 	RepositoryIdentities RepositoryIdentityAppender
+	// BucketSweeps, when set, receives the slot a finished unit frees: the bucket's sync.bucket_sweep hands it to
+	// the oldest eligible waiter (CHAOS-14250). Nil keeps the run's own wake (CHAOS-10013).
+	BucketSweeps syncrunrollup.BucketSweepEnqueuer
 }
 
 // NewPostgresRepository constructs the production unit repository. metrics is
@@ -1218,12 +1221,11 @@ func bumpSyncRunRollup(
 	return syncrunrollup.Bump(ctx, tx, syncRunID)
 }
 
-// wakeDispatch arms the bucket head's and the run's next dispatch pass now that
-// this unit has left its concurrency slot (CHAOS-10013). It runs after the
-// unit's commit and never fails the completion: see
-// syncrunrollup.WakeAfterSlotFree.
+// wakeDispatch releases this unit's concurrency slot to the dispatch side
+// (CHAOS-10013, CHAOS-14250). It runs after the unit's commit and never fails
+// the completion: see syncrunrollup.ReleaseSlot.
 func (repository *PostgresRepository) wakeDispatch(ctx context.Context, claim Claim, completedAt time.Time) {
-	syncrunrollup.WakeAfterSlotFree(ctx, repository.Pool, syncrunrollup.SlotFree{
+	syncrunrollup.ReleaseSlot(ctx, repository.Pool, repository.BucketSweeps, syncrunrollup.SlotFree{
 		RunID: claim.SyncRunID, OrgID: claim.OrgID, Provider: claim.Provider, CostClass: string(claim.CostClass),
 	}, completedAt, syncrunrollup.DispatchWakePathProviderUnit)
 }

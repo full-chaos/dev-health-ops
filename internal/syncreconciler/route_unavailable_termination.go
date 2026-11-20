@@ -294,7 +294,7 @@ func (sweep *UnreclaimableSweep) terminalizeRouteUnavailable(
 	if commitErr != nil {
 		return sweepUnavailable(sweepStepCommit, commitErr)
 	}
-	wakeDispatchAfterCommit(ctx, sweep.wake, wakeRuns, now, syncrunrollup.DispatchWakePathRouteUnavailable)
+	wakeDispatchAfterCommit(ctx, sweep.wake, sweep.sweeps, wakeRuns, now, syncrunrollup.DispatchWakePathRouteUnavailable)
 	return nil
 }
 

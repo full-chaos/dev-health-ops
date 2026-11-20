@@ -30,6 +30,7 @@ const (
 	KindDailyMetricsPartition        = "metrics.daily_partition"
 	KindDailyMetricsFinalize         = "metrics.daily_finalize"
 	KindTeamAutoimport               = "sync.team_autoimport"
+	KindBucketSweep                  = "sync.bucket_sweep"
 	KindTeamRepoOwnershipDerivation  = "sync.team_repo_ownership_derivation"
 	KindProviderOAuthRevocations     = "sync.provider_oauth_revocations"
 	KindExternalPushExpirySweep      = "sync.external_push_expiry_sweep"
@@ -223,6 +224,15 @@ type TeamAutoimportPayload struct {
 	SyncRunID string `json:"sync_run_id"`
 }
 
+// BucketSweepPayload names one sync dispatch bucket: the (organization, provider, cost class) whose concurrency slots
+// the sweep hands to the oldest eligible waiting runs (CHAOS-14250). The three fields are the River uniqueness key of
+// the kind, so concurrent releases of one bucket collapse into one pending sweep.
+type BucketSweepPayload struct {
+	OrgID     string `json:"org_id" river:"unique"`
+	Provider  string `json:"provider" river:"unique"`
+	CostClass string `json:"cost_class" river:"unique"`
+}
+
 // TeamRepoOwnershipDerivationPayload carries only the authoritative successful
 // SyncRun. CHAOS-4365 item 1b: the worker re-derives team_repo_ownership from
 // already-synced ClickHouse data (team_project_ownership, work_items,
@@ -401,6 +411,13 @@ var definitions = map[string]contractDefinition{
 		CurrentVersion:    ContractVersionV1,
 		SupportedVersions: []int{ContractVersionV1},
 		DomainLink:        "sync_run",
+		OrganizationScope: "tenant",
+	},
+	KindBucketSweep: {
+		Kind:              KindBucketSweep,
+		CurrentVersion:    ContractVersionV1,
+		SupportedVersions: []int{ContractVersionV1},
+		DomainLink:        "sync_bucket",
 		OrganizationScope: "tenant",
 	},
 	KindTeamRepoOwnershipDerivation: {
@@ -595,6 +612,15 @@ func Decode(kind string, data []byte) (Envelope, error) {
 			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
 		}
 		payload = value
+	case KindBucketSweep:
+		var value BucketSweepPayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
 	case KindTeamRepoOwnershipDerivation:
 		var value TeamRepoOwnershipDerivationPayload
 		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
@@ -693,6 +719,8 @@ func MarshalCanonical(envelope Envelope) ([]byte, error) {
 		kind = KindDailyMetricsFinalize
 	case TeamAutoimportPayload:
 		kind = KindTeamAutoimport
+	case BucketSweepPayload:
+		kind = KindBucketSweep
 	case TeamRepoOwnershipDerivationPayload:
 		kind = KindTeamRepoOwnershipDerivation
 	case WorkGraphBuildPayload:
@@ -881,6 +909,18 @@ func (payload DailyMetricsFinalizePayload) validate() error {
 
 func (payload TeamAutoimportPayload) validate() error {
 	return validateUUID("sync_run_id", payload.SyncRunID)
+}
+
+var bucketSweepLabelPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+
+func (payload BucketSweepPayload) validate() error {
+	if err := validateUUID("org_id", payload.OrgID); err != nil {
+		return err
+	}
+	if !bucketSweepLabelPattern.MatchString(payload.Provider) || !bucketSweepLabelPattern.MatchString(payload.CostClass) {
+		return errors.New("provider and cost_class must be bounded lowercase labels")
+	}
+	return nil
 }
 
 func (payload TeamRepoOwnershipDerivationPayload) validate() error {

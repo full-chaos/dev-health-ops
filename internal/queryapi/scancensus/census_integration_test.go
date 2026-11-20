@@ -525,6 +525,12 @@ const nullableIntoPlainSites = `
 // scan target or column type changed, and the reason class of each pin is kept.
 // unverifiedSites is `file|func|destinations|digest|reason`; see reasonClass.
 //
+// CHAOS-14376 merge of main (the CHAOS-14355 slice 3 tie-break of the throughput forecast reads): four throughputforecast
+// pins re-pinned by hand, digests copied from the local TestScanTypeCensus output (not computed): loadBacklog,
+// loadStaleWIP, loadThroughputHistory, loadWorkItemOverlay. The newest version is now the argMax of the value tuple by
+// (computed_at, cityHash64(values)) and the measures are its picked.N elements; the scan targets read the same element
+// types as before (UInt32 sums are UInt64, the Date day/min day is *time.Time, avg() is Float64, the Nullable wip ages
+// stay Nullable), so each pin keeps its reason class.
 // CHAOS-14376: six forecast pins added by hand, digests copied from the local TestScanTypeCensus output (not computed):
 // capacityforecast/clickhouse.go (loadBacklog, loadThroughput) and throughputforecast/clickhouse.go (loadBacklog,
 // loadStaleWIP, loadThroughputHistory, loadWorkItemOverlay). Their FROM is now a source chosen at run time (the table, or
@@ -755,6 +761,16 @@ const nullableIntoPlainSites = `
 //	loadDocDrift 598c61985afe -> 3c8b7092e723
 //	loadFlaky 2673b9f034d0 -> 9c8219b2ccb8
 //	loadLabels ffbc61d0410c -> 9df0068c57ab
+//
+// CHAOS-14355 (operating review): the argMax(x, computed_at) period reads pick ONE version per key, ordered by
+// (computed_at, cityHash64(tuple(values))), and test liveness with liverow.Predicate on the picked row in an outer WHERE
+// (no per-column HAVING). fetchWorkItems and fetchStateDurations: same select list, column types and scan targets; the
+// statement text changed. fetchChangeFailureAgg: statement not edited, the file's SQL digest moved. Re-pinned by hand,
+// digests copied from the local TestScanTypeCensus failure output (not computed):
+//
+//	fetchChangeFailureAgg 78aa9a6d5455 -> 33e78a54a14c
+//	fetchStateDurations 4e40f48a6488 -> dd682a464928
+//	fetchWorkItems 02d2157b4812 -> 6adb8910eb84
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|e67003e26fc2|not-describable
@@ -810,9 +826,9 @@ internal/queryapi/investment/sunburst.go|FetchInvestmentSunburst|*string,*string
 internal/queryapi/investmentexplain/reader.go|FetchInvestmentBreakdown|*string,*string,*float64|2283428d08a0|spliced-select-list
 internal/queryapi/investmentexplain/reader.go|FetchInvestmentThemeEffort|*string,*float64,*float64,*float64|fd01dffa31fe|spliced-select-list
 internal/queryapi/investmentexplain/workunitreader.go|FetchWorkUnitInvestments|*string,**string,**string,*time.Time,*time.Time,**string,**string,**string,**float64,*float64,*[]string,*[]float64,*[]string,*[]float64,**string,**float64,**string,**string,**string,**string,*time.Time|63286cc9b046|spliced-select-list
-internal/queryapi/operatingreview/operatingreview.go|fetchChangeFailureAgg|[]any|78aa9a6d5455|variadic-destinations
-internal/queryapi/operatingreview/operatingreview.go|fetchStateDurations|*string,*uint64,*float64,*float64|4e40f48a6488|not-describable
-internal/queryapi/operatingreview/operatingreview.go|fetchWorkItems|*time.Time,*uint64,*uint64,*uint32,**float64,**float64,**float64,**float64|02d2157b4812|not-describable
+internal/queryapi/operatingreview/operatingreview.go|fetchChangeFailureAgg|[]any|33e78a54a14c|variadic-destinations
+internal/queryapi/operatingreview/operatingreview.go|fetchStateDurations|*string,*uint64,*float64,*float64|dd682a464928|not-describable
+internal/queryapi/operatingreview/operatingreview.go|fetchWorkItems|*time.Time,*uint64,*uint64,*uint32,**float64,**float64,**float64,**float64|6adb8910eb84|not-describable
 internal/queryapi/people/metricqueries.go|fetchPersonBreakdown|*string,*float64|f158cf132a83|spliced-select-list
 internal/queryapi/people/metricqueries.go|fetchPersonMetricSeries|*time.Time,*float64|aaa0e43ef5ee|spliced-select-list
 internal/queryapi/people/metricqueries.go|fetchPersonMetricValue|*uint64,*float64|44f613075ca4|spliced-select-list
@@ -832,10 +848,10 @@ internal/queryapi/sankey/queries.go|fetchExpenseCounts|*float64,*float64,*float6
 internal/queryapi/sankey/queries.go|fetchStateStatusCounts|*string,*float64|d810cfa8eeb7|not-describable
 internal/queryapi/server/mcp_route.go|Scan|[]any|073743d6899c|variadic-destinations
 internal/queryapi/testopsrisk/testopsrisk.go|readDaily|**time.Time,**float64,**float64,**float64,**float64,**float64,**float64,**uint64,**float64|2072b04aaa64|not-describable
-internal/queryapi/throughputforecast/clickhouse.go|loadBacklog|*uint64,*uint64,*uint64,*time.Time|ebb4c8cb9910|not-describable
-internal/queryapi/throughputforecast/clickhouse.go|loadStaleWIP|**float64,**float64|67e04ce3c3da|not-describable
-internal/queryapi/throughputforecast/clickhouse.go|loadThroughputHistory|*time.Time,*uint64|2f4e984cf05a|not-describable
-internal/queryapi/throughputforecast/clickhouse.go|loadWorkItemOverlay|*float64,*uint64|bb0b531aa798|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadBacklog|*uint64,*uint64,*uint64,*time.Time|2d4d80074e2b|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadStaleWIP|**float64,**float64|3dd402e56d1e|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadThroughputHistory|*time.Time,*uint64|a930dc834fd5|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadWorkItemOverlay|*float64,*uint64|740708b6aca9|not-describable
 internal/queryapi/workgraph/edges.go|countMatchingEdges|*uint64|8d8175642fa2|not-describable
 internal/queryapi/workgraph/edges.go|fetchDedupedEdgeRows|*string,*string,*string,*string,*string,*string,*string,*string,*string,*float64,*string|9ec6525b760f|statement-not-static
 internal/queryapi/workgraph/edges.go|queryDependencyEdges|*string,*string,*string,*string,*string,*string,*string,*string,*string,*float64,*string|c998ded583fc|statement-not-static

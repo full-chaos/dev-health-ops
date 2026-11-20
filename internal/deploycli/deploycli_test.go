@@ -5,13 +5,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	deployrun "github.com/full-chaos/dev-health-ops/internal/deploy/run"
 )
 
 const (
@@ -45,7 +48,7 @@ func pinnedHost(t *testing.T) host {
 	if err := os.WriteFile(pin, []byte(hex.EncodeToString(sum[:])+" "+commit+" "+bin+"\n"), 0o400); err != nil {
 		t.Fatal(err)
 	}
-	return host{pinPath: pin, selfExe: exe, commit: commit}
+	return host{pinPath: pin, selfExe: exe, commit: commit, harden: func() error { return nil }}
 }
 
 func unpinnedHost(t *testing.T) host {
@@ -174,5 +177,49 @@ func TestRefusalsHoldNoInputValueBytes(t *testing.T) {
 				t.Fatalf("the output holds the input bytes %q:\n%s%s", v, out, errOut)
 			}
 		}
+	}
+}
+
+// readOrder records whether stdin was read before harden ran.
+type readOrder struct {
+	hardened, readFirst *bool
+	r                   *strings.Reader
+}
+
+func (o readOrder) Read(p []byte) (int, error) {
+	if !*o.hardened {
+		*o.readFirst = true
+	}
+	return o.r.Read(p)
+}
+
+func TestRollHardensBeforeItReadsTheInputs(t *testing.T) {
+	if reflect.ValueOf(prodHost().harden).Pointer() != reflect.ValueOf(deployrun.Harden).Pointer() {
+		t.Fatal("the prod host must harden with run.Harden (umask 077, cd /)")
+	}
+	var hardened, readFirst bool
+	calls := 0
+	h := pinnedHost(t)
+	h.harden = func() error { calls++; hardened = true; return nil }
+	var out bytes.Buffer
+	code := cli.Execute(context.Background(), "dho", []cli.Command{command(h)}, cli.Env{
+		Args:  []string{"deploy", "roll", "dev-health", "pre", "-"},
+		Stdin: readOrder{hardened: &hardened, readFirst: &readFirst, r: strings.NewReader(good)}, Stdout: &out, Stderr: &out,
+		Lookup: func(string) (string, bool) { return "", false },
+	})
+	if code != cli.ExitRefused || calls != 1 || readFirst || !strings.Contains(out.String(), "INPUTS: PASS") {
+		t.Fatalf("exit %d, harden calls %d, stdin read before harden %v:\n%s", code, calls, readFirst, out.String())
+	}
+
+	h.harden = func() error { return errors.New("no") }
+	out2, _, code := exec(t, h, good, "deploy", "roll", "dev-health", "pre", "-")
+	if code != cli.ExitRefused || strings.Contains(out2, "DHO-DEPLOY END") || !strings.Contains(out2, "cannot set umask 077 and cd /") {
+		t.Fatalf("a failed harden must refuse before anything is read; exit %d:\n%s", code, out2)
+	}
+
+	calls = 0
+	h.harden = func() error { calls++; return nil }
+	if _, _, code := exec(t, h, good, "deploy", "roll", "dev-health", "pre"); code != cli.ExitUsage || calls != 0 {
+		t.Fatalf("a usage error must not harden; exit %d, calls %d", code, calls)
 	}
 }

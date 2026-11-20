@@ -233,16 +233,9 @@ func (o opportunity) project(repoName, teamName *string) model.AIOpportunity {
 		}
 		drill = append(drill, model.AIWorkGraphDrilldownRef{RootType: "pr", RootID: prrootid.Format(repo, number), Label: "PR " + number})
 	}
-	secondary := ""
-	if o.teamID != nil {
-		secondary = *o.teamID
-	}
-	if o.idKey != "" {
-		secondary = o.idKey
-	}
 	repo := o.repoID
 	return model.AIOpportunity{
-		OpportunityID:       stableOpportunityID(opportunityKinds[o.kind], o.repoID, secondary),
+		OpportunityID:       o.servedID(),
 		Kind:                o.kind,
 		RepoID:              &repo,
 		TeamID:              o.teamID,

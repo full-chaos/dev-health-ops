@@ -309,3 +309,31 @@ func TestRepetitiveIDDeclarationStillFindsDefects(t *testing.T) {
 		}
 	}
 }
+
+// Two clusters that differ only in the work type (one author, one prefix, one count, the same pull requests: a pull
+// request linked to two work items of two types) tie on every key of the served order but serve two ids; the served
+// order and the limit-1 cut must not follow the read's row order.
+func TestCell14266TiedClustersKeepOneServedOrder(t *testing.T) {
+	a := cluster14266("bump deps for", "a@example.com", "pull_request", 6, "1", "2")
+	b := cluster14266("bump deps for", "a@example.com", "bug", 6, "1", "2")
+	served := func(limit int, rep ...map[string]any) []string {
+		got, err := AiOpportunities(context.Background(), &fixtureClientD{c: oracleDCase{Rep: rep}}, "org-1", nil, limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, r := range got.Recommendations {
+			ids = append(ids, r.OpportunityID)
+		}
+		return ids
+	}
+	for _, limit := range []int{1, 5} {
+		ab, ba := served(limit, a, b), served(limit, b, a)
+		if !reflect.DeepEqual(ab, ba) {
+			t.Errorf("limit %d: the served order follows the row order: %v vs %v", limit, ab, ba)
+		}
+	}
+	if ids := served(5, a, b); len(ids) != 2 || ids[0] == ids[1] {
+		t.Errorf("want two ids, got %v", ids)
+	}
+}

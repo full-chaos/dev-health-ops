@@ -63,10 +63,22 @@ func (r *fakeRows) Scan(dest ...any) error {
 		switch ptr := d.(type) {
 		case *string:
 			*ptr = row[i].(string)
+		case **string:
+			if row[i] == nil {
+				*ptr = nil
+			} else {
+				v := row[i].(string)
+				*ptr = &v
+			}
 		case *time.Time:
 			*ptr = row[i].(time.Time)
 		case **time.Time:
-			*ptr = nil
+			if row[i] == nil {
+				*ptr = nil
+			} else {
+				v := row[i].(time.Time)
+				*ptr = &v
+			}
 		case *uint64:
 			*ptr = row[i].(uint64)
 		case *uint32:

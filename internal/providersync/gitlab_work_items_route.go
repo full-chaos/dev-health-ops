@@ -330,9 +330,9 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	pages += issuePages
 	issuePayloads = dropOutsideWorkItemWindow(ctx, counted.Metrics, claim, issuePayloads, gitLabWorkItemWindowView)
 	for _, raw := range issuePayloads {
-		var payload gitlabIssueWorkItemPayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+		payload, err := decodeGitLabIssueWorkItem(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(gitlabIssuesRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		labelEvents := []gitlabLabelEventPayload(nil)
 		if fetchLabels {
@@ -460,9 +460,9 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		pages += mergeRequestPages
 		mergeRequests = dropOutsideWorkItemWindow(ctx, counted.Metrics, claim, mergeRequests, gitLabWorkItemWindowView)
 		for _, raw := range mergeRequests {
-			var payload gitlabMergeRequestWorkItemPayload
-			if err := json.Unmarshal(raw, &payload); err != nil {
-				return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+			payload, err := decodeGitLabMergeRequestWorkItem(raw)
+			if err != nil {
+				return CompleteRouteBatch{}, providerfoundation.RouteFailure(gitlabMergeRequestsRoute, providerfoundation.ReasonBodyDecode, err)
 			}
 			stateEvents := []gitlabStateEventPayload(nil)
 			if fetchHistory {
@@ -671,9 +671,9 @@ func collectGitLabMilestones(
 	}
 	result := make([]gitlabIssueMilestonePayload, 0, len(items))
 	for _, raw := range items {
-		var payload gitlabIssueMilestonePayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return nil, pages, providerfoundation.ErrNormalizationInvalid
+		payload, err := decodeGitLabIssueMilestone(raw)
+		if err != nil {
+			return nil, pages, providerfoundation.RouteFailure(route, providerfoundation.ReasonBodyDecode, err)
 		}
 		result = append(result, payload)
 	}
@@ -690,9 +690,9 @@ func collectGitLabLabelEvents(
 	}
 	result := make([]gitlabLabelEventPayload, 0, len(items))
 	for _, raw := range items {
-		var payload gitlabLabelEventPayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return nil, pages, providerfoundation.ErrNormalizationInvalid
+		payload, err := decodeGitLabLabelEvent(raw)
+		if err != nil {
+			return nil, pages, providerfoundation.RouteFailure(route, providerfoundation.ReasonBodyDecode, err)
 		}
 		result = append(result, payload)
 	}
@@ -709,9 +709,9 @@ func collectGitLabStateEvents(
 	}
 	result := make([]gitlabStateEventPayload, 0, len(items))
 	for _, raw := range items {
-		var payload gitlabStateEventPayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return nil, pages, providerfoundation.ErrNormalizationInvalid
+		payload, err := decodeGitLabStateEvent(raw)
+		if err != nil {
+			return nil, pages, providerfoundation.RouteFailure(route, providerfoundation.ReasonBodyDecode, err)
 		}
 		result = append(result, payload)
 	}
@@ -728,9 +728,9 @@ func collectGitLabIssueLinks(
 	}
 	result := make([]gitlabIssueLinkPayload, 0, len(items))
 	for _, raw := range items {
-		var payload gitlabIssueLinkPayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return nil, pages, providerfoundation.ErrNormalizationInvalid
+		payload, err := decodeGitLabIssueLink(raw)
+		if err != nil {
+			return nil, pages, providerfoundation.RouteFailure(route, providerfoundation.ReasonBodyDecode, err)
 		}
 		result = append(result, payload)
 	}
@@ -747,9 +747,9 @@ func collectGitLabClosingMergeRequests(
 	}
 	result := make([]gitlabClosingMergeRequestPayload, 0, len(items))
 	for _, raw := range items {
-		var payload gitlabClosingMergeRequestPayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return nil, pages, providerfoundation.ErrNormalizationInvalid
+		payload, err := decodeGitLabClosingMergeRequest(raw)
+		if err != nil {
+			return nil, pages, providerfoundation.RouteFailure(route, providerfoundation.ReasonBodyDecode, err)
 		}
 		if _, ok := payload.reference(); !ok {
 			return nil, pages, providerfoundation.ErrNormalizationInvalid
@@ -769,12 +769,9 @@ func collectGitLabNotes(
 	}
 	result := make([]gitlabNotePayload, 0, len(items))
 	for _, raw := range items {
-		var payload gitlabNotePayload
-		// UseNumber: a note id above 2^53 must keep its exact text (CHAOS-8790).
-		decoder := json.NewDecoder(bytes.NewReader(raw))
-		decoder.UseNumber()
-		if err := decoder.Decode(&payload); err != nil {
-			return nil, pages, providerfoundation.ErrNormalizationInvalid
+		payload, err := decodeGitLabNote(raw)
+		if err != nil {
+			return nil, pages, providerfoundation.RouteFailure(route, providerfoundation.ReasonBodyDecode, err)
 		}
 		result = append(result, payload)
 	}
@@ -901,9 +898,9 @@ func (handler GitLabWorkItemsRouteHandler) collectGitLabGroupEpics(
 	listed = len(payloads)
 	payloads = dropOutsideWorkItemWindow(ctx, client.Metrics, claim, payloads, gitLabWorkItemWindowView)
 	for _, raw := range payloads {
-		var payload gitlabEpicPayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return outcome, providerfoundation.ErrNormalizationInvalid
+		payload, err := decodeGitLabEpic(raw)
+		if err != nil {
+			return outcome, providerfoundation.RouteFailure(gitlabGroupEpicsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		iidText, _, _ := pythonJSONScalar(payload.IID)
 		epicRoot := groupRoot + "/epics/" + url.PathEscape(iidText)
@@ -966,4 +963,79 @@ func (handler GitLabWorkItemsRouteHandler) collectGitLabGroupEpics(
 		result = "incomplete"
 	}
 	return outcome, nil
+}
+
+func decodeGitLabIssueWorkItem(raw json.RawMessage) (gitlabIssueWorkItemPayload, error) {
+	var payload gitlabIssueWorkItemPayload
+	if json.Unmarshal(raw, &payload) != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
+}
+
+func decodeGitLabMergeRequestWorkItem(raw json.RawMessage) (gitlabMergeRequestWorkItemPayload, error) {
+	var payload gitlabMergeRequestWorkItemPayload
+	if json.Unmarshal(raw, &payload) != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
+}
+
+func decodeGitLabIssueMilestone(raw json.RawMessage) (gitlabIssueMilestonePayload, error) {
+	var payload gitlabIssueMilestonePayload
+	if json.Unmarshal(raw, &payload) != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
+}
+
+func decodeGitLabLabelEvent(raw json.RawMessage) (gitlabLabelEventPayload, error) {
+	var payload gitlabLabelEventPayload
+	if json.Unmarshal(raw, &payload) != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
+}
+
+func decodeGitLabStateEvent(raw json.RawMessage) (gitlabStateEventPayload, error) {
+	var payload gitlabStateEventPayload
+	if json.Unmarshal(raw, &payload) != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
+}
+
+func decodeGitLabIssueLink(raw json.RawMessage) (gitlabIssueLinkPayload, error) {
+	var payload gitlabIssueLinkPayload
+	if json.Unmarshal(raw, &payload) != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
+}
+
+func decodeGitLabClosingMergeRequest(raw json.RawMessage) (gitlabClosingMergeRequestPayload, error) {
+	var payload gitlabClosingMergeRequestPayload
+	if json.Unmarshal(raw, &payload) != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
+}
+
+func decodeGitLabEpic(raw json.RawMessage) (gitlabEpicPayload, error) {
+	var payload gitlabEpicPayload
+	if json.Unmarshal(raw, &payload) != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
+}
+
+// decodeGitLabNote keeps UseNumber: a note id above 2^53 must keep its exact text (CHAOS-8790).
+func decodeGitLabNote(raw json.RawMessage) (gitlabNotePayload, error) {
+	var payload gitlabNotePayload
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&payload) != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
 }

@@ -31,7 +31,7 @@ type censusPin struct {
 }
 
 var pinnedTableFiles = map[string]censusPin{
-	"internal/cigates/metricsproof/proof.go": {"bd1b94c430164bb9854ebf62b5ac652edb2fe757d4583dc360ffb41c250109ac",
+	"internal/cigates/metricsproof/proof.go": {"c1df0a93c5da39a38a3e93f6dc17cd297646b6369c2d0b93158241073613ae07",
 		"not a reader: names the table in the proof table map"},
 	"internal/jobs/metrics/daily/benchmarking/clickhouse.go": {"030945e440857e7d4f09c4772c7241b415d4873e2bd092a87e0489586637eaa4",
 		"reader rule applied: pass_rate is pooled, passed_count over executedCases (passed_count + failed_count), no stored rate read; flake_rate and retry_dependency_rate are pooled over distinct_cases, a repo-day with a NULL rate or NULL counts in neither sum; failure_recurrence_score is pooled, recurrent_failed_names over distinct_failed_names, a repo-day without both counts in neither sum; line_coverage_pct is pooled over lines_total and branch_coverage_pct over branches_total, a repo-day with a NULL count in neither sum, and defect_intro_rate over new_items_count (not the test table); LiveInputKeys counts live (repo_id, day) keys and reads no value column"},
@@ -53,7 +53,7 @@ var pinnedTableFiles = map[string]censusPin{
 		"reader rule applied: newest-row subquery then the live-row filter, the outer query names flake and case counts"},
 	"internal/queryapi/analytics/testopsownership.go": {"488386f9a7d8ebfc6e109f4e8ffa94971c36298f8650a2bfd5e12626983f3f37",
 		"not a reader: table name switch"},
-	"internal/queryapi/analytics/timeseries.go": {"30584b37e1528c4b938bf633da0c9b57d2d487999961592b5062717b54b9f808",
+	"internal/queryapi/analytics/timeseries.go": {"bb3c9338da0e30a1262328c18d5be19fa2740174eb58f5b1f3fef3c1566bf6ad",
 		"not a reader: natural key map; the newest-row source leaves out a retired day (live-row filter)"},
 	"internal/queryapi/analytics/validate.go": {"1c38d31d7ae4454bac6269c14d73b27ab7126aca8ff56888d032957b6fd475dd",
 		"not a reader: routes a measure to the table, the column rule lives elsewhere"},

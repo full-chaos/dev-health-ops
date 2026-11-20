@@ -47,6 +47,8 @@ func TestOrgActivityAgeProbeOfTheWorkerReportsTheNewestRowAgeAndNoSampleWhenEmpt
 	t.Cleanup(admin.Close)
 	prepareMultiReplicaDatabase(t, ctx, admin)
 	// If ageSQL is ever qualified as pg_catalog.now(), this shadow is bypassed and this test fails on purpose: switch it to a Go clock seam then.
+	// ageSQL calls now() unqualified. If the product SQL is ever changed to pg_catalog.now(), this shadow stops working and this test
+	// fails on purpose: it must then switch to the Go clock seam of the probe.
 	if _, err := admin.Exec(ctx, `CREATE FUNCTION public.now() RETURNS timestamptz LANGUAGE sql STABLE
 AS $$ SELECT timestamptz '2026-11-20 12:00:00+00' $$`); err != nil {
 		t.Fatal(err)
@@ -149,8 +151,8 @@ AS $$ SELECT timestamptz '2026-11-20 12:00:00+00' $$`); err != nil {
 
 	t.Run("the gauge is the age of the newest row over all orgs", func(t *testing.T) {
 		clock := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
-		// One row per org (org_id is the key): refreshed 3 h, 1 h and 30 min ago (the newest, held by the last org); computed_at is 10 h older, so it is not the age column.
-		for index, age := range []time.Duration{3 * time.Hour, time.Hour, 30 * time.Minute} {
+		// One row per org (org_id is the key): refreshed 3 h, 30 min and 1 h ago (the newest is the middle one, so a first-row or last-row read dies); computed_at is 10 h older, so it is not the age column.
+		for index, age := range []time.Duration{3 * time.Hour, 30 * time.Minute, time.Hour} {
 			id := uuid.New()
 			if _, err := admin.Exec(ctx, `INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, $2, $2, 'community', 'stripe', true, now(), now())`, id, "age-probe-"+string(rune('a'+index))); err != nil {
@@ -163,7 +165,7 @@ VALUES ($1, $2, $2, 'community', 'stripe', true, now(), now())`, id, "age-probe-
 		}
 		gauge, failed := build(t)
 		if len(gauge) != 1 || gauge[0] != 1800 {
-			t.Errorf("gauge = %v, want exactly [1800] (now - max(refreshed_at) of the 30 min old row)", gauge)
+			t.Errorf("gauge = %v, want exactly [1800] (now - max(refreshed_at) of the 30 min old row, the middle one)", gauge)
 		}
 		if len(failed) != 1 || failed[0] != 0 {
 			t.Errorf("read-failure counter = %v, want one series at 0", failed)

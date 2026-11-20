@@ -180,7 +180,9 @@ func (f *fixtureClientD) Query(_ context.Context, st string, b []clickhouse.Bind
 	case strings.Contains(st, "title_prefix"):
 		var rows [][]any
 		for _, m := range c.Rep {
-			rows = append(rows, []any{m["repo_id"].(string), m["title_prefix"].(string), uint64(m["prs_total"].(float64)), strList(m["pr_refs"])})
+			author, _ := m["cluster_author"].(string)
+			workType, _ := m["cluster_work_type"].(string)
+			rows = append(rows, []any{m["repo_id"].(string), m["title_prefix"].(string), uint64(m["prs_total"].(float64)), strList(m["pr_refs"]), author, workType})
 		}
 		return &scriptedRows{rows: rows}, nil
 	case strings.Contains(st, "LEFT ANTI JOIN"):

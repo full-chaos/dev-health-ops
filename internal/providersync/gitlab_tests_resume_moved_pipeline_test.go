@@ -538,9 +538,10 @@ func TestGitLabTestsResumeStepBackIsCounted(t *testing.T) {
 
 // A pipeline that is NOT in the window when the walk starts (id > LastID, updated before SinceAt) and is updated between
 // two chunks: (a) updated past BeforeAt (any update after the plan): this window does not list it, the next window
-// lists and reads it. (b) updated INTO this window (only when GitLab's clock is behind the plan time): its id is above
-// LastID, so this walk passes it, and the next window (updated_after = this BeforeAt) does not list it either. (b) is the
-// named residual; the updated_at-ordered binary missed it the same way (it moved in front of the resume point).
+// lists and reads it. (b) updated INTO this window (GitLab's clock behind ours, or an explicit future before_at such as
+// a backfill): its id is above LastID, so this walk passes it, and the next window (updated_after = this BeforeAt) does
+// not list it either. (b) is the named residual, NOT closed (ticket 14383); a NEW pipeline listed inside the window after
+// the walk passed its id is the same class. The updated_at-ordered binary missed it the same way.
 func TestGitLabTestsResumeAPipelineUpdatedIntoAWindowAfterTheWalkPassedItsID(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "tests")
 	next := claim
@@ -620,6 +621,152 @@ func TestGitLabTestsResumeWhenTheUpdatedOrderIsNotTheIDOrder(t *testing.T) {
 					}
 				}
 			})
+		}
+	}
+}
+
+// gitLabResumeFixtureN is gitLabResumeFixture with n pipelines.
+func gitLabResumeFixtureN(n int) []gitLabResumePipeline {
+	pipelines := gitLabResumeFixture()
+	base := time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC)
+	for index := len(pipelines); index < n; index++ {
+		started := base.Add(time.Duration(index) * time.Minute)
+		pipelines = append(pipelines, gitLabResumePipeline{id: 1001 + index, started: started, updated: started.Add(5 * time.Minute)})
+	}
+	return pipelines[:n]
+}
+
+// A phase that has charged its whole page budget still re-reads its already-charged pages for free: a yield inside the
+// last budgeted page, and a page-end yield after which deletions move the last unread pipeline onto that page, both end
+// whole (no truncation, every pipeline read once). Only a page the phase never charged needs budget.
+func TestGitLabTestsResumeWithTheWholeBudgetChargedStillReadsChargedPages(t *testing.T) {
+	for _, phase := range []string{"pipelines", "reports"} {
+		for _, tc := range []struct {
+			name      string
+			pipelines int
+			maxPages  int
+			yield     int
+			deleted   int
+		}{
+			{"mid page of the last budgeted page, steady", 250, 3, 225, 0},
+			// Two deletions leave page 2 short (99), so the listing provably ends on it: a full last page would make the
+			// paginator ask for page 3, which needs budget.
+			{"page end of the last budgeted page, two read pipelines deleted", 201, 2, 200, 2},
+		} {
+			t.Run(phase+": "+tc.name, func(t *testing.T) {
+				t.Parallel()
+				fake := &gitLabResumeFake{t: t, pipelines: gitLabResumeFixtureN(tc.pipelines)}
+				result, err := gitLabResumeRun(t, fake, gitLabResumeWalkOptions{
+					handler: GitLabTestsRouteHandler{MaxPages: tc.maxPages}, phase: phase, yields: []int{tc.yield},
+					mutate: func(int) { gitLabResumeDelete(fake, gitLabResumeListed(fake)[:tc.deleted]...) },
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				// The other phase walks the listing fresh and may need a page past the budget (201 pipelines, 2 pages): only
+				// the resumed phase's own truncation is the defect.
+				component := gitLabPipelineInventoryComponent
+				if phase == "reports" {
+					component = gitLabReportInventoryComponent
+				}
+				for _, truncated := range result.cursor.Truncated {
+					if truncated == component {
+						t.Fatalf("truncated=%v, want the resumed phase whole: the re-read pages were charged already", result.cursor.Truncated)
+					}
+				}
+				reads := result.reads.of(phase)
+				if len(reads) != tc.pipelines {
+					t.Fatalf("read %d pipelines, want %d", len(reads), tc.pipelines)
+				}
+				for id, count := range reads {
+					if count != 1 {
+						t.Fatalf("pipeline %d read %d times", id, count)
+					}
+				}
+			})
+		}
+	}
+}
+
+// Two yields around a step back (or around a legacy restart) charge no page twice: after the first resume the cursor
+// sits on a lower page than the phase has charged, and the second resume still knows the charged pages.
+func TestGitLabTestsResumeTwiceAfterAStepBackChargesNoPageTwice(t *testing.T) {
+	for _, phase := range []string{"pipelines", "reports"} {
+		for _, legacy := range []bool{false, true} {
+			t.Run(phase+" legacy="+strconv.FormatBool(legacy), func(t *testing.T) {
+				t.Parallel()
+				fake := &gitLabResumeFake{t: t, pipelines: gitLabResumeFixture()}
+				options := gitLabResumeWalkOptions{
+					phase: phase, yields: []int{150, 151},
+					mutate: func(yield int) {
+						if yield == 0 && !legacy {
+							gitLabResumeDelete(fake, gitLabResumeListed(fake)[:120]...)
+						}
+					},
+				}
+				rewrites := 0
+				if legacy {
+					options.rewrite = func(raw string) string {
+						rewrites++
+						if rewrites > 1 {
+							return raw
+						}
+						var fields map[string]any
+						if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+							t.Fatal(err)
+						}
+						delete(fields, "li")
+						legacyRaw, err := json.Marshal(fields)
+						if err != nil {
+							t.Fatal(err)
+						}
+						return string(legacyRaw)
+					}
+				}
+				result, err := gitLabResumeRun(t, fake, options)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pages, want := result.cursor.PipelinePages, 3
+				if phase == "reports" {
+					pages = result.cursor.ReportPages
+				}
+				if !legacy {
+					want = 2 // 130 pipelines left after the deletion: pages 1 and 2
+				}
+				if pages != want {
+					t.Fatalf("the phase charged %d pages, want %d (no page charged twice)", pages, want)
+				}
+			})
+		}
+	}
+}
+
+// The listed pipeline id is read from the exact "id" key as a positive JSON integer; a quoted id, a case variant of the
+// key and every non-integer form are refused.
+func TestGitLabTestsListedPipelineIDIsAnExactPositiveInteger(t *testing.T) {
+	for raw, want := range map[string]int64{
+		`{"id":1250}`:               1250,
+		`{"id":1250,"ID":7}`:        1250,
+		`{"id":"1250"}`:             0,
+		`{"ID":1250}`:               0,
+		`{"id":0,"Id":1250}`:        0,
+		`{"Id":1250}`:               0,
+		`{"id":null}`:               0,
+		`{"id":-3}`:                 0,
+		`{"id":12.5}`:               0,
+		`{"id":1e3}`:                0,
+		`{}`:                        0,
+		`{"id":[1250]}`:             0,
+		`{"id":true}`:               0,
+		`{"id":"x","name":"other"}`: 0,
+	} {
+		id, err := gitLabTestsListedPipelineID(json.RawMessage(raw))
+		if want > 0 && (err != nil || id != want) {
+			t.Errorf("%s: id=%d err=%v, want %d", raw, id, err, want)
+		}
+		if want == 0 && err == nil {
+			t.Errorf("%s: accepted as %d, want a refusal", raw, id)
 		}
 	}
 }

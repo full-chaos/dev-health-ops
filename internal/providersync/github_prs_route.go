@@ -260,9 +260,11 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 			return CompleteRouteBatch{}, err
 		}
 		rows = append(rows, row)
-		pullAttributions, err := githubPullRequestAttributionsFromDetail(
-			claim, repoUUID, raw, normalizedAt,
-		)
+		pull, err := decodeGitHubPullWorkItemPayload(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubPullRoute, providerfoundation.ReasonBodyDecode, err)
+		}
+		pullAttributions, err := detectGitHubPullRequestAttributions(claim, repoUUID, pull, normalizedAt)
 		if err != nil {
 			return CompleteRouteBatch{}, err
 		}
@@ -327,8 +329,11 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 func filterGitHubPullWindow(items []json.RawMessage, claim Claim) ([]int, error) {
 	numbers := make([]int, 0, len(items))
 	for _, raw := range items {
-		var item gitHubPullListItem
-		if json.Unmarshal(raw, &item) != nil || item.Number < 1 {
+		item, err := decodeGitHubPullListItem(raw)
+		if err != nil {
+			return nil, providerfoundation.RouteFailure(githubPullsRoute, providerfoundation.ReasonBodyDecode, err)
+		}
+		if item.Number < 1 {
 			return nil, providerfoundation.ErrNormalizationInvalid
 		}
 		if pullOutsideKnownWindow(firstTime(item.UpdatedAt), claim) {
@@ -564,19 +569,21 @@ func decodeGitHubPullDetail(raw json.RawMessage, target *gitHubPullDetailPayload
 	return nil
 }
 
-// githubPullRequestAttributionsFromDetail runs the ONE pull-request AI
-// detector (detectGitHubPullRequestAttributions) over the payload the
-// work-items route decodes from the same endpoint. Both routes therefore write
-// the same ai_attribution key with the same content.
-func githubPullRequestAttributionsFromDetail(
-	claim Claim,
-	repoID uuid.UUID,
-	raw json.RawMessage,
-	normalizedAt time.Time,
-) ([]githubAIAttributionRow, error) {
+// decodeGitHubPullWorkItemPayload decodes the payload the ONE pull-request AI detector
+// (detectGitHubPullRequestAttributions) reads, so both routes write the same
+// ai_attribution key with the same content.
+func decodeGitHubPullWorkItemPayload(raw json.RawMessage) (githubPullRequestWorkItemPayload, error) {
 	var pull githubPullRequestWorkItemPayload
 	if json.Unmarshal(raw, &pull) != nil {
-		return nil, providerfoundation.ErrNormalizationInvalid
+		return pull, providerfoundation.ErrNormalizationInvalid
 	}
-	return detectGitHubPullRequestAttributions(claim, repoID, pull, normalizedAt)
+	return pull, nil
+}
+
+func decodeGitHubPullListItem(raw json.RawMessage) (gitHubPullListItem, error) {
+	var item gitHubPullListItem
+	if json.Unmarshal(raw, &item) != nil {
+		return item, providerfoundation.ErrNormalizationInvalid
+	}
+	return item, nil
 }

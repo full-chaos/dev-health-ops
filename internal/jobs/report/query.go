@@ -17,6 +17,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 )
 
 type ReportDefinition struct {
@@ -59,7 +61,11 @@ WHERE report.id = $1::uuid AND run.id = $2::uuid
 	if err != nil {
 		return ReportDefinition{}, fmt.Errorf("load saved report: %w", ErrDependencyUnavailable)
 	}
-	return decodeReportDefinition(input.ReportID, organizationID, planJSON, parametersJSON, loader.now().UTC())
+	definition, err := decodeReportDefinition(input.ReportID, organizationID, planJSON, parametersJSON, loader.now().UTC())
+	if err == nil {
+		warnUnknownConfidence(ctx, definition.Plan.PlanID, definition.Plan.ConfidenceThreshold)
+	}
+	return definition, err
 }
 
 type wirePlan struct {
@@ -92,6 +98,31 @@ type wireChartSpec struct {
 	TimeRangeEnd   string   `json:"time_range_end"`
 	Title          *string  `json:"title"`
 	OrganizationID string   `json:"org_id"`
+}
+
+// confidenceLevels are the confidence thresholds a plan names. A stored plan with another value still runs and the
+// footer shows it as stored (escaped); warnUnknownConfidence only tells an operator.
+var confidenceLevels = map[string]bool{"direct_fact": true, "inferred": true, "hypothesis": true}
+
+const unknownConfidenceCounterName = "dev_health_report_plan_unknown_confidence_total"
+
+var unknownConfidenceCounter = func() metric.Int64Counter {
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/jobs/report").Int64Counter(
+		unknownConfidenceCounterName,
+		metric.WithDescription("Report runs whose stored plan names a confidence level outside the known set."))
+	if err != nil {
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(unknownConfidenceCounterName)
+	}
+	return counter
+}()
+
+// warnUnknownConfidence logs one WARN (plan id, never the value) and counts a stored plan whose confidence level is unknown.
+func warnUnknownConfidence(ctx context.Context, planID, level string) {
+	if confidenceLevels[level] {
+		return
+	}
+	slog.WarnContext(ctx, "unknown confidence level", "plan_id", planID)
+	unknownConfidenceCounter.Add(ctx, 1)
 }
 
 func decodeReportDefinition(

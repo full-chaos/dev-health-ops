@@ -69,7 +69,9 @@ SET status = $2, available_at = $3,
     rate_limit_deferrals = $4, rate_limit_first_seen_at = $5,
     budget_deferrals = 0, budget_first_deferred_at = NULL,
     first_blocked_at = COALESCE(first_blocked_at, $6),
-    error = $7, result = $8::json,
+    error = $7, result = (CASE WHEN jsonb_typeof(result::jsonb -> 'rate_limit_progress_mark') = 'object'
+                 THEN jsonb_build_object('rate_limit_progress_mark', result::jsonb -> 'rate_limit_progress_mark')
+                 ELSE '{}'::jsonb END || $8::jsonb)::json,
     lease_owner = NULL, lease_expires_at = NULL, last_heartbeat_at = $6, updated_at = $6
 WHERE id = $1::uuid
   AND (
@@ -109,7 +111,10 @@ func deferUnitForBudget(
 	}
 	tag, err := tx.Exec(ctx, `
 UPDATE public.sync_run_units
-SET status = $2, available_at = $3, error = $4, result = $5::json,
+SET status = $2, available_at = $3, error = $4,
+    result = (CASE WHEN jsonb_typeof(result::jsonb -> 'rate_limit_progress_mark') = 'object'
+                 THEN jsonb_build_object('rate_limit_progress_mark', result::jsonb -> 'rate_limit_progress_mark')
+                 ELSE '{}'::jsonb END || $5::jsonb)::json,
     budget_deferrals = budget_deferrals + 1,
     budget_first_deferred_at = COALESCE(budget_first_deferred_at, $6),
     first_blocked_at = COALESCE(first_blocked_at, $6),

@@ -85,7 +85,7 @@ var jobPermAllowlist = map[jobKey]jobPermRow{
 // gone, has its own block or no longer inherits is refused.
 var wildcardJobs = map[string][]string{
 	"freeze-provider-worlds.yml":   {"freeze"},
-	"go-quality.yml":               {"go-quality-leg", "go-quality"},
+	"go-quality.yml":               {"go-quality-leg", "go-quality", "go-quality-coverage"},
 	"go-workers-compose-proof.yml": {"go-workers-compose-proof"},
 	"go.yml":                       {"go-arm64-numeric-parity", "go-storage-integration-shard", "go-golden-drift", "go-container-build", "go-container-smoke", "go-container-security", "go-container-reproducibility", "go-auth-compose-proof", "go-auth-web-proxy-proof", "graphql-wire-parity", "go-queue-gate"},
 	"venue-oracles-changed.yml":    {"venue-oracles-changed"},

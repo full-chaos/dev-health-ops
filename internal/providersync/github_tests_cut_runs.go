@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// A peeled artifacts listing ends the next range at the oldest created second it saw, inclusive, so the runs of that
+// A peeled runs or artifacts listing ends the next range at the oldest created second it saw, inclusive, so the runs of that
 // second are listed again (githubTestsPeel). Two cursor lists of run keys, with fixed roles, keep those runs from being
 // read twice:
 //   - ActiveCutKeys records the runs of the active range read whole at the second RangeOldest. It is never a skip source.

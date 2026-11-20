@@ -491,7 +491,7 @@ const RateLimitCategory = "rate_limit"
 // ChunkContinuationRepository. Production's PostgresRepository implements it.
 type RateLimitDeferralRepository interface {
 	RateLimitEpisode(context.Context, providersync.Claim) (providersync.RateLimitEpisode, error)
-	DeferForRateLimit(context.Context, providersync.Claim, time.Time, time.Time, providersync.RateLimitObservation) error
+	DeferForRateLimit(context.Context, providersync.Claim, time.Time, time.Time, providersync.RateLimitObservation, providersync.RateLimitEpisodeStep) error
 }
 
 // ChunkContinuationRepository is optional so legacy repository test doubles
@@ -854,6 +854,36 @@ func (handler *Handler) logLifecycleWith(
 // unit that needs hundreds of attempts is otherwise visible only as River
 // snoozes, and nothing told the bounds apart. Counts, milliseconds and a closed
 // reason vocabulary only: no cursor, row or payload content.
+// logRateLimitEpisodeRestart is the one line of an episode restart: the unit,
+// the counters it had, and the checkpoint marks that proved progress.
+func logRateLimitEpisodeRestart(
+	ctx context.Context,
+	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
+	claim providersync.Claim,
+	episode providersync.RateLimitEpisode,
+) {
+	if execution == nil || episode.Mark == nil || episode.Checkpoint == nil {
+		return
+	}
+	logger := execution.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.InfoContext(ctx, "sync_provider_unit_rate_limit_episode_restarted",
+		"provider", claim.Provider,
+		"dataset", claim.Dataset,
+		"job_id", execution.JobID,
+		"attempt", execution.Attempt,
+		"sync_run_id", claim.SyncRunID,
+		"sync_unit_id", claim.ID,
+		"prior_deferrals", episode.Deferrals,
+		"old_prepared_chunks", episode.Mark.PreparedChunks,
+		"old_next_ordinal", episode.Mark.NextOrdinal,
+		"new_prepared_chunks", episode.Checkpoint.PreparedChunks,
+		"new_next_ordinal", episode.Checkpoint.NextOrdinal,
+	)
+}
+
 func (handler *Handler) logChunkAttempt(
 	ctx context.Context,
 	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
@@ -1157,18 +1187,31 @@ func (handler *Handler) Work(
 				return jobruntime.Retryable(jobruntime.WithSafeCauseText(episodeErr,
 					safeCause(retryCauseRateLimitEpisodeFailed, session.Claim, execution, episodeErr)))
 			}
-			plan, granted := planRateLimitDeferral(retryAfter, episode, session.Claim.ID, completedAt)
+			// A chunked walk whose checkpoint moved since the last deferral is
+			// making progress under a tight budget: its episode starts again, so
+			// the 10-deferral / 2 h cap only ends a walk that stopped moving.
+			step := providersync.RateLimitEpisodeStep{Mark: episode.Checkpoint}
+			planned := episode
+			if episode.Progressed() {
+				step.Restart = true
+				planned = providersync.RateLimitEpisode{}
+			}
+			plan, granted := planRateLimitDeferral(retryAfter, planned, session.Claim.ID, completedAt)
 			if granted {
 				if deferErr := deferrer.DeferForRateLimit(
-					context.WithoutCancel(ctx), session.Claim, plan.notBefore, completedAt, rateLimitObservation(err),
+					context.WithoutCancel(ctx), session.Claim, plan.notBefore, completedAt, rateLimitObservation(err), step,
 				); deferErr != nil {
 					return jobruntime.Retryable(jobruntime.WithSafeCauseText(deferErr,
 						safeCause(retryCauseRateLimitDeferFailed, session.Claim, execution, deferErr)))
 				}
+				if step.Restart {
+					handler.ProviderMetrics.RecordRateLimitEpisodeRestart(session.Claim.Provider, session.Claim.Dataset)
+					logRateLimitEpisodeRestart(ctx, execution, session.Claim, episode)
+				}
 				handler.ProviderMetrics.RecordUnitDeferred(session.Claim.Provider, session.Claim.Dataset, deferralReasonRateLimited)
 				handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
 				handler.logLifecycleWith(ctx, execution, session.Claim, "sync_provider_unit_finished", "rate_limited", err,
-					"deferral_reason", deferralReasonRateLimited, "deferrals", episode.Deferrals+1,
+					"deferral_reason", deferralReasonRateLimited, "deferrals", planned.Deferrals+1,
 					"delay_ms", plan.countdown.Milliseconds())
 				return jobruntime.RateLimited(err, plan.countdown)
 			}

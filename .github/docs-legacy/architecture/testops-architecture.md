@@ -34,6 +34,10 @@ TestOps data is persisted in ClickHouse for high-performance analytics. The sche
     - `testops_pipeline_metrics_daily`: Daily rollups of pipeline performance.
     - `testops_test_metrics_daily`: Daily rollups of test reliability and flakiness.
     - `testops_coverage_metrics_daily`: Daily rollups of code coverage trends.
+      A coverage day whose record is gone (the run of its newest coverage snapshot moved to another day) is retired on the next
+      recompute of that day: the family writes a row with `retracted = 1` over the key, and readers take the newest row of a key
+      first and leave the key out when that row is a retraction, so the day shows no point, never 0 (migration 162). Days that are
+      not recomputed keep the old row until a redrive.
 
 ### Metrics Layer
 Metrics are computed daily from raw event tables and persisted in the daily metrics tables.
@@ -63,3 +67,5 @@ TestOps uses path-based attribution to map test suites and coverage snapshots to
 | **Line Coverage** | Percentage of code lines covered by tests. | percent | `testops_coverage_metrics_daily` | `lines_covered / lines_total` |
 | **Coverage Delta** | Change in coverage percentage from prior day. | percent | `testops_coverage_metrics_daily` | `current_pct - prior_pct` |
 | **Rerun Rate** | Share of pipeline runs that were retries. | ratio | `testops_pipeline_metrics_daily` | `retry_count / pipelines_count` |
+| **Run status counts** | Every counted run of the day is in exactly one bucket: success (`success`, `succeeded`, `passed`), failure (`failure`, `failed`, `error`, `errors`, `timeout`, `timed_out`), cancelled (`cancelled`, `canceled`, `cancel`), skipped (`skipped`), unfinished (`running`, `queued`), other (every other status: `stale`, `completed` with no conclusion, `canceling`, an unknown or empty status). A `deleted` run is in no bucket. A row written before these columns existed reads NULL, not 0. | count | `testops_pipeline_metrics_daily` | `pipelines_count = success_count + failure_count + cancelled_count + skipped_count + unfinished_count + other_count` |
+| **Stale unfinished runs** | The unfinished runs whose `ci_pipeline_runs` row was last synced more than the open-run lookback (6 h, `testops.OpenRunRefreshLookback`) before `computed_at`: they may be finished already. A GitLab skipped pipeline is stored as skipped and counts in the skipped bucket, as a GitHub one does; GitLab rows stored as cancelled before that change stay cancelled until a re-sync of their day. | count | `testops_pipeline_metrics_daily` | `unfinished_stale_count` |

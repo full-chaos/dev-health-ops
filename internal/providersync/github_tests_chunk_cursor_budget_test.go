@@ -31,6 +31,7 @@ func githubTestsRealisticCursorBase() githubTestsChunkCursor {
 		SkippedArtifactsOverflow: 999999,
 		ExcludedNonReportSuffix:  999999,
 		ExcludedNonReportPrefix:  999999,
+		Relist:                   githubTestsRelistStoppedSaturated,
 	}
 	for component, causes := range githubTestsIncompleteVocabulary {
 		for cause := range causes {
@@ -88,6 +89,7 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	for _, cause := range []string{
 		githubTestsArtifactOversizedCause, githubTestsArtifactUnavailableCause,
 		githubTestsUnreadableArchiveCause, githubTestsMalformedCause, githubTestsUnreadableCause, githubTestsUnsafeDoctypeCause, githubTestsArtifactExpiredCause,
+		githubTestsCompressionRatioCause, githubTestsArchiveEntryCapCause,
 	} {
 		causeOverflow[cause] = true
 	}
@@ -97,6 +99,7 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	for _, cause := range []string{
 		githubTestsArtifactOversizedCause, githubTestsArtifactUnavailableCause,
 		githubTestsUnreadableArchiveCause, githubTestsMalformedCause, githubTestsUnreadableCause, githubTestsUnsafeDoctypeCause, githubTestsArtifactExpiredCause,
+		githubTestsCompressionRatioCause, githubTestsArchiveEntryCapCause,
 	} {
 		causeCount[cause] = 999999999
 	}
@@ -107,6 +110,11 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 			cursor.ExcludedArtifactSample, name+" (non_report_artifact_suffix)",
 		)
 	}
+
+	// An artifacts phase mid-peel also carries its range and both cut lists at their byte cap (CHAOS-14251: at most 120
+	// bytes; the canary below stays 150).
+	cursor.RangeHi, cursor.RangeOldest, cursor.RangeItems = "2026-07-20T23:59:59Z", "2026-07-20T00:00:00Z", githubTestsSearchResultCap
+	cursor.ActiveCutKeys, cursor.CarriedCutKeys = githubTestsWidestCutKeys(t), githubTestsWidestCutKeys(t)
 
 	encoded, err := encodeGitHubTestsChunkCursor(cursor)
 	if err != nil {
@@ -119,6 +127,7 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	if len(encoded) > maxChunkCursorBytes {
 		t.Fatalf("worst-case cursor is %d bytes, want <= %d (maxChunkCursorBytes)", len(encoded), maxChunkCursorBytes)
 	}
+	t.Logf("worst-case cursor %d bytes, headroom %d", len(encoded), maxChunkCursorBytes-len(encoded))
 	// A canary for margin erosion, not a hard correctness bound: a future
 	// field addition that eats this margin should fail loudly here before it
 	// ever gets close to the hard 4KiB limit in production.
@@ -148,6 +157,10 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	// bytes). githubTestsMaxSkippedArtifactRecords went 8 -> 6 to pay for them, so the worst case keeps well over 150 bytes under the
 	// hard 4 KiB bound. Lead ruling: the canary is lowered once, for both causes; the next vocabulary entry must shrink a sample
 	// instead of lowering this again.
+	//
+	// CHAOS-14030: report_member gained compression_ratio and archive_entry_cap (two pairs plus two entries in each per-cause map).
+	// githubTestsMaxSkippedArtifactRecords went 6 -> 5 to pay for them: one fewer per-artifact skip record is kept, while the
+	// per-cause counts stay exact. The canary stays 150.
 	const wantMargin = 150
 	if remaining := maxChunkCursorBytes - len(encoded); remaining < wantMargin {
 		t.Fatalf(
@@ -439,4 +452,14 @@ func TestGitHubTestsChunkCursorLegacyTrimDoesNotExcuseAnUnrelatedUnmarkedCause(t
 		)
 	}
 	mustCompareGitHubTestsCompletionOK(t, claim, batch)
+}
+
+// githubTestsWidestCutKeys is a valid cut key list of exactly githubTestsMaxCutKeysBytes bytes of the widest keys.
+func githubTestsWidestCutKeys(t *testing.T) string {
+	t.Helper()
+	keys := "99999999999999999999.999999,99999999999999999998.999"
+	if len(keys) != githubTestsMaxCutKeysBytes || !githubTestsCutKeyListValid(keys) {
+		t.Fatalf("widest cut key list %q is %d bytes or invalid, want a valid list of %d bytes", keys, len(keys), githubTestsMaxCutKeysBytes)
+	}
+	return keys
 }

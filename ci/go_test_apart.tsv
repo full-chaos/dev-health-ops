@@ -1,0 +1,8 @@
+# Split test packages ci/go_race_shard.awk (tapart=, chain=1) keeps apart in the non-race test legs (CHAOS-14334): no test shard holds
+# parts of two of them. Format: package<TAB>reason. Key = import path relative to the root module; each row names a split package
+# (ci/go_test_splits.tsv). They shell out to ci/check_go.sh and run beside each other slower than the plan models: test shard 6/13
+# held parts of all four (p50 672 s, 919-940 s on slow runners, over the 900 s cap). internal/cigates/testshard checks the rule.
+internal/cigates/checkgoshards	shells out to check_go.sh test legs; 166-174 s on the 919-926 s legs
+internal/cigates/integrationshards	shells out to check_go.sh integration shards; 188-196 s on the 919-926 s legs
+internal/cigates/outboundtransport	shells out to check_go.sh; 147-160 s on the 919-926 s legs
+internal/cigates/testshard	shells out to check_go.sh shard plans; 374 s on the 919-926 s legs

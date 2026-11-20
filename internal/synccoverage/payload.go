@@ -1,8 +1,8 @@
 package synccoverage
 
 import (
-	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
@@ -23,7 +23,7 @@ type payloadInput struct {
 
 func buildPayload(input payloadInput) (projectionPayload, error) {
 	if len(input.Windows) > maxCompactWindows {
-		return nil, fmt.Errorf("sync coverage compact window limit exceeded: %d", maxCompactWindows)
+		return nil, newLimitError("compact_window", len(input.Windows), maxCompactWindows)
 	}
 	scheduleInterval := intervalForSchedule(input.Schedule, input.Now)
 	paused := !input.Config.Active
@@ -42,17 +42,17 @@ func buildPayload(input payloadInput) (projectionPayload, error) {
 	for _, key := range input.Scope.DatasetKeys {
 		scopeDatasets[key] = struct{}{}
 	}
-	backfillByPair := make(map[string][]coverageInterval)
-	expanded := 0
-	for _, interval := range input.Backfills {
-		sourceIDs := interval.SourceIDs
+	groups := backfillTargetGroups(input.Backfills)
+	groupsByPair := make(map[string][]int)
+	for index, group := range groups {
+		sourceIDs := group.SourceIDs
 		if len(sourceIDs) == 0 {
 			for sourceID := range scopeSourceIDs {
 				sourceIDs = append(sourceIDs, sourceID)
 			}
 			sort.Strings(sourceIDs)
 		}
-		datasetKeys := interval.DatasetKeys
+		datasetKeys := group.DatasetKeys
 		if len(datasetKeys) == 0 {
 			datasetKeys = input.Scope.DatasetKeys
 		}
@@ -64,16 +64,35 @@ func buildPayload(input payloadInput) (projectionPayload, error) {
 				if _, ok := scopeDatasets[dataset]; !ok {
 					continue
 				}
-				expanded++
-				if expanded > maxBackfillPairs {
-					return nil, fmt.Errorf("sync coverage backfill pair limit exceeded: %d", maxBackfillPairs)
-				}
 				key := sourceID + "\x00" + dataset
-				backfillByPair[key] = append(backfillByPair[key], coverageInterval{
-					Since: interval.Since, Before: interval.Before,
-					SourceIDs: []string{sourceID}, RunIDs: interval.RunIDs,
-				})
+				groupsByPair[key] = append(groupsByPair[key], index)
 			}
+		}
+	}
+	backfillByPair := make(map[string][]coverageInterval, len(groupsByPair))
+	mergedRanges := 0
+	for _, sourceItem := range input.Scope.Sources {
+		sourceID := sourceItem.ID.String()
+		for _, dataset := range input.Scope.DatasetKeys {
+			key := sourceID + "\x00" + dataset
+			if _, done := backfillByPair[key]; done || len(groupsByPair[key]) == 0 {
+				continue
+			}
+			pairRanges := make([]coverageInterval, 0)
+			for _, index := range groupsByPair[key] {
+				for _, interval := range groups[index].Ranges {
+					pairRanges = append(pairRanges, coverageInterval{
+						Since: interval.Since, Before: interval.Before,
+						SourceIDs: []string{sourceID}, RunIDs: interval.RunIDs,
+					})
+				}
+			}
+			pairRanges = mergeIntervals(pairRanges)
+			mergedRanges += len(pairRanges)
+			if mergedRanges > maxBackfillPairs {
+				return nil, newLimitError("backfill_pair", mergedRanges, maxBackfillPairs)
+			}
+			backfillByPair[key] = pairRanges
 		}
 	}
 
@@ -85,6 +104,7 @@ func buildPayload(input payloadInput) (projectionPayload, error) {
 			pairWindows := byPair[key]
 			successes := filterWindows(pairWindows, "success")
 			failures := filterWindows(pairWindows, "failed")
+			closedRanges := closedRangesFromWindows(filterWindows(pairWindows, statusClosedWithReason))
 			requested := append(intervalsFromWindows(pairWindows), backfillByPair[key]...)
 			requested = mergeIntervals(requested)
 			covered := mergeIntervals(intervalsFromWindows(successes))
@@ -99,7 +119,7 @@ func buildPayload(input payloadInput) (projectionPayload, error) {
 			_, running := input.ActivePairs[key]
 			pairs = append(pairs, pairCoverage{
 				SourceID: sourceID, DatasetKey: dataset, Requested: requested, Covered: covered,
-				Gaps: gaps, StaleRanges: staleRanges, FailedRanges: failedRanges,
+				Gaps: gaps, StaleRanges: staleRanges, FailedRanges: failedRanges, ClosedRanges: closedRanges,
 				CoveredThrough: coveredThrough,
 				Status: statusFromParts(statusParts{FailedCount: len(failedRanges), GapCount: len(gaps),
 					StaleStatus: staleStatus, HasData: len(requested) > 0 || len(covered) > 0, Running: running}),
@@ -143,13 +163,17 @@ func buildPayload(input payloadInput) (projectionPayload, error) {
 			"gaps":             intervalPayloads(dataset.Gaps),
 			"stale_ranges":     intervalPayloads(dataset.StaleRanges),
 			"failed_ranges":    intervalPayloads(dataset.FailedRanges),
+			// CHAOS-13988: covered windows whose only lost reports were
+			// closed with a reason. Additive: payloads stored before it lack
+			// the key, so projectionVersion is unchanged.
+			"closed_with_reason_ranges": closedRangePayloads(dataset.ClosedRanges),
 		})
 	}
 	for _, key := range notEnabledDatasets(input.Config, input.Scope) {
 		datasetPayload = append(datasetPayload, map[string]any{
 			"dataset_key": key, "status": "not_enabled", "covered_through": nil,
 			"requested_ranges": []any{}, "covered_ranges": []any{}, "gaps": []any{},
-			"stale_ranges": []any{}, "failed_ranges": []any{},
+			"stale_ranges": []any{}, "failed_ranges": []any{}, "closed_with_reason_ranges": []any{},
 		})
 	}
 
@@ -170,6 +194,40 @@ func buildPayload(input payloadInput) (projectionPayload, error) {
 		"datasets": datasetPayload, "sources": sources,
 		"backfill_windows": canonicalBackfillWindows(pairs),
 	}, nil
+}
+
+type backfillTargetGroup struct {
+	SourceIDs   []string
+	DatasetKeys []string
+	Ranges      []coverageInterval
+}
+
+// backfillTargetGroups merges backfills with the same source and dataset target once, before buildPayload merges
+// each pair's ranges across targets; maxBackfillPairs bounds those per-pair merged ranges, not raw backfills x
+// pairs (CHAOS-14233). Merging is a union, so the payload is the same either way.
+func backfillTargetGroups(backfills []coverageInterval) []backfillTargetGroup {
+	byTarget := make(map[string]*backfillTargetGroup)
+	keys := make([]string, 0)
+	for _, interval := range backfills {
+		sourceIDs := uniqueSorted(interval.SourceIDs)
+		datasetKeys := uniqueSorted(interval.DatasetKeys)
+		key := strings.Join(sourceIDs, "\x00") + "\x01" + strings.Join(datasetKeys, "\x00")
+		group, ok := byTarget[key]
+		if !ok {
+			group = &backfillTargetGroup{SourceIDs: sourceIDs, DatasetKeys: datasetKeys}
+			byTarget[key] = group
+			keys = append(keys, key)
+		}
+		group.Ranges = append(group.Ranges, interval)
+	}
+	sort.Strings(keys)
+	groups := make([]backfillTargetGroup, 0, len(keys))
+	for _, key := range keys {
+		group := byTarget[key]
+		group.Ranges = mergeIntervals(group.Ranges)
+		groups = append(groups, *group)
+	}
+	return groups
 }
 
 func intervalForSchedule(active *schedule, now time.Time) *time.Duration {
@@ -270,6 +328,7 @@ func buildDatasetCoverage(keys []string, pairs []pairCoverage) []datasetCoverage
 			item.Gaps = append(item.Gaps, pair.Gaps...)
 			item.StaleRanges = append(item.StaleRanges, pair.StaleRanges...)
 			item.FailedRanges = append(item.FailedRanges, pair.FailedRanges...)
+			item.ClosedRanges = append(item.ClosedRanges, pair.ClosedRanges...)
 			if pair.CoveredThrough != nil && (item.CoveredThrough == nil || pair.CoveredThrough.After(*item.CoveredThrough)) {
 				value := *pair.CoveredThrough
 				item.CoveredThrough = &value
@@ -288,6 +347,8 @@ func buildDatasetCoverage(keys []string, pairs []pairCoverage) []datasetCoverage
 		item.Gaps = mergeIntervalsBySourceScope(item.Gaps)
 		item.StaleRanges = mergeIntervals(item.StaleRanges)
 		item.FailedRanges = mergeIntervals(item.FailedRanges)
+		// Like gaps, closed ranges keep their source scope (and their reasons).
+		item.ClosedRanges = mergeClosedRanges(item.ClosedRanges)
 		item.Status = statusFromParts(statusParts{FailedCount: len(item.FailedRanges), GapCount: len(item.Gaps),
 			StaleStatus: rollupStaleStatus(statuses), HasData: len(item.Requested) > 0 || len(item.Covered) > 0,
 			Running: running && !stale})
@@ -345,6 +406,30 @@ func intervalPayloads(intervals []coverageInterval) []any {
 			item["run_ids"] = interval.RunIDs
 		}
 		result = append(result, item)
+	}
+	return result
+}
+
+func closedRangesFromWindows(windows []unitWindow) []closedRange {
+	result := make([]closedRange, 0, len(windows))
+	for _, window := range windows {
+		result = append(result, closedRange{
+			Interval: coverageInterval{Since: window.Since, Before: window.Before, SourceIDs: []string{window.SourceID}},
+			Reasons:  window.Reasons,
+		})
+	}
+	return mergeClosedRanges(result)
+}
+
+// closedRangePayloads is the closed_with_reason_ranges list: since, before,
+// source_ids and the sorted reasons of each range.
+func closedRangePayloads(ranges []closedRange) []any {
+	result := make([]any, 0, len(ranges))
+	for _, item := range ranges {
+		result = append(result, map[string]any{
+			"since": isoTime(item.Interval.Since), "before": isoTime(item.Interval.Before),
+			"source_ids": append([]string{}, uniqueSorted(item.Interval.SourceIDs)...), "reasons": append([]string{}, item.Reasons...),
+		})
 	}
 	return result
 }

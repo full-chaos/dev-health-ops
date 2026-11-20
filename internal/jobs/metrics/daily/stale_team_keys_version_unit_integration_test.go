@@ -49,7 +49,8 @@ WHERE database = currentDatabase() AND table = ? AND name = 'computed_at'`, tabl
 }
 
 // A clock that is three units after the old row is late enough: the row of
-// zeros takes the clock, in every table.
+// zeros takes the clock, in every table (a snapshot-stamped table: one unit
+// below the clock, staleKeySnapshot).
 func TestARowOfZerosIsNotAheadOfAClockThatIsLaterThanTheOldRow(t *testing.T) {
 	ctx := context.Background()
 	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
@@ -81,9 +82,14 @@ func TestARowOfZerosIsNotAheadOfAClockThatIsLaterThanTheOldRow(t *testing.T) {
 				args...).Scan(&newest); err != nil {
 				t.Fatalf("read the newest row of the key: %v", err)
 			}
-			if !newest.Equal(clock) {
-				t.Errorf("the row of zeros is at %s, the clock was %s (the old row at %s): it is %s ahead of its clock",
-					newest.UTC().Format(time.RFC3339Nano), clock.Format(time.RFC3339Nano), stored.Format(time.RFC3339Nano), newest.Sub(clock))
+			want := clock
+			if marker, stamped := staleKeySnapshot(table, clock); stamped {
+				want = marker
+			}
+			if !newest.Equal(want) {
+				t.Errorf("the row of zeros is at %s, want %s for the clock %s (the old row at %s): it is %s off",
+					newest.UTC().Format(time.RFC3339Nano), want.Format(time.RFC3339Nano), clock.Format(time.RFC3339Nano),
+					stored.Format(time.RFC3339Nano), newest.Sub(want))
 			}
 		})
 	}

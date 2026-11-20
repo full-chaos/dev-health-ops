@@ -75,8 +75,8 @@ func validTestOpsRunReportCompletenessRow(row testOpsRunReportCompletenessRow) b
 // exactly one of this set and githubTestsRunReportNotALossCauses; a cell holds the two sets to the vocabularies. A cause in
 // neither still counts as a loss: missing is not complete.
 //
-// aggregate_of_parts is a loss until the producer drops only lossless aggregates (acp ruling on CHAOS-13826 C7): today's drop
-// compares case identity and outcome only, so a dropped artifact may hold fields its parts do not.
+// aggregate_of_parts is not a loss: the producer drops an artifact only when every stored suite and case field equals its copy or
+// its parts and it carries no coverage (acp ruling on CHAOS-13826 C7); any other overlap keeps every artifact as aggregate_mismatch.
 var githubTestsRunReportLossCauses = map[string]struct{}{
 	githubTestsPerRunCapCause:           {},
 	githubTestsPerRunPageBudgetCause:    {},
@@ -87,12 +87,15 @@ var githubTestsRunReportLossCauses = map[string]struct{}{
 	githubTestsUnreadableCause:          {},
 	githubTestsUnsafeDoctypeCause:       {},
 	githubTestsArtifactExpiredCause:     {},
+	githubTestsCompressionRatioCause:    {},
+	githubTestsArchiveEntryCapCause:     {},
 	githubTestsAggregateMismatchCause:   {},
-	githubTestsAggregateOfPartsCause:    {},
 }
 
 // githubTestsRunReportNotALossCauses are recorded causes that lose no report row.
-var githubTestsRunReportNotALossCauses = map[string]struct{}{}
+var githubTestsRunReportNotALossCauses = map[string]struct{}{
+	githubTestsAggregateOfPartsCause: {},
+}
 
 // githubTestsArtifactNotFoundReason is a selected artifact that was listed but answered 404 or 410 at download: deleted or expired
 // between the listing and the read, so its report was not read. The unit result keeps it out of the loss vocabulary (routine
@@ -201,6 +204,66 @@ func githubTestsRunReportCompleteness(
 		OrgID: pipeline.OrgID, RepoID: pipeline.RepoID, RunID: pipeline.RunID, RunAttempt: githubTestsRunAttempt(run),
 		Provider: pipeline.Provider, Complete: complete, Reasons: reasons,
 		ReportsExpected: int64(expected), ReportsAdmitted: int64(admitted),
+		LastSynced: lastSynced, VerdictVersion: testOpsRunReportVerdictVersion(complete, lastSynced),
+	}}
+}
+
+// gitLabTestsRunReport is one GitLab pipeline's report walk (CHAOS-13981): its report sources (the native test_report and each
+// selected artifact holding a report member), those read whole, and the loss reasons, all from the closed vocabulary above. The
+// route fills it at each skip site: cursor.Truncated is one set for the whole unit and names no pipeline.
+type gitLabTestsRunReport struct {
+	reasons  map[string]struct{}
+	expected int
+	admitted int
+}
+
+func newGitLabTestsRunReport() gitLabTestsRunReport {
+	return gitLabTestsRunReport{reasons: map[string]struct{}{}}
+}
+
+func (report gitLabTestsRunReport) lose(reason string) {
+	report.reasons[reason] = struct{}{}
+}
+
+// gitLabTestsRunReportComponentReasons maps the per-pipeline skips of the report phase onto completeness reasons. The native
+// test_report over its object cap is artifact_oversized: the same loss, a report source over a size bound, never read.
+// report_member_dropped is named by its member causes (compression_ratio, archive_entry_cap) instead.
+var gitLabTestsRunReportComponentReasons = map[string]string{
+	gitLabRunArtifactsComponent:           githubTestsPerRunCapCause,
+	gitLabRunArtifactsPageBudgetComponent: githubTestsPerRunPageBudgetCause,
+	gitLabReportTooLargeComponent:         githubTestsArtifactOversizedCause,
+	gitLabArtifactOversizedComponent:      githubTestsArtifactOversizedCause,
+}
+
+// gitLabTestsPipelineFinished reports whether a pipeline is in a final status: only then is its report set fixed for the
+// attempt, as githubTestsRunReadable requires a completed run.
+func gitLabTestsPipelineFinished(payload gitLabTestsPipelinePayload) bool {
+	switch stringValue(payload.Status) {
+	case "success", "failed", "canceled", "cancelled", "skipped":
+		return true
+	}
+	return false
+}
+
+// gitLabTestsRunReportCompleteness is the walk's verdict row on one pipeline, or nil when the pipeline is not finished or had
+// no report source and no loss.
+func gitLabTestsRunReportCompleteness(
+	claim Claim, repoID string, payload gitLabTestsPipelinePayload, attempt int64, report gitLabTestsRunReport, normalizedAt time.Time,
+) []testOpsRunReportCompletenessRow {
+	if !gitLabTestsPipelineFinished(payload) || (report.expected == 0 && len(report.reasons) == 0) {
+		return nil
+	}
+	reasons := make([]string, 0, len(report.reasons))
+	for reason := range report.reasons {
+		reasons = append(reasons, reason)
+	}
+	sort.Strings(reasons)
+	complete := len(reasons) == 0
+	lastSynced := normalizedAt.UTC().Truncate(time.Millisecond)
+	return []testOpsRunReportCompletenessRow{{
+		OrgID: claim.OrgID, RepoID: repoID, RunID: stringValue(payload.ID), RunAttempt: attempt,
+		Provider: "gitlab_ci", Complete: complete, Reasons: reasons,
+		ReportsExpected: int64(report.expected), ReportsAdmitted: int64(report.admitted),
 		LastSynced: lastSynced, VerdictVersion: testOpsRunReportVerdictVersion(complete, lastSynced),
 	}}
 }

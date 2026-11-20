@@ -225,6 +225,8 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	// tally covers the whole pass -- flushed once, after whichever commit
 	// below actually succeeds.
 	ctx = withRollupBumpTally(ctx)
+	ctx = withPostCommitLogs(ctx)
+	fence := &transportFence{args: args, kind: outboxKindDispatchSyncRun, unavailable: ErrDispatchSyncRunUnavailable, logger: service.logger}
 
 	// The outbox-relay route-generation fence every native service already
 	// starts with (finalizeWorker/referenceDiscoveryWorker's own first
@@ -253,7 +255,8 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	if run == nil {
 		// Python: `if run is None: ... return {"status": "missing", ...}`.
 		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunMissing, synclog.Run(synclog.ParseID(args.SyncRunID())))
-		return tx.Commit(ctx)
+		_, err := service.commitFenced(ctx, tx, fence)
+		return err
 	}
 
 	now := service.nowUTC()
@@ -284,7 +287,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 			return ErrDispatchSyncRunUnavailable
 		}
 		if !allowed {
-			return service.terminalizeFeatureDisabled(ctx, tx, run, reason, now)
+			return service.terminalizeFeatureDisabled(ctx, tx, fence, run, reason, now)
 		}
 	}
 
@@ -301,7 +304,8 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 			return err
 		}
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunBlockedOnReferenceDiscovery, synclog.Run(synclog.ParseID(run.id)))
-		return tx.Commit(ctx)
+		_, err := service.commitFenced(ctx, tx, fence)
+		return err
 	}
 
 	// --- CHAOS-4556: validate provider-family claims for every dispatch-
@@ -324,7 +328,9 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		if err != nil {
 			return err
 		}
-		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunInvalidClaimUnitsTerminalized, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyInvalidClaimUnits, terminalizedBeforeCap), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(invalidProviderFamilyClaimErrorCategory)), synclog.Text(synclog.KeyPhase, synclog.LabelPreCapacity))
+		logAfterCommit(ctx, func() {
+			service.logger.Warn(ctx, synclog.MsgDispatchSyncRunInvalidClaimUnitsTerminalized, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyInvalidClaimUnits, terminalizedBeforeCap), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(invalidProviderFamilyClaimErrorCategory)), synclog.Text(synclog.KeyPhase, synclog.LabelPreCapacity))
+		})
 	}
 
 	// --- DispatchGuard: authorize this pass ---
@@ -333,7 +339,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		return err
 	}
 	if !decision.allowed {
-		return service.denyRun(ctx, tx, run, decision, now)
+		return service.denyRun(ctx, tx, fence, run, decision, now)
 	}
 	// Python has a SECOND `if not decision.allowed:` check immediately
 	// after this point (a "continuing_after_denial_for_active_units" log
@@ -349,7 +355,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		for _, id := range decision.cappedUnitIDs {
 			cappedIDs[id] = true
 		}
-		service.logger.Info(ctx, synclog.MsgDispatchSyncRunConcurrencyCapped, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyCappedCount, len(cappedIDs)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reasonCode)))
+		logConcurrencyCapped(ctx, service.logger, run.id, len(cappedIDs), decision)
 	}
 
 	// --- BudgetGuard dry-run telemetry (side effect only; return discarded,
@@ -535,7 +541,9 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	if persisted, err := persistBudgetEstimates(ctx, tx, routedUnits, budgetResult.estimatesByUnit); err != nil {
 		return err
 	} else if persisted > 0 {
-		service.logger.Debug(ctx, synclog.MsgDispatchSyncRunBudgetEstimatesPersisted, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyCount, persisted))
+		logAfterCommit(ctx, func() {
+			service.logger.Debug(ctx, synclog.MsgDispatchSyncRunBudgetEstimatesPersisted, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyCount, persisted))
+		})
 	}
 
 	if len(invalidClaimUnits) > 0 {
@@ -544,7 +552,9 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		if err != nil {
 			return err
 		}
-		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunInvalidClaimUnitsTerminalized, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyInvalidClaimUnits, terminalizedInvalid), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(invalidProviderFamilyClaimErrorCategory)), synclog.Text(synclog.KeyPhase, synclog.LabelPostClaim))
+		logAfterCommit(ctx, func() {
+			service.logger.Warn(ctx, synclog.MsgDispatchSyncRunInvalidClaimUnitsTerminalized, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyInvalidClaimUnits, terminalizedInvalid), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(invalidProviderFamilyClaimErrorCategory)), synclog.Text(synclog.KeyPhase, synclog.LabelPostClaim))
+		})
 	}
 
 	if len(unroutableUnits) > 0 {
@@ -553,7 +563,9 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		if err != nil {
 			return err
 		}
-		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunUnroutableUnitsTerminalized, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyUnroutableUnits, terminalized), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(featureDisabledErrorCategory)))
+		logAfterCommit(ctx, func() {
+			service.logger.Warn(ctx, synclog.MsgDispatchSyncRunUnroutableUnitsTerminalized, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyUnroutableUnits, terminalized), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(featureDisabledErrorCategory)))
+		})
 	}
 
 	// Emitted before the commit branches so it is reported whether or not this
@@ -584,9 +596,12 @@ WHERE id = $1::uuid`,
 			return ErrDispatchSyncRunUnavailable
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return ErrDispatchSyncRunUnavailable
+	if committed, err := service.commitFenced(ctx, tx, fence); err != nil {
+		return err
+	} else if !committed {
+		return nil
 	}
+	flushPostCommitLogs(ctx)
 	// CHAOS-10013: every unit this pass terminalized (budget exhaustion, an
 	// invalid or unroutable claim) was counted against its bucket when the
 	// capacity decision was made, so a sibling the cap held back is due a pass
@@ -719,7 +734,7 @@ WHERE id = $1::uuid`,
 // when some units are still genuinely in flight (a normal state at
 // dispatch time, unlike reference-discovery's own always-terminal case).
 func (service *NativeDispatchSyncRunService) terminalizeFeatureDisabled(
-	ctx context.Context, tx pgx.Tx, run *finalizeSyncRun, reason scheduledsync.FeatureDecisionReason, now time.Time,
+	ctx context.Context, tx pgx.Tx, fence *transportFence, run *finalizeSyncRun, reason scheduledsync.FeatureDecisionReason, now time.Time,
 ) error {
 	message := canonicalIncidentFeatureDisabledMessage(reason)
 	transition, err := terminalizeFeatureDisabledRun(ctx, tx, run, message, now)
@@ -737,10 +752,13 @@ func (service *NativeDispatchSyncRunService) terminalizeFeatureDisabled(
 			return err
 		}
 	}
-	service.logger.Warn(ctx, synclog.MsgDispatchSyncRunFeatureDisabled, synclog.Run(synclog.ParseID(run.id)), synclog.Org(synclog.ParseID(run.orgID)), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(featureDisabledErrorCategory)), synclog.Count(synclog.KeyRunningUnits, transition.RunningUnits))
-	if err := tx.Commit(ctx); err != nil {
+	logAfterCommit(ctx, func() {
+		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunFeatureDisabled, synclog.Run(synclog.ParseID(run.id)), synclog.Org(synclog.ParseID(run.orgID)), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(featureDisabledErrorCategory)), synclog.Count(synclog.KeyRunningUnits, transition.RunningUnits))
+	})
+	if committed, err := service.commitFenced(ctx, tx, fence); err != nil || !committed {
 		return err
 	}
+	flushPostCommitLogs(ctx)
 	// CHAOS-4586 (codex round 10): terminalizeFeatureDisabledRun above
 	// already tallied a rollup bump onto Dispatch's own ctx (installed at
 	// this transaction's start); flush it now that the commit it belongs
@@ -748,6 +766,22 @@ func (service *NativeDispatchSyncRunService) terminalizeFeatureDisabled(
 	// this file.
 	flushRollupBumpTally(ctx, service.metrics)
 	return nil
+}
+
+// commitFenced commits the pass through fence. A commit-time refusal (the
+// delivery was superseded during the pass) is reported like a start refusal,
+// with the reason decideCommit took from the locked commit snapshot.
+func (service *NativeDispatchSyncRunService) commitFenced(ctx context.Context, tx pgx.Tx, fence *transportFence) (bool, error) {
+	outcome, err := fence.commit(ctx, tx)
+	if err != nil || outcome.committed {
+		return outcome.committed, err
+	}
+	service.logger.Info(ctx, synclog.MsgDispatchSyncRunDeliveryNotCurrent,
+		synclog.Run(synclog.ParseID(fence.args.SyncRunID())),
+		synclog.Text(synclog.KeyReason, synclog.ParseLabel(outcome.reason)),
+		synclog.Count(synclog.KeyDeliveryRouteGeneration, fence.args.RouteGeneration()),
+		synclog.Count(synclog.KeyCurrentRouteGeneration, outcome.routeGeneration))
+	return false, nil
 }
 
 // transportReference is currentTransportReference's decision with its first failing clause (empty when current)
@@ -758,48 +792,68 @@ type transportReference struct {
 	routeGeneration int64
 }
 
-// readTransportReference is currentTransportReference read in ONE statement that also returns the row images the
-// decision ran on, so the refusal's reason describes the snapshot that refused it, never a later one.
-func readTransportReference(ctx context.Context, tx pgx.Tx, args Args, kind string) (transportReference, error) {
-	var (
-		routeTransport, outboxStatus, outboxTransport *string
-		routeGeneration, outboxGeneration             *int64
-		routePaused, outboxFound                      *bool
-	)
+// transportRow is the route and outbox row images one delivery is judged on; nil fields are missing rows.
+type transportRow struct {
+	routeTransport, outboxStatus, outboxTransport     *string
+	routeGeneration, outboxGeneration, outboxAttempts *int64
+	routePaused, outboxFound                          *bool
+}
+
+// readTransportRow reads the route and the outbox row in ONE statement, so a refusal's reason describes the
+// snapshot that refused it, never a later one.
+func readTransportRow(ctx context.Context, tx pgx.Tx, args Args, kind string) (transportRow, error) {
+	var row transportRow
 	err := tx.QueryRow(ctx, `
 SELECT route.transport, route.generation, route.paused,
-       outbox.found, outbox.status, outbox.dispatched_transport, outbox.dispatched_route_generation
+       outbox.found, outbox.status, outbox.dispatched_transport, outbox.dispatched_route_generation, outbox.attempts
 FROM (SELECT 1) AS one
 LEFT JOIN public.sync_dispatch_transport_routes AS route ON route.kind = $4
 LEFT JOIN LATERAL (
-    SELECT true AS found, status, dispatched_transport, dispatched_route_generation
+    SELECT true AS found, status, dispatched_transport, dispatched_route_generation, attempts
     FROM public.sync_dispatch_outbox
     WHERE id = $1::uuid AND sync_run_id = $2::uuid AND org_id = $3 AND kind = $4
 ) AS outbox ON true`,
 		args.OutboxID(), args.SyncRunID(), args.OrganizationID(), kind,
-	).Scan(&routeTransport, &routeGeneration, &routePaused, &outboxFound, &outboxStatus, &outboxTransport, &outboxGeneration)
+	).Scan(&row.routeTransport, &row.routeGeneration, &row.routePaused, &row.outboxFound, &row.outboxStatus,
+		&row.outboxTransport, &row.outboxGeneration, &row.outboxAttempts)
 	if err != nil {
-		return transportReference{}, ErrFinalizeSyncRunUnavailable
+		return transportRow{}, ErrFinalizeSyncRunUnavailable
 	}
-	reference := transportReference{routeGeneration: -1}
-	if routeGeneration != nil {
-		reference.routeGeneration = *routeGeneration
+	return row, nil
+}
+
+func (row transportRow) currentRouteGeneration() int64 {
+	if row.routeGeneration == nil {
+		return -1
 	}
+	return *row.routeGeneration
+}
+
+// readTransportReference is the start guard: currentTransportReference read with the row images, its reason the
+// first failing clause in the guard's own order.
+func readTransportReference(ctx context.Context, tx pgx.Tx, args Args, kind string) (transportReference, error) {
+	row, err := readTransportRow(ctx, tx, args, kind)
+	if err != nil {
+		return transportReference{}, err
+	}
+	reference := transportReference{routeGeneration: row.currentRouteGeneration()}
 	switch {
-	case outboxFound == nil:
+	case row.outboxFound == nil:
 		reference.reason = "outbox_row_missing"
-	case outboxStatus == nil || *outboxStatus != "dispatched":
+	case row.outboxStatus == nil || *row.outboxStatus != "dispatched":
 		reference.reason = "outbox_not_dispatched"
-	case outboxTransport == nil || *outboxTransport != "river":
+	case row.outboxTransport == nil || *row.outboxTransport != "river":
 		reference.reason = "outbox_other_transport"
-	case routeTransport == nil:
+	case row.routeTransport == nil:
 		reference.reason = "route_row_missing"
-	case *routeTransport != "river":
+	case *row.routeTransport != "river":
 		reference.reason = "route_other_transport"
-	case routePaused == nil || *routePaused:
+	case row.routePaused == nil || *row.routePaused:
 		reference.reason = "route_paused"
-	case outboxGeneration == nil || *outboxGeneration != reference.routeGeneration || args.RouteGeneration() != reference.routeGeneration:
+	case row.outboxGeneration == nil || *row.outboxGeneration != reference.routeGeneration || args.RouteGeneration() != reference.routeGeneration:
 		reference.reason = "route_generation_mismatch"
+	case row.outboxAttempts == nil || *row.outboxAttempts != args.Attempt():
+		reference.reason = "delivery_attempt_mismatch"
 	default:
 		reference.current = true
 	}
@@ -818,7 +872,7 @@ LEFT JOIN LATERAL (
 // skips terminal runs) and pollutes coverage as a permanent requested-but-
 // uncovered window.
 func (service *NativeDispatchSyncRunService) denyRun(
-	ctx context.Context, tx pgx.Tx, run *finalizeSyncRun, decision guardDecision, now time.Time,
+	ctx context.Context, tx pgx.Tx, fence *transportFence, run *finalizeSyncRun, decision guardDecision, now time.Time,
 ) error {
 	errorText := decision.reason
 	if errorText == "" {
@@ -855,10 +909,13 @@ func (service *NativeDispatchSyncRunService) denyRun(
 			}
 			recordRollupBump(ctx, rollupPathDenied)
 		}
-		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunDeniedWithActiveUnits, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reasonCode)), synclog.Count(synclog.KeyFailedPlannedUnits, failedPlanned), synclog.Count(synclog.KeyFailedStaleDispatchingUnits, failedStale))
-		if err := tx.Commit(ctx); err != nil {
+		logAfterCommit(ctx, func() {
+			service.logger.Warn(ctx, synclog.MsgDispatchSyncRunDeniedWithActiveUnits, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reasonCode)), synclog.Count(synclog.KeyFailedPlannedUnits, failedPlanned), synclog.Count(synclog.KeyFailedStaleDispatchingUnits, failedStale))
+		})
+		if committed, err := service.commitFenced(ctx, tx, fence); err != nil || !committed {
 			return err
 		}
+		flushPostCommitLogs(ctx)
 		flushRollupBumpTally(ctx, service.metrics)
 		return nil
 	}
@@ -884,10 +941,13 @@ WHERE id = $1::uuid`,
 		map[string]any{}, &errorText); err != nil {
 		return err
 	}
-	service.logger.Warn(ctx, synclog.MsgDispatchSyncRunDenied, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reasonCode)), synclog.Count(synclog.KeyFailedPlannedUnits, failedPlanned))
-	if err := tx.Commit(ctx); err != nil {
+	logAfterCommit(ctx, func() {
+		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunDenied, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reasonCode)), synclog.Count(synclog.KeyFailedPlannedUnits, failedPlanned))
+	})
+	if committed, err := service.commitFenced(ctx, tx, fence); err != nil || !committed {
 		return err
 	}
+	flushPostCommitLogs(ctx)
 	flushRollupBumpTally(ctx, service.metrics)
 	return nil
 }

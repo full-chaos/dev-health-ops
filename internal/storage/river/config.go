@@ -31,10 +31,10 @@ func MaintenanceConfigFromPlatform(configValue platformconfig.Config) Maintenanc
 
 func DefaultMaintenanceConfig() MaintenanceConfig {
 	return MaintenanceConfig{
-		CompletedJobRetention: 7 * 24 * time.Hour,
-		CancelledJobRetention: 30 * 24 * time.Hour,
-		DiscardedJobRetention: 30 * 24 * time.Hour,
-		JobCleanerTimeout:     30 * time.Second,
+		CompletedJobRetention: platformconfig.DefaultCompletedJobRetention,
+		CancelledJobRetention: platformconfig.DefaultCancelledJobRetention,
+		DiscardedJobRetention: platformconfig.DefaultDiscardedJobRetention,
+		JobCleanerTimeout:     platformconfig.DefaultRiverJobCleanerTimeout,
 	}
 }
 

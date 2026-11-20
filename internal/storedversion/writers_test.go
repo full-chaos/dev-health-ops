@@ -42,6 +42,8 @@ var contractedWriters = map[string]string{
 	"internal/localgit/stored_version.go|repos":                                       "local sync repositories (dho sync git|prs|blame --provider local)",
 	"internal/localgit/stored_version.go|git_commits":                                 "local sync commits",
 	"internal/localgit/stored_version.go|git_pull_requests":                           "local sync pull requests (inferred from merge commits and refs)",
+	"internal/storedversion/repair.go|git_pull_requests":                              "kept-group repair (migration 166): one INSERT..SELECT of the FINAL row with a NULL lead filled from git_pull_request_kept, at the version + 1 ms; every other column is the FINAL row's (TestEveryKeptTableWriteRepairsItsKeys)",
+	"internal/storedversion/repair.go|deployments":                                    "kept-group repair (migration 166): one INSERT..SELECT of the FINAL row with a NULL merged_at filled, with its pull request pair, from deployment_kept, at the version + 1 ms; every other column is the FINAL row's",
 }
 
 // outOfScopeWriters write operational_* tables: revisioned snapshots under
@@ -87,53 +89,54 @@ var outOfScopeWriters = map[string]string{
 // unresolvedWriters build the table name at run time; each names why it
 // cannot write an in-scope table.
 var unresolvedWriters = map[string]string{
-	"internal/providerfoundation/sinks.go":                   "writes the normalized provider-entity schema (schema_version, dedupe_key, attributes_json), which no in-scope table has",
-	"internal/audit/audit.go":                                "PostgreSQL auth-schema append-only audit and outbox inserts and the per-aggregate revision counter (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/identity/backfill.go":                     "PostgreSQL auth-schema principal and user inserts of the users backfill (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/identity/backfill_orgs.go":                "PostgreSQL auth-schema membership insert and role update of the organizations and memberships backfill (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/identity/identities.go":                   "PostgreSQL auth-schema identity inserts (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/identity/organizationbirth.go":            "PostgreSQL auth-schema organization insert of an organization birth (schema name interpolated) and its public organization row; no in-scope ClickHouse table",
-	"internal/auth/identity/joinmembership.go":               "PostgreSQL auth-schema membership insert of a join (schema name interpolated) and its public.memberships row; no in-scope ClickHouse table",
-	"internal/auth/membership/store.go":                      "PostgreSQL auth-schema memberships writes of the membership aggregate (schema name interpolated) and their public.memberships rows; no in-scope ClickHouse table",
-	"internal/auth/repoidentity/repoidentity.go":             "PostgreSQL auth-schema repository_identities upsert of the repo-identities sync (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/grant/store.go":                           "PostgreSQL auth-schema resource_grants writes of the grant aggregate (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/invite/store.go":                          "PostgreSQL auth-schema invites writes of the invite aggregate (schema name interpolated), their public.org_invites rows and go-api audit_logs rows; no in-scope ClickHouse table",
-	"internal/auth/invite/orgrevocation.go":                  "PostgreSQL auth-schema invites revocations of an organization deprovision (schema name interpolated) and their public.org_invites rows; no in-scope ClickHouse table",
-	"internal/auth/platformrole/store.go":                    "PostgreSQL auth-schema platform role assignment grants of the platform role aggregate (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/platformrole/owner.go":                    "PostgreSQL auth-schema platform role assignment grants of the platform role aggregate (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/identity/local/attempts_pg.go":            "PostgreSQL auth-schema login_attempts insert (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/identity/local/linkcred.go":               "PostgreSQL auth-schema link_credentials insert (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/identity/local/linkbind.go":               "PostgreSQL auth-schema link_credentials insert (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/identity/local.go":                        "PostgreSQL auth-schema principal and user inserts (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/identity/adminusers.go":                   "PostgreSQL auth-schema principal and user inserts of the go-api admin users create through auth-service (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/identity/cliuser.go":                      "PostgreSQL auth-schema principal and user inserts of the dho auth users-create verb (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/identity/oidc/flowstore.go":               "PostgreSQL auth-schema sso_flow_states insert (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/identity/saml/pgstore.go":                 "PostgreSQL auth-schema sso_flow_states and saml_assertion_uses inserts (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/copyproject/copyproject.go":               "PostgreSQL auth-schema principal, user and organization copy inserts of the session issue (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/restorefence/init.go":                     "PostgreSQL auth-schema restore-fence state insert of the init verb (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/restorefence/apply.go":                    "PostgreSQL auth-schema restore-fence state, revocation and replay-mark inserts of the post-restore fence apply (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/keyrotation/store.go":                     "PostgreSQL auth-schema signing_keys inserts of the key rotation operator (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/org/store.go":                             "PostgreSQL auth-schema organizations insert of the organization aggregate (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/outboxprojection/store.go":                "PostgreSQL auth-schema principals, push_sources, credential_registry, credential_projection and digest writes of the external credential projection (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/pushprojection/reader.go":                 "PostgreSQL auth-schema projection_cursor and projection_retry writes of the push projection reader (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/repoidentityprojection/reader.go":         "PostgreSQL auth-schema repository_identities, projection_cursor and projection_retry writes of the repository identity reader (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/serviceaccount/keys.go":                   "PostgreSQL auth-schema credential_registry inserts of the service account key verbs (schema migrated by auth-migrate, not an alembic table)",
-	"internal/auth/serviceaccount/store.go":                  "PostgreSQL auth-schema principals and service_accounts inserts of the organization service account lifecycle (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/workload/assertion_keys.go":               "PostgreSQL auth-schema workload_assertion_keys insert of the assertion key verb (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/workload/bootstrap_lifecycle.go":          "PostgreSQL auth-schema credential_registry inserts of the workload bootstrap lifecycle verbs (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/workload/store.go":                        "PostgreSQL auth-schema principals, workloads and workload_bindings inserts of the workload registry (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/oauthgrant/store.go":                      "PostgreSQL auth-schema OAuth authorization requests and grants, written by the store with no stored-version key",
-	"internal/auth/session/client_session.go":                "PostgreSQL auth-schema sessions insert of an OAuth client session; no stored-version key",
-	"internal/auth/session/delegation.go":                    "PostgreSQL auth-schema sessions insert of a delegated session (schema name interpolated); no in-scope ClickHouse table",
-	"internal/auth/session/signin.go":                        "PostgreSQL auth-schema sessions and refresh_credentials inserts of a sign-in (schema name interpolated); no in-scope ClickHouse table; a second writer path of store.go's rows until CHAOS-10411 moves Create onto it",
-	"internal/auth/session/store.go":                         "PostgreSQL auth-schema sessions and refresh_credentials inserts (schema name interpolated); no in-scope ClickHouse table",
-	"internal/storage/postgres/authschema/apply.go":          "PostgreSQL schema-migration ledger",
-	"internal/providersync/catalog_evidence_start.go":        "the CHAOS-10521 evidence start of a catalog link names its table at run time (INSERT INTO + spec.table) and writes team_memberships, team_project_ownership and team_repo_ownership, none of them in-scope tables: a written row is a whole-row copy read by FINAL with every column, only valid_from (the moved row) or valid_to (the retired old key) and updated_at change (updated_at is the run, or raised past the stored stamp for the retired key so the new version wins), so every other column is carried forward unchanged -- R1/R2 applied by hand like ownership_interval_compaction.go, not through storedversion.Contract",
-	"internal/providersync/ownership_interval_compaction.go": "the CHAOS-9556 compaction names its table at run time (INSERT INTO + spec.table) and writes the two ownership interval tables (team_project_ownership, team_repo_ownership) and its own backup table, none of them in-scope tables: a rewritten row is a whole-row copy read by FINAL with every column, only valid_to and updated_at change (updated_at is raised past the stored stamp so the new version wins), so every other column is carried forward unchanged -- R1/R2 applied by hand like jira_project_as_team_retire.go, not through storedversion.Contract",
-	"internal/providersync/work_item_dependency_drain.go":    "the CHAOS-9706 drain names its tables through constants it concatenates (INSERT INTO + table) and writes work_item_dependencies_drain_bak (its backup, a copy of every column) and, on restore, work_item_dependencies itself: a restored row is a whole-row copy of the saved version with its own last_synced, inserted only where no row of the key holds a last_synced at or after it, so no stated or held column is changed (R1/R2 applied by hand like the CHAOS-9556 compaction)",
-	"internal/providersync/team_id_carry.go":                 "the team id carry names its table at run time (INSERT INTO + write.table) and writes teams and link rows, team policies, drift changes and fallbacks, which are not in-scope tables; the one in-scope table it writes is identities (planIdentities), and that write is a whole-row copy: the row is read by FINAL with every column, only team_ids and updated_at change (updated_at is bumped past the stored stamp so the new version wins), so every other column is carried forward unchanged -- R1/R2 applied by hand like internal/api/teamsidentity/store.go, not through storedversion.Contract",
-	"internal/jobs/metrics/daily/stale_team_keys.go":         "the stale-key rule names its table at run time (INSERT INTO + table.Table): one of the team-keyed daily tables that package teamkeytables declares, none of them an in-scope or operational table (TestNoStaleKeyRuleTableIsAnInScopeKey)",
-	"internal/chmigrate/apply.go":                            "ClickHouse schema migrator: records schema_migrations, and seeds the head baseline's captured rows only into a table it has just created and that holds no row; the checked-in baseline seeds no table, and its drift test ties it to the Python chain",
+	"internal/providerfoundation/sinks.go":                         "writes the normalized provider-entity schema (schema_version, dedupe_key, attributes_json), which no in-scope table has",
+	"internal/audit/audit.go":                                      "PostgreSQL auth-schema append-only audit and outbox inserts and the per-aggregate revision counter (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/backfill.go":                           "PostgreSQL auth-schema principal and user inserts of the users backfill (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/backfill_orgs.go":                      "PostgreSQL auth-schema membership insert and role update of the organizations and memberships backfill (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/identities.go":                         "PostgreSQL auth-schema identity inserts (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/organizationbirth.go":                  "PostgreSQL auth-schema organization insert of an organization birth (schema name interpolated) and its public organization row; no in-scope ClickHouse table",
+	"internal/auth/identity/joinmembership.go":                     "PostgreSQL auth-schema membership insert of a join (schema name interpolated) and its public.memberships row; no in-scope ClickHouse table",
+	"internal/auth/membership/store.go":                            "PostgreSQL auth-schema memberships writes of the membership aggregate (schema name interpolated) and their public.memberships rows; no in-scope ClickHouse table",
+	"internal/auth/repoidentity/repoidentity.go":                   "PostgreSQL auth-schema repository_identities upsert of the repo-identities sync (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/grant/store.go":                                 "PostgreSQL auth-schema resource_grants writes of the grant aggregate (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/invite/store.go":                                "PostgreSQL auth-schema invites writes of the invite aggregate (schema name interpolated), their public.org_invites rows and go-api audit_logs rows; no in-scope ClickHouse table",
+	"internal/auth/invite/orgrevocation.go":                        "PostgreSQL auth-schema invites revocations of an organization deprovision (schema name interpolated) and their public.org_invites rows; no in-scope ClickHouse table",
+	"internal/auth/platformrole/store.go":                          "PostgreSQL auth-schema platform role assignment grants of the platform role aggregate (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/platformrole/owner.go":                          "PostgreSQL auth-schema platform role assignment grants of the platform role aggregate (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/local/attempts_pg.go":                  "PostgreSQL auth-schema login_attempts insert (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/local/linkcred.go":                     "PostgreSQL auth-schema link_credentials insert (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/local/linkbind.go":                     "PostgreSQL auth-schema link_credentials insert (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/local.go":                              "PostgreSQL auth-schema principal and user inserts (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/adminusers.go":                         "PostgreSQL auth-schema principal and user inserts of the go-api admin users create through auth-service (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/cliuser.go":                            "PostgreSQL auth-schema principal and user inserts of the dho auth users-create verb (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/oidc/flowstore.go":                     "PostgreSQL auth-schema sso_flow_states insert (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/saml/pgstore.go":                       "PostgreSQL auth-schema sso_flow_states and saml_assertion_uses inserts (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/copyproject/copyproject.go":                     "PostgreSQL auth-schema principal, user and organization copy inserts of the session issue (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/restorefence/init.go":                           "PostgreSQL auth-schema restore-fence state insert of the init verb (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/restorefence/apply.go":                          "PostgreSQL auth-schema restore-fence state, revocation and replay-mark inserts of the post-restore fence apply (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/keyrotation/store.go":                           "PostgreSQL auth-schema signing_keys inserts of the key rotation operator (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/org/store.go":                                   "PostgreSQL auth-schema organizations insert of the organization aggregate (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/outboxprojection/store.go":                      "PostgreSQL auth-schema principals, push_sources, credential_registry, credential_projection and digest writes of the external credential projection (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/pushprojection/reader.go":                       "PostgreSQL auth-schema projection_cursor and projection_retry writes of the push projection reader (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/repoidentityprojection/reader.go":               "PostgreSQL auth-schema repository_identities, projection_cursor and projection_retry writes of the repository identity reader (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/serviceaccount/keys.go":                         "PostgreSQL auth-schema credential_registry inserts of the service account key verbs (schema migrated by auth-migrate, not an alembic table)",
+	"internal/auth/serviceaccount/store.go":                        "PostgreSQL auth-schema principals and service_accounts inserts of the organization service account lifecycle (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/workload/assertion_keys.go":                     "PostgreSQL auth-schema workload_assertion_keys insert of the assertion key verb (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/workload/bootstrap_lifecycle.go":                "PostgreSQL auth-schema credential_registry inserts of the workload bootstrap lifecycle verbs (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/workload/store.go":                              "PostgreSQL auth-schema principals, workloads and workload_bindings inserts of the workload registry (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/oauthgrant/store.go":                            "PostgreSQL auth-schema OAuth authorization requests and grants, written by the store with no stored-version key",
+	"internal/auth/session/client_session.go":                      "PostgreSQL auth-schema sessions insert of an OAuth client session; no stored-version key",
+	"internal/auth/session/delegation.go":                          "PostgreSQL auth-schema sessions insert of a delegated session (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/session/signin.go":                              "PostgreSQL auth-schema sessions and refresh_credentials inserts of a sign-in (schema name interpolated); no in-scope ClickHouse table; a second writer path of store.go's rows until CHAOS-10411 moves Create onto it",
+	"internal/auth/session/store.go":                               "PostgreSQL auth-schema sessions and refresh_credentials inserts (schema name interpolated); no in-scope ClickHouse table",
+	"internal/storage/postgres/authschema/apply.go":                "PostgreSQL schema-migration ledger",
+	"internal/providersync/catalog_evidence_start.go":              "the CHAOS-10521 evidence start of a catalog link names its table at run time (INSERT INTO + spec.table) and writes team_memberships, team_project_ownership and team_repo_ownership, none of them in-scope tables: a written row is a whole-row copy read by FINAL with every column, only valid_from (the moved row) or valid_to (the retired old key) and updated_at change (updated_at is the run, or raised past the stored stamp for the retired key so the new version wins), so every other column is carried forward unchanged -- R1/R2 applied by hand like ownership_interval_compaction.go, not through storedversion.Contract",
+	"internal/providersync/ownership_interval_compaction.go":       "the CHAOS-9556 compaction names its table at run time (INSERT INTO + spec.table) and writes the two ownership interval tables (team_project_ownership, team_repo_ownership) and its own backup table, none of them in-scope tables: a rewritten row is a whole-row copy read by FINAL with every column, only valid_to and updated_at change (updated_at is raised past the stored stamp so the new version wins), so every other column is carried forward unchanged -- R1/R2 applied by hand like jira_project_as_team_retire.go, not through storedversion.Contract",
+	"internal/providersync/work_item_dependency_drain.go":          "the CHAOS-9706 drain names its tables through constants it concatenates (INSERT INTO + table) and writes work_item_dependencies_drain_bak (its backup, a copy of every column) and, on restore, work_item_dependencies itself: a restored row is a whole-row copy of the saved version with its own last_synced, inserted only where no row of the key holds a last_synced at or after it, so no stated or held column is changed (R1/R2 applied by hand like the CHAOS-9556 compaction)",
+	"internal/providersync/team_id_carry.go":                       "the team id carry names its table at run time (INSERT INTO + write.table) and writes teams and link rows, team policies, drift changes and fallbacks, which are not in-scope tables; the one in-scope table it writes is identities (planIdentities), and that write is a whole-row copy: the row is read by FINAL with every column, only team_ids and updated_at change (updated_at is bumped past the stored stamp so the new version wins), so every other column is carried forward unchanged -- R1/R2 applied by hand like internal/api/teamsidentity/store.go, not through storedversion.Contract",
+	"internal/jobs/metrics/daily/benchmarking_empty_run_retire.go": "the empty-run retraction of benchmarking names its table at run time (INSERT INTO + table.table): one of the six benchmarking output tables (testops_metric_baselines, testops_maturity_bands, testops_metric_anomalies, testops_period_comparisons, testops_metric_correlations, testops_benchmark_insights), none of them an in-scope or operational table",
+	"internal/jobs/metrics/daily/stale_team_keys.go":               "the stale-key rule names its table at run time (INSERT INTO + table.Table): one of the team-keyed daily tables that package teamkeytables declares, none of them an in-scope or operational table (TestNoStaleKeyRuleTableIsAnInScopeKey)",
+	"internal/chmigrate/apply.go":                                  "ClickHouse schema migrator: records schema_migrations, and seeds the head baseline's captured rows only into a table it has just created and that holds no row; the checked-in baseline seeds no table, and its drift test ties it to the Python chain",
 }
 
 // The stale-key rule of the daily metric families writes a row of zeros to a
@@ -272,4 +275,90 @@ func TestEveryWriterOfAnInScopeKeyIsContractedOrListed(t *testing.T) {
 	}
 	t.Logf("module scan: %d INSERT sites; contracted %d, out of scope %d, unresolved %d",
 		len(found), len(contractedWriters), len(outOfScopeWriters), len(unresolvedWriters))
+}
+
+// keptRepairSites are the writes of a table with kept groups (migration 166). Each inserts under SyncContext, so its
+// repair read sees the insert, and repairs its keys after the insert.
+var keptRepairSites = map[string][]string{
+	"internal/providersync/github_prs_effects_clickhouse.go": {
+		"sink.Conn.PrepareBatch(storedversion.SyncContext(ctx), pullRequestInsert)", "storedversion.PullRequestKept.Repair(",
+	},
+	"internal/providersync/github_deployments_effects_clickhouse.go": {
+		"sink.Conn.PrepareBatch(storedversion.SyncContext(ctx), deploymentsInsert)", "storedversion.DeploymentKept.Repair(",
+	},
+	"internal/streamhandlers/external_clickhouse.go": {
+		`"pull_request.v1": storedversion.PullRequestKept`, "insertCtx = storedversion.SyncContext(ctx)",
+		"s.conn.PrepareBatch(insertCtx, query)", "kept.Repair(",
+	},
+	"internal/localgit/stored_version.go": {
+		`"git_pull_requests": storedversion.PullRequestKept`, "insertCtx = storedversion.SyncContext(ctx)",
+		"w.Conn.PrepareBatch(insertCtx, insert)", "kept.Repair(",
+	},
+}
+
+// CHAOS-6014 C4: every writer of git_pull_requests or deployments is one of the kept-repair sites, and each site inserts
+// under SyncContext and repairs after the insert. The contracted writers of the two tables are the module scan's.
+func TestEveryKeptTableWriteRepairsItsKeys(t *testing.T) {
+	found := scanInserts(t)
+	writers := map[string]bool{}
+	for key := range found {
+		if table := key[strings.IndexByte(key, '|')+1:]; strings.Contains(key, "|") && (table == PullRequestKept.Base || table == DeploymentKept.Base) {
+			writers[key] = true
+		}
+	}
+	want := map[string]bool{
+		"internal/providersync/stored_version.go|git_pull_requests":        true,
+		"internal/providersync/stored_version.go|deployments":              true,
+		"internal/streamhandlers/external_clickhouse.go|git_pull_requests": true,
+		"internal/localgit/stored_version.go|git_pull_requests":            true,
+		"internal/storedversion/repair.go|git_pull_requests":               true,
+		"internal/storedversion/repair.go|deployments":                     true,
+	}
+	for key := range writers {
+		if !want[key] {
+			t.Errorf("%s writes a table with kept groups and is no kept-repair site", key)
+		}
+	}
+	for key := range want {
+		if !writers[key] {
+			t.Errorf("%s is a kept-repair writer the module scan does not find", key)
+		}
+	}
+	_, filename, _, ok := moduleroot.Caller(0)
+	if !ok {
+		t.Fatal("locate test")
+	}
+	root := filepath.Join(filepath.Dir(filename), "..", "..")
+	for file, needles := range keptRepairSites {
+		source, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(file)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, needle := range needles {
+			if !strings.Contains(string(source), needle) {
+				t.Errorf("%s lacks %q", file, needle)
+			}
+		}
+	}
+	// The two provider-sync statements are prepared only at their kept-repair site.
+	for _, name := range []string{"pullRequestInsert", "deploymentsInsert"} {
+		matches, err := filepath.Glob(filepath.Join(root, "internal", "providersync", "*.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sites := 0
+		for _, path := range matches {
+			if strings.HasSuffix(path, "_test.go") {
+				continue
+			}
+			source, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sites += strings.Count(string(source), ", "+name+")")
+		}
+		if sites != 1 {
+			t.Errorf("%s is prepared at %d sites, want 1 (its kept-repair site)", name, sites)
+		}
+	}
 }

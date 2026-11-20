@@ -405,7 +405,7 @@ func reportJSON(result reconcileResult) *pyjson.Object {
 // reconcile is trigger_reconciliation (reconcile_all).
 func (h handlers) reconcile(w http.ResponseWriter, r *http.Request) {
 	var errs pybody.Errors
-	org, _ := errs.QueryUUID("org_id", pybody.LastQueryValue(r.URL.Query(), "org_id"))
+	org, _ := errs.QueryUUID("org_id", pybody.LastQueryValue(pybody.Query(r), "org_id"))
 	if len(errs) > 0 {
 		h.write(w, validation(errs))
 		return

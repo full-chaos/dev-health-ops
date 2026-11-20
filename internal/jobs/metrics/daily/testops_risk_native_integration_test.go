@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -53,16 +54,6 @@ func TestTestopsRiskExecutorComputeFamilyWritesAllThreeTablesAgainstRealClickHou
     commit_hash Nullable(String), branch Nullable(String), pr_number Nullable(UInt32),
     team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT ''
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id)`,
-		`CREATE TABLE test_suite_results (
-    repo_id UUID, run_id String, suite_id String, suite_name String,
-    framework Nullable(String), environment Nullable(String),
-    total_count UInt32, passed_count UInt32, failed_count UInt32, skipped_count UInt32,
-    error_count UInt32 DEFAULT 0, quarantined_count UInt32 DEFAULT 0, retried_count UInt32 DEFAULT 0,
-    duration_seconds Nullable(Float64), started_at Nullable(DateTime64(3, 'UTC')),
-    finished_at Nullable(DateTime64(3, 'UTC')), team_id Nullable(String), service_id Nullable(String),
-    org_id LowCardinality(String) DEFAULT '', last_synced DateTime64(3, 'UTC'),
-    report_slot LowCardinality(String) DEFAULT '', run_attempt UInt32 DEFAULT 0, legacy_suite_ids Array(String) DEFAULT []
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id, suite_id)`,
 		`CREATE TABLE test_case_results (
     repo_id UUID, run_id String, suite_id String, case_id String, case_name String,
     class_name Nullable(String), status LowCardinality(String), duration_seconds Nullable(Float64),
@@ -70,45 +61,12 @@ func TestTestopsRiskExecutorComputeFamilyWritesAllThreeTablesAgainstRealClickHou
     stack_trace Nullable(String), is_quarantined UInt8 DEFAULT 0,
     org_id LowCardinality(String) DEFAULT '', last_synced DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id, suite_id, case_id)`,
-		`CREATE TABLE coverage_snapshots (
-    repo_id UUID, run_id String, snapshot_id String, report_format Nullable(String),
-    lines_total Nullable(UInt32), lines_covered Nullable(UInt32), line_coverage_pct Nullable(Float64),
-    branches_total Nullable(UInt32), branches_covered Nullable(UInt32), branch_coverage_pct Nullable(Float64),
-    functions_total Nullable(UInt32), functions_covered Nullable(UInt32),
-    commit_hash Nullable(String), branch Nullable(String), pr_number Nullable(UInt32),
-    team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT '',
-    last_synced DateTime64(3, 'UTC'),
-    report_slot LowCardinality(String) DEFAULT '', run_attempt UInt32 DEFAULT 0, legacy_snapshot_ids Array(String) DEFAULT []
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id, snapshot_id)`,
-		`CREATE TABLE testops_release_confidence (
-    repo_id UUID, day Date, confidence_score Float64, pipeline_success_factor Float64,
-    test_pass_factor Float64, coverage_factor Float64, flake_penalty Float64, regression_penalty Float64,
-    factors_json String DEFAULT '{}', team_id Nullable(String), service_id Nullable(String),
-    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
-		// drag_hours/failure_rework_hours/flake_investigation_hours/
-		// queue_wait_hours/retry_overhead_hours are Nullable(Float64) since
-		// migration 091_testops_quality_drag_nullable_fields.sql (CHAOS-4806,
-		// ruling R73) -- a plain Float64 here would refuse the writer's
-		// *float64 nil writes with a real ClickHouse error instead of the
-		// production schema's actual NULL.
-		`CREATE TABLE testops_quality_drag (
-    repo_id UUID, day Date, drag_hours Nullable(Float64), failure_rework_hours Nullable(Float64),
-    flake_investigation_hours Nullable(Float64), queue_wait_hours Nullable(Float64), retry_overhead_hours Nullable(Float64),
-    factors_json String DEFAULT '{}', team_id Nullable(String), service_id Nullable(String),
-    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
-		`CREATE TABLE testops_pipeline_stability (
-    repo_id UUID, day Date, stability_index Float64, success_rate_7d Float64, success_rate_trend Float64,
-    failure_clustering_score Float64, median_recovery_time_seconds Nullable(Float64),
-    team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT '',
-    computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "test_suite_results", "coverage_snapshots", "testops_run_report_completeness", "testops_release_confidence", "testops_quality_drag", "testops_pipeline_stability")
 	applyTestopsRepositoryOwnershipSchema(ctx, t, conn)
 
 	// Freeze background merges on the seeded source tables BEFORE anything is
@@ -318,16 +276,6 @@ func TestTestopsRiskExecutorComputeFamilyReportsPartialWriteAtTheCallSite(t *tes
     commit_hash Nullable(String), branch Nullable(String), pr_number Nullable(UInt32),
     team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT ''
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id)`,
-		`CREATE TABLE test_suite_results (
-    repo_id UUID, run_id String, suite_id String, suite_name String,
-    framework Nullable(String), environment Nullable(String),
-    total_count UInt32, passed_count UInt32, failed_count UInt32, skipped_count UInt32,
-    error_count UInt32 DEFAULT 0, quarantined_count UInt32 DEFAULT 0, retried_count UInt32 DEFAULT 0,
-    duration_seconds Nullable(Float64), started_at Nullable(DateTime64(3, 'UTC')),
-    finished_at Nullable(DateTime64(3, 'UTC')), team_id Nullable(String), service_id Nullable(String),
-    org_id LowCardinality(String) DEFAULT '', last_synced DateTime64(3, 'UTC'),
-    report_slot LowCardinality(String) DEFAULT '', run_attempt UInt32 DEFAULT 0, legacy_suite_ids Array(String) DEFAULT []
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id, suite_id)`,
 		`CREATE TABLE test_case_results (
     repo_id UUID, run_id String, suite_id String, case_id String, case_name String,
     class_name Nullable(String), status LowCardinality(String), duration_seconds Nullable(Float64),
@@ -335,34 +283,6 @@ func TestTestopsRiskExecutorComputeFamilyReportsPartialWriteAtTheCallSite(t *tes
     stack_trace Nullable(String), is_quarantined UInt8 DEFAULT 0,
     org_id LowCardinality(String) DEFAULT '', last_synced DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id, suite_id, case_id)`,
-		`CREATE TABLE coverage_snapshots (
-    repo_id UUID, run_id String, snapshot_id String, report_format Nullable(String),
-    lines_total Nullable(UInt32), lines_covered Nullable(UInt32), line_coverage_pct Nullable(Float64),
-    branches_total Nullable(UInt32), branches_covered Nullable(UInt32), branch_coverage_pct Nullable(Float64),
-    functions_total Nullable(UInt32), functions_covered Nullable(UInt32),
-    commit_hash Nullable(String), branch Nullable(String), pr_number Nullable(UInt32),
-    team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT '',
-    last_synced DateTime64(3, 'UTC'),
-    report_slot LowCardinality(String) DEFAULT '', run_attempt UInt32 DEFAULT 0, legacy_snapshot_ids Array(String) DEFAULT []
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id, snapshot_id)`,
-		`CREATE TABLE testops_release_confidence (
-    repo_id UUID, day Date, confidence_score Float64, pipeline_success_factor Float64,
-    test_pass_factor Float64, coverage_factor Float64, flake_penalty Float64, regression_penalty Float64,
-    factors_json String DEFAULT '{}', team_id Nullable(String), service_id Nullable(String),
-    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
-		// drag_hours/failure_rework_hours/flake_investigation_hours/
-		// queue_wait_hours/retry_overhead_hours are Nullable(Float64) since
-		// migration 091_testops_quality_drag_nullable_fields.sql (CHAOS-4806,
-		// ruling R73) -- a plain Float64 here would refuse the writer's
-		// *float64 nil writes with a real ClickHouse error instead of the
-		// production schema's actual NULL.
-		`CREATE TABLE testops_quality_drag (
-    repo_id UUID, day Date, drag_hours Nullable(Float64), failure_rework_hours Nullable(Float64),
-    flake_investigation_hours Nullable(Float64), queue_wait_hours Nullable(Float64), retry_overhead_hours Nullable(Float64),
-    factors_json String DEFAULT '{}', team_id Nullable(String), service_id Nullable(String),
-    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
 		// testops_pipeline_stability is DELIBERATELY never created -- see the
 		// test's doc comment. writeTestopsRisk writes this table LAST
 		// (testops_risk_native_clickhouse.go:1003-1092), so its PrepareBatch
@@ -373,6 +293,7 @@ func TestTestopsRiskExecutorComputeFamilyReportsPartialWriteAtTheCallSite(t *tes
 			t.Fatal(err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "test_suite_results", "coverage_snapshots", "testops_run_report_completeness", "testops_release_confidence", "testops_quality_drag")
 	applyTestopsRepositoryOwnershipSchema(ctx, t, conn)
 
 	const orgID = "00000000-0000-4000-8000-00000000000a"

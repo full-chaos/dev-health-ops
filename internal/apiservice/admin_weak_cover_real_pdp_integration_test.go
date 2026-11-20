@@ -217,8 +217,8 @@ func (w *wcWorld) newSides(t *testing.T, ctx context.Context, wrap func(authapi.
 	t.Helper()
 	var s wcSides
 	s.plane = authplane.StartAuthorize(t, ctx, w.env.URI, w.key, authplane.AuthorizeOptions{PlatformRolesOwned: w.mode.authOwned, UsersOwned: true, Wrap: wrap})
-	s.handlers[wcOff], s.admins[wcOff] = w.goAPI(t, s.plane, wcLiveEnforce, AuthProxyConfig{})
-	s.handlers[wcOn], s.admins[wcOn] = w.goAPI(t, s.plane, wcLiveEnforce+",admin", AuthProxyConfig{})
+	s.handlers[wcOff], s.admins[wcOff] = w.goAPI(t, s.plane, wcLiveEnforce, AuthProxyConfig{}, authplane.RigClientTimeout)
+	s.handlers[wcOn], s.admins[wcOn] = w.goAPI(t, s.plane, wcLiveEnforce+",admin", AuthProxyConfig{}, authplane.RigClientTimeout)
 	return s
 }
 
@@ -239,8 +239,8 @@ func (w *wcWorld) impSwitchOnSides(t *testing.T) wcSides {
 		t.Fatal("the proxy config does not turn impersonation through auth-service on")
 	}
 	s := wcSides{plane: w.main.plane}
-	s.handlers[wcOff], s.admins[wcOff] = w.goAPI(t, s.plane, wcLiveEnforce, proxy)
-	s.handlers[wcOn], s.admins[wcOn] = w.goAPI(t, s.plane, wcLiveEnforce+",admin", proxy)
+	s.handlers[wcOff], s.admins[wcOff] = w.goAPI(t, s.plane, wcLiveEnforce, proxy, authplane.RigClientTimeout)
+	s.handlers[wcOn], s.admins[wcOn] = w.goAPI(t, s.plane, wcLiveEnforce+",admin", proxy, authplane.RigClientTimeout)
 	return s
 }
 
@@ -322,8 +322,9 @@ func (a *wcUsersAdmin) DeleteUser(_ context.Context, in authprovision.UserDelete
 
 // goAPI is go-api's handler as service.go builds it: newProtection over the database, the user access tokens routed by
 // the endpoint-profile rows, the Enforcer over the profile rows with the enforce set, the production scope layers.
-// Users are owned (AUTH_USERS_OWNED, as in prod) with the stub user-admin client.
-func (w *wcWorld) goAPI(t *testing.T, plane *authplane.Authorize, enforce string, proxy AuthProxyConfig) (http.Handler, *wcUsersAdmin) {
+// Users are owned (AUTH_USERS_OWNED, as in prod) with the stub user-admin client. enforceTimeout is the Enforcer's
+// deadline per decision call; 0 is its production default.
+func (w *wcWorld) goAPI(t *testing.T, plane *authplane.Authorize, enforce string, proxy AuthProxyConfig, enforceTimeout time.Duration) (http.Handler, *wcUsersAdmin) {
 	t.Helper()
 	protected, err := newProtection(apiTestConfig(), w.env.Admin, w.mode.goOwned, proxy, quietLogger())
 	if err != nil {
@@ -337,7 +338,7 @@ func (w *wcWorld) goAPI(t *testing.T, plane *authplane.Authorize, enforce string
 		t.Fatal(err)
 	}
 	enf, err := policy.NewEnforcer(policy.EnforceConfig{Decider: plane.Client, Rows: rows,
-		Switch: authzenforce.Parse(authzenforce.GoAPI, enforce), Logger: quietLogger()})
+		Switch: authzenforce.Parse(authzenforce.GoAPI, enforce), Logger: quietLogger(), Timeout: enforceTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -648,9 +649,13 @@ type wcAnswer struct {
 	retryAfter string
 	decisions  []string
 	usersAdmin []string
+	elapsed    time.Duration
 }
 
-func (w *wcWorld) serve(h http.Handler, plane *authplane.Authorize, admin *wcUsersAdmin, side int, c *wcCaller, r wcRow) wcAnswer {
+// wcPEPUnavailable is the Enforcer's fail-closed body when its decision point does not answer (policy/enforce.go:580).
+const wcPEPUnavailable = `{"detail":"Authorization service temporarily unavailable"}`
+
+func (w *wcWorld) serve(h http.Handler, plane *authplane.Authorize, admin *wcUsersAdmin, side int, c *wcCaller, r wcRow) (wcAnswer, error) {
 	var body io.Reader
 	if r.body != "" {
 		body = strings.NewReader(r.body)
@@ -666,13 +671,16 @@ func (w *wcWorld) serve(h http.Handler, plane *authplane.Authorize, admin *wcUse
 		req.Header.Set("X-Org-Id", r.xOrg)
 	}
 	rec := httptest.NewRecorder()
+	start := time.Now()
 	h.ServeHTTP(rec, req)
+	elapsed := time.Since(start)
 	calls := admin.take()
 	for i := range calls {
 		calls[i] = w.normalize(calls[i])
 	}
-	return wcAnswer{status: rec.Code, body: w.normalize(rec.Body.String()), retryAfter: rec.Header().Get("Retry-After"), decisions: plane.Take(),
-		usersAdmin: calls}
+	decisions, err := plane.Take()
+	return wcAnswer{status: rec.Code, body: w.normalize(rec.Body.String()), retryAfter: rec.Header().Get("Retry-After"), decisions: decisions,
+		usersAdmin: calls, elapsed: elapsed}, err
 }
 
 var (
@@ -724,12 +732,21 @@ func (w *wcWorld) cellOn(t *testing.T, sides wcSides, c *wcCaller, rowIndex int)
 	for side := range 2 {
 		r := wcRows(c, side)[rowIndex]
 		out.row = r
-		out.sides[side] = w.serve(sides.handlers[side], sides.plane, sides.admins[side], side, c, r)
-		a := out.sides[side]
+		a, err := w.serve(sides.handlers[side], sides.plane, sides.admins[side], side, c, r)
+		if err != nil {
+			t.Fatalf("%s %s %s side: %v", c.spec.label, r.name, wcSideName[side], err)
+		}
+		out.sides[side] = a
 		t.Logf("CELL|13728|%s|%s|%s|%s|%d|retry=%q|%s|pdp=%v|users_admin=%v", w.mode.name, c.spec.label, r.name, wcSideName[side], a.status,
 			a.retryAfter, wcShort(a.body), a.decisions, a.usersAdmin)
 		if a.status == 0 {
 			t.Fatalf("%s side: no answer", wcSideName[side])
+		}
+		// A side whose decision call gave no decision got the Enforcer's fallback: say so, not a parity diff.
+		if a.body == wcPEPUnavailable && slices.ContainsFunc(a.decisions, func(d string) bool { return strings.Contains(d, " status=") }) {
+			t.Errorf("TIMEOUT-FALLBACK %s %s %s side: the decision point gave no decision within the client deadline %s (decisions %v, took %s): "+
+				"an environment stall or a decision point failure, not a parity result", c.spec.label, r.name, wcSideName[side],
+				sides.plane.ClientTimeout(), a.decisions, a.elapsed.Round(time.Millisecond))
 		}
 	}
 	// The live members namespace asks admin.orgs as its platform alternative on the site_org_* rows, on both sides.
@@ -1009,7 +1026,10 @@ func TestAdminWeakCoverRealPDPAbsoluteAnswers(t *testing.T) {
 	for _, cell := range cells {
 		t.Run(cell.name, func(t *testing.T) {
 			for side := range 2 {
-				got := w.serve(w.main.handlers[side], w.main.plane, w.main.admins[side], side, cell.caller, cell.row)
+				got, err := w.serve(w.main.handlers[side], w.main.plane, w.main.admins[side], side, cell.caller, cell.row)
+				if err != nil {
+					t.Fatalf("%s %s side: %v", cell.name, wcSideName[side], err)
+				}
 				t.Logf("CELL|13728|m_on|%s|%s|%s|%d|%s|pdp=%v", cell.caller.spec.label, cell.name, wcSideName[side], got.status, wcShort(got.body), got.decisions)
 				if got.status != cell.status || got.body != cell.body {
 					t.Errorf("%s side: %d %s; the rule's answer is %d %s", wcSideName[side], got.status, wcShort(got.body), cell.status, cell.body)
@@ -1029,7 +1049,7 @@ func TestAdminWeakCoverRealPDPDeadDecisionPoint(t *testing.T) {
 	w := newWCWorld(t, ctx, wcModes[0])
 	dead := authplane.StartAuthorize(t, ctx, w.env.URI, w.key, authplane.AuthorizeOptions{UsersOwned: true})
 	dead.Stop()
-	w.main.handlers[wcOn], w.main.admins[wcOn] = w.goAPI(t, dead, wcLiveEnforce+",admin", AuthProxyConfig{})
+	w.main.handlers[wcOn], w.main.admins[wcOn] = w.goAPI(t, dead, wcLiveEnforce+",admin", AuthProxyConfig{}, authplane.RigClientTimeout)
 	// pa_foreign_org: its org claim lets the acr revoke row reach its HoldsPlatform site.
 	c := w.seed(t, ctx, wcSpecs[5])
 	for i, r := range wcRows(c, wcOff) {
@@ -1044,6 +1064,78 @@ func TestAdminWeakCoverRealPDPDeadDecisionPoint(t *testing.T) {
 				t.Errorf("off side %d %s Retry-After %q: its decision point is up", off.status, off.body, off.retryAfter)
 			}
 		})
+	}
+}
+
+// go-api's own decision point deadlines, as production builds them: the client's shadowPDPTimeout (shadow.go) and the
+// Enforcer's default (policy/enforce.go; production's EnforceConfig sets no Timeout), against a decision point that
+// stalls past them: the admin cell fails closed with 503 and Retry-After 5, ended by the deadline and not by the stall,
+// and the late decision is drained into this cell. The rig's longer deadlines cannot hide this answer. The cell pins the
+// answer at the production deadlines, not their values: how the held read ended says which ran out first.
+func TestAdminWeakCoverRealPDPProdDeadlineFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	w := newWCWorld(t, ctx, wcModes[1])
+	held := wcStallState{stall: shadowPDPTimeout + 2*time.Second, ended: make(chan string, 8)}
+	slow := authplane.StartAuthorize(t, ctx, w.env.URI, w.key, authplane.AuthorizeOptions{PlatformRolesOwned: true, UsersOwned: true,
+		ClientTimeout: shadowPDPTimeout, Wrap: func(s authapi.DecisionState) authapi.DecisionState { held.inner = s; return held }})
+	// Enforcer timeout 0: production's EnforceConfig sets none (enforcer.go:79), so the Enforcer's own default applies.
+	handler, admin := w.goAPI(t, slow, wcLiveEnforce+",admin", AuthProxyConfig{}, 0)
+	c := w.seed(t, ctx, wcSpecs[1])
+	r := wcRows(c, wcOn)[0]
+	if c.spec.label != "pa_orgless" || r.name != "r21_list" {
+		t.Fatalf("class %s row %s, want pa_orgless r21_list", c.spec.label, r.name)
+	}
+	a, err := w.serve(handler, slow, admin, wcOn, c, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("PROD-DEADLINE|%s|%s|%d|retry=%q|%s|elapsed=%s|pdp=%v", c.spec.label, r.name, a.status, a.retryAfter, a.body, a.elapsed.Round(time.Millisecond), a.decisions)
+	if a.status != http.StatusServiceUnavailable || a.retryAfter != "5" || a.body != wcPEPUnavailable || len(a.usersAdmin) != 0 {
+		t.Errorf("stalled decision point: %d Retry-After %q %s, %d user-admin calls; want 503, Retry-After 5, %s and none",
+			a.status, a.retryAfter, a.body, len(a.usersAdmin), wcPEPUnavailable)
+	}
+	var ends []string
+	for len(held.ended) > 0 {
+		ends = append(ends, <-held.ended)
+	}
+	if len(ends) != 1 || ends[0] != wcEndedByCall {
+		t.Errorf("held decision reads ended %v: want one, ended by its call (the deadline), before the %s stall", ends, held.stall)
+	}
+	if len(a.decisions) != 1 || !strings.HasPrefix(a.decisions[0], r.action+" platform ") || !strings.Contains(a.decisions[0], " status=") {
+		t.Errorf("decisions %v: want the one late %s call, drained into this cell", a.decisions, r.action)
+	}
+}
+
+// wcStallState holds each decision read for stall, or until its call ends, and sends on ended how the hold ended.
+type wcStallState struct {
+	inner authapi.DecisionState
+	stall time.Duration
+	ended chan string
+}
+
+const (
+	wcEndedByCall  = "call_ended"
+	wcEndedByStall = "stall_ran_out"
+)
+
+func (s wcStallState) Read(ctx context.Context, fn func(authapi.DecisionTx) error) error {
+	timer := time.NewTimer(s.stall)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		s.end(wcEndedByStall)
+	case <-ctx.Done():
+		s.end(wcEndedByCall)
+		return ctx.Err()
+	}
+	return s.inner.Read(ctx, fn)
+}
+
+// end never blocks a decision read; a full channel already fails the one-read assert.
+func (s wcStallState) end(how string) {
+	select {
+	case s.ended <- how:
+	default:
 	}
 }
 
@@ -1162,7 +1254,10 @@ func TestAdminWeakCoverRealPDPPlantedDefects(t *testing.T) {
 			}
 			// The planted decision point: the same production builder over the same database, its state wrapped.
 			planted := w.newSides(t, ctx, w.plantWrap([]wcPlant{p}))
-			got := w.serve(planted.handlers[wcOn], planted.plane, planted.admins[wcOn], wcOn, c, wcRows(c, wcOn)[0])
+			got, err := w.serve(planted.handlers[wcOn], planted.plane, planted.admins[wcOn], wcOn, c, wcRows(c, wcOn)[0])
+			if err != nil {
+				t.Fatalf("%s: %v", p.name, err)
+			}
 			t.Logf("CELL|13728|%s|%s|%s|planted_on|%d|%s|pdp=%v", wcModes[p.mode].name, c.spec.label, p.name, got.status, wcShort(got.body), got.decisions)
 			// The main cell's parity assert, on the planted answer: it must report the flip.
 			if why := wcDiff(base.sides[wcOff], got, "", ""); why == "" || got.status != p.wantOn {

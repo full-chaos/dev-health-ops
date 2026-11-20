@@ -231,6 +231,8 @@ type handlers struct {
 	storedKey   func(context.Context, string) (string, error)
 	// storedPurposeKey replaces the stored purpose override key read in tests.
 	storedPurposeKey func(context.Context, string, llmorgsettings.Purpose) (string, error)
+	// storedScopeBaseURL replaces the stored base_url read of one scope ("" = the default row) in tests.
+	storedScopeBaseURL func(context.Context, string, llmorgsettings.Purpose) (string, error)
 	// write renders this area's own directly-written errors (the keyed
 	// rate limiter's 429) in the same wire shape every other error uses.
 	write httpapi.ErrorWriter

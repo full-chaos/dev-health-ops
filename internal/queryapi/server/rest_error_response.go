@@ -24,6 +24,7 @@ package server
 
 import (
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/chclient"
 	"log"
 	"net/http"
@@ -150,6 +151,12 @@ func writeRESTDataUnavailable(w http.ResponseWriter, r *http.Request, component,
 		writeRESTError(w, r, component, orgID, http.StatusServiceUnavailable, detail)
 		return
 	}
+	// A read the client's cancel ended is not a degradation: one INFO cancel
+	// line under the route's component, no "degraded" line (CHAOS-9184).
+	if analytics.ReportedAsClientCancel(r.Context(), err, component, "org_id", orgID, "request_id", logSafeRequestID(envelopeRequestID(r))) {
+		writeRESTError(w, r, component, orgID, http.StatusServiceUnavailable, "Data unavailable")
+		return
+	}
 	log.Printf("query-api: %s: degraded to 503 Data unavailable: org_id=%s request_id=%s err=%v",
 		component, orgID, logSafeRequestID(envelopeRequestID(r)), err)
 	writeRESTError(w, r, component, orgID, http.StatusServiceUnavailable, "Data unavailable")
@@ -180,7 +187,7 @@ func logRESTBoundHit(r *http.Request, component, orgID string, err error) (detai
 		source = "deadline of the client"
 	}
 	log.Printf("query-api: WARN %s: read hit the %s bound (%s, limit=%s): scope_ids=%d org_id=%s request_id=%s err=%v",
-		component, bound, source, limit, len(r.URL.Query()["scope_id"]), orgID, logSafeRequestID(envelopeRequestID(r)), err)
+		component, bound, source, limit, len(httpapi.Query(r)["scope_id"]), orgID, logSafeRequestID(envelopeRequestID(r)), err)
 	return restBoundDetail(bound), true
 }
 

@@ -232,7 +232,7 @@ jobs:
     strategy:
       # One red leg must not cancel the others: every leg reports its own signal.
       fail-fast: false
-      # CHAOS-11418: the legs live in ci/go_quality_legs.json (static, plan-reads, test-N-of-13, race-N-of-13; the tooling tests pin the
+      # CHAOS-11418: the legs live in ci/go_quality_legs.json (static, plan-reads, test-N-of-13, race-N-of-16; the tooling tests pin the
       # race and test counts there). go-quality-plan filters them with ci/go_quality_legs.sh: a pull request without the ci:full
       # label starts no race leg (a job cannot read its own matrix in an `if`, so the leg is left out, not started to report a
       # skip). The legs are not required status contexts (the ruleset requires the `go-quality` aggregate), so the count can
@@ -529,6 +529,9 @@ jobs:
           # CHAOS-11684: the test and race stages run go test -json; the raw events (they carry test output) stay in this runner
           # directory and are reduced to package/test/action/elapsed by the step below. Never under go-test-json/ (uploaded as is).
           GO_TEST_LEG_JSON_DIR: ${{ runner.temp }}/go-test-leg-json
+          # CHAOS-13767: cover profiles of the non-race test legs of main pushes only (check_go.sh go_test_cover_args); the PR head
+          # that added it ran the same path on pull requests (all 13 test legs green). To turn coverage off, empty this one line.
+          GO_TEST_COVER_DIR: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(matrix.name, 'test-') && format('{0}/go-cover', runner.temp) || '' }}
         # Each stage of the leg prints UTC start/done stamps (`==> stage ...`).
         run: bash ci/check_go.sh ci-leg ${{ matrix.args }}
 
@@ -544,11 +547,29 @@ jobs:
             jq -R -r 'fromjson? | select(type == "object" and ((.Test // "") != "") and (.Action == "pass" or .Action == "fail" or .Action == "skip")) | [.Package, .Test, .Action, (.Elapsed // 0)] | @tsv' "${f}"
           done | gzip -9 > "go-test-timings/${{ matrix.name }}.tsv.gz"
 
-      - name: Write JUnit XML next to the providersync race slice's go test -json (race legs)
+      - name: Write JUnit XML parts of the leg's go test -json
         continue-on-error: true
-        if: always() && startsWith(matrix.name, 'race-') && steps.relevance.outputs.relevant == 'true'
-        # CHAOS-13193: the product tests sync reads .xml and .info members only; the .json stays.
-        run: bash ci/go_test_json_to_junit.sh go-test-json
+        if: always() && steps.relevance.outputs.relevant == 'true' && (startsWith(matrix.name, 'test-') || startsWith(matrix.name, 'race-'))
+        # CHAOS-13193: the product tests sync reads .xml and .info members only; the .json stays. CHAOS-13766: the leg's own events
+        # (the runner-only leg directory) and the race legs' providersync slice (go-test-json/) become one go-junit-part-<leg>
+        # artifact (excluded from the sync's artifact cap); the go-quality job merges the parts into one report.
+        env:
+          LEG_JSON_DIR: ${{ runner.temp }}/go-test-leg-json
+          COVER_DIR: ${{ runner.temp }}/go-cover
+        run: |
+          bash ci/go_junit_part.sh go-junit-part go-test-json "${LEG_JSON_DIR}"
+          # CHAOS-13767: the leg's cover profiles (main pushes, test legs) ride in the same go-junit-part- artifact; go-quality-coverage merges them.
+          if [ -d "${COVER_DIR}" ]; then mkdir -p go-junit-part/cover && cp -- "${COVER_DIR}"/*.out go-junit-part/cover/ 2>/dev/null || true; fi
+
+      - name: Upload the leg's JUnit part
+        continue-on-error: true
+        if: always() && steps.relevance.outputs.relevant == 'true' && (startsWith(matrix.name, 'test-') || startsWith(matrix.name, 'race-'))
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go-junit-part-${{ matrix.name }}
+          path: go-junit-part/
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Upload the providersync race slice's go test -json (race legs)
         continue-on-error: true
@@ -767,7 +788,7 @@ jobs:
           QUEUE_RUN: ${{ needs.go-quality-plan.outputs.queue_run }}
         run: |
           if [ -n "${QUEUE_RUN}" ]; then
-            summary="go-quality on this push: static ran, plan-reads ran; test-1-of-13, test-2-of-13, test-3-of-13, test-4-of-13, test-5-of-13, test-6-of-13, test-7-of-13, test-8-of-13, test-9-of-13, test-10-of-13, test-11-of-13, test-12-of-13, test-13-of-13, race-1-of-13, race-2-of-13, race-3-of-13, race-4-of-13, race-5-of-13, race-6-of-13, race-7-of-13, race-8-of-13, race-9-of-13, race-10-of-13, race-11-of-13, race-12-of-13, race-13-of-13 skipped: queue-tested sha, merge_group run ${QUEUE_RUN}"
+            summary="go-quality on this push: static ran, plan-reads ran; test-1-of-13, test-2-of-13, test-3-of-13, test-4-of-13, test-5-of-13, test-6-of-13, test-7-of-13, test-8-of-13, test-9-of-13, test-10-of-13, test-11-of-13, test-12-of-13, test-13-of-13, race-1-of-16, race-2-of-16, race-3-of-16, race-4-of-16, race-5-of-16, race-6-of-16, race-7-of-16, race-8-of-16, race-9-of-16, race-10-of-16, race-11-of-16, race-12-of-16, race-13-of-16, race-14-of-16, race-15-of-16, race-16-of-16 skipped: queue-tested sha, merge_group run ${QUEUE_RUN}"
           else
             summary="go-quality on this push: every leg ran (no queue-tested sha)"
           fi
@@ -807,12 +828,95 @@ jobs:
           chmod +x ci/aggregate_gate_results.sh
           ./ci/aggregate_gate_results.sh
 
+      # CHAOS-13766: fan-in of the leg JUnit parts, after the verdict above (best effort: none of these steps can change the
+      # job's result). The merged report is the ONE go-test-junit-quality artifact of the run; every testcase is kept.
+      - name: Download the leg JUnit parts
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: go-junit-part-*
+          path: junit-parts
+
+      - name: Merge the leg JUnit parts into one report
+        if: always()
+        continue-on-error: true
+        env:
+          JUNIT_MERGED_NAME: go-quality-junit
+        run: |
+          mkdir -p junit-merged
+          # The parts are go-junit-report documents: one <testsuites> root each. Every <testsuite> (so every testcase, a failed
+          # one with its full output) is copied unchanged under one new root.
+          {
+            printf '<?xml version="1.0" encoding="UTF-8"?>\n<testsuites>\n'
+            while IFS= read -r part; do
+              awk '/^<\?xml/ { next } /<testsuites[ >\/]/ { root = 1 } root { if ($0 ~ />[ \t]*$/) root = 0; next } /<\/testsuites>/ { next } { print }' "${part}"
+            done < <(find junit-parts -type f -name '*.xml' | LC_ALL=C sort)
+            printf '</testsuites>\n'
+          } > "junit-merged/${JUNIT_MERGED_NAME}.xml"
+          if [ -z "$(find junit-parts -type f -name '*.xml' 2>/dev/null)" ]; then echo "::warning::no JUnit part was downloaded; the merged report is empty"; fi
+          echo "merged $(find junit-parts -type f -name '*.xml' | wc -l) part(s), $(grep -c '<testcase' "junit-merged/${JUNIT_MERGED_NAME}.xml" || true) testcase line(s)"
+
+      - name: Upload the merged go-quality JUnit report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go-test-junit-quality
+          path: junit-merged/
+          retention-days: 14
+          if-no-files-found: warn
+
+  # CHAOS-13767: one lcov report of the main push's non-race test legs, for the ops coverage sync (it reads .info members). Best effort:
+  # no step can fail the job, nothing needs it, and it is not in the go-quality aggregate, so it can never change a verdict.
+  go-quality-coverage:
+    name: go-quality-coverage
+    needs: [go-quality-leg]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        continue-on-error: true
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Download the leg parts that carry cover profiles
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: go-junit-part-test-*
+          path: cover-parts
+
+      - name: Merge the cover profiles into one lcov report
+        continue-on-error: true
+        env:
+          GOWORK: off
+        run: |
+          mkdir -p coverage
+          go run -trimpath ./tools/lcovmerge -strip "$(go list -m)/" -o coverage/go-quality.info cover-parts
+          echo "$(grep -c '^SF:' coverage/go-quality.info) file record(s)"
+
+      - name: Upload the merged go-quality lcov report
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go-test-coverage-quality
+          path: coverage/
+          retention-days: 14
+          if-no-files-found: warn
+
   # CHAOS-11733: a merge queue entry can fail first in any workflow, not only go.yml. When any job of this workflow fails on a
   # merge_group run, cancel the runs stacked on this red entry (same job and script as go.yml). Not a required context
   # (no job needs it), continue-on-error, and the checkout is the target branch's tip, never the merge group.
   cancel-stacked-queue-children:
     name: cancel-stacked-queue-children
-    needs: [go-quality-plan, go-quality-leg, go-quality-cache, go-quality]
+    needs: [go-quality-plan, go-quality-leg, go-quality-cache, go-quality, go-quality-coverage]
     if: failure() && github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -119,6 +119,7 @@ const (
 	teamIDCarryFallbackColumns  = "org_id, provider, scope_type, scope_id, team_id, team_name, reason, priority, valid_from, valid_to, created_by, created_at, updated_at"
 	teamIDCarryTeamsColumns     = "id, team_uuid, name, description, manual_members, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id, project_keys, repo_patterns, is_active, source_id, created_at, provider_team_id, provider_name, gone_at"
 	teamIDCarryObservationsCols = "org_id, provider, native_team_key, team_id, name, description, members_json, project_keys_json, repo_patterns_json, is_active, parent_team_id, discovered_at, updated_at"
+	teamIDCarryEvidenceColumns  = "org_id, provider, repo_full_name, team_id, input, input_key, seen_at, is_deleted"
 )
 
 // TeamIDCarryOutcome is counts only: no id, key or name of a team, a member
@@ -160,13 +161,16 @@ type TeamIDCarryOutcome struct {
 	DeletedKeyedTeams uint64 `json:"deleted_keyed_teams"`
 	// The open link rows moved, and the ones whose prefixed twin was already
 	// open (the old row is closed, no second open row is written).
-	Memberships          uint64 `json:"memberships"`
-	ProjectOwnership     uint64 `json:"project_ownership"`
-	RepoOwnership        uint64 `json:"repo_ownership"`
-	LinkRowsAlreadyKeyed uint64 `json:"link_rows_already_keyed"`
-	Observations         uint64 `json:"observations"`
-	SyncPolicies         uint64 `json:"sync_policies"`
-	DriftChanges         uint64 `json:"drift_changes"`
+	Memberships      uint64 `json:"memberships"`
+	ProjectOwnership uint64 `json:"project_ownership"`
+	RepoOwnership    uint64 `json:"repo_ownership"`
+	// RepoOwnershipEvidence is the live input evidence keys of the moved
+	// teams' derived repo ownership, recorded again under the new id.
+	RepoOwnershipEvidence uint64 `json:"repo_ownership_evidence"`
+	LinkRowsAlreadyKeyed  uint64 `json:"link_rows_already_keyed"`
+	Observations          uint64 `json:"observations"`
+	SyncPolicies          uint64 `json:"sync_policies"`
+	DriftChanges          uint64 `json:"drift_changes"`
 	// IdentityDriftChanges is the pending identity membership changes of a
 	// moved team that were superseded.
 	IdentityDriftChanges uint64 `json:"identity_drift_changes"`
@@ -205,6 +209,15 @@ var errTeamIDCarryUnkeyed = errors.New("team id carry: planned id without a prov
 // failure part way the old team is still found active, so a re-run moves
 // what is left.
 func CarryTeamIDs(ctx context.Context, conn TeamIDCarryConn, orgID string, at time.Time, dryRun bool) (TeamIDCarryOutcome, error) {
+	return carryTeamIDs(ctx, conn, orgID, at, dryRun, true)
+}
+
+// carryTeamIDs is CarryTeamIDs. evidence false leaves the input evidence of
+// derived repo ownership where it is: the api's ClickHouse login holds no
+// grant on team_repo_ownership_evidence (least privilege, CHAOS-9349 ruling),
+// so a claim the admin write path carries has no recorded key until the next
+// derive records it (the bootstrap rule for that window).
+func carryTeamIDs(ctx context.Context, conn TeamIDCarryConn, orgID string, at time.Time, dryRun, evidence bool) (TeamIDCarryOutcome, error) {
 	orgID = strings.TrimSpace(orgID)
 	if ctx == nil || conn == nil || orgID == "" || at.IsZero() {
 		return TeamIDCarryOutcome{}, ErrInvalidConfiguration
@@ -223,7 +236,7 @@ func CarryTeamIDs(ctx context.Context, conn TeamIDCarryConn, orgID string, at ti
 	if teamGroups == 0 && observations == 0 {
 		return outcome, nil
 	}
-	carry := teamIDCarryRun{ctx: ctx, conn: conn, org: org, orgID: orgID, at: at, outcome: &outcome}
+	carry := teamIDCarryRun{ctx: ctx, conn: conn, org: org, orgID: orgID, at: at, outcome: &outcome, evidence: evidence}
 	if err := carry.plan(); err != nil {
 		return TeamIDCarryOutcome{}, err
 	}
@@ -293,6 +306,9 @@ type teamIDCarryRun struct {
 	orgID   string
 	at      time.Time
 	outcome *TeamIDCarryOutcome
+	// evidence: the run also records the moved claims' input evidence keys
+	// under the new id (the worker paths; not the api login).
+	evidence bool
 
 	// target: old id -> provider -> new id, for every provider group that
 	// moves. groups: old id -> every provider with a bare row of that id.
@@ -301,16 +317,24 @@ type teamIDCarryRun struct {
 	target  map[string]map[string]string
 	groups  map[string]map[string]bool
 	primary map[string]string
-	// moved: the new ids whose team row this run writes from a moved row; that
-	// row states the moved team's provider identity. Every other teams row the
-	// run writes keeps the stored identity.
-	moved map[string]bool
+	// moved: the new ids whose team row this run writes from a moved row, and
+	// the old id it moves from; that row states the moved team's provider
+	// identity. Every other teams row the run writes keeps the stored identity.
+	moved map[string]teamIDCarrySource
 
 	// writes run in this order; teams and observations are last.
 	writes []teamIDCarryWrite
 	// restate: the kept rows written again from their stored version, right
 	// after the teams write.
 	restate []teamprovider.Restatement
+}
+
+// teamIDCarrySource is the old id of a moved team and the newest version of
+// that id the carry read: the moved row's roster is the one it read unless a
+// newer version of the old id is stored when the row is inserted.
+type teamIDCarrySource struct {
+	id   string
+	read teamprovider.Version
 }
 
 func (run *teamIDCarryRun) plan() error {
@@ -350,7 +374,7 @@ func (run *teamIDCarryRun) plan() error {
 			return err
 		}
 	}
-	for _, step := range []func() error{run.planPolicies, run.planDrift, run.planIdentityDrift, run.planIdentities, run.planFallbacks} {
+	for _, step := range []func() error{run.planRepoOwnershipEvidence, run.planPolicies, run.planDrift, run.planIdentityDrift, run.planIdentities, run.planFallbacks} {
 		if err := step(); err != nil {
 			return err
 		}
@@ -400,6 +424,7 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 	type newTeam struct {
 		content chRow
 		id      string
+		from    teamIDCarrySource
 	}
 	var created []newTeam
 	var retired []chRow
@@ -407,6 +432,12 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 		var carried []chRow
 		var admin *chRow
 		blocked := false
+		from := teamIDCarrySource{id: id}
+		for _, row := range byID[id] {
+			if read := (teamprovider.Version{UpdatedAt: row.time("updated_at"), LastSynced: row.time("last_synced")}); teamIDCarryNewer(read, from.read) {
+				from.read = read
+			}
+		}
 		for _, row := range byID[id] {
 			if row.u8("is_active") != 1 {
 				continue
@@ -461,7 +492,7 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 				return nil, err
 			}
 			targets[""] = newID
-			created = append(created, newTeam{content: *admin, id: newID})
+			created = append(created, newTeam{content: *admin, id: newID, from: from})
 			retired = append(retired, *admin)
 		default:
 			for _, row := range carried {
@@ -484,7 +515,7 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 					}
 					retired = append(retired, *admin)
 				}
-				created = append(created, newTeam{content: content, id: newID})
+				created = append(created, newTeam{content: content, id: newID, from: from})
 				retired = append(retired, row)
 			}
 			if len(carried) > 1 && admin != nil {
@@ -495,7 +526,7 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 					return nil, err
 				}
 				targets[""] = newID
-				created = append(created, newTeam{content: *admin, id: newID})
+				created = append(created, newTeam{content: *admin, id: newID, from: from})
 				retired = append(retired, *admin)
 			}
 		}
@@ -515,9 +546,9 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 	}
 
 	rows := make([]chRow, 0, len(created)+len(retired))
-	run.moved = make(map[string]bool, len(created))
+	run.moved = make(map[string]teamIDCarrySource, len(created))
 	for _, team := range created {
-		run.moved[team.id] = true
+		run.moved[team.id] = team.from
 		// A custom team, pushed or the admin's, is stored with no provider
 		// (teamid.StoredProvider).
 		row := run.newTeamRow(team.content, team.content.str("id"), team.id)
@@ -856,6 +887,40 @@ func (run *teamIDCarryRun) planLink(link teamIDCarryLink) error {
 	return nil
 }
 
+// planRepoOwnershipEvidence records the live input evidence of the moved
+// teams' derived repo ownership claims again under the new id (CHAOS-9349
+// ruling 11): the carried claim keeps the proof that holds its close when an
+// input row is missing, instead of starting over with no recorded key. The
+// old id's keys stay; its rows are closed by planLink, so no run reads them.
+func (run *teamIDCarryRun) planRepoOwnershipEvidence() error {
+	oldIDs, _ := run.linkIDs()
+	if !run.evidence || len(oldIDs) == 0 {
+		return nil
+	}
+	live, err := run.read(`SELECT org_id, provider, repo_full_name, team_id, input, input_key, last_seen AS seen_at, toUInt8(0) AS is_deleted `+
+		`FROM (SELECT org_id, provider, repo_full_name, team_id, input, input_key, max(seen_at) AS last_seen, `+
+		`argMax(is_deleted, (seen_at, is_deleted)) AS deleted FROM team_repo_ownership_evidence `+
+		`WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)} `+
+		`GROUP BY org_id, provider, repo_full_name, team_id, input, input_key) WHERE deleted = 0`,
+		run.org, clickhouse.Named("ids", oldIDs))
+	if err != nil {
+		return fmt.Errorf("team id carry: read team_repo_ownership_evidence: %w", err)
+	}
+	var out []chRow
+	for _, row := range live {
+		newID, ok := run.linkTarget(row.str("provider"), row.str("team_id"))
+		if !ok {
+			continue
+		}
+		out = append(out, row.with("team_id", newID).with("seen_at", teamIDCarryBump(run.at, row.time("seen_at"), time.Millisecond)))
+	}
+	run.outcome.RepoOwnershipEvidence = uint64(len(out))
+	if len(out) > 0 {
+		run.writes = append(run.writes, teamIDCarryWrite{table: "team_repo_ownership_evidence", columns: teamIDCarryEvidenceColumns, rows: out})
+	}
+	return nil
+}
+
 func teamIDCarryLinkKey(provider, teamID, natural, source string) string {
 	return strings.Join([]string{provider, teamID, natural, source}, "\x00")
 }
@@ -1075,7 +1140,7 @@ func teamIDCarryGuard(write teamIDCarryWrite) error {
 			if row.timePtr("valid_to") == nil {
 				ids = append(ids, row.str("team_id"))
 			}
-		case "team_sync_policies", "team_provider_observations":
+		case "team_sync_policies", "team_provider_observations", "team_repo_ownership_evidence":
 			ids = append(ids, row.str("team_id"))
 		case "team_drift_changes":
 			if row.str("status") != teamDriftStatusSuperseded {
@@ -1166,9 +1231,16 @@ func (run *teamIDCarryRun) writeRestatements(ctx context.Context) error {
 }
 
 // writeTeams writes the team rows through teamprovider.Insert: a moved team's
-// new row states the moved row's provider identity (gone_at included), and
-// every other row (an old row going inactive, a kept row taking members)
-// keeps the stored identity, read inside the same statement.
+// new row states the moved row's provider identity (gone_at included) and
+// the roster the carry read, or the old id's roster read inside the statement
+// when a version of the old id newer than that read is stored
+// (teamprovider.RosterSource: an edit of the old id after the read); every
+// other row (an old row going inactive) keeps the stored identity and roster,
+// read inside the same statement. deleted_at is never the carry's own: an
+// admin delete of the old id committed after the read is copied onto the
+// moved row, which is then written inactive (teamprovider.DeletedSource), and
+// an old row going inactive keeps its id's stored admin delete
+// (teamprovider.DeletedKept), so a delete that races a move holds on both ids.
 func (run *teamIDCarryRun) writeTeams(ctx context.Context, write teamIDCarryWrite) error {
 	all := strings.Split(write.columns, ", ")
 	identity := map[string]bool{teamprovider.ColumnProviderTeamID: true, teamprovider.ColumnProviderName: true, teamprovider.ColumnGoneAt: true}
@@ -1178,22 +1250,35 @@ func (run *teamIDCarryRun) writeTeams(ctx context.Context, write teamIDCarryWrit
 			columns = append(columns, column)
 		}
 	}
+	columns = append(columns, "deleted_at")
 	writes := make([]teamprovider.Write, 0, len(write.rows))
 	for _, row := range write.rows {
 		values := make([]any, 0, len(columns))
-		for _, column := range columns {
+		for _, column := range columns[:len(columns)-1] {
 			values = append(values, row.value(column))
 		}
-		version := teamprovider.Write{Values: values, Gone: teamprovider.GoneKept}
-		if run.moved[row.str("id")] {
+		values = append(values, nil)
+		version := teamprovider.Write{Values: values, Gone: teamprovider.GoneKept, Roster: teamprovider.RosterKept, Deleted: teamprovider.DeletedKept}
+		if from, moved := run.moved[row.str("id")]; moved {
 			version = teamprovider.Write{
 				Values: values, ProviderTeamID: row.str(teamprovider.ColumnProviderTeamID), ProviderName: row.str(teamprovider.ColumnProviderName),
 				Gone: teamprovider.GoneStated, GoneAt: row.timePtr(teamprovider.ColumnGoneAt),
+				Roster: teamprovider.RosterSource, RosterSource: from.id, RosterSourceRead: from.read,
+				Deleted: teamprovider.DeletedSource,
 			}
 		}
 		writes = append(writes, version)
 	}
 	return teamprovider.Insert(ctx, run.conn, run.orgID, columns, writes)
+}
+
+// teamIDCarryNewer reports whether version a is newer than b by
+// (updated_at, last_synced).
+func teamIDCarryNewer(a, b teamprovider.Version) bool {
+	if !a.UpdatedAt.Equal(b.UpdatedAt) {
+		return a.UpdatedAt.After(b.UpdatedAt)
+	}
+	return a.LastSynced.After(b.LastSynced)
 }
 
 // teamIDCarryBump is a version stamp past the stored one: `at`, or the
@@ -1322,7 +1407,11 @@ func (row chRow) with(column string, value any) chRow {
 // logs what moved; a write path calls it before it reads or writes a team
 // id (see CarryTeamIDs). An error stops the path before it writes.
 func CarryTeamIDsBeforeWrite(ctx context.Context, conn TeamIDCarryConn, orgID, writer string) error {
-	outcome, err := CarryTeamIDs(ctx, conn, orgID, time.Now().UTC(), false)
+	return carryTeamIDsBeforeWrite(ctx, conn, orgID, writer, true)
+}
+
+func carryTeamIDsBeforeWrite(ctx context.Context, conn TeamIDCarryConn, orgID, writer string, evidence bool) error {
+	outcome, err := carryTeamIDs(ctx, conn, orgID, time.Now().UTC(), false, evidence)
 	if err != nil {
 		return err
 	}

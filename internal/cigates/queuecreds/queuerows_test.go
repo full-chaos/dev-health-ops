@@ -209,6 +209,10 @@ var queueRowReadTable = map[string]queueRowRead{
 		"args#>>domain,id", roleInternal, "", "", "join against the request row"},
 	"internal/joboutbox/undelivered_repair.go#undeliveredMarkDeadSQL": {
 		"args#>>domain,id", roleInternal, "", "", "join against the request row"},
+	"internal/jobs/metrics/daily/postgres.go#MaterializeScheduledFanout": {
+		"dedupe_key", roleInternal, "", "", "EXISTS on a key built from the run id; only the boolean is read, never logged"},
+	"internal/jobs/metrics/daily/dispatch_fail.go#FailDispatchPermanently": {
+		"dedupe_key", roleInternal, "", "", "EXISTS on a key built from the run id; only the boolean is read, never logged"},
 	"internal/jobs/metrics/daily/redrive.go#ReconcileOrphanedFinalizeRedriveRuns": {
 		"dedupe_key", roleInternal, "", "", "join key for the abandonment check; never logged"},
 	"internal/jobs/metrics/remaining/redrive.go#deadHandoffReasonSQL": {
@@ -230,6 +234,10 @@ var queueRowReadTable = map[string]queueRowRead{
 		"dedupe_key", roleInternal, "", "", "equality with a key built from the unit id"},
 	"internal/syncreconciler/unreclaimable_sweep.go#terminalizeTerminalDeliverySQL": {
 		"dedupe_key", roleInternal, "", "", "equality with a key built from the unit id"},
+	"internal/syncreconciler/terminal_delivery_repair.go#rearmExhaustedPostSyncSQL": {
+		"args->>sync_run_id", roleInternal, "", "", "equality join to the outbox row's sync_run_id; the UPDATE returns nothing and nothing is logged"},
+	"internal/syncreconciler/terminal_delivery_repair.go#countExhaustedPostSyncOutsideWindowSQL": {
+		"args->>sync_run_id", roleInternal, "", "", "equality join to the outbox row's sync_run_id; only count(*) is read"},
 	"internal/storage/river/telemetry.go#queueTelemetrySQL": {
 		"args->>contract_version, args->contract_version",
 		roleInternal, "", "", "only a digits-only contract version reaches the metric label"},

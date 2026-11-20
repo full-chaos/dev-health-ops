@@ -238,12 +238,14 @@ func TestCanonicalOnlyCensus_BranchSites(t *testing.T) {
 // TestOps TEAM owner join, which exists only OFF the investment path (TestTestopsOwnerJoinIsOffTheInvestmentPath);
 // teamownership.go decides, per request form and flag, whether a team scope is read by ownership (the reason
 // team_owns_no_repository needs every read to be), pinned by TestBatchTeamScopeReadsOwnership (timeseries, breakdown, sankey,
-// flow matrix x the flag x a canonical-only dimension).
+// flow matrix x the flag x a canonical-only dimension); validate.go's groupKeyNotNull, the sankey.go node arm and
+// sankeygrouped.go drop a NULL sankey node key only OFF the investment path
+// (TestNullRepositoryIsOneUnassignedGroupAndNoSankeyNode, TestSankeyGrouped_SeededRealClickHouse_EqualsPerDimensionQueries).
 func censusPinnedSites() map[string]int {
 	return map[string]int{
-		"breakdown.go": 7, "catalog.go": 5, "filtertranslation.go": 14, "flowmatrix.go": 9, "investment.go": 5,
-		"investmentquality.go": 4, "resolve.go": 35, "sankey.go": 5, "sankeycoverage.go": 21, "sankeygrouped.go": 7,
-		"teamownership.go": 4, "testopsownership.go": 4, "timeseries.go": 5, "validate.go": 5,
+		"breakdown.go": 8, "catalog.go": 5, "filtertranslation.go": 14, "flowmatrix.go": 9, "investment.go": 5,
+		"investmentquality.go": 4, "resolve.go": 35, "sankey.go": 9, "sankeycoverage.go": 22, "sankeygrouped.go": 10,
+		"teamownership.go": 4, "testopsownership.go": 5, "timeseries.go": 6, "validate.go": 9,
 	}
 }
 

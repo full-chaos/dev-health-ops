@@ -18,6 +18,9 @@ var (
 	// ErrInvalidProcessorFlags marks a stored processor_flags value the
 	// rebuild cannot read, which Python also fails on.
 	ErrInvalidProcessorFlags = errors.New("sync coverage processor_flags is invalid")
+
+	errBeginRebuild     = errors.New("begin sync coverage rebuild")
+	errEncodeProjection = errors.New("encode sync coverage projection")
 )
 
 type Projector struct {
@@ -54,7 +57,7 @@ func (projector *Projector) Rebuild(
 	}
 	tx, err := projector.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("begin sync coverage rebuild: %w", err)
+		return nil, fmt.Errorf("%w: %w", errBeginRebuild, err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
@@ -73,7 +76,7 @@ func (projector *Projector) Rebuild(
 	}
 	encoded, err := marshalPayload(payload)
 	if err != nil {
-		return nil, fmt.Errorf("encode sync coverage projection: %w", err)
+		return nil, fmt.Errorf("%w: %w", errEncodeProjection, err)
 	}
 	if _, err := tx.Exec(ctx, `
 INSERT INTO public.sync_coverage_projections (

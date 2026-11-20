@@ -52,7 +52,8 @@ func TestWorkItemAttributionClosurePromotesToOrgWide(t *testing.T) {
 	repoX := uuid.New()
 	now := time.Now().UTC()
 
-	seedWorkItemAttributionItem(t, ctx, conn, orgID, "A", repoX, now)
+	// A is a pull request: only a pull / merge request takes the ownership of its own repository.
+	seedWorkItemAttributionPullRequest(t, ctx, conn, orgID, "A", repoX, now)
 	seedWorkItemAttributionItem(t, ctx, conn, orgID, "B", uuid.Nil, now)
 	seedWorkItemAttributionItem(t, ctx, conn, orgID, "C", uuid.Nil, now)
 	seedWorkItemAttributionItem(t, ctx, conn, orgID, "D", uuid.Nil, now)
@@ -210,17 +211,12 @@ func TestWorkItemAttributionBelowThresholdClosureIsWritten(t *testing.T) {
 	}
 }
 
-// TestWorkItemAttributionBelowThresholdReverseClosureUsesDonorEdge is codex
-// round r2's P1 fix: a reverse-hop closure item (B, found because
-// B --relates_to--> A and A is affected) has its OWN outgoing edge (B->A),
-// which the FIRST loadDependencyEdges call in ComputeOrg never sees (that
-// call is scoped to the ORIGINAL affected set as source, before B is
-// known). Without reloading dependencies after the closure merge, B
-// resolves unassigned instead of inheriting A's team via linked_issue --
-// the below-threshold closure test above never caught this because its
-// fixture only exercised the FORWARD direction (A->C), where A's own edge
-// was already loaded before the closure decision.
-func TestWorkItemAttributionBelowThresholdReverseClosureUsesDonorEdge(t *testing.T) {
+// TestWorkItemAttributionOrgWideRunGivesAPullRequestTheTeamOfItsIssueDonor: the donor of a linked_issue row is
+// an ISSUE that has its team through project_ownership; B, a pull request linked to it (B -> A), takes that
+// team in an org-wide run (the first run of an org). The scoped project run is asserted by
+// TestWorkItemAttributionScopedProjectRunGivesAReverseHopPullRequestItsIssueDonorsTeam and, for two runs on one
+// UTC day, by TestWorkItemAttributionSameDayScopedRunDefersAnItemAlreadyWrittenToday.
+func TestWorkItemAttributionOrgWideRunGivesAPullRequestTheTeamOfItsIssueDonor(t *testing.T) {
 	ctx := context.Background()
 	conn := workItemAttributionMigratedClickHouse(t, ctx)
 
@@ -233,47 +229,222 @@ func TestWorkItemAttributionBelowThresholdReverseClosureUsesDonorEdge(t *testing
 		t.Fatalf("new executor: %v", err)
 	}
 
-	orgID := "org-reverseclosure-" + uuid.NewString()
-	repoX := uuid.New()
+	orgID := "org-issuedonor-" + uuid.NewString()
 	now := time.Now().UTC()
+	// The catalog (team, project owner) pre-dates the run by days, as synced data does: an ownership row is
+	// effective as of the day of the items it owns. The items are synced today.
+	old := now.Add(-72 * time.Hour)
 
-	seedWorkItemAttributionItem(t, ctx, conn, orgID, "A", repoX, now)
-	// B is a pull request: a linked item gives its team only to a pull request.
+	if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, project_key, org_id, last_synced)
+		VALUES (?, 'A', 'github', 'issue', 'proj-a', 'PA', ?, ?)`, uuid.Nil, orgID, now); err != nil {
+		t.Fatalf("seed issue A: %v", err)
+	}
 	seedWorkItemAttributionPullRequest(t, ctx, conn, orgID, "B", uuid.Nil, now)
 	for i := 0; i < 18; i++ {
 		seedWorkItemAttributionItem(t, ctx, conn, orgID, fmt.Sprintf("filler-%d", i), uuid.Nil, now)
 	}
-	seedWorkItemAttributionRepoOwnership(t, ctx, conn, orgID, repoX, "team-infra", now)
-	// B -> A: B's donor is A (the affected item), the REVERSE hop.
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES ('team-infra', ?, 'Team infra', [], [], [], 1, ?, ?, ?, 'github', '')`,
+		uuid.New(), old, old, orgID); err != nil {
+		t.Fatalf("insert team-infra: %v", err)
+	}
+	projectKey := "PA"
+	seedWorkItemAttributionProjectOwnershipAt(t, ctx, conn, orgID, "github", "proj-a", &projectKey, "team-infra", old, old)
 	seedWorkItemAttributionDependency(t, ctx, conn, orgID, "B", "A", "relates_to", now)
-
-	waitForWorkItemAttributionRepoFactVisible(t, ctx, conn, orgID)
+	waitForWorkItemAttributionProjectFactVisible(t, ctx, conn, orgID)
 
 	outcome, err := executor.ComputeOrg(ctx, orgID)
 	if err != nil {
 		t.Fatalf("ComputeOrg: %v", err)
 	}
-	if outcome.OrgWide {
-		t.Fatalf("outcome.OrgWide = true, want a SCOPED run: closure {A,B} is 2/20 = 10%%, "+
-			"well under the 25%% bound (outcome=%+v)", outcome)
+	if !outcome.OrgWide {
+		t.Fatalf("outcome.OrgWide = false, want the first run of an org to be org-wide (outcome=%+v)", outcome)
 	}
+	for id, want := range map[string]string{"A": "[team-infra/project_ownership]", "B": "[team-infra/linked_issue]"} {
+		var primary []string
+		for _, row := range latestAttributions(t, ctx, conn, orgID, id) {
+			if row.isPrimary == 1 {
+				primary = append(primary, row.teamID+"/"+row.source)
+			}
+		}
+		if fmt.Sprint(primary) != want {
+			t.Errorf("%s primary row = %v, want %s", id, primary, want)
+		}
+	}
+}
 
-	rows := queryWorkItemAttributionRows(t, ctx, conn, orgID)
-	var bTeam *string
-	var sawB bool
-	for _, row := range rows {
-		if row.workItemID == "B" {
-			sawB = true
+// The control of the test above: the same link with a PULL REQUEST donor A (it takes its repository
+// owner's team) gives B no team, because the donor of a linked_issue row must be an issue.
+func TestWorkItemAttributionAPullRequestDonorGivesNoTeamToALinkedPullRequest(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionMigratedClickHouse(t, ctx)
+	writer, err := NewWorkItemAttributionClickHouseWriter(conn)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	executor, err := NewWorkItemAttributionExecutor(ctx, conn, writer)
+	if err != nil {
+		t.Fatalf("new executor: %v", err)
+	}
+	orgID := "org-reverseclosure-prdonor-" + uuid.NewString()
+	repoX := uuid.New()
+	now := time.Now().UTC()
+	seedWorkItemAttributionPullRequest(t, ctx, conn, orgID, "A", repoX, now)
+	seedWorkItemAttributionPullRequest(t, ctx, conn, orgID, "B", uuid.Nil, now)
+	for i := 0; i < 18; i++ {
+		seedWorkItemAttributionItem(t, ctx, conn, orgID, fmt.Sprintf("filler-%d", i), uuid.Nil, now)
+	}
+	seedWorkItemAttributionRepoOwnership(t, ctx, conn, orgID, repoX, "team-infra", now)
+	seedWorkItemAttributionDependency(t, ctx, conn, orgID, "B", "A", "relates_to", now)
+	waitForWorkItemAttributionRepoFactVisible(t, ctx, conn, orgID)
+	if _, err := executor.ComputeOrg(ctx, orgID); err != nil {
+		t.Fatalf("ComputeOrg: %v", err)
+	}
+	var aTeam, bTeam *string
+	for _, row := range queryWorkItemAttributionRows(t, ctx, conn, orgID) {
+		switch row.workItemID {
+		case "A":
+			aTeam = row.teamID
+		case "B":
 			bTeam = row.teamID
 		}
 	}
-	if !sawB {
-		t.Fatal("no attribution row for B, the reverse-hop closure member")
+	if aTeam == nil || *aTeam != "team-infra" {
+		t.Fatalf("A (a pull request in the owned repository) team = %v, want team-infra", aTeam)
 	}
-	if bTeam == nil || *bTeam != "team-infra" {
-		t.Fatalf("B's attribution team_id = %v, want \"team-infra\" via linked_issue inheritance "+
-			"from A -- this is codex round r2's P1 finding: B's own B->A edge was never "+
-			"reloaded after the closure merge, so B resolved unassigned instead", bTeam)
+	if bTeam != nil {
+		t.Fatalf("B team = %v, want none: its only donor is a pull request", *bTeam)
+	}
+}
+
+// issueDonorReverseHopRuns seeds an org with an issue A of project proj-a (key PA), owned by team-infra through
+// team_project_ownership, a pull request B and 18 fillers, then runs run1 org-wide with no edge. It then adds the
+// edge B -> A, refreshes the proj-a owner row (same owner, newer updated_at) and runs run2, which the refresh
+// scopes to the project. It returns run 2's outcome and B's primary rows after it.
+func issueDonorReverseHopRuns(
+	t *testing.T, ctx context.Context, conn driver.Conn, orgID string, now time.Time,
+	run1, run2 *WorkItemAttributionExecutor,
+) (WorkItemAttributionOutcome, []storedAttribution) {
+	t.Helper()
+	old := now.Add(-72 * time.Hour)
+	if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, project_key, org_id, last_synced)
+		VALUES (?, 'A', 'github', 'issue', 'proj-a', 'PA', ?, ?)`, uuid.Nil, orgID, now); err != nil {
+		t.Fatalf("seed issue A: %v", err)
+	}
+	seedWorkItemAttributionPullRequest(t, ctx, conn, orgID, "B", uuid.Nil, now)
+	for i := 0; i < 18; i++ {
+		seedWorkItemAttributionItem(t, ctx, conn, orgID, fmt.Sprintf("filler-%d", i), uuid.Nil, now)
+	}
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES ('team-infra', ?, 'Team infra', [], [], [], 1, ?, ?, ?, 'github', '')`,
+		uuid.New(), old, old, orgID); err != nil {
+		t.Fatalf("insert team-infra: %v", err)
+	}
+	projectKey := "PA"
+	seedWorkItemAttributionProjectOwnershipAt(t, ctx, conn, orgID, "github", "proj-a", &projectKey, "team-infra", old, old)
+	waitForWorkItemAttributionProjectFactVisible(t, ctx, conn, orgID)
+
+	outcome1, err := run1.ComputeOrg(ctx, orgID)
+	if err != nil {
+		t.Fatalf("ComputeOrg run 1: %v", err)
+	}
+	if !outcome1.OrgWide {
+		t.Fatalf("run 1 outcome = %+v, want the first run of an org to be org-wide", outcome1)
+	}
+	if got := primaryTeamSources(latestAttributions(t, ctx, conn, orgID, "B")); got != "[/unassigned]" {
+		t.Fatalf("B after run 1 (no edge yet) = %s, want [/unassigned]", got)
+	}
+
+	// The refreshed owner row must be newer than run 1's marker for run 2 to see a change.
+	time.Sleep(1100 * time.Millisecond)
+	seedWorkItemAttributionDependency(t, ctx, conn, orgID, "B", "A", "relates_to", time.Now().UTC())
+	seedWorkItemAttributionProjectOwnershipAt(t, ctx, conn, orgID, "github", "proj-a", &projectKey, "team-infra", old, time.Now().UTC())
+	waitForWorkItemAttributionProjectFactVisible(t, ctx, conn, orgID)
+
+	outcome2, err := run2.ComputeOrg(ctx, orgID)
+	if err != nil {
+		t.Fatalf("ComputeOrg run 2: %v", err)
+	}
+	if outcome2.OrgWide || !containsString(outcome2.ProjectKeys, "PA") || !containsString(outcome2.ProjectKeys, "proj-a") {
+		t.Fatalf("run 2 outcome = %+v, want a run scoped to the project PA / proj-a", outcome2)
+	}
+	return outcome2, latestAttributions(t, ctx, conn, orgID, "B")
+}
+
+func primaryTeamSources(rows []storedAttribution) string {
+	var primary []string
+	for _, row := range rows {
+		if row.isPrimary == 1 {
+			primary = append(primary, row.teamID+"/"+row.source)
+		}
+	}
+	return fmt.Sprint(primary)
+}
+
+// TestWorkItemAttributionScopedProjectRunGivesAReverseHopPullRequestItsIssueDonorsTeam: a run scoped to a project
+// rederives the reverse-hop dependent B (B -> A) of the project's issue A, and B takes A's team through
+// linked_issue. Run 1 is on the day before, so no row of A or B is from today and the same-day rule
+// (alreadyCoveredToday) defers nothing.
+func TestWorkItemAttributionScopedProjectRunGivesAReverseHopPullRequestItsIssueDonorsTeam(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionMigratedClickHouse(t, ctx)
+	writer, err := NewWorkItemAttributionClickHouseWriter(conn)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	executor, err := NewWorkItemAttributionExecutor(ctx, conn, writer)
+	if err != nil {
+		t.Fatalf("new executor: %v", err)
+	}
+	now := time.Now().UTC()
+	yesterday := now.Add(-24 * time.Hour)
+	runYesterday := &WorkItemAttributionExecutor{conn: conn, writer: writer, nowUTC: func() time.Time { return yesterday }}
+	orgID := "org-scopedissuedonor-" + uuid.NewString()
+
+	outcome, bRows := issueDonorReverseHopRuns(t, ctx, conn, orgID, now, runYesterday, executor)
+	if outcome.ItemsSeen != 2 || outcome.RowsWritten != 2 {
+		t.Fatalf("run 2 outcome = %+v, want A and its reverse-hop dependent B seen and written (2, 2)", outcome)
+	}
+	if got := primaryTeamSources(latestAttributions(t, ctx, conn, orgID, "A")); got != "[team-infra/project_ownership]" {
+		t.Errorf("A primary row = %s, want [team-infra/project_ownership]", got)
+	}
+	if got := primaryTeamSources(bRows); got != "[team-infra/linked_issue]" {
+		t.Fatalf("B primary row = %s, want [team-infra/linked_issue]", got)
+	}
+	const wantEvidence = "linked_issue=A;dependency_type=relates_to;donor_provider=github;donor_source=project_ownership"
+	for _, row := range bRows {
+		if row.isPrimary == 1 && row.evidence != wantEvidence {
+			t.Errorf("B linked_issue evidence = %q, want %q", row.evidence, wantEvidence)
+		}
+	}
+}
+
+// TestWorkItemAttributionSameDayScopedRunDefersAnItemAlreadyWrittenToday: the same two runs on one UTC day. Run 1
+// wrote A and B today, so run 2 defers both (the CHAOS-5078 alreadyCoveredToday rule) and writes nothing; B keeps
+// its run-1 row. The retry on the next day is held by TestWorkItemAttributionScopedRunRetriesTheItemsItDeferredOnTheNextDay.
+func TestWorkItemAttributionSameDayScopedRunDefersAnItemAlreadyWrittenToday(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionMigratedClickHouse(t, ctx)
+	writer, err := NewWorkItemAttributionClickHouseWriter(conn)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	executor, err := NewWorkItemAttributionExecutor(ctx, conn, writer)
+	if err != nil {
+		t.Fatalf("new executor: %v", err)
+	}
+	orgID := "org-samedayissuedonor-" + uuid.NewString()
+	// Both runs must fall on one UTC day: start after midnight when it is close.
+	now := time.Now().UTC()
+	if untilMidnight := now.Truncate(24 * time.Hour).Add(24 * time.Hour).Sub(now); untilMidnight < time.Minute {
+		time.Sleep(untilMidnight + time.Second)
+		now = time.Now().UTC()
+	}
+
+	outcome, bRows := issueDonorReverseHopRuns(t, ctx, conn, orgID, now, executor, executor)
+	if outcome.ItemsSeen != 2 || outcome.RowsWritten != 0 {
+		t.Fatalf("run 2 outcome = %+v, want A and B seen (2) and both deferred as written today (0 rows)", outcome)
+	}
+	if got := primaryTeamSources(bRows); got != "[/unassigned]" {
+		t.Fatalf("B primary row = %s, want its run-1 row [/unassigned]", got)
 	}
 }
 

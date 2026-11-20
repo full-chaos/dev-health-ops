@@ -167,7 +167,6 @@ func TestSinkReadKeysAreRouteSignalsNotText(t *testing.T) {
 		"deployments":                 {"lifecycle_lookup_failed": reflect.Bool, "pull_request_lookup_failed": reflect.Bool},
 		"git_pull_requests":           {"reviews_lookup_failed": reflect.Bool},
 		"work_item_team_attributions": {"ownership_reason": reflect.String, "priority": reflect.Int},
-		"work_item_transitions":       {"provider": reflect.String},
 	}
 	kinds := map[sinkReadKind]reflect.Kind{sinkReadBool: reflect.Bool, sinkReadInt: reflect.Int, sinkReadEnum: reflect.String}
 	if len(preparedRouteSinkReadKeys) != len(allowed) {
@@ -447,7 +446,7 @@ func TestTeamAttributionOwnershipReasonsAreTheCascadeLabels(t *testing.T) {
 	want := map[string]bool{"": true, teamattribution.GithubWorkItemDerivationOwnershipCheckedLabel(""): true}
 	for _, reason := range []string{
 		teamattribution.MembershipOwnershipReasonNotOwned, teamattribution.MembershipOwnershipReasonUnknown,
-		teamattribution.MembershipOwnershipReasonTeamNullCarrying,
+		teamattribution.MembershipOwnershipReasonTeamNullCarrying, teamattribution.MembershipOwnershipReasonIssueGateNotApplied,
 	} {
 		want[teamattribution.GithubWorkItemDerivationOwnershipCheckedLabel(reason)] = true
 	}
@@ -472,8 +471,6 @@ func TestProjectionRefusesASignalOutsideItsKindOrSet(t *testing.T) {
 		{"deployments", map[string]any{"lifecycle_lookup_failed": true}, true},
 		{"deployments", map[string]any{"lifecycle_lookup_failed": "provider text"}, false},
 		{"git_pull_requests", map[string]any{"reviews_lookup_failed": map[string]any{"x": 1}}, false},
-		{"work_item_transitions", map[string]any{"provider": "linear"}, true},
-		{"work_item_transitions", map[string]any{"provider": "provider text"}, false},
 		{"deployments", map[string]any{"lifecycle_lookup_failed": nil}, false},
 		{"work_item_team_attributions", map[string]any{"priority": nil}, false},
 		{"work_item_team_attributions", map[string]any{"ownership_reason": nil}, false},

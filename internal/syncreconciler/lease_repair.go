@@ -433,13 +433,16 @@ func leaseRepairBucketAdvisoryID(orgID, provider, costClass string) int64 {
 // The result document is rebuilt with jsonb_build_object, so 'error_category'
 // is OVERWRITTEN with 'worker_lost'. Never change this into a merge that keeps
 // the prior value -- see lease_repair_test.go's
-// TestNoLeaseRepairStampPreservesAPriorErrorCategory.
+// TestNoLeaseRepairStampPreservesAPriorErrorCategory. The one key carried over
+// is the worker's rate_limit_progress_mark (CHAOS-14252), on the LEFT of `||`.
 const markExpiredLeaseRetryingSQL = `
 UPDATE public.sync_run_units AS unit
 SET status = 'retrying',
 	available_at = $4,
 	error = 'sync unit lease expired',
-	result = jsonb_build_object(
+	result = CASE WHEN jsonb_typeof(unit.result::jsonb -> 'rate_limit_progress_mark') = 'object'
+		THEN jsonb_build_object('rate_limit_progress_mark', unit.result::jsonb -> 'rate_limit_progress_mark')
+		ELSE '{}'::jsonb END || jsonb_build_object(
 		'error_category', 'worker_lost',
 		'retry_count', unit.expired_lease_retry_count + 1,
 		'retry_reason', 'expired_lease',

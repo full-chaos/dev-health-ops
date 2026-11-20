@@ -34,7 +34,7 @@ func TestGitHubWorkItemDerivationTrimsManualScopeAndPreservesZeroPriority(t *tes
 		}},
 	})
 	teamID, _, candidates := derived.Resolve(teamattribution.GithubWorkItemDerivationSubject{
-		WorkItemID: "gh:acme/api#manual", Provider: "github", RepoID: &repoID, OrgID: "org-acme",
+		WorkItemID: "gh:acme/api#manual", Provider: "github", Type: "pr", RepoID: &repoID, OrgID: "org-acme",
 	})
 	if teamattribution.GithubWorkItemDerivationStringValue(teamID) != "team-manual" || len(candidates) != 1 {
 		t.Fatalf("manual attribution = team %v candidates %+v", teamID, candidates)
@@ -50,7 +50,7 @@ func TestGitHubWorkItemDerivationManualFallbackTieBreakIsStable(t *testing.T) {
 	repoID := "c7198fbc-1945-3717-05d8-eb78866b4e79"
 	projectID := "acme/api"
 	subject := teamattribution.GithubWorkItemDerivationSubject{
-		WorkItemID: "gh:acme/api#manual-tie", Provider: "github",
+		WorkItemID: "gh:acme/api#manual-tie", Provider: "github", Type: "pr",
 		RepoID: &repoID, ProjectID: &projectID, OrgID: "org-acme",
 	}
 	rules := []teamattribution.GithubWorkItemDerivationManualFallback{
@@ -887,18 +887,11 @@ func TestGitHubWorkItemDerivationAuthorNeverOutranksALinkedIssueDonor(t *testing
 	}
 }
 
-func TestGitHubWorkItemDerivationCausalAuthorNeverOutranksARealLinkedIssueDonor(t *testing.T) {
-	// The other half of the test above: rather than injecting the
-	// linked_issue candidate directly, this drives the REAL production
-	// builder end to end -- a Linear issue that resolves to team CHAOS via
-	// its OWN project ownership fact (a first-class, donor-eligible source)
-	// is linked to a GitHub PR whose author resolves to a DIFFERENT team via
-	// the admin member layer. The PR must inherit the donor's team, not the
-	// author's.
+func causalAuthorLinkedIssueScenario(linkTiers map[teamattribution.LinkPair]string) (*string, *string, []teamattribution.GithubWorkItemDerivationCandidate) {
 	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	donorProjectID := "linear-project-chaos"
 	donor := teamattribution.GithubWorkItemDerivationSubject{
-		WorkItemID: "linear:CHAOS-2400", Provider: "linear",
+		WorkItemID: "linear:CHAOS-2400", Provider: "linear", Type: "issue",
 		ProjectID: &donorProjectID, OrgID: "org-acme",
 	}
 	pr := teamattribution.GithubWorkItemDerivationSubject{
@@ -917,6 +910,7 @@ func TestGitHubWorkItemDerivationCausalAuthorNeverOutranksARealLinkedIssueDonor(
 			MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
 		}},
 	})
+	derived.LinkTiers = linkTiers
 	subjects := map[string]teamattribution.GithubWorkItemDerivationSubject{
 		donor.WorkItemID: donor, pr.WorkItemID: pr,
 	}
@@ -926,7 +920,21 @@ func TestGitHubWorkItemDerivationCausalAuthorNeverOutranksARealLinkedIssueDonor(
 			RelationshipType: "relates_to", LastSynced: now, OrgID: "org-acme",
 		}}, nil,
 	)
-	teamID, teamName, candidates := derived.Resolve(pr)
+	return derived.Resolve(pr)
+}
+
+func TestGitHubWorkItemDerivationCausalAuthorNeverOutranksARealLinkedIssueDonor(t *testing.T) {
+	// The other half of the test above: rather than injecting the
+	// linked_issue candidate directly, this drives the REAL production
+	// builder end to end -- a Linear issue that resolves to team CHAOS via
+	// its OWN project ownership fact (a first-class, donor-eligible source)
+	// is linked to a GitHub PR whose author resolves to a DIFFERENT team via
+	// the admin member layer. The PR must inherit the donor's team, not the
+	// author's. The PR -> issue edge has its native work_graph_issue_pr link
+	// row: a pull request edge with no link row is no donor.
+	teamID, teamName, candidates := causalAuthorLinkedIssueScenario(map[teamattribution.LinkPair]string{
+		{PullRequest: "ghpr:acme/api#100", Issue: "linear:CHAOS-2400"}: "native",
+	})
 	if teamattribution.GithubWorkItemDerivationStringValue(teamID) != "CHAOS" {
 		t.Fatalf("team id = %v, want CHAOS (the real donor must outrank the author)", teamattribution.GithubWorkItemDerivationStringValue(teamID))
 	}
@@ -949,6 +957,35 @@ func TestGitHubWorkItemDerivationCausalAuthorNeverOutranksARealLinkedIssueDonor(
 	if _, present := bySource["author_membership"]; present {
 		t.Fatalf("candidates = %+v, want NO author_membership row (CHAOS-5649 R179 rule 1: the real donor already set a DIFFERENT primary team)", candidates)
 	}
+
+	t.Run("edge with no link row", func(t *testing.T) {
+		// Same edge, no work_graph_issue_pr row: the edge is no donor, so the
+		// PR gets no linked_issue row. The author's team does not step in:
+		// membership is provenance only (is_primary 0), so the PR stays
+		// unassigned.
+		teamID, teamName, candidates := causalAuthorLinkedIssueScenario(nil)
+		if teamID != nil || teamName != nil {
+			t.Fatalf("team = (%q, %q), want none (no link row = no donor; the author never takes the primary)",
+				teamattribution.GithubWorkItemDerivationStringValue(teamID), teamattribution.GithubWorkItemDerivationStringValue(teamName))
+		}
+		bySource := map[string]teamattribution.GithubWorkItemDerivationCandidate{}
+		for _, candidate := range candidates {
+			bySource[candidate.Source] = candidate
+		}
+		if linked, present := bySource["linked_issue"]; present {
+			t.Fatalf("linked_issue candidate = %+v, want none (an edge with no link row is no donor)", linked)
+		}
+		if author, present := bySource["author_membership"]; !present || author.IsPrimary != 0 ||
+			teamattribution.GithubWorkItemDerivationStringValue(author.TeamID) != "team-ops" {
+			t.Fatalf("author_membership candidate = %+v (present %v), want present, is_primary 0, team-ops", author, present)
+		}
+		if unassigned := bySource["unassigned"]; unassigned.IsPrimary != 1 || unassigned.TeamID != nil {
+			t.Fatalf("unassigned candidate = %+v, want the primary row with no team", unassigned)
+		}
+		if len(candidates) != 2 {
+			t.Fatalf("candidates = %+v, want exactly author_membership (is_primary 0) + unassigned", candidates)
+		}
+	})
 }
 
 func TestGitHubWorkItemDerivationAuthorMembershipNeverAppliesToAGitLabIssue(t *testing.T) {

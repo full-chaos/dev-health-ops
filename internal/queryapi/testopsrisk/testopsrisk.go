@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/latestrow"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // QueryClient is the narrow ClickHouse boundary this package needs.
@@ -42,6 +43,7 @@ type dailyRow struct {
 	flakeInvestigationHours *float64
 	queueWaitHours          *float64
 	retryOverheadHours      *float64
+	partialRows             *uint64
 	pipelineStability       *float64
 }
 
@@ -49,7 +51,12 @@ type dailyRow struct {
 // release confidence and pipeline stability and the sums of the latest
 // quality-drag hours, outer-joined on the day. Stability is read only through
 // testops.StabilityLiveRowsSQL: a repo-day with no completed run has none.
-const dailyQuery = `SELECT
+// The quality-drag table is read FINAL: one whole row per repo-day, the one a
+// merge keeps (the last inserted of equal computed_at), so a NULL part of that
+// row stays NULL and a merge never changes the answer. A repo-day whose newest
+// row of a table retires the day (package liverow) is left out of that table's
+// aggregate: the day reads as absent, never 0.
+var dailyQuery = `SELECT
     day AS day,
     release_confidence,
     quality_drag_hours,
@@ -57,6 +64,7 @@ const dailyQuery = `SELECT
     flake_investigation_hours,
     queue_wait_hours,
     retry_overhead_hours,
+    partial_rows,
     pipeline_stability
 FROM (
     SELECT
@@ -72,6 +80,7 @@ FROM (
           AND day >= {start:Date}
           AND day <= {end:Date}
         GROUP BY day, repo_id
+        HAVING ` + liverow.NewestPredicate("testops_release_confidence", "") + `
     )
     GROUP BY day
 ) AS release_daily
@@ -82,22 +91,17 @@ FULL OUTER JOIN (
         sum(failure_rework_hours) AS failure_rework_hours,
         sum(flake_investigation_hours) AS flake_investigation_hours,
         sum(queue_wait_hours) AS queue_wait_hours,
-        sum(retry_overhead_hours) AS retry_overhead_hours
-    FROM (
-        SELECT
-            day,
-            repo_id,
-            argMax(drag_hours, computed_at) AS drag_hours,
-            argMax(failure_rework_hours, computed_at) AS failure_rework_hours,
-            argMax(flake_investigation_hours, computed_at) AS flake_investigation_hours,
-            argMax(queue_wait_hours, computed_at) AS queue_wait_hours,
-            argMax(retry_overhead_hours, computed_at) AS retry_overhead_hours
-        FROM testops_quality_drag
-        WHERE org_id = {org_id:String}
-          AND day >= {start:Date}
-          AND day <= {end:Date}
-        GROUP BY day, repo_id
-    )
+        sum(retry_overhead_hours) AS retry_overhead_hours,
+        toUInt64(countIf(testops_quality_drag.failure_rework_hours IS NULL
+            OR testops_quality_drag.flake_investigation_hours IS NULL
+            OR testops_quality_drag.queue_wait_hours IS NULL
+            OR testops_quality_drag.retry_overhead_hours IS NULL)) AS partial_rows
+    -- the columns of countIf are table-qualified: an output alias of a sum above would otherwise be read inside it (code 184)
+    FROM testops_quality_drag FINAL
+    WHERE org_id = {org_id:String}
+      AND day >= {start:Date}
+      AND day <= {end:Date}
+      AND ` + liverow.Predicate("testops_quality_drag", "") + `
     GROUP BY day
 ) AS drag_daily USING (day)
 FULL OUTER JOIN (
@@ -113,7 +117,9 @@ ORDER BY day ASC
 SETTINGS join_use_nulls = 1`
 
 // quadrantQuery reads, per repository, the pipeline success rate and test
-// pass rate of its latest release-confidence row, least confident first. A
+// pass rate of its latest release-confidence row, least confident first: the
+// newest row of each repo-day, without the repo-days whose newest row retires
+// the day (package liverow), then the latest day of each repository. A
 // factor missing from that row's factors_json (absent key or JSON null) is
 // NULL, not 0. The Nullable value is wrapped in a tuple because argMax skips
 // NULL values, which would let an older row's factor stand in for the latest
@@ -126,19 +132,29 @@ var quadrantQuery = fmt.Sprintf(`SELECT
 FROM (
     SELECT
         repo_id,
-        tupleElement(argMax(
-            tuple(JSONExtract(factors_json, 'pipeline_success_rate', 'Nullable(Float64)')),
-            (day, computed_at)
-        ), 1) AS pipeline_success_rate,
-        tupleElement(argMax(
-            tuple(JSONExtract(factors_json, 'test_pass_rate', 'Nullable(Float64)')),
-            (day, computed_at)
-        ), 1) AS test_pass_rate,
-        argMax(confidence_score, (day, computed_at)) AS confidence_score
-    FROM testops_release_confidence
-    WHERE org_id = {org_id:String}
-      AND day >= {start:Date}
-      AND day <= {end:Date}
+        tupleElement(argMax(tuple(day_pipeline_success_rate), day), 1) AS pipeline_success_rate,
+        tupleElement(argMax(tuple(day_test_pass_rate), day), 1) AS test_pass_rate,
+        argMax(day_confidence_score, day) AS confidence_score
+    FROM (
+        SELECT
+            repo_id,
+            day,
+            tupleElement(argMax(
+                tuple(JSONExtract(factors_json, 'pipeline_success_rate', 'Nullable(Float64)')),
+                computed_at
+            ), 1) AS day_pipeline_success_rate,
+            tupleElement(argMax(
+                tuple(JSONExtract(factors_json, 'test_pass_rate', 'Nullable(Float64)')),
+                computed_at
+            ), 1) AS day_test_pass_rate,
+            argMax(confidence_score, computed_at) AS day_confidence_score
+        FROM testops_release_confidence
+        WHERE org_id = {org_id:String}
+          AND day >= {start:Date}
+          AND day <= {end:Date}
+        GROUP BY repo_id, day
+        HAVING %s
+    )
     GROUP BY repo_id
 ) AS latest
 LEFT JOIN (
@@ -149,7 +165,7 @@ LEFT JOIN (
 ) AS repos
   ON repos.id = latest.repo_id
 ORDER BY latest.confidence_score ASC
-LIMIT 50`, latestrow.ArgMaxKeepNullBy("repo", "last_synced"))
+LIMIT 50`, liverow.NewestPredicate("testops_release_confidence", ""), latestrow.ArgMaxKeepNullBy("repo", "last_synced"))
 
 func readDaily(ctx context.Context, client QueryClient, bindings []clickhouse.Binding) ([]dailyRow, error) {
 	rs, err := client.Query(ctx, dailyQuery, bindings)
@@ -162,7 +178,7 @@ func readDaily(ctx context.Context, client QueryClient, bindings []clickhouse.Bi
 		var r dailyRow
 		var day *time.Time
 		if err := rs.Scan(&day, &r.releaseConfidence, &r.qualityDragHours, &r.failureReworkHours,
-			&r.flakeInvestigationHours, &r.queueWaitHours, &r.retryOverheadHours, &r.pipelineStability); err != nil {
+			&r.flakeInvestigationHours, &r.queueWaitHours, &r.retryOverheadHours, &r.partialRows, &r.pipelineStability); err != nil {
 			return nil, fmt.Errorf("testopsrisk: daily scan: %w", err)
 		}
 		if day == nil {
@@ -248,11 +264,21 @@ func latestWith(rows []dailyRow, pick func(dailyRow) *float64) *dailyRow {
 	return nil
 }
 
-func orZero(v *float64) float64 {
-	if v == nil {
-		return 0
+type breakdownPart struct {
+	category string
+	hours    *float64
+}
+
+// breakdownItems lists the parts that have a sum; a part whose sum is absent
+// (every summed row NULL) is omitted, never shown as 0.
+func breakdownItems(parts ...breakdownPart) []model.TestOpsRiskBreakdownItem {
+	items := []model.TestOpsRiskBreakdownItem{}
+	for _, p := range parts {
+		if p.hours != nil {
+			items = append(items, model.TestOpsRiskBreakdownItem{Category: p.category, Hours: *p.hours})
+		}
 	}
-	return *v
+	return items
 }
 
 // Resolve answers testopsRisk for the org over the inclusive date range.
@@ -316,12 +342,13 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, input model.
 	}
 	if r := latestWith(rows, drag); r != nil {
 		out.QualityDragHours = r.qualityDragHours
-		out.QualityDragBreakdown = []model.TestOpsRiskBreakdownItem{
-			{Category: "Failure Rework", Hours: orZero(r.failureReworkHours)},
-			{Category: "Flake Investigation", Hours: orZero(r.flakeInvestigationHours)},
-			{Category: "Queue Wait", Hours: orZero(r.queueWaitHours)},
-			{Category: "Retry Overhead", Hours: orZero(r.retryOverheadHours)},
-		}
+		out.QualityDragPartial = r.partialRows != nil && *r.partialRows > 0
+		out.QualityDragBreakdown = breakdownItems(
+			breakdownPart{"Failure Rework", r.failureReworkHours},
+			breakdownPart{"Flake Investigation", r.flakeInvestigationHours},
+			breakdownPart{"Queue Wait", r.queueWaitHours},
+			breakdownPart{"Retry Overhead", r.retryOverheadHours},
+		)
 	}
 	return out, nil
 }

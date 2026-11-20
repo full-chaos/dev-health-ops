@@ -92,7 +92,7 @@ func TestExternalStatementVariantsMatchThePythonReference(t *testing.T) {
 				IngestionID: uuid.MustParse("11111111-2222-4333-8444-555555555555"),
 			},
 			SourceID: sourceID,
-		}, externalSinkRecord{Kind: variant.Kind, ExternalID: "golden", Payload: variant.Payload}, now, &ExternalRecomputeScope{}, nil)
+		}, externalSinkRecord{Kind: variant.Kind, ExternalID: "golden", Payload: variant.Payload}, now, &ExternalRecomputeScope{})
 		if err != nil {
 			t.Errorf("%s: %v", name, err)
 			continue

@@ -851,14 +851,20 @@ RETURNING id::text, org_id::text, generation, status, target_day::text,
 // already materialized partition set rather than replacing it with a newer
 // ClickHouse snapshot.
 //
-// An empty snapshot terminalizes the run as no_repositories with its completion
-// fence and does not create a synthetic empty partition. Such a partition would
-// report a successful compute while doing no work.
+// An empty snapshot creates no partition (a synthetic empty partition would
+// report a successful compute while doing no work). The run stays running and
+// its finalize handoff is published in the same transaction: the finalize of a
+// run with no partition retires the rows of the day whose source is gone and
+// ends the run as no_repositories with its completion fence.
 func (store *PostgresStore) MaterializeScheduledFanout(
 	ctx context.Context,
 	run Run,
 	repositoryIDs []RepositoryID,
+	publisher Publisher,
 ) (bool, error) {
+	if publisher == nil {
+		return false, ErrUnavailable
+	}
 	if !store.valid() || !validUUID(run.ID) || !validUUID(run.OrganizationID) ||
 		(!isScheduledFanoutGeneration(run.Generation) && !isPostSyncGeneration(run.Generation) &&
 			!isManualDailyGeneration(run.Generation) && !isExternalRecomputeGeneration(run.Generation)) {
@@ -921,7 +927,23 @@ FOR UPDATE`, run.ID).Scan(&organizationID, &generation, &status); err != nil {
 SELECT count(*) FROM public.daily_metrics_partitions WHERE run_id = $1::uuid`, run.ID).Scan(&existing); err != nil {
 		return false, ErrUnavailable
 	}
-	if existing != 0 {
+	handedOff := false
+	if existing == 0 {
+		// A run with no partition whose finalize handoff exists already decided
+		// that it is empty: a retried dispatch must not cut partitions under the
+		// finalize it handed off. The handoff is read from the outbox at any
+		// status (a dead row too); the worker's domain role holds SELECT on the
+		// outbox and no grant on the abandonment record. Outbox retention keeps
+		// every row for at least one day (scheduler/fixed producers.go, MinDays
+		// 1), and metrics.daily_dispatch has 3 attempts, so its retries come
+		// within minutes.
+		if err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM public.worker_job_outbox WHERE dedupe_key = $1)`,
+			FinalizeHandoffKey(run.ID)).Scan(&handedOff); err != nil {
+			return false, ErrUnavailable
+		}
+	}
+	if existing != 0 || handedOff {
 		if err := tx.Commit(ctx); err != nil {
 			return false, ErrUnavailable
 		}
@@ -960,21 +982,7 @@ WHERE id = $2::uuid AND status = 'running'`, now, run.ID)
 		return false, ErrRepositoryCapExceeded
 	}
 	if len(partitions) == 0 {
-		command, err := tx.Exec(ctx, `
-UPDATE public.daily_metrics_runs
-SET status = 'no_repositories', finalization_status = 'succeeded', finalized_at = $1, updated_at = $1
-WHERE id = $2::uuid AND status = 'running'`, now, run.ID)
-		if err != nil {
-			return false, ErrUnavailable
-		}
-		if command.RowsAffected() != 1 {
-			return false, ErrInvalidState
-		}
-		completionKey, err := joboutbox.CompletionKey("daily_metrics_run", run.ID)
-		if err != nil {
-			return false, ErrInvalidState
-		}
-		if err := joboutbox.MarkCompletionTx(ctx, tx, completionKey); err != nil {
+		if err := publisher.PublishFinalizeTx(ctx, tx, run); err != nil {
 			return false, ErrUnavailable
 		}
 	} else {
@@ -1651,8 +1659,17 @@ func (store *PostgresStore) FailFinalizePermanently(ctx context.Context, claim F
 	if !store.valid() || !validUUID(claim.Run.ID) || !validUUID(claim.Token) {
 		return ErrUnavailable
 	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return ErrUnavailable
+	}
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
 	now := store.now().UTC()
-	command, err := store.pool.Exec(ctx, `
+	command, err := tx.Exec(ctx, `
 UPDATE public.daily_metrics_runs
 SET status = 'failed', finalization_status = 'failed',
     finalization_claim_token = NULL, finalization_lease_expires_at = NULL,
@@ -1666,6 +1683,17 @@ WHERE id = $2::uuid AND finalization_status = 'running'
 	if command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
+	closedCommand, err := tx.Exec(ctx, `
+UPDATE public.daily_metrics_finalize_redrive_events
+SET status = 'closed_failed', closed_at = $1
+WHERE run_id = $2::uuid AND status = 'open'`, now, claim.Run.ID)
+	if err != nil {
+		return ErrUnavailable
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ErrUnavailable
+	}
+	store.observeFinalizeRedrive("redriven_failed", int(closedCommand.RowsAffected()))
 	return nil
 }
 

@@ -39,6 +39,7 @@ devhealth_acr_workload_refused_total	reason,route	code: internal/apiservice/acr/
 devhealth_api_auth_proxy_impersonation_config_invalid		code: internal/apiservice/authproxy.go
 devhealth_api_auth_proxy_requests_total	aggregate,outcome	code: internal/apiservice/authproxy.go
 devhealth_api_auth_proxy_upstream_duration_seconds	aggregate	code: internal/apiservice/authproxy.go
+devhealth_api_llm_settings_save_lock_timeout_total	scope	code: internal/apiservice/admin/llmsettings_leakcheck.go
 devhealth_api_org_acr_revoke_skipped_total	event,reason	code: internal/apiservice/admin/org_acr_revoke.go
 devhealth_api_orgdelete_auth_deprovision_skipped_total	reason	code: internal/apiservice/admin/orgdeletion_auth.go
 devhealth_auth_access_token_accepted_total	class,profile,service	code: internal/auth/accessverify/accessverify.go
@@ -83,6 +84,8 @@ devhealth_auth_outbox_publisher_enabled		code: internal/audit/outboxloop.go
 devhealth_auth_push_reconcile_drift	class	code: internal/auth/pushreconcile/reconcilejob/gauge.go
 devhealth_auth_push_reconcile_runs_total	outcome	code: internal/auth/pushreconcile/reconcilejob/probe.go
 dev_health_categorize_byo_optin_unreadable_total	reason	code: internal/jobs/investment/categorizebyo.go
+dev_health_report_plan_unknown_confidence_total		code: internal/jobs/report/query.go
+dev_health_report_plan_uncharted_stored_spec_total		code: internal/jobs/report/query.go
 dev_health_generation_repair_failures_total	step	code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_generation_repair_partial_total		code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_ic_finalize_refused_empty_org_total		code: internal/jobs/metrics/daily/icfinalize/executor.go
@@ -162,12 +165,16 @@ devhealth_query_api_work_graph_flow_outcome_total	outcome	code: internal/queryap
 devhealth_query_api_workgraph_membership_rows_per_endpoint		code: internal/queryapi/workgraph/membership_telemetry.go
 devhealth_query_api_workgraph_truncation_total	family,op	code: internal/queryapi/workgraph/teamattribution.go
 dev_health_stream_product_telemetry_nonfinite_total		code: internal/streamhandlers/product_telemetry_metrics.go
+dev_health_storedversion_kept_table_missing_total	table,writer	code: internal/storedversion/repair.go
+dev_health_storedversion_repair_unconverged_total	table,writer	code: internal/storedversion/repair.go
 devhealth_sync_work_items_limit_open_total		code: internal/api/syncadmin/manual_trigger.go
 dev_health_team_id_carry_kept_teams_not_restated_total		code: internal/providersync/team_id_carry.go
 dev_health_teams_identity_page_walk_failed_total	cause,provider,walk	code: internal/api/teamsidentity/page_walk.go
 devhealth_telemetry_org_id_rejected_total	reason	code: internal/api/telemetry/telemetry.go
 dev_health_workgraph_build_permanent_cancels_total	error_class	code: internal/jobs/workgraph/handler.go
 dev_health_work_item_user_rows_spanning_teams_total	provider	code: internal/jobs/metrics/daily/work_item_user_rows_metrics.go
+github_tests_run_report_planner_kept_aggregate_total	outcome	code: internal/providersync/github_tests_run_report_planner_signal.go
+gitlab_tests_artifact_jobs_over_cap_total	outcome	code: internal/providersync/gitlab_tests_artifact_cap_signal.go
 jira_project_discovery_total	outcome	code: internal/providerfoundation/jira_discovery_metrics.go
 jira_team_catalog_ownership_snapshot_incomplete_total	reason	code: internal/providersync/jira_team_catalog_metrics.go
 linear_reference_catalog_ownership_snapshot_incomplete_total	reason	code: internal/providersync/linear_reference_catalog_metrics.go
@@ -185,6 +192,7 @@ river.work_duration_histogram	attempt,cancel,kind,priority,queue,snooze,status	t
 session_org_activity_fallback_total		code: internal/api/session/activity_metrics.go
 session_org_activity_read_failures_total	error_class,table	code: internal/api/session/activity_metrics.go
 sync_finalize_delivery_not_current_total	reason	code: internal/syncdispatchruntime/native_finalize_sync_run.go
+sync_fence_commit_snapshot_busy_total	kind,reason	code: internal/syncdispatchruntime/transport_fence.go
 sync_route_generation_stranded_total	action,kind	code: internal/syncreconciler/generation_reconcile.go
 team_catalog_snapshot_close_abandoned_total	kind,provider,reason	code: internal/providersync/snapshot_close_report.go
 team_repo_ownership_retraction_held_total	kind,provider,reason	code: internal/providersync/team_repo_ownership_retraction_guard.go
@@ -226,6 +234,7 @@ dev_health_execution_liveness_probe_failures_total	probe,reason	code: internal/p
 dev_health_execution_liveness_seconds_since_success	probe	code: internal/platform/selfprobe/monitor.go
 dev_health_gate_penalize_errors_total	path,provider	code: internal/providerfoundation/budget.go
 dev_health_github_tree_walk_near_ceiling_total	limit	code: internal/providerfoundation/budget.go
+dev_health_github_tests_cursor_cut_list_dropped_total	list	code: internal/providerfoundation/budget.go
 dev_health_github_work_items_issue_list_cap_exceeded_total	reason	code: internal/providerfoundation/budget.go
 dev_health_github_work_items_issue_list_stopped_total	reason	code: internal/providerfoundation/budget.go
 dev_health_github_work_items_issue_list_tie_paged_total	reason	code: internal/providerfoundation/budget.go
@@ -266,6 +275,7 @@ dev_health_provider_inventory_page_cap_total	dataset,provider	code: internal/pro
 dev_health_provider_open_run_skipped_total	dataset,provider,reason	code: internal/providerfoundation/budget.go
 dev_health_provider_per_run_truncation_total	cause,component,dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_prepared_snapshot_discarded_total	dataset,provider,reason	code: internal/providerfoundation/budget.go
+dev_health_provider_rate_limit_episode_restart_total	dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_request_usage_dropped_requests_total		code: internal/providersync/request_usage.go
 dev_health_provider_request_usage_dropped_rows_total		code: internal/providersync/request_usage.go
 dev_health_provider_requests_total	class,provider	code: internal/providerfoundation/budget.go
@@ -298,6 +308,7 @@ dev_health_runtime_ready		code: internal/platform/health/server.go
 dev_health_runtime_required_checks		code: internal/platform/health/server.go
 dev_health_runtime_uptime_seconds		code: internal/platform/health/server.go
 dev_health_scheduler_explicit_datasets_without_row_total		code: internal/scheduler/sync/materializer.go
+dev_health_sync_coverage_backfill_resolutions_total	outcome	code: internal/synccoverage/metrics.go
 dev_health_sync_coverage_datasets_excluded_by_intent_total	provider	code: internal/synccoverage/metrics.go
 dev_health_sync_coverage_folded_key_resolutions_total	canonical_dataset_key	code: internal/synccoverage/metrics.go
 dev_health_sync_dispatch_advisory_lock_wait_total	outcome	code: internal/platform/workersignals/workersignals.go
@@ -363,6 +374,8 @@ sync_dispatch_observer_sampled_candidates		code: internal/syncreconciler/loop.go
 sync_dispatch_observer_truncated		code: internal/syncreconciler/loop.go
 sync_dispatch_observer_unknown_kinds		code: internal/syncreconciler/loop.go
 sync_dispatch_observer_up		code: internal/syncreconciler/loop.go
+sync_dispatch_post_sync_redrive_skipped_window		code: internal/syncreconciler/loop.go
+sync_dispatch_post_sync_redrive_total	outcome	code: internal/syncreconciler/loop.go
 sync_dispatch_runaway_dispatch_wakeups		code: internal/syncreconciler/loop.go
 sync_dispatch_unreclaimable_candidates		code: internal/syncreconciler/loop.go
 sync_dispatch_unreclaimable_sweep_failures_total		code: internal/syncreconciler/loop.go
@@ -372,6 +385,7 @@ sync_initial_backfill_total	outcome	code: internal/scheduler/sync/initial_backfi
 sync_manual_trigger_await_latency_seconds	outcome	code: internal/synchandoff/await_metrics.go
 sync_manual_trigger_await_outcome_total	outcome	code: internal/synchandoff/await_metrics.go
 sync_plan_gate_total	dataset,outcome,provider	code: internal/scheduler/sync/plan_gate_telemetry.go
+sync_reconciler_chunk_sidecar_reclaim_lock_skipped_total		code: internal/syncreconciler/pipeline.go
 sync_reconciler_stage_budget_seconds	stage	code: internal/syncreconciler/pipeline.go
 sync_reconciler_stage_degraded	stage	code: internal/syncreconciler/pipeline.go
 sync_reconciler_stage_duration_seconds	stage	code: internal/syncreconciler/pipeline.go
@@ -518,3 +532,5 @@ worker_work_item_attribution_native_rows_written_total		code: internal/jobruntim
 worker_work_item_attribution_native_runs_total		code: internal/jobruntime/telemetry.go
 worker_work_item_attribution_native_scoped_runs_total		code: internal/jobruntime/telemetry.go
 worker_workgraph_lease_release_lost_total		code: internal/jobruntime/telemetry.go
+dev_health_config_clickhouse_non_native_dsn	key	code: internal/platform/config/clickhouse_non_native.go
+dev_health_config_clickhouse_dsn_host_problem	cause,key	code: internal/platform/config/clickhouse_non_native.go

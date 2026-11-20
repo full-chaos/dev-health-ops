@@ -64,6 +64,7 @@ func SelectWorkItemsRouteHandler(provider, dataset string, deps WorkItemsRouteDe
 			ProjectMembershipSnapshotDiff: GitHubProjectV2SnapshotDiffClickHouseReader{
 				Conn: deps.Conn,
 			},
+			StoredTransitions: GitHubProjectV2StoredTransitionsClickHouseReader{Conn: deps.Conn},
 		}, true
 	case "gitlab":
 		// NO page limits on purpose: the route's own defaults apply, and for every

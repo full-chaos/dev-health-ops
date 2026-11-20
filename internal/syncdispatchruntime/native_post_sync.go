@@ -43,6 +43,11 @@ type PostSyncPlan struct {
 	// days those rows touched (CHAOS-9169): a commit written for a day outside
 	// every window of the run marks its own day.
 	Git bool
+	// TestReports is true when a successful unit of the sync run wrote test
+	// suite rows (the cicd or tests target). Only then does the fan-out record
+	// the days of the suites of the runs it wrote, the older attempts' days
+	// included (CHAOS-14006).
+	TestReports bool
 	// RunStartedAt is sync_runs.started_at (created_at for a run that has
 	// none): no unit of the run wrote a raw row before it, apart from clock
 	// skew between processes.
@@ -262,6 +267,15 @@ func (service *NativePostSyncService) fanout(ctx context.Context, args PostSyncA
 	if plan == nil {
 		observe = true
 		outcome = jobruntime.PostSyncFanoutOutcomeNoRepositories
+		state.step = stageCommitCheck
+		var allowed bool
+		if allowed, err = service.postSyncCommitAllowed(ctx, tx, args); err != nil {
+			return err
+		}
+		if !allowed {
+			observe = false
+			return nil
+		}
 		state.step = stageCommit
 		if err = tx.Commit(ctx); err != nil {
 			return err
@@ -336,6 +350,15 @@ func (service *NativePostSyncService) fanout(ctx context.Context, args PostSyncA
 	state.step = stageOwnershipDerivation
 	if err = service.publishTeamRepoOwnershipDerivation(ctx, tx, *plan); err != nil {
 		return err
+	}
+	state.step = stageCommitCheck
+	allowed, err := service.postSyncCommitAllowed(ctx, tx, args)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		observe = false
+		return nil
 	}
 	state.step = stageCommit
 	if commitErr := tx.Commit(ctx); commitErr != nil {
@@ -570,22 +593,32 @@ SELECT EXISTS (
     SELECT 1
     FROM public.sync_dispatch_outbox AS outbox
     JOIN public.sync_dispatch_transport_routes AS route
-      ON route.kind = outbox.kind
-    WHERE outbox.id = $1::uuid
-      AND outbox.sync_run_id = $2::uuid
-      AND outbox.org_id = $3
-      AND outbox.kind = 'post_sync'
-      AND outbox.status = 'dispatched'
-      AND outbox.dispatched_transport = 'river'
-      AND outbox.dispatched_route_generation = $4
-      AND route.transport = 'river'
-      AND route.generation = $4
-      AND route.paused = false
-)`, args.OutboxID(), args.SyncRunID(), args.OrganizationID(), args.RouteGeneration()).Scan(&current)
+      ON route.kind = outbox.kind`+transportReferencePredicate+`
+)`, args.OutboxID(), args.SyncRunID(), args.OrganizationID(), args.RouteGeneration(), outboxKindPostSync, args.Attempt()).Scan(&current)
 	if err != nil {
 		return false, unavailable(stageReference, err)
 	}
 	return current, nil
+}
+
+// postSyncCommitAllowed is the pass's last statement before COMMIT: the shared commit snapshot of the post_sync row
+// (locked to the commit, NOWAIT) judged by decideCommit. A superseded delivery is refused with one line; a held row
+// (55P03) or a read error is ErrPostSyncUnavailable, so River retries the same delivery.
+func (service *NativePostSyncService) postSyncCommitAllowed(ctx context.Context, tx pgx.Tx, args PostSyncArgs) (bool, error) {
+	snapshot, err := readCommitSnapshot(ctx, tx, args, outboxKindPostSync)
+	if err != nil {
+		return false, unavailable(stageCommitCheck, err)
+	}
+	allowed, reason := decideCommit(snapshot, args.RouteGeneration(), args.Attempt())
+	if !allowed {
+		service.logger.Info(ctx, synclog.MsgPostSyncDeliveryNotCurrent,
+			synclog.Org(synclog.ParseID(args.OrganizationID())),
+			synclog.Run(synclog.ParseID(args.SyncRunID())),
+			synclog.Text(synclog.KeyReason, synclog.ParseLabel(reason)),
+			synclog.Count(synclog.KeyDeliveryRouteGeneration, args.RouteGeneration()),
+			synclog.Count(synclog.KeyCurrentRouteGeneration, snapshot.currentRouteGeneration()))
+	}
+	return allowed, nil
 }
 
 func loadPostSyncPlan(
@@ -595,12 +628,12 @@ func loadPostSyncPlan(
 	now time.Time,
 ) (*PostSyncPlan, error) {
 	var orgID, integrationID string
-	var runStartedAt *time.Time
+	var runStartedAt, runCompletedAt *time.Time
 	err := tx.QueryRow(ctx, `
-SELECT org_id, integration_id::text, COALESCE(started_at, created_at)
+SELECT org_id, integration_id::text, COALESCE(started_at, created_at), completed_at
 FROM public.sync_runs
 WHERE id = $1::uuid AND org_id = $2
-FOR SHARE`, args.SyncRunID(), args.OrganizationID()).Scan(&orgID, &integrationID, &runStartedAt)
+FOR SHARE`, args.SyncRunID(), args.OrganizationID()).Scan(&orgID, &integrationID, &runStartedAt, &runCompletedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -621,7 +654,15 @@ ORDER BY id`, args.SyncRunID())
 	if runStartedAt != nil {
 		startedAt = runStartedAt.UTC()
 	}
-	workItemWindows := newWorkItemDayAccumulator(startedAt, now)
+	// The plan window closes at the run's own completion time, which the
+	// finalize writes in the transaction that arms this delivery, so a late or
+	// re-driven delivery plans the run's days, not the days of its own clock
+	// (CHAOS-14115).
+	anchor := now
+	if runCompletedAt != nil {
+		anchor = runCompletedAt.UTC()
+	}
+	workItemWindows := newWorkItemDayAccumulator(startedAt, anchor)
 	var (
 		targets        = map[string]struct{}{}
 		from           *time.Time
@@ -700,8 +741,8 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 	_, hasOperational := targets["operational"]
 	git := writesGitRows(targets)
 	dora := git || hasDeployments || hasCICD || hasIncidents || hasOperational
-	dailyRelevant := dailyMetricsTrigger(git, hasWorkItems, hasCICD, hasDeployments, hasIncidents)
-	targetDay := now
+	dailyRelevant := dailyRelevantTargets(targets)
+	targetDay := anchor
 	backfillDays := 1
 	if to != nil {
 		targetDay = *to
@@ -714,8 +755,12 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 			backfillDays = 1
 		}
 	}
-	currentSingleDay := (from == nil && to == nil) ||
-		(from != nil && to != nil && sameUTCDate(*from, *to) && sameUTCDate(*to, now))
+	// Complexity scans current file contents and writes one row for its target
+	// day (complexity.BuildSnapshots), so it is planned only when that day is
+	// still today on this delivery's clock; a late delivery leaves it to the
+	// fixed schedule.
+	currentSingleDay := sameUTCDate(targetDay, now) && ((from == nil && to == nil) ||
+		(from != nil && to != nil && sameUTCDate(*from, *to) && sameUTCDate(*to, now)))
 	var workItemWindowDays []time.Time
 	if hasWorkItems && dailyRelevant {
 		workItemWindowDays, err = workItemWindows.days()
@@ -724,7 +769,7 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 		}
 	}
 	return &PostSyncPlan{
-		WorkItems: hasWorkItems, Git: git, RunStartedAt: startedAt,
+		WorkItems: hasWorkItems, Git: git, TestReports: writesTestReportRows(targets), RunStartedAt: startedAt,
 		WorkItemWindowDays: workItemWindowDays,
 		OrganizationID:     orgID, SyncRunID: args.SyncRunID(), TargetDay: targetDay,
 		BackfillDays: backfillDays, From: from, To: to,
@@ -761,6 +806,16 @@ func dailyMetricsTrigger(git, hasWorkItems, hasCICD, hasDeployments, hasIncident
 	return git || hasWorkItems || hasCICD || hasDeployments || hasIncidents
 }
 
+// dailyRelevantTargets is dailyMetricsTrigger over the targets of the
+// successful units. The tests target writes the same rows as cicd, so either
+// one triggers the daily run, and with it the touched record of the suite days.
+func dailyRelevantTargets(targets map[string]struct{}) bool {
+	_, hasWorkItems := targets["work-items"]
+	_, hasDeployments := targets["deployments"]
+	_, hasIncidents := targets["incidents"]
+	return dailyMetricsTrigger(writesGitRows(targets), hasWorkItems, writesTestReportRows(targets), hasDeployments, hasIncidents)
+}
+
 // writesGitRows says whether a successful unit of the sync run wrote commits
 // or pull requests (the git or the prs target): the same for every provider,
 // as it is read from the dataset capability of each unit, never from a name.
@@ -768,6 +823,15 @@ func writesGitRows(targets map[string]struct{}) bool {
 	_, hasGit := targets["git"]
 	_, hasPRs := targets["prs"]
 	return hasGit || hasPRs
+}
+
+// writesTestReportRows says whether a successful unit of the sync run wrote
+// test suite rows (the cicd or the tests target), read from the dataset
+// capability like writesGitRows.
+func writesTestReportRows(targets map[string]struct{}) bool {
+	_, hasCICD := targets["cicd"]
+	_, hasTests := targets["tests"]
+	return hasCICD || hasTests
 }
 
 func utcDay(value time.Time) time.Time {

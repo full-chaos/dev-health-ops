@@ -95,7 +95,7 @@ type LoopConfig struct {
 // DefaultLoopConfig's two-second ObservationTimeout suits a Stepper that is
 // genuinely one bounded call, such as Shadow's single indexed read. It is
 // NOT sized for the sync-dispatch mutation pipeline: that Stepper
-// (MutationPipeline) is an 8-stage, 3-pool composition, and CHAOS-4239 found
+// (MutationPipeline) is a 9-stage, 3-pool composition, and CHAOS-4239 found
 // this same comment claiming "one indexed read of at most 101 candidates"
 // years after the pipeline made that description false -- the doc drifted,
 // nothing caught it, and the flat 2s deadline it described kept killing the
@@ -188,10 +188,13 @@ type Loop struct {
 	// already happened, and the next step's zero would erase the only
 	// evidence a stuck discovery retry was ever recovered.
 	discoveryRearmed uint64
-	lastOK           time.Time
-	up               bool
-	errors           chan error
-	recorderBusy     chan struct{}
+	// postSyncRearmed accumulates the CHAOS-14115 re-drive event for the same
+	// reason.
+	postSyncRearmed uint64
+	lastOK          time.Time
+	up              bool
+	errors          chan error
+	recorderBusy    chan struct{}
 
 	// stepObserved is a test-only synchronization hook (CHAOS-4553, porting
 	// the CHAOS-4429 pattern from the sibling internal/joboutbox.ReconcilerLoop):
@@ -526,6 +529,9 @@ func (loop *Loop) accumulateRecoveriesLocked(observation Observation) {
 	loop.discoveryRearmed = accumulateCount(
 		loop.discoveryRearmed, observation.DiscoveryRearmed,
 	)
+	loop.postSyncRearmed = accumulateCount(
+		loop.postSyncRearmed, observation.PostSyncRedriveRearmed,
+	)
 }
 
 // accumulateCount adds one step's events to a process total, refusing both a
@@ -607,6 +613,9 @@ func (loop *Loop) carryUnmeasuredGaugesLocked(
 		if observation.UnreclaimableMeasured {
 			merged.UnreclaimableCandidates = observation.UnreclaimableCandidates
 		}
+		if observation.PostSyncSkippedWindowMeasured {
+			merged.PostSyncRedriveSkippedWindow = observation.PostSyncRedriveSkippedWindow
+		}
 		return merged
 	}
 	if !observation.RunawayMeasured {
@@ -614,6 +623,9 @@ func (loop *Loop) carryUnmeasuredGaugesLocked(
 	}
 	if !observation.UnreclaimableMeasured {
 		merged.UnreclaimableCandidates = loop.observation.UnreclaimableCandidates
+	}
+	if !observation.PostSyncSkippedWindowMeasured {
+		merged.PostSyncRedriveSkippedWindow = loop.observation.PostSyncRedriveSkippedWindow
 	}
 	return merged
 }
@@ -697,6 +709,7 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	unreclaimableTerminalized := loop.unreclaimableTerminalized
 	unreclaimableSweepFailures := loop.unreclaimableSweepFailures
 	discoveryRearmed := loop.discoveryRearmed
+	postSyncRearmed := loop.postSyncRearmed
 	lastOK := loop.lastOK
 	up := loop.up
 	now := loop.clock.Now()
@@ -723,6 +736,9 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	}
 	fmt.Fprintf(&text, "# HELP sync_dispatch_exhausted_delivery_recoveries_total Coordinator deliveries reclaimed after River spent their whole attempt budget.\n# TYPE sync_dispatch_exhausted_delivery_recoveries_total counter\nsync_dispatch_exhausted_delivery_recoveries_total %d\n", exhaustedRecoveries)
 	fmt.Fprintf(&text, "# HELP sync_dispatch_discovery_rearmed_total reference_discovery sync_dispatch_outbox rows the materializer reset from a stranded 'dispatched' state back to 'pending' (CHAOS-4357). A sustained nonzero rate is the expected signal of provider failures being retried -- watch it alongside sync_run_reference_discoveries.status, not as a fault by itself.\n# TYPE sync_dispatch_discovery_rearmed_total counter\nsync_dispatch_discovery_rearmed_total %d\n", discoveryRearmed)
+	text.WriteString("# HELP sync_dispatch_post_sync_redrive_total Exhausted post_sync deliveries on terminal sync runs that this replica re-armed for a new delivery inside the re-drive window (CHAOS-14115). Each row is re-armed by one replica, so sum over replicas.\n# TYPE sync_dispatch_post_sync_redrive_total counter\n")
+	fmt.Fprintf(&text, "sync_dispatch_post_sync_redrive_total{outcome=%q} %d\n", "rearmed", postSyncRearmed)
+	fmt.Fprintf(&text, "# HELP sync_dispatch_post_sync_redrive_skipped_window Exhausted post_sync deliveries on terminal sync runs older than the re-drive window right now, left as they are (CHAOS-14115). Every replica reads the same database count: read max over replicas, never sum.\n# TYPE sync_dispatch_post_sync_redrive_skipped_window gauge\nsync_dispatch_post_sync_redrive_skipped_window %d\n", observation.PostSyncRedriveSkippedWindow)
 	// CHAOS-4097. The two gauges are the alertable pair: a runaway count above
 	// zero says a run is looping, and a failure counter that climbs says the
 	// thing which would have told you is broken. Reading either one alone can

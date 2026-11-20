@@ -111,27 +111,34 @@ func (e *llmStepError) Unwrap() error { return e.err }
 // byoLLMAccess is llm_settings.py's require_byo_llm_access: a refusal, or an
 // error when a lookup failed (the gate fails closed).
 func (h *handlers) byoLLMAccess(ctx context.Context, orgID string, forCleanup bool) (*llmRefusal, error) {
+	_, refusal, err := h.byoLLMAccessOrg(ctx, orgID, forCleanup)
+	return refusal, err
+}
+
+// byoLLMAccessOrg is byoLLMAccess that also returns the org id as parsed: an id
+// that does not parse is the 404 here, so a save never sees one.
+func (h *handlers) byoLLMAccessOrg(ctx context.Context, orgID string, forCleanup bool) (uuid.UUID, *llmRefusal, error) {
 	notFound := func() *llmRefusal { return &llmRefusal{status: http.StatusNotFound, detail: notFoundOrg()} }
 	org, err := pythonparity.ParseUUID(orgID)
 	if err != nil {
-		return notFound(), nil
+		return uuid.Nil, notFound(), nil
 	}
 	var found uuid.UUID
 	err = h.store.Pool.QueryRow(ctx, `SELECT id FROM organizations WHERE id = $1`, org).Scan(&found)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return notFound(), nil
+		return uuid.Nil, notFound(), nil
 	}
 	if err != nil {
-		return nil, &llmStepError{"look up organization", err}
+		return uuid.Nil, nil, &llmStepError{"look up organization", err}
 	}
 	// Cleanup skips both the tier and the flag gate: stored credentials must
 	// stay removable after a downgrade or a kill switch.
 	if forCleanup {
-		return nil, nil
+		return org, nil, nil
 	}
 	tier, err := licensing.ResolveOrgTier(ctx, h.store.Pool, org)
 	if err != nil {
-		return nil, &llmStepError{"resolve org tier", err}
+		return uuid.Nil, nil, &llmStepError{"resolve org tier", err}
 	}
 	have, _ := licensing.TierRank(tier)
 	want, _ := licensing.TierRank(byoLLMMinTier)
@@ -141,26 +148,32 @@ func (h *handlers) byoLLMAccess(ctx context.Context, orgID string, forCleanup bo
 		detail.Set("feature", byoLLMFeature)
 		detail.Set("required_tier", byoLLMMinTier)
 		detail.Set("current_tier", tier)
-		return &llmRefusal{status: http.StatusPaymentRequired, detail: detail}, nil
+		return uuid.Nil, &llmRefusal{status: http.StatusPaymentRequired, detail: detail}, nil
 	}
 	state, _, err := licensing.FeatureFlagState(ctx, h.store.Pool, org, byoLLMFeature, byoLLMMinTier, h.store.now())
 	if err != nil {
-		return nil, &llmStepError{"resolve byo_llm flag", err}
+		return uuid.Nil, nil, &llmStepError{"resolve byo_llm flag", err}
 	}
 	if state == licensing.StateDisabled {
 		detail := pyjson.NewObject()
 		detail.Set("error", "feature_not_enabled")
 		detail.Set("feature", byoLLMFeature)
 		detail.Set("message", "BYO LLM is not enabled for this organization")
-		return &llmRefusal{status: http.StatusForbidden, detail: detail}, nil
+		return uuid.Nil, &llmRefusal{status: http.StatusForbidden, detail: detail}, nil
 	}
-	return nil, nil
+	return org, nil, nil
 }
 
 // requireBYOLLMAccess answers the route's refusal itself and returns false; a
 // failed lookup answers the generic 500.
 func (h *handlers) requireBYOLLMAccess(ctx context.Context, w http.ResponseWriter, orgID string, forCleanup bool) bool {
-	refusal, err := h.byoLLMAccess(ctx, orgID, forCleanup)
+	_, ok := h.requireBYOLLMAccessOrg(ctx, w, orgID, forCleanup)
+	return ok
+}
+
+// requireBYOLLMAccessOrg is requireBYOLLMAccess that also returns the org id as parsed.
+func (h *handlers) requireBYOLLMAccessOrg(ctx context.Context, w http.ResponseWriter, orgID string, forCleanup bool) (uuid.UUID, bool) {
+	org, refusal, err := h.byoLLMAccessOrg(ctx, orgID, forCleanup)
 	if err != nil {
 		var step *llmStepError
 		if errors.As(err, &step) {
@@ -168,13 +181,13 @@ func (h *handlers) requireBYOLLMAccess(ctx context.Context, w http.ResponseWrite
 		} else {
 			h.internalError(ctx, w, "byo llm access", err)
 		}
-		return false
+		return uuid.Nil, false
 	}
 	if refusal != nil {
 		refusal.write(w)
-		return false
+		return uuid.Nil, false
 	}
-	return true
+	return org, true
 }
 
 // maskAPIKey is llm_settings.py's mask_api_key, by code point.
@@ -230,7 +243,11 @@ func (h *handlers) llmSettingsResponse(ctx context.Context, db pgExecer, orgID s
 		values[key] = value
 	}
 	// Every unreadable setting is named, the overrides' too (CHAOS-12172).
-	purposes, err := h.llmPurposesObject(ctx, db, orgID)
+	maskKeys, err := h.llmMaskKeys(ctx, db, orgID)
+	if err != nil {
+		return nil, err
+	}
+	purposes, err := h.llmPurposesObject(ctx, db, orgID, maskKeys)
 	if !collectUndecryptable(err, &unreadable) && err != nil {
 		return nil, err
 	}
@@ -250,7 +267,7 @@ func (h *handlers) llmSettingsResponse(ctx context.Context, db pgExecer, orgID s
 		}
 	}
 	if values["base_url"] != nil {
-		out.Set("base_url", *values["base_url"])
+		setMaskedBaseURL(out, *values["base_url"], maskKeys)
 	}
 	if raw := values["concurrency"]; raw != nil && *raw != "" {
 		parsed, err := pythonparity.ParseInt(*raw)
@@ -277,7 +294,7 @@ func (h *handlers) getLLMSettings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rawPurpose, hasPurpose := r.URL.Query()["purpose"]
+	rawPurpose, hasPurpose := httpapi.Query(r)["purpose"]
 	if hasPurpose {
 		purpose, valid := h.purposeParamFor(ctx, w, orgID, rawPurpose[len(rawPurpose)-1], nil)
 		if !valid {
@@ -385,7 +402,8 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 		writeValidation(w, errs)
 		return
 	}
-	if !h.requireBYOLLMAccess(ctx, w, orgID, false) {
+	org, ok := h.requireBYOLLMAccessOrg(ctx, w, orgID, false)
+	if !ok {
 		return
 	}
 	if purposeRaw != nil {
@@ -423,7 +441,7 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		upsert := put.purposeUpsert(purpose)
 		upsert.inTx = h.categorizeOptInStep(r, orgID, categorizeBYO)
-		out, refusal, err := h.applyLLMPurpose(ctx, orgID, upsert)
+		out, refusal, err := h.applyLLMPurpose(ctx, org, upsert)
 		if err != nil {
 			if h.writeUndecryptable(ctx, w, "write llm purpose override", err) {
 				return
@@ -449,7 +467,7 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 			"message", "BYO LLM budget changes are unavailable while impersonating")
 		return
 	}
-	out, refusal, err := h.applyLLMSettings(ctx, orgID, llmUpsert{
+	out, refusal, err := h.applyLLMSettings(ctx, org, llmUpsert{
 		provider: *provider, model: model, apiKey: apiKey, baseURL: baseURL,
 		concurrency: concurrency, budgetLimitMu: budgetLimitMu, requireModel: true,
 		inTx: h.categorizeOptInStep(r, orgID, categorizeBYO),
@@ -499,41 +517,30 @@ func byoProviderNeedsModel(in llmUpsert) bool {
 // applyLLMSettings is llm_settings.py's upsert_llm_settings over settings.py's:
 // the base URL is checked, then every write and the budget limit share one
 // transaction that a refusal or a failed response rolls back. The route and the
-// operator verb both run it.
-func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUpsert) (*pyjson.Object, *llmRefusal, error) {
+// operator verb both run it. org is the org id as byoLLMAccessOrg parsed it: the
+// save lock and every row read and written are keyed by its canonical text, so
+// every spelling of one org id takes one lock and writes one set of rows.
+func (h *handlers) applyLLMSettings(ctx context.Context, org uuid.UUID, in llmUpsert) (*pyjson.Object, *llmRefusal, error) {
+	orgID := org.String()
 	if refusal := decisionProviderRefusal(in.provider, "", false, "", nil, false); refusal != nil {
 		return nil, refusal, nil
 	}
+	origBaseURL := in.baseURL
+	sentBaseURL, refused, err := h.resolveBaseURL(ctx, nil, orgID, "", in.baseURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	if refused {
+		return nil, maskedBaseURLRefusal(), nil
+	}
+	in.baseURL = sentBaseURL
 	baseURLText := ""
 	if in.baseURL != nil {
 		baseURLText = *in.baseURL
 	}
-	var keys []string
-	if in.apiKey != nil {
-		keys = append(keys, *in.apiKey)
+	if refusal, err := h.saveKeyRefusal(ctx, h.store.Pool, orgID, "", in.apiKey, in.baseURL, true); refusal != nil || err != nil {
+		return nil, refusal, err
 	}
-	if baseURLText != "" {
-		stored, err := readableStoredKey(h.storedLLMKey(ctx, orgID))
-		if err != nil {
-			return nil, nil, &llmStepError{"read stored llm key", err}
-		}
-		keys = append(keys, stored)
-	}
-	valid, reason, keyHit, splitErr := h.checkBaseURL(ctx, baseURLText, keys...)
-	if keyHit {
-		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", "Invalid LLM base_url"), nil
-	}
-	if splitErr != nil {
-		// urlsplit's ValueError escapes validate_llm_base_url: an unhandled 500.
-		return nil, nil, &llmStepError{"validate base url", splitErr}
-	}
-	if !valid {
-		if reason == "" {
-			reason = "Invalid LLM base_url"
-		}
-		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", reason), nil
-	}
-
 	if in.requireModel && byoProviderNeedsModel(in) {
 		return nil, newLLMRefusal(http.StatusBadRequest, "error", "model_required", "feature", byoLLMFeature, "message", "model is required when a BYO LLM provider is saved"), nil
 	}
@@ -548,6 +555,27 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 			_ = tx.Rollback(context.WithoutCancel(ctx))
 		}
 	}()
+	// Under the org's save lock the key checks run again on the transaction: a
+	// save of another scope that passed its checks before this one committed is
+	// seen here, so two saves never each store a url carrying the other's key.
+	if refusal, err := h.lockLLMSettingsSave(ctx, tx, org, ""); refusal != nil || err != nil {
+		return nil, refusal, err
+	}
+	inTx, refused, err := h.resolveBaseURL(ctx, tx, orgID, "", origBaseURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	if refused || !sameBaseURL(inTx, in.baseURL) {
+		return nil, maskedBaseURLRefusal(), nil
+	}
+	// From here the save checks and writes the base_url as read under the lock.
+	in.baseURL, baseURLText = inTx, ""
+	if inTx != nil {
+		baseURLText = *inTx
+	}
+	if refusal, err := h.saveKeyRefusal(ctx, tx, orgID, "", in.apiKey, in.baseURL, false); refusal != nil || err != nil {
+		return nil, refusal, err
+	}
 	set := func(key string, value *string, encrypt bool, description string) error {
 		_, err := h.upsertSetting(ctx, tx, orgID, llmCategory, key, value, encrypt, &description)
 		return err
@@ -635,7 +663,7 @@ func (h *handlers) deleteLLMSettings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if rawPurpose, hasPurpose := r.URL.Query()["purpose"]; hasPurpose {
+	if rawPurpose, hasPurpose := httpapi.Query(r)["purpose"]; hasPurpose {
 		purpose, valid := h.purposeParamFor(ctx, w, orgID, rawPurpose[len(rawPurpose)-1], nil)
 		if !valid {
 			return

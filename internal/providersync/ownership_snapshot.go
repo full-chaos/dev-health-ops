@@ -164,7 +164,7 @@ const (
 // a fact that still holds is on no page. So the end of a walk is never the
 // proof of an absence by itself: each kind states what is.
 //
-// It is made only by AbsenceByListing and AbsenceByCloseWriter. (The end of a walk by the provider's cursor was a
+// It is made only by AbsenceByListing, AbsenceByCloseWriter and AbsenceByInputEvidence. (The end of a walk by the provider's cursor was a
 // third statement until CHAOS-9124: it proved no absence, and no kind states it any more.)
 // The zero value proves no absence, so a kind whose proof nobody stated closes no absent fact.
 type AbsenceProof[R any] struct {
@@ -187,6 +187,24 @@ const AbsenceByCloseWriterStatement = "decided_by_the_writer_of_the_kind"
 // close on the end of a walk, which is the defect this type exists to stop.
 func AbsenceByCloseWriter[R any]() AbsenceProof[R] {
 	return AbsenceProof[R]{statement: AbsenceByCloseWriterStatement, verdict: func(R) SnapshotAbsence { return SnapshotAbsenceProven }}
+}
+
+// AbsenceByInputEvidenceStatement is the statement of AbsenceByInputEvidence.
+const AbsenceByInputEvidenceStatement = "every_recorded_input_row_held"
+
+// AbsenceByInputEvidence is the proof of a kind derived from stored input
+// rows, not read from a provider listing: a fact the run does not derive is
+// gone only when every input row recorded as its evidence is in the run
+// (present, with any value). missing names, for a row, the recorded inputs the
+// run does not hold; one missing input proves nothing, because a missing row
+// is not a changed row. A nil missing proves nothing.
+func AbsenceByInputEvidence[R any](missing func(R) []string) AbsenceProof[R] {
+	return AbsenceProof[R]{statement: AbsenceByInputEvidenceStatement, verdict: func(row R) SnapshotAbsence {
+		if missing == nil || len(missing(row)) != 0 {
+			return SnapshotAbsenceNotProven
+		}
+		return SnapshotAbsenceProven
+	}}
 }
 
 // AbsenceByListingStatement is the statement of AbsenceByListing.

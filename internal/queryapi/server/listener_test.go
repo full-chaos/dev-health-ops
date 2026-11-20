@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -24,7 +25,7 @@ func listenerPlane(t *testing.T) *Plane {
 func TestListenerBindsInStartAndStopsInShutdown(t *testing.T) {
 	plane := listenerPlane(t)
 	defer plane.Close()
-	public, internal := Listeners("127.0.0.1:0", "", plane, nil, nil)
+	public, internal := Listeners("127.0.0.1:0", "", plane, nil)
 	if internal != nil {
 		t.Fatalf("an internal listener exists with no internal address")
 	}
@@ -68,7 +69,7 @@ func TestListenerFailsStartWhenTheAddressIsTaken(t *testing.T) {
 	defer occupied.Close()
 	plane := listenerPlane(t)
 	defer plane.Close()
-	public, _ := Listeners(occupied.Addr().String(), "", plane, nil, nil)
+	public, _ := Listeners(occupied.Addr().String(), "", plane, nil)
 	if err := public.Start(context.Background()); err == nil {
 		t.Fatal("Start succeeded on a taken address")
 	}
@@ -87,7 +88,7 @@ func TestListenerFailsStartWhenTheAddressIsTaken(t *testing.T) {
 func TestInternalListenerExistsOnlyWhenItsAddressIsSet(t *testing.T) {
 	plane := listenerPlane(t)
 	defer plane.Close()
-	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil, nil)
+	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil)
 	if public == nil || internal == nil {
 		t.Fatalf("public=%v internal=%v, want both", public, internal)
 	}
@@ -114,7 +115,7 @@ func TestInternalOnlyRouteExistsOnlyOnTheInternalListener(t *testing.T) {
 	})
 	plane.InternalHandler = internalMux
 
-	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil, nil)
+	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil)
 	ctx := context.Background()
 	if err := public.Start(ctx); err != nil {
 		t.Fatal(err)
@@ -171,4 +172,21 @@ func TestCloserReleasesThePlaneOnShutdown(t *testing.T) {
 	if err := (Closer{}).Shutdown(context.Background()); err != nil {
 		t.Fatalf("a Closer with no plane: %v", err)
 	}
+}
+
+// CHAOS-8654 r1: a runtime that never starts the closer (a cancelled start, an earlier component's
+// bind failure) releases it, and the plane closes its routes (the posture check first, then the
+// pool) once however often it is asked.
+func TestCloserReleaseClosesThePlaneOnce(t *testing.T) {
+	closed := 0
+	closer := Closer{Plane: &Plane{Close: sync.OnceFunc(func() { closed++ })}}
+	closer.Release()
+	if err := closer.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	closer.Release()
+	if closed != 1 {
+		t.Fatalf("plane closed %d times, want once", closed)
+	}
+	(Closer{}).Release()
 }

@@ -69,6 +69,7 @@ type PipelineRunRow struct {
 	TeamID          *string
 	ServiceID       *string
 	OrgID           string
+	LastSynced      time.Time
 }
 
 // SuiteRow ports TestSuiteResultRow (testops_schemas.py:145).
@@ -111,6 +112,8 @@ type CoverageSnapshotRow struct {
 	LinesTotal        *uint32
 	LinesCovered      *uint32
 	LineCoveragePct   *float64
+	BranchesTotal     *uint32
+	BranchesCovered   *uint32
 	BranchCoveragePct *float64
 	TeamID            *string
 	ServiceID         *string
@@ -130,6 +133,10 @@ type PipelineMetric struct {
 	SuccessCount          int
 	FailureCount          int
 	CancelledCount        int
+	SkippedCount          int
+	UnfinishedCount       int
+	OtherCount            int
+	UnfinishedStaleCount  int
 	SuccessRate           float64
 	FailureRate           float64
 	CancelRate            float64
@@ -141,6 +148,16 @@ type PipelineMetric struct {
 	TeamID                *string
 	ServiceID             *string
 	OrgID                 string
+	// PooledSamples are the samples the duration and queue values above were taken over, stored with the row so the
+	// pooled readers read the same sample set as the stored values.
+	PooledSamples []PooledSample
+}
+
+// PooledSample is one counted run's (or suite's) samples with its own service id; nil is no sample.
+type PooledSample struct {
+	ServiceID *string
+	Duration  *float64
+	Queue     *float64
 }
 
 // TestMetric ports TestMetricsDailyRecord (testops_schemas.py:366).
@@ -151,7 +168,7 @@ type TestMetric struct {
 	FailedCount             int
 	SkippedCount            int
 	QuarantinedCount        int
-	PassRate                float64
+	PassRate                float64 // stored pass_rate/failure_rate: over TotalCases, 0 on an all-skipped day; never read (report census)
 	FailureRate             float64
 	FlakeRate               float64
 	FlakeCases              int
@@ -161,6 +178,12 @@ type TestMetric struct {
 	SuiteDurationP50Seconds *float64
 	SuiteDurationP95Seconds *float64
 	FailureRecurrence       float64
+	// RecurrentFailedNames and DistinctFailedNames are the two counts of FailureRecurrence: the failed names of the day
+	// that also failed in the history window, and the distinct failed names of the day (0 and 0 with no failed name).
+	RecurrentFailedNames int
+	DistinctFailedNames  int
+	// PooledSamples are the suite duration samples the suite percentiles above were taken over.
+	PooledSamples []PooledSample
 	// FlakeUnknown is set when the day holds case rows only of runs left out of
 	// the flake measures (runs not shown to be on the default branch). Nothing
 	// was measured: DistinctCases is 0, the rates above stay 0 here and the
@@ -171,6 +194,14 @@ type TestMetric struct {
 	TeamID       *string
 	ServiceID    *string
 	OrgID        string
+	// ReportRuns is the report completeness of the day's runs; nil = not measured (written as NULL, never 0).
+	ReportRuns *ReportRunCounts
+}
+
+// ReportRunCounts counts the runs with a kept suite on a repo-day (Runs), the runs read as partial and the runs that carry
+// no completeness mark for a counted attempt (unmarked). Partial and Unmarked are disjoint; the rest are complete.
+type ReportRunCounts struct {
+	Runs, Partial, Unmarked int
 }
 
 // CoverageMetric ports CoverageMetricsDailyRecord (testops_schemas.py:394).
@@ -185,6 +216,8 @@ type CoverageMetric struct {
 	BranchCoveragePct       *float64
 	LinesTotal              *uint32
 	LinesCovered            *uint32
+	BranchesTotal           *uint32
+	BranchesCovered         *uint32
 	CoverageDeltaPct        *float64
 	UncoveredFilesCount     int
 	CoverageRegressionCount int
@@ -319,6 +352,44 @@ func normalizePipelineStatus(status *string) string {
 		return "cancelled"
 	default:
 		return normalized
+	}
+}
+
+// pipelineUnfinishedStatuses are the stored statuses of a run that has not finished yet.
+var pipelineUnfinishedStatuses = []string{"running", "queued"}
+
+// OpenRunRefreshLookback is how long a sync takes to read an open run again: the GitHub runs phase lists runs created
+// up to this long before its window, and re-reads older open runs by id. An unfinished run whose row is older than this
+// may already be finished.
+const OpenRunRefreshLookback = 6 * time.Hour
+
+// pipelineRunBucket is the one count of a day's row that a counted run adds to.
+type pipelineRunBucket int
+
+const (
+	bucketOther pipelineRunBucket = iota
+	bucketSuccess
+	bucketFailure
+	bucketCancelled
+	bucketSkipped
+	bucketUnfinished
+)
+
+// pipelineStatusBucket puts every stored status in exactly one bucket; a status no other bucket names is other.
+func pipelineStatusBucket(status *string) pipelineRunBucket {
+	switch normalized := normalizePipelineStatus(status); {
+	case normalized == "success":
+		return bucketSuccess
+	case normalized == "failure":
+		return bucketFailure
+	case normalized == "cancelled":
+		return bucketCancelled
+	case normalized == "skipped":
+		return bucketSkipped
+	case slices.Contains(pipelineUnfinishedStatuses, normalized):
+		return bucketUnfinished
+	default:
+		return bucketOther
 	}
 }
 
@@ -463,7 +534,9 @@ func ComputePipelineMetrics(repoID uuid.UUID, rows []PipelineRunRow, repoName st
 // formerly locals inside ComputePipelineMetrics, hoisted unchanged.
 type pipelineBucket struct {
 	pipelines, success, failure, cancelled, reruns int
+	skipped, unfinished, unfinishedStale, other    int
 	durations, queues                              []float64
+	samples                                        []PooledSample
 	orgID                                          string
 }
 
@@ -496,6 +569,8 @@ type PipelineAccumulator struct {
 	resolver RepoTeamResolver
 	byGroup  map[pipelineKey]*pipelineBucket
 	order    []pipelineKey
+	// staleBefore is set by MeasureStaleAsOf; while it is zero, no run is stale.
+	staleBefore time.Time
 }
 
 // NewPipelineAccumulator takes the same repoName/resolver contract as
@@ -507,6 +582,12 @@ func NewPipelineAccumulator(repoID uuid.UUID, repoName string, resolver RepoTeam
 		resolver: resolver,
 		byGroup:  make(map[pipelineKey]*pipelineBucket),
 	}
+}
+
+// MeasureStaleAsOf makes Add count an unfinished run as stale when its row was last synced more than
+// OpenRunRefreshLookback before computedAt.
+func (accumulator *PipelineAccumulator) MeasureStaleAsOf(computedAt time.Time) {
+	accumulator.staleBefore = computedAt.Add(-OpenRunRefreshLookback)
 }
 
 // Add folds one ci_pipeline_runs row into its (resolved team_id, raw
@@ -529,23 +610,37 @@ func (accumulator *PipelineAccumulator) Add(row PipelineRunRow) {
 		accumulator.order = append(accumulator.order, k)
 	}
 	b.pipelines++
-	switch normalizePipelineStatus(row.Status) {
-	case "success":
+	switch pipelineStatusBucket(row.Status) {
+	case bucketSuccess:
 		b.success++
-	case "failure":
+	case bucketFailure:
 		b.failure++
-	case "cancelled":
+	case bucketCancelled:
 		b.cancelled++
+	case bucketSkipped:
+		b.skipped++
+	case bucketUnfinished:
+		b.unfinished++
+		if row.LastSynced.Before(accumulator.staleBefore) {
+			b.unfinishedStale++
+		}
+	default:
+		b.other++
 	}
 	if row.RetryCount > 0 {
 		b.reruns++
 	}
-	if d := safeDurationSeconds(row.QueuedAt, row.StartedAt, row.FinishedAt, row.DurationSeconds, false); d != nil {
+	d := safeDurationSeconds(row.QueuedAt, row.StartedAt, row.FinishedAt, row.DurationSeconds, false)
+	if d != nil {
 		b.durations = append(b.durations, *d)
 	}
-	if q := safeDurationSeconds(row.QueuedAt, row.StartedAt, row.FinishedAt, row.QueueSeconds, true); q != nil {
+	q := safeDurationSeconds(row.QueuedAt, row.StartedAt, row.FinishedAt, row.QueueSeconds, true)
+	if q != nil {
 		b.queues = append(b.queues, *q)
 	}
+	// Every counted run is one element, a run with no sample included: the pooled readers then hold the same rows as
+	// the raw runs, so a computed day with no sample is a null bucket, not a missing one.
+	b.samples = append(b.samples, PooledSample{ServiceID: row.ServiceID, Duration: d, Queue: q})
 }
 
 // Finish emits the groups in Python's sorted (team_id, service_id) order.
@@ -574,6 +669,9 @@ func finishPipelineBucket(repoID uuid.UUID, k pipelineKey, b *pipelineBucket) Pi
 		RepoID: repoID, OrgID: b.orgID,
 		PipelinesCount: b.pipelines, SuccessCount: b.success,
 		FailureCount: b.failure, CancelledCount: b.cancelled,
+		SkippedCount: b.skipped, UnfinishedCount: b.unfinished,
+		OtherCount: b.other, UnfinishedStaleCount: b.unfinishedStale,
+		PooledSamples: b.samples,
 	}
 	// Success and failure rates are over the completed runs (succeeded or failed); cancelled, skipped and unfinished
 	// runs are in neither. A day with no completed run keeps 0 here (the columns are not nullable): every reader
@@ -649,9 +747,14 @@ func (accumulator *PipelineAccumulator) FinishRepoDay() *PipelineMetric {
 		merged.success += b.success
 		merged.failure += b.failure
 		merged.cancelled += b.cancelled
+		merged.skipped += b.skipped
+		merged.unfinished += b.unfinished
+		merged.unfinishedStale += b.unfinishedStale
+		merged.other += b.other
 		merged.reruns += b.reruns
 		merged.durations = append(merged.durations, b.durations...)
 		merged.queues = append(merged.queues, b.queues...)
+		merged.samples = append(merged.samples, b.samples...)
 		if merged.orgID == "" {
 			merged.orgID = b.orgID
 		}
@@ -752,6 +855,7 @@ type TestAccumulator struct {
 	totalCases, passedCount, failedCount, skippedCount int
 	quarantinedCount                                   int
 	suiteDurations                                     []float64
+	suiteSamples                                       []PooledSample
 	caseStatuses                                       map[string]map[string]struct{}
 	caseHasRetry                                       map[string]bool
 	currentFailedNames                                 map[string]struct{}
@@ -790,9 +894,14 @@ func (accumulator *TestAccumulator) AddSuite(row SuiteRow) {
 	accumulator.failedCount += int(row.FailedCount) + int(row.ErrorCount)
 	accumulator.skippedCount += int(row.SkippedCount)
 	accumulator.quarantinedCount += int(row.QuarantinedCount)
+	var duration *float64
 	if row.DurationSeconds != nil && *row.DurationSeconds >= 0 {
 		accumulator.suiteDurations = append(accumulator.suiteDurations, *row.DurationSeconds)
+		value := *row.DurationSeconds
+		duration = &value
 	}
+	// Every counted suite is one element, a suite with no duration included (the raw suite rows' shape).
+	accumulator.suiteSamples = append(accumulator.suiteSamples, PooledSample{ServiceID: row.ServiceID, Duration: duration})
 }
 
 // AddCaseRow folds one raw test_case_results row in, reproducing Python's
@@ -878,6 +987,8 @@ func (accumulator *TestAccumulator) Finish(historicalFailedNames map[string]stru
 		RepoID: repoID, TotalCases: totalCases, PassedCount: passedCount,
 		FailedCount: failedCount, SkippedCount: skippedCount, QuarantinedCount: quarantinedCount,
 		TotalSuites: len(suites), FlakeCases: flakeCases, DistinctCases: distinctCases,
+		RecurrentFailedNames: recurrentFailures, DistinctFailedNames: len(currentFailedNames),
+		PooledSamples: accumulator.suiteSamples,
 	}
 	if totalCases > 0 {
 		metric.PassRate = float64(passedCount) / float64(totalCases)
@@ -936,6 +1047,7 @@ func ComputeCoverageMetric(repoID uuid.UUID, current, prior []CoverageSnapshotRo
 	metric := &CoverageMetric{
 		RepoID: repoID, LineCoveragePct: latest.LineCoveragePct, BranchCoveragePct: latest.BranchCoveragePct,
 		LinesTotal: latest.LinesTotal, LinesCovered: latest.LinesCovered,
+		BranchesTotal: latest.BranchesTotal, BranchesCovered: latest.BranchesCovered,
 		TeamID: resolveRepoTeam(latest.TeamID, repoName, resolver), ServiceID: latest.ServiceID, OrgID: latest.OrgID,
 	}
 	if latest.LineCoveragePct != nil && priorLatest != nil && priorLatest.LineCoveragePct != nil {

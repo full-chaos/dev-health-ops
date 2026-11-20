@@ -195,3 +195,35 @@ func TestOpenUnitsIndexJobRefusesAWindowThatDoesNotFitItsDeadline(t *testing.T) 
 		t.Fatalf("refusal = %.300s", refusal)
 	}
 }
+
+func TestStreakIndexJobHonoursACustomActiveDeadlineSeconds(t *testing.T) {
+	t.Parallel()
+
+	jobs, _, refusal := renderJobs(t, "web.enabled=false", "migrations.hook.streakIndex.enabled=true", "migrations.hook.streakIndex.activeDeadlineSeconds=3000")
+	if refusal != "" {
+		t.Fatalf("render refused: %s", refusal)
+	}
+	job, ok := jobs["t-dev-health-streak-index"]
+	if !ok {
+		t.Fatal("no streak index Job with the flag on")
+	}
+	if got := job["spec"].(map[string]any)["activeDeadlineSeconds"]; got != 3000 {
+		t.Fatalf("activeDeadlineSeconds = %v, want 3000", got)
+	}
+}
+
+func TestStreakIndexJobWithoutBundledPostgresHasNoWaitInitContainer(t *testing.T) {
+	t.Parallel()
+
+	jobs, _, refusal := renderJobs(t, "web.enabled=false", "migrations.hook.localBundledPostgres=false", "migrations.hook.streakIndex.enabled=true")
+	if refusal != "" {
+		t.Fatalf("render refused: %s", refusal)
+	}
+	job, ok := jobs["t-dev-health-streak-index"]
+	if !ok {
+		t.Fatal("no streak index Job with the flag on")
+	}
+	if inits, has := job["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["initContainers"]; has {
+		t.Fatalf("initContainers = %v, want none", inits)
+	}
+}

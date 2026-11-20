@@ -68,6 +68,10 @@ const (
 	// operator action differs: the partition reasons mean recompute some
 	// partitions, this one means the partitions are fine and only the
 	// cross-partition finalize needs re-running.
+	//
+	// No tool moves a 'failed' run back: the recovery is a new run of the day
+	// (`metrics daily-start --rerun-tag`). The marker clears once a later run
+	// of the same org-day covers the failed run (finalizeCoveredByLaterRunSQL).
 	BlockedReasonFinalizeFailed = "finalize_failed"
 	// BlockedReasonPartitionsFailedNoRetry marks a run whose only ended
 	// partitions are 'failed' rows past failedPartitionRetryHorizon: their River
@@ -113,6 +117,70 @@ type BlockedReconcileOutcome struct {
 	Blocked int
 }
 
+// finalizeCoveredByLaterRunSQL is true when a LATER run (created_at) of the
+// same org-day covers the failed run `run`, so its finalize_failed marker
+// clears. The later run is succeeded, or is a succeeded run that an operator
+// reopened (a finalize-redrive or partition-recompute provenance row with prior
+// status 'succeeded'): a reopen alone must not mark the old run again. It
+// covers when it is full-org, or when the failed run is repository-scoped and
+// every repository id of the failed run is in a later partition that succeeded
+// -- on a reopened later run, one that is not failed_permanent, because the
+// recompute window sets its partitions back to pending. An older success, a
+// later run that never succeeded, a no_repositories run and a narrower scope do
+// not cover. The clear is not sticky: a reopened later run that ends failed
+// stops covering, and the next pass marks the old run again.
+const finalizeCoveredByLaterRunSQL = `EXISTS (
+                   SELECT 1 FROM public.daily_metrics_runs AS later
+                   WHERE later.org_id = run.org_id
+                     AND later.target_day = run.target_day
+                     AND later.created_at > run.created_at
+                     AND (
+                         (later.status = 'succeeded' AND later.finalization_status = 'succeeded')
+                         OR (
+                             later.status = 'running'
+                             AND (
+                                 EXISTS (
+                                     SELECT 1 FROM public.daily_metrics_finalize_redrive_events AS reopen
+                                     WHERE reopen.run_id = later.id AND reopen.prior_status = 'succeeded'
+                                 )
+                                 OR EXISTS (
+                                     SELECT 1 FROM public.daily_metrics_partition_recompute_events AS reopen
+                                     WHERE reopen.run_id = later.id AND reopen.prior_status = 'succeeded'
+                                 )
+                             )
+                         )
+                     )
+                     AND (
+                         later.full_org
+                         OR (
+                             NOT run.full_org
+                             AND EXISTS (
+                                 SELECT 1
+                                 FROM public.daily_metrics_partitions AS failed_partition,
+                                      json_array_elements_text(failed_partition.repo_ids) AS failed_repo(repo_id)
+                                 WHERE failed_partition.run_id = run.id
+                             )
+                             AND NOT EXISTS (
+                                 SELECT 1
+                                 FROM public.daily_metrics_partitions AS failed_partition,
+                                      json_array_elements_text(failed_partition.repo_ids) AS failed_repo(repo_id)
+                                 WHERE failed_partition.run_id = run.id
+                                   AND NOT EXISTS (
+                                       SELECT 1
+                                       FROM public.daily_metrics_partitions AS later_partition,
+                                            json_array_elements_text(later_partition.repo_ids) AS later_repo(repo_id)
+                                       WHERE later_partition.run_id = later.id
+                                         AND later_repo.repo_id = failed_repo.repo_id
+                                         AND (
+                                             later_partition.status = 'succeeded'
+                                             OR (later.status = 'running' AND later_partition.status <> 'failed_permanent')
+                                         )
+                                   )
+                             )
+                         )
+                     )
+               )`
+
 // reconcileBlockedRunsSQL applies the predicate in BOTH directions in one
 // statement. Writing set and clear as two statements would be two places for
 // the definition of "blocked" to live, and they would drift; here the CASE
@@ -124,8 +192,8 @@ type BlockedReconcileOutcome struct {
 // state writes zero rows, so this can run on every tick without churning
 // updated_at or generating write load proportional to the number of runs.
 const reconcileBlockedRunsSQL = `
-WITH decided AS (
-    SELECT run.id,
+WITH shaped AS (
+    SELECT run.id, run.org_id, run.target_day, run.created_at, run.full_org,
            EXISTS (
                SELECT 1 FROM public.daily_metrics_partitions AS partition
                WHERE partition.run_id = run.id
@@ -193,7 +261,7 @@ WITH decided AS (
                    SELECT 1 FROM public.daily_metrics_partitions AS partition
                    WHERE partition.run_id = run.id
                )
-           ) AS finalize_blocked,
+           ) AS finalize_terminal,
            NOT EXISTS (
                SELECT 1 FROM public.daily_metrics_partitions AS partition
                WHERE partition.run_id = run.id
@@ -223,8 +291,19 @@ WITH decided AS (
     -- The guards are what make this correct, not the absence of overlap.
     WHERE run.org_id = $1::uuid AND run.status IN ('running', 'failed')
 ),
+covered AS (
+    SELECT run.*, (run.finalize_terminal AND ` + finalizeCoveredByLaterRunSQL + `) AS finalize_covered
+    FROM shaped AS run
+),
+decided AS (
+    SELECT covered.id, covered.blocked, covered.has_permanent, covered.none_succeeded,
+           covered.finalize_covered, covered.was_blocked, covered.read_blocked_at, covered.read_reason,
+           covered.finalize_terminal AND NOT covered.finalize_covered AS finalize_blocked
+    FROM covered
+),
 wanted AS (
     SELECT decided.id, decided.was_blocked, decided.read_blocked_at, decided.read_reason,
+           decided.finalize_covered,
            decided.blocked OR decided.finalize_blocked AS want_blocked,
            CASE
                -- No failed_permanent row: the run ended only through stale
@@ -247,7 +326,9 @@ UPDATE public.daily_metrics_runs AS run
 -- succeed beside one, between two passes).
 SET blocked_at = CASE WHEN wanted.want_blocked THEN COALESCE(run.blocked_at, $2::timestamptz) ELSE NULL END,
     blocked_reason = wanted.want_reason,
-    updated_at = $2
+    -- A covered finalize clear changes only the marker: the failed run keeps
+    -- its updated_at. Every other transition stamps it.
+    updated_at = CASE WHEN wanted.finalize_covered THEN run.updated_at ELSE $2 END
 FROM wanted
 WHERE run.id = wanted.id
   AND (

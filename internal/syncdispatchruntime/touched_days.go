@@ -154,6 +154,11 @@ type TouchedDaysStore interface {
 	// RecordTouchedGit records the days of the commits and pull requests
 	// written at or after since (CHAOS-9169), each under its own repository.
 	RecordTouchedGit(ctx context.Context, organizationID string, since time.Time) (uint64, error)
+	// RecordTouchedTests records the day of every test suite row of each
+	// workflow run that had a suite row written at or after since: every
+	// attempt, slot and legacy row of the run, so a re-run that moves the
+	// counted suite off a day still marks that day (CHAOS-14006).
+	RecordTouchedTests(ctx context.Context, organizationID string, since time.Time) (uint64, error)
 	PendingDays(ctx context.Context, organizationID string, limit int) (TouchedDaysPending, error)
 	PendingRepositories(ctx context.Context, organizationID string, days []time.Time, limitPerDay int) (map[string][]string, error)
 	MarkDispatched(ctx context.Context, organizationID string, at time.Time, fullDays []time.Time, keys []TouchedDayKey) error
@@ -262,26 +267,8 @@ func (service *NativePostSyncService) takeTouchedDays(
 		return nil, err
 	}
 	take := &touchedDaysTake{organizationID: plan.OrganizationID}
-	if plan.WorkItems || plan.Git {
-		if plan.RunStartedAt.IsZero() {
-			return nil, unavailable(stageTouchedPlan, nil)
-		}
-		since := plan.RunStartedAt.Add(-postSyncTouchedClockMargin)
-		if plan.WorkItems {
-			recorded, err := service.touched.RecordTouched(
-				WithTouchedWindowSink(ctx, &take.window), plan.OrganizationID, since, plan.WorkItemWindowDays)
-			if err != nil {
-				return nil, err
-			}
-			take.recorded += recorded
-		}
-		if plan.Git {
-			recorded, err := service.touched.RecordTouchedGit(ctx, plan.OrganizationID, since)
-			if err != nil {
-				return nil, err
-			}
-			take.recorded += recorded
-		}
+	if err := recordPlanTouchedDays(ctx, service.touched, plan, take); err != nil {
+		return nil, err
 	}
 	pending, err := service.touched.PendingDays(ctx, plan.OrganizationID, postSyncTouchedPendingDayReadLimit)
 	if err != nil {
@@ -350,6 +337,41 @@ func (service *NativePostSyncService) chooseTouchedDayStarts(
 		}
 	}
 	take.carriedOver = len(candidates) - scanned
+	return nil
+}
+
+// recordPlanTouchedDays appends the touched days of each kind of raw row the
+// sync run wrote, all read from the same lower bound.
+func recordPlanTouchedDays(ctx context.Context, touched TouchedDaysStore, plan *PostSyncPlan, take *touchedDaysTake) error {
+	if !plan.WorkItems && !plan.Git && !plan.TestReports {
+		return nil
+	}
+	if plan.RunStartedAt.IsZero() {
+		return unavailable(stageTouchedPlan, nil)
+	}
+	since := plan.RunStartedAt.Add(-postSyncTouchedClockMargin)
+	if plan.WorkItems {
+		recorded, err := touched.RecordTouched(
+			WithTouchedWindowSink(ctx, &take.window), plan.OrganizationID, since, plan.WorkItemWindowDays)
+		if err != nil {
+			return err
+		}
+		take.recorded += recorded
+	}
+	if plan.Git {
+		recorded, err := touched.RecordTouchedGit(ctx, plan.OrganizationID, since)
+		if err != nil {
+			return err
+		}
+		take.recorded += recorded
+	}
+	if plan.TestReports {
+		recorded, err := touched.RecordTouchedTests(ctx, plan.OrganizationID, since)
+		if err != nil {
+			return err
+		}
+		take.recorded += recorded
+	}
 	return nil
 }
 

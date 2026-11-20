@@ -27,6 +27,8 @@ type gitLabTestsRunJobs struct {
 	// idsByName holds the listed job ids of each name, ascending; nameOf is a job id's name.
 	idsByName map[string][]string
 	nameOf    map[string]string
+	// retried counts the listed jobs GitLab marks retried: one per job retry of the pipeline.
+	retried int
 }
 
 func gitLabTestsJobRetried(job gitLabTestsJobPayload) bool {
@@ -51,7 +53,7 @@ func newGitLabTestsRunJobs(items []json.RawMessage) (gitLabTestsRunJobs, error) 
 	for _, raw := range items {
 		job, err := decodeGitLabTestsJob(raw)
 		if err != nil {
-			return gitLabTestsRunJobs{}, err
+			return gitLabTestsRunJobs{}, providerfoundation.RouteFailure(gitlabPipelineJobsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		id := stringValue(job.ID)
 		if id == "" {
@@ -59,6 +61,7 @@ func newGitLabTestsRunJobs(items []json.RawMessage) (gitLabTestsRunJobs, error) 
 		}
 		if gitLabTestsJobRetried(job) {
 			result.anyRetried = true
+			result.retried++
 		}
 		name := stringValue(job.Name)
 		idsByName[name] = append(idsByName[name], id)
@@ -79,6 +82,22 @@ func newGitLabTestsRunJobs(items []json.RawMessage) (gitLabTestsRunJobs, error) 
 	}
 	result.idsByName = idsByName
 	return result, nil
+}
+
+// runAttempt is the attempt of the pipeline's report-completeness row (CHAOS-13981): 1 + the number of retried jobs. A pipeline
+// has no attempt number and every job retry adds one retried job, so each retry is a new key; the same job set is the same key.
+// The highest job rank would not do: a retry of a second job name leaves it unchanged.
+func (jobs gitLabTestsRunJobs) runAttempt() int64 {
+	return 1 + int64(jobs.retried)
+}
+
+// gitLabTestsRunAttemptOf is runAttempt over a whole job listing, before a per-run cap cuts it.
+func gitLabTestsRunAttemptOf(items []json.RawMessage) (int64, error) {
+	jobs, err := newGitLabTestsRunJobs(items)
+	if err != nil {
+		return 0, err
+	}
+	return jobs.runAttempt(), nil
 }
 
 // earlierJobIDs are the listed ids of the job's name that rank below it: the jobs it retried, oldest first.
@@ -186,6 +205,9 @@ func parseGitLabTestsJobArtifact(
 		legacyScopes = append([]string{jobID}, runJobs.earlierJobIDs(jobID)...)
 	}
 	rows, err := parseGitHubTestsArchive(archive, scope, scope, legacyScopes, repoID, runID, orgID, started, finished, at)
+	// The two size-guard skips are GitHub report_member causes (CHAOS-14030): GitLab treats any other skip as fatal, so it takes
+	// them out here and records them in its own terms (gitLabReportMemberComponent) from GuardDropped.
+	rows = rows.withoutMemberGuardSkips()
 	for index := range rows.Coverage {
 		rows.Coverage[index].ReportSlot, rows.Coverage[index].RunAttempt = name, attempt
 	}

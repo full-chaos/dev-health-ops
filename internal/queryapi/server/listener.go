@@ -94,12 +94,8 @@ func (l *Listener) Address() string {
 // the only one that can ever reach a route mounted only on
 // InternalHandler. internal is nil when internalAddr is empty.
 //
-// extra, when non-nil, answers the paths it declares (the one-release operator
-// compatibility routes, OperatorCompat) and everything else goes to the plane's routes.
-// /healthz and /readyz are mounted on BOTH listeners (probes reach the query listener from
-// either network); /metrics is mounted on the INTERNAL one ONLY: a scrape endpoint
-// is operational detail, not a probe, and this compat shim's whole point is that its real,
-// permanent home is the operator listener's own -- never the public one.
+// /healthz, /readyz and /metrics are NOT served here: they live on the operator
+// listener only (CHAOS-13492), so these paths answer the plane's own 404.
 //
 // internalAllowedPeers (D2953), when non-empty, restricts the internal listener to
 // accepting a connection only from a peer address inside one of these CIDRs -- see
@@ -108,7 +104,7 @@ func (l *Listener) Address() string {
 // loudly, rather than silently: an internal listener with an open bind on every
 // interface and no peer check is the exact gap D2953 was raised for. Ignored when
 // internalAddr is empty (there is no internal listener to restrict).
-func Listeners(publicAddr, internalAddr string, plane *Plane, extra http.Handler, internalAllowedPeers []*net.IPNet) (public, internal *Listener) {
+func Listeners(publicAddr, internalAddr string, plane *Plane, internalAllowedPeers []*net.IPNet) (public, internal *Listener) {
 	publicBase := plane.Handler
 	internalBase := plane.InternalHandler
 	if internalBase == nil {
@@ -116,20 +112,6 @@ func Listeners(publicAddr, internalAddr string, plane *Plane, extra http.Handler
 		// never set this falls back to the old, undifferentiated shape
 		// rather than serving the internal listener on a nil handler.
 		internalBase = plane.Handler
-	}
-	if extra != nil {
-		withExtra := func(base http.Handler, mountMetrics bool) http.Handler {
-			mux := http.NewServeMux()
-			mux.Handle("/healthz", extra)
-			mux.Handle("/readyz", extra)
-			if mountMetrics {
-				mux.Handle("/metrics", extra)
-			}
-			mux.Handle("/", base)
-			return mux
-		}
-		publicBase = withExtra(publicBase, false)
-		internalBase = withExtra(internalBase, true)
 	}
 	publicServer, internalServer := newListenerServers(publicAddr, internalAddr, publicBase, internalBase)
 	public = &Listener{name: "query-http", server: publicServer, errors: make(chan error, 1)}
@@ -184,8 +166,13 @@ type Closer struct{ Plane *Plane }
 func (Closer) Name() string                { return "query-routes" }
 func (Closer) Start(context.Context) error { return nil }
 func (c Closer) Shutdown(context.Context) error {
+	c.Release()
+	return nil
+}
+
+// Release closes the plane; the runtime calls it when it never started this component.
+func (c Closer) Release() {
 	if c.Plane != nil && c.Plane.Close != nil {
 		c.Plane.Close()
 	}
-	return nil
 }

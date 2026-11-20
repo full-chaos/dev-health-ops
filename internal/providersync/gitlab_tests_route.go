@@ -175,7 +175,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 	for _, raw := range adapterPage.Items {
 		payload, err := decodeGitLabTestsPipeline(raw)
 		if err != nil {
-			return CompleteRouteBatch{}, err
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(gitlabPipelinesRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		if stringValue(payload.ID) == "" {
 			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
@@ -219,7 +219,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 		for _, jobRaw := range jobPage.Items {
 			job, err := decodeGitLabTestsJob(jobRaw)
 			if err != nil {
-				return CompleteRouteBatch{}, err
+				return CompleteRouteBatch{}, providerfoundation.RouteFailure(gitlabPipelineJobsRoute, providerfoundation.ReasonBodyDecode, err)
 			}
 			row, ok := normalizeGitLabTestsJob(claim, repoID, pipeline.RunID, job, normalizedAt)
 			if !ok {
@@ -437,7 +437,7 @@ func selectGitLabTestsReportPipelines(
 		}
 		payload, err := decodeGitLabTestsPipeline(raw)
 		if err != nil {
-			return nil, err
+			return nil, providerfoundation.RouteFailure(gitlabPipelinesRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		if stringValue(payload.ID) == "" {
 			return nil, providerfoundation.ErrNormalizationInvalid
@@ -468,7 +468,7 @@ func selectGitLabTestsArtifactJobs(rawItems []json.RawMessage, maxArtifacts int)
 		}
 		job, err := decodeGitLabTestsJob(raw)
 		if err != nil {
-			return nil, err
+			return nil, providerfoundation.RouteFailure(gitlabPipelineJobsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		if !gitLabTestsJobHasArtifacts(job) || gitLabTestsJobRetried(job) {
 			continue
@@ -479,6 +479,22 @@ func selectGitLabTestsArtifactJobs(rawItems []json.RawMessage, maxArtifacts int)
 		selected = append(selected, job)
 	}
 	return selected, nil
+}
+
+// gitLabTestsQualifyingArtifactJobs counts the jobs that qualify for selectGitLabTestsArtifactJobs: the selection keeps the first
+// maxArtifacts of them and reads none of the others.
+func gitLabTestsQualifyingArtifactJobs(rawItems []json.RawMessage) (int, error) {
+	qualifying := 0
+	for _, raw := range rawItems {
+		job, err := decodeGitLabTestsJob(raw)
+		if err != nil {
+			return 0, providerfoundation.RouteFailure(gitlabPipelineJobsRoute, providerfoundation.ReasonBodyDecode, err)
+		}
+		if gitLabTestsJobHasArtifacts(job) && !gitLabTestsJobRetried(job) {
+			qualifying++
+		}
+	}
+	return qualifying, nil
 }
 
 func decodeGitLabTestsPipeline(raw json.RawMessage) (gitLabTestsPipelinePayload, error) {
@@ -565,8 +581,10 @@ func mapGitLabTestsPipelineStatus(value string) string {
 	switch value {
 	case "failed":
 		return "failure"
-	case "canceled", "cancelled", "skipped":
+	case "canceled", "cancelled":
 		return "cancelled"
+	case "skipped":
+		return "skipped"
 	case "manual", "scheduled", "pending", "created", "waiting_for_resource", "preparing":
 		return "queued"
 	default:
@@ -890,49 +908,56 @@ func gitLabTestsJSONTruthy(value any) bool {
 }
 
 func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation.HTTPClient, root, jobID string) ([]byte, error) {
+	body, _, err := downloadGitLabTestsArtifactFound(ctx, client, root, jobID)
+	return body, err
+}
+
+// downloadGitLabTestsArtifactFound is downloadGitLabTestsArtifact that also says whether the artifact was there: found is false
+// when the provider answered 404 or 410 (deleted or expired since the listing).
+func downloadGitLabTestsArtifactFound(ctx context.Context, client *providerfoundation.HTTPClient, root, jobID string) ([]byte, bool, error) {
 	response, err := client.DoRoute(ctx, http.MethodGet, gitlabJobArtifactsRoute, root+"/jobs/"+url.PathEscape(jobID)+"/artifacts", nil)
 	if err != nil {
 		var providerErr *providerfoundation.ProviderError
 		if errors.As(err, &providerErr) && (providerErr.StatusCode == http.StatusNotFound || providerErr.StatusCode == http.StatusGone) {
-			return nil, nil
+			return nil, false, nil
 		}
-		return nil, err
+		return nil, false, err
 	}
 	if response.StatusCode >= 300 && response.StatusCode < 400 {
 		location := response.Header.Get("Location")
 		_ = response.Body.Close()
 		if location == "" {
-			return nil, providerfoundation.ResponseFailure(response, "redirect", ErrGitLabTestsIncomplete)
+			return nil, false, providerfoundation.ResponseFailure(response, "redirect", ErrGitLabTestsIncomplete)
 		}
 		response, err = client.DoUnauthenticatedRoute(ctx, http.MethodGet, gitlabJobArtifactsRoute, location)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusGone {
-		return nil, nil
+		return nil, false, nil
 	}
 	if response.StatusCode >= 400 {
 		message, readErr := providerfoundation.ReadResponseBodyTransport(response, 1<<20-1)
 		if readErr != nil {
-			return nil, readErr
+			return nil, false, readErr
 		}
 		if classified := providerfoundation.ClassifyHTTPForRequest("gitlab", responsePath(response), response.StatusCode, response.Header, string(message)); classified != nil {
 			classified.Route = gitlabJobArtifactsRoute
-			return nil, classified
+			return nil, false, classified
 		}
-		return nil, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode, Route: gitlabJobArtifactsRoute}
+		return nil, false, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode, Route: gitlabJobArtifactsRoute}
 	}
 	body, over, err := providerfoundation.ReadResponseBodyWithin(response, gitLabTestsMaxDownload, logging.TransportFailure)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if over > 0 {
-		return nil, fmt.Errorf("%w: %w", errGitLabTestsArtifactTooLarge,
+		return nil, false, fmt.Errorf("%w: %w", errGitLabTestsArtifactTooLarge,
 			providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, ErrGitLabTestsIncomplete))
 	}
-	return body, nil
+	return body, true, nil
 }
 
 func gitLabTestsOptionalError(ctx context.Context, err error) error {

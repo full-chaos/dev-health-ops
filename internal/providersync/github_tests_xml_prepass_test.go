@@ -93,8 +93,8 @@ func TestGitHubTestsLCOVWithCoverageTextStaysLCOV(t *testing.T) {
 	}
 }
 
-// The cap went 8 -> 6 (CHAOS-13985): the 7th and later skips go only to the
-// per-cause overflow and count, never into the sample.
+// The cap went 8 -> 6 (CHAOS-13985) -> 5 (CHAOS-14030): the skips past the cap
+// (the 6th and later) go only to the per-cause overflow and count, never into the sample.
 func TestGitHubTestsSeventhSkippedArtifactOnlyCountsAndOverflows(t *testing.T) {
 	var records []GitHubTestsSkippedArtifact
 	var overflow int
@@ -103,20 +103,20 @@ func TestGitHubTestsSeventhSkippedArtifactOnlyCountsAndOverflows(t *testing.T) {
 	for i := 0; i < githubTestsMaxSkippedArtifactRecords+1; i++ {
 		records, overflow, causeOverflow, causeCount = appendGitHubTestsSkippedArtifact(
 			records, overflow, causeOverflow, causeCount,
-			GitHubTestsSkippedArtifact{RunID: "1", ArtifactID: "2", Cause: githubTestsUnsafeDoctypeCause},
+			GitHubTestsSkippedArtifact{RunID: "1", ArtifactID: fmt.Sprint(i + 2), Cause: githubTestsUnsafeDoctypeCause},
 		)
 	}
-	if githubTestsMaxSkippedArtifactRecords != 6 || len(records) != 6 || overflow != 1 ||
-		!causeOverflow[githubTestsUnsafeDoctypeCause] || causeCount[githubTestsUnsafeDoctypeCause] != 7 {
+	if githubTestsMaxSkippedArtifactRecords != 5 || len(records) != githubTestsMaxSkippedArtifactRecords || overflow != 1 ||
+		!causeOverflow[githubTestsUnsafeDoctypeCause] || causeCount[githubTestsUnsafeDoctypeCause] != githubTestsMaxSkippedArtifactRecords+1 {
 		t.Fatalf("records=%d overflow=%d causeOverflow=%v causeCount=%v", len(records), overflow, causeOverflow, causeCount)
 	}
 	// incomplete[] still holds the cause for every one of them.
 	var rows githubTestsReportRows
-	for i := 0; i < 7; i++ {
+	for i := 0; i < githubTestsMaxSkippedArtifactRecords+1; i++ {
 		rows.recordSkipped(githubTestsUnsafeDoctypeCause, false)
 	}
 	incomplete, _ := rows.optionalIncomplete()
-	if len(incomplete) != 1 || incomplete[0] != (GitHubTestsIncomplete{Component: "report_member", Cause: "unsafe_doctype", Count: 7}) {
+	if len(incomplete) != 1 || incomplete[0] != (GitHubTestsIncomplete{Component: "report_member", Cause: "unsafe_doctype", Count: githubTestsMaxSkippedArtifactRecords + 1}) {
 		t.Fatalf("incomplete=%+v", incomplete)
 	}
 }

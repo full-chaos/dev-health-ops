@@ -288,9 +288,9 @@ func TestPlatformAdminRowsTakeThePDPVerdict(t *testing.T) {
 	}
 }
 
-// A live go-api impersonation row is refused on every platform-admin row before any decision point call (12735,
-// D6714: platform actions stay refused); the live-row exempt routes (stop, handoff consume) alone ask the decision
-// point, as the admin.
+// A live go-api impersonation row is refused on every platform-admin row (12735, D6714: platform actions stay
+// refused) after the row's role question only, whose allow is still the session refusal; the live-row exempt routes
+// (stop, handoff consume) alone are decided by the decision point, as the admin.
 func TestPlatformAdminRowsRefuseImpersonationExceptStop(t *testing.T) {
 	for pattern := range platformAdminRoutes {
 		t.Run(pattern, func(t *testing.T) {
@@ -304,8 +304,10 @@ func TestPlatformAdminRowsRefuseImpersonationExceptStop(t *testing.T) {
 				}
 				return
 			}
-			if got.status != http.StatusForbidden || got.body != impersonationRefusalBody || len(pdp.calls()) != 0 {
-				t.Fatalf("%d %q, %d PDP calls; want 403 %q and 0", got.status, got.body, len(pdp.calls()), impersonationRefusalBody)
+			calls := pdp.calls()
+			want := pdpSeen{Principal: shadowBearer, Action: platformAdminRoutes[pattern].action, Type: "platform", Key: "platform", Service: "dev-health-ops-api"}
+			if got.status != http.StatusForbidden || got.body != impersonationRefusalBody || len(calls) != liveRowRoleCalls(productionGoAPIRows(t)[pattern], false, "") || calls[0] != want {
+				t.Fatalf("%d %q, PDP saw %+v; want 403 %q and the one platform question %+v", got.status, got.body, calls, impersonationRefusalBody, want)
 			}
 			if !slices.Equal(rec.snapshot(), []string{"admin/impersonation_refused"}) {
 				t.Fatalf("counted %v, want [admin/impersonation_refused]", rec.snapshot())
@@ -336,7 +338,7 @@ func TestPlatformAdminRowsFailClosedWithoutAVerdict(t *testing.T) {
 		t.Run(pattern, func(t *testing.T) {
 			dead := newTestPDP(t, allowAll)
 			deadEnforcer := productionEnforcer(t, dead, "admin")
-			dead.srv.Close()
+			dead.kill()
 			got := serveCell(cellHandler(t, legacyStore(true, "admin"), userClaims(nil), deadEnforcer), pattern, cellBearer())
 			if got.status != http.StatusServiceUnavailable || got.header.Get("Retry-After") != enforceRetryAfter {
 				t.Fatalf("dead PDP: %d %q Retry-After %q, want 503 and %q", got.status, got.body, got.header.Get("Retry-After"), enforceRetryAfter)

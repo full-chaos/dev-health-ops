@@ -61,6 +61,9 @@ func (r *fakeRows) Scan(dest ...any) error {
 		switch p := d.(type) {
 		case *string:
 			*p = row[i].(string)
+		case **string:
+			value := row[i].(string)
+			*p = &value
 		case *uint64:
 			*p = row[i].(uint64)
 		case *time.Time:

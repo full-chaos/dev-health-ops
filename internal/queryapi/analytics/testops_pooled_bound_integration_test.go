@@ -97,23 +97,33 @@ func TestTestopsPooledReadEstimateStaysInTheOrganizationsKeyRange(t *testing.T) 
 	if err != nil || !ok {
 		t.Fatalf("org: ok=%v err=%v", ok, err)
 	}
-	for name, q := range map[string]compiledQuery{"TEAM": team, "ORG": orgQ} {
-		estimate := e.explainEstimate(q)
-		var total, raw uint64
-		for _, row := range estimate {
-			total += row.rows
-			if row.table == "ci_pipeline_runs" {
-				raw += row.rows
+	estimate := func(phase string, wantRaw func(raw uint64) bool, want string) {
+		for name, q := range map[string]compiledQuery{"TEAM": team, "ORG": orgQ} {
+			var total, raw uint64
+			for _, row := range e.explainEstimate(q) {
+				total += row.rows
+				if row.table == "ci_pipeline_runs" {
+					raw += row.rows
+				}
+				t.Logf("B1 %s %s estimate: table %s rows %d marks %d", phase, name, row.table, row.rows, row.marks)
 			}
-			t.Logf("B1 %s estimate: table %s rows %d marks %d", name, row.table, row.rows, row.marks)
-		}
-		if raw == 0 || raw >= bigRuns {
-			t.Fatalf("B1 %s: ci_pipeline_runs estimate %d rows, want > 0 and under the other organization's %d rows (org_id-first key)", name, raw, bigRuns)
-		}
-		if total >= TestopsPooledMaxRowsToRead {
-			t.Fatalf("B1 %s: estimate %d rows is over the bound %d", name, total, TestopsPooledMaxRowsToRead)
+			if !wantRaw(raw) {
+				t.Fatalf("B1 %s %s: ci_pipeline_runs estimate %d rows, want %s", phase, name, raw, want)
+			}
+			if total >= TestopsPooledMaxRowsToRead {
+				t.Fatalf("B1 %s %s: estimate %d rows is over the bound %d", phase, name, total, TestopsPooledMaxRowsToRead)
+			}
 		}
 	}
+	// The writer stored the day's samples with its row (CHAOS-14025): the raw read is only the legacy arm, still in the
+	// organization's key range.
+	estimate("stored", func(raw uint64) bool { return raw < bigRuns },
+		fmt.Sprintf("under the other organization's %d rows (org_id-first key)", bigRuns))
+	// A newest row without samples (written before migration 161) reads the raw runs, in the organization's key range.
+	e.exec(`INSERT INTO testops_pipeline_metrics_daily (repo_id, day, pipelines_count, success_count, failure_count, success_rate, failure_rate, rerun_rate, org_id, computed_at) VALUES (?, ?, 3, 3, 0, 1, 0, 0, ?, now() + INTERVAL 1 HOUR)`,
+		repoSmall, day1, small)
+	estimate("legacy", func(raw uint64) bool { return raw > 0 && raw < bigRuns },
+		fmt.Sprintf("> 0 and under the other organization's %d rows (org_id-first key)", bigRuns))
 }
 
 // B2: a pooled read past the row bound is refused as a PooledReadBoundError (ClickHouse TOO_MANY_ROWS), never served in

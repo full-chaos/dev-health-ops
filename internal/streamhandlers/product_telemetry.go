@@ -149,18 +149,15 @@ type productEvent struct {
 
 type productClickHouse interface {
 	PrepareBatch(context.Context, string, ...driver.PrepareBatchOption) (driver.Batch, error)
-	// Query is narrow and single-purpose (CHAOS-4321, team-lead ruling
-	// 2026-08-26): ClickHouseExternalBatchSink's team.v1 write needs to read
-	// a team's current manual_members before overwriting the row, the same
-	// preserve-on-write guard ClickHouseStore.insert_teams already applies
-	// in Python -- an admin-override column that one write path can
-	// silently erase is not shippable. This does not widen what
-	// ProductTelemetryHandler can do; it only reads, and the real
-	// driver.Conn (this interface's only production implementation)
-	// already satisfies it with zero adapter changes.
+	// Query is the reads ClickHouseExternalBatchSink makes before a write
+	// (the team id carry, a team's created_at, a contract kind's current
+	// version). It does not widen what ProductTelemetryHandler can do; it
+	// only reads, and the real driver.Conn (this interface's only production
+	// implementation) already satisfies it.
 	Query(context.Context, string, ...any) (driver.Rows, error)
 	// Exec runs the team.v1 write: one INSERT..SELECT that keeps the stored
-	// provider identity (teamprovider.Insert).
+	// provider identity and admin roster (teamprovider.Insert), and the
+	// pull_request.v1 repair of its kept groups (storedversion.Kept.Repair).
 	Exec(context.Context, string, ...any) error
 }
 

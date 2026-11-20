@@ -48,25 +48,25 @@ func TestATestOpsRateChartLeavesOutARepoDayWithNoMeasuredCase(t *testing.T) {
 		noCases  = "00000000-0000-4000-8000-0000000000a3"
 		at       = "2026-01-03 10:00:00"
 	)
-	row := func(repo, day string, totalCases uint32, flake, retry, recurrence *float64, distinct uint32) {
+	row := func(repo, day string, totalCases uint32, flake, retry, recurrence *float64, flakeCases, distinct, recurrent, failedNames uint32) {
 		t.Helper()
 		if err := conn.Exec(ctx, `INSERT INTO testops_test_metrics_daily
     (repo_id, day, total_cases, passed_count, failed_count, skipped_count, quarantined_count, pass_rate, failure_rate,
      flake_rate, retry_dependency_rate, total_suites, failure_recurrence_score, team_id, org_id, computed_at,
-     flake_cases, distinct_cases)
-VALUES (toUUID(?), ?, ?, ?, 0, 0, 0, 1, 0, ?, ?, 1, ?, 'team-1', ?, ?, 0, ?)`,
-			repo, day, totalCases, totalCases, flake, retry, recurrence, org, at, distinct); err != nil {
+     flake_cases, distinct_cases, recurrent_failed_names, distinct_failed_names)
+VALUES (toUUID(?), ?, ?, ?, 0, 0, 0, 1, 0, ?, ?, 1, ?, 'team-1', ?, ?, ?, ?, ?, ?)`,
+			repo, day, totalCases, totalCases, flake, retry, recurrence, org, at, flakeCases, distinct, recurrent, failedNames); err != nil {
 			t.Fatal(err)
 		}
 	}
 	value := func(v float64) *float64 { return &v }
-	row(known, measured, 10, value(0.2), value(0.1), value(0.5), 10)
+	row(known, measured, 10, value(0.2), value(0.1), value(0.5), 2, 10, 1, 2)
 	// Unknown: the day's cases are all of pull-request runs; suites still count.
-	row(unknown, measured, 10, nil, nil, nil, 0)
+	row(unknown, measured, 10, nil, nil, nil, 0, 0, 0, 0)
 	// A day with suites and no case row: nothing was measured.
-	row(noCases, measured, 0, nil, nil, nil, 0)
-	row(unknown, noneDay, 10, nil, nil, nil, 0)
-	row(noCases, noneDay, 0, nil, nil, nil, 0)
+	row(noCases, measured, 0, nil, nil, nil, 0, 0, 0, 0)
+	row(unknown, noneDay, 10, nil, nil, nil, 0, 0, 0, 0)
+	row(noCases, noneDay, 0, nil, nil, nil, 0, 0, 0, 0)
 
 	chart := func(metric string) map[string]float64 {
 		t.Helper()

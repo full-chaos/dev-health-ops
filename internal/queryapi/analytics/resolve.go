@@ -125,6 +125,16 @@ func EverythingSelected() Selection {
 // ResolveSelected is Resolve for an operation whose selection is known: the
 // statements of a part the operation did not select are not sent.
 func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batch model.AnalyticsRequestInput, selected Selection) (*model.AnalyticsResult, error) {
+	return resolveSelected(ctx, client, orgID, batch, selected, nil)
+}
+
+// resolveSelected is ResolveSelected with readEnded, the way a read of the
+// batch learns the context state at the moment it ended (nil: ctx.Err()); a
+// test sets it to order two concurrent reads.
+func resolveSelected(ctx context.Context, client QueryClient, orgID string, batch model.AnalyticsRequestInput, selected Selection, readEnded func(context.Context) error) (*model.AnalyticsResult, error) {
+	if readEnded == nil {
+		readEnded = func(ctx context.Context) error { return ctx.Err() }
+	}
 	if err := validateSubRequestCount(len(batch.Timeseries), len(batch.Breakdowns), batch.Sankey != nil, batch.FlowMatrix != nil); err != nil {
 		return nil, err
 	}
@@ -192,7 +202,7 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	// Phase 0: repo-filter resolution. FATAL on error.
 	resolvedFilters, err := ResolveAnalyticsRepoFilters(ctx, client, orgID, batch.Filters)
 	if err != nil {
-		return nil, fmt.Errorf("analytics: repo filter resolution: %w", err)
+		return nil, fmt.Errorf("analytics: repo filter resolution: %w", markedIfClientCancel(ctx, err, "repo_filter", "org_id", orgID))
 	}
 
 	// Phase 1: timeseries + breakdowns, concurrent, index-ordered first
@@ -200,10 +210,12 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	type tsOutcome struct {
 		result []model.TimeseriesResult
 		err    error
+		ended  error
 	}
 	type bdOutcome struct {
 		result model.BreakdownResult
 		err    error
+		ended  error
 	}
 	tsOutcomes := make([]tsOutcome, len(batch.Timeseries))
 	bdOutcomes := make([]bdOutcome, len(batch.Breakdowns))
@@ -214,12 +226,14 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 		go func(i int, input model.TimeseriesRequestInput) {
 			defer wg.Done()
 			tsOutcomes[i].result, tsOutcomes[i].err = resolveOneTimeseries(ctx, client, orgID, input, useInvestment, resolvedFilters, selected.TimeseriesScope)
+			tsOutcomes[i].ended = readEnded(ctx)
 		}(i, input)
 	}
 	for i, input := range batch.Breakdowns {
 		go func(i int, input model.BreakdownRequestInput) {
 			defer wg.Done()
 			bdOutcomes[i].result, bdOutcomes[i].err = resolveOneBreakdown(ctx, client, orgID, input, useInvestment, resolvedFilters, selected.Breakdowns)
+			bdOutcomes[i].ended = readEnded(ctx)
 		}(i, input)
 	}
 	wg.Wait()
@@ -227,6 +241,19 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	// Index-ordered first-error scan: ALL of timeseries before ANY of
 	// breakdowns, regardless of which index actually failed or when
 	// (analytics.py:597-617's two separate enumerate loops).
+	// Every statement the client's cancel ended is reported here, not only
+	// the one whose error is returned; the mark keeps the GraphQL presenter
+	// from reporting it again (graphql_error_presenter.go).
+	for i := range tsOutcomes {
+		if tsOutcomes[i].err != nil {
+			tsOutcomes[i].err = markedIfClientCancelAt(ctx, tsOutcomes[i].ended, tsOutcomes[i].err, "timeseries", "org_id", orgID, "index", i)
+		}
+	}
+	for i := range bdOutcomes {
+		if bdOutcomes[i].err != nil {
+			bdOutcomes[i].err = markedIfClientCancelAt(ctx, bdOutcomes[i].ended, bdOutcomes[i].err, "breakdown", "org_id", orgID, "index", i)
+		}
+	}
 	for i, o := range tsOutcomes {
 		if o.err != nil {
 			return nil, fmt.Errorf("analytics: timeseries[%d]: %w", i, o.err)
@@ -284,7 +311,7 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	if selected.EvidenceQualityStats {
 		stats, err := resolveEvidenceQualityStats(ctx, client, orgID, batch, qualityInvestment, resolvedFilters)
 		if err != nil {
-			return nil, fmt.Errorf("analytics: evidenceQualityStats: %w", err)
+			return nil, fmt.Errorf("analytics: evidenceQualityStats: %w", markedIfClientCancel(ctx, err, "evidence_quality_stats", "org_id", orgID))
 		}
 		evidenceQualityStats = stats
 	}
@@ -292,7 +319,7 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	// statement is sent only when the groups are selected.
 	evidenceQualityByGroup, err := resolveEvidenceQualityByGroup(ctx, client, orgID, batch, qualityInvestment, resolvedFilters, selected.EvidenceQualityByGroup)
 	if err != nil {
-		return nil, fmt.Errorf("analytics: evidenceQualityByGroup: %w", err)
+		return nil, fmt.Errorf("analytics: evidenceQualityByGroup: %w", markedIfClientCancel(ctx, err, "evidence_quality_by_group", "org_id", orgID))
 	}
 	// analytics.py:970-973: evidence_quality_distribution is literally
 	// evidence_quality_stats.band_counts, reused, never recomputed --
@@ -305,7 +332,7 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 
 	filterEmptyReason, err := resolveFilterEmptyReason(ctx, client, orgID, batch, useInvestment, selected.FilterEmptyReason)
 	if err != nil {
-		return nil, fmt.Errorf("analytics: filterEmptyReason: %w", err)
+		return nil, fmt.Errorf("analytics: filterEmptyReason: %w", markedIfClientCancel(ctx, err, "filter_empty_reason", "org_id", orgID))
 	}
 
 	return &model.AnalyticsResult{
@@ -590,7 +617,9 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 		//
 		// A request the client closed is a cancel, not a failed read
 		// (clientcancel.go): one INFO line, no failure report.
-		if !reportedAsClientCancel(ctx, execErr, "sankey", "org_id", orgID, "path", pathLabel(req.Path), "use_investment", useInvestment) {
+		if reportedAsClientCancel(ctx, execErr, "sankey", "org_id", orgID, "path", pathLabel(req.Path), "use_investment", useInvestment) {
+			execErr = &reportedClientCancel{err: execErr}
+		} else {
 			recordDegradation(ctx, "sankey", execErr)
 			slog.WarnContext(ctx, "analytics: sankey query failed",
 				"org_id", orgID, "path", pathLabel(req.Path), "use_investment", useInvestment, "error", execErr)

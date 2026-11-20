@@ -39,6 +39,13 @@ func TestPredicateIsTheRegistryRuleWithEveryColumnQualified(t *testing.T) {
 			"argMax(i.active_count, i.computed_at) != 0)"; got != want {
 		t.Fatalf("NewestPredicate = %q, want %q", got, want)
 	}
+	// A table with a Retracted column in its own writer.
+	if got, want := Predicate("cicd_metrics_daily", ""), "(cicd_metrics_daily.retracted = 0)"; got != want {
+		t.Fatalf("Predicate = %q, want %q", got, want)
+	}
+	if got, want := NewestPredicate("cicd_metrics_daily", "c"), "(argMax(c.retracted, c.computed_at) = 0)"; got != want {
+		t.Fatalf("NewestPredicate = %q, want %q", got, want)
+	}
 	// No column of any predicate is bare: each name follows a qualifier.
 	bare := regexp.MustCompile(`(^|[( ,])[a-z_0-9]+ (!= 0|IS NOT NULL)`)
 	for _, table := range Tables() {
@@ -81,10 +88,20 @@ func TestEveryRegistryTableHasARuleOrAReason(t *testing.T) {
 			t.Errorf("%s is in the registry now: delete its ownWriterMarkers entry", table)
 		}
 	}
+	for table := range ownWriterRetracted {
+		if registry[table] {
+			t.Errorf("%s is in the registry now: delete its ownWriterRetracted entry", table)
+		}
+		if _, both := ownWriterMarkers[table]; both {
+			t.Errorf("%s has two own-writer rules", table)
+		}
+	}
 	want := []string{
-		"ai_governance_coverage_daily", "compounding_risk_daily", "ic_landscape_rolling_30d",
-		"issue_type_metrics_daily",
-		"team_cognitive_load_daily", "team_complexity_daily", "team_metrics_daily",
+		"ai_governance_coverage_daily", "cicd_metrics_daily", "compounding_risk_daily", "deploy_metrics_daily",
+		"ic_landscape_rolling_30d", "incident_metrics_daily", "issue_type_metrics_daily", "repo_metrics_daily",
+		"team_cognitive_load_daily", "team_complexity_daily", "team_metrics_daily", "testops_coverage_metrics_daily",
+		"testops_pipeline_metrics_daily", "testops_pipeline_stability", "testops_quality_drag", "testops_release_confidence",
+		"testops_test_metrics_daily",
 		"user_metrics_daily", "work_item_completion_daily", "work_item_metrics_daily", "work_item_state_durations_daily",
 		"work_item_user_metrics_daily",
 	}
@@ -125,7 +142,7 @@ func TestColumnsAreTheColumnsOfThePredicate(t *testing.T) {
 
 func TestATableWithNoRulePanics(t *testing.T) {
 	for _, table := range []string{
-		"repo_metrics_daily", // not a team-keyed table
+		"repo_complexity_daily", // not a team-keyed table
 		"estimate_coverage_metrics_daily", "ai_impact_metrics_daily",
 	} {
 		if Registered(table) {

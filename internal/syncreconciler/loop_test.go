@@ -212,6 +212,9 @@ func TestLoopImmediateObservationGatesReadinessAndExportsGauges(t *testing.T) {
 		// the same reason -- the row is stranded the instant it happens, and
 		// a gauge would clear the only evidence a stuck retry was recovered.
 		"# TYPE sync_dispatch_discovery_rearmed_total counter": true,
+		// CHAOS-14115: a post_sync re-arm or window skip is an event; each row
+		// is counted once, when it happens.
+		"# TYPE sync_dispatch_post_sync_redrive_total counter": true,
 	}
 	for _, line := range strings.Split(metrics.String(), "\n") {
 		if !strings.HasSuffix(line, " counter") {

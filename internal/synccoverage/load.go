@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 )
 
 var requestedStatuses = []string{"success", "failed", "planned", "dispatching", "running", "retrying"}
@@ -82,7 +85,8 @@ func streamCompactWindows(
 SELECT unit.source_id, unit.dataset_key, unit.processor_flags,
        unit.since_at, unit.before_at, unit.status,
        COALESCE(run.completed_at, run.started_at, run.created_at), unit.id,
-       COALESCE(unit.result->>'reports_complete' = 'false', false)
+       COALESCE(unit.result->>'reports_complete' = 'false', false),
+       (unit.result->'incomplete')::text
 FROM public.sync_run_units AS unit
 JOIN public.sync_runs AS run ON run.id = unit.sync_run_id
 WHERE unit.org_id = $1
@@ -106,7 +110,7 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 	for rows.Next() {
 		rowCount++
 		if rowCount > maxProjectionRows {
-			return nil, nil, rowCount, fmt.Errorf("sync coverage projection row limit exceeded: %d", maxProjectionRows)
+			return nil, nil, rowCount, newLimitError("projection_row", rowCount, maxProjectionRows)
 		}
 		var sourceID uuid.UUID
 		var dataset, status string
@@ -114,7 +118,8 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 		var since, before, runTime time.Time
 		var unitID uuid.UUID
 		var reportsIncomplete bool
-		if err := rows.Scan(&sourceID, &dataset, &flags, &since, &before, &status, &runTime, &unitID, &reportsIncomplete); err != nil {
+		var incomplete *string
+		if err := rows.Scan(&sourceID, &dataset, &flags, &since, &before, &status, &runTime, &unitID, &reportsIncomplete, &incomplete); err != nil {
 			return nil, nil, rowCount, fmt.Errorf("scan sync coverage unit window: %w", err)
 		}
 		since = maxTime(since.UTC(), truncatedBefore)
@@ -125,6 +130,10 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 		effectiveKeys, err := effectiveDatasetKeys(dataset, flags)
 		if err != nil {
 			return nil, nil, rowCount, fmt.Errorf("expand sync coverage unit window: %w", err)
+		}
+		var closedReasons []string
+		if status == "success" && reportsIncomplete {
+			closedReasons = closedWithReason(incomplete)
 		}
 		for _, effectiveKey := range effectiveKeys {
 			if !containsString(scope.DatasetKeys, effectiveKey) {
@@ -144,20 +153,32 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 			// gap and is not the last complete sync. It did run, so it
 			// supersedes an earlier failure of the window: the window reads as
 			// a gap, not as failed.
+			//
+			// CHAOS-13988 "close with reason": when every lost report is
+			// closed with a reason (closedWithReasonCauses) the window is
+			// covered like a complete unit's, and is also recorded with its
+			// reasons. A window once closed stays covered: a later gap-class
+			// unit over it does not reopen it, and only a complete unit
+			// (whatever its order) removes the reason.
 			if status == "success" && reportsIncomplete && effectiveKey == "tests" {
-				state.Failed = subtractIntervals(state.Failed, []coverageInterval{interval})
-				continue
+				if len(closedReasons) == 0 {
+					state.subtractFailed(interval)
+					continue
+				}
+				state.Closed = append(state.Closed, closedRange{Interval: interval, Reasons: closedReasons})
+			} else if status == "success" {
+				state.Complete = append(state.Complete, interval)
 			}
 			switch status {
 			case "success":
 				state.Covered = append(state.Covered, interval)
-				state.Failed = subtractIntervals(state.Failed, []coverageInterval{interval})
+				state.subtractFailed(interval)
 				value := runTime.UTC()
 				if latestSuccessful == nil || value.After(*latestSuccessful) {
 					latestSuccessful = &value
 				}
 			case "failed":
-				state.Failed = mergeIntervals(append(state.Failed, interval))
+				state.addFailed(interval)
 			}
 		}
 	}
@@ -176,11 +197,50 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 		for _, item := range state.Failed {
 			windows = append(windows, unitWindow{Since: item.Since, Before: item.Before, SourceID: parts[0], DatasetKey: parts[1], Status: "failed", RunTime: now.Add(time.Microsecond)})
 		}
-		if len(windows) > maxCompactWindows {
-			return nil, nil, rowCount, fmt.Errorf("sync coverage compact window limit exceeded: %d", maxCompactWindows)
+		for _, item := range subtractClosedRanges(state.Closed, state.Complete) {
+			windows = append(windows, unitWindow{Since: item.Interval.Since, Before: item.Interval.Before, SourceID: parts[0], DatasetKey: parts[1], Status: statusClosedWithReason, Reasons: item.Reasons})
 		}
 	}
+	if len(windows) > maxCompactWindows {
+		return nil, nil, rowCount, newLimitError("compact_window", len(windows), maxCompactWindows)
+	}
 	return windows, latestSuccessful, rowCount, nil
+}
+
+// closedWithReasonCauses are the report_member causes that close a tests
+// window with a reason (chris 2026-11-17, CHAOS-13988): a report GitHub
+// deleted after its retention period (artifact_expired), a broken report
+// member (malformed) or a member refused by design (unsafe_doctype) can never
+// be read by a retry or a backfill, so the window is covered and the reason
+// is shown. The strings mirror the providersync GitHub tests vocabulary; this
+// package does not import providersync.
+var closedWithReasonCauses = map[string]map[string]struct{}{
+	"report_member": {"artifact_expired": {}, "malformed": {}, "unsafe_doctype": {}},
+}
+
+// closedWithReason returns the distinct sorted causes of a unit result's
+// `incomplete` list when EVERY observation in it is a closedWithReasonCauses
+// pair. It returns nil -- the window stays a gap -- for a missing key, JSON
+// null, an undecodable list, an empty list, or any other observation.
+func closedWithReason(incomplete *string) []string {
+	if incomplete == nil {
+		return nil
+	}
+	var observations []struct {
+		Component string `json:"component"`
+		Cause     string `json:"cause"`
+	}
+	if err := json.Unmarshal([]byte(*incomplete), &observations); err != nil || len(observations) == 0 {
+		return nil
+	}
+	reasons := make([]string, 0, len(observations))
+	for _, observation := range observations {
+		if _, ok := closedWithReasonCauses[observation.Component][observation.Cause]; !ok {
+			return nil
+		}
+		reasons = append(reasons, observation.Cause)
+	}
+	return uniqueSorted(reasons)
 }
 
 func loadActivePairs(ctx context.Context, tx pgx.Tx, orgID string, scope effectiveScope) (map[string]struct{}, error) {
@@ -230,6 +290,9 @@ WHERE run.org_id = $1 AND run.integration_id = $2
 	return pairs, nil
 }
 
+// loadBackfillRanges reads the config's backfill jobs that this projection can use and counts them per projection
+// read: a config with no enabled scope source reads no job, and a job whose before_date is older than the history
+// cutoff is not read; neither is counted nor warned about.
 func loadBackfillRanges(ctx context.Context, tx pgx.Tx, config syncConfig, scope effectiveScope, truncatedBefore time.Time) ([]coverageInterval, error) {
 	if len(scope.Sources) == 0 {
 		return nil, nil
@@ -260,14 +323,39 @@ WHERE org_id = $1 AND sync_config_id = $2 AND before_date >= $3::date`, config.O
 	for _, item := range scope.Sources {
 		scopeSources = append(scopeSources, item.ID.String())
 	}
+	runIDs := make([]uuid.UUID, len(jobs))
+	markers := make([]string, len(jobs))
+	derived := make([]uuid.UUID, 0)
+	for index, job := range jobs {
+		runIDs[index], markers[index] = backfillRunID(job.TaskID)
+		if markers[index] == backfillMarkerOccurrence {
+			derived = append(derived, runIDs[index])
+		}
+	}
+	planned, err := plannedRunIDs(ctx, tx, config.OrgID, derived)
+	if err != nil {
+		return nil, err
+	}
+	outcomes := make(map[string]int, len(backfillResolutionOutcomes))
 	result := make([]coverageInterval, 0)
-	for _, job := range jobs {
+	for index, job := range jobs {
 		since := maxTime(job.SinceDate.UTC(), truncatedBefore)
 		beforeDate := job.BeforeDate.UTC()
 		before := time.Date(beforeDate.Year(), beforeDate.Month(), beforeDate.Day()+1, 0, 0, 0, 0, time.UTC).Add(-time.Microsecond)
 		base := coverageInterval{Since: since, Before: before, RunIDs: []string{job.ID.String()}}
-		runID, resolved := backfillRunID(job.TaskID)
-		if !resolved {
+		runID := runIDs[index]
+		switch markers[index] {
+		case backfillMarkerSyncRun:
+			outcomes[backfillOutcomeSyncRun]++
+		case backfillMarkerOccurrence:
+			if _, ok := planned[runID]; !ok {
+				// No run planned for the occurrence (yet, or ever): neither covered nor requested by this job.
+				outcomes[backfillOutcomeOccurrenceUnplanned]++
+				continue
+			}
+			outcomes[backfillOutcomeOccurrence]++
+		default:
+			outcomes[backfillOutcomeUnresolved]++
 			base.SourceIDs = uniqueSorted(scopeSources)
 			result = append(result, base)
 			continue
@@ -287,22 +375,84 @@ WHERE org_id = $1 AND sync_config_id = $2 AND before_date >= $3::date`, config.O
 			}
 		}
 		if len(result) > maxBackfillPairs {
-			return nil, fmt.Errorf("sync coverage backfill pair limit exceeded: %d", maxBackfillPairs)
+			return nil, newLimitError("backfill_pair", len(result), maxBackfillPairs)
 		}
+	}
+	backfillResolutionMetrics.observe(outcomes)
+	if waiting := outcomes[backfillOutcomeOccurrenceUnplanned] + outcomes[backfillOutcomeUnresolved]; waiting > 0 {
+		slog.WarnContext(ctx, "sync coverage: backfill jobs without a planned run",
+			slog.Any("sync_config_id", config.ID),
+			slog.Int(backfillOutcomeOccurrenceUnplanned, outcomes[backfillOutcomeOccurrenceUnplanned]),
+			slog.Int(backfillOutcomeUnresolved, outcomes[backfillOutcomeUnresolved]))
 	}
 	return result, nil
 }
 
-func backfillRunID(taskID *string) (uuid.UUID, bool) {
+const (
+	backfillMarkerSyncRun    = "sync_run"
+	backfillMarkerOccurrence = "occurrence"
+	syncRunMarker            = "sync_run:"
+	occurrenceMarker         = "occurrence:"
+)
+
+// backfillRunID is the run a backfill_jobs row names. "sync_run:<uuid>" names it. An admin backfill keeps
+// "occurrence:<id>" (or "idem:<hash>;occurrence:<id>") for ever, so its run is the materializer's deterministic
+// run of that occurrence, the same derivation finalize uses to close the job. The marker is "" when neither applies.
+func backfillRunID(taskID *string) (uuid.UUID, string) {
 	if taskID == nil {
-		return uuid.Nil, false
+		return uuid.Nil, ""
 	}
-	index := strings.LastIndex(*taskID, "sync_run:")
+	if index := strings.LastIndex(*taskID, syncRunMarker); index >= 0 {
+		parsed, err := uuid.Parse((*taskID)[index+len(syncRunMarker):])
+		if err != nil {
+			return uuid.Nil, ""
+		}
+		return parsed, backfillMarkerSyncRun
+	}
+	index := strings.LastIndex(*taskID, occurrenceMarker)
 	if index < 0 {
-		return uuid.Nil, false
+		return uuid.Nil, ""
 	}
-	parsed, err := uuid.Parse((*taskID)[index+len("sync_run:"):])
-	return parsed, err == nil
+	occurrence := (*taskID)[index+len(occurrenceMarker):]
+	if end := strings.IndexByte(occurrence, ';'); end >= 0 {
+		occurrence = occurrence[:end]
+	}
+	if occurrence == "" {
+		return uuid.Nil, ""
+	}
+	derived, err := schedulersync.DeterministicSyncRunID(occurrence)
+	if err != nil {
+		return uuid.Nil, ""
+	}
+	parsed, err := uuid.Parse(derived)
+	if err != nil {
+		return uuid.Nil, ""
+	}
+	return parsed, backfillMarkerOccurrence
+}
+
+// plannedRunIDs is the subset of runIDs that exist as the org's sync runs.
+func plannedRunIDs(ctx context.Context, tx pgx.Tx, orgID string, runIDs []uuid.UUID) (map[uuid.UUID]struct{}, error) {
+	planned := make(map[uuid.UUID]struct{}, len(runIDs))
+	if len(runIDs) == 0 {
+		return planned, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT id FROM public.sync_runs WHERE org_id = $1 AND id = ANY($2::uuid[])`, orgID, runIDs)
+	if err != nil {
+		return nil, fmt.Errorf("query sync coverage backfill runs: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan sync coverage backfill run: %w", err)
+		}
+		planned[id] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sync coverage backfill runs: %w", err)
+	}
+	return planned, nil
 }
 
 // scopeDatasetKeys narrows which effective keys are accepted into the

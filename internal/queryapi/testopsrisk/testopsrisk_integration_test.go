@@ -12,19 +12,11 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
 var ddls = []string{
-	`CREATE TABLE testops_release_confidence (repo_id UUID, day Date, confidence_score Float64, factors_json String DEFAULT '{}',
-      org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
-	`CREATE TABLE testops_quality_drag (repo_id UUID, day Date, drag_hours Float64, failure_rework_hours Float64, flake_investigation_hours Float64,
-      queue_wait_hours Float64, retry_overhead_hours Float64, org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC'))
-      ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
-	`CREATE TABLE testops_pipeline_stability (repo_id UUID, day Date, stability_index Float64, org_id LowCardinality(String) DEFAULT '',
-      computed_at DateTime('UTC')) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
-	`CREATE TABLE testops_pipeline_metrics_daily (repo_id UUID, day Date, success_count UInt32, failure_count UInt32,
-      org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
 	`CREATE TABLE repos (id UUID, repo String, org_id String DEFAULT 'default', created_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC'))
       ENGINE = ReplacingMergeTree(last_synced) ORDER BY id`,
 }
@@ -58,6 +50,7 @@ func startStore(t *testing.T) (context.Context, stdclickhouse.Conn, QueryClient)
 			t.Fatalf("ddl: %v", err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "testops_pipeline_metrics_daily", "testops_release_confidence", "testops_quality_drag", "testops_pipeline_stability")
 	client, err := clickhouse.NewClickHouseQueryClientWithOptions(clickhouse.Options{DSN: inst.URI})
 	if err != nil {
 		t.Fatal(err)

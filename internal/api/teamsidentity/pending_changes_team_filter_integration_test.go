@@ -122,3 +122,27 @@ func writeSeamSeedNativeOrg(t *testing.T, s Store, ctx context.Context, orgID, p
 		t.Fatal(err)
 	}
 }
+
+// team_id is read the way FastAPI reads it (parse_qsl): a valid escape is
+// decoded even beside a malformed one, which stays literal, and bytes that
+// decode to invalid UTF-8 read as U+FFFD.
+func TestPendingChangesTeamIDDecodesEachEscapeLikePython(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	for _, keyed := range []string{"jira:ENG%zz", "jira:ENG%zz Platform", "jira:ENG�"} {
+		writeSeamSeedNative(t, s, ctx, "jira", keyed, strings.TrimPrefix(keyed, "jira:"))
+		seedPendingChange(t, s, ctx, "org-1", "c-"+keyed, keyed, "jira")
+	}
+	h := newTestHandlers(s)
+	for _, c := range []struct{ name, query, want string }{
+		{"valid escape beside a malformed one", "team_id=jira%3AENG%zz", "c-jira:ENG%zz"},
+		{"malformed escape and a plus", "team_id=jira:ENG%zz+Platform", "c-jira:ENG%zz Platform"},
+		{"invalid UTF-8 is the replacement character", "team_id=jira%3AENG%FF", "c-jira:ENG�"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			code, ids := pendingCall(t, h, "org-1", c.query)
+			if code != http.StatusOK || strings.Join(ids, ",") != c.want {
+				t.Fatalf("got %d %v, want 200 [%s]", code, ids, c.want)
+			}
+		})
+	}
+}

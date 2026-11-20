@@ -28,16 +28,109 @@ const (
 	GoneStated
 )
 
+// Roster says what a version does with manual_members, the admin roster.
+type Roster uint8
+
+const (
+	// RosterStated writes the value the writer gives: an admin roster edit.
+	RosterStated Roster = iota
+	// RosterKept writes the roster of teams FINAL, read inside the insert
+	// statement: a writer that does not edit the roster. The read narrows the
+	// window in which a roster edit can be lost to one statement; it is not a
+	// lock (two INSERT..SELECT statements are not isolated).
+	RosterKept
+	// RosterDelta writes the roster of teams FINAL, read inside the insert
+	// statement, with Write.RosterAdd added and Write.RosterRemove taken out
+	// (sorted, distinct, no empty member): an admin edit of some members.
+	RosterDelta
+	// RosterSource writes the roster of the team Write.RosterSource when a
+	// version of it newer than Write.RosterSourceRead (by (updated_at,
+	// last_synced)) is stored, read inside the insert statement ([] when that
+	// version is an admin delete); else the value the writer gives. A team
+	// moved to a new id writes the roster it read from its old id, and an
+	// edit of the old id committed after that read is the roster it takes.
+	RosterSource
+)
+
+// Kept is a set of the columns an admin write does not edit: a version keeps
+// them from the team's teams FINAL row, read inside the insert statement.
+type Kept uint32
+
+const (
+	KeptName Kept = 1 << iota
+	KeptDescription
+	KeptProjectKeys
+	KeptRepoPatterns
+)
+
+// keptColumns are the columns of Kept, in bit order.
+var keptColumns = []struct {
+	bit    Kept
+	column string
+}{{KeptName, "name"}, {KeptDescription, "description"}, {KeptProjectKeys, "project_keys"}, {KeptRepoPatterns, "repo_patterns"}}
+
+const keptAll = KeptName | KeptDescription | KeptProjectKeys | KeptRepoPatterns
+
+// Deleted says what a version does with deleted_at, which only an admin
+// delete sets (teamsidentity Store.DeleteTeam). A copy rule writes an admin
+// delete that is stored, read inside the insert statement; it never writes a
+// time of its own.
+type Deleted uint8
+
+const (
+	// DeletedStated writes the value the writer gives.
+	DeletedStated Deleted = iota
+	// DeletedKept writes deleted_at of the team's teams FINAL row: a team id
+	// carry's old row going inactive keeps an admin delete of that id.
+	DeletedKept
+	// DeletedSource writes deleted_at of the newest version of the team
+	// Write.RosterSource when that version is newer than Write.RosterSourceRead
+	// and is an admin delete, and then writes the row inactive: a team moved
+	// to a new id after its old id was deleted is deleted too. Else the
+	// writer's is_active and NULL.
+	DeletedSource
+)
+
+// Version is a stored version of a team: its (updated_at, last_synced).
+type Version struct {
+	UpdatedAt, LastSynced time.Time
+}
+
 // Write is one version of a team for Insert. Values are the writer's own
 // columns, in Insert's column order. A non-empty ProviderTeamID or
 // ProviderName is the run's own value; an empty one keeps the newest
-// non-empty stored value.
+// non-empty stored value. With Roster RosterKept or RosterDelta the
+// manual_members value is not written; with RosterSource it is written only
+// when the source team has no newer version.
 type Write struct {
 	Values         []any
 	ProviderTeamID string
 	ProviderName   string
 	Gone           Gone
 	GoneAt         *time.Time
+	Roster         Roster
+	RosterAdd      []string
+	RosterRemove   []string
+	// RosterSource is the team a RosterSource row takes its roster from, and
+	// RosterSourceRead the newest version of it the writer read.
+	RosterSource     string
+	RosterSourceRead Version
+	// Kept are the columns this version takes from the team's teams FINAL
+	// row when the team has one; the writer's value otherwise.
+	Kept Kept
+	// VersionAfterStored moves updated_at to just after the newest stored
+	// version of the team (every version, deleted too) when it is not after
+	// it already, read inside the insert statement.
+	VersionAfterStored bool
+	// SkipDeleted writes nothing when the team has no teams FINAL row or its
+	// newest version is an admin delete, read inside the insert statement: an
+	// admin edit of a team deleted meanwhile (the delete wins).
+	SkipDeleted bool
+	// Deleted is DeletedKept or DeletedSource only for a row whose
+	// deleted_at value is nil: a copy rule copies an admin delete, it never
+	// carries one of the writer's. A statement holds copy rules or admin
+	// rules (Kept, VersionAfterStored, SkipDeleted), never both.
+	Deleted Deleted
 }
 
 // Execer is the one connection method Insert needs.
@@ -84,7 +177,9 @@ func ColumnTypes() map[string]string {
 // Insert writes rows into teams in ONE INSERT..SELECT. provider_team_id,
 // provider_name and gone_at are read from the stored versions of each team
 // inside that statement (the Query rule: the newest non-empty id and name,
-// the newest version's gone_at), so no write of another writer can land
+// the newest version's gone_at), and so is manual_members of a RosterKept
+// or RosterDelta row (teams FINAL) and of a RosterSource row (its source
+// team's newest version), so no write of another writer can land
 // between the read and the insert of a separate statement and be erased.
 // The SELECT still reads a snapshot taken when the statement starts, so a
 // write that commits while the statement runs is not seen: ClickHouse has no
@@ -97,9 +192,42 @@ func Insert(ctx context.Context, conn Execer, orgID string, columns []string, ro
 	if len(rows) == 0 {
 		return nil
 	}
-	query, idIndex, orgIndex, err := insertStatement(columns)
+	keep, source, admin, copied := false, false, false, false
+	for r, row := range rows {
+		if row.Kept&^keptAll != 0 {
+			return fmt.Errorf("%w: row %d keeps unknown columns %d", ErrInvalidWrite, r, row.Kept)
+		}
+		admin = admin || row.Kept != 0 || row.VersionAfterStored || row.SkipDeleted
+		if row.Roster > RosterSource {
+			return fmt.Errorf("%w: row %d has roster rule %d", ErrInvalidWrite, r, row.Roster)
+		}
+		if row.Roster == RosterSource && strings.TrimSpace(row.RosterSource) == "" {
+			return fmt.Errorf("%w: row %d takes its roster from no team", ErrInvalidWrite, r)
+		}
+		switch {
+		case row.Deleted > DeletedSource:
+			return fmt.Errorf("%w: row %d has deleted rule %d", ErrInvalidWrite, r, row.Deleted)
+		case row.Deleted == DeletedKept && row.Roster != RosterKept && row.Roster != RosterDelta:
+			return fmt.Errorf("%w: row %d keeps deleted_at with no kept roster read", ErrInvalidWrite, r)
+		case row.Deleted == DeletedSource && row.Roster != RosterSource:
+			return fmt.Errorf("%w: row %d copies deleted_at from no source team", ErrInvalidWrite, r)
+		}
+		keep = keep || row.Roster != RosterStated
+		source = source || row.Roster == RosterSource
+		copied = copied || row.Deleted != DeletedStated
+	}
+	if admin && copied {
+		return fmt.Errorf("%w: one statement holds admin rules and deleted_at copy rules", ErrInvalidWrite)
+	}
+	query, idIndex, orgIndex, err := insertStatement(columns, keep, source, admin, copied)
 	if err != nil {
 		return err
+	}
+	deletedAt := -1
+	for c, column := range columns {
+		if column == "deleted_at" {
+			deletedAt = c
+		}
 	}
 	params := make([][]any, len(columns))
 	for i := range params {
@@ -111,6 +239,16 @@ func Insert(ctx context.Context, conn Execer, orgID string, columns []string, ro
 	goneRules := make([]uint32, len(rows))
 	goneValues := make([]any, len(rows))
 	ordinals := make([]uint32, len(rows))
+	rosterRules := make([]uint32, len(rows))
+	rosterAdd := make([]any, len(rows))
+	rosterRemove := make([]any, len(rows))
+	rosterSources := make([]string, len(rows))
+	rosterReadAt := make([]any, len(rows))
+	rosterReadSynced := make([]any, len(rows))
+	keptMasks := make([]uint32, len(rows))
+	versionAfter := make([]uint32, len(rows))
+	skipDeleted := make([]uint32, len(rows))
+	deletedRules := make([]uint32, len(rows))
 	for r, row := range rows {
 		if len(row.Values) != len(columns) {
 			return fmt.Errorf("%w: row %d has %d values for %d columns", ErrInvalidWrite, r, len(row.Values), len(columns))
@@ -128,6 +266,11 @@ func Insert(ctx context.Context, conn Execer, orgID string, columns []string, ro
 			}
 		}
 		ids[r] = id
+		if row.Deleted != DeletedStated {
+			if value := row.Values[deletedAt]; value != nil && !reflect.ValueOf(value).IsZero() {
+				return fmt.Errorf("%w: row %d copies an admin delete but states deleted_at %v", ErrInvalidWrite, r, value)
+			}
+		}
 		for c, value := range row.Values {
 			params[c][r], err = paramValue(columnTypes[columns[c]], value)
 			if err != nil {
@@ -142,6 +285,20 @@ func Insert(ctx context.Context, conn Execer, orgID string, columns []string, ro
 			goneValues[r] = utcText(*row.GoneAt)
 		}
 		ordinals[r] = uint32(r)
+		rosterRules[r] = uint32(row.Roster)
+		rosterAdd[r] = append([]string{}, row.RosterAdd...)
+		rosterRemove[r] = append([]string{}, row.RosterRemove...)
+		rosterSources[r] = strings.TrimSpace(row.RosterSource)
+		rosterReadAt[r] = versionText(row.RosterSourceRead.UpdatedAt)
+		rosterReadSynced[r] = versionText(row.RosterSourceRead.LastSynced)
+		keptMasks[r] = uint32(row.Kept)
+		if row.VersionAfterStored {
+			versionAfter[r] = 1
+		}
+		if row.SkipDeleted {
+			skipDeleted[r] = 1
+		}
+		deletedRules[r] = uint32(row.Deleted)
 	}
 	var rules [3]int
 	for _, row := range rows {
@@ -163,6 +320,21 @@ func Insert(ctx context.Context, conn Execer, orgID string, columns []string, ro
 		clickhouse.Named("org_id", orgID),
 		clickhouse.Named("team_ids", ids),
 	)
+	if keep {
+		args = append(args, clickhouse.Named("roster_rule", rosterRules),
+			clickhouse.Named("roster_add", rosterAdd), clickhouse.Named("roster_remove", rosterRemove))
+	}
+	if source {
+		args = append(args, clickhouse.Named("roster_source", rosterSources),
+			clickhouse.Named("roster_read_at", rosterReadAt), clickhouse.Named("roster_read_synced", rosterReadSynced))
+	}
+	if admin {
+		args = append(args, clickhouse.Named("kept_mask", keptMasks),
+			clickhouse.Named("version_after", versionAfter), clickhouse.Named("skip_deleted", skipDeleted))
+	}
+	if copied {
+		args = append(args, clickhouse.Named("deleted_rule", deletedRules))
+	}
 	return conn.Exec(ctx, query, args...)
 }
 
@@ -185,8 +357,12 @@ func StatedColumns(insert string) ([]string, error) {
 	return columns[:len(columns)-3], nil
 }
 
-func insertStatement(columns []string) (query string, idIndex, orgIndex int, err error) {
-	idIndex, orgIndex = -1, -1
+func insertStatement(columns []string, keepRoster, sourceRoster, admin, copyDeleted bool) (query string, idIndex, orgIndex int, err error) {
+	if admin && copyDeleted {
+		return "", 0, 0, fmt.Errorf("%w: one statement holds admin rules and deleted_at copy rules", ErrInvalidWrite)
+	}
+	idIndex, orgIndex, rosterIndex := -1, -1, -1
+	index := map[string]int{}
 	seen := map[string]bool{}
 	arrays := make([]string, 0, len(columns)+5)
 	fields := make([]string, 0, len(columns)+5)
@@ -197,11 +373,14 @@ func insertStatement(columns []string) (query string, idIndex, orgIndex int, err
 			return "", 0, 0, fmt.Errorf("%w: column %q", ErrInvalidWrite, column)
 		}
 		seen[column] = true
+		index[column] = c
 		switch column {
 		case "id":
 			idIndex = c
 		case "org_id":
 			orgIndex = c
+		case "manual_members":
+			rosterIndex = c
 		}
 		arrays = append(arrays, fmt.Sprintf("{v%d:Array(%s)}", c, columnType))
 		fields = append(fields, fmt.Sprintf("incoming_row.%d AS v%d", c+1, c))
@@ -209,6 +388,19 @@ func insertStatement(columns []string) (query string, idIndex, orgIndex int, err
 	}
 	if idIndex < 0 {
 		return "", 0, 0, fmt.Errorf("%w: no id column", ErrInvalidWrite)
+	}
+	if keepRoster && rosterIndex < 0 {
+		return "", 0, 0, fmt.Errorf("%w: a kept roster with no manual_members column", ErrInvalidWrite)
+	}
+	if copyDeleted && (!seen["deleted_at"] || !seen["is_active"]) {
+		return "", 0, 0, fmt.Errorf("%w: a copied deleted_at with no deleted_at or is_active column", ErrInvalidWrite)
+	}
+	if admin {
+		for _, column := range []string{"name", "description", "project_keys", "repo_patterns", "updated_at"} {
+			if !seen[column] {
+				return "", 0, 0, fmt.Errorf("%w: an admin write with no %s column", ErrInvalidWrite, column)
+			}
+		}
 	}
 	n := len(columns)
 	arrays = append(arrays, "{identity_id:Array(String)}", "{identity_name:Array(String)}",
@@ -220,16 +412,128 @@ func insertStatement(columns []string) (query string, idIndex, orgIndex int, err
 		"if(incoming.identity_id != '', incoming.identity_id, ifNull(stored.stored_team_id, ''))",
 		"if(incoming.identity_name != '', incoming.identity_name, ifNull(stored.stored_name, ''))",
 		fmt.Sprintf("multiIf(incoming.gone_rule = %d, NULL, incoming.gone_rule = %d, CAST(incoming.gone_in, 'Nullable(DateTime64(6))'), stored.stored_gone)", GoneCleared, GoneStated))
+	keptJoin := ""
+	if keepRoster {
+		arrays = append(arrays, "{roster_rule:Array(UInt32)}", "{roster_add:Array(Array(String))}", "{roster_remove:Array(Array(String))}")
+		fields = append(fields, fmt.Sprintf("incoming_row.%d AS roster_rule", n+6),
+			fmt.Sprintf("incoming_row.%d AS roster_add", n+7), fmt.Sprintf("incoming_row.%d AS roster_remove", n+8))
+		sourceRule := ""
+		if sourceRoster {
+			arrays = append(arrays, "{roster_source:Array(String)}", "{roster_read_at:Array(DateTime64(6, 'UTC'))}", "{roster_read_synced:Array(DateTime64(6, 'UTC'))}")
+			fields = append(fields, fmt.Sprintf("incoming_row.%d AS roster_source", n+9),
+				fmt.Sprintf("incoming_row.%d AS roster_read_at", n+10), fmt.Sprintf("incoming_row.%d AS roster_read_synced", n+11))
+			sourceRule = fmt.Sprintf("incoming.roster_rule = %d AND moved_from.moved_from_version > "+
+				"(toUnixTimestamp64Micro(incoming.roster_read_at), toUnixTimestamp64Micro(incoming.roster_read_synced)), moved_from.moved_from_manual, ", RosterSource)
+		}
+		selected[rosterIndex] = fmt.Sprintf("multiIf(incoming.roster_rule = %d, kept.kept_manual, "+
+			"incoming.roster_rule = %d, arraySort(arrayDistinct(arrayFilter(m -> m != '' AND NOT has(incoming.roster_remove, m), "+
+			"arrayConcat(kept.kept_manual, incoming.roster_add)))), %sincoming.v%d)", RosterKept, RosterDelta, sourceRule, rosterIndex)
+	}
+	// The kept subquery by flags: admin rules read keptAdminQuery, copy rules
+	// keptRosterDeletedQuery (Insert refuses both in one statement), a plain
+	// kept roster keptRosterQuery.
+	if keepRoster || admin {
+		kept := keptRosterQuery
+		switch {
+		case admin:
+			kept = keptAdminQuery
+		case copyDeleted:
+			kept = keptRosterDeletedQuery
+		}
+		keptJoin = "LEFT JOIN (" + kept + ") AS kept ON kept.kept_id = incoming.v" + fmt.Sprint(idIndex) + " "
+	}
+	if keepRoster && sourceRoster {
+		moved := sourceRosterQuery
+		if copyDeleted {
+			moved = sourceRosterDeletedQuery
+		}
+		keptJoin += "LEFT JOIN (" + moved + ") AS moved_from ON moved_from.moved_from_id = incoming.roster_source "
+	}
+	if copyDeleted {
+		arrays = append(arrays, "{deleted_rule:Array(UInt32)}")
+		fields = append(fields, fmt.Sprintf("incoming_row.%d AS deleted_rule", len(fields)+1))
+		deletedIndex, activeIndex := index["deleted_at"], index["is_active"]
+		selected[deletedIndex] = fmt.Sprintf("if(incoming.deleted_rule = %d, kept.kept_deleted, incoming.v%d)", DeletedKept, deletedIndex)
+		if sourceRoster {
+			deletedNewer := fmt.Sprintf("incoming.deleted_rule = %d AND moved_from.moved_from_version > "+
+				"(toUnixTimestamp64Micro(incoming.roster_read_at), toUnixTimestamp64Micro(incoming.roster_read_synced)) "+
+				"AND moved_from.moved_from_deleted IS NOT NULL", DeletedSource)
+			selected[deletedIndex] = fmt.Sprintf("multiIf(incoming.deleted_rule = %d, kept.kept_deleted, %s, moved_from.moved_from_deleted, incoming.v%d)",
+				DeletedKept, deletedNewer, deletedIndex)
+			selected[activeIndex] = fmt.Sprintf("if(%s, toUInt8(0), incoming.v%d)", deletedNewer, activeIndex)
+		}
+	}
+	where := ""
+	if admin {
+		arrays = append(arrays, "{kept_mask:Array(UInt32)}", "{version_after:Array(UInt32)}", "{skip_deleted:Array(UInt32)}")
+		fields = append(fields, fmt.Sprintf("incoming_row.%d AS kept_mask", len(fields)+1),
+			fmt.Sprintf("incoming_row.%d AS version_after", len(fields)+2), fmt.Sprintf("incoming_row.%d AS skip_deleted", len(fields)+3))
+		for _, kept := range keptColumns {
+			c := index[kept.column]
+			selected[c] = fmt.Sprintf("if(bitAnd(incoming.kept_mask, %d) != 0 AND kept.kept_found = 1, kept.kept_%s, incoming.v%d)", kept.bit, kept.column, c)
+		}
+		updated := index["updated_at"]
+		selected[updated] = fmt.Sprintf("if(incoming.version_after = 1 AND newest.newest_found = 1 AND newest.newest_at >= incoming.v%d, "+
+			"addMicroseconds(newest.newest_at, 1), incoming.v%d)", updated, updated)
+		keptJoin += "LEFT JOIN (" + newestVersionQuery + ") AS newest ON newest.newest_id = incoming.v" + fmt.Sprint(idIndex) + " "
+		where = "WHERE NOT (incoming.skip_deleted = 1 AND (kept.kept_found != 1 OR kept.kept_deleted_at IS NOT NULL)) "
+	}
 	query = "INSERT INTO teams (" + strings.Join(columns, ", ") + ", " + Columns + ") " +
 		"SELECT " + strings.Join(selected, ", ") + " " +
 		"FROM (SELECT " + strings.Join(fields, ", ") + " FROM (SELECT arrayJoin(arrayZip(" + strings.Join(arrays, ", ") + ")) AS incoming_row)) AS incoming " +
 		"LEFT JOIN (" + storedIdentityQuery + ") AS stored ON stored.stored_id = incoming.v" + fmt.Sprint(idIndex) + " " +
+		keptJoin + where +
 		"ORDER BY incoming.ordinal"
 	return query, idIndex, orgIndex, nil
 }
 
+// keptRosterQuery is the stored roster a RosterKept row writes and a
+// RosterDelta row edits: manual_members of the team's teams FINAL row. A team
+// with no row gets the column default [], and so does a team whose newest
+// version is an admin delete: the delete ends the manual roster, so a team
+// written again after it (by an admin or a sync) starts with none.
+const keptRosterQuery = "SELECT id AS kept_id, if(deleted_at IS NULL, manual_members, []) AS kept_manual FROM teams FINAL " +
+	"WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)}"
+
+// keptAdminQuery is keptRosterQuery with the columns an admin write keeps
+// (Kept), whether the team has a teams FINAL row (kept_found) and its
+// deleted_at.
+const keptAdminQuery = "SELECT id AS kept_id, if(deleted_at IS NULL, manual_members, []) AS kept_manual, 1 AS kept_found, " +
+	"name AS kept_name, description AS kept_description, project_keys AS kept_project_keys, repo_patterns AS kept_repo_patterns, " +
+	"deleted_at AS kept_deleted_at FROM teams FINAL WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)}"
+
+// newestVersionQuery is the newest updated_at of each team over every stored
+// version, deleted too: the version a VersionAfterStored row moves past.
+const newestVersionQuery = "SELECT id AS newest_id, 1 AS newest_found, toTimeZone(max(updated_at), 'UTC') AS newest_at " +
+	"FROM teams WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)} GROUP BY id"
+
+// sourceRosterQuery is the newest stored version of each source team of a
+// RosterSource row, by (updated_at, last_synced) over every raw version (a
+// version of one id from another provider included, as teams FINAL would
+// fold it), and its roster: [] when that version is an admin delete, as
+// keptRosterQuery reads it.
+const sourceRosterQuery = "SELECT id AS moved_from_id, " +
+	"argMax(if(deleted_at IS NULL, manual_members, []), (updated_at, last_synced)) AS moved_from_manual, " +
+	"max((toUnixTimestamp64Micro(updated_at), toUnixTimestamp64Micro(last_synced))) AS moved_from_version " +
+	"FROM teams WHERE org_id = {org_id:String} AND id IN {roster_source:Array(String)} GROUP BY id"
+
 // storedIdentitySelect is Query's rule with the names a writer joins on:
 // stored_id, stored_team_id, stored_name and stored_gone.
+// keptRosterDeletedQuery is keptRosterQuery with the team's teams FINAL
+// deleted_at (kept_deleted), the value a DeletedKept row copies.
+const keptRosterDeletedQuery = "SELECT id AS kept_id, if(deleted_at IS NULL, manual_members, []) AS kept_manual, deleted_at AS kept_deleted FROM teams FINAL " +
+	"WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)}"
+
+// sourceRosterDeletedQuery is sourceRosterQuery with the newest version's
+// deleted_at (moved_from_deleted, NULL when that version is no admin delete),
+// the value a DeletedSource row copies. argMax skips a NULL argument, so the
+// time is read through the epoch and back.
+const sourceRosterDeletedQuery = "SELECT id AS moved_from_id, " +
+	"argMax(if(deleted_at IS NULL, manual_members, []), (updated_at, last_synced)) AS moved_from_manual, " +
+	"max((toUnixTimestamp64Micro(updated_at), toUnixTimestamp64Micro(last_synced))) AS moved_from_version, " +
+	"CAST(nullIf(argMax(ifNull(deleted_at, toDateTime64(0, 6, 'UTC')), (updated_at, last_synced)), toDateTime64(0, 6, 'UTC')) AS Nullable(DateTime64(6, 'UTC'))) AS moved_from_deleted " +
+	"FROM teams WHERE org_id = {org_id:String} AND id IN {roster_source:Array(String)} GROUP BY id"
+
 const storedIdentitySelect = "SELECT id AS stored_id, " +
 	"argMaxIf(provider_team_id, (updated_at, last_synced), provider_team_id != '') AS stored_team_id, " +
 	"argMaxIf(provider_name, (updated_at, last_synced), provider_name != '') AS stored_name, " +
@@ -369,6 +673,15 @@ func paramValue(columnType string, value any) (any, error) {
 		return nil, fmt.Errorf("a %T for a time column", value)
 	}
 	return value, nil
+}
+
+// versionText is a read version as UTC text; no time (a row of another rule)
+// is the Unix epoch, the oldest time the parameter type holds.
+func versionText(t time.Time) string {
+	if t.IsZero() {
+		t = time.Unix(0, 0)
+	}
+	return utcText(t)
 }
 
 func utcText(t time.Time) string {

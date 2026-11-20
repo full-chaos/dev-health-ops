@@ -190,9 +190,9 @@ func admissionGuardEnv(self runOrder, active map[dispatchBucket]int, older map[d
 			return nil
 		},
 		totalCap: func() int { return 0 },
-		activeCount: func(bucket dispatchBucket) (int, error) {
+		activeCount: func(bucket dispatchBucket) (int, int, error) {
 			*calls = append(*calls, guardCall{kind: "active", bucket: bucket})
-			return active[bucket], nil
+			return active[bucket], 0, nil
 		},
 		emit: func(dispatchBucket, int, int, int, int, int, int) {},
 		self: self,

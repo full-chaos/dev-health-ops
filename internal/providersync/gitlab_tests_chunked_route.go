@@ -83,6 +83,9 @@ const (
 	// never zero); the unit's coverage_complete is false and names the component.
 	gitLabReportTooLargeComponent    = "report_too_large"
 	gitLabArtifactOversizedComponent = "artifact_oversized"
+	// gitLabReportMemberDroppedComponent: report members of a job artifact the archive parse did not read because they
+	// were over the compression-ratio guard or past the entry cap (CHAOS-14030). The bytes are the same on every walk, so it advances.
+	gitLabReportMemberDroppedComponent = "report_member_dropped"
 )
 
 // gitLabTestsTruncationComponents is the CLOSED vocabulary of truncation
@@ -101,7 +104,7 @@ var (
 		gitLabPipelineInventoryComponent: {}, gitLabReportInventoryComponent: {},
 		gitLabRunJobsComponent: {}, gitLabRunArtifactsComponent: {},
 		gitLabRunJobsPageBudgetComponent: {}, gitLabRunArtifactsPageBudgetComponent: {},
-		gitLabReportTooLargeComponent: {}, gitLabArtifactOversizedComponent: {},
+		gitLabReportTooLargeComponent: {}, gitLabArtifactOversizedComponent: {}, gitLabReportMemberDroppedComponent: {},
 	}
 	// The advancing set is an ALLOWLIST, so anything added to the vocabulary
 	// and forgotten here withholds rather than silently advancing over data
@@ -109,7 +112,7 @@ var (
 	// stop withholds the watermark; a positively observed item cap advances it.
 	gitLabTestsWatermarkAdvancing = map[string]struct{}{
 		gitLabRunJobsComponent: {}, gitLabRunArtifactsComponent: {},
-		gitLabReportTooLargeComponent: {}, gitLabArtifactOversizedComponent: {},
+		gitLabReportTooLargeComponent: {}, gitLabArtifactOversizedComponent: {}, gitLabReportMemberDroppedComponent: {},
 	}
 )
 
@@ -176,7 +179,7 @@ func recordGitLabTestsPerRunTruncation(
 	slog.Warn(
 		"provider per-run item cap reached; run committed with partial items",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", cursor.Repo, "component", component, logging.ProviderIDAttr("run", runID), "kept", kept,
+		"repository", logging.ProviderText(cursor.Repo), "component", component, logging.ProviderIDAttr("run", runID), "kept", kept,
 	)
 	return cursor
 }
@@ -210,7 +213,7 @@ func recordGitLabTestsSkippedItem(
 	slog.Warn(
 		"gitlab test item skipped: over the size cap",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", cursor.Repo, "component", component, logging.ProviderIDAttr("run", runID), "cap_bytes", capBytes,
+		"repository", logging.ProviderText(cursor.Repo), "component", component, logging.ProviderIDAttr("run", runID), "cap_bytes", capBytes,
 	)
 	return cursor
 }
@@ -245,7 +248,7 @@ func recordGitLabTestsInventoryTruncation(
 	slog.Warn(
 		"provider inventory page budget exhausted",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", cursor.Repo, "component", component, "pages", pagesSpent,
+		"repository", logging.ProviderText(cursor.Repo), "component", component, "pages", pagesSpent,
 	)
 	return cursor
 }
@@ -449,7 +452,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 				before := cursor
 				payload, decodeErr := decodeGitLabTestsPipeline(page.Items[index])
 				if decodeErr != nil {
-					return decodeErr
+					return providerfoundation.RouteFailure(gitlabPipelinesRoute, providerfoundation.ReasonBodyDecode, decodeErr)
 				}
 				jobs := []githubTestsJobRow(nil)
 				acceptance := []githubTestsAcceptanceRow(nil)
@@ -502,7 +505,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					for _, rawJob := range jobItems {
 						job, jobErr := decodeGitLabTestsJob(rawJob)
 						if jobErr != nil {
-							return jobErr
+							return providerfoundation.RouteFailure(gitlabPipelineJobsRoute, providerfoundation.ReasonBodyDecode, jobErr)
 						}
 						row, include := normalizeGitLabTestsJob(claim, repoID, pipeline.RunID, job, normalizedAt)
 						if include {
@@ -596,8 +599,10 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 			suites := []testSuiteResultRow(nil)
 			cases := []testCaseResultRow(nil)
 			coverage := []coverageSnapshotRow(nil)
+			var completeness []testOpsRunReportCompletenessRow
 			if len(selected) == 1 {
 				payload := selected[0]
+				runReport := newGitLabTestsRunReport()
 				runID := stringValue(payload.ID)
 				started := gitLabTestsPipelineStartedAt(payload)
 				finished := parseGitLabTestsTime(payload.FinishedAt)
@@ -608,21 +613,31 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					MaxPages: gitLabTestsPerRunJobPages,
 				})
 				runJobs, jobItems := gitLabTestsRunJobs{}, []json.RawMessage(nil)
+				attempt := int64(1)
 				if jobErr != nil {
 					if fatal := gitLabTestsOptionalError(ctx, jobErr); fatal != nil {
 						return fatal
 					}
+					// The job list answered 404: the pipeline's artifacts are unknown, a known loss (CHAOS-13981).
+					runReport.lose(githubTestsArtifactUnavailableCause)
 				} else {
 					cursor.Pages += jobPage.Pages
 					jobItems = jobPage.Items
+					// The attempt counts the retries of the whole listing: a retry past the per-run cap is still a new key.
+					var attemptErr error
+					if attempt, attemptErr = gitLabTestsRunAttemptOf(jobItems); attemptErr != nil {
+						return attemptErr
+					}
 					switch {
 					case len(jobItems) > githubTestsMaxJobsPerRun:
 						jobItems = jobItems[:githubTestsMaxJobsPerRun]
 						cursor = recordGitLabTestsPerRunTruncation(
 							cursor, client, claim, gitLabRunArtifactsComponent, runID, len(jobItems))
+						runReport.lose(gitLabTestsRunReportComponentReasons[gitLabRunArtifactsComponent])
 					case jobPage.PageBudgetExhausted:
 						cursor = recordGitLabTestsPerRunTruncation(
 							cursor, client, claim, gitLabRunArtifactsPageBudgetComponent, runID, len(jobItems))
+						runReport.lose(gitLabTestsRunReportComponentReasons[gitLabRunArtifactsPageBudgetComponent])
 					}
 					var rankErr error
 					if runJobs, rankErr = newGitLabTestsRunJobs(jobItems); rankErr != nil {
@@ -645,6 +660,8 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 					cursor = recordGitLabTestsSkippedItem(
 						cursor, client, claim, gitLabReportTooLargeComponent, runID, nativeMaxObjectBytes)
 					report, present, reportErr = gitLabTestsReportPayload{}, false, nil
+					runReport.expected++
+					runReport.lose(gitLabTestsRunReportComponentReasons[gitLabReportTooLargeComponent])
 				}
 				if reportErr != nil {
 					return reportErr
@@ -660,7 +677,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 						slog.Info(
 							"non-finite test time stored as NULL",
 							"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-							"repository", cursor.Repo, logging.ProviderIDAttr("run", runID), "count", nonFinite,
+							"repository", logging.ProviderText(cursor.Repo), logging.ProviderIDAttr("run", runID), "count", nonFinite,
 						)
 					}
 					if duplicates := countDuplicateTestCases(reportCases); duplicates > 0 {
@@ -668,7 +685,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 						slog.Info(
 							"within-suite duplicate test-case names disambiguated with an ordinal suffix",
 							"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-							"repository", cursor.Repo, logging.ProviderIDAttr("run", runID), "count", duplicates,
+							"repository", logging.ProviderText(cursor.Repo), logging.ProviderIDAttr("run", runID), "count", duplicates,
 						)
 					}
 					if duplicates := countDuplicateTestSuites(reportSuites); duplicates > 0 {
@@ -676,25 +693,44 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 						slog.Info(
 							"sibling suite collision resolved: same-named suite objects disambiguated with an ordinal suffix",
 							"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-							"repository", cursor.Repo, logging.ProviderIDAttr("run", runID), "count", duplicates,
+							"repository", logging.ProviderText(cursor.Repo), logging.ProviderIDAttr("run", runID), "count", duplicates,
 						)
 					}
 					suites, cases = reportSuites, reportCases
+					runReport.expected++
+					runReport.admitted++
 				}
 				if jobErr == nil {
 					artifactJobs, selectJobErr := selectGitLabTestsArtifactJobs(jobItems, gitLabTestsMaxArtifacts)
 					if selectJobErr != nil {
 						return selectJobErr
 					}
+					qualifying, qualifyErr := gitLabTestsQualifyingArtifactJobs(jobItems)
+					if qualifyErr != nil {
+						return qualifyErr
+					}
+					if qualifying > gitLabTestsMaxArtifacts {
+						reportGitLabTestsArtifactJobsOverCap(ctx, claim.Provider, claim.Dataset, claim.ID, cursor.Repo, runID, qualifying, gitLabTestsMaxArtifacts)
+						// The selection reads the first gitLabTestsMaxArtifacts and none of the others; the unit result does not
+						// record this cut (ticket 14144), the pipeline's verdict does.
+						runReport.lose(githubTestsPerRunCapCause)
+					}
 					for _, job := range artifactJobs {
-						archive, downloadErr := downloadGitLabTestsArtifact(ctx, &counted, root, stringValue(job.ID))
+						archive, found, downloadErr := downloadGitLabTestsArtifactFound(ctx, &counted, root, stringValue(job.ID))
 						if errors.Is(downloadErr, errGitLabTestsArtifactTooLarge) {
 							cursor = recordGitLabTestsSkippedItem(
 								cursor, client, claim, gitLabArtifactOversizedComponent, runID, gitLabTestsMaxDownload)
+							runReport.expected++
+							runReport.lose(gitLabTestsRunReportComponentReasons[gitLabArtifactOversizedComponent])
 							continue
 						}
 						if downloadErr != nil {
 							return downloadErr
+						}
+						if !found {
+							runReport.expected++
+							runReport.lose(githubTestsArtifactNotFoundReason)
+							continue
 						}
 						if len(archive) == 0 {
 							continue
@@ -703,14 +739,29 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 						if parseErr != nil || rows.Skipped != 0 {
 							return fmt.Errorf("%w: reports skipped=%d: %v", ErrGitLabTestsIncomplete, rows.Skipped, parseErr)
 						}
+						if rows.GuardDropped > 0 {
+							cursor = recordGitLabTestsSkippedItem(cursor, client, claim, gitLabReportMemberDroppedComponent, runID, 0)
+							for _, cause := range rows.GuardCauses {
+								runReport.lose(cause)
+							}
+						}
+						if rows.ReportsParsed > 0 || rows.GuardDropped > 0 {
+							runReport.expected++
+						}
+						// A source is admitted only when it was read whole: a guard-dropped member leaves it out.
+						if rows.ReportsRead > 0 && rows.GuardDropped == 0 {
+							runReport.admitted++
+						}
 						coverage = append(coverage, rows.Coverage...)
 					}
 				}
+				// One verdict row per pipeline, in the emission that carries its report rows (CHAOS-13981).
+				completeness = gitLabTestsRunReportCompleteness(claim, repoID, payload, attempt, runReport, normalizedAt)
 			}
 			cursor.Suites += len(suites)
 			cursor.Cases += len(cases)
 			cursor.Coverage += len(coverage)
-			effects, effectErr := testOpsEffects(nil, nil, nil, suites, cases, coverage)
+			effects, effectErr := testOpsEffects(nil, nil, nil, suites, cases, coverage, completeness...)
 			if effectErr != nil {
 				return effectErr
 			}

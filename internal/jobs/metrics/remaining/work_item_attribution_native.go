@@ -43,6 +43,9 @@ var workItemAttributionTableRequirements = map[string][]string{
 		"org_id", "source_work_item_id", "target_work_item_id", "relationship_type",
 		"relationship_type_raw", "last_synced",
 	},
+	"work_graph_issue_pr": {
+		"org_id", "repo_id", "work_item_id", "pr_number", "provenance", "last_synced",
+	},
 	"teams": {
 		"org_id", "provider", "id", "name", "project_keys", "manual_members",
 		"is_active", "updated_at",

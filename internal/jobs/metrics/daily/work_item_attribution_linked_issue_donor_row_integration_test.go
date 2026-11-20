@@ -17,7 +17,7 @@ import (
 // that inherits through a linked issue takes the team of the issue's own
 // primary attribution row, never a resolution of the issue on the pull
 // request's day. The donor issue D's stored row names team-donor
-// (repo_ownership, written when D was attributed); on the pull request's day
+// (project_ownership, written when D was attributed); on the pull request's day
 // D's repository is owned by team-other, which is what a resolution of D on
 // that day would give. Every donor provider. The donor's row is its newest
 // primary row. A donor with no stored row gives nothing: the pull request is
@@ -45,8 +45,8 @@ func TestALinkedItemCopiesTheTeamOfItsDonorsOwnRow(t *testing.T) {
 				if stored {
 					// An older primary row of another team: the donor's row is
 					// its newest primary row.
-					seedWorkItemAttributionStoredRow(t, ctx, conn, orgID, repoD, donor, provider, "team-old", "repo_ownership", targetDay.Add(-48*time.Hour))
-					seedWorkItemAttributionStoredRow(t, ctx, conn, orgID, repoD, donor, provider, "team-donor", "repo_ownership", targetDay.Add(-24*time.Hour))
+					seedWorkItemAttributionStoredRow(t, ctx, conn, orgID, repoD, donor, provider, "team-old", "project_ownership", targetDay.Add(-48*time.Hour))
+					seedWorkItemAttributionStoredRow(t, ctx, conn, orgID, repoD, donor, provider, "team-donor", "project_ownership", targetDay.Add(-24*time.Hour))
 				}
 
 				executor, err := NewWorkItemAttributionExecutor(conn)
@@ -76,7 +76,7 @@ func TestALinkedItemCopiesTheTeamOfItsDonorsOwnRow(t *testing.T) {
 						"not team-other (a resolution of the donor on the pull request's day)", linked)
 				}
 				assertLinkedIssueEvidence(t, ctx, conn, orgID, "PR",
-					"linked_issue="+donor+";dependency_type=relates_to;donor_provider="+provider+";donor_source=repo_ownership")
+					"linked_issue="+donor+";dependency_type=relates_to;donor_provider="+provider+";donor_source=project_ownership")
 			})
 		}
 	}
@@ -87,7 +87,7 @@ func seedWorkItemAttributionDonorItem(
 	orgID, workItemID, provider string, repoID uuid.UUID, createdAt time.Time,
 ) {
 	t.Helper()
-	if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, created_at, org_id, last_synced) VALUES (?, ?, ?, ?, ?, ?)`,
+	if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, type, created_at, org_id, last_synced) VALUES (?, ?, ?, 'issue', ?, ?, ?)`,
 		repoID, workItemID, provider, createdAt, orgID, createdAt); err != nil {
 		t.Fatalf("seed donor work item: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestALinkedItemIsRevisitedOnceItsDonorHasARow(t *testing.T) {
 			repoPR, repoD := uuid.New(), uuid.New()
 			donor := provider + ":D-1"
 			seedWorkItemAttributionLinkedItem(t, ctx, conn, orgID, "PR", repoPR, seededAt)
-			if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, project_id, created_at, org_id, last_synced) VALUES (?, ?, ?, 'proj-d', ?, ?, ?)`,
+			if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, created_at, org_id, last_synced) VALUES (?, ?, ?, 'issue', 'proj-d', ?, ?, ?)`,
 				repoD, donor, provider, seededAt, orgID, seededAt); err != nil {
 				t.Fatalf("seed donor: %v", err)
 			}
@@ -217,7 +217,7 @@ func TestALinkedItemCopiesADonorThatAnotherPartitionOfTheRunWrites(t *testing.T)
 			repoPR, repoD := uuid.New(), uuid.New()
 			donor := provider + ":D-1"
 			seedWorkItemAttributionLinkedItem(t, ctx, conn, orgID, "PR", repoPR, seededAt)
-			if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, project_id, created_at, org_id, last_synced) VALUES (?, ?, ?, 'proj-d', ?, ?, ?)`,
+			if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, created_at, org_id, last_synced) VALUES (?, ?, ?, 'issue', 'proj-d', ?, ?, ?)`,
 				repoD, donor, provider, seededAt, orgID, seededAt); err != nil {
 				t.Fatalf("seed donor: %v", err)
 			}
@@ -279,7 +279,7 @@ func TestADonorOutsideTheDaysWindowGivesItsStoredRow(t *testing.T) {
 			if !tc.completed.IsZero() {
 				completed = tc.completed
 			}
-			if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, project_id, status, created_at, completed_at, org_id, last_synced) VALUES (?, 'jira:D-1', 'jira', 'proj-d', ?, ?, ?, ?, ?)`,
+			if err := conn.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, status, created_at, completed_at, org_id, last_synced) VALUES (?, 'jira:D-1', 'jira', 'task', 'proj-d', ?, ?, ?, ?, ?)`,
 				repoD, tc.status, tc.created, completed, orgID, seededAt); err != nil {
 				t.Fatalf("seed donor: %v", err)
 			}
@@ -347,6 +347,10 @@ func TestALargePartitionLoadsItsDonorsInBoundedStatements(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			links, err := conn.PrepareBatch(ctx, `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)`)
+			if err != nil {
+				t.Fatal(err)
+			}
 			for n := range items {
 				pr := fmt.Sprintf("ghpr:acme/%s#%d", pad, n)
 				donor := fmt.Sprintf("jira:%s-%d", pad, n)
@@ -359,11 +363,14 @@ func TestALargePartitionLoadsItsDonorsInBoundedStatements(t *testing.T) {
 				if err := edges.Append(orgID, pr, donor, "relates_to", seededAt); err != nil {
 					t.Fatal(err)
 				}
+				if err := links.Append(repoPR, donor, uint32(n), float32(1), "native", "linear_attachment", seededAt, orgID); err != nil {
+					t.Fatal(err)
+				}
 				if err := stored.Append(orgID, repoD, donor, "jira", "team-donor", "team-donor", "project_ownership", uint8(1), "medium", "project_ownership=proj-d", day.AddDate(0, 0, -1), "test", "earlier-run"); err != nil {
 					t.Fatal(err)
 				}
 			}
-			for _, batch := range []driver.Batch{workItems, edges, stored} {
+			for _, batch := range []driver.Batch{workItems, edges, stored, links} {
 				if err := batch.Send(); err != nil {
 					t.Fatal(err)
 				}

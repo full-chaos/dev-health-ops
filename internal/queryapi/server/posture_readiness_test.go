@@ -25,7 +25,7 @@ func TestQueryAPIPostureCheckIsOptIn(t *testing.T) {
 			}
 			return ""
 		}
-		if check := queryAPIPostureCheck(env, nil); check != nil {
+		if check, _ := queryAPIPostureCheck(env, nil); check != nil {
 			t.Errorf("%s: a deployment that names no role must not be checked", name)
 		}
 	}
@@ -35,7 +35,8 @@ func TestQueryAPIPostureCheckIsOptIn(t *testing.T) {
 		}
 		return ""
 	}
-	check := queryAPIPostureCheck(named, nil)
+	check, stop := queryAPIPostureCheck(named, nil)
+	defer stop()
 	if check == nil {
 		t.Fatal("a deployment that names a role must be checked")
 	}
@@ -79,7 +80,7 @@ func TestBuildQueryRouteWiresThePostureCheckIntoReadiness(t *testing.T) {
 	// construction), handed to BOTH the combined check and the per-class probes dho
 	// query-api registers.
 	for _, call := range []string{
-		"posture := queryAPIPostureCheck(getenv, pgPool)",
+		"posture, stopPosture := queryAPIPostureCheck(getenv, pgPool)",
 		"readinessCheck(chClient, pgPool, envelope.jwksProbe(), posture)",
 		"Probes:     readinessProbes(chClient, pgPool, envelope.jwksProbe(), posture),",
 	} {
@@ -228,14 +229,17 @@ func TestReadyzAnswersWithinTheProbeBudgetWhileThePostureQueryIsSlow(t *testing.
 		}
 		return ""
 	}
-	probes := readinessProbes(fakePinger{}, fakePinger{}, fakeJWKS{}, queryAPIPostureCheck(env, pool))
+	probeCheck, stopProbeCheck := queryAPIPostureCheck(env, pool)
+	defer stopProbeCheck()
+	probes := readinessProbes(fakePinger{}, fakePinger{}, fakeJWKS{}, probeCheck)
 
 	// A probe that does not wait on the live posture check answers at once from the background run's state ("not yet
 	// proven"). One that waits stays on the context handed to it: the check is called directly with a 30 s context, far
 	// above the 10 s failure-only guard, so a wait is seen as "still running after the guard" (the readyz handler's own 3 s
 	// bound would end it with the same 503 body, which is why the check is called here and not only through /readyz).
 	// No time bound sits on the passing path. On the guard the call is cancelled FIRST, then joined for at most 10 s.
-	check := queryAPIPostureCheck(env, pool)
+	check, stop := queryAPIPostureCheck(env, pool)
+	defer stop()
 	checkCtx, cancelCheck := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelCheck()
 	for probe := 1; probe <= 3; probe++ {
@@ -295,7 +299,9 @@ func TestPostureProofStartsAtConstructionNotOnTheFirstProbe(t *testing.T) {
 		}
 		return ""
 	}
-	if check := queryAPIPostureCheck(env, pool); check == nil {
+	check, stop := queryAPIPostureCheck(env, pool)
+	defer stop()
+	if check == nil {
 		t.Fatal("a named role must be checked")
 	}
 	deadline := time.Now().Add(5 * time.Second)
@@ -304,5 +310,32 @@ func TestPostureProofStartsAtConstructionNotOnTheFirstProbe(t *testing.T) {
 			t.Fatal("no connection reached Postgres with no probe made: the proof did not start at construction")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// CHAOS-8654: the posture check proves the role in the background on pgPool, so every path that
+// closes pgPool after the check exists stops the check first (closeRoute), the route's cleanup too.
+func TestBuildQueryRouteStopsThePostureCheckBeforeThePoolCloses(t *testing.T) {
+	t.Parallel()
+	src, err := os.ReadFile("query_route.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(src)
+	start := strings.Index(text, "posture, stopPosture := queryAPIPostureCheck(getenv, pgPool)")
+	end := strings.Index(text, "return handlers, ready, cleanup, nil")
+	if start < 0 || end < start {
+		t.Fatal("query_route.go: posture check construction or the route's return not found")
+	}
+	tail := text[start:end]
+	closer := "closeRoute := func() {\n\t\tstopPosture()\n\t\tpgPool.Close()\n\t}"
+	if strings.Count(tail, closer) != 1 {
+		t.Fatalf("query_route.go must define %q once after the posture check", closer)
+	}
+	if got := strings.Count(tail, "pgPool.Close()"); got != 1 {
+		t.Fatalf("pgPool.Close() appears %d times after the posture check, want only inside closeRoute", got)
+	}
+	if strings.Count(tail, "cleanup := closeRoute") != 1 {
+		t.Fatal("the route's cleanup must be closeRoute")
 	}
 }

@@ -84,7 +84,7 @@ func model(args []string) (ran *call, code int) {
 			}
 		}
 		if current.kind == Group {
-			if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
+			if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
 				return nil, ExitOK
 			}
 			return nil, ExitUsage

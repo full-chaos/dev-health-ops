@@ -111,6 +111,11 @@ func resolveInvestmentMembershipScope(ctx context.Context, client QueryClient, o
 	entry := request.resolution(orgID)
 	entry.once.Do(func() {
 		entry.state, entry.err = resolveAndObserveInvestmentMembershipScope(ctx, client, orgID, timeoutSeconds)
+		// Every phase of the request gets this one error: it is reported here,
+		// once, and cached marked, so no phase reports it again.
+		if entry.err != nil {
+			entry.err = markedIfClientCancel(ctx, entry.err, "membership_scope", "org_id", orgID)
+		}
 	})
 	return entry.state, entry.err
 }

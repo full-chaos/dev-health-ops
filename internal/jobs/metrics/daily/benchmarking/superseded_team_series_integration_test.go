@@ -89,7 +89,7 @@ VALUES (?, 'github', ?, toUUID(?), ?, 'exact', 'native', 1, 10, 0, ?, ?)`,
 	// one metric of each.
 	for _, source := range []struct{ table, column, metric string }{
 		{"testops_pipeline_metrics_daily", "rerun_rate", "rerun_rate"},
-		{"testops_test_metrics_daily", "pass_rate", "pass_rate"},
+		{"testops_test_metrics_daily", "flake_rate", "flake_rate"},
 		{"testops_coverage_metrics_daily", "line_coverage_pct", "line_coverage_pct"},
 	} {
 		t.Run(source.table, func(t *testing.T) {
@@ -98,8 +98,23 @@ VALUES (?, 'github', ?, toUUID(?), ?, 'exact', 'native', 1, 10, 0, ?, ?)`,
 			if err := admin.Exec(ctx, "SYSTEM STOP MERGES "+source.table); err != nil {
 				t.Fatalf("stop merges: %v", err)
 			}
+			// rerun_rate is read as reruns over runs: every repo-day has the same 10 runs, so the
+			// weights are equal and the expected values are those of the stored rates. The test table gets 10 distinct
+			// cases and the rate's share of them as flake cases, for the same reason.
 			insert := "INSERT INTO " + source.table + " (repo_id, day, " + source.column +
-				", team_id, org_id, computed_at) VALUES (?, ?, ?, ?, ?, ?)"
+				", team_id, org_id, computed_at, pipelines_count) VALUES (?, ?, ?, ?, ?, ?, 10)"
+			if source.table != "testops_pipeline_metrics_daily" {
+				insert = "INSERT INTO " + source.table + " (repo_id, day, " + source.column +
+					", team_id, org_id, computed_at) VALUES (?, ?, ?, ?, ?, ?)"
+			}
+			if source.table == "testops_test_metrics_daily" {
+				insert = "INSERT INTO " + source.table + " (repo_id, day, " + source.column +
+					", team_id, org_id, computed_at, flake_cases, distinct_cases) VALUES (?, ?, ?, ?, ?, ?, toUInt32(round(?*10)), 10)"
+			}
+			if source.table == "testops_coverage_metrics_daily" {
+				insert = "INSERT INTO " + source.table + " (repo_id, day, " + source.column +
+					", team_id, org_id, computed_at, lines_total, lines_covered) VALUES (?, ?, ?, ?, ?, ?, 1000, toUInt32(round(?*10)))"
+			}
 			for _, row := range []struct {
 				repo string
 				team *string
@@ -112,7 +127,11 @@ VALUES (?, 'github', ?, toUUID(?), ?, 'exact', 'native', 1, 10, 0, ?, ?)`,
 				{repoC, ptr("team-old"), 0.3, older},
 				{repoC, nil, 0.4, newer},
 			} {
-				if err := admin.Exec(ctx, insert, row.repo, day, row.rate, row.team, org, row.at); err != nil {
+				args := []any{row.repo, day, row.rate, row.team, org, row.at}
+				if source.table == "testops_test_metrics_daily" || source.table == "testops_coverage_metrics_daily" {
+					args = append(args, row.rate)
+				}
+				if err := admin.Exec(ctx, insert, args...); err != nil {
 					t.Fatalf("insert %s: %v", row.repo, err)
 				}
 			}

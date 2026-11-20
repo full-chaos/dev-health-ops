@@ -286,7 +286,7 @@ type Store interface {
 	LoadRun(context.Context, string) (Run, error)
 	ClaimDispatch(context.Context, string) (*Run, error)
 	DispatchablePartitions(context.Context, string) ([]Partition, error)
-	MaterializeScheduledFanout(context.Context, Run, []RepositoryID) (bool, error)
+	MaterializeScheduledFanout(context.Context, Run, []RepositoryID, Publisher) (bool, error)
 	ClaimPartition(context.Context, string) (*PartitionClaim, error)
 	RenewPartition(context.Context, PartitionClaim) error
 	CompletePartition(context.Context, PartitionClaim, Publisher) error
@@ -558,13 +558,23 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 	// drain of the organization.
 	defer handler.drainTouchedDaysAfterDispatch(ctx, *run)
 	if run.RepositoryDiscoveryRequired {
+		// A run that no attempt materializes keeps no partition and no
+		// finalize handoff: on the last attempt, and on a permanent refusal,
+		// the run is ended failed (failUnmaterializedRun, dispatch_fail.go).
 		repositoryIDs, err := handler.discoverer.RepositoryIDs(ctx, run.OrganizationID)
 		if err != nil {
+			if lastDispatchAttempt(execution) {
+				handler.failUnmaterializedRun(ctx, execution, *run, "dispatch_discovery")
+			}
 			return jobruntime.Retryable(err)
 		}
-		if _, err := handler.store.MaterializeScheduledFanout(ctx, *run, repositoryIDs); err != nil {
+		if _, err := handler.store.MaterializeScheduledFanout(ctx, *run, repositoryIDs, handler.publisher); err != nil {
 			if errors.Is(err, ErrInvalidState) {
+				handler.failUnmaterializedRun(ctx, execution, *run, "dispatch_materialize")
 				return permanentWithCause(err, jobruntime.ReasonInvalidState, "step=dispatch_materialize")
+			}
+			if lastDispatchAttempt(execution) {
+				handler.failUnmaterializedRun(ctx, execution, *run, "dispatch_materialize")
 			}
 			return jobruntime.Retryable(err)
 		}
@@ -1621,6 +1631,14 @@ func (handler *FinalizeHandler) zeroPartitionRun(ctx context.Context, run Run) (
 	return true, nil
 }
 
+// emptyRunSkip is the ErrEmptyRunFamilySkipped of one family, with its reason.
+type emptyRunSkip struct{ reason string }
+
+func (skip *emptyRunSkip) Error() string {
+	return ErrEmptyRunFamilySkipped.Error() + ": " + skip.reason
+}
+func (skip *emptyRunSkip) Unwrap() error { return ErrEmptyRunFamilySkipped }
+
 func NewFinalizeHandler(store Store) (*FinalizeHandler, error) {
 	if store == nil {
 		return nil, ErrUnavailable
@@ -1653,14 +1671,14 @@ func NewFinalizeHandler(store Store) (*FinalizeHandler, error) {
 // silent no-op.
 var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoadFamilyName, TeamComplexityFamilyName, BenchmarkingFamilyName, CompoundingRiskTeamFamilyName, WorkItemMeasureCapabilityFamilyName}
 
-// finalizeFamiliesRefusingZeroPartitions are the finalize families that read
-// the partitions of the run and refuse a run with none. A run of the whole
-// organization whose discovery found no repository has no partition: its
-// finalize skips these families and runs every other one.
-var finalizeFamiliesRefusingZeroPartitions = []string{BenchmarkingFamilyName}
+// ErrEmptyRunFamilySkipped is what a finalize family returns, with no row
+// written, when it keeps its rows of the day on a run of the whole
+// organization with no partition. The handler counts it as skipped_empty_run
+// and runs the next family. Its message after the colon is the reason.
+var ErrEmptyRunFamilySkipped = errors.New("daily: finalize family kept its rows on a run with no repositories")
 
-// ZeroPartitionFamilySkippedLogMessage is the line of a finalize family that is
-// skipped on a run with no partition.
+// ZeroPartitionFamilySkippedLogMessage is the line of a finalize family that
+// kept its rows on a run with no partition.
 const ZeroPartitionFamilySkippedLogMessage = "daily finalize: family skipped on a run with no repositories"
 
 // errZeroPartitionRunNotFullOrg: a run of some repositories gets its partitions
@@ -1880,16 +1898,6 @@ func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Contex
 			)
 			return fmt.Errorf("%w: %s", ErrFinalizeFamilyIncomplete, name)
 		}
-		if noPartitions && slices.Contains(finalizeFamiliesRefusingZeroPartitions, name) {
-			slog.Default().InfoContext(ctx, ZeroPartitionFamilySkippedLogMessage,
-				"run_id", run.ID, "organization_id", run.OrganizationID,
-				"target_day", run.TargetDay.Format("2006-01-02"), "family", name,
-			)
-			handler.observeFinalizeFamily(
-				run, name, jobruntime.DailyMetricsNativeFamilyOutcomeSkippedEmptyRun, 0, handler.finalizeNow(),
-			)
-			continue
-		}
 		// Between-family cancellation check. Once the lease is lost another
 		// worker may already own this run, so continuing to write is the
 		// two-writer hazard with extra steps.
@@ -1903,10 +1911,19 @@ func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Contex
 		}
 		started := handler.finalizeNow()
 		rowsWritten, err := executor.ComputeFinalizeFamily(ctx, run)
+		var skipped *emptyRunSkip
 		switch {
 		case err == nil:
 			handler.observeFinalizeFamily(
 				run, name, jobruntime.DailyMetricsNativeFamilyOutcomeComputed, rowsWritten, started,
+			)
+		case noPartitions && rowsWritten == 0 && errors.As(err, &skipped):
+			slog.Default().InfoContext(ctx, ZeroPartitionFamilySkippedLogMessage,
+				"run_id", run.ID, "organization_id", run.OrganizationID,
+				"target_day", run.TargetDay.Format("2006-01-02"), "family", name, "reason", skipped.reason,
+			)
+			handler.observeFinalizeFamily(
+				run, name, jobruntime.DailyMetricsNativeFamilyOutcomeSkippedEmptyRun, 0, started,
 			)
 		case rowsWritten > 0:
 			handler.observeFinalizeFamily(
@@ -2102,6 +2119,21 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 			"organization_id", claim.Run.OrganizationID,
 			"target_day", claim.Run.TargetDay.Format("2006-01-02"),
 		)
+		// The last attempt has no retry to release for: end the run as the
+		// failed-compute arm above does, or it stays 'running' with no job.
+		if terminalAttempt(execution) {
+			if failErr := failFinalizePermanently(handler.store, ctx, *claim); failErr != nil {
+				logger.Error("daily finalize terminal write failed",
+					"error", failErr,
+					"run_id", runID,
+					"organization_id", claim.Run.OrganizationID,
+					"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+				)
+			} else {
+				handler.drainTouchedDaysAfterEnd(ctx, claim.Run)
+			}
+			return jobruntime.Retryable(err)
+		}
 		if releaseErr := releaseFinalize(handler.store, ctx, *claim); releaseErr != nil {
 			logger.Error("daily finalize release failed",
 				"error", releaseErr,
@@ -2208,10 +2240,10 @@ func releasePartition(store Store, ctx context.Context, claim PartitionClaim) {
 	_ = store.ReleasePartition(releaseCtx, claim)
 }
 
-// terminalAttempt reports whether River will not run this partition job again:
-// the same attempt pair the adapter acts on (finalize's own final-attempt arm).
-// An unset MaxAttempts is never the last attempt.
-func terminalAttempt(execution *jobruntime.Execution[jobruntime.DailyMetricsPartitionArgs]) bool {
+// terminalAttempt reports whether River will not run this job again: the same
+// attempt pair the adapter acts on (finalize's own final-attempt arm). An unset
+// MaxAttempts is never the last attempt.
+func terminalAttempt[Args jobruntime.ContractArgs](execution *jobruntime.Execution[Args]) bool {
 	return execution.Definition.MaxAttempts > 0 && execution.Attempt >= execution.Definition.MaxAttempts
 }
 

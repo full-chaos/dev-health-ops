@@ -234,3 +234,38 @@ running that script once against the still-live constants immediately before
 their deletion -- the values it emitted are exactly what the test compared
 against on every prior run, never hand-reconstructed. `python_linear_recovery_
 oracle.py` itself is deleted: nothing else called it.
+
+## Declared divergence: equal last_synced in the linked-issue edge collapse
+
+Pair `github/work-items/derivation-context`
+(`TestGitHubWorkItemDerivationMatchesFrozenPythonProduction`). The frozen Python
+collapse (`compute_work_items.py`, `latest_edge`) kept one edge per (source,
+target), the newest by `last_synced`, and on an equal `last_synced` the lower
+`relationship_type`: a `blocks` row beside a `relates_to` or
+`external_issue_key` row of the same pair, written by one sync, dropped the
+donor. Go keeps the inheritable row on that tie
+(`teamattribution.LatestGitHubWorkItemDerivationDependencies`). The reason is
+the settled rule of CHAOS-9821: a native link outranks explicit text, and a
+lower tier never displaces a native link. That rule came after the Python
+choice to prefer the blocking type on a tie. No frozen case
+holds such a tie, so the golden file is unchanged. Python is deleted, so its
+answer for a tied input is not recorded;
+`TestOracleDeclaredDivergenceGoKeepsTheInheritableEdgeOnATie` adds a
+same-timestamp `blocks` row to the case
+`actual_extkey_link_inherits_linear_donor` and shows Go gives the frozen
+case's answer (the Python rule gave the item no linked donor).
+
+## Declared divergence: equal last_synced in the repository-ownership donor walk
+
+Pair `sync/team-repo-ownership/donor-walk`
+(`TestTeamRepoOwnershipDonorWalkMatchesFrozenPythonProduction`). The donor walk
+of the `team_repo_ownership` derivation (`buildDonorTeamIDResolver`) collapses
+dependency edges per (source, target) with the cascade's one rule,
+`teamattribution.LatestDependencyEdgeWins`: on an equal `last_synced` an
+inheritable row wins, then the lower `relationship_type`. The frozen Python
+`latest_edge` kept the lower type alone, so a `blocks` row beside a
+`relates_to` row of the same pair dropped the donor. No frozen case of this
+pair holds such a tie, so the golden file is unchanged.
+`TestTeamRepoOwnershipDonorWalkDeclaredDivergenceGoKeepsTheInheritableEdgeOnATie`
+adds a same-timestamp `blocks` row to the case
+`inheritable_relates_to_transfers` and shows Go gives the frozen case's team.

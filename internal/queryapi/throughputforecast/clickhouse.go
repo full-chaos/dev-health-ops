@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/newestrow"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
@@ -19,7 +20,8 @@ import (
 // a list of days: a day that holds only retraction rows (the keys of a retired
 // team id a caller named) is a day with no data, not a day with a throughput
 // or a WIP of 0. The reads that take each key's newest day (backlog, current
-// WIP, stale WIP) do not carry it: a retraction row must stay the newest row
+// WIP, stale WIP) do not filter on it (the backlog read only counts its
+// measured keys): a retraction row must stay the newest row
 // of its key there, so that the key gives nothing and not its older backlog,
 // and it adds 0 to a sum and no value to a Nullable mean.
 var measuredWorkItemKey = liverow.NewestPredicate("work_item_metrics_daily", "")
@@ -323,6 +325,7 @@ type estimateCoverage struct {
 	estimatedCount   int
 	unestimatedCount int
 	backlogSize      int
+	grainCount       int
 }
 
 // loadEstimateCoverage ports _load_estimate_coverage.
@@ -409,6 +412,11 @@ func loadEstimateCoverage(
 		return nil, err
 	}
 
+	grainCount, err := countFromAggregate("grains", grains)
+	if err != nil {
+		return nil, err
+	}
+
 	// `ratio = estimated / backlog if backlog else None` -- a FALSY check, so a
 	// backlog of zero yields a null ratio rather than a division by zero. The
 	// counts are still reported: "we know the backlog is empty" is different
@@ -423,6 +431,7 @@ func loadEstimateCoverage(
 		estimatedCount:   estimatedCount,
 		unestimatedCount: unestimatedCount,
 		backlogSize:      backlogSize,
+		grainCount:       grainCount,
 	}, nil
 }
 
@@ -449,6 +458,7 @@ func loadReviewOverlay(
             FROM repo_metrics_daily
             WHERE day >= {start_date:Date} AND org_id = {org_id:String}
             GROUP BY repo_id, day
+            HAVING ` + liverow.NewestPredicate("repo_metrics_daily", "") + `
         )
         WHERE pr_first_review_p50_hours IS NOT NULL
     `
@@ -482,45 +492,79 @@ func loadReviewOverlay(
 	return *latency, nil
 }
 
-// loadBacklog ports _load_backlog.
+// backlogRead is the backlog of a scope and how it was found (CHAOS-8167): the newest day of a key can be long before
+// the forecast window, and a sum read from it is not a current backlog.
+type backlogRead struct {
+	size  int
+	state model.ThroughputBacklogState
+	// asOfDay is the oldest newest day of the measured keys; nil for NO_ROWS and SUPPLIED.
+	asOfDay *time.Time
+}
+
+// loadBacklog ports _load_backlog and says how fresh the sum is. A measured key whose newest day is before the window
+// start (the bound of the throughput history and current WIP reads) makes the read STALE; the sum keeps that key's
+// value. A key whose newest row is a retraction adds 0 and is not a measured key, so a scope of such keys only is
+// NO_ROWS, not a measured zero.
 func loadBacklog(
 	ctx context.Context, client QueryClient, orgID string,
-	teamIDs []string, workScopeID *string,
-) (int, error) {
+	teamIDs []string, workScopeID *string, historyWeeks int, today time.Time,
+) (backlogRead, error) {
 	conditions, bindings := workItemScopeFilter(orgID, teamIDs, workScopeID)
 	where := strings.Join(conditions, " AND ")
+	bindings = append(bindings, clickhouse.Binding{Name: "start_date", Value: startDate(today, historyWeeks)})
 
 	query := fmt.Sprintf(`
-        SELECT sum(wip_count_end_of_day) AS backlog
+        SELECT
+            sum(wip_count_end_of_day) AS backlog,
+            countIf(measured) AS measured_keys,
+            countIf(measured AND newest_day < {start_date:Date}) AS stale_keys,
+            minIf(newest_day, measured) AS oldest_day
         FROM (
             SELECT
                 team_id,
                 work_scope_id,
                 provider,
-                argMax(wip_count_end_of_day, computed_at) AS wip_count_end_of_day
+                max(day) AS newest_day,
+                argMax(wip_count_end_of_day, computed_at) AS wip_count_end_of_day,
+                %s AS measured
             FROM work_item_metrics_daily
             WHERE %s
             AND %s
             GROUP BY team_id, work_scope_id, provider, row_view
         )
-    `, newestrow.PerTeamPredicate("work_item_metrics_daily", where), where)
+    `, measuredWorkItemKey, newestrow.PerTeamPredicate("work_item_metrics_daily", where), where)
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
-		return 0, fmt.Errorf("throughputForecast: backlog query: %w", err)
+		return backlogRead{}, fmt.Errorf("throughputForecast: backlog query: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var backlog uint64
+	var backlog, measuredKeys, staleKeys uint64
+	var oldestDay time.Time
 	if rows.Next() {
-		if scanErr := rows.Scan(&backlog); scanErr != nil {
-			return 0, fmt.Errorf("throughputForecast: backlog scan: %w", scanErr)
+		if scanErr := rows.Scan(&backlog, &measuredKeys, &staleKeys, &oldestDay); scanErr != nil {
+			return backlogRead{}, fmt.Errorf("throughputForecast: backlog scan: %w", scanErr)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("throughputForecast: backlog rows: %w", err)
+		return backlogRead{}, fmt.Errorf("throughputForecast: backlog rows: %w", err)
 	}
-	return countFromAggregate("wip_count_end_of_day", backlog)
+	size, err := countFromAggregate("wip_count_end_of_day", backlog)
+	if err != nil {
+		return backlogRead{}, err
+	}
+	read := backlogRead{size: size, state: model.ThroughputBacklogStateNoRows}
+	if measuredKeys == 0 {
+		return read, nil
+	}
+	read.state = model.ThroughputBacklogStateMeasured
+	if staleKeys > 0 {
+		read.state = model.ThroughputBacklogStateStale
+	}
+	day := oldestDay.UTC()
+	read.asOfDay = &day
+	return read, nil
 }
 
 // loadIncidentOverlay ports _load_incident_overlay.
@@ -544,6 +588,7 @@ func loadIncidentOverlay(
             FROM incident_metrics_daily
             WHERE day >= {start_date:Date} AND org_id = {org_id:String}
             GROUP BY repo_id, day
+            HAVING ` + liverow.NewestPredicate("incident_metrics_daily", "") + `
         )
     `
 	bindings := []clickhouse.Binding{

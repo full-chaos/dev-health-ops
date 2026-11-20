@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"log/slog"
 	"math"
 	"math/big"
@@ -18,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/google/uuid"
 )
@@ -174,19 +174,14 @@ func TestClickHouseExternalSinkRetriesAreIdempotentAtNaturalKeys(t *testing.T) {
 	}
 }
 
-// TestClickHouseExternalSinkPreservesManualMembersOnTeamWrite pins the fix
-// for the CHAOS-4321 round-3 codex adversarial review HIGH finding: a
-// team.v1 external-ingest write used to send manual_members=[]
-// unconditionally, so it could silently clear an admin override. Write()
-// must now read the team's current manual_members and carry it forward.
-func TestClickHouseExternalSinkPreservesManualMembersOnTeamWrite(t *testing.T) {
+// TestClickHouseExternalSinkKeepsManualMembersOnTeamWrite pins CHAOS-4321
+// and CHAOS-14081: a team.v1 push never edits the admin roster, so the team
+// row keeps manual_members (teamprovider.RosterKept), read from teams FINAL
+// inside the insert statement, and no earlier read of the roster is made
+// that an admin edit could land after.
+func TestClickHouseExternalSinkKeepsManualMembersOnTeamWrite(t *testing.T) {
 	pointer := externalTestPointer()
-	connection := &productSink{
-		batch: &productBatch{},
-		queryRows: [][]any{
-			{"gh:team-a", []string{"alice@example.test"}},
-		},
-	}
+	connection := &productSink{batch: &productBatch{}, queryErr: errors.New("the roster must not be read before the insert")}
 	sink, err := NewClickHouseExternalBatchSink(connection)
 	if err != nil {
 		t.Fatal(err)
@@ -201,57 +196,20 @@ func TestClickHouseExternalSinkPreservesManualMembersOnTeamWrite(t *testing.T) {
 	if _, err := sink.Write(context.Background(), source); err != nil {
 		t.Fatal(err)
 	}
-	if connection.queryCalls != 1 {
-		t.Fatalf("preserve-lookup calls = %d, want 1", connection.queryCalls)
+	if connection.queryCalls != 0 {
+		t.Fatalf("roster reads before the insert = %d (%q), want 0", connection.queryCalls, connection.lastQuery)
 	}
 	if connection.carryCountCalls != 1 {
 		t.Fatalf("team id carry count reads = %d, want 1 before the team.v1 write", connection.carryCountCalls)
 	}
-	// The preserve read asks for the id the row is written under: the
-	// system-prefixed id (CHAOS-8939), not the pushed one.
-	askedFor := false
-	for _, arg := range connection.lastQueryArgs {
-		if named, ok := arg.(driver.NamedValue); ok && named.Name == "team_ids" {
-			askedFor = reflect.DeepEqual(named.Value, []string{"gh:team-a"})
-		}
-	}
-	if !askedFor {
-		t.Fatalf("preserve-lookup args = %#v, want team_ids [gh:team-a]", connection.lastQueryArgs)
-	}
-	if !connection.batch.sent || len(connection.batch.rows) != 1 {
+	if !connection.batch.sent || len(connection.batch.rows) != 1 || len(connection.writes) != 1 {
 		t.Fatalf("team sink not durable: %#v", connection.batch)
 	}
-	// manual_members (4) is the column this test protects.
-	got := connection.batch.rows[0][4]
-	if want := []string{"alice@example.test"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("manual_members = %v, want %v (existing override must survive)", got, want)
+	if got := connection.writes[0].Roster; got != teamprovider.RosterKept {
+		t.Fatalf("team.v1 roster rule = %d, want RosterKept", got)
 	}
-}
-
-// TestClickHouseExternalSinkAbortsTeamWriteWhenPreserveLookupFails pins the
-// other half of the same fix: if the preserve-lookup read itself fails, the
-// team.v1 row must never be written with a blind [] -- that would silently
-// wipe whatever override actually exists. Write() must return an error and
-// the batch must never be sent.
-func TestClickHouseExternalSinkAbortsTeamWriteWhenPreserveLookupFails(t *testing.T) {
-	pointer := externalTestPointer()
-	connection := &productSink{batch: &productBatch{}, queryErr: errors.New("clickhouse unavailable")}
-	sink, err := NewClickHouseExternalBatchSink(connection)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sink.now = func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
-	source := externalSinkBatch{
-		Pointer: pointer, SourceID: uuid.New(),
-		Records: []externalSinkRecord{externalSinkFixture("team.v1", map[string]any{
-			"id": "team-a", "name": "Team A", "updatedAt": "2026-07-23T11:00:00Z",
-		})},
-	}
-	if _, err := sink.Write(context.Background(), source); err == nil {
-		t.Fatal("expected Write to fail closed when the manual_members preserve-lookup errors")
-	}
-	if connection.batch.sent {
-		t.Fatal("team row must never be sent when its manual_members could not be preserved")
+	if !strings.Contains(connection.query, "kept.kept_manual") {
+		t.Fatalf("team insert does not read the stored roster in the statement: %s", connection.query)
 	}
 }
 
@@ -357,7 +315,7 @@ func TestExternalClickHouseRowsMatchPythonGoldenOracle(t *testing.T) {
 			record := externalSinkRecord{Kind: kind, ExternalID: "golden", Payload: expected.Payload}
 			values, err := externalRecordValues(
 				externalSinkBatch{Pointer: pointer, SourceID: sourceID},
-				record, now, &ExternalRecomputeScope{}, nil,
+				record, now, &ExternalRecomputeScope{},
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -367,6 +325,13 @@ func TestExternalClickHouseRowsMatchPythonGoldenOracle(t *testing.T) {
 				t.Fatal(err)
 			}
 			table, columns := externalQueryContract(query)
+			if table == "work_item_transitions" {
+				var problem string
+				columns, values, problem = withoutTransitionProviderAfterThePythonFreeze(columns, values, source.System)
+				if problem != "" {
+					t.Fatal(problem)
+				}
+			}
 			columns = slices.DeleteFunc(columns, func(column string) bool {
 				return slices.Contains(externalUnreferencedColumns[table], column)
 			})

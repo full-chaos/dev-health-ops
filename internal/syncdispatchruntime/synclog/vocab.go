@@ -60,6 +60,7 @@ var (
 	MsgPostSyncFanout                                    = Msg{"post_sync_fanout"}
 	MsgPostSyncFanoutFailed                              = Msg{"post_sync_fanout.failed"}
 	MsgPostSyncFanoutChainDefect                         = Msg{"post_sync_fanout.chain_defect"}
+	MsgPostSyncDeliveryNotCurrent                        = Msg{"post_sync_fanout.delivery_not_current"}
 	MsgPostSyncTouchedDays                               = Msg{"post_sync_fanout.touched_days"}
 	MsgPostSyncTouchedDaysFailed                         = Msg{"post_sync_fanout.touched_days_failed"}
 	MsgPostSyncTouchedWindowOverBound                    = Msg{"post_sync_fanout.touched_window_keys_over_bound"}
@@ -74,6 +75,7 @@ var (
 	MsgDispatchSyncRunRedispatchBackoffReadFailed        = Msg{"dispatch_sync_run.redispatch_backoff_read_failed"}
 	MsgDispatchSyncRunWokenByUnitCompletion              = Msg{"dispatch_sync_run.woken_by_unit_completion"}
 	MsgDispatchSyncRunUnitCompletionWakeFailed           = Msg{"dispatch_sync_run.unit_completion_wake_failed"}
+	MsgSyncDispatchCommitSnapshotBusy                    = Msg{"sync_dispatch_fence.commit_snapshot_busy"}
 	MsgTeamRepoOwnershipDerivation                       = Msg{"team_repo_ownership_derivation"}
 	// The provider egress guard (internal/egressguard): a refused dial, and an allow-list setting that is not a CIDR list.
 	MsgEgressRefused          = Msg{"egressguard: provider egress refused"}
@@ -179,6 +181,8 @@ var (
 	KeyErrorCode                    = Key{"error_code"}
 	KeyCount                        = Key{"count"}
 	KeyPath                         = Key{"path"}
+	KeyOutboxKind                   = Key{"outbox_kind"}
+	KeyTries                        = Key{"tries"}
 	KeyCountdown                    = Key{"countdown"}
 	KeyKeptEarlierWakeup            = Key{"kept_earlier_wakeup"}
 	KeyIdleSeconds                  = Key{"idle_seconds"}

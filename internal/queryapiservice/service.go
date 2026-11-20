@@ -94,20 +94,7 @@ func configure(
 			return closeOnError(err)
 		}
 	}
-	// One release of compatibility (D2627): /healthz, /readyz and /metrics are also
-	// answered on the query listener, in the old shapes, so the chart's probes and
-	// the scrape can move to the operator listener in their own deploy change.
-	// The handler is only borrowed (never started): it reads the same registry.
-	operatorRoutes, err := health.NewServer(health.ServerOptions{
-		Address:  "127.0.0.1:0",
-		Registry: registry,
-		Service:  config.QueryAPIServiceName,
-	})
-	if err != nil {
-		return closeOnError(err)
-	}
-	logger.WarnContext(ctx, "the query listener still serves /healthz, /readyz and /metrics for one release; probes and scrape belong on the operator listener", "setting", "HTTP_ADDR")
-	public, internal := server.Listeners(cfg.QueryAPIAddress, cfg.QueryAPIInternalAddress, plane, server.OperatorCompat(registry, operatorRoutes, config.QueryAPIServiceName), cfg.QueryAPIInternalAllowedCIDRs)
+	public, internal := server.Listeners(cfg.QueryAPIAddress, cfg.QueryAPIInternalAddress, plane, cfg.QueryAPIInternalAllowedCIDRs)
 	if err := registry.RegisterRequired(listenerCheck, func(context.Context) error {
 		if public.Address() == "" {
 			return errors.New("query listener is not bound")

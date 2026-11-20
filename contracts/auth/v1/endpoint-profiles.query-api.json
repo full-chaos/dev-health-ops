@@ -1346,7 +1346,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 252,
+          "line": 251,
           "note": "func authenticateGraphQLEdge",
           "path": "internal/queryapi/server/graphql_edge_route.go"
         },
@@ -1358,7 +1358,7 @@
       "service": "dev-health-query-api",
       "source": {
         "file": "internal/queryapi/server/graphql_edge_route.go",
-        "line": 169
+        "line": 168
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -1390,7 +1390,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 252,
+          "line": 251,
           "note": "func authenticateGraphQLEdge",
           "path": "internal/queryapi/server/graphql_edge_route.go"
         },
@@ -1402,7 +1402,7 @@
       "service": "dev-health-query-api",
       "source": {
         "file": "internal/queryapi/server/graphql_edge_route.go",
-        "line": 169
+        "line": 168
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -1412,22 +1412,6 @@
         "issuer": null,
         "token_type": "EdDSA at+jwt JWT (user access token)"
       }
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "api_route /healthz [dev-health-query-api @query,internal]",
-      "method": "api_route",
-      "public_rationale": "Probe reached by the orchestrator; returns no tenant data.",
-      "route": "/healthz",
-      "service": "dev-health-query-api",
-      "source": {
-        "file": "internal/queryapi/server/operator_compat.go",
-        "line": 36
-      },
-      "surface_kind": "rest"
     },
     {
       "accepted_credential_classes": [],
@@ -1450,14 +1434,14 @@
       "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
-      "id": "GET /metrics [dev-health-query-api @internal,operator]",
+      "id": "GET /metrics [dev-health-query-api @operator]",
       "method": "GET",
-      "public_rationale": "Scrape endpoint on the operator and internal listeners only (never the public one); process metrics, no tenant data.",
+      "public_rationale": "Scrape endpoint on the operator listener only; process metrics, no tenant data.",
       "route": "/metrics",
       "service": "dev-health-query-api",
       "source": {
-        "file": "internal/queryapi/server/operator_compat.go",
-        "line": 71
+        "file": "internal/platform/health/server.go",
+        "line": 133
       },
       "surface_kind": "rest"
     },
@@ -1674,22 +1658,6 @@
         "issuer": null,
         "token_type": "EdDSA at+jwt JWT (user access token)"
       }
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "api_route /readyz [dev-health-query-api @query,internal]",
-      "method": "api_route",
-      "public_rationale": "Probe reached by the orchestrator; returns no tenant data.",
-      "route": "/readyz",
-      "service": "dev-health-query-api",
-      "source": {
-        "file": "internal/queryapi/server/operator_compat.go",
-        "line": 40
-      },
-      "surface_kind": "rest"
     },
     {
       "accepted_credential_classes": [],

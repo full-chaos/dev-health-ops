@@ -310,12 +310,19 @@ jobs:
     if: needs.auth-changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # CHAOS-13779: pulls the mirrored test-dependency images from ghcr.io.
+    permissions:
+      contents: read
+      packages: read
     strategy:
       fail-fast: false
       matrix:
         leg: [1, 2, 3, 4]
     env:
       CHECK_GO_JOB_CAP_MIN: 30
+      # CHAOS-13779: the go.yml form. Every registry-less Docker Hub ref (the harness images and the testcontainers reaper)
+      # resolves at the ghcr mirror, for the pre-pull and for the tests alike.
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -343,6 +350,25 @@ jobs:
           key: go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
+      # CHAOS-13779: without a login and a pre-pull, parallel test binaries pulled postgres from Docker Hub themselves and one
+      # container create got "No such image". The pre-pull warms every pinned image first, with a bounded retry, and a real
+      # missing image fails this step.
+      - name: Log in to GitHub Container Registry
+        id: ghcr_login
+        continue-on-error: true
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Retry the GitHub Container Registry login
+        if: steps.ghcr_login.outcome == 'failure'
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash ci/lib/ghcr_login.sh
+      - name: Pre-pull pinned test dependency images with bounded retry
+        run: bash ci/check_go.sh integration-prepull
       - name: go test -race on live PostgreSQL (session domain concurrency, CHAOS-10207; leg ${{ matrix.leg }} of 4)
         run: bash ci/check_go.sh auth race-integration-leg "${{ matrix.leg }}" 4
       - name: Save the Go module and build caches (main pushes and the merge queue only)
@@ -353,6 +379,9 @@ jobs:
             ${{ steps.go-cache-paths.outputs.mod }}
             ${{ steps.go-cache-paths.outputs.build }}
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
+      - name: Log out of GitHub Container Registry
+        if: always()
+        run: docker logout ghcr.io
 
   # One job per package (CHAOS-11417): checkout, setup-go and the compile are paid once per package, not once per target.
   # Each target keeps its own `auth fuzz TARGET` call, so its corpus, its proof marker and the one default fuzz budget
@@ -374,7 +403,7 @@ jobs:
           - package: internal/auth/signedtoken
             targets: FuzzValidSignedToken
           - package: internal/auth/httpapi
-            targets: FuzzParseLimit FuzzParseForwardedTrust
+            targets: FuzzParseLimit FuzzParseForwardedTrust FuzzParseQueryMatchesNetURLOnWellFormedInput
           - package: internal/auth/clientaddr
             targets: FuzzParseTrust
           - package: internal/auth/keystore

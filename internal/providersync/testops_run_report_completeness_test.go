@@ -218,8 +218,11 @@ func TestRunReportLossCausesMatchTheRunVocabularies(t *testing.T) {
 			}
 		}
 	}
-	if _, loss := githubTestsRunReportLossCauses[githubTestsAggregateOfPartsCause]; !loss {
-		t.Error("aggregate_of_parts must stay a loss until the producer drop is lossless (acp C7)")
+	if _, notALoss := githubTestsRunReportNotALossCauses[githubTestsAggregateOfPartsCause]; !notALoss {
+		t.Error("aggregate_of_parts is not a loss now that the producer drops only lossless aggregates (acp C7)")
+	}
+	if _, loss := githubTestsRunReportLossCauses[githubTestsAggregateMismatchCause]; !loss {
+		t.Error("aggregate_mismatch must stay a loss (acp C7)")
 	}
 	for reason := range githubTestsRunReportVerdictOnlyReasons {
 		if _, ok := recordable[reason]; ok {
@@ -234,7 +237,7 @@ func TestRunLossReasonsSeeASkipTheMarkerSampleDropped(t *testing.T) {
 	for index := 0; index < githubTestsMaxSkippedArtifactRecords; index++ {
 		cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount = appendGitHubTestsSkippedArtifact(
 			cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount,
-			GitHubTestsSkippedArtifact{RunID: "1", ArtifactID: "a", Cause: githubTestsArtifactUnavailableCause},
+			GitHubTestsSkippedArtifact{RunID: "1", ArtifactID: fmt.Sprint("a", index), Cause: githubTestsArtifactUnavailableCause},
 		)
 	}
 	before := githubTestsTakeRunLossCounts(cursor)

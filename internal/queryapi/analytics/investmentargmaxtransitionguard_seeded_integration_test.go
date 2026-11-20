@@ -45,6 +45,7 @@ import (
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -136,6 +137,7 @@ func TestArgMaxNullTransitionGuard_SeededRealClickHouse_BaselineThenTransition(t
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})
 	if err != nil {
@@ -286,6 +288,7 @@ func TestArgMaxNullTransitionGuard_SeededRealClickHouse_SameTimestampTieDiverges
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_unit_investments")
 
 	const tieOrg = "argmax-guard-tie"
 	const tieTimestamp = "2026-01-05 00:00:00"

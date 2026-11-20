@@ -21,7 +21,8 @@ const (
 	enforceOutcomeAllow     = "allow"
 	enforceOutcomeDeny      = "deny"
 	enforceOutcomeErrorDeny = "error_deny"
-	// enforceOutcomeImpersonationRefused: a caller with a live go-api impersonation row, refused before any call.
+	// enforceOutcomeImpersonationRefused: a caller with a live go-api impersonation row, refused with the session's 403
+	// after its question did not deny (decideLiveRow), or unasked: a holder of the session context on an organization row.
 	enforceOutcomeImpersonationRefused = "impersonation_refused"
 
 	enforceDefaultTimeout = 2 * time.Second
@@ -66,8 +67,11 @@ var enforceOutcomes = []string{enforceOutcomeAllow, enforceOutcomeDeny, enforceO
 // obligation go-api does not carry out (see obligationsCarriedOut) is such a failure. A caller with a live go-api
 // impersonation row presents the admin's own bearer, which the decision point would judge as the admin, not as the
 // delegation: its read of a route that is not a platform wrap keeps the legacy answer (served as the target
-// organization, product rule 1) and any other request is refused, as the legacy platform wrap refuses it, both before
-// any call, except on the stop route. A delegated session's own bearer is decided
+// organization, product rule 1), unasked, and any other request is refused, as the legacy platform wrap refuses it,
+// except on the stop route. On a platform row the role question is asked first, as the legacy wrap asks it before the
+// session (decideLiveRow): a deny is the legacy deny, an allow or no verdict the session refusal. On an organization row
+// a caller with no admin.impersonate (its row found by the guard's read only) is asked the question it is asked with no
+// row, with the same result; a holder of the session context is refused unasked. A delegated session's own bearer is decided
 // like any other. A token with no organization on an organization row is asked the one platform action the legacy
 // guard admits it by, admin.orgs; on an AdminOrg row it is refused as the legacy guard refuses it, with no question
 // (decideOrgless). A request whose served organization is no UUID is judged on the token organization like any other;
@@ -155,6 +159,9 @@ type enforceObservation struct {
 	userAccessToken bool
 	// impersonating: a live go-api impersonation row is in force for the caller's own bearer.
 	impersonating bool
+	// rowOnly: the live row was found by the guard's own read (Guard.enforceVerdict), not by the session context: the
+	// caller holds no admin.impersonate, so the legacy guard judges it as a plain caller of its token organization.
+	rowOnly bool
 	// read: the request method writes nothing (readMethod, the legacy RefuseImpersonation's rule).
 	read bool
 	// platformWrap: the route is a platform wrap, whose legacy guard refuses a live row itself (Guard.wrap, Superuser).
@@ -293,10 +300,7 @@ func (e *Enforcer) decideOnce(ctx context.Context, o enforceObservation) enforce
 				slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
 			return enforceLegacy
 		}
-		countEnforce(ctx, row.Namespace, enforceOutcomeImpersonationRefused, "")
-		e.logger.WarnContext(ctx, "api enforcement: impersonation caller refused on an enforced row",
-			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
-		return enforceImpersonationRefused
+		return e.decideLiveRow(ctx, o, row)
 	}
 	// A request that serves another organization than the token's is judged as the legacy guard judges it: the decision
 	// point answers for the TOKEN organization, the route level's check, and the org scope and the handler keep admitting
@@ -336,6 +340,82 @@ func (e *Enforcer) decideOnce(ctx context.Context, o enforceObservation) enforce
 		return enforceDenyNoOrg
 	}
 	return enforceDeny
+}
+
+// decideLiveRow decides a caller with a live go-api impersonation row on a row it may not use in one. On a platform row the
+// role question comes first, as the legacy platform wrap asks it before the session (Guard.wrap): a caller the decision
+// point denies the row gets the legacy deny (product rule 1). On an organization row a caller whose row only the guard's
+// own read found (rowOnly) is asked the question it is asked with no row, as the legacy guard judges it by its role
+// alone: a deny is that refusal. An allow, no verdict, or a holder of the session context on an organization row is the
+// session refusal, so the row never reaches a handler (D6833).
+func (e *Enforcer) decideLiveRow(ctx context.Context, o enforceObservation, row ShadowRow) enforceVerdict {
+	if held, judged := e.liveRowHolds(ctx, o, row); judged && !held {
+		countEnforce(ctx, row.Namespace, enforceOutcomeDeny, "")
+		if o.orgID == "" {
+			return enforceDenyNoOrg
+		}
+		return enforceDeny
+	}
+	countEnforce(ctx, row.Namespace, enforceOutcomeImpersonationRefused, "")
+	e.logger.WarnContext(ctx, "api enforcement: impersonation caller refused on an enforced row",
+		slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
+	return enforceImpersonationRefused
+}
+
+// liveRowHolds asks a platform row's role question for decideLiveRow: the row's platform action, and on an admin-or row
+// adminOrOrgAction in the token's organization too. On an organization row it asks liveRowOrgHolds for a rowOnly caller.
+// judged is false for a holder on an organization row and for no verdict.
+func (e *Enforcer) liveRowHolds(ctx context.Context, o enforceObservation, row ShadowRow) (held, judged bool) {
+	if row.ResourceType != policycatalog.ScopePlatform {
+		if !o.rowOnly {
+			return false, false
+		}
+		return e.liveRowOrgHolds(ctx, o, row)
+	}
+	if o.adminOr {
+		requests := adminOrRequests(o.bearer, row.Action, strings.ToLower(o.orgID))
+		decisions, failed := e.askBatch(ctx, requests)
+		allowed, _, verdict := adminOrAnswer(requests, decisions, e.noRepositoryDimension[o.pattern], o.read)
+		return allowed, !failed && verdict
+	}
+	var err error
+	if o.platform != nil {
+		held, err = o.platform.holds(ctx, row.Action)
+	} else {
+		held, err = e.askPlatform(ctx, o.bearer, row.Action)
+	}
+	return held, err == nil
+}
+
+// liveRowOrgHolds asks an organization row the question decideOnce asks with no live row: with a token organization the
+// row's action in it (rowRequest); with none, decideOrgless's question: the org-less platform action, or nothing on an
+// AdminOrg row, which the legacy guard refuses whoever asks (a deny). judged is false for no verdict, an allow whose
+// obligations go-api does not carry out, and a delegated session's bearer.
+func (e *Enforcer) liveRowOrgHolds(ctx context.Context, o enforceObservation, row ShadowRow) (held, judged bool) {
+	if o.orgID == "" {
+		switch o.orgless.question() {
+		case orglessRefusedUnasked:
+			return false, true
+		case orglessKeepsLegacy:
+			return false, false
+		}
+		var err error
+		if o.platform != nil {
+			held, err = o.platform.holds(ctx, o.orgless.action)
+		} else {
+			held, err = e.askPlatform(ctx, o.bearer, o.orgless.action)
+		}
+		return held, err == nil
+	}
+	request := rowRequest(o.bearer, row, strings.ToLower(o.orgID))
+	decision, failed := e.ask(ctx, request)
+	if failed || decision.Local() {
+		return false, false
+	}
+	if decision.Allowed() && !obligationsCarriedOut(decision.Obligations(), request, e.noRepositoryDimension[o.pattern], o.read) {
+		return false, false
+	}
+	return decision.Allowed(), true
 }
 
 // decideOrgless decides an organization row for a token with no organization (CHAOS-10872 S1, product rule 1). The
@@ -495,6 +575,7 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, level
 	}
 	ctx := r.Context()
 	impersonating := ImpersonationFrom(ctx) != nil
+	rowOnly := false
 	// The session context is set for a holder of admin.impersonate only. On an enforced write or platform row the live
 	// row decides for any caller, as the guard's own refusals do (Guard.sessionRow): a caller whose admin.impersonate
 	// was revoked while its row is live is refused too. A read of any other row reads no row (the read limit).
@@ -510,13 +591,14 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, level
 			return enforceSessionRowUnavailable
 		}
 		impersonating = session != nil
+		rowOnly = impersonating
 	}
 	verdict := g.pdp.enforcer.decide(ctx, enforceObservation{pattern: r.Pattern, bearer: bearer, orgID: user.OrgID,
-		userAccessToken: user.accessToken, impersonating: impersonating, read: readMethod(r.Method), platformWrap: platformRoute,
+		userAccessToken: user.accessToken, impersonating: impersonating, rowOnly: rowOnly, read: readMethod(r.Method), platformWrap: platformRoute,
 		served: servedOrgOf(r, g.pdp.enforcer.rows[r.Pattern]), adminOr: gt.kind == gateAdminOr,
 		orgless: orglessInputsOf(level, gt, user), platform: platform})
 	// The refusal returns before the legacy checks that observe the shadow, so the shadow is told here: it counts
-	// impersonation_refused without a decision point call.
+	// impersonation_refused without a decision point call of its own. A live-row deny is not told, as no enforced deny is.
 	if verdict == enforceImpersonationRefused {
 		g.observeShadowAs(r, user, bearer, false, true, gt, level)
 	}

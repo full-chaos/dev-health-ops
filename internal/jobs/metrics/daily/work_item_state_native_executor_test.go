@@ -23,10 +23,13 @@ func mustParseUTC(t *testing.T, value string) time.Time {
 
 // TestComputeWorkItemStateDurationsGolden ports
 // test_time_in_state_is_bucketed_to_day
-// (ops/tests/test_work_item_state_durations_compute.py) byte-for-byte: same
-// item, same two transitions, same day/computed_at -- the Python test's own
-// documented expectation (00:00-02:00 todo=2h; 02:00-10:00 in_progress=8h;
-// 10:00-24:00 done=14h) is the oracle. This is CHAOS-4278's row-identity
+// (ops/tests/test_work_item_state_durations_compute.py): same item, same two
+// transitions, same day/computed_at -- the Python test's own documented
+// expectation (00:00-02:00 todo=2h; 02:00-10:00 in_progress=8h) is the oracle.
+// One intended divergence: Python also counted 10:00-24:00 done=14h, running
+// the done segment of an item with no completed_at to computed_at, so its
+// answer depended on the run time. The segment now ends at the last
+// transition, and the item has no done row. This is CHAOS-4278's row-identity
 // proof for the segment/overlap algorithm itself (the part of this port NOT
 // substituted by a table read -- see WorkItemStateExecutor's doc comment for
 // the team-attribution substitution and its own, separately measured,
@@ -83,7 +86,6 @@ func TestComputeWorkItemStateDurationsGolden(t *testing.T) {
 	}{
 		{"todo", 2.0},
 		{"in_progress", 8.0},
-		{"done", 14.0},
 	}
 	if len(rows) != len(cases) {
 		t.Fatalf("got %d rows, want %d: %#v", len(rows), len(cases), rows)
@@ -163,20 +165,32 @@ func TestSegmentWorkItemStatusesFromStatusFallback(t *testing.T) {
 	}
 }
 
-// TestSegmentWorkItemStatusesCompletedAtWinsOverComputedAt ports the
-// "end_of_item = completed_at if present else computed_at" rule.
-func TestSegmentWorkItemStatusesCompletedAtWinsOverComputedAt(t *testing.T) {
+// TestSegmentWorkItemStatusesEndsAtCompletedAtOnlyWhenTerminal: completed_at ends
+// the last segment when the status or the last known transition is terminal;
+// an open item with a kept completed_at runs to computed_at.
+func TestSegmentWorkItemStatusesEndsAtCompletedAtOnlyWhenTerminal(t *testing.T) {
 	created := mustParseUTC(t, "2025-12-17T00:00:00Z")
 	completed := mustParseUTC(t, "2025-12-18T06:00:00Z")
 	computedAt := mustParseUTC(t, "2025-12-19T00:00:00Z")
-	segments := segmentWorkItemStatuses(created, &completed, "todo", []workItemStateTransition{
-		{OccurredAt: mustParseUTC(t, "2025-12-18T00:00:00Z"), FromStatus: "backlog", ToStatus: "in_progress"},
-	}, computedAt)
-	if len(segments) != 2 {
-		t.Fatalf("got %d segments, want 2: %#v", len(segments), segments)
-	}
-	if !segments[1].end.Equal(completed) {
-		t.Fatalf("segments[1].end=%v, want completed_at %v", segments[1].end, completed)
+	for _, tc := range []struct {
+		status, lastTo string
+		wantEnd        time.Time
+	}{
+		{"done", "in_progress", completed},
+		{"canceled", "in_progress", completed},
+		{"todo", "in_progress", computedAt},
+		{"todo", "done", completed},
+		{"in_progress", "canceled", completed},
+	} {
+		segments := segmentWorkItemStatuses(created, &completed, tc.status, []workItemStateTransition{
+			{OccurredAt: mustParseUTC(t, "2025-12-18T00:00:00Z"), FromStatus: "backlog", ToStatus: tc.lastTo},
+		}, computedAt)
+		if len(segments) != 2 {
+			t.Fatalf("status %s, last to %s: got %d segments, want 2: %#v", tc.status, tc.lastTo, len(segments), segments)
+		}
+		if !segments[1].end.Equal(tc.wantEnd) {
+			t.Fatalf("status %s, last to %s: segments[1].end=%v, want %v", tc.status, tc.lastTo, segments[1].end, tc.wantEnd)
+		}
 	}
 }
 

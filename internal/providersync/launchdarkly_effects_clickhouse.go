@@ -414,15 +414,17 @@ WHERE org_id = ? AND source_type = ? AND source_id = ? AND edge_type = ?
 	var confidence float32
 	found := false
 	for rows.Next() {
+		var provider *string
 		if err := rows.Scan(
 			&actual.EdgeID, &actual.SourceType, &actual.SourceID, &actual.TargetType,
-			&actual.TargetID, &actual.EdgeType, &repoID, &actual.Provider,
+			&actual.TargetID, &actual.EdgeType, &repoID, &provider,
 			&actual.Provenance, &confidence, &actual.Evidence, &actual.DiscoveredAt,
 			&actual.LastSynced, &actual.EventAt, &actual.Day, &actual.OrgID,
 		); err != nil {
 			return EffectConflict, err
 		}
 		actual.RepoID = repoID
+		actual.Provider = derefString(provider)
 		actual.Confidence = float64(confidence)
 		found = true
 	}

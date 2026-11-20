@@ -155,9 +155,9 @@ func loggedProvider(provider string) string {
 }
 
 func (h handlers) internal(w http.ResponseWriter, r *http.Request, what string, err error) {
-	h.logger.ErrorContext(r.Context(), "api route failed", slog.String("path", r.Pattern),
+	h.logger.Log(r.Context(), routeFailureLevel(err), "api route failed", slog.String("path", r.Pattern),
 		slog.String("step", what), slog.String("error", err.Error()))
-	policy.WriteInternal(w)
+	writeInternalUnlessRefused(w, err)
 }
 
 // orgIDOf is get_admin_org_id's own resolution: the CURRENT authenticated
@@ -407,7 +407,7 @@ func discoverInvalidProviderDetail(provider string) *pyjson.Object {
 // and Fernet decryptor internal/apiservice already builds for
 // webhookintake), then calls the live provider API.
 func (h handlers) discoverTeams(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query()
+	query := httpapi.Query(r)
 	if !query.Has("provider") {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, discoverMissingProviderDetail(), nil)
 		return
@@ -623,7 +623,10 @@ func (h handlers) updateTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	write := TeamWrite{Origin: existing.origin.Provider, TeamID: teamID, Name: existing.Name, Description: existing.Description}
+	// Only the fields of the body are written: the others are kept as
+	// stored when the write is made, not as read here.
+	write := TeamWrite{Origin: existing.origin.Provider, TeamID: teamID, Name: existing.Name, Description: existing.Description,
+		KeepName: !hasName, KeepDescription: !hasDescription, Update: true}
 	if hasName {
 		write.Name = name
 	}
@@ -632,13 +635,9 @@ func (h handlers) updateTeam(w http.ResponseWriter, r *http.Request) {
 	}
 	if hasRepoPatterns {
 		write.RepoPatterns = &repoPatterns
-	} else {
-		write.RepoPatterns = ptrSlice(existing.RepoPatterns)
 	}
 	if hasProjectKeys {
 		write.ProjectKeys = &projectKeys
-	} else {
-		write.ProjectKeys = ptrSlice(existing.ProjectKeys)
 	}
 	updated, err := h.store.CreateOrUpdateTeam(r.Context(), orgIDOf(r.Context()), write)
 	if err != nil {
@@ -796,12 +795,10 @@ func (h handlers) createOrUpdateIdentity(w http.ResponseWriter, r *http.Request)
 	if hasEmail {
 		write.Email = &email
 	}
-	stored, err := h.store.CreateOrUpdateIdentity(ctx, orgID, write)
-	if err != nil {
-		h.internal(w, r, "create or update identity", err)
-		return
-	}
-	newFacets := storedFacets(stored)
+	// The rosters are reconciled BEFORE the identity is written: a roster
+	// edit refused with 409 leaves the identity as it was, so the same
+	// request sent again finds the same old facets and teams to remove.
+	newFacets := storedFacets(resolveIdentity(orgID, old, write, time.Now().UTC()))
 	staleFacets := map[string]bool{}
 	for facet := range oldFacets {
 		if !newFacets[facet] {
@@ -839,5 +836,10 @@ func (h handlers) createOrUpdateIdentity(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	stored, err := h.store.CreateOrUpdateIdentity(ctx, orgID, write)
+	if err != nil {
+		h.internal(w, r, "create or update identity", err)
+		return
+	}
 	policy.WriteModel(w, http.StatusOK, identityWrittenJSON(stored), nil)
 }

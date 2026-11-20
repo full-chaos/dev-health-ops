@@ -186,10 +186,10 @@ func workItemHierarchyProbes() map[string]workItemHierarchyProbe {
 				"content":{"__typename":"Issue","id":"I_1","number":9,"title":"Board child","state":"OPEN",
 				"createdAt":"2026-10-01T00:00:00Z","updatedAt":"2026-10-02T00:00:00Z",
 				"repository":{"nameWithOwner":"acme/api"},"labels":{"nodes":[]},"assignees":{"nodes":[]}},
-				"fieldValues":{"nodes":[]},"changes":{"nodes":[]}}`), &payload); err != nil {
+				"fieldValues":{"nodes":[]}}`), &payload); err != nil {
 				t.Fatal(err)
 			}
-			row, _, kept, err := normalizeGitHubProjectV2Item(nativeTestClaim("github", "work-items"), payload, "ghprojv2:acme/1", nil, now)
+			row, kept, err := normalizeGitHubProjectV2Item(nativeTestClaim("github", "work-items"), payload, "ghprojv2:acme/1", nil, now)
 			if err != nil || !kept {
 				t.Fatalf("kept=%v err=%v", kept, err)
 			}
@@ -201,7 +201,7 @@ func workItemHierarchyProbes() map[string]workItemHierarchyProbe {
 				"created_at":"2026-10-01T00:00:00Z","labels":[],"epic":{"id":900,"iid":4,"group_id":12}}`), &payload); err != nil {
 				t.Fatal(err)
 			}
-			row, _, err := normalizeGitLabIssueWorkItem(nativeTestClaim("gitlab", "work-items"), "acme/api", "acme/api", "org:gitlab:1", repoID, payload, nil,
+			row, _, err := normalizeGitLabIssueWorkItem(nativeTestClaim("gitlab", "work-items"), "acme/api", "acme/api", "org:gitlab:1", repoID, payload, nil, nil,
 				loadRealStatusMapping(t), nil, now)
 			if err != nil {
 				t.Fatal(err)

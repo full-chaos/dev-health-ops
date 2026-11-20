@@ -679,7 +679,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:367; internal/api/teamsidentity/store.go:125); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:367; internal/api/teamsidentity/store.go:127); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "DELETE /api/v1/admin/teams/{team_id} [dev-health-ops-api @api]",
@@ -1333,7 +1333,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/backfill_detail.go:36; internal/api/syncadmin/store.go:462 (backfillJobByID WHERE id=$1 AND org_id=$2, called at internal/api/syncadmin/backfill_detail.go:30)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/backfill_detail.go:36; internal/api/syncadmin/store.go#store.backfillJobByID`FROM backfill_jobs WHERE id = $1 AND org_id = $2` (backfillJobByID WHERE id=$1 AND org_id=$2, called at internal/api/syncadmin/backfill_detail.go:30)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [
         "action: no catalog action covers backfill job (this leaf does not extend the vocabulary)"
       ],
@@ -4587,7 +4587,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/runs.go:560 (malformed uuid 404 at internal/api/syncadmin/runs.go:551); internal/api/syncadmin/store.go:313 (syncRunByID WHERE id=$1 AND org_id=$2, called at internal/api/syncadmin/runs.go:554)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/runs.go#handlers.getSyncRun`if run == nil {` (malformed uuid 404 at internal/api/syncadmin/runs.go#handlers.getSyncRun`pythonparity.ParseUUID(r.PathValue(\"run_id\"))`); internal/api/syncadmin/store.go:313 (syncRunByID WHERE id=$1 AND org_id=$2, called at internal/api/syncadmin/runs.go:554)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [
         "action: no catalog action covers sync run (this leaf does not extend the vocabulary)"
       ],
@@ -4857,7 +4857,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:559; internal/api/teamsidentity/store.go:125); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:559; internal/api/teamsidentity/store.go:127); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/teams/{team_id} [dev-health-ops-api @api]",
@@ -4923,7 +4923,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/members_discover.go:726; internal/api/teamsidentity/members_discover.go:720 (GetTeam -> internal/api/teamsidentity/store.go:125)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/members_discover.go:726; internal/api/teamsidentity/members_discover.go:720 (GetTeam -> internal/api/teamsidentity/store.go:127)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [
         "action: no catalog action covers team member discovery (provider call) (this leaf does not extend the vocabulary)"
       ],
@@ -4991,7 +4991,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/members_infer.go:392; internal/api/teamsidentity/members_infer.go:386 (GetTeam -> internal/api/teamsidentity/store.go:125)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/members_infer.go:392; internal/api/teamsidentity/members_infer.go:386 (GetTeam -> internal/api/teamsidentity/store.go:127)); a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [
         "action: no catalog action covers team member inference (provider call) (this leaf does not extend the vocabulary)"
       ],
@@ -8430,7 +8430,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:621; internal/api/teamsidentity/teamsidentity.go:616 (GetTeam -> internal/api/teamsidentity/store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:621; internal/api/teamsidentity/teamsidentity.go:616 (GetTeam -> internal/api/teamsidentity/store.go:127)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/admin/teams/{team_id} [dev-health-ops-api @api]",
@@ -9333,7 +9333,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:749; internal/api/teamsidentity/teamsidentity.go:739 (GetTeam -> internal/api/teamsidentity/store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:748; internal/api/teamsidentity/teamsidentity.go:738 (GetTeam -> internal/api/teamsidentity/store.go:127)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/identities [dev-health-ops-api @api]",
@@ -12342,7 +12342,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/member_confirm.go:377; internal/api/teamsidentity/member_confirm.go:371 (GetTeam -> internal/api/teamsidentity/store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/member_confirm.go:377; internal/api/teamsidentity/member_confirm.go:371 (GetTeam -> internal/api/teamsidentity/store.go:127)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [
         "action: no catalog action covers team members (inferred) (this leaf does not extend the vocabulary)"
       ],
@@ -12410,7 +12410,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/member_confirm.go:272; internal/api/teamsidentity/member_confirm.go:266 (GetTeam -> internal/api/teamsidentity/store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/member_confirm.go:272; internal/api/teamsidentity/member_confirm.go:266 (GetTeam -> internal/api/teamsidentity/store.go:127)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [
         "action: no catalog action covers team members (this leaf does not extend the vocabulary)"
       ],

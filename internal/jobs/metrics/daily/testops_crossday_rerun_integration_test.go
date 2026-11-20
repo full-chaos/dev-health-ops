@@ -202,6 +202,9 @@ func (e *f3Env) columns(table string) []string {
 // compute runs the production pipeline and test executors for the org's repository and the day.
 func (e *f3Env) compute(org string, day time.Time) {
 	e.t.Helper()
+	// computed_at is whole seconds and a retiring marker sits one unit below the run's snapshot: it retires only a row at least
+	// two units older than the snapshot, so a compute starts two units after the row it may retire.
+	time.Sleep(2100 * time.Millisecond)
 	repo := e.stack.repoID(e.t, org)
 	run := Run{ID: fmt.Sprintf("run-%s-%s-%d", org, day.Format(time.DateOnly), time.Now().UnixNano()), OrganizationID: org, TargetDay: day}
 	part := Partition{ID: "part-" + run.ID, RunID: run.ID, RepoIDs: []RepositoryID{RepositoryID(repo.String())}}
@@ -223,12 +226,12 @@ func (e *f3Env) compute(org string, day time.Time) {
 	time.Sleep(5 * time.Millisecond)
 }
 
-// row is the stored day row (the newest computed_at), or nil.
+// row is the stored day row (the newest computed_at), or nil. A newest row that retires the day (retracted = 1) is no row.
 func (e *f3Env) row(org string, day time.Time) map[string]any {
 	e.t.Helper()
 	rows, err := e.stack.conn.Query(e.ctx, `SELECT formatRow('JSONEachRow', total_cases, passed_count, failed_count, skipped_count, pass_rate,
   failure_rate, total_suites, flake_cases, distinct_cases, flake_rate, failure_recurrence_score)
-FROM testops_test_metrics_daily FINAL WHERE org_id = ? AND day = ?`, org, day)
+FROM (SELECT * FROM testops_test_metrics_daily FINAL WHERE org_id = ? AND day = ?) WHERE retracted = 0`, org, day)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -428,7 +431,7 @@ func TestF3CrossDayRerun(t *testing.T) {
 		e.wantRow("F3-7", org, f3Day, map[string]float64{"total_cases": 2, "skipped_count": 2, "pass_rate": 0})
 	})
 
-	t.Run("F3_8_G1_a_day_row_written_before_the_rerun_stays", func(t *testing.T) {
+	t.Run("F3_8_G1_a_day_row_written_before_the_rerun_is_retired", func(t *testing.T) {
 		e := &f3Env{t: t, ctx: e.ctx, stack: e.stack}
 		org := "f3-8-" + uuid.NewString()[:8]
 		e.stack.pass(t, org, f3Run, at(f3Day, 10), attempt1)
@@ -437,8 +440,9 @@ func TestF3CrossDayRerun(t *testing.T) {
 		e.stack.pass(t, org, f3Run, f3Next, attempt2)
 		e.compute(org, f3Day)
 		e.compute(org, f3Next)
-		// G1 (acp Q6): a named residual. The earlier D row is not superseded by a zero row; the window D..D+1 counts the run twice.
-		e.wantRow("F3-8 after", org, f3Day, map[string]float64{"total_cases": 2, "pass_rate": 0.5})
+		// G1: the recompute of D counts no kept suite, so a newer row retires the earlier D row (no zero row: the marker reads
+		// as absent). The window D..D+1 counts the run once.
+		e.wantNoRow("F3-8 after", org, f3Day)
 		e.wantRow("F3-8 after", org, f3Next, moved)
 	})
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/storedversion"
 )
 
 // GitHubPullRequestClickHouseEffects writes the single `git_pull_requests`
@@ -83,11 +84,12 @@ func (sink GitHubPullRequestClickHouseEffects) writePullRequestEffect(
 	if err := applyPullRequestContract(ctx, sink.Conn, claim, rows, true); err != nil {
 		return err
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, pullRequestInsert)
+	batch, err := sink.Conn.PrepareBatch(storedversion.SyncContext(ctx), pullRequestInsert)
 	if err != nil {
 		return err
 	}
 	defer batch.Abort()
+	keys := make([][]any, 0, len(rows))
 	for _, row := range rows {
 		if err := batch.Append(
 			row.RepoID, row.Number, row.Title, row.Body, row.State,
@@ -99,11 +101,15 @@ func (sink GitHubPullRequestClickHouseEffects) writePullRequestEffect(
 		); err != nil {
 			return err
 		}
+		keys = append(keys, []any{row.RepoID, uint32(row.Number)})
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {
 		return err
 	}
-	return batch.Send()
+	if err := batch.Send(); err != nil {
+		return err
+	}
+	return storedversion.PullRequestKept.Repair(ctx, sink.Conn, pullRequestContract.Writer, claim.OrgID, keys, sink.Lease.Assert)
 }
 
 // pullRequestMergedAtRegressionGuarded is one row where the incoming batch's
@@ -336,13 +342,14 @@ WHERE org_id = ? AND repo_id = ? AND number = ?`,
 		found       bool
 	)
 	for rows.Next() {
-		// additions/deletions/changed_files/comments_count/
-		// changes_requested_count/reviews_count are non-nullable UInt32
-		// columns; clickhouse-go requires scanning into *uint32, not *int.
-		var additions, deletions, changedFiles, commentsCount uint32
-		var changesRequestedCount, reviewsCount uint32
+		// comments_count/changes_requested_count/reviews_count are UInt32;
+		// additions/deletions/changed_files are Nullable(UInt32). clickhouse-go
+		// requires a *uint32 (or **uint32 for the Nullable ones), not *int.
+		var commentsCount, changesRequestedCount, reviewsCount uint32
+		var additions, deletions, changedFiles *uint32
+		var state, authorName *string
 		if err := rows.Scan(
-			&actual.Title, &actual.Body, &actual.State, &actual.AuthorName,
+			&actual.Title, &actual.Body, &state, &authorName,
 			&actual.AuthorEmail, &actual.CreatedAt, &actual.MergedAt,
 			&actual.ClosedAt, &actual.HeadBranch, &actual.BaseBranch,
 			&additions, &deletions, &changedFiles,
@@ -352,8 +359,9 @@ WHERE org_id = ? AND repo_id = ? AND number = ?`,
 		); err != nil {
 			return pullRequestVersion{}, err
 		}
-		actual.Additions, actual.Deletions = int(additions), int(deletions)
-		actual.ChangedFiles, actual.CommentsCount = int(changedFiles), int(commentsCount)
+		actual.State, actual.AuthorName = derefString(state), derefString(authorName)
+		actual.Additions, actual.Deletions = int(derefUint32(additions)), int(derefUint32(deletions))
+		actual.ChangedFiles, actual.CommentsCount = int(derefUint32(changedFiles)), int(commentsCount)
 		actual.ChangesRequestedCount = int(changesRequestedCount)
 		actual.ReviewsCount = int(reviewsCount)
 		found = true
@@ -402,9 +410,17 @@ func comparePullRequestVersion(
 	if actual.LastSynced.UTC().Before(expected.LastSynced.UTC()) {
 		return EffectAbsent
 	}
+	// A winner up to RepairVersionWindow newer can be this write's own kept-group repair: the same row with a NULL lead
+	// filled (storedversion.Kept.Repair). Any other difference, or a newer version past the window, is another write.
+	repaired := false
 	if actual.LastSynced.UTC().After(expected.LastSynced.UTC()) {
-		return EffectConflict
+		if actual.LastSynced.UTC().After(expected.LastSynced.UTC().Add(storedversion.RepairVersionWindow)) {
+			return EffectConflict
+		}
+		repaired = true
 	}
+	mergedFilled := repaired && expected.MergedAt == nil && actual.Row.MergedAt != nil
+	reviewFilled := repaired && expected.FirstReviewAt == nil && actual.Row.FirstReviewAt != nil
 	if !stringPointersEqual(actual.Row.Title, expected.Title) {
 		return EffectConflict
 	}
@@ -423,7 +439,7 @@ func comparePullRequestVersion(
 	if !actual.Row.CreatedAt.UTC().Equal(expected.CreatedAt.UTC()) {
 		return EffectConflict
 	}
-	if !timePointersEqual(actual.Row.MergedAt, expected.MergedAt) {
+	if !mergedFilled && !timePointersEqual(actual.Row.MergedAt, expected.MergedAt) {
 		return EffectConflict
 	}
 	if !timePointersEqual(actual.Row.ClosedAt, expected.ClosedAt) {
@@ -444,16 +460,16 @@ func comparePullRequestVersion(
 	if actual.Row.ChangedFiles != expected.ChangedFiles {
 		return EffectConflict
 	}
-	if !timePointersEqual(actual.Row.FirstReviewAt, expected.FirstReviewAt) {
+	if !reviewFilled && !timePointersEqual(actual.Row.FirstReviewAt, expected.FirstReviewAt) {
 		return EffectConflict
 	}
 	if !timePointersEqual(actual.Row.FirstCommentAt, expected.FirstCommentAt) {
 		return EffectConflict
 	}
-	if actual.Row.ChangesRequestedCount != expected.ChangesRequestedCount {
+	if !reviewFilled && actual.Row.ChangesRequestedCount != expected.ChangesRequestedCount {
 		return EffectConflict
 	}
-	if actual.Row.ReviewsCount != expected.ReviewsCount {
+	if !reviewFilled && actual.Row.ReviewsCount != expected.ReviewsCount {
 		return EffectConflict
 	}
 	if actual.Row.CommentsCount != expected.CommentsCount {
@@ -487,3 +503,10 @@ func timePointersEqual(left, right *time.Time) bool {
 
 var _ EffectSink = GitHubPullRequestClickHouseEffects{}
 var _ EffectReadback = GitHubPullRequestClickHouseEffects{}
+
+func derefUint32(value *uint32) uint32 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}

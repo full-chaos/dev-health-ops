@@ -144,14 +144,16 @@ func TestReleaseMakesAWaitingSweepDueNow(t *testing.T) {
 		if err := enqueuer.EnsureBucketSweep(ctx, sweepRiverOrg, sweepRiverProvider, sweepRiverClass); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := admin.Exec(ctx, `UPDATE river.river_job SET state = 'scheduled', scheduled_at = now() + interval '1 hour' WHERE kind = 'sync.bucket_sweep'`); err != nil {
+		var waitingUntil time.Time
+		if err := admin.QueryRow(ctx, `UPDATE river.river_job SET state = 'scheduled', scheduled_at = now() + interval '1 hour' WHERE kind = 'sync.bucket_sweep'
+RETURNING scheduled_at`).Scan(&waitingUntil); err != nil {
 			t.Fatal(err)
 		}
 		if err := enqueuer.EnsureBucketSweep(ctx, sweepRiverOrg, sweepRiverProvider, sweepRiverClass); err != nil {
 			t.Fatal(err)
 		}
 		jobs := sweepJobs(t, ctx, admin)
-		if len(jobs) != 1 || jobs[0].state != "scheduled" || time.Until(jobs[0].scheduledAt) < 50*time.Minute {
+		if len(jobs) != 1 || jobs[0].state != "scheduled" || !jobs[0].scheduledAt.Equal(waitingUntil) {
 			t.Fatalf("ensure moved the waiting sweep: %v", jobs)
 		}
 		if err := enqueuer.EnqueueBucketSweep(ctx, sweepRiverOrg, sweepRiverProvider, sweepRiverClass); err != nil {
@@ -159,7 +161,7 @@ func TestReleaseMakesAWaitingSweepDueNow(t *testing.T) {
 		}
 		jobs = sweepJobs(t, ctx, admin)
 		t.Logf("release on a sweep scheduled +1h -> %v", jobs)
-		if len(jobs) != 1 || jobs[0].state != "available" || time.Until(jobs[0].scheduledAt) > time.Minute {
+		if len(jobs) != 1 || jobs[0].state != "available" || !jobs[0].scheduledAt.Before(waitingUntil) {
 			t.Fatalf("a release left the waiting sweep at %v, want one row available now", jobs)
 		}
 	})

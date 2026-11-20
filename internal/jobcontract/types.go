@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -911,14 +912,23 @@ func (payload TeamAutoimportPayload) validate() error {
 	return validateUUID("sync_run_id", payload.SyncRunID)
 }
 
-var bucketSweepLabelPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+// BucketSweepProviders and BucketSweepCostClasses are the closed sets of a sync.bucket_sweep payload: the provider
+// matrix (providersync.MatrixProviders) and the provider cost classes (providersync.CostLight/CostMedium/CostHeavy).
+// The payload schema enums and the compiled registry validator carry the same sets.
+var (
+	BucketSweepProviders   = []string{"github", "gitlab", "jira", "launchdarkly", "linear", "pagerduty"}
+	BucketSweepCostClasses = []string{"light", "medium", "heavy"}
+)
 
 func (payload BucketSweepPayload) validate() error {
 	if err := validateUUID("org_id", payload.OrgID); err != nil {
 		return err
 	}
-	if !bucketSweepLabelPattern.MatchString(payload.Provider) || !bucketSweepLabelPattern.MatchString(payload.CostClass) {
-		return errors.New("provider and cost_class must be bounded lowercase labels")
+	if !slices.Contains(BucketSweepProviders, payload.Provider) {
+		return errors.New("provider is not a sync bucket provider")
+	}
+	if !slices.Contains(BucketSweepCostClasses, payload.CostClass) {
+		return errors.New("cost_class is not a sync bucket cost class")
 	}
 	return nil
 }

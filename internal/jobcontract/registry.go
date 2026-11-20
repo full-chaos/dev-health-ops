@@ -597,10 +597,10 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 		if err := validateUUIDProperty(properties["org_id"]); err != nil {
 			return err
 		}
-		for _, field := range []string{"provider", "cost_class"} {
+		for field, values := range map[string][]string{"provider": BucketSweepProviders, "cost_class": BucketSweepCostClasses} {
 			property, ok := properties[field].(map[string]any)
-			if !ok || property["type"] != "string" || property["pattern"] != "^[a-z][a-z0-9_]{0,31}$" {
-				return fmt.Errorf("%s schema drifts from compiled label type", field)
+			if !ok || property["type"] != "string" || !equalStringList(property["enum"], values) {
+				return fmt.Errorf("%s schema drifts from compiled enum", field)
 			}
 		}
 		return nil
@@ -879,4 +879,18 @@ func NativeRiverRouteKinds(data []byte) ([]string, error) {
 		}
 	}
 	return kinds, nil
+}
+
+// equalStringList reports whether a decoded JSON array holds exactly want, in order.
+func equalStringList(value any, want []string) bool {
+	list, ok := value.([]any)
+	if !ok || len(list) != len(want) {
+		return false
+	}
+	for index, item := range list {
+		if text, ok := item.(string); !ok || text != want[index] {
+			return false
+		}
+	}
+	return true
 }

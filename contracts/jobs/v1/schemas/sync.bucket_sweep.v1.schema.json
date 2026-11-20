@@ -13,11 +13,11 @@
     },
     "provider": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+      "enum": ["github", "gitlab", "jira", "launchdarkly", "linear", "pagerduty"]
     },
     "cost_class": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+      "enum": ["light", "medium", "heavy"]
     }
   }
 }

@@ -3,7 +3,6 @@ package syncdispatchruntime
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"slices"
 	"time"
 
@@ -45,9 +44,6 @@ var bucketSweepUniqueStates = []rivertype.JobState{
 	rivertype.JobStateScheduled,
 }
 
-// bucketLabelPattern bounds a provider or cost class label (the payload schema's pattern).
-var bucketLabelPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
-
 // BucketSweepJobArgs is the River argument type of sync.bucket_sweep: the registry envelope with the bucket as its
 // payload. The payload fields carry the River uniqueness tags; the envelope fields are derived from them.
 type BucketSweepJobArgs struct {
@@ -77,7 +73,8 @@ func NewBucketSweepJobArgs(orgID, provider, costClass string) BucketSweepJobArgs
 func (args BucketSweepJobArgs) valid() error {
 	if args != NewBucketSweepJobArgs(args.Payload.OrgID, args.Payload.Provider, args.Payload.CostClass) ||
 		!uuidPattern.MatchString(args.OrgID) ||
-		!bucketLabelPattern.MatchString(args.Payload.Provider) || !bucketLabelPattern.MatchString(args.Payload.CostClass) {
+		!slices.Contains(jobcontract.BucketSweepProviders, args.Payload.Provider) ||
+		!slices.Contains(jobcontract.BucketSweepCostClasses, args.Payload.CostClass) {
 		return ErrInvalidReference
 	}
 	return nil

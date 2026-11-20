@@ -439,3 +439,24 @@ func TestGitHubTestsLateRerunNilCreatedIsNotReadByTheDeepRange(t *testing.T) {
 		}
 	}
 }
+
+// The deep range is charged like the runs phase's deep range (githubTestsListingAllowance): a page is charged when the walk
+// enters it, and a resume inside a page re-fetches it for free. A deep range of exactly its budget (3 pages), walked in many
+// chunks so resumes land inside its pages, finishes with no stop.
+func TestGitHubTestsLateRerunDeepRangeResumeInsideAPageIsFree(t *testing.T) {
+	since, before := time.Date(2026, 7, 4, 23, 0, 0, 0, time.UTC), time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC)
+	late := listingRun{id: 1, created: time.Date(2026, 7, 1, 0, 50, 0, 0, time.UTC), startedAt: time.Date(2026, 7, 4, 1, 0, 0, 0, time.UTC), status: "completed", conclusion: "success"}
+	late.updated = late.startedAt.Add(time.Hour)
+	fake := newListingFake(t, append([]listingRun{late}, makeListingRuns(3000, 299, time.Date(2026, 6, 28, 0, 0, 0, 0, time.UTC), time.Minute)...))
+	for _, chunk := range []int{37, 70, 130} {
+		fake.artifactGets = map[int]int{}
+		walk := walkListing(t, GitHubTestsRouteHandler{LateRerunMaxPages: 3}, lateRerunClaim(since, before), fake, chunk)
+		if walk.passes < 3 {
+			t.Fatalf("chunk %d: passes=%d, want resumes inside the deep range", chunk, walk.passes)
+		}
+		stops := lateRerunIncompleteOf(githubTestsSaturatedObservations(walk.cursor), githubTestsLateRerunReportsComponent)
+		if len(stops) != 0 || fake.artifactGets[late.id] != 1 {
+			t.Errorf("chunk %d: stops=%+v late reads=%d, want no stop (3 pages on a 3-page budget) and 1 read", chunk, stops, fake.artifactGets[late.id])
+		}
+	}
+}

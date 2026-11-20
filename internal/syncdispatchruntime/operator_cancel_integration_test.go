@@ -407,9 +407,9 @@ SELECT (SELECT count(*) FROM public.sync_runs WHERE id = $1::uuid AND result::js
 	}
 }
 
-// A River job of a cancelled unit that the post-commit cancel missed finds its unit unclaimable
-// (the provider-unit handler then retries it as a no-op) and writes nothing.
-func TestCancelSyncRunLeavesAMissedRiverJobANoOp(t *testing.T) {
+// The claim of a cancelled unit is refused and writes nothing. A queued job of that unit therefore
+// retries and is discarded by River (TestQueuedJobOfACancelledUnitRetriesThenIsDiscardedWithoutADomainWrite).
+func TestCancelSyncRunRefusesTheClaimOfACancelledUnit(t *testing.T) {
 	ctx, pool := startFeatureDisabledPool(t)
 	now := cancelTestNow()
 	fixture := seedCancelFixture(t, ctx, pool, cancelTestRun, now)

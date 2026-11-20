@@ -1,9 +1,15 @@
 package providersync
 
 import (
+	"context"
 	"fmt"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
 
 // lateRerunRunAt is the run as GitHub shows it at t (ok=false before its creation): attempt 1 fails 5 minutes after its
@@ -40,7 +46,7 @@ func lateRerunChain(t *testing.T, handler GitHubTestsRouteHandler, s0, end time.
 	store := &fakeOpenRuns{}
 	handler.OpenRuns = store
 	var writes []lateRerunWrite
-	for index := 0; s0.Add(time.Duration(index)*width).Before(end); index++ {
+	for index := 0; s0.Add(time.Duration(index) * width).Before(end); index++ {
 		since, before := s0.Add(time.Duration(index)*width), s0.Add(time.Duration(index+1)*width)
 		var runs []listingRun
 		if run, exists := lateRerunRunAt(created, rerun, before); exists {
@@ -87,13 +93,14 @@ func TestLateRerunRunsChainRefreshesThePipelineRow(t *testing.T) {
 		width   time.Duration
 		created time.Duration // offset from claim 1's before (negative = inside claim 1)
 		rerun   time.Duration // re-run start, offset from claim 1's before
+		want    []int         // the claims that write attempt 2
 	}{
-		{"loss 1h rerun 30h later", time.Hour, -10 * time.Minute, 30 * time.Hour},
-		{"loss 1h rerun 72h later", time.Hour, -10 * time.Minute, 72 * time.Hour},
-		{"loss 1d rerun 3d later", 24 * time.Hour, -10 * time.Minute, 72 * time.Hour},
-		{"loss 1h rerun 6d later", time.Hour, -10 * time.Minute, 6 * 24 * time.Hour},
-		{"loss 7d rerun in claim 3", 7 * 24 * time.Hour, -24 * time.Hour, 8 * 24 * time.Hour},
-		{"control 1h rerun 3h later", time.Hour, -10 * time.Minute, 3 * time.Hour},
+		{"loss 1h rerun 30h later", time.Hour, -10 * time.Minute, 30 * time.Hour, []int{48}},
+		{"loss 1h rerun 72h later", time.Hour, -10 * time.Minute, 72 * time.Hour, []int{96}},
+		{"loss 1d rerun 3d later", 24 * time.Hour, -10 * time.Minute, 72 * time.Hour, []int{4, 5, 6}},
+		{"loss 1h rerun 6d later", time.Hour, -10 * time.Minute, 6 * 24 * time.Hour, []int{168}},
+		{"loss 7d rerun in claim 3", 7 * 24 * time.Hour, -24 * time.Hour, 8 * 24 * time.Hour, []int{3}},
+		{"control 1h rerun 3h later", time.Hour, -10 * time.Minute, 3 * time.Hour, []int{4, 5, 6}},
 	} {
 		b1 := s0.Add(cell.width)
 		created, rerun := b1.Add(cell.created), b1.Add(cell.rerun)
@@ -131,10 +138,359 @@ func TestLateRerunRunsChainRefreshesThePipelineRow(t *testing.T) {
 		t.Logf("CELL %s: width=%s created=%s rerun=%s finish=%s; stored %s; attempt-2 writes in claims %v",
 			cell.name, cell.width, created.Format(time.RFC3339), rerun.Format(time.RFC3339), finish.Format(time.RFC3339),
 			lateRerunRowText(row), attempt2)
+		if fmt.Sprint(attempt2) != fmt.Sprint(cell.want) {
+			t.Errorf("%s: attempt-2 writes in claims %v, want %v", cell.name, attempt2, cell.want)
+		}
 		if row.Status == nil || *row.Status != "success" || row.RetryCount != 1 || !row.StartedAt.Equal(rerun) ||
 			row.FinishedAt == nil || !row.FinishedAt.Equal(finish) {
 			t.Errorf("%s: stored %s, want the re-run: status=success retry_count=1 started=%s finished=%s",
 				cell.name, lateRerunRowText(row), rerun.Format(time.RFC3339), finish.Format(time.RFC3339))
 		}
+	}
+}
+
+// lateRerunRuns builds count runs created three days before since, one a minute, each re-run so that it last changed one
+// hour before since: attempt 2, completed. They are older than the runs range and changed after the deep floor.
+func lateRerunRuns(first, count int, since time.Time) []listingRun {
+	runs := make([]listingRun, 0, count)
+	for index := range count {
+		runs = append(runs, listingRun{id: first + index, created: since.Add(-72*time.Hour + time.Duration(index)*time.Minute),
+			startedAt: since.Add(-2 * time.Hour), updated: since.Add(-time.Hour), status: "completed", conclusion: "success", attempt: 2})
+	}
+	return runs
+}
+
+// lateRerunDeepRanges counts the listings of the deep range the claim sent: the created ranges that end one second
+// before the runs range (a peeled deep range ends earlier and is not counted).
+func lateRerunDeepRanges(fake *listingFake, claim Claim) int {
+	hi := claim.SinceAt.UTC().Add(-githubTestsRefreshLookbackDefault - time.Second).Format(time.RFC3339)
+	count := 0
+	for _, created := range fake.listRanges {
+		if strings.HasSuffix(created, ".."+hi) {
+			count++
+		}
+	}
+	return count
+}
+
+func lateRerunIncomplete(t *testing.T, walk listingWalk) []GitHubTestsIncomplete {
+	t.Helper()
+	incomplete, ok := walk.final.Result[GitHubTestsResultKeyIncomplete].([]GitHubTestsIncomplete)
+	if !ok {
+		t.Fatalf("result incomplete is %T", walk.final.Result[GitHubTestsResultKeyIncomplete])
+	}
+	return incomplete
+}
+
+func lateRerunMidnightClaim(mode string) Claim {
+	since, before := time.Date(2026, 7, 20, 23, 0, 0, 0, time.UTC), time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
+	claim := listingClaim(since, before)
+	claim.Mode = mode
+	return claim
+}
+
+// Only the claim that holds a UTC midnight lists the deep range, and the deep range reads no run whose last change came
+// less than the refresh lookback after its creation: a normal run costs no jobs request there.
+func TestLateRerunRunsRangeOnlyOnTheMidnightClaimAndOnlyLateChanges(t *testing.T) {
+	s0 := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	var runs []listingRun
+	for hour := range 72 {
+		created := s0.Add(time.Duration(hour)*time.Hour + 10*time.Minute)
+		runs = append(runs, listingRun{id: 100 + hour, created: created, updated: created.Add(5 * time.Minute), status: "completed", conclusion: "success"})
+	}
+	var deepIn []int
+	for index := range 72 {
+		since, before := s0.Add(time.Duration(index)*time.Hour), s0.Add(time.Duration(index+1)*time.Hour)
+		claim := listingClaim(since, before)
+		claim.Mode = "incremental"
+		fake := newListingFake(t, runs)
+		walkListing(t, GitHubTestsRouteHandler{}, claim, fake, 0)
+		if lateRerunDeepRanges(fake, claim) > 0 {
+			deepIn = append(deepIn, index+1)
+		}
+		for _, run := range runs {
+			if fake.jobGets[run.id] > 0 && run.created.Before(since.Add(-githubTestsRefreshLookbackDefault)) {
+				t.Errorf("claim %d [%s, %s]: jobs read %d times for run %d created %s, a normal run older than the runs range",
+					index+1, since.Format(time.RFC3339), before.Format(time.RFC3339), fake.jobGets[run.id], run.id, run.created.Format(time.RFC3339))
+			}
+		}
+	}
+	if fmt.Sprint(deepIn) != fmt.Sprint([]int{24, 48, 72}) {
+		t.Fatalf("deep range sent by claims %v, want [24 48 72] (the claims that hold a UTC midnight)", deepIn)
+	}
+}
+
+// A run created exactly at the start of the runs range is listed by the runs range only: the deep range ends one second
+// before it, so the run is read once in the claim.
+func TestLateRerunRunsSeamRunIsReadOnce(t *testing.T) {
+	claim := lateRerunMidnightClaim("incremental")
+	seam := claim.SinceAt.Add(-githubTestsRefreshLookbackDefault)
+	run := listingRun{id: 7, created: seam, startedAt: seam.Add(6 * time.Hour), updated: claim.SinceAt.Add(30 * time.Minute),
+		status: "completed", conclusion: "success", attempt: 2}
+	fake := newListingFake(t, []listingRun{run})
+	walk := walkListing(t, GitHubTestsRouteHandler{}, claim, fake, 0)
+	if lateRerunDeepRanges(fake, claim) != 1 {
+		t.Fatalf("deep ranges=%d, want 1 (%v)", lateRerunDeepRanges(fake, claim), fake.listRanges)
+	}
+	rows := 0
+	for _, row := range walk.pipelines {
+		if row.RunID == "7" {
+			rows++
+		}
+	}
+	if fake.jobGets[7] != 1 || rows != 1 {
+		t.Fatalf("seam run: jobs reads=%d pipeline rows=%d, want 1 and 1 (ranges %v)", fake.jobGets[7], rows, fake.listRanges)
+	}
+}
+
+// The deep range belongs to an incremental claim with both edges that holds a UTC midnight M, since < M <= before. A
+// retry of that claim keeps its window, so it lists the deep range again.
+func TestLateRerunRunsMidnightEdges(t *testing.T) {
+	day := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
+	window := func(since, before time.Time, mode string) Claim {
+		claim := listingClaim(since, before)
+		claim.Mode = mode
+		return claim
+	}
+	open := window(day.Add(-time.Hour), day, "incremental")
+	open.SinceAt = nil
+	for _, cell := range []struct {
+		name  string
+		claim Claim
+		deep  bool
+	}{
+		{"midnight == before", window(day.Add(-time.Hour), day, "incremental"), true},
+		{"midnight == since", window(day, day.Add(time.Hour), "incremental"), false},
+		{"no midnight", window(day.Add(time.Hour), day.Add(2*time.Hour), "incremental"), false},
+		{"two-day claim", window(day.Add(-36*time.Hour), day.Add(12*time.Hour), "incremental"), true},
+		{"backfill holds a midnight", window(day.Add(-time.Hour), day, "backfill"), false},
+		{"full resync holds a midnight", window(day.Add(-time.Hour), day, "full_resync"), false},
+		{"open start", open, false},
+	} {
+		if got := githubTestsHoldsMidnight(cell.claim); got != cell.deep {
+			t.Errorf("%s: holds midnight=%v, want %v", cell.name, got, cell.deep)
+		}
+		if cell.claim.SinceAt == nil {
+			continue
+		}
+		late := lateRerunRuns(1, 1, cell.claim.SinceAt.UTC())
+		for attempt := 1; attempt <= 2; attempt++ {
+			fake := newListingFake(t, late)
+			walk := walkListing(t, GitHubTestsRouteHandler{}, cell.claim, fake, 0)
+			refreshed := len(walk.pipelines) == 1 && walk.pipelines[0].RetryCount == 1
+			if got := lateRerunDeepRanges(fake, cell.claim) == 1; got != cell.deep || refreshed != cell.deep {
+				t.Errorf("%s attempt %d: deep range=%v late run refreshed=%v, want %v (ranges %v)", cell.name, attempt, got, refreshed, cell.deep, fake.listRanges)
+			}
+		}
+	}
+}
+
+// A midnight claim held by the runs-range page budget (no watermark) is claimed again with the same window, so it still
+// owns the midnight: once its runs range fits, the deep range refreshes the late re-run.
+func TestLateRerunRunsHeldClaimReownsTheMidnight(t *testing.T) {
+	claim := lateRerunMidnightClaim("incremental")
+	runs := lateRerunRuns(1, 1, claim.SinceAt.UTC())
+	runs = append(runs, makeListingRuns(1000, 150, claim.SinceAt.UTC(), 20*time.Second)...)
+	held := walkListing(t, GitHubTestsRouteHandler{MaxRuns: 100}, claim, newListingFake(t, runs), 0)
+	if held.final.Watermark != nil {
+		t.Fatalf("held claim watermark=%v, want nil (runs range over its budget)", held.final.Watermark)
+	}
+	retry := walkListing(t, GitHubTestsRouteHandler{}, claim, newListingFake(t, runs), 0)
+	if retry.final.Watermark == nil || !retry.final.Watermark.Equal(*claim.BeforeAt) {
+		t.Fatalf("retry watermark=%v, want %s", retry.final.Watermark, claim.BeforeAt)
+	}
+	if row, ok := retry.pipelineIDs()["1"]; !ok || row.RetryCount != 1 {
+		t.Fatalf("retry of the held midnight claim did not refresh the late re-run: %+v present=%v", row, ok)
+	}
+}
+
+// A deep range of three pages walked one chunk per invocation resumes where it stopped, counts each page once against
+// its budget, and ends with no observation. The budget is one page above the real pages: a resume inside a page re-fetches
+// it inside the visitor's own allowance (the runs range has the same edge).
+func TestLateRerunRunsDeepRangeResumesAcrossChunks(t *testing.T) {
+	claim := lateRerunMidnightClaim("incremental")
+	runs := lateRerunRuns(1, 250, claim.SinceAt.UTC())
+	walk := walkListing(t, GitHubTestsRouteHandler{LateRerunMaxPages: 4}, claim, newListingFake(t, runs), 1)
+	if walk.passes < 4 {
+		t.Fatalf("passes=%d, want the deep range walked over several invocations", walk.passes)
+	}
+	if incomplete := lateRerunIncomplete(t, walk); len(incomplete) != 0 || walk.final.Result[GitHubTestsResultKeyReportsComplete] != true {
+		t.Fatalf("incomplete=%v reports_complete=%v, want none and true", incomplete, walk.final.Result[GitHubTestsResultKeyReportsComplete])
+	}
+	if walk.cursor.LateRunPages != 3 {
+		t.Fatalf("deep pages=%d, want 3", walk.cursor.LateRunPages)
+	}
+	refreshed := 0
+	for _, row := range walk.pipelineIDs() {
+		if row.RetryCount == 1 {
+			refreshed++
+		}
+	}
+	if refreshed != 250 || walk.final.Watermark == nil {
+		t.Fatalf("refreshed=%d watermark=%v, want 250 and the window end", refreshed, walk.final.Watermark)
+	}
+}
+
+// A deep range stopped by its page budget or by a saturated second records ONE late_rerun_runs observation: the unit
+// reads reports_complete=false (coverage shows the gap) and still advances its watermark (the window was walked).
+func TestLateRerunRunsStopIsOneAdvancingObservation(t *testing.T) {
+	claim := lateRerunMidnightClaim("incremental")
+	inWindow := listingRun{id: 9000, created: claim.SinceAt.Add(10 * time.Minute), updated: claim.SinceAt.Add(15 * time.Minute),
+		status: "completed", conclusion: "success"}
+	sameSecond := lateRerunRuns(1, 1001, claim.SinceAt.UTC())
+	for index := range sameSecond {
+		sameSecond[index].created = sameSecond[0].created
+	}
+	for _, cell := range []struct {
+		name    string
+		handler GitHubTestsRouteHandler
+		runs    []listingRun
+		cause   string
+		atLeast int
+		most    int
+	}{
+		{"page budget", GitHubTestsRouteHandler{LateRerunMaxPages: 1}, lateRerunRuns(1, 150, claim.SinceAt.UTC()), githubTestsPageBudgetCause, 100, 100},
+		{"saturated second", GitHubTestsRouteHandler{}, sameSecond, githubTestsListingSaturatedCause, 1000, 1001},
+	} {
+		runs := append(append([]listingRun{}, cell.runs...), inWindow)
+		walk := walkListing(t, cell.handler, claim, newListingFake(t, runs), 0)
+		want := []GitHubTestsIncomplete{{Component: githubTestsLateRerunRunsComponent, Cause: cell.cause, Count: 1}}
+		if incomplete := lateRerunIncomplete(t, walk); fmt.Sprint(incomplete) != fmt.Sprint(want) {
+			t.Errorf("%s: incomplete=%v, want %v", cell.name, incomplete, want)
+		}
+		if walk.final.Result[GitHubTestsResultKeyReportsComplete] != false {
+			t.Errorf("%s: reports_complete=%v, want false (the gap shows in coverage)", cell.name, walk.final.Result[GitHubTestsResultKeyReportsComplete])
+		}
+		if walk.final.Watermark == nil || !walk.final.Watermark.Equal(*claim.BeforeAt) {
+			t.Errorf("%s: watermark=%v, want the window end (an advancing pair)", cell.name, walk.final.Watermark)
+		}
+		if err := validateGitHubTestsCompletion(claim, walk.final); err != nil {
+			t.Errorf("%s: the completion comparator refused the result: %v", cell.name, err)
+		}
+		refreshed := 0
+		ids := walk.pipelineIDs()
+		for _, row := range ids {
+			if row.RetryCount == 1 {
+				refreshed++
+			}
+		}
+		if _, ok := ids["9000"]; !ok || refreshed < cell.atLeast || refreshed > cell.most {
+			t.Errorf("%s: window run written=%v, late re-runs refreshed=%d, want the window run and %d..%d", cell.name, ok, refreshed, cell.atLeast, cell.most)
+		}
+	}
+}
+
+// The non-chunked Collect (the oracle) lists the same deep range with the same keep rule, and records a stop of it as the
+// late_rerun_runs page-budget observation.
+func TestLateRerunRunsOracleMatchesTheChunkedRoute(t *testing.T) {
+	claim := lateRerunMidnightClaim("incremental")
+	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	runs := lateRerunRuns(1, 3, claim.SinceAt.UTC())
+	runs = append(runs, listingRun{id: 50, created: claim.SinceAt.Add(-72 * time.Hour), updated: claim.SinceAt.Add(-72*time.Hour + 5*time.Minute),
+		status: "completed", conclusion: "failure"})
+	collect := func(handler GitHubTestsRouteHandler, runs []listingRun) (map[string]uint32, []GitHubTestsIncomplete) {
+		batch, err := handler.Collect(context.Background(), claim, providerfoundation.Credential{},
+			githubTestsClient(t, fakehttp.Client(newListingFake(t, runs))), normalizedAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]uint32{}
+		for _, effect := range batch.Effects {
+			if effect.Destination != "ci_pipeline_runs" {
+				continue
+			}
+			rows, decodeErr := decodeEffectRows[githubTestsPipelineRow](effect)
+			if decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+			for _, row := range rows {
+				out[row.RunID] = row.RetryCount
+			}
+		}
+		incomplete, _ := batch.Result["incomplete"].([]GitHubTestsIncomplete)
+		return out, incomplete
+	}
+	oracle, incomplete := collect(GitHubTestsRouteHandler{}, runs)
+	chunked := map[string]uint32{}
+	for id, row := range walkListing(t, GitHubTestsRouteHandler{}, claim, newListingFake(t, runs), 0).pipelineIDs() {
+		chunked[id] = row.RetryCount
+	}
+	if fmt.Sprint(oracle) != fmt.Sprint(chunked) || fmt.Sprint(oracle) != "map[1:1 2:1 3:1]" || len(incomplete) != 0 {
+		t.Fatalf("oracle rows %v incomplete %v, chunked rows %v; want map[1:1 2:1 3:1] on both and no observation", oracle, incomplete, chunked)
+	}
+	_, incomplete = collect(GitHubTestsRouteHandler{LateRerunMaxPages: 1}, lateRerunRuns(1, 150, claim.SinceAt.UTC()))
+	want := []GitHubTestsIncomplete{{Component: githubTestsLateRerunRunsComponent, Cause: githubTestsPageBudgetCause, Count: 1}}
+	if fmt.Sprint(incomplete) != fmt.Sprint(want) {
+		t.Fatalf("oracle over its deep budget: incomplete=%v, want %v", incomplete, want)
+	}
+}
+
+// The late_rerun_runs pairs are in the closed vocabulary and advance the watermark.
+func TestLateRerunRunsPairsAreKnownAndAdvancing(t *testing.T) {
+	for _, cause := range []string{githubTestsPageBudgetCause, githubTestsListingSaturatedCause} {
+		observation := GitHubTestsIncomplete{Component: githubTestsLateRerunRunsComponent, Cause: cause, Count: 1}
+		if !githubTestsIncompleteInVocabulary(observation) {
+			t.Errorf("%v is not in the closed vocabulary", observation)
+		}
+		if githubTestsBlocksWatermark([]GitHubTestsIncomplete{observation}, nil, 0, nil, nil) {
+			t.Errorf("%v holds the watermark, want an advancing pair", observation)
+		}
+	}
+}
+
+// Handler bounds of the deep range: the page budget is at most 1000 (zero or less = 1000).
+func TestLateRerunRunsPageBudgetBounds(t *testing.T) {
+	claim := lateRerunMidnightClaim("incremental")
+	for _, pages := range []int{githubTestsLateRerunMaxPages + 1} {
+		handler := GitHubTestsRouteHandler{LateRerunMaxPages: pages}
+		client := githubTestsClient(t, fakehttp.Client(newListingFake(t, nil)))
+		err := handler.CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client, time.Now(), "",
+			func(ChunkRouteEmission) error { return nil })
+		if err != ErrInvalidConfiguration {
+			t.Errorf("LateRerunMaxPages=%d: err=%v, want ErrInvalidConfiguration", pages, err)
+		}
+	}
+	if (GitHubTestsRouteHandler{}).lateRerunMaxPages() != 1000 || (GitHubTestsRouteHandler{}).lateRerunLookback() != 7*24*time.Hour {
+		t.Fatal("deep range defaults changed: want 1000 pages and 7 days")
+	}
+}
+
+// The oracle reads a run once when both of its ranges answer it (GitHub never does; a fake that ignores created does): one
+// pipeline row and one jobs read, so the batch holds no duplicate key.
+func TestLateRerunRunsOracleReadsARunOnce(t *testing.T) {
+	claim := lateRerunMidnightClaim("incremental")
+	run := lateRerunRuns(1, 1, claim.SinceAt.UTC())[0]
+	run.created = claim.SinceAt.Add(-time.Hour)
+	run.startedAt, run.updated = claim.SinceAt.Add(6*time.Hour), claim.SinceAt.Add(7*time.Hour)
+	jobs := 0
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		header := http.Header{"Content-Type": {"application/json"}}
+		switch request.URL.Path {
+		case "/repos/acme/api":
+			return githubTestsHTTPResponse(request, header, gitHubRepositoryFixture), nil
+		case "/repos/acme/api/actions/runs":
+			return githubTestsHTTPResponse(request, header, `{"workflow_runs":[`+run.json()+`]}`), nil
+		case "/repos/acme/api/actions/runs/1/jobs":
+			jobs++
+			return githubTestsHTTPResponse(request, header, `{"jobs":[]}`), nil
+		case "/repos/acme/api/actions/runs/1/artifacts":
+			return githubTestsHTTPResponse(request, header, `{"artifacts":[]}`), nil
+		}
+		t.Fatalf("unexpected request %s", request.URL.String())
+		return nil, nil
+	})
+	batch, err := GitHubTestsRouteHandler{}.Collect(context.Background(), claim, providerfoundation.Credential{},
+		githubTestsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := 0
+	for _, effect := range batch.Effects {
+		if effect.Destination == "ci_pipeline_runs" {
+			rows += len(effect.Rows)
+		}
+	}
+	if rows != 1 || jobs != 1 {
+		t.Fatalf("pipeline rows=%d jobs reads=%d, want 1 and 1", rows, jobs)
 	}
 }

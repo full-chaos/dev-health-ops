@@ -331,6 +331,11 @@ type GitHubTestsRouteHandler struct {
 	// RefreshLookback is how far before the window the runs phase lists; zero
 	// keeps githubTestsRefreshLookbackDefault.
 	RefreshLookback time.Duration
+	// LateRerunLookback and LateRerunMaxPages bound the deep range of the
+	// claim that holds a UTC midnight; zero or less keeps
+	// githubTestsLateRerunLookbackDefault and githubTestsLateRerunMaxPages.
+	LateRerunLookback time.Duration
+	LateRerunMaxPages int
 	// MaxWalkRecords lowers githubTestsMaxWalkRecords when positive; zero keeps it.
 	MaxWalkRecords int
 }
@@ -386,6 +391,35 @@ func (handler GitHubTestsRouteHandler) Collect(
 	if runsOver || len(runItems) > maxRuns {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
+	lateMaxPages := handler.lateRerunMaxPages()
+	if lateMaxPages < 1 || lateMaxPages > githubTestsLateRerunMaxPages {
+		return CompleteRouteBatch{}, ErrInvalidConfiguration
+	}
+	// The deep range of the claim that holds a UTC midnight, as in the chunked
+	// route. A stop (budget or a saturated second; this collector does not tell
+	// them apart) is recorded as the late_rerun_runs page-budget observation.
+	var lateItems []json.RawMessage
+	lateListPages, lateOver := 0, false
+	if githubTestsHoldsMidnight(claim) {
+		lateItems, lateListPages, lateOver, err = collectGitHubTestsRunsPeeled(ctx, client, root, lateMaxPages, func(hi string) url.Values {
+			return githubTestsLateRerunRunsQuery(claim, handler.refreshLookback(), handler.lateRerunLookback(), hi)
+		})
+		if err != nil {
+			return CompleteRouteBatch{}, err
+		}
+		// The two ranges are disjoint on GitHub; a run both answered is read once.
+		listed := make(map[string]struct{}, len(runItems))
+		for _, raw := range runItems {
+			if run, decodeErr := decodeGitHubWorkflowRunListItem(raw); decodeErr == nil {
+				listed[run.ID.String()] = struct{}{}
+			}
+		}
+		lateItems = slices.DeleteFunc(lateItems, func(raw json.RawMessage) bool {
+			run, decodeErr := decodeGitHubWorkflowRunListItem(raw)
+			_, seen := listed[run.ID.String()]
+			return decodeErr == nil && seen
+		})
+	}
 	artifactRunItems, artifactListPages, artifactsOver, err := collectGitHubTestsRunsPeeled(ctx, client, root, runPages, func(hi string) url.Values {
 		return githubTestsArtifactRunQueryAt(claim, hi)
 	})
@@ -402,6 +436,11 @@ func (handler GitHubTestsRouteHandler) Collect(
 	cases := make([]testCaseResultRow, 0)
 	coverage := make([]coverageSnapshotRow, 0)
 	incomplete := make([]GitHubTestsIncomplete, 0)
+	if lateOver {
+		incomplete = mergeGitHubTestsIncomplete(incomplete, GitHubTestsIncomplete{
+			Component: githubTestsLateRerunRunsComponent, Cause: githubTestsPageBudgetCause, Count: 1,
+		})
+	}
 	// Durable markers for expired report artifacts (CHAOS-13980). This route carries them in the result, like the chunked route,
 	// so the shared watermark policy sees the same evidence for the same loss.
 	var (
@@ -410,15 +449,19 @@ func (handler GitHubTestsRouteHandler) Collect(
 		skippedCauseOverflow map[string]bool
 		skippedCauseCount    map[string]int
 	)
-	requests, pages := 1+runListPages+artifactListPages, runListPages+artifactListPages
+	requests, pages := 1+runListPages+lateListPages+artifactListPages, runListPages+lateListPages+artifactListPages
 	policyCache := map[string]githubTestsPolicy{}
-	for _, raw := range runItems {
+	for index, raw := range append(append([]json.RawMessage{}, runItems...), lateItems...) {
 		run, err := decodeGitHubWorkflowRun(raw)
 		if err != nil {
 			return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
-		if !include || !githubTestsRunWanted(run, pipeline, claim) {
+		keep := include && githubTestsRunWanted(run, pipeline, claim)
+		if index >= len(runItems) {
+			keep = include && githubTestsLateRerunWanted(run, claim, handler.refreshLookback())
+		}
+		if !keep {
 			continue
 		}
 		pipelines = append(pipelines, pipeline)

@@ -577,9 +577,24 @@ properties of that listing shape the walk:
   The 6-hour lookback and the 100 / 300 re-read caps are fixed defaults, not
   configurable.
 
-One case stays unseen: a run that was final at its last read and is rerun
-weeks later, after it left both the lookback and the open set, is not re-read,
-because no listing key reaches it.
+- A run that was final at its last read and is rerun later, after it left the
+  lookback and the open set, is found by a daily deep range of the runs phase.
+  The incremental unit whose window holds a UTC midnight (since < midnight <=
+  before) lists once more the runs created from 7 days before its window to
+  one second before the runs range. It keeps a run only when the run last
+  changed at or after the window start minus the window width (at least one
+  day) and at least the lookback after its creation; the kept run is written
+  like a listed run. The deep range has its own budget of 1,000 pages. A deep
+  range stopped by that budget or by a saturated second records
+  `late_rerun_runs` (`page_budget_exhausted` or `listing_saturated`): the unit
+  reads `reports_complete=false`, and the watermark still advances, because
+  the window itself was walked. Backfill and full resync units list no deep
+  range.
+
+One case stays unseen: a run rerun more than 7 days after its creation (GitHub
+allows a rerun for 30 days) is not re-read, because no listing key reaches it.
+A rerun inside the 7 days lands at the next midnight unit, up to one day plus
+one window width after it ends.
 
 ### What a re-anchor cannot see
 

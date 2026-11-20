@@ -102,6 +102,16 @@ type githubTestsChunkCursor struct {
 	RangeHi     string `json:"rh,omitempty"`
 	RangeItems  int    `json:"ri,omitempty"`
 	RangeOldest string `json:"ro,omitempty"`
+	// LateRuns marks the deep range of the runs phase (the late re-run relist
+	// of the claim that holds a UTC midnight), walked after the runs range;
+	// LateRunPages is its cumulative page count against its own budget.
+	LateRuns     bool `json:"lr,omitempty"`
+	LateRunPages int  `json:"lrp,omitempty"`
+	// LateRunsBudget and LateRunsSaturated record that the deep range stopped
+	// at its page budget (or the walk bound) or at a saturated second; the
+	// unit result carries them as the late_rerun_runs observations.
+	LateRunsBudget    bool `json:"lrb,omitempty"`
+	LateRunsSaturated bool `json:"lrs,omitempty"`
 	// The open phase re-reads, by id, stored pipeline rows that are still open
 	// and older than the runs listing reaches. OpenAfterStarted/OpenAfterRunID
 	// are the keyset position (rows finalized by earlier chunks drop out of the
@@ -1392,6 +1402,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	if maxWalkRecords < 1 || maxWalkRecords > githubTestsMaxWalkRecords {
 		return ErrInvalidConfiguration
 	}
+	lateMaxPages := handler.lateRerunMaxPages()
+	if lateMaxPages < 1 || lateMaxPages > githubTestsLateRerunMaxPages {
+		return ErrInvalidConfiguration
+	}
 	if err := validatePerRunPageBudget(
 		"MaxJobPages", jobPages, githubTestsPerRunPerPage, githubTestsMaxJobsPerRun,
 	); err != nil {
@@ -1421,6 +1435,20 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		return emit(ChunkRouteEmission{Batch: batch, CursorBefore: beforeRaw, CursorAfter: afterRaw, Final: final})
 	}
 	lookback := handler.refreshLookback()
+	lateLookback := handler.lateRerunLookback()
+	// nextRunsListing follows a finished listing range of the runs phase: the
+	// runs range of the claim that holds a UTC midnight goes on to the deep
+	// range, every other one to the artifacts phase.
+	nextRunsListing := func(c githubTestsChunkCursor) githubTestsChunkCursor {
+		c.RangeHi, c.RangeItems, c.RangeOldest = "", 0, ""
+		if !c.LateRuns && githubTestsHoldsMidnight(claim) {
+			c.LateRuns = true
+			return c
+		}
+		c.LateRuns = false
+		c.Phase = githubTestsArtifactsPhase
+		return c
+	}
 	// endRunsRange is the end of one runs-phase listing range. A listing that
 	// consumed GitHub's cap of results may hide older runs: the next range ends
 	// at the oldest created time seen, in the same phase. A range that makes no
@@ -1431,12 +1459,13 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		c.RangeItems, c.RangeOldest = 0, ""
 		switch {
 		case !saturated:
-			c.RangeHi = ""
-			c.Phase = githubTestsArtifactsPhase
+			c = nextRunsListing(c)
+		case stuck && c.LateRuns:
+			c = recordGitHubTestsLateRerunRunsStop(c, client, claim, githubTestsListingSaturatedCause, c.LateRunPages)
+			c = nextRunsListing(c)
 		case stuck:
 			c = recordGitHubTestsSaturated(c, client, claim, githubTestsRunInventorySaturatedComponent, githubTestsRunsPhase, hi, items)
-			c.RangeHi = ""
-			c.Phase = githubTestsArtifactsPhase
+			c = nextRunsListing(c)
 		default:
 			c.RangeHi = nextHi
 		}
@@ -1564,7 +1593,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		// partially consumed page; without it the budget would never advance
 		// and the cap would be disabled entirely.
 		if !(cursor.NextURL == page.CursorBefore && cursor.Index > 0) {
-			cursor.RunPages++
+			if cursor.LateRuns {
+				cursor.LateRunPages++
+			} else {
+				cursor.RunPages++
+			}
 		}
 		start, _ := githubTestsResumeStart(cursor, page, client, claim, githubTestsRunsPhase)
 		for index := start; index < len(page.Items); index++ {
@@ -1581,7 +1614,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			cursor.RangeOldest = githubTestsOlderCreated(cursor.RangeOldest, parseGitHubWorkflowTime(run.CreatedAt))
 			jobs := make([]githubTestsJobRow, 0)
 			acceptance := make([]githubTestsAcceptanceRow, 0)
-			if include && githubTestsRunWanted(run, pipeline, claim) {
+			keep := include && githubTestsRunWanted(run, pipeline, claim)
+			if cursor.LateRuns {
+				keep = include && githubTestsLateRerunWanted(run, claim, lookback)
+			}
+			if keep {
 				var detailErr error
 				jobs, acceptance, detailErr = collectRunDetail(run, pipeline)
 				if detailErr != nil {
@@ -1593,7 +1630,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			}
 			effects, effectErr := testOpsEffects(
 				func() []githubTestsPipelineRow {
-					if include && githubTestsRunWanted(run, pipeline, claim) {
+					if keep {
 						return []githubTestsPipelineRow{pipeline}
 					}
 					return nil
@@ -1634,9 +1671,45 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	}
 
 	for cursor.Phase == githubTestsRunsPhase {
+		if githubTestsWalkRecords(cursor) >= maxWalkRecords && cursor.LateRuns {
+			logGitHubTestsWalkBound(cursor, claim, githubTestsLateRerunRunsComponent, maxWalkRecords)
+			cursor = recordGitHubTestsLateRerunRunsStop(cursor, client, claim, githubTestsPageBudgetCause, cursor.LateRunPages)
+			cursor = nextRunsListing(cursor)
+			cursor.NextURL, cursor.Index = "", 0
+			break
+		}
 		if githubTestsWalkRecords(cursor) >= maxWalkRecords {
 			cursor = recordGitHubTestsWalkBound(cursor, client, claim, githubTestsRunInventoryComponent, maxWalkRecords)
 			break
+		}
+		if cursor.LateRuns {
+			// The deep range: its own budget; a stop records the advancing
+			// late_rerun_runs pair and the phase goes on.
+			allowance, budgetErr := remainingPageBudget(lateMaxPages, cursor.LateRunPages)
+			exhausted := errors.Is(budgetErr, ErrPaginationCapExceeded)
+			if budgetErr != nil && !exhausted {
+				return budgetErr
+			}
+			if !exhausted {
+				pageOptions := providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Route: githubRunsRoute,
+					Query: githubTestsLateRerunRunsQuery(claim, lookback, lateLookback, cursor.RangeHi), DataKey: "workflow_runs",
+					MaxPages: allowance, InitialURL: cursor.NextURL}
+				collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, pageOptions, emitRunPage)
+				if errors.Is(visitErr, errGitHubTestsWalkBound) {
+					logGitHubTestsWalkBound(cursor, claim, githubTestsLateRerunRunsComponent, maxWalkRecords)
+					visitErr, exhausted = nil, true
+				}
+				if visitErr != nil {
+					return visitErr
+				}
+				exhausted = exhausted || collection.PageBudgetExhausted
+			}
+			if exhausted {
+				cursor = recordGitHubTestsLateRerunRunsStop(cursor, client, claim, githubTestsPageBudgetCause, cursor.LateRunPages)
+				cursor = nextRunsListing(cursor)
+				cursor.NextURL, cursor.Index = "", 0
+			}
+			continue
 		}
 		query := githubTestsRunsQuery(claim, lookback, cursor.RangeHi)
 		allowance, budgetErr := remainingPageBudget(
@@ -1651,6 +1724,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		pageOptions := providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Route: githubRunsRoute, Query: query, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}
 		collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, pageOptions, emitRunPage)
+		if errors.Is(visitErr, errGitHubTestsWalkBound) && cursor.LateRuns {
+			// The runs range ended at the bound and went on to the deep range: the loop ends the deep range.
+			continue
+		}
 		if errors.Is(visitErr, errGitHubTestsWalkBound) {
 			cursor = recordGitHubTestsWalkBound(cursor, client, claim, githubTestsRunInventoryComponent, maxWalkRecords)
 			break
@@ -1667,7 +1744,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 
 	if cursor.Phase == githubTestsRunsPhase {
 		cursor.Phase = githubTestsArtifactsPhase
-		cursor.NextURL, cursor.Index = "", 0
+		cursor.NextURL, cursor.Index, cursor.LateRuns = "", 0, false
 	}
 	handlerOpenRan := false
 	// collectOpenRuns is the open phase: stored pipeline rows still open and

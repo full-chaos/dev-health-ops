@@ -86,7 +86,7 @@ func TestSelfCheckWithInputsHashesAndParsesStdin(t *testing.T) {
 	}
 	bad := good + "UNKNOWN_KEY=" + canary + "\n"
 	out, _, code = exec(t, pinnedHost(t), bad, "deploy", "self-check", "-")
-	if code != cli.ExitRefused || !strings.Contains(out, "sha256(inputs)="+sha(bad)) || !strings.Contains(out, "INPUTS: REFUSED: inputs line 20: unknown key UNKNOWN_KEY") ||
+	if code != cli.ExitRefused || !strings.Contains(out, "sha256(inputs)="+sha(bad)) || !strings.Contains(out, "INPUTS: REFUSED: inputs line 20: unknown key for this target") ||
 		strings.Contains(out, canary) || !strings.HasSuffix(out, "DHO-DEPLOY END rc=3\n") {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -151,6 +151,27 @@ func TestHelpExitsZero(t *testing.T) {
 			out, errOut, code := exec(t, pinnedHost(t), "", "deploy", verb, h)
 			if code != cli.ExitOK || !strings.Contains(errOut, "usage: dho deploy "+verb) || out != "" {
 				t.Fatalf("%s %s: exit %d, %q %q", verb, h, code, out, errOut)
+			}
+		}
+	}
+}
+
+// (c): a refusal holds no byte of the input value: not the kit-only TARGET,
+// not the unknown key's name, not its value.
+func TestRefusalsHoldNoInputValueBytes(t *testing.T) {
+	cases := map[string][]string{}
+	for _, target := range []string{"ingress-nginx", "acr", "f1pipe"} {
+		cases[strings.Replace(good, "TARGET=dev-health", "TARGET="+target, 1)] = []string{target}
+	}
+	cases[good+"ZZ_CANARY_KEY=canary_unknown_value\n"] = []string{"ZZ_CANARY_KEY", "canary_unknown_value"}
+	for buf, values := range cases {
+		out, errOut, code := exec(t, pinnedHost(t), buf, "deploy", "self-check", "-")
+		if code != cli.ExitRefused || !strings.Contains(out, "INPUTS: REFUSED") {
+			t.Fatalf("exit %d:\n%s", code, out)
+		}
+		for _, v := range values {
+			if strings.Contains(out+errOut, v) {
+				t.Fatalf("the output holds the input bytes %q:\n%s%s", v, out, errOut)
 			}
 		}
 	}

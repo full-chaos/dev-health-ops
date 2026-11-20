@@ -169,20 +169,22 @@ var (
 	hexDigest    = regexp.MustCompile(rHex)
 )
 
-// migrateHooks are the names of the chart's migrate, data and grant hook
-// Jobs (deploy/helm/dev-health/templates: river-hooks.yaml, migrate-job.yaml,
+// migrateHooks are the chart's migrate, data and grant hook Jobs
+// (deploy/helm/dev-health/templates: river-hooks.yaml, migrate-job.yaml,
 // auth-migrate-job.yaml, auth-grants-job.yaml). Their pins are never rolled
 // back (acp Q5) and the kit gates their rows with post-roll posture reads, so
 // a row on a doc of one of these names, of any kind, is a kit form. The one
 // other chart hook, route-activate, rides an app roll in the kit (s41-a).
-var migrateHooks = map[string]bool{
-	"dev-health-ops-river-migrate":    true,
-	"dev-health-ops-provision-roles":  true,
-	"dev-health-ops-migrate":          true,
-	"dev-health-ops-streak-index":     true,
-	"dev-health-ops-open-units-index": true,
-	"dev-health-ops-auth-migrate":     true,
-	"dev-health-ops-auth-grants":      true,
+var migrateHooks = []string{"river-migrate", "provision-roles", "migrate", "streak-index", "open-units-index", "auth-migrate", "auth-grants"}
+
+// hookDoc: a name is a hook doc when it is <hook> or ends in "-<hook>", under any release prefix and any kind.
+func hookDoc(name string) bool {
+	for _, h := range migrateHooks {
+		if name == h || strings.HasSuffix(name, "-"+h) {
+			return true
+		}
+	}
+	return false
 }
 
 // authDoc is any doc of the auth-service family: every chart auth resource
@@ -237,7 +239,7 @@ func checkDevHealth(in *Inputs) error {
 		switch {
 		case r.Old == "<secret>" || r.New == "<empty>":
 			return notBuilt(r.Line, "an IMGROW <secret> / <empty> row")
-		case migrateHooks[name]:
+		case hookDoc(name):
 			return notBuilt(r.Line, "an IMGROW row on a migrate, data or grant hook Job doc")
 		case authDoc(name):
 			return notBuilt(r.Line, "an IMGROW row on an auth doc (restore-fence, GRANTWIDEN)")

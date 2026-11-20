@@ -122,17 +122,27 @@ func Parse(buf []byte) (*Inputs, error) {
 	if len(buf) > MaxBytes {
 		return in, refuse(0, "larger than %d bytes", MaxBytes)
 	}
-	bad := 0
+	bad, badLine, nulLine, line := 0, 0, 0, 1
 	for _, b := range buf {
-		if b == 0 {
-			return in, refuse(0, "the buffer holds a NUL byte")
+		switch {
+		case b == '\n':
+			line++
+			continue
+		case b == 0 && nulLine == 0:
+			nulLine = line
 		}
-		if b != '\n' && (b < 0x20 || b > 0x7e) {
+		if b < 0x20 || b > 0x7e {
 			bad++
+			if badLine == 0 {
+				badLine = line
+			}
 		}
 	}
+	if nulLine > 0 {
+		return in, refuse(nulLine, "the buffer holds a NUL byte")
+	}
 	if bad > 0 {
-		return in, refuse(0, "%d byte(s) outside printable ASCII + LF (TAB, CR, non-ASCII)", bad)
+		return in, refuse(badLine, "%d byte(s) outside printable ASCII + LF (TAB, CR, non-ASCII); the first is on this line", bad)
 	}
 	lines := strings.Split(string(buf), "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
@@ -184,7 +194,7 @@ func Parse(buf []byte) (*Inputs, error) {
 		return in, refuse(0, "missing key TARGET")
 	}
 	if kitTarget[in.Target] {
-		return in, notBuilt(targetLine, "target %s", in.Target)
+		return in, notBuilt(targetLine, "TARGET names a kit-only target")
 	}
 	spec := targets[in.Target]
 
@@ -216,7 +226,7 @@ func Parse(buf []byte) (*Inputs, error) {
 		}
 		ks, known := spec.keys[e.key]
 		if !known {
-			return in, refuse(e.line, "unknown key %s for target %s", e.key, in.Target)
+			return in, refuse(e.line, "unknown key for this target")
 		}
 		if !ks.match(e.value) {
 			return in, refuse(e.line, "bad value for %s", e.key)

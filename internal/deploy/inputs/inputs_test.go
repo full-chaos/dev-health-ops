@@ -191,7 +191,7 @@ func TestStructureAndVersion(t *testing.T) {
 		"no target":         {strings.Replace(goodDev, "TARGET=dev-health\n", "", 1), "missing key TARGET"},
 		"two targets":       {goodDev + "TARGET=dev-health\n", "duplicate key TARGET"},
 		"bad target":        {strings.Replace(goodDev, "TARGET=dev-health", "TARGET=prod", 1), "bad value for TARGET"},
-		"unknown key":       {goodDev + "NOT_A_KEY=1\n", "unknown key NOT_A_KEY for target dev-health"},
+		"unknown key":       {goodDev + "NOT_A_KEY=1\n", "unknown key for this target"},
 		"render file":       {goodDev + "RENDER_FILE=/var/lib/oci-cache/lane-scratch/x/r.yaml\n", "RENDER_FILE is not a dho key"},
 		"dup scalar":        {goodDev + "STEP=42\n", "duplicate key STEP"},
 		"dup run tag":       {goodDev + "RUN_TAG=s41-b\n", "duplicate key RUN_TAG"},
@@ -202,7 +202,7 @@ func TestStructureAndVersion(t *testing.T) {
 		t.Run(name, func(t *testing.T) { mustRefuse(t, c.buf, false, c.want) })
 	}
 	for _, target := range []string{"ingress-nginx", "acr", "f1pipe"} {
-		mustRefuse(t, strings.Replace(goodDev, "TARGET=dev-health", "TARGET="+target, 1), true, "target "+target)
+		mustRefuse(t, strings.Replace(goodDev, "TARGET=dev-health", "TARGET="+target, 1), true, "TARGET names a kit-only target")
 	}
 }
 
@@ -425,6 +425,45 @@ func TestRouteActivateIsAnAppRollRowUnderTheOnePairCheck(t *testing.T) {
 	for _, name := range []string{"river-migrate", "provision-roles", "migrate", "streak-index", "open-units-index", "auth-migrate", "auth-grants"} {
 		for _, kind := range []string{"Job", "NetworkPolicy", "ServiceAccount"} {
 			mustRefuse(t, goodDev+row(kind+"/dev-health-ops-"+name, ".metadata.labels.x", "a", "b"), true, "an IMGROW row on a")
+		}
+	}
+}
+
+// (d): a byte refusal names the line of the first bad byte.
+func TestByteRefusalsNameTheLineOfTheFirstBadByte(t *testing.T) {
+	for name, c := range map[string]struct {
+		buf  string
+		line int
+		want string
+	}{
+		"CR on line 1":        {strings.Replace(goodDev, "\n", "\r\n", 1), 1, "outside printable ASCII"},
+		"TAB on line 3":       {strings.Replace(goodDev, "TARGET=dev-health\n", "TARGET=dev-health\t\n", 1), 3, "outside printable ASCII"},
+		"NUL on line 3":       {strings.Replace(goodDev, "TARGET=dev-health\n", "TARGET=dev-health\x00\n", 1), 3, "NUL"},
+		"non-ASCII on line 3": {strings.Replace(goodDev, "TARGET=dev-health\n", "TARGET=dev-health\xc3\xa9\n", 1), 3, "outside printable ASCII"},
+		"DEL on line 3":       {strings.Replace(goodDev, "TARGET=dev-health\n", "TARGET=dev-health\x7f\n", 1), 3, "outside printable ASCII"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if r := mustRefuse(t, c.buf, false, c.want); r.Line != c.line {
+				t.Fatalf("refusal on line %d, want %d: %v", r.Line, c.line, r)
+			}
+		})
+	}
+}
+
+// (a): the hook rule is the -<hook> name suffix under any release prefix. The
+// hard negatives carry a hook word without the "-" boundary at the end of the
+// name (xmigrate, provision-rolesx) or as an inner segment (migrate-docs): a
+// bare HasSuffix(name, hook) or a Contains match would refuse them.
+func TestHookNamesMatchBySuffixOnAnyPrefix(t *testing.T) {
+	img := ".spec.template.spec.containers[0].image"
+	for _, prefix := range []string{"", "dev-health-", "dev-health-ops-", "acme-dev-health-"} {
+		for _, h := range []string{"river-migrate", "provision-roles", "migrate", "streak-index", "open-units-index", "auth-migrate", "auth-grants"} {
+			mustRefuse(t, goodDev+row("Job/"+prefix+h, img, oldDig, newDig), true, "migrate, data or grant hook")
+		}
+	}
+	for _, name := range []string{"dev-health-ops-xmigrate", "dev-health-ops-migrate-docs", "dev-health-ops-provision-rolesx", "dev-health-ops-streak-indexer", "dev-health-ops-open-units-indexes", "dev-health-migratex"} {
+		if _, err := Parse([]byte(goodDev + row("Deployment/"+name, img, oldDig, newDig))); err != nil {
+			t.Fatalf("%s is not a hook doc: %v", name, err)
 		}
 	}
 }

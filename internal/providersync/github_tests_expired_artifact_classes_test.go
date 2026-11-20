@@ -215,8 +215,8 @@ func TestGitHubTestsExpiredRevisitWithFullSampleOvercounts(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Collect: %v", err)
 			}
-			// this route lists each run id once, so it has no revisit to recount
-			check(t, claim, batch, distinct)
+			// a repeat of a run whose read had a loss is read again, as on the chunked route (CHAOS-14361)
+			check(t, claim, batch, distinct+1)
 		})
 	}
 }

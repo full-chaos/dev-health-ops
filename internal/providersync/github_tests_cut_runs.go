@@ -17,12 +17,13 @@ import (
 //     revisit reads as main.
 //
 // Each list costs at most 8 + 52 bytes of the cursor in the artifacts phase, whose worst-case cursor has no more room, and
-// 8 + 896 bytes in the runs phase, whose cursor carries no artifacts fields (CHAOS-14321): a cut second of a busy repo holds
-// tens of runs, so 52 bytes (four 11-digit keys) dropped every one of them. githubTestsFitCursor drops a list that does not
-// fit the cursor budget.
+// 8 + 882 bytes in the runs phase, whose cursor carries no artifacts fields (CHAOS-14321): a cut second of a busy repo holds
+// tens of runs, so 52 bytes (four 11-digit keys) dropped every one of them. The runs cap is 896 less 14: the two lists pay
+// the 28 bytes of the widest AnchorID (CHAOS-14316), so the deep range's worst-case cursor keeps its 300-byte margin.
+// githubTestsFitCursor drops a list that does not fit the cursor budget.
 const (
 	githubTestsMaxCutKeysBytes     = 52
-	githubTestsMaxRunsCutKeysBytes = 896
+	githubTestsMaxRunsCutKeysBytes = 882
 	githubTestsCutKeysOverflow     = "-"
 	githubTestsCutRunsConflict     = "github_tests_cut_runs"
 )
@@ -178,8 +179,8 @@ func githubTestsCutKeyListValid(keys string, limit int) bool {
 
 // githubTestsFitCursor drops cut lists from a cursor that is over maxChunkCursorBytes (CHAOS-14315): the active list first
 // (empty: the revisit then skips only the runs a later write lists again, each read whole, so it is sound), then the carried
-// list. The lists only dedup reads of a peeled
-// range; the continuation URL and every other field stay. A cursor that does not fit even then is returned unchanged,
+// list, then the resume anchor (CHAOS-14316: a resume without it seeks the listing again, so it can re-read, never skip).
+// The lists only dedup reads of a peeled range; the continuation URL and every other field stay. A cursor that does not fit even then is returned unchanged,
 // so the encode fails as it always did. The result depends only on the cursor, so a before cursor equal to the previous
 // after cursor degrades to the same bytes.
 func githubTestsFitCursor(cursor githubTestsChunkCursor) (githubTestsChunkCursor, []string) {
@@ -198,6 +199,10 @@ func githubTestsFitCursor(cursor githubTestsChunkCursor) (githubTestsChunkCursor
 	if !fits(fitted) && fitted.CarriedCutKeys != "" {
 		fitted.CarriedCutKeys = ""
 		dropped = append(dropped, "carried")
+	}
+	if !fits(fitted) && fitted.AnchorID != "" {
+		fitted.AnchorID = ""
+		dropped = append(dropped, "anchor")
 	}
 	if !fits(fitted) {
 		return cursor, nil

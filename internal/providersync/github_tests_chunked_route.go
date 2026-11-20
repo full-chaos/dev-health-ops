@@ -247,6 +247,10 @@ type githubTestsChunkCursor struct {
 	// Relist is the state of the late re-run re-list (github_tests_late_rerun_reports.go): walking its deep range, or why it
 	// stopped before its oldest runs. The deep range starts ArtifactPages again from zero: the regular range is done by then.
 	Relist int `json:"rl,omitempty"`
+	// AnchorID is the id (1-20 digits) of the last run the active runs or artifacts listing listed, read or not. A resume
+	// checks that the run before its stored index is still this run (githubTestsResumeStart): a run deleted before it moves
+	// it, and the listing is then sought again by created time (githubTestsReseek) instead of resumed by position.
+	AnchorID string `json:"ra,omitempty"`
 }
 
 // markGitHubTestsSkippedArtifactCauseOverflow returns a NEW map with cause
@@ -951,43 +955,21 @@ const (
 	githubTestsArtifactsPhase = "artifacts"
 )
 
-// githubTestsResumeStart resolves where to resume inside a re-fetched page.
+// githubTestsResumeStart resolves where to resume inside a re-fetched page, or reports that the listing must be sought again.
 //
-// A resume cursor stores an ORDINAL index into a page identified by its URL.
-// GitHub serves Actions runs newest-first, so between two attempts new runs
-// shift what any given page holds, and the page a cursor named can come back
-// shorter than the index recorded against it. That is the provider moving, not
-// a corrupt checkpoint: the unit's durable state is intact and every prepared
-// chunk is still committed.
+// A resume cursor names a page by its URL and an index into it, plus the id of the last run the listing listed (AnchorID).
+// GitHub serves Actions runs newest-first and pages them by position, so a run deleted BEFORE that run between two attempts
+// moves every later run one place up: the page holds different runs at the same index, and a page end moves the next page's
+// first run onto the finished page. A position alone resumed past such a run and reported the listing complete
+// (CHAOS-14316). So the run before the stored index must still be the anchor; the cursor of a finished page that has a next
+// page keeps that page and its length (the visitor then follows the next link), so a page end is checked the same way.
+// A deletion after the anchor moves only runs not yet listed, so it passes.
 //
-// Such a mismatch -- a stored index that no longer addresses an item --
-// therefore RE-ANCHORS: walk the page again from the start, rather than
-// failing.
-//
-// This detects only the case where the index addresses nothing. A page
-// RESHUFFLED to the same length still satisfies the index and is walked from
-// it, so an ordinal cursor cannot tell "same items, moved" from "different
-// items, same count". That case is silent and undetectable without anchoring
-// on item identity (CHAOS-4182), which is why the re-anchor counter is a LOWER
-// BOUND on page movement, not a measure of it. Re-walking is safe because every cicd destination is a
-// ReplacingMergeTree keyed on the row's natural identity
-// (internal/chmigrate/history/000_raw_tables.sql:97-106 for ci_pipeline_runs,
-// 029_testops_tables.sql:33-102 for the testops tables), so re-processing an
-// item replaces its row instead of duplicating it. Clamping to the end of the
-// page instead would silently drop whatever moved off it -- data loss reported
-// as progress.
-//
-// Failing here cost one of the unit's five attempts per occurrence, which is
-// why a deploy or any other gap used to burn attempts on exactly the busiest
-// repositories -- the ones whose pages shift most (CHAOS-4177).
-// The bool return reports whether this call is a GENUINE re-anchor (the
-// stored index no longer addresses an item, so the page is about to be
-// re-walked from 0) as opposed to a fresh page never resumed at all. The
-// artifacts phase needs this distinction: a genuine re-anchor re-downloads
-// and re-counts every artifact on the page, including ones an earlier
-// attempt already reflected in ArchivesSeen/ArchivesUnreadable, which can
-// otherwise cross the totality floor on a truly small sample (CHAOS-4185
-// codex round 1) -- see the caller in the artifacts phase below.
+// Any other cursor (the anchor moved, an index past the page, a cursor written before AnchorID existed) is not resumed by
+// position: the caller seeks the listing again from the created second of its oldest listed run (githubTestsReseek), so a
+// moved page can cost a re-read but never a skip. The re-seek is counted as a re-anchor (the label set is unchanged).
+// A fresh page (another URL) and a cursor at the start of a page with nothing listed before it start at index 0. An index 0
+// after an empty page keeps the anchor on an earlier page and starts at 0 too.
 func githubTestsResumeStart(
 	cursor githubTestsChunkCursor,
 	page providerfoundation.PageVisit,
@@ -998,28 +980,66 @@ func githubTestsResumeStart(
 	if cursor.NextURL != page.CursorBefore {
 		return 0, false
 	}
-	// A cursor is never persisted with Index == len(page.Items): both item
-	// write sites (the runs loop and its artifacts twin) assign index+1 and
-	// then normalise every >= len case to index 0 with CursorAfter, and both
-	// empty-page branches set index 0. A persisted Index > 0 therefore always
-	// addressed an item that
-	// existed, so an index at or past the re-fetched length now addresses
-	// NOTHING -- walking from there would process zero items and advance past
-	// whatever the page still held, silently. Index 0 is always a legitimate
-	// start, including on an empty page.
-	if cursor.Index == 0 || cursor.Index < len(page.Items) {
+	if cursor.Index == 0 && (cursor.AnchorID != "" || cursor.RangeItems == 0) {
+		return 0, false
+	}
+	if cursor.Index > 0 && cursor.Index <= len(page.Items) && cursor.AnchorID != "" &&
+		githubTestsListedRunID(page.Items[cursor.Index-1]) == cursor.AnchorID {
 		return cursor.Index, false
 	}
 	if client != nil {
 		client.Metrics.RecordResumeReanchor(claim.Provider, claim.Dataset, phase)
 	}
 	slog.Warn(
-		"provider page moved under a resume; re-anchoring and re-walking the page",
+		"provider page moved under a resume; seeking the listing again from its oldest listed created second",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
 		"repository", logging.ProviderText(cursor.Repo), "phase", phase,
-		"stored_index", cursor.Index, "page_items", len(page.Items),
+		"stored_index", cursor.Index, "page_items", len(page.Items), "anchored", cursor.AnchorID != "",
 	)
 	return 0, true
+}
+
+// githubTestsListedRunID is the anchor form of one listed run: its id when it is 1-20 digits, else "" (never an anchor).
+func githubTestsListedRunID(raw json.RawMessage) string {
+	run, err := decodeGitHubWorkflowRun(raw)
+	if err != nil {
+		return ""
+	}
+	return githubTestsAnchorID(run)
+}
+
+func githubTestsAnchorID(run gitHubWorkflowRunPayload) string {
+	id := run.ID.String()
+	if !githubTestsCutRunDigits(id, 20) {
+		return ""
+	}
+	return id
+}
+
+// errGitHubTestsReseek ends a page visit whose resume position moved (githubTestsResumeStart); the phase loop seeks the
+// listing again (githubTestsReseek).
+var errGitHubTestsReseek = errors.New("github tests listing moved under a resume")
+
+// githubTestsReseek starts the active range again as a new search that ends at the created second of its oldest listed run
+// (RangeOldest, inclusive). GitHub lists newest-created first, so every run not yet listed was created at or before that
+// second, and every run created after it was listed. The runs of that second listed in this range are listed and read
+// again: a run is never skipped inside the range that read it (the cut-key rule, github_tests_cut_runs.go). That dup is
+// idempotent: every destination is a ReplacingMergeTree on the row's natural key (internal/chmigrate/history/
+// 000_raw_tables.sql:97-106 for ci_pipeline_runs, 029_testops_tables.sql:33-102 for the testops tables), so a row read again
+// replaces the stored one. Only the carried list stays a skip source, when the range already ended at that second: those
+// runs were read whole by the previous range. With no dated run listed yet the range starts again from its start. The new
+// search has its own count. A moved page never fails the unit (CHAOS-4177: a failure cost one of its five attempts).
+func githubTestsReseek(cursor githubTestsChunkCursor) githubTestsChunkCursor {
+	if second, ok := githubTestsCutSecond(cursor.RangeOldest); ok {
+		if hi, hiOK := githubTestsCutSecond(cursor.RangeHi); !hiOK || hi != second {
+			cursor.CarriedCutKeys = ""
+		}
+		cursor.RangeHi = cursor.RangeOldest
+	}
+	cursor.ActiveCutKeys = ""
+	cursor.RangeItems, cursor.RangeOldest, cursor.RangeOldestItems = 0, "", 0
+	cursor.NextURL, cursor.Index, cursor.AnchorID = "", 0, ""
+	return cursor
 }
 
 func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
@@ -1040,6 +1060,7 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 		cursor.OpenSkipped < 0 || cursor.OpenTransientRun < 0 ||
 		cursor.OpenSkipEvent != nil && (cursor.OpenSkipEvent.RunID == "" || cursor.OpenSkipEvent.Reason == "") ||
 		cursor.Index < 0 || cursor.NextURL == "" && cursor.Index != 0 ||
+		cursor.AnchorID != "" && !githubTestsCutRunDigits(cursor.AnchorID, 20) ||
 		cursor.RunPages < 0 || cursor.ArtifactPages < 0 || cursor.Relist < 0 || cursor.Relist > githubTestsRelistStoppedSaturated ||
 		// The counter pair is either both known or both unknown, never split:
 		// a cursor carrying exactly one is corrupt, not a legacy shape (a
@@ -1056,6 +1077,7 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 	}
 	if cursor.Phase != githubTestsRunsPhase && cursor.Phase != githubTestsArtifactsPhase {
 		cursor = githubTestsClearCutKeys(cursor)
+		cursor.AnchorID = ""
 	}
 	// A cursor already carrying aggregate overflow with no per-cause ledger
 	// at all predates SkippedArtifactCauseOverflow (CHAOS-4592 codex review
@@ -1504,7 +1526,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	// runs range of the claim that holds a UTC midnight goes on to the deep
 	// range, every other one to the artifacts phase.
 	nextRunsListing := func(c githubTestsChunkCursor) githubTestsChunkCursor {
-		c.RangeHi, c.RangeItems, c.RangeOldest, c.RangeOldestItems = "", 0, "", 0
+		c.RangeHi, c.RangeItems, c.RangeOldest, c.RangeOldestItems, c.AnchorID = "", 0, "", 0, ""
 		c = githubTestsClearCutKeys(c)
 		if !c.LateRuns && githubTestsHoldsMidnight(claim) {
 			c.LateRuns = true
@@ -1524,7 +1546,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		if saturated && !stuck && c.RangeOldestItems >= githubTestsSearchResultCap {
 			stuck, hi = true, nextHi
 		}
-		c.RangeItems, c.RangeOldest, c.RangeOldestItems = 0, "", 0
+		c.RangeItems, c.RangeOldest, c.RangeOldestItems, c.AnchorID = 0, "", 0, ""
 		switch {
 		case !saturated:
 			c = nextRunsListing(c)
@@ -1543,7 +1565,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	endArtifactsRange := func(c githubTestsChunkCursor) githubTestsChunkCursor {
 		nextHi, saturated, stuck := githubTestsArtifactInterval(claim, c.Relist == githubTestsRelistWalking, lateLookback).peel(c.RangeItems, c.RangeOldest, c.RangeHi)
 		items, hi := c.RangeItems, c.RangeHi
-		c.RangeItems, c.RangeOldest = 0, ""
+		c.RangeItems, c.RangeOldest, c.AnchorID = 0, "", ""
 		switch {
 		case !saturated:
 			c.RangeHi = ""
@@ -1683,7 +1705,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				cursor.RunPages++
 			}
 		}
-		start, _ := githubTestsResumeStart(cursor, page, client, claim, githubTestsRunsPhase)
+		start, reseek := githubTestsResumeStart(cursor, page, client, claim, githubTestsRunsPhase)
+		if reseek {
+			return errGitHubTestsReseek
+		}
 		for index := start; index < len(page.Items); index++ {
 			if githubTestsWalkRecords(cursor) >= maxWalkRecords {
 				return errGitHubTestsWalkBound
@@ -1740,19 +1765,20 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			after := cursor
 			after.Index = index + 1
 			after.NextURL = page.CursorBefore
-			if after.Index >= len(page.Items) {
-				after.Index = 0
-				after.NextURL = page.CursorAfter
-				if after.NextURL == "" {
-					after = endRunsRange(after)
-				}
+			after.AnchorID = githubTestsAnchorID(run)
+			// A finished page with a next page keeps its own URL and length: the resume re-reads it to check the anchor
+			// (githubTestsResumeStart) and the visitor follows its next link.
+			if after.Index >= len(page.Items) && page.CursorAfter == "" {
+				after.Index, after.NextURL = 0, ""
+				after = endRunsRange(after)
 			}
 			if err := emitCursor(before, after, CompleteRouteBatch{Effects: effects}, false); err != nil {
 				return err
 			}
 			cursor = after
 		}
-		if len(page.Items) == 0 {
+		// An empty page, or a resume at the end of the last page (its run checked, nothing left on it), ends here.
+		if len(page.Items) == 0 || start == len(page.Items) && page.CursorAfter == "" {
 			cursor.NextURL = page.CursorAfter
 			cursor.Index = 0
 			if cursor.NextURL == "" {
@@ -1792,6 +1818,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					Query: githubTestsLateRerunRunsQuery(claim, lookback, lateLookback, cursor.RangeHi), DataKey: "workflow_runs",
 					MaxPages: allowance, InitialURL: cursor.NextURL}
 				collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, pageOptions, emitRunPage)
+				if errors.Is(visitErr, errGitHubTestsReseek) {
+					cursor = githubTestsReseek(cursor)
+					continue
+				}
 				if errors.Is(visitErr, errGitHubTestsWalkBound) {
 					logGitHubTestsWalkBound(cursor, claim, githubTestsLateRerunRunsComponent, maxWalkRecords)
 					visitErr, exhausted = nil, true
@@ -1821,6 +1851,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		pageOptions := providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Route: githubRunsRoute, Query: query, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}
 		collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, pageOptions, emitRunPage)
+		if errors.Is(visitErr, errGitHubTestsReseek) {
+			cursor = githubTestsReseek(cursor)
+			continue
+		}
 		if errors.Is(visitErr, errGitHubTestsWalkBound) && cursor.LateRuns {
 			// The runs range ended at the bound and went on to the deep range: the loop ends the deep range.
 			continue
@@ -1841,7 +1875,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 
 	if cursor.Phase == githubTestsRunsPhase {
 		cursor.Phase = githubTestsArtifactsPhase
-		cursor.NextURL, cursor.Index, cursor.LateRuns = "", 0, false
+		cursor.NextURL, cursor.Index, cursor.LateRuns, cursor.AnchorID = "", 0, false, ""
 		cursor.RangeOldestItems = 0
 		cursor = githubTestsClearCutKeys(cursor)
 	}
@@ -2029,12 +2063,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			if !(cursor.NextURL == page.CursorBefore && cursor.Index > 0) {
 				cursor.ArtifactPages++
 			}
-			start, reanchored := githubTestsResumeStart(cursor, page, client, claim, githubTestsArtifactsPhase)
-			if reanchored {
-				// A genuine re-anchor re-walks this WHOLE page from index 0,
-				// which re-downloads and re-counts every artifact on it --
-				// including ones an earlier attempt already reflected in
-				// these counters. That can cross the totality floor on a
+			start, reseek := githubTestsResumeStart(cursor, page, client, claim, githubTestsArtifactsPhase)
+			if reseek {
+				// A re-seek (githubTestsReseek) reads again the runs of the anchor's created second, which re-downloads
+				// and re-counts their artifacts -- including ones an earlier attempt already reflected in these counters. That can cross the totality floor on a
 				// truly small real sample (e.g. a genuine 1-artifact repo
 				// whose page shrank under a resume): the SAME artifact would
 				// be counted twice, satisfying seen>=2 with only one
@@ -2061,6 +2093,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				// re-anchor -- a bounded, purely cosmetic over-count (these
 				// never gate the watermark or Incomplete) -- which is a far
 				// safer failure mode than erasing real history.
+				return errGitHubTestsReseek
 			}
 			for index := start; index < len(page.Items); index++ {
 				if githubTestsWindowRecords(cursor) >= maxWalkRecords {
@@ -2594,9 +2627,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				after := cursor
 				after.Index = index + 1
 				after.NextURL = page.CursorBefore
-				if after.Index >= len(page.Items) {
-					after.Index = 0
-					after.NextURL = page.CursorAfter
+				after.AnchorID = githubTestsAnchorID(run)
+				// A finished page with a next page keeps its own URL and length, as in the runs phase.
+				if after.Index >= len(page.Items) && page.CursorAfter == "" {
+					after.Index, after.NextURL = 0, ""
 					// Publish the next phase (open, else the terminal one) the
 					// moment the last artifact page is consumed, exactly as the
 					// runs phase publishes "artifacts". Without it a cursor at
@@ -2606,16 +2640,14 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					// re-walked the WHOLE artifacts phase -- spending two fresh
 					// pages of budget per lap until the cap stopped it
 					// (CHAOS-4130).
-					if after.NextURL == "" {
-						after = endArtifactsRange(after)
-					}
+					after = endArtifactsRange(after)
 				}
 				if err := emitCursor(before, after, CompleteRouteBatch{Effects: effects}, false); err != nil {
 					return err
 				}
 				cursor = after
 			}
-			if len(page.Items) == 0 {
+			if len(page.Items) == 0 || start == len(page.Items) && page.CursorAfter == "" {
 				cursor.NextURL = page.CursorAfter
 				cursor.Index = 0
 				if cursor.NextURL == "" {
@@ -2627,7 +2659,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			}
 			return nil
 		}
-		allowance, budgetErr := remainingPageBudget((maxRuns+nativePerPage-1)/nativePerPage, cursor.ArtifactPages)
+		// A resume inside a page (a finished page included: its cursor keeps the page to check the anchor) re-reads a
+		// charged page, so that read is free, as in the runs phase.
+		allowance, budgetErr := githubTestsListingAllowance((maxRuns+nativePerPage-1)/nativePerPage, cursor.ArtifactPages, cursor.NextURL != "" && cursor.Index > 0)
 		if cursor.Relist == githubTestsRelistWalking {
 			// The deep range: its own budget, under the shared listing allowance (charged on entering a page).
 			allowance, budgetErr = githubTestsListingAllowance(lateMaxPages, cursor.ArtifactPages, cursor.NextURL != "" && cursor.Index > 0)
@@ -2645,6 +2679,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			return budgetErr
 		}
 		collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Route: githubRunsRoute, Query: artifactQuery, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}, artifactPage)
+		if errors.Is(visitErr, errGitHubTestsReseek) {
+			cursor = githubTestsReseek(cursor)
+			continue
+		}
 		if errors.Is(visitErr, errGitHubTestsWalkBound) {
 			cursor = recordGitHubTestsArtifactsWalkBound(cursor, client, claim, maxWalkRecords)
 			break
@@ -2669,6 +2707,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		cursor.Phase = githubTestsPhaseAfterArtifacts(handler)
 	}
 	cursor = githubTestsClearCutKeys(cursor)
+	cursor.AnchorID = ""
 	if cursor.Phase == githubTestsOpenPhase {
 		handlerOpenRan = true
 		if err := collectOpenRuns(); err != nil {

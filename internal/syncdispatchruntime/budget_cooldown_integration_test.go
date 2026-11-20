@@ -222,7 +222,7 @@ VALUES ($1,$2,$3,'github','commits',$4,'dispatching',now(),(SELECT integration_i
 
 		now := time.Now().UTC()
 		if err := repository.DeferForRateLimit(ctx, claim, now.Add(5*time.Minute), now,
-			providersync.RateLimitObservation{Dimension: "graphql_cost", RetryAfter: 5 * time.Minute}); err != nil {
+			providersync.RateLimitObservation{Dimension: "graphql_cost", RetryAfter: 5 * time.Minute}, providersync.RateLimitEpisodeStep{}); err != nil {
 			t.Fatal(err)
 		}
 

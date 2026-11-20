@@ -203,12 +203,12 @@ func githubTestsLateRerunWanted(run gitHubWorkflowRunPayload, claim Claim, lookb
 	return !updated.UTC().Before(githubTestsLateRerunFloor(claim)) && !updated.UTC().Before(created.UTC().Add(lookback))
 }
 
-// githubTestsLateRerunListedOutsideDeepRange reports a run the deep listing answered although it is not in the deep
-// created range: created at or after the runs range's floor (it belongs to the runs range), or with no created time
-// (GitHub cannot list it by created). Each route skips it in the deep range, whatever the listing answered, so the two
-// ranges never read one run twice in a claim.
-func githubTestsLateRerunListedOutsideDeepRange(pipeline githubTestsPipelineRow, claim Claim, lookback time.Duration) bool {
-	return pipeline.QueuedAt == nil || !pipeline.QueuedAt.UTC().Before(claim.SinceAt.UTC().Add(-lookback))
+// githubTestsLateRerunListedOutsideDeepRange reports a run a deep listing answered although it is not in that deep
+// created range: created at or after floor, the start of the range above it (the runs range of the runs phase, the
+// regular range of the artifacts phase), or with no created time (GitHub cannot list it by created). Each route skips it
+// in the deep range, whatever the listing answered, so the two ranges of a phase never read one run twice in a claim.
+func githubTestsLateRerunListedOutsideDeepRange(pipeline githubTestsPipelineRow, floor time.Time) bool {
+	return pipeline.QueuedAt == nil || !pipeline.QueuedAt.UTC().Before(floor)
 }
 
 // githubTestsRunsQuery is the created range of one runs-phase listing.
@@ -496,6 +496,12 @@ func githubTestsSaturatedObservations(cursor githubTestsChunkCursor) []GitHubTes
 	if cursor.LateRunsSaturated {
 		out = append(out, GitHubTestsIncomplete{Component: githubTestsLateRerunRunsComponent, Cause: githubTestsListingSaturatedCause, Count: 1})
 	}
+	switch cursor.Relist {
+	case githubTestsRelistStoppedBudget:
+		out = append(out, GitHubTestsIncomplete{Component: githubTestsLateRerunReportsComponent, Cause: githubTestsPageBudgetCause, Count: 1})
+	case githubTestsRelistStoppedSaturated:
+		out = append(out, GitHubTestsIncomplete{Component: githubTestsLateRerunReportsComponent, Cause: githubTestsListingSaturatedCause, Count: 1})
+	}
 	return out
 }
 
@@ -538,6 +544,15 @@ func collectGitHubTestsRunsPeeled(
 	ctx context.Context, client *providerfoundation.HTTPClient, root string, pageBudget int,
 	queryFor func(peeledHi string) url.Values,
 ) (items []json.RawMessage, pages int, over bool, err error) {
+	return collectGitHubTestsRunsPeeledBy(ctx, client, root, pageBudget, queryFor, githubTestsPeel)
+}
+
+// collectGitHubTestsRunsPeeledBy is collectGitHubTestsRunsPeeled with the peel rule given (an artifacts-phase range peels
+// inside its created interval).
+func collectGitHubTestsRunsPeeledBy(
+	ctx context.Context, client *providerfoundation.HTTPClient, root string, pageBudget int,
+	queryFor func(peeledHi string) url.Values, peel func(items int, oldest, rangeHi string) (string, bool, bool),
+) (items []json.RawMessage, pages int, over bool, err error) {
 	seen := map[string]struct{}{}
 	hi := ""
 	for {
@@ -565,7 +580,7 @@ func collectGitHubTestsRunsPeeled(
 		if page.PageBudgetExhausted {
 			return items, pages, true, nil
 		}
-		nextHi, saturated, stuck := githubTestsPeel(count, oldest, hi)
+		nextHi, saturated, stuck := peel(count, oldest, hi)
 		switch {
 		case !saturated:
 			return items, pages, false, nil

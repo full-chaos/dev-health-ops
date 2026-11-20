@@ -236,7 +236,7 @@ func roll(h host, env cli.Env) int {
 	}
 	in, err := inputs.Parse(buf)
 	if err == nil && in.Target != words[0] {
-		decide(env, "roll", in, &inputs.Refusal{Class: inputs.ClassTargetMismatch, Key: "TARGET"})
+		decide(env, "roll", in, &inputs.Refusal{Class: inputs.ClassTargetMismatch, Key: "TARGET", Line: in.TargetLine})
 		fmt.Fprintln(r.out, "INPUTS: REFUSED: TARGET is not the target of the command")
 		return r.end(cli.ExitRefused)
 	}

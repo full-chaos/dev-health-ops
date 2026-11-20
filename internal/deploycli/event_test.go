@@ -71,6 +71,12 @@ func refusalCases() []refusalCase {
 		{"too_large", good + "#" + strings.Repeat("x", 70000) + "\n", inputs.ClassTooLarge, "", 0, false},
 		{"nul_byte", good + "#a\x00b\n", inputs.ClassNulByte, "", n + 1, false},
 		{"bad_byte", good + "#a\tb\n", inputs.ClassBadByte, "", n + 1, false},
+		{"bad_byte CRLF on a fixed key", sub("DHO_DEPLOY_INPUTS=1\n", "DHO_DEPLOY_INPUTS=1\r\n"), inputs.ClassBadByte, "DHO_DEPLOY_INPUTS", 1, false},
+		{"bad_byte in the value of a fixed key", sub("STEP=41", "STEP=4\x011"), inputs.ClassBadByte, "STEP", lineOf(good, "STEP="), false},
+		{"bad_byte on an unknown key", good + "ZZ_CANARY_KEY=canary_unknown\tvalue\n", inputs.ClassBadByte, "", n + 1, false},
+		{"bad_byte in a key prefix", sub("STEP=41", "ST\tEP=41"), inputs.ClassBadByte, "", lineOf(good, "STEP="), false},
+		{"nul_byte in the value of a fixed key", sub("STEP=41", "STEP=4\x001"), inputs.ClassNulByte, "STEP", lineOf(good, "STEP="), false},
+		{"nul_byte on an unknown key", good + "ZZ_CANARY_KEY=canary_unknown\x00value\n", inputs.ClassNulByte, "", n + 1, false},
 		{"too_many_lines", good + strings.Repeat("#c\n", 300), inputs.ClassTooManyLines, "", 0, false},
 		{"not_key_value", good + "lower=1\n", inputs.ClassNotKeyValue, "", n + 1, false},
 		{"no_entries", "# only a comment\n", inputs.ClassNoEntries, "", 0, false},
@@ -200,10 +206,43 @@ func TestInputsEventTargetMismatch(t *testing.T) {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	d := oneEvent(t, errOut)
-	if d["outcome"] != "REFUSED" || d["reason_class"] != inputs.ClassTargetMismatch || d["input_key"] != "TARGET" || d["verb"] != "roll" || d["not_built"] != false {
+	if d["outcome"] != "REFUSED" || d["reason_class"] != inputs.ClassTargetMismatch || d["input_key"] != "TARGET" || d["verb"] != "roll" || d["not_built"] != false || d["input_line"] != float64(lineOf(good, "TARGET=")) {
 		t.Fatalf("%v", d)
 	}
 	checkKeys(t, d)
+}
+
+func TestInputsEventTargetMismatchNamesTheTargetLine(t *testing.T) {
+	rest := strings.Replace(good, "TARGET=dev-health\n", "", 1)
+	for _, at := range []int{2, 3, 10, 40, 299} {
+		lines := strings.SplitAfter(rest, "\n")
+		head, tail := lines[:1], lines[1:len(lines)-1]
+		var b strings.Builder
+		b.WriteString(strings.Join(head, ""))
+		for i := 2; i < at; i++ {
+			if i-2 < len(tail) {
+				b.WriteString(tail[i-2])
+			} else {
+				b.WriteString("#pad\n")
+			}
+		}
+		b.WriteString("TARGET=dev-health\n")
+		if at-2 < len(tail) {
+			b.WriteString(strings.Join(tail[at-2:], ""))
+		}
+		buf := b.String()
+		want := lineOf(buf, "TARGET=")
+		if want != at {
+			t.Fatalf("fixture: TARGET on line %d, want %d", want, at)
+		}
+		_, errOut, code := exec(t, pinnedHost(t), buf, "deploy", "roll", "acr", "pre", "-")
+		if code != cli.ExitRefused {
+			t.Fatalf("exit %d", code)
+		}
+		if d := oneEvent(t, errOut); d["reason_class"] != inputs.ClassTargetMismatch || d["input_line"] != float64(at) {
+			t.Fatalf("TARGET on line %d: %v", at, d)
+		}
+	}
 }
 
 func TestInputsEventOnePerRunAndNoneWithoutADecision(t *testing.T) {
@@ -232,7 +271,7 @@ func TestInputsEventOnePerRunAndNoneWithoutADecision(t *testing.T) {
 }
 
 func TestInputsEventHoldsNoValueBytes(t *testing.T) {
-	canaries := []string{"ZZ_CANARY_KEY", "canary_unknown_value", "canarytgt", "Canary_Run", "zzcanary-web", "canary_author"}
+	canaries := []string{"ZZ_CANARY_KEY", "canary_unknown", "canary_unknown_value", "canarytgt", "Canary_Run", "zzcanary-web", "canary_author"}
 	bufs := []string{
 		good + "ZZ_CANARY_KEY=canary_unknown_value\n",
 		"ZZ_CANARY_KEY=canary_unknown_value\n" + good,

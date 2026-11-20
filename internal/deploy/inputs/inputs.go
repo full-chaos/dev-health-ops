@@ -5,6 +5,7 @@
 package inputs
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -121,14 +122,15 @@ func SHA256(buf []byte) string {
 // Inputs is a parsed buffer. Values holds the scalar keys, Lists the
 // repeatable ones, in file order.
 type Inputs struct {
-	SHA256    string
-	Target    string
-	RunTag    string
-	Author    string
-	Values    map[string]string
-	Lists     map[string][]string
-	DevHealth *DevHealth
-	lines     map[string][]int
+	SHA256     string
+	Target     string
+	TargetLine int
+	RunTag     string
+	Author     string
+	Values     map[string]string
+	Lists      map[string][]string
+	DevHealth  *DevHealth
+	lines      map[string][]int
 }
 
 // line is the first file line of key k (0 = none).
@@ -162,6 +164,22 @@ var (
 	reAuthor  = regexp.MustCompile(`^[a-z][a-z0-9-]{1,31}$`)
 	kitTarget = map[string]bool{"ingress-nginx": true, "f1pipe": true, "acr": true}
 )
+
+// keyOnLine is the text before the first "=" on file line n (1-based), or ""
+// when the line has none. It is only a candidate: Parse keeps it only if it
+// is a fixed key name of this binary.
+func keyOnLine(buf []byte, n int) string {
+	for i, l := range bytes.Split(buf, []byte{'\n'}) {
+		if i+1 != n {
+			continue
+		}
+		if j := bytes.IndexByte(l, '='); j >= 0 {
+			return string(l[:j])
+		}
+		return ""
+	}
+	return ""
+}
 
 type entry struct {
 	line       int
@@ -200,10 +218,10 @@ func parse(buf []byte) (*Inputs, error) {
 		}
 	}
 	if nulLine > 0 {
-		return in, refuse(ClassNulByte, "", nulLine, "the buffer holds a NUL byte")
+		return in, refuse(ClassNulByte, keyOnLine(buf, nulLine), nulLine, "the buffer holds a NUL byte")
 	}
 	if bad > 0 {
-		return in, refuse(ClassBadByte, "", badLine, "%d byte(s) outside printable ASCII + LF (TAB, CR, non-ASCII); the first is on this line", bad)
+		return in, refuse(ClassBadByte, keyOnLine(buf, badLine), badLine, "%d byte(s) outside printable ASCII + LF (TAB, CR, non-ASCII); the first is on this line", bad)
 	}
 	lines := strings.Split(string(buf), "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
@@ -250,6 +268,7 @@ func parse(buf []byte) (*Inputs, error) {
 			return in, refuse(ClassBadValue, "TARGET", e.line, "bad value for TARGET")
 		}
 		in.Target = e.value
+		in.TargetLine = e.line
 	}
 	if targetLine == 0 {
 		return in, refuse(ClassMissingKey, "TARGET", 0, "missing key TARGET")

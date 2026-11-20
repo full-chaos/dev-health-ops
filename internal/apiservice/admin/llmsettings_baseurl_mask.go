@@ -155,7 +155,7 @@ func (h *handlers) resolveBaseURL(ctx context.Context, db pgExecer, orgID string
 
 func (h *handlers) storedBaseURLAndKeys(ctx context.Context, db pgExecer, orgID string, scope llmorgsettings.Purpose) (string, []string, error) {
 	if db == nil {
-		stored, err := h.storedScopeBaseURLOf(ctx, orgID, scope)
+		stored, err := h.storedScopeBaseURLOf(ctx, h.store.Pool, orgID, scope)
 		if err != nil {
 			return "", nil, &llmStepError{"read stored llm base url", err}
 		}

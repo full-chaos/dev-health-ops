@@ -773,8 +773,12 @@ func githubTestsArtifactRunQuery(claim Claim) url.Values {
 // the chunked route and this non-chunked comparison implementation so the two
 // cannot grade each other apart.
 //
-// The upper bound is unchanged: a run that started after the claim's upper
-// bound is out of scope.
+// The upper bound: a run that started after the claim's upper bound is out of
+// scope, except in a backfill chunk that knows the planner's tiling
+// (BackfillNext). The run_started_at of a run is its LATEST attempt, so a run
+// queued across before or re-run days later starts after before, while the
+// listing keeps it by created_at. In such a chunk the ownership rule below
+// decides alone: the run is read by the one chunk that owns it.
 //
 // The lower bound is on the run's own last-updated time, not its start time --
 // a re-run, a retried job, or a suite that lands late all bump that value, so
@@ -806,22 +810,23 @@ func githubTestsArtifactRunQuery(claim Claim) url.Values {
 // last-updated time is never excluded -- a run we cannot date is a run we
 // must not silently drop.
 func githubTestsReportRunOutsideWindow(pipeline githubTestsPipelineRow, claim Claim) bool {
-	if claim.BeforeAt != nil && pipeline.StartedAt.After(claim.BeforeAt.UTC()) {
-		return true
-	}
+	startedAfter := claim.BeforeAt != nil && pipeline.StartedAt.After(claim.BeforeAt.UTC())
 	if claim.SinceAt == nil || claim.BeforeAt == nil || pipeline.FinishedAt == nil {
-		return false
+		return startedAfter
 	}
 	since := claim.SinceAt.UTC()
 	width := claim.BeforeAt.UTC().Sub(since)
 	if width <= 0 {
-		return false
+		return startedAfter
 	}
 	finished := pipeline.FinishedAt.UTC()
 	if claim.Mode == "backfill" {
+		if startedAfter && claim.BackfillNext == nil {
+			return true
+		}
 		return finished.Before(since) || !githubTestsBackfillReadsLaterRun(pipeline, claim, finished)
 	}
-	return finished.Before(since.Add(-width))
+	return startedAfter || finished.Before(since.Add(-width))
 }
 
 func githubTestsBackfillReadsLaterRun(pipeline githubTestsPipelineRow, claim Claim, finished time.Time) bool {

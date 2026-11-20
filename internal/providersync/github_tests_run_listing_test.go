@@ -839,6 +839,7 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			c.Phase = githubTestsRunsPhase
 			c.RangeHi, c.RangeOldest, c.RangeItems = "2026-07-20T23:59:59Z", "2026-07-20T00:00:00Z", githubTestsSearchResultCap
 			c.SaturatedRuns, c.SaturatedArtifacts = true, true
+			c.ActiveCutKeys, c.CarriedCutKeys = githubTestsWidestCutKeys(t), githubTestsWidestCutKeys(t)
 		}},
 		{"runs deep range peel", func(c *githubTestsChunkCursor) {
 			c.Phase = githubTestsRunsPhase
@@ -941,8 +942,7 @@ func TestOpenPhaseCapAndBacklogAreFixedAtThePhaseStartAcrossInvocations(t *testi
 }
 
 // The 8,000-run split resumed in the middle of pages (the walk yields every 37 chunks) writes the same rows as the
-// unbroken walk: no run is lost and a resume adds no duplicate. (The one run at each cut second is written by two
-// ranges, so the rows exceed the runs by the number of peels in both walks alike.)
+// unbroken walk: no run is lost and a resume adds no duplicate.
 func TestRunsListingPeelResumesMidPageWithoutLoss(t *testing.T) {
 	runs := makeListingRuns(1, 8000, listingSince, 10*time.Second)
 	claim := listingClaim(listingSince, listingSince.Add(24*time.Hour))

@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
@@ -36,33 +35,33 @@ func TestOperationalReadersScanNullColumnsAsTheZeroValue(t *testing.T) {
 	const orgID = "6f0f7a51-2b7e-4c1e-9a43-1d1f5f0c9a01"
 	repoID := uuid.MustParse("0b9d3a5e-7f61-4c2a-8d6e-3c1b2a4f5e60")
 	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
-	for _, statement := range []string{
-		`INSERT INTO operational_service_repository_mappings (org_id, id, service_id, repo_id, provider, relationship_provenance, mapping_kind, rule_id, source_url, is_active, observed_at, last_synced, source_version_at, ordering_contract)
-		 VALUES ({org:String}, 'map-1', 'svc-1', {repo:UUID}, 'pagerduty', NULL, NULL, NULL, NULL, 1, {now:DateTime64(6)}, {now:DateTime64(6)}, {now:DateTime64(6)}, 2)`,
-		`INSERT INTO operational_incidents (org_id, id, title, service_id, escalation_policy_id, source_url, started_at, is_deleted, observed_at, last_synced, source_version_at, ordering_contract)
-		 VALUES ({org:String}, 'inc-1', 'down', NULL, NULL, NULL, {now:DateTime64(6)}, 0, {now:DateTime64(6)}, {now:DateTime64(6)}, {now:DateTime64(6)}, 2)`,
-		`INSERT INTO operational_services (org_id, id, name, owning_team_id, escalation_policy_id, is_deleted, observed_at, last_synced, source_version_at, ordering_contract)
-		 VALUES ({org:String}, 'svc-1', 'api', NULL, NULL, 0, {now:DateTime64(6)}, {now:DateTime64(6)}, {now:DateTime64(6)}, 2)`,
-		`INSERT INTO operational_alerts (org_id, id, title, incident_id, source_url, is_deleted, observed_at, last_synced, source_version_at, ordering_contract)
-		 VALUES ({org:String}, 'alert-1', 'cpu', 'inc-1', NULL, 0, {now:DateTime64(6)}, {now:DateTime64(6)}, {now:DateTime64(6)}, 2)`,
-		`INSERT INTO operational_incident_timeline_events (org_id, id, incident_id, event_type, actor_id, body, source_url, observed_at, last_synced, source_version_at, ordering_contract)
-		 VALUES ({org:String}, 'event-1', 'inc-1', 'ack', NULL, NULL, NULL, {now:DateTime64(6)}, {now:DateTime64(6)}, {now:DateTime64(6)}, 2)`,
-		`INSERT INTO operational_incident_notes (org_id, id, incident_id, body, author_user_id, source_url, observed_at, last_synced, source_version_at, ordering_contract)
-		 VALUES ({org:String}, 'note-1', 'inc-1', 'looking', NULL, NULL, {now:DateTime64(6)}, {now:DateTime64(6)}, {now:DateTime64(6)}, 2)`,
-		`INSERT INTO operational_incident_responders (org_id, id, incident_id, user_id, source_url, observed_at, last_synced, source_version_at, ordering_contract)
-		 VALUES ({org:String}, 'resp-1', 'inc-1', NULL, NULL, {now:DateTime64(6)}, {now:DateTime64(6)}, {now:DateTime64(6)}, 2)`,
-		`INSERT INTO deployments (org_id, repo_id, deployment_id, environment, deployed_at)
-		 VALUES ({org:String}, {repo:UUID}, 'dep-1', NULL, NULL)`,
-		`INSERT INTO work_items (org_id, work_item_id, title, description)
-		 VALUES ({org:String}, 'gh:acme/web#7', 'Fix cart totals', NULL)`,
+	for _, seed := range []struct {
+		statement string
+		args      []any
+	}{
+		{`INSERT INTO operational_service_repository_mappings (org_id, id, service_id, repo_id, provider, relationship_provenance, mapping_kind, rule_id, source_url, is_active, observed_at, last_synced, source_version_at, ordering_contract)
+		 VALUES (?, 'map-1', 'svc-1', ?, 'pagerduty', NULL, NULL, NULL, NULL, 1, ?, ?, ?, 2)`, []any{orgID, repoID, now, now, now}},
+		{`INSERT INTO operational_incidents (org_id, id, title, service_id, escalation_policy_id, source_url, started_at, is_deleted, observed_at, last_synced, source_version_at, ordering_contract)
+		 VALUES (?, 'inc-1', 'down', NULL, NULL, NULL, ?, 0, ?, ?, ?, 2)`, []any{orgID, now, now, now, now}},
+		{`INSERT INTO operational_services (org_id, id, name, owning_team_id, escalation_policy_id, is_deleted, observed_at, last_synced, source_version_at, ordering_contract)
+		 VALUES (?, 'svc-1', 'api', NULL, NULL, 0, ?, ?, ?, 2)`, []any{orgID, now, now, now}},
+		{`INSERT INTO operational_alerts (org_id, id, title, incident_id, source_url, is_deleted, observed_at, last_synced, source_version_at, ordering_contract)
+		 VALUES (?, 'alert-1', 'cpu', 'inc-1', NULL, 0, ?, ?, ?, 2)`, []any{orgID, now, now, now}},
+		{`INSERT INTO operational_incident_timeline_events (org_id, id, incident_id, event_type, actor_id, body, source_url, observed_at, last_synced, source_version_at, ordering_contract)
+		 VALUES (?, 'event-1', 'inc-1', 'ack', NULL, NULL, NULL, ?, ?, ?, 2)`, []any{orgID, now, now, now}},
+		{`INSERT INTO operational_incident_notes (org_id, id, incident_id, body, author_user_id, source_url, observed_at, last_synced, source_version_at, ordering_contract)
+		 VALUES (?, 'note-1', 'inc-1', 'looking', NULL, NULL, ?, ?, ?, 2)`, []any{orgID, now, now, now}},
+		{`INSERT INTO operational_incident_responders (org_id, id, incident_id, user_id, source_url, observed_at, last_synced, source_version_at, ordering_contract)
+		 VALUES (?, 'resp-1', 'inc-1', NULL, NULL, ?, ?, ?, 2)`, []any{orgID, now, now, now}},
+		{`INSERT INTO deployments (org_id, repo_id, deployment_id, environment, deployed_at)
+		 VALUES (?, ?, 'dep-1', NULL, NULL)`, []any{orgID, repoID}},
+		{`INSERT INTO work_items (org_id, work_item_id, title, description)
+		 VALUES (?, 'gh:acme/web#7', 'Fix cart totals', NULL)`, []any{orgID}},
 	} {
-		if err := conn.Exec(clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{
-			"org": orgID, "repo": repoID.String(), "now": now.Format("2006-01-02 15:04:05.000000"),
-		})), statement); err != nil {
-			t.Fatalf("seed: %v\n%s", err, statement)
+		if err := conn.Exec(ctx, seed.statement, seed.args...); err != nil {
+			t.Fatalf("seed: %v\n%s", err, seed.statement)
 		}
 	}
-
 	t.Run("ReadServiceRepositoryMappings", func(t *testing.T) {
 		rows, err := ReadServiceRepositoryMappings(ctx, conn, orgID, now.Add(time.Hour), nil, nil)
 		if err != nil {

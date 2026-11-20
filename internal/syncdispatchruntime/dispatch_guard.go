@@ -603,6 +603,19 @@ func backfillSlotLimit(self runOrder, capValue, activeBackfill int, older []olde
 	return share - held
 }
 
+// The pieces of the active-count statement, named so the backfill wait gauge (backfill_wait_gauge.go) reads the same
+// capacity-consumer set in one grouped statement. Parameters $4..$7 are the status and time arguments of the live clause.
+const (
+	activeBucketUnitsCounts = `count(*),
+       count(*) FILTER (WHERE run.triggered_by = 'backfill' OR run.mode = 'backfill')`
+	activeBucketUnitsFrom = `FROM public.sync_run_units AS unit
+LEFT JOIN public.sync_runs AS run ON run.id = unit.sync_run_id`
+	activeBucketUnitsLive = `(
+        (unit.status = $4 AND unit.updated_at > $5)
+     OR (unit.status = $6 AND (unit.lease_expires_at IS NULL OR unit.lease_expires_at > $7))
+      )`
+)
+
 // countActiveBucketUnits counts the capacity-CONSUMER set for one bucket
 // across ALL runs (guard.py:230-260): fresh DISPATCHING (updated_at >
 // staleCutoff) OR live RUNNING (lease_expires_at NULL, unknown/
@@ -617,15 +630,10 @@ func backfillSlotLimit(self runOrder, capValue, activeBackfill int, older []olde
 func countActiveBucketUnits(ctx context.Context, tx pgx.Tx, bucket dispatchBucket, staleCutoff, now time.Time) (int, int, error) {
 	var count, backfill int
 	err := tx.QueryRow(ctx, `
-SELECT count(*),
-       count(*) FILTER (WHERE run.triggered_by = 'backfill' OR run.mode = 'backfill')
-FROM public.sync_run_units AS unit
-LEFT JOIN public.sync_runs AS run ON run.id = unit.sync_run_id
+SELECT `+activeBucketUnitsCounts+`
+`+activeBucketUnitsFrom+`
 WHERE unit.org_id = $1 AND unit.provider = $2 AND unit.cost_class = $3
-  AND (
-        (unit.status = $4 AND unit.updated_at > $5)
-     OR (unit.status = $6 AND (unit.lease_expires_at IS NULL OR unit.lease_expires_at > $7))
-      )`,
+  AND `+activeBucketUnitsLive,
 		bucket.orgID, bucket.provider, bucket.costClass,
 		syncRunUnitStatusDispatching, staleCutoff,
 		syncRunUnitStatusRunning, now,

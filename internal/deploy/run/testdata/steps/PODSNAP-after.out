@@ -1,0 +1,21 @@
+NAME                                        UID                                    RESTARTSOWNER         OWNERNAME
+acme-app-api-28183edf1-n4l2t                a6be37fc-6892-4cca-b58f-c95680c21086   3     ReplicaSet    acme-app-api-28183edf1
+acme-app-api-ba18beb8d-nn8qj                8c0d8dab-421e-4cf9-a37c-e931d7511d51   2     ReplicaSet    acme-app-api-ba18beb8d
+acme-app-api-27805dada-55l29                bd8b0fb3-241e-4019-9e32-df8485b4c0ae   3     ReplicaSet    acme-app-api-27805dada
+acme-app-query-3ad79c8a4-8n7k5              310931d1-b8ac-4954-98ca-54258153354f   3     ReplicaSet    acme-app-query-3ad79c8a4
+acme-app-query-987177422-s6sml              2b96860e-13f2-4890-b423-8043e6d97028   1     ReplicaSet    acme-app-query-987177422
+acme-app-query-adcacd517-rh7h8              d27fd1a2-e403-4973-9cfa-894bb355da53   1     ReplicaSet    acme-app-query-adcacd517
+acme-app-worker-batch-303796ba0-b5bg4       17a98784-59dd-4fca-bbf4-4743b287b03c   0     ReplicaSet    acme-app-worker-batch-303796ba0
+acme-app-worker-batch-83e5e65c7-c2jbk       b938924c-76b5-4790-b9a2-4e19e8cee59b   1     ReplicaSet    acme-app-worker-batch-83e5e65c7
+acme-app-worker-batch-55ad15620-9vvff       145f9a56-9658-4fa3-bc1f-08188e5fff47   3     ReplicaSet    acme-app-worker-batch-55ad15620
+acme-app-worker-sync-2f81567bc-skbhm        0929e760-780f-4bb5-be6a-7ef4e9a16df9   3     ReplicaSet    acme-app-worker-sync-2f81567bc
+acme-app-worker-sync-7a15ae49d-hzjjl        53fa8030-b07d-4e5b-b0c4-e243ea6d6f61   3     ReplicaSet    acme-app-worker-sync-7a15ae49d
+acme-app-worker-stream-56b4aba5d-4l7x7      ff7595b8-c5ca-4bad-a2b4-0908addbe4cb   0     ReplicaSet    acme-app-worker-stream-56b4aba5d
+acme-app-worker-stream-7385d5753-f8lkb      18d6ef51-d675-4bed-b098-e6005bb54b4b   0     ReplicaSet    acme-app-worker-stream-7385d5753
+acme-app-scheduler-94bd00af9-98kcq          c0ac1fad-c9d1-4d62-9d30-1cd6fd2b379a   0     ReplicaSet    acme-app-scheduler-94bd00af9
+acme-app-scheduler-c6aea78de-mctlc          a4282e2d-3901-42e7-a163-3547a528c01c   2     ReplicaSet    acme-app-scheduler-c6aea78de
+acme-app-scheduler-ba4d4f253-pk5nq          c62ad1b3-0988-41f0-98f0-09104b29fe82   2     ReplicaSet    acme-app-scheduler-ba4d4f253
+acme-app-web-538bda721-846m7                8460b357-666a-427c-bd5c-0fca3e44ffd1   0     ReplicaSet    acme-app-web-538bda721
+acme-app-web-793fd8e56-l72bg                d237196a-010d-46a5-9617-eb7d86eab000   2     ReplicaSet    acme-app-web-793fd8e56
+acme-app-auth-4b7ee839d-mjqmc               294c5857-e2dd-433d-b0e1-5090aa47ef55   2     ReplicaSet    acme-app-auth-4b7ee839d
+acme-app-auth-1bce15e24-p6djn               ae382c94-3a24-4a24-8698-a88b3df39a32   0     ReplicaSet    acme-app-auth-1bce15e24

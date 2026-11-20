@@ -735,6 +735,16 @@ const nullableIntoPlainSites = `
 //	loadRepoFlowRows 39a7e63ddf0e -> d2aa188ecd2d
 //	loadTeamFlowRows 2653b84e5b21 -> 7f2f10dcf329
 //	fetchChangeFailureAgg 73d54a21b859 -> 78aa9a6d5455
+//
+// CHAOS-14355 (operating review): the argMax(x, computed_at) period reads pick ONE version per key, ordered by
+// (computed_at, cityHash64(tuple(values))), and test liveness with liverow.Predicate on the picked row in an outer WHERE
+// (no per-column HAVING). fetchWorkItems and fetchStateDurations: same select list, column types and scan targets; the
+// statement text changed. fetchChangeFailureAgg: statement not edited, the file's SQL digest moved. Re-pinned by hand,
+// digests copied from the local TestScanTypeCensus failure output (not computed):
+//
+//	fetchChangeFailureAgg 78aa9a6d5455 -> 33e78a54a14c
+//	fetchStateDurations 4e40f48a6488 -> dd682a464928
+//	fetchWorkItems 02d2157b4812 -> 6adb8910eb84
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|87d2d1cf0eaf|not-describable
@@ -788,9 +798,9 @@ internal/queryapi/investment/sunburst.go|FetchInvestmentSunburst|*string,*string
 internal/queryapi/investmentexplain/reader.go|FetchInvestmentBreakdown|*string,*string,*float64|2283428d08a0|spliced-select-list
 internal/queryapi/investmentexplain/reader.go|FetchInvestmentThemeEffort|*string,*float64,*float64,*float64|fd01dffa31fe|spliced-select-list
 internal/queryapi/investmentexplain/workunitreader.go|FetchWorkUnitInvestments|*string,**string,**string,*time.Time,*time.Time,**string,**string,**string,**float64,*float64,*[]string,*[]float64,*[]string,*[]float64,**string,**float64,**string,**string,**string,**string,*time.Time|63286cc9b046|spliced-select-list
-internal/queryapi/operatingreview/operatingreview.go|fetchChangeFailureAgg|[]any|78aa9a6d5455|variadic-destinations
-internal/queryapi/operatingreview/operatingreview.go|fetchStateDurations|*string,*uint64,*float64,*float64|4e40f48a6488|not-describable
-internal/queryapi/operatingreview/operatingreview.go|fetchWorkItems|*time.Time,*uint64,*uint64,*uint32,**float64,**float64,**float64,**float64|02d2157b4812|not-describable
+internal/queryapi/operatingreview/operatingreview.go|fetchChangeFailureAgg|[]any|33e78a54a14c|variadic-destinations
+internal/queryapi/operatingreview/operatingreview.go|fetchStateDurations|*string,*uint64,*float64,*float64|dd682a464928|not-describable
+internal/queryapi/operatingreview/operatingreview.go|fetchWorkItems|*time.Time,*uint64,*uint64,*uint32,**float64,**float64,**float64,**float64|6adb8910eb84|not-describable
 internal/queryapi/people/metricqueries.go|fetchPersonBreakdown|*string,*float64|f158cf132a83|spliced-select-list
 internal/queryapi/people/metricqueries.go|fetchPersonMetricSeries|*time.Time,*float64|aaa0e43ef5ee|spliced-select-list
 internal/queryapi/people/metricqueries.go|fetchPersonMetricValue|*uint64,*float64|44f613075ca4|spliced-select-list

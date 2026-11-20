@@ -201,7 +201,7 @@ func TestRepeatedListedSectionPrintsAChartOnce(t *testing.T) {
 // The fallback heading is the only "## Other Charts" heading: a plan section whose title is the same keeps a distinct title.
 func TestPlanSectionTitledOtherChartsKeepsOneFallbackHeading(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"other charts", "Other Charts", "other_charts", "OTHER_CHARTS"} {
+	for _, name := range []string{"other charts", "Other Charts"} {
 		unlisted := cicdCharts("team")
 		markdown := renderPlan(t, []string{"summary", name}, unlisted)
 		requireTables(t, markdown, unlisted)
@@ -219,6 +219,22 @@ func TestPlanSectionTitledOtherChartsKeepsOneFallbackHeading(t *testing.T) {
 		}
 		if got := strings.Count(markdown, "\n## Other Charts (plan section)\n"); got != 1 {
 			t.Errorf("section %q with every chart printed: its heading count = %d, want 1:\n%s", name, got, markdown)
+		}
+	}
+}
+
+// A section named other_charts shows as typed, so it is not "Other Charts" and keeps its own heading beside the fallback.
+func TestPlanSectionOtherChartsWithUnderscoreShowsAsTyped(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"other_charts", "OTHER_CHARTS"} {
+		unlisted := cicdCharts("team")
+		markdown := renderPlan(t, []string{"summary", name}, unlisted)
+		requireTables(t, markdown, unlisted)
+		if got := strings.Count(markdown, "\n## Other Charts\n"); got != 1 {
+			t.Errorf("section %q: %d Other Charts headings, want 1 (the fallback):\n%s", name, got, markdown)
+		}
+		if !strings.Contains(markdown, "\n## "+strings.ReplaceAll(name, "_", "\\_")+"\n") && !strings.Contains(markdown, "\n## "+name+"\n") {
+			t.Errorf("section %q does not show as typed:\n%s", name, markdown)
 		}
 	}
 }

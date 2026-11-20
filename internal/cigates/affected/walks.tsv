@@ -543,6 +543,7 @@ internal/storage/clickhouse	batch_options_census_test.go	.	tree	*
 internal/storage/clickhouse/latestrow	latestrow_census_test.go	.	tree	*.go
 internal/storage/clickhouse/liverow	census_test.go	cmd	tree	*.go
 internal/storage/clickhouse/liverow	census_test.go	internal	tree	*.go
+internal/storage/clickhouse/liverow	gitversion_inventory_test.go	internal	tree	*.go
 internal/storage/postgres	api_authorization_platform_roles_test.go	internal/api	tree	*
 internal/storage/postgres	api_authorization_platform_roles_test.go	internal/apiservice	tree	*
 internal/storage/postgres	api_authorization_platform_roles_test.go	internal/pgmigrate/sql	dir	*

@@ -151,6 +151,38 @@ func TeamPick(table, newest string) string {
 		declared.LiveRow(table+"."), table, strings.Join(key, ", "))
 }
 
+// ServedTeamSource is TeamSource for a served (query API) reader (CHAOS-14376):
+// the newest rows it picks from are read with the organization's own predicate,
+// org_id = {org_id:String}, in this text, so the read is scoped by the helper and
+// not by its caller. The caller binds org_id, as every served read does. where is
+// the reader's filter of key columns; it panics for a table that holds no team rows
+// and for an empty filter. A served reader never takes TeamSource or TeamPick: the
+// org scope census refuses them in the served roots.
+func ServedTeamSource(table, where string) string {
+	declared := mustTeamTable(table)
+	return fmt.Sprintf("(\n    SELECT * FROM %s AS %s\n    WHERE %s\n)",
+		TeamPick(table, servedNewest(table, where)), teamSourceAlias, declared.LiveRow(teamSourceAlias+"."))
+}
+
+// ServedTeamPick is TeamPick for a served reader of each key's newest day: the
+// same organization-scoped read as ServedTeamSource, and no live-row rule after
+// the pick, so a key whose every view is retracted keeps its row of zeros as its
+// newest row (it adds 0 and keeps that day the key's newest day, as the org form
+// does). It panics as ServedTeamSource does.
+func ServedTeamPick(table, where string) string {
+	mustTeamTable(table)
+	return TeamPick(table, servedNewest(table, where))
+}
+
+// servedNewest is the newest row of each full key of table in the organization,
+// aliased as the table.
+func servedNewest(table, where string) string {
+	if strings.TrimSpace(where) == "" {
+		panic("rowview: a served team view of " + table + " needs a filter")
+	}
+	return fmt.Sprintf("(SELECT * FROM %[1]s FINAL WHERE %[1]s.org_id = {org_id:String} AND (%[2]s)) AS %[1]s", table, where)
+}
+
 // mustTeamTable panics for a table that holds no team rows.
 func mustTeamTable(table string) teamkeytables.Table {
 	if _, ok := teamTables[table]; !ok {

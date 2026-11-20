@@ -85,7 +85,27 @@ func scopeFilter(orgID string, teamIDs []string, workScopeID *string) ([]string,
 // no view column and keeps scopeFilter.
 func workItemScopeFilter(orgID string, teamIDs []string, workScopeID *string) ([]string, []clickhouse.Binding) {
 	conditions, bindings := scopeFilter(orgID, teamIDs, workScopeID)
+	if len(teamIDs) == 1 {
+		// One team reads the team view (CHAOS-14376): every view stays in the filter, workItemSource picks one per key.
+		return conditions, bindings
+	}
 	return append(conditions, rowview.OrgPredicate("work_item_metrics_daily", "")), bindings
+}
+
+// workItemSource is the FROM source of a read of work_item_metrics_daily. No team or a team set reads the table (the
+// org view is in the where of workItemScopeFilter). One team reads the team view of the organization (CHAOS-14376):
+// of the newest row of each view of a key, a live row first, then team, org, legacy (rowview.ServedTeamSource); a read
+// of each key's newest day takes the pick with no live-row rule after it (rowview.ServedTeamPick), so a retracted key
+// stays its key's newest row there, as in the org form (see measuredWorkItemKey). The source is aliased as the table.
+func workItemSource(teamIDs []string, where string, newestDay bool) string {
+	switch {
+	case len(teamIDs) != 1:
+		return "work_item_metrics_daily"
+	case newestDay:
+		return rowview.ServedTeamPick("work_item_metrics_daily", where) + " AS work_item_metrics_daily"
+	default:
+		return rowview.ServedTeamSource("work_item_metrics_daily", where) + " AS work_item_metrics_daily"
+	}
 }
 
 // startDate ports `utc_today() - timedelta(weeks=history_weeks)`.
@@ -137,14 +157,14 @@ func loadThroughputHistory(
                 work_scope_id,
                 team_id,
                 argMax(items_completed, computed_at) AS items_completed
-            FROM work_item_metrics_daily
+            FROM %s
             WHERE %s
             GROUP BY day, provider, work_scope_id, team_id, row_view
             HAVING %s
         )
         GROUP BY day
         ORDER BY day
-    `, strings.Join(conditions, " AND "), measuredWorkItemKey)
+    `, workItemSource(teamIDs, strings.Join(conditions, " AND "), false), strings.Join(conditions, " AND "), measuredWorkItemKey)
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -190,6 +210,7 @@ func loadWorkItemOverlay(
 	})
 
 	where := strings.Join(conditions, " AND ")
+	newestDaySource := workItemSource(teamIDs, where, true)
 	// current_wip is the sum of each team's OWN newest row in the window
 	// (CHAOS-8498); one maximum day over the team set dropped a team whose
 	// newest day was older. average_wip keeps the per-day sums.
@@ -208,7 +229,7 @@ func loadWorkItemOverlay(
                         work_scope_id,
                         team_id,
                         argMax(wip_count_end_of_day, computed_at) AS wip_count_end_of_day
-                    FROM work_item_metrics_daily
+                    FROM %s
                     WHERE %s
                     GROUP BY day, provider, work_scope_id, team_id, row_view
                     HAVING %s
@@ -225,13 +246,14 @@ func loadWorkItemOverlay(
                     work_scope_id,
                     team_id,
                     argMax(wip_count_end_of_day, computed_at) AS wip_count_end_of_day
-                FROM work_item_metrics_daily
+                FROM %s
                 WHERE %s
                   AND %s
                 GROUP BY day, provider, work_scope_id, team_id, row_view
             )
         ) AS current_part
-    `, where, measuredWorkItemKey, where, newestrow.PerTeamPredicate("work_item_metrics_daily", where))
+    `, workItemSource(teamIDs, where, false), where, measuredWorkItemKey,
+		newestDaySource, where, newestrow.PerTeamPredicate(newestDaySource, where))
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -275,6 +297,7 @@ func loadStaleWIP(
 ) (*float64, *float64, error) {
 	conditions, bindings := workItemScopeFilter(orgID, teamIDs, workScopeID)
 	where := strings.Join(conditions, " AND ")
+	source := workItemSource(teamIDs, where, true)
 
 	// The same predicate appears twice on purpose: the subquery finds the
 	// latest day WITHIN THIS SCOPE, and the outer filter selects that scope's
@@ -292,13 +315,13 @@ func loadStaleWIP(
                 team_id,
                 (argMax(tuple(wip_age_p50_hours), computed_at)).1 AS wip_age_p50_hours,
                 (argMax(tuple(wip_age_p90_hours), computed_at)).1 AS wip_age_p90_hours
-            FROM work_item_metrics_daily
+            FROM %s
             WHERE %s
             AND %s
             GROUP BY provider, work_scope_id, team_id, row_view
         )
         WHERE wip_age_p50_hours IS NOT NULL OR wip_age_p90_hours IS NOT NULL
-    `, newestrow.PerTeamPredicate("work_item_metrics_daily", where), where)
+    `, source, newestrow.PerTeamPredicate(source, where), where)
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -511,6 +534,7 @@ func loadBacklog(
 ) (backlogRead, error) {
 	conditions, bindings := workItemScopeFilter(orgID, teamIDs, workScopeID)
 	where := strings.Join(conditions, " AND ")
+	source := workItemSource(teamIDs, where, true)
 	bindings = append(bindings, clickhouse.Binding{Name: "start_date", Value: startDate(today, historyWeeks)})
 
 	query := fmt.Sprintf(`
@@ -527,12 +551,12 @@ func loadBacklog(
                 max(day) AS newest_day,
                 argMax(wip_count_end_of_day, computed_at) AS wip_count_end_of_day,
                 %s AS measured
-            FROM work_item_metrics_daily
+            FROM %s
             WHERE %s
             AND %s
             GROUP BY team_id, work_scope_id, provider, row_view
         )
-    `, measuredWorkItemKey, newestrow.PerTeamPredicate("work_item_metrics_daily", where), where)
+    `, measuredWorkItemKey, source, newestrow.PerTeamPredicate(source, where), where)
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {

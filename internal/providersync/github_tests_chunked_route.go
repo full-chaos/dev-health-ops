@@ -2407,10 +2407,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						pipeline, run, lossBefore, lossAfter,
 						reportsExpected-nonReportArchives, len(expiredItems), githubTestsAdmittedReports(parsedReports, plan.Admitted), normalizedAt,
 					)
-					// Only a run read whole (one complete verdict) is recorded, in the same emission as its rows: a run with no report
-					// source or any loss is read again.
+					// Only a run read whole (one complete verdict) is recorded, in the same emission as its rows; a read with no report
+					// source or any loss removes the run's key, so a run read earlier in this range is read again by the revisit.
 					if len(completeness) == 1 && completeness[0].Complete {
 						cursor = githubTestsRecordCutRun(cursor, cutSecond, cutKey)
+					} else {
+						cursor = githubTestsDropCutRun(cursor, cutKey)
 					}
 				}
 				cursor.Suites += len(suites)

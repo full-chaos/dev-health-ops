@@ -102,6 +102,22 @@ func githubTestsRecordCutRun(cursor githubTestsChunkCursor, second int64, key st
 	return cursor
 }
 
+// githubTestsDropCutRun removes a run's exact key from the active list: a later read of the same run in the active range
+// that was not read whole (no verdict or an incomplete one) must not leave it carried. An overflowed list carries nothing.
+func githubTestsDropCutRun(cursor githubTestsChunkCursor, key string) githubTestsChunkCursor {
+	if key == "" || cursor.ActiveCutKeys == "" || cursor.ActiveCutKeys == githubTestsCutKeysOverflow {
+		return cursor
+	}
+	kept := make([]string, 0, strings.Count(cursor.ActiveCutKeys, ",")+1)
+	for _, listed := range strings.Split(cursor.ActiveCutKeys, ",") {
+		if listed != key {
+			kept = append(kept, listed)
+		}
+	}
+	cursor.ActiveCutKeys = strings.Join(kept, ",")
+	return cursor
+}
+
 // githubTestsFreezeCutKeys carries the active list into the next range at a peel. An overflowed list carries nothing.
 func githubTestsFreezeCutKeys(cursor githubTestsChunkCursor) githubTestsChunkCursor {
 	cursor.CarriedCutKeys = ""

@@ -260,3 +260,123 @@ func TestGitHubTestsCutSecondActiveListHoldsOnlyTheOldestSecond(t *testing.T) {
 		t.Fatalf("artifact lists of the 4 newer report runs and the 4 cut-second runs = %v, want %v", got, want)
 	}
 }
+
+// cutRepeatedReadDoer serves run target's artifacts per list: the first list holds first; the second (the repeated read in
+// the same range) holds second, or nothing for no_source; artifact 9902 fails on the second list (404, or a redirect with
+// no location) and reads on the revisit.
+type cutRepeatedReadDoer struct {
+	*githubTestsAdmissionDoer
+	listing       *listingFake
+	target        int
+	first, second []githubTestsAdmissionArtifact
+	secondRead    string
+	lists         int
+}
+
+func (doer *cutRepeatedReadDoer) Do(request *http.Request) (*http.Response, error) {
+	path := request.URL.Path
+	switch {
+	case path == "/repos/acme/api/actions/runs/"+strconv.Itoa(doer.target)+"/artifacts":
+		doer.lists++
+		doer.artifacts = doer.second
+		if doer.lists == 1 || doer.lists == 2 && doer.secondRead == "complete_control" || doer.lists >= 3 && doer.secondRead == "no_source" {
+			doer.artifacts = doer.first
+		} else if doer.lists == 2 && doer.secondRead == "no_source" {
+			doer.artifacts = nil
+		}
+		return doer.githubTestsAdmissionDoer.Do(request)
+	case path == "/repos/acme/api/actions/artifacts/9902/zip" && doer.lists == 2:
+		status := http.StatusFound
+		if doer.secondRead == "download_404" {
+			status = http.StatusNotFound
+		}
+		return &http.Response{StatusCode: status, Header: http.Header{}, Body: http.NoBody, Request: request}, nil
+	case strings.HasPrefix(path, "/repos/acme/api/actions/artifacts/"):
+		return doer.githubTestsAdmissionDoer.Do(request)
+	default:
+		return doer.listing.Do(request)
+	}
+}
+
+// A run read whole and then read again in the same range (same-page duplicate, shifted page, resume re-anchor) with no
+// verdict or an incomplete verdict (empty listing, an additional report's download 404, a redirect with no location) is
+// dropped from the active list in that emission: the revisit reads it as main does. A complete repeated read keeps it.
+func TestGitHubTestsCutSecondRepeatedReadWithALossDropsTheKey(t *testing.T) {
+	type tally struct {
+		lists, verdicts, suites, additional int
+		carried                             string
+	}
+	for _, shape := range []string{"duplicate", "offset_shift", "reanchor"} {
+		for _, layout := range cutDedupLayouts {
+			for _, secondRead := range []string{"no_source", "download_404", "unavailable_download", "complete_control"} {
+				name := fmt.Sprintf("%s/%s/%s", shape, layout.name, secondRead)
+				runs := cutDedupRuns(layout.updated)
+				target := runs[len(runs)-1]
+				switch shape {
+				case "duplicate":
+					runs = append(runs, target)
+				case "offset_shift":
+					for index := 0; index < 99; index++ {
+						runs[index].created = cutDedupSecond
+					}
+				}
+				first := []githubTestsAdmissionArtifact{{id: 9901, name: "existing-tests", archive: githubTestsZip(t, map[string]string{"junit.xml": completenessJUnit("existing-", 1)})}}
+				second := first
+				if secondRead == "download_404" || secondRead == "unavailable_download" {
+					second = append(append([]githubTestsAdmissionArtifact(nil), first...),
+						githubTestsAdmissionArtifact{id: 9902, name: "additional-tests", archive: githubTestsZip(t, map[string]string{"junit.xml": completenessJUnit("additional-", 1)})})
+				}
+				admission := newGitHubTestsAdmissionDoer(t, strconv.Itoa(target.id), first)
+				admission.direct = true
+				doer := &cutRepeatedReadDoer{githubTestsAdmissionDoer: admission, listing: newListingFake(t, runs), target: target.id, first: first, second: second, secondRead: secondRead}
+				var carried string
+				var peeled, yielded bool
+				walk := walkCutDedup(t, cutDedupClaim(layout.backfill), doer, func(before, after githubTestsChunkCursor) bool {
+					if before.Phase != githubTestsArtifactsPhase || before.RangeHi != "" {
+						return false
+					}
+					if after.RangeHi == cutDedupSecond.Format(time.RFC3339) {
+						peeled, carried = true, after.CarriedCutKeys
+						if shape == "duplicate" {
+							doer.listing.runs = doer.listing.runs[:len(doer.listing.runs)-1]
+						}
+						return false
+					}
+					if doer.lists != 1 || yielded {
+						return false
+					}
+					switch shape {
+					case "offset_shift":
+						if after.RangeItems != 900 || after.Index != 0 {
+							t.Fatalf("%s: the page did not end at the target: items=%d index=%d", name, after.RangeItems, after.Index)
+						}
+						doer.listing.runs = append(doer.listing.runs, listingRun{id: 7000, created: cutDedupBefore.Add(-time.Minute), updated: layout.updated, status: "completed", conclusion: "success"})
+					case "reanchor":
+						if after.RangeItems != 999 || after.Index != 99 {
+							t.Fatalf("%s: the walk did not stop inside the page: items=%d index=%d", name, after.RangeItems, after.Index)
+						}
+						doer.listing.runs = doer.listing.runs[98:]
+					default:
+						return false
+					}
+					yielded = true
+					return true
+				}, nil)
+				if !peeled || (shape != "duplicate") != yielded {
+					t.Fatalf("%s: want a peel and the resume branch: peeled=%t resumed=%t", name, peeled, yielded)
+				}
+				id := strconv.Itoa(target.id)
+				got := tally{doer.lists, walk.rows[testOpsRunReportCompletenessDestination][id], walk.rows["test_suite_results"][id], admission.api[9902], carried}
+				want := map[string]tally{
+					"no_source":            {3, 2, 2, 0, ""},
+					"download_404":         {3, 3, 4, 1, ""},
+					"unavailable_download": {3, 3, 4, 1, ""},
+					"complete_control":     {2, 2, 2, 0, id},
+				}[secondRead]
+				if got != want {
+					t.Errorf("%s: lists/verdicts/suites/additional reads/carried = %+v, want %+v", name, got, want)
+				}
+			}
+		}
+	}
+}

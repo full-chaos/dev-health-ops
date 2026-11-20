@@ -88,9 +88,14 @@ func TestResolveForecastBindsEverySelectedTeamUnderIN(t *testing.T) {
 			t.Errorf("statement %d team_ids: got %#v, want a typed []string %v", index, value, want)
 		}
 	}
-	// The backlog statement repeats its predicate in the max(day) subquery.
-	if n := strings.Count(client.statements[1], "team_id IN {team_ids:Array(String)}"); n != 2 {
-		t.Errorf("backlog: the IN predicate appears %d times, want 2 (outer and max(day) subquery)", n)
+	// Each source is the newest version of each key, filtered by the predicate before the pick (capacityOrgNewest).
+	// The throughput statement holds it in its source and its outer WHERE; the backlog statement repeats both in the
+	// max(day) subquery.
+	if n := strings.Count(client.statements[0], "team_id IN {team_ids:Array(String)}"); n != 2 {
+		t.Errorf("throughput: the IN predicate appears %d times, want 2 (source and outer)", n)
+	}
+	if n := strings.Count(client.statements[1], "team_id IN {team_ids:Array(String)}"); n != 4 {
+		t.Errorf("backlog: the IN predicate appears %d times, want 4 (source and outer, in the statement and in the max(day) subquery)", n)
 	}
 	if got.TeamID != nil {
 		t.Errorf("teamId: got %q, want null for several teams (no invented first team)", *got.TeamID)

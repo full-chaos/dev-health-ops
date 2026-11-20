@@ -35,17 +35,14 @@ const (
 )
 
 var usersOwnedCensus = map[string]usersOwnedClass{
-	"internal/api/session/changepassword.go|handlers.changePassword":    refuseFirst,
-	"internal/api/session/social.go|handlers.createSocialUser":          refuseFirst,
-	"internal/api/sso/provision.go|handlers.createAccountAndMembership": refuseFirst,
-	"internal/apiservice/admin/userstore.go|pgStore.insertUser":         refuseFirst,
-	"internal/apiservice/admin/userstore.go|pgStore.updateUser":         refuseFirst,
-	"internal/apiservice/admin/userstore.go|pgStore.setUserPassword":    refuseFirst,
-	"internal/apiservice/admin/userdelete.go|pgStore.softDeleteUser":    refuseFirst,
-	"internal/apiservice/admin/userdelete.go|pgStore.forceDeleteUser":   refuseFirst,
-	"internal/api/session/store.go|touchLastLogin":                      skipWrite,
-	"internal/api/sso/provision.go|handlers.provisionOrGetUser":         skipWrite,
-	"internal/api/sso/oauth.go|handlers.oauthProvisionUser":             skipWrite,
+	"internal/api/session/changepassword.go|handlers.changePassword":  refuseFirst,
+	"internal/api/session/social.go|handlers.createSocialUser":        refuseFirst,
+	"internal/apiservice/admin/userstore.go|pgStore.insertUser":       refuseFirst,
+	"internal/apiservice/admin/userstore.go|pgStore.updateUser":       refuseFirst,
+	"internal/apiservice/admin/userstore.go|pgStore.setUserPassword":  refuseFirst,
+	"internal/apiservice/admin/userdelete.go|pgStore.softDeleteUser":  refuseFirst,
+	"internal/apiservice/admin/userdelete.go|pgStore.forceDeleteUser": refuseFirst,
+	"internal/api/session/store.go|touchLastLogin":                    skipWrite,
 }
 
 // usersOwnedEntryPoints are the admin routes and operator verbs that reach the

@@ -1,13 +1,16 @@
 // Package coveragebaselines answers coverageBaselines (CHAOS-8111): each
-// repository's coverage baseline, which is its own mean coverage over the 30
-// days before a given day (chris, 2026-10-03: "the running 30 day average"). It
-// is not a set target.
+// repository's coverage baseline, which is its own coverage over the 30 days
+// before a given day (chris, 2026-10-03: "the running 30 day average"). It is
+// not a set target. Line coverage pools the stored line counts over the counted
+// days (covered lines over total lines), the rule of the other line coverage
+// readers; branch coverage is the mean of the stored day percents.
 //
 // It is Go-only: no Python resolver exists for it.
 //
 // Computed in ClickHouse in one grouped statement over
-// testops_coverage_metrics_daily (one row per org, repository and day; a plain
-// MergeTree, so the newest version of a day is chosen here by computed_at).
+// testops_coverage_metrics_daily (one row per org, repository and day; a
+// ReplacingMergeTree whose merges are eventual, so the newest version of a day
+// is chosen here by computed_at).
 //
 // A baseline needs MinDays days with a value inside the 30. With fewer, the
 // mean of one or two days is the current value under another name, and a
@@ -57,8 +60,8 @@ type Scope struct {
 	AsOf time.Time
 }
 
-// baseline is the mean when enough days hold a value, else nil. A mean with no
-// day behind it (NULL) is nil whatever the count says.
+// baseline is the value when enough days hold a value, else nil. A value with
+// no day behind it (NULL) is nil whatever the count says.
 func baseline(mean *float64, days int) *float64 {
 	if mean == nil || days < MinDays {
 		return nil
@@ -69,7 +72,9 @@ func baseline(mean *float64, days int) *float64 {
 
 // newestPerRepoDay is the one coverage read of this package: the newest version
 // of each (repository, day) of the window, inside the scope. The tuple keeps a
-// NULL of the newest version from being skipped for an older value. Both
+// NULL of the newest version from being skipped for an older value, and takes
+// both line counts from the same version. line_counted is a repo-day whose line
+// counts measure a coverage: both counts set and lines_total above 0. Both
 // baselines (per repository and of the whole scope) are built on this read, so
 // they cannot read different rows. A day whose newest row retires it (package liverow) is not a day of the window.
 func newestPerRepoDay(scopeFilter string) string {
@@ -77,7 +82,10 @@ func newestPerRepoDay(scopeFilter string) string {
             SELECT
                 repo_id,
                 day,
-                (argMax(tuple(line_coverage_pct), computed_at)).1 AS line_pct,
+                argMax(tuple(lines_covered, lines_total), computed_at) AS day_lines,
+                day_lines.1 AS day_lines_covered,
+                day_lines.2 AS day_lines_total,
+                day_lines_covered IS NOT NULL AND day_lines_total IS NOT NULL AND day_lines_total > 0 AS line_counted,
                 (argMax(tuple(branch_coverage_pct), computed_at)).1 AS branch_pct
             FROM testops_coverage_metrics_daily
             WHERE org_id = {org_id:String}
@@ -87,16 +95,18 @@ func newestPerRepoDay(scopeFilter string) string {
             HAVING ` + liverow.NewestPredicate("testops_coverage_metrics_daily", "")
 }
 
-// statement reads, per repository, the mean of each measure over the window and
-// the number of days that hold a value. avg() over a Nullable column leaves the
-// NULL days out and is NULL when no day holds a value.
+// statement reads, per repository, each measure over the window and the number
+// of days that hold a value. Line coverage is covered lines over total lines of
+// the counted days, NULL when no day is counted. Branch coverage is the mean:
+// avg() over a Nullable column leaves the NULL days out and is NULL when no day
+// holds a value.
 func statement(scopeFilter string) string {
 	return `
         SELECT
             toString(b.repo_id) AS repo_id,
             nullIf(r.repo, '') AS repo_name,
-            avg(b.line_pct) AS line_mean,
-            countIf(b.line_pct IS NOT NULL) AS line_days,
+            100 * sumIf(b.day_lines_covered, b.line_counted) / nullIf(sumIf(b.day_lines_total, b.line_counted), 0) AS line_value,
+            countIf(b.line_counted) AS line_days,
             avg(b.branch_pct) AS branch_mean,
             countIf(b.branch_pct IS NOT NULL) AS branch_days
         FROM (` + newestPerRepoDay(scopeFilter) + `
@@ -159,17 +169,17 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, endDate grap
 	out := []model.RepoCoverageBaseline{}
 	for rows.Next() {
 		var (
-			repoID               string
-			repoName             *string
-			lineMean, branchMean *float64
-			lineDays, branchDays uint64
+			repoID                string
+			repoName              *string
+			lineValue, branchMean *float64
+			lineDays, branchDays  uint64
 		)
-		if scanErr := rows.Scan(&repoID, &repoName, &lineMean, &lineDays, &branchMean, &branchDays); scanErr != nil {
+		if scanErr := rows.Scan(&repoID, &repoName, &lineValue, &lineDays, &branchMean, &branchDays); scanErr != nil {
 			return nil, fmt.Errorf("coveragebaselines: scan: %w", scanErr)
 		}
 		row := model.RepoCoverageBaseline{
 			RepoID:            repoID,
-			LineBaselinePct:   baseline(lineMean, int(lineDays)),
+			LineBaselinePct:   baseline(lineValue, int(lineDays)),
 			LineDays:          int(lineDays),
 			BranchBaselinePct: baseline(branchMean, int(branchDays)),
 			BranchDays:        int(branchDays),

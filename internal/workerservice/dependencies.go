@@ -183,6 +183,13 @@ type postgresWorkerDatabase struct {
 	postureOptions   postgres.PostureCheckOptions
 	queueProbe       postgres.LazyProbeCheck
 	riverSchemaProbe postgres.LazyProbeCheck
+	// postures are the cached domain posture checks handed out by DomainPostureCheck; Close seals the
+	// list (a later DomainPostureCheck answers ErrUnavailable) and stops them. A second Close waits for
+	// the first (closeOnce).
+	posturesMu     sync.Mutex
+	posturesClosed bool
+	postures       []*postgres.CachedPostureCheck
+	closeOnce      sync.Once
 }
 
 func (database *postgresWorkerDatabase) NewWorkerPresence(
@@ -251,10 +258,19 @@ func (database *postgresWorkerDatabase) DomainPostureCheck(logger *slog.Logger) 
 	if database == nil || database.pools == nil || database.pools.Domain == nil {
 		return nil
 	}
-	return postgres.NewCachedPostureCheck(
+	database.posturesMu.Lock()
+	defer database.posturesMu.Unlock()
+	if database.posturesClosed {
+		return func(context.Context) error {
+			return fmt.Errorf("%w: domain posture check closed", postgres.ErrUnavailable)
+		}
+	}
+	check := postgres.NewCachedPostureCheck(
 		database.pools.ReadinessPool(), database.domainRole, database.riverSchema, postgres.DomainPosture(),
 		postgres.PostureCheckOptions{Logger: logger},
-	).Check
+	)
+	database.postures = append(database.postures, check)
+	return check.Check
 }
 
 // GitHubProjectsV2Configured reports whether any enabled GitHub integration
@@ -374,8 +390,27 @@ func (database *postgresWorkerDatabase) DomainTransactionReady(ctx context.Conte
 	return selfprobe.Once(ctx, selfprobe.NewPool(database.pools.ReadinessPool()))
 }
 
+// Close stops the readiness checks (each running one ends and logs first), then closes the pools
+// they run on.
 func (database *postgresWorkerDatabase) Close() {
-	if database != nil && database.pools != nil {
+	if database == nil {
+		return
+	}
+	database.closeOnce.Do(database.close)
+}
+
+func (database *postgresWorkerDatabase) close() {
+	database.posturesMu.Lock()
+	database.posturesClosed = true
+	postures := database.postures
+	database.postures = nil
+	database.posturesMu.Unlock()
+	database.queueProbe.Close()
+	database.riverSchemaProbe.Close()
+	for _, check := range postures {
+		check.Close()
+	}
+	if database.pools != nil {
 		database.pools.Close()
 	}
 }
@@ -1081,7 +1116,9 @@ func configureWorkerDependenciesWithSources(
 		// check names failed rather than reading a crash loop.
 		return nil, nil
 	}
-	components := []lifecycle.Component{workerDatabaseLifecycle{database: dependencies.database}}
+	components := []lifecycle.Component{workerDatabaseLifecycle{
+		database: dependencies.database, contractVersions: &dependencies.contractVersionsProbe,
+	}}
 	// Native replacement for the monitor-queue-depths Beat task. It reads the
 	// same River telemetry the readiness and metrics paths use, so queue depth
 	// and age come from the authoritative queue-control tables.
@@ -2281,13 +2318,19 @@ func (dependencies *workerDependencies) reportUnsupportedContracts(ctx context.C
 }
 
 func (dependencies *workerDependencies) close() {
-	if dependencies != nil && dependencies.database != nil {
+	if dependencies == nil {
+		return
+	}
+	dependencies.contractVersionsProbe.Close()
+	if dependencies.database != nil {
 		dependencies.database.Close()
 	}
 }
 
 type workerDatabaseLifecycle struct {
 	database workerDatabase
+	// contractVersions runs on the database's queue pool, so it stops before the pools close.
+	contractVersions *postgres.LazyProbeCheck
 }
 
 func (workerDatabaseLifecycle) Name() string { return "postgres-runtime-pools" }
@@ -2300,10 +2343,19 @@ func (component workerDatabaseLifecycle) Start(context.Context) error {
 }
 
 func (component workerDatabaseLifecycle) Shutdown(context.Context) error {
+	component.Release()
+	return nil
+}
+
+// Release stops the census, then closes the database (its readiness checks first); the runtime
+// calls it when it never started this component.
+func (component workerDatabaseLifecycle) Release() {
+	if component.contractVersions != nil {
+		component.contractVersions.Close()
+	}
 	if component.database != nil {
 		component.database.Close()
 	}
-	return nil
 }
 
 // enforceClickHouseSchema opens one short ClickHouse connection and gates on schema_migrations. A

@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	chstorage "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -37,11 +37,7 @@ func startTeamSourceStore(ctx context.Context, t *testing.T) driver.Conn {
 	}
 	t.Cleanup(func() { _ = inst.Close(context.Background()) })
 	chschema.Apply(ctx, t, inst)
-	opts, err := stdclickhouse.ParseDSN(inst.URI)
-	if err != nil {
-		t.Fatalf("parse ClickHouse DSN: %v", err)
-	}
-	conn, err := stdclickhouse.Open(opts)
+	conn, err := chstorage.Open(ctx, chstorage.DefaultConfig(inst.URI))
 	if err != nil {
 		t.Fatalf("open ClickHouse: %v", err)
 	}

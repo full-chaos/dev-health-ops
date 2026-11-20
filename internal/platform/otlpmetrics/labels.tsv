@@ -83,6 +83,7 @@ devhealth_auth_outbox_publisher_enabled		code: internal/audit/outboxloop.go
 devhealth_auth_push_reconcile_drift	class	code: internal/auth/pushreconcile/reconcilejob/gauge.go
 devhealth_auth_push_reconcile_runs_total	outcome	code: internal/auth/pushreconcile/reconcilejob/probe.go
 dev_health_categorize_byo_optin_unreadable_total	reason	code: internal/jobs/investment/categorizebyo.go
+dev_health_report_plan_unknown_confidence_total		code: internal/jobs/report/query.go
 dev_health_generation_repair_failures_total	step	code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_generation_repair_partial_total		code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_ic_finalize_refused_empty_org_total		code: internal/jobs/metrics/daily/icfinalize/executor.go
@@ -524,3 +525,4 @@ worker_work_item_attribution_native_rows_written_total		code: internal/jobruntim
 worker_work_item_attribution_native_runs_total		code: internal/jobruntime/telemetry.go
 worker_work_item_attribution_native_scoped_runs_total		code: internal/jobruntime/telemetry.go
 worker_workgraph_lease_release_lost_total		code: internal/jobruntime/telemetry.go
+dev_health_config_clickhouse_non_native_dsn	key	code: internal/platform/config/clickhouse_non_native.go

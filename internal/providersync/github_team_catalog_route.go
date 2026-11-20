@@ -155,7 +155,7 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 	resolver := identityalias.LoadDefault()
 
 	teamPages, err := providerfoundation.CollectGitHubLinkPages(ctx, collector.Client, providerfoundation.GitHubPageOptions{
-		Path: "/orgs/" + url.PathEscape(org) + "/teams", Route: "/orgs/{org}/teams", Query: perPageQuery(perPage),
+		Path: "/orgs/" + url.PathEscape(org) + "/teams", Route: githubOrgTeamsRoute, Query: perPageQuery(perPage),
 		MaxPages: maxPages,
 	})
 	evidence.Pages += teamPages.Pages
@@ -175,9 +175,9 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 	emailCache := make(map[string]*string)
 
 	for _, raw := range teamPages.Items {
-		var payload githubTeamPayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return githubTeamCatalogRows{}, evidence, providerfoundation.ErrNormalizationInvalid
+		payload, err := decodeGitHubTeam(raw)
+		if err != nil {
+			return githubTeamCatalogRows{}, evidence, providerfoundation.RouteFailure(githubOrgTeamsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		slug := strings.TrimSpace(payload.Slug)
 		if slug == "" {
@@ -191,7 +191,7 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 		var repoPatterns []string
 		if wantTeams {
 			repoPages, err := providerfoundation.CollectGitHubLinkPages(ctx, collector.Client, providerfoundation.GitHubPageOptions{
-				Path: "/orgs/" + url.PathEscape(org) + "/teams/" + url.PathEscape(slug) + "/repos", Route: "/orgs/{org}/teams/{slug}/repos",
+				Path: "/orgs/" + url.PathEscape(org) + "/teams/" + url.PathEscape(slug) + "/repos", Route: githubOrgTeamReposRoute,
 				Query: perPageQuery(perPage), MaxPages: maxPages,
 			})
 			evidence.Pages += repoPages.Pages
@@ -203,9 +203,9 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 			}
 			repoPatterns = make([]string, 0, len(repoPages.Items))
 			for _, repoRaw := range repoPages.Items {
-				var repoPayload githubTeamRepoPayload
-				if err := json.Unmarshal(repoRaw, &repoPayload); err != nil {
-					return githubTeamCatalogRows{}, evidence, providerfoundation.ErrNormalizationInvalid
+				repoPayload, err := decodeGitHubTeamRepo(repoRaw)
+				if err != nil {
+					return githubTeamCatalogRows{}, evidence, providerfoundation.RouteFailure(githubOrgTeamReposRoute, providerfoundation.ReasonBodyDecode, err)
 				}
 				name := strings.TrimSpace(repoPayload.Name)
 				if name == "" {
@@ -310,7 +310,7 @@ func (collector GitHubTeamCatalogRouteHandler) collectTeamMemberships(
 	emailCache map[string]*string,
 ) ([]githubMembershipRow, bool, bool, error) {
 	pages, err := providerfoundation.CollectGitHubLinkPages(ctx, collector.Client, providerfoundation.GitHubPageOptions{
-		Path: "/orgs/" + url.PathEscape(org) + "/teams/" + url.PathEscape(slug) + "/members", Route: "/orgs/{org}/teams/{slug}/members",
+		Path: "/orgs/" + url.PathEscape(org) + "/teams/" + url.PathEscape(slug) + "/members", Route: githubOrgTeamMembersRoute,
 		Query: perPageQuery(perPage), MaxPages: maxPages,
 	})
 	if err != nil {
@@ -322,9 +322,9 @@ func (collector GitHubTeamCatalogRouteHandler) collectTeamMemberships(
 	memberships := make([]githubMembershipRow, 0, len(pages.Items))
 	unusable := 0
 	for _, memberRaw := range pages.Items {
-		var memberPayload githubTeamMemberPayload
-		if err := json.Unmarshal(memberRaw, &memberPayload); err != nil {
-			return nil, false, false, providerfoundation.ErrNormalizationInvalid
+		memberPayload, err := decodeGitHubTeamMember(memberRaw)
+		if err != nil {
+			return nil, false, false, providerfoundation.RouteFailure(githubOrgTeamMembersRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		login := strings.TrimSpace(memberPayload.Login)
 		if login == "" {
@@ -413,4 +413,28 @@ func memberReadFailureCause(err error) string {
 	default:
 		return "read_failed"
 	}
+}
+
+func decodeGitHubTeam(raw json.RawMessage) (githubTeamPayload, error) {
+	var payload githubTeamPayload
+	if json.Unmarshal(raw, &payload) != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
+}
+
+func decodeGitHubTeamRepo(raw json.RawMessage) (githubTeamRepoPayload, error) {
+	var payload githubTeamRepoPayload
+	if json.Unmarshal(raw, &payload) != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
+}
+
+func decodeGitHubTeamMember(raw json.RawMessage) (githubTeamMemberPayload, error) {
+	var payload githubTeamMemberPayload
+	if json.Unmarshal(raw, &payload) != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
 }

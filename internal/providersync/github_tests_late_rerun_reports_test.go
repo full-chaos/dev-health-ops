@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -679,6 +680,174 @@ func TestGitHubTestsLateRerunAdjacentMidnightClaimsReReadPinned(t *testing.T) {
 				}
 				if got != [2]int{1, 1} {
 					t.Errorf("artifact reads first/next midnight claim=%v, want the pinned [1 1]", got)
+				}
+			})
+		}
+	}
+}
+
+// lateRerunR2Doer serves the fake GitHub with report artifacts for one run, and can serve a listing looser than its
+// created filter: widen replaces a filter (its pagination keeps the asked filter), extra puts one more run ahead of a
+// first page.
+type lateRerunR2Doer struct {
+	*listingFake
+	report int
+	file   *githubTestsRouteDoer
+	widen  func(string) string
+	extra  func(string) *listingRun
+}
+
+func (doer *lateRerunR2Doer) Do(request *http.Request) (*http.Response, error) {
+	switch request.URL.Path {
+	case "/repos/acme/api/actions/runs/" + strconv.Itoa(doer.report) + "/artifacts":
+		doer.artifactGets[doer.report]++
+		return githubTestsHTTPResponse(request, http.Header{"Content-Type": {"application/json"}}, `{"artifacts":[{"id":77,"expired":false}]}`), nil
+	case "/repos/acme/api/actions/artifacts/77/zip", "/report.zip":
+		return doer.file.Do(request)
+	case "/repos/acme/api/actions/runs":
+		created := request.URL.Query().Get("created")
+		if doer.extra != nil && request.URL.Query().Get("page") == "" {
+			if extra := doer.extra(created); extra != nil {
+				response, err := doer.listingFake.Do(request)
+				if err != nil {
+					return nil, err
+				}
+				body, err := io.ReadAll(response.Body)
+				response.Body.Close()
+				if err != nil {
+					return nil, err
+				}
+				remainder := strings.TrimPrefix(string(body), `{"workflow_runs":[`)
+				separator := ","
+				if strings.HasPrefix(remainder, "]") {
+					separator = ""
+				}
+				response.Body = io.NopCloser(strings.NewReader(`{"workflow_runs":[` + extra.json() + separator + remainder))
+				return response, nil
+			}
+		}
+		if doer.widen != nil {
+			if replacement := doer.widen(created); replacement != created {
+				clone := request.Clone(request.Context())
+				query := clone.URL.Query()
+				query.Set("created", replacement)
+				clone.URL.RawQuery = query.Encode()
+				response, err := doer.listingFake.Do(clone)
+				if err == nil {
+					if link := response.Header.Get("Link"); link != "" {
+						raw, _, _ := strings.Cut(strings.TrimPrefix(link, "<"), ">")
+						next := mustURL(raw)
+						values := next.Query()
+						values.Set("created", created)
+						next.RawQuery = values.Encode()
+						response.Header.Set("Link", "<"+next.String()+`>; rel="next"`)
+					}
+					response.Request = request
+				}
+				return response, err
+			}
+		}
+	}
+	return doer.listingFake.Do(request)
+}
+
+// lateRerunR2Walk runs one claim on one route and returns the report artifact reads of run report and the report rows written.
+func lateRerunR2Walk(t *testing.T, route string, claim Claim, runs []listingRun, report int, widen func(string) string, extra func(string) *listingRun) (int, [3]int) {
+	t.Helper()
+	doer := &lateRerunR2Doer{listingFake: newListingFake(t, runs), report: report, widen: widen, extra: extra,
+		file: &githubTestsRouteDoer{t: t, archive: githubTestsZip(t, map[string]string{"junit.xml": githubTestsJUnitFixture, "lcov.info": githubTestsLCOVFixture})}}
+	client := githubTestsClient(t, fakehttp.Client(doer))
+	now := time.Date(2026, 7, 25, 0, 0, 0, 0, time.UTC)
+	var rows [3]int
+	record := func(effects []EffectBatch) {
+		for _, effect := range effects {
+			switch effect.Destination {
+			case "test_suite_results":
+				rows[0] += len(effect.Rows)
+			case "test_case_results":
+				rows[1] += len(effect.Rows)
+			case "coverage_snapshots":
+				rows[2] += len(effect.Rows)
+			}
+		}
+	}
+	if route == "oracle" {
+		batch, err := (GitHubTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		record(batch.Effects)
+	} else if err := (GitHubTestsRouteHandler{}).CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client, now, "",
+		func(emission ChunkRouteEmission) error { record(emission.Batch.Effects); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	return doer.artifactGets[report], rows
+}
+
+// A claim that lists no deep range (no UTC midnight, an open end, full_resync, backfill) keeps main's regular admission:
+// a completed run a loose listing answers although it was created one second below the regular floor, updated inside the
+// claim, is read as on main ([1 2 1] report rows), on both routes.
+func TestGitHubTestsLateRerunNoDeepRangeKeepsMainAdmission(t *testing.T) {
+	m := time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC)
+	const regular = "2026-07-03..2026-07-05T00:00:00Z"
+	for _, cell := range []struct {
+		name, mode, filter string
+		since, before      time.Time
+	}{
+		{"incremental without a midnight", "incremental", "2026-07-03..2026-07-04T23:00:00Z", m.Add(-2 * time.Hour), m.Add(-time.Hour)},
+		{"incremental with an open end", "incremental", ">=2026-07-03", m.Add(-2 * time.Hour), time.Time{}},
+		{"full_resync", "full_resync", regular, m.Add(-time.Hour), m},
+		{"backfill", "backfill", regular, m.Add(-time.Hour), m},
+	} {
+		for _, route := range []string{"chunked", "oracle"} {
+			t.Run(cell.name+"/"+route, func(t *testing.T) {
+				claim := lateRerunClaim(cell.since, cell.before)
+				claim.Mode = cell.mode
+				if cell.before.IsZero() {
+					claim.BeforeAt = nil
+				}
+				run := listingRun{id: 9001, created: m.AddDate(0, 0, -2).Add(-time.Second), startedAt: cell.since, updated: cell.since.Add(time.Minute),
+					status: "completed", conclusion: "success", attempt: 2}
+				reads, rows := lateRerunR2Walk(t, route, claim, []listingRun{run}, run.id, func(created string) string {
+					if created == cell.filter {
+						return "2026-07-02..2026-07-05T00:00:00Z"
+					}
+					return created
+				}, nil)
+				if reads != 1 || rows != [3]int{1, 2, 1} {
+					t.Errorf("reads=%d rows=%v, want main's 1 read and [1 2 1]", reads, rows)
+				}
+			})
+		}
+	}
+}
+
+// After a capped page the range is peeled: the next query ends at the oldest created second seen. A loose narrowed page that
+// answers again a run created above that ceiling (already read in the first range) does not read it again: the chunked
+// route admits a run under the active query's ceiling (the cut second inclusive), as the oracle keeps one read per run id.
+// Regular and deep artifacts ranges, both routes.
+func TestGitHubTestsLateRerunPeeledRangeAdmitsUnderItsCeiling(t *testing.T) {
+	m := time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC)
+	for _, deep := range []bool{false, true} {
+		for _, route := range []string{"chunked", "oracle"} {
+			t.Run(fmt.Sprintf("deep=%v/%s", deep, route), func(t *testing.T) {
+				first, lo := "2026-07-03..2026-07-05T00:00:00Z", "2026-07-03.."
+				at := m.AddDate(0, 0, -1).Add(10 * time.Hour)
+				if deep {
+					first, lo = "2026-06-26..2026-07-02T23:59:59Z", "2026-06-26.."
+					at = m.AddDate(0, 0, -5).Add(10 * time.Hour)
+				}
+				run := listingRun{id: 9001, created: at.Add(2 * time.Hour), startedAt: m.Add(-time.Hour), updated: m.Add(-time.Minute),
+					status: "completed", conclusion: "success", attempt: 2}
+				runs := append(makeListingRuns(100, 999, at, time.Second), run)
+				reads, _ := lateRerunR2Walk(t, route, lateRerunClaim(m.Add(-time.Hour), m), runs, run.id, nil, func(created string) *listingRun {
+					if created != first && strings.HasPrefix(created, lo) {
+						return &run
+					}
+					return nil
+				})
+				if reads != 1 {
+					t.Errorf("reads=%d, want 1 (the narrowed page's repeat above its ceiling is not read again)", reads)
 				}
 			})
 		}

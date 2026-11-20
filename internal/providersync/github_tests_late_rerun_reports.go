@@ -64,8 +64,9 @@ func githubTestsRelistRunOutsideWindow(pipeline githubTestsPipelineRow, claim Cl
 }
 
 // githubTestsCreatedInterval is the created interval [lo, hi) of one artifacts-phase listing range: the regular range
-// [date(since - max(1 d, width)), before + 1 s) or the deep range [date(floor - L), regular floor). A zero bound is open.
-// The two intervals of a claim are disjoint. One interval decides, for its range, both which listed runs are admitted
+// [date(since - max(1 d, width)), before + 1 s) of a claim that lists a deep range, or that deep range [date(floor - L),
+// regular floor). A zero bound is open. The two intervals of such a claim are disjoint. A claim that lists no deep range
+// has an unbounded regular interval: its admission and peel are main's (githubTestsPeel), byte for byte. One interval decides, for its range, both which listed runs are admitted
 // and how a full page peels, so a listing looser than its created filter never reads a run outside the interval and
 // never moves the next range outside it.
 type githubTestsCreatedInterval struct {
@@ -79,13 +80,25 @@ func githubTestsArtifactInterval(claim Claim, deep bool, lookback time.Duration)
 		return githubTestsCreatedInterval{lo: githubTestsLateRerunFloor(claim).Add(-lookback).Truncate(24 * time.Hour), hi: githubTestsRelistFloor(claim), deep: true}
 	}
 	var interval githubTestsCreatedInterval
-	if claim.SinceAt != nil {
-		interval.lo, _ = time.Parse(time.DateOnly, githubTestsArtifactRunsCreatedFrom(claim))
+	if !githubTestsHoldsMidnight(claim) {
+		return interval
 	}
-	if claim.BeforeAt != nil {
-		interval.hi = claim.BeforeAt.UTC().Truncate(time.Second).Add(time.Second)
-	}
+	interval.lo, _ = time.Parse(time.DateOnly, githubTestsArtifactRunsCreatedFrom(claim))
+	interval.hi = claim.BeforeAt.UTC().Truncate(time.Second).Add(time.Second)
 	return interval
+}
+
+// admitsUnder is admits with the active query's ceiling: a run created after rangeHi (the peeled end, inclusive to its
+// second) belongs to an earlier, already walked range of the same listing, so a loose narrowed page cannot read it again.
+func (interval githubTestsCreatedInterval) admitsUnder(created *time.Time, rangeHi string) bool {
+	if !interval.admits(created) {
+		return false
+	}
+	if created == nil || rangeHi == "" {
+		return true
+	}
+	ceiling, err := time.Parse(time.RFC3339, rangeHi)
+	return err != nil || !created.UTC().Truncate(time.Second).After(ceiling)
 }
 
 // admits reports whether a listed run with this created time belongs to the range. A run with no created time is refused by
@@ -104,6 +117,9 @@ func (interval githubTestsCreatedInterval) admits(created *time.Time) bool {
 // interval's when rangeHi is empty) makes no progress inside the interval: stuck, so the range stops with its observation
 // and nothing outside the interval is listed.
 func (interval githubTestsCreatedInterval) peel(items int, oldest, rangeHi string) (nextHi string, saturated, stuck bool) {
+	if interval.lo.IsZero() && interval.hi.IsZero() {
+		return githubTestsPeel(items, oldest, rangeHi)
+	}
 	if items < githubTestsSearchResultCap {
 		return "", false, false
 	}

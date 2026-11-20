@@ -461,9 +461,10 @@ func TestQueryAPIPostureCheckInProductionRefusesAGrantOutsideTheManagedSchemas(t
 	// The production composition with a short freshness window: the default
 	// re-proves a passing answer every 300 s (CHAOS-6937), and this test watches a
 	// grant change reach readiness within a minute.
-	check := queryAPIPostureCheckWith(env, fixture.rolePool, postgresstore.PostureCheckOptions{
+	check, stop := queryAPIPostureCheckWith(env, fixture.rolePool, postgresstore.PostureCheckOptions{
 		TTL: time.Second, MaxStale: time.Minute, Jitter: -1,
 	})
+	defer stop()
 	waitReady := func(what string, want func(error) bool) error {
 		deadline := time.Now().Add(60 * time.Second)
 		for {

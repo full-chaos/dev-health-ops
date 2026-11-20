@@ -95,6 +95,10 @@ type PostureCheckOptions struct {
 // Each real execution logs its duration and outcome. Use CheckRolePosture
 // directly where a live answer every call is the point (startup gates,
 // tests that flip grants).
+//
+// The owner calls Close before it closes the pool the check runs on: Close
+// cancels the running execution and returns only after it has ended and
+// logged, so no execution outlives the process that started it.
 type CachedPostureCheck struct {
 	run        func(context.Context) error
 	role       string
@@ -119,6 +123,10 @@ type CachedPostureCheck struct {
 	// so a probe classifies the failure by its real cause (CHAOS-6934).
 	unanswered error
 	flight     *postureFlight
+	closed     bool
+	stop       context.CancelFunc
+	runCtx     context.Context
+	running    sync.WaitGroup
 }
 
 type postureFlight struct {
@@ -177,7 +185,10 @@ func newCachedPostureCheck(role string, run func(context.Context) error, options
 		}
 		return fallback
 	}
+	runCtx, stop := context.WithCancel(context.Background())
 	return &CachedPostureCheck{
+		runCtx:     runCtx,
+		stop:       stop,
 		run:        run,
 		role:       role,
 		logger:     options.Logger,
@@ -208,7 +219,7 @@ func (c *CachedPostureCheck) Check(ctx context.Context) error {
 			return nil
 		}
 	}
-	if c.refused != nil && now.Sub(c.refusedAt) < c.refusalTTL {
+	if c.refused != nil && (c.closed || now.Sub(c.refusedAt) < c.refusalTTL) {
 		err := c.refused
 		c.mu.Unlock()
 		return err
@@ -345,20 +356,39 @@ func postureJitter(value float64) float64 {
 	}
 }
 
+// Close stops the check: no execution starts after it, the running one is
+// cancelled, and Close returns once that execution has ended and logged. A
+// closed check keeps serving its last answer; with none usable it is
+// ErrUnavailable. Close may be called more than once.
+func (c *CachedPostureCheck) Close() {
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+	c.stop()
+	c.running.Wait()
+}
+
 // startFlightLocked returns the in-flight execution, starting one if none.
 // The caller holds c.mu.
 func (c *CachedPostureCheck) startFlightLocked() *postureFlight {
 	if c.flight != nil {
 		return c.flight
 	}
+	if c.closed {
+		flight := &postureFlight{done: make(chan struct{}), err: fmt.Errorf("%w: role posture check closed", ErrUnavailable)}
+		close(flight.done)
+		return flight
+	}
 	flight := &postureFlight{done: make(chan struct{})}
 	c.flight = flight
+	c.running.Add(1)
 	go c.execute(flight)
 	return flight
 }
 
 func (c *CachedPostureCheck) execute(flight *postureFlight) {
-	ctx, cancel := context.WithTimeout(context.Background(), c.runTimeout)
+	defer c.running.Done()
+	ctx, cancel := context.WithTimeout(withPostureOwner(c.runCtx), c.runTimeout)
 	defer cancel()
 	started := c.now()
 	err := c.protectedRun(ctx)

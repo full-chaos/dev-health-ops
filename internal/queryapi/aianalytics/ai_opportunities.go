@@ -366,7 +366,8 @@ WHERE pr.created_at >= now() - INTERVAL 30 DAY@@REPO@@
   AND coalesce(pr.title, '') != ''
 GROUP BY repo_id, coalesce(pr.author_email, pr.author_name, ''), coalesce(nullIf(wi.type, ''), 'pull_request'), title_prefix
 HAVING prs_total >= {cluster_min:UInt32}
-ORDER BY prs_total DESC
+ORDER BY prs_total DESC, repo_id ASC, concat(title_prefix, ''' with') ASC,
+    coalesce(pr.author_email, pr.author_name, '') ASC, coalesce(nullIf(wi.type, ''), 'pull_request') ASC
 LIMIT 100`
 
 type titleRule struct {
@@ -416,7 +417,7 @@ WHERE pr.created_at >= now() - INTERVAL 30 DAY
   AND pr.org_id = {org_id:String}
 GROUP BY repo_id
 HAVING prs_total >= {min_prs:UInt32}
-ORDER BY prs_total DESC
+ORDER BY prs_total DESC, repo_id ASC
 LIMIT 100`
 
 const docFileExpr = "(file_path LIKE '%.md' OR file_path LIKE '%.rst' OR file_path LIKE '%.adoc'" +
@@ -435,7 +436,7 @@ WHERE c.committer_when >= now() - INTERVAL 30 DAY@@REPO@@
   AND c.org_id = {org_id:String}
 GROUP BY repo_id
 HAVING code_commits >= {min_commits:UInt32} AND doc_changes = 0
-ORDER BY code_commits DESC
+ORDER BY code_commits DESC, repo_id ASC
 LIMIT 100`
 
 // flakyStatement is the share of DISTINCT test cases that flaked over the window: the summed flake cases over the
@@ -462,7 +463,7 @@ WHERE day >= today() - 30@@REPO@@
 GROUP BY repo_id
 HAVING cases_total >= {min_cases:UInt64}
    AND flake_share >= {flake_threshold:Float64}
-ORDER BY flake_share DESC
+ORDER BY flake_share DESC, repo_id ASC
 LIMIT 100`
 
 // withRepo splices the optional repository predicate into a statement.

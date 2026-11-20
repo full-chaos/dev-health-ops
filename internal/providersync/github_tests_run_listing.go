@@ -203,12 +203,18 @@ func githubTestsLateRerunWanted(run gitHubWorkflowRunPayload, claim Claim, lookb
 	return !updated.UTC().Before(githubTestsLateRerunFloor(claim)) && !updated.UTC().Before(created.UTC().Add(lookback))
 }
 
-// githubTestsLateRerunListedOutsideDeepRange reports a run a deep listing answered although it is not in that deep
-// created range: created at or after floor, the start of the range above it (the runs range of the runs phase, the
-// regular range of the artifacts phase), or with no created time (GitHub cannot list it by created). Each route skips it
-// in the deep range, whatever the listing answered, so the two ranges of a phase never read one run twice in a claim.
-func githubTestsLateRerunListedOutsideDeepRange(pipeline githubTestsPipelineRow, floor time.Time) bool {
-	return pipeline.QueuedAt == nil || !pipeline.QueuedAt.UTC().Before(floor)
+// githubTestsRunsInterval is the created interval of the runs phase's runs range (deep false) or deep range, equal to
+// their queries: runs [since - lookback, before + 1 s), deep [date(floor - late), since - lookback). A claim that lists no
+// deep range has an unbounded interval: its admission and peel are main's.
+func githubTestsRunsInterval(claim Claim, deep bool, lookback, late time.Duration) githubTestsCreatedInterval {
+	if !githubTestsHoldsMidnight(claim) {
+		return githubTestsCreatedInterval{}
+	}
+	floor := claim.SinceAt.UTC().Add(-lookback).Truncate(time.Second)
+	if deep {
+		return githubTestsCreatedInterval{lo: githubTestsLateRerunFloor(claim).Add(-late).Truncate(24 * time.Hour), hi: floor, deep: true}
+	}
+	return githubTestsCreatedInterval{lo: floor, hi: claim.BeforeAt.UTC().Truncate(time.Second).Add(time.Second)}
 }
 
 // githubTestsRunsQuery is the created range of one runs-phase listing.

@@ -1515,7 +1515,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	// at the oldest created time seen, in the same phase. A range that makes no
 	// progress is recorded and the phase ends.
 	endRunsRange := func(c githubTestsChunkCursor) githubTestsChunkCursor {
-		nextHi, saturated, stuck := githubTestsPeel(c.RangeItems, c.RangeOldest, c.RangeHi)
+		nextHi, saturated, stuck := githubTestsRunsInterval(claim, c.LateRuns, lookback, lateLookback).peel(c.RangeItems, c.RangeOldest, c.RangeHi)
 		items, hi := c.RangeItems, c.RangeHi
 		c.RangeItems, c.RangeOldest = 0, ""
 		switch {
@@ -1691,9 +1691,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			cutSecond, cutKey := githubTestsCutRunKey(run)
 			wanted := githubTestsRunWanted(run, pipeline, claim)
 			if cursor.LateRuns {
-				wanted = !githubTestsLateRerunListedOutsideDeepRange(pipeline, claim.SinceAt.UTC().Add(-lookback)) && githubTestsLateRerunWanted(run, claim, lookback)
+				wanted = githubTestsLateRerunWanted(run, claim, lookback)
 			}
-			read := include && wanted && !githubTestsSkipCutRun(cursor, cutSecond, cutKey)
+			read := include && githubTestsRunsInterval(claim, cursor.LateRuns, lookback, lateLookback).admitsUnder(pipeline.QueuedAt, cursor.RangeHi) &&
+				wanted && !githubTestsSkipCutRun(cursor, cutSecond, cutKey)
 			jobs := make([]githubTestsJobRow, 0)
 			acceptance := make([]githubTestsAcceptanceRow, 0)
 			var pipelines []githubTestsPipelineRow

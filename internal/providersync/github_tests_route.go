@@ -382,9 +382,11 @@ func (handler GitHubTestsRouteHandler) Collect(
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
 	runPages := (maxRuns + nativePerPage - 1) / nativePerPage
-	runItems, runListPages, runsOver, err := collectGitHubTestsRunsPeeled(ctx, client, root, runPages, func(hi string) url.Values {
+	runsInterval := githubTestsRunsInterval(claim, false, handler.refreshLookback(), handler.lateRerunLookback())
+	lateInterval := githubTestsRunsInterval(claim, true, handler.refreshLookback(), handler.lateRerunLookback())
+	runItems, runListPages, runsOver, err := collectGitHubTestsRunsPeeledBy(ctx, client, root, runPages, func(hi string) url.Values {
 		return githubTestsRunsQuery(claim, handler.refreshLookback(), hi)
-	})
+	}, runsInterval.peel)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
@@ -401,9 +403,9 @@ func (handler GitHubTestsRouteHandler) Collect(
 	var lateItems []json.RawMessage
 	lateListPages, lateOver := 0, false
 	if githubTestsHoldsMidnight(claim) {
-		lateItems, lateListPages, lateOver, err = collectGitHubTestsRunsPeeled(ctx, client, root, lateMaxPages, func(hi string) url.Values {
+		lateItems, lateListPages, lateOver, err = collectGitHubTestsRunsPeeledBy(ctx, client, root, lateMaxPages, func(hi string) url.Values {
 			return githubTestsLateRerunRunsQuery(claim, handler.refreshLookback(), handler.lateRerunLookback(), hi)
-		})
+		}, lateInterval.peel)
 		if err != nil {
 			return CompleteRouteBatch{}, err
 		}
@@ -468,10 +470,9 @@ func (handler GitHubTestsRouteHandler) Collect(
 			return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
-		keep := include && githubTestsRunWanted(run, pipeline, claim)
+		keep := include && runsInterval.admits(pipeline.QueuedAt) && githubTestsRunWanted(run, pipeline, claim)
 		if index >= len(runItems) {
-			keep = include && !githubTestsLateRerunListedOutsideDeepRange(pipeline, claim.SinceAt.UTC().Add(-handler.refreshLookback())) &&
-				githubTestsLateRerunWanted(run, claim, handler.refreshLookback())
+			keep = include && lateInterval.admits(pipeline.QueuedAt) && githubTestsLateRerunWanted(run, claim, handler.refreshLookback())
 		}
 		if !keep {
 			continue

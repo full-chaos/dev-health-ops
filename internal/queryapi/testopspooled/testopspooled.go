@@ -47,7 +47,7 @@ func NewestStoredRows(table string, columns ...string) string {
             SELECT org_id, repo_id, day, pooled_samples_stored` + selected + `
             FROM ` + table + `
             WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date}
-            ORDER BY computed_at DESC
+            ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC
             LIMIT 1 BY org_id, repo_id, day
         )`
 }

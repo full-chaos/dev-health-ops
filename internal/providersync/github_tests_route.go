@@ -331,10 +331,10 @@ type GitHubTestsRouteHandler struct {
 	// RefreshLookback is how far before the window the runs phase lists; zero
 	// keeps githubTestsRefreshLookbackDefault.
 	RefreshLookback time.Duration
-	// LateRerunLookback is how far below the regular artifacts floor the daily late re-run re-list reaches; zero keeps
-	// githubTestsLateRerunLookbackDefault.
+	// LateRerunLookback and LateRerunMaxPages bound the deep range of the
+	// claim that holds a UTC midnight; zero or less keeps
+	// githubTestsLateRerunLookbackDefault and githubTestsLateRerunMaxPages.
 	LateRerunLookback time.Duration
-	// LateRerunMaxPages lowers the deep range's page budget when positive; zero keeps githubTestsLateRerunMaxPagesDefault.
 	LateRerunMaxPages int
 	// MaxWalkRecords lowers githubTestsMaxWalkRecords when positive; zero keeps it.
 	MaxWalkRecords int
@@ -378,8 +378,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	if maxArtifactBytes <= 0 {
 		maxArtifactBytes = githubTestsMaxDownloadSize
 	}
-	if maxRuns < 1 || maxRuns > githubTestsMaxRuns || maxArtifacts < 1 || maxArtifacts > githubTestsMaxArtifacts || jobPages < 1 || jobPages > nativeMaxPages ||
-		!handler.lateRerunConfigValid() {
+	if maxRuns < 1 || maxRuns > githubTestsMaxRuns || maxArtifacts < 1 || maxArtifacts > githubTestsMaxArtifacts || jobPages < 1 || jobPages > nativeMaxPages {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
 	runPages := (maxRuns + nativePerPage - 1) / nativePerPage
@@ -391,6 +390,23 @@ func (handler GitHubTestsRouteHandler) Collect(
 	}
 	if runsOver || len(runItems) > maxRuns {
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
+	}
+	lateMaxPages := handler.lateRerunMaxPages()
+	if lateMaxPages < 1 || lateMaxPages > githubTestsLateRerunMaxPages {
+		return CompleteRouteBatch{}, ErrInvalidConfiguration
+	}
+	// The deep range of the claim that holds a UTC midnight, as in the chunked
+	// route. A stop (budget or a saturated second; this collector does not tell
+	// them apart) is recorded as the late_rerun_runs page-budget observation.
+	var lateItems []json.RawMessage
+	lateListPages, lateOver := 0, false
+	if githubTestsHoldsMidnight(claim) {
+		lateItems, lateListPages, lateOver, err = collectGitHubTestsRunsPeeled(ctx, client, root, lateMaxPages, func(hi string) url.Values {
+			return githubTestsLateRerunRunsQuery(claim, handler.refreshLookback(), handler.lateRerunLookback(), hi)
+		})
+		if err != nil {
+			return CompleteRouteBatch{}, err
+		}
 	}
 	artifactRunItems, artifactListPages, artifactsOver, err := collectGitHubTestsRunsPeeled(ctx, client, root, runPages, func(hi string) url.Values {
 		return githubTestsArtifactRunQueryAt(claim, hi)
@@ -407,8 +423,8 @@ func (handler GitHubTestsRouteHandler) Collect(
 	}
 	var relistPages int
 	relistStopped := false
-	if githubTestsRelistOwned(claim) {
-		relistItems, pages, over, err := collectGitHubTestsRunsPeeled(ctx, client, root, handler.lateRerunMaxPages(), func(hi string) url.Values {
+	if githubTestsHoldsMidnight(claim) {
+		relistItems, pages, over, err := collectGitHubTestsRunsPeeled(ctx, client, root, lateMaxPages, func(hi string) url.Values {
 			return githubTestsRelistQueryAt(claim, handler.lateRerunLookback(), hi)
 		})
 		if err != nil {
@@ -426,6 +442,11 @@ func (handler GitHubTestsRouteHandler) Collect(
 	cases := make([]testCaseResultRow, 0)
 	coverage := make([]coverageSnapshotRow, 0)
 	incomplete := make([]GitHubTestsIncomplete, 0)
+	if lateOver {
+		incomplete = mergeGitHubTestsIncomplete(incomplete, GitHubTestsIncomplete{
+			Component: githubTestsLateRerunRunsComponent, Cause: githubTestsPageBudgetCause, Count: 1,
+		})
+	}
 	// Durable markers for expired report artifacts (CHAOS-13980). This route carries them in the result, like the chunked route,
 	// so the shared watermark policy sees the same evidence for the same loss.
 	var (
@@ -437,15 +458,20 @@ func (handler GitHubTestsRouteHandler) Collect(
 	if relistStopped {
 		incomplete = append(incomplete, GitHubTestsIncomplete{Component: githubTestsLateRerunReportsComponent, Cause: githubTestsPageBudgetCause, Count: 1})
 	}
-	requests, pages := 1+runListPages+artifactListPages+relistPages, runListPages+artifactListPages+relistPages
+	requests, pages := 1+runListPages+lateListPages+artifactListPages+relistPages, runListPages+lateListPages+artifactListPages+relistPages
 	policyCache := map[string]githubTestsPolicy{}
-	for _, raw := range runItems {
+	for index, raw := range append(append([]json.RawMessage{}, runItems...), lateItems...) {
 		run, err := decodeGitHubWorkflowRun(raw)
 		if err != nil {
 			return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
-		if !include || !githubTestsRunWanted(run, pipeline, claim) {
+		keep := include && githubTestsRunWanted(run, pipeline, claim)
+		if index >= len(runItems) {
+			keep = include && !githubTestsLateRerunListedOutsideDeepRange(pipeline, claim.SinceAt.UTC().Add(-handler.refreshLookback())) &&
+				githubTestsLateRerunWanted(run, claim, handler.refreshLookback())
+		}
+		if !keep {
 			continue
 		}
 		pipelines = append(pipelines, pipeline)
@@ -764,8 +790,12 @@ func githubTestsArtifactRunQuery(claim Claim) url.Values {
 // the chunked route and this non-chunked comparison implementation so the two
 // cannot grade each other apart.
 //
-// The upper bound is unchanged: a run that started after the claim's upper
-// bound is out of scope.
+// The upper bound: a run that started after the claim's upper bound is out of
+// scope, except in a backfill chunk that knows the planner's tiling
+// (BackfillNext). The run_started_at of a run is its LATEST attempt, so a run
+// queued across before or re-run days later starts after before, while the
+// listing keeps it by created_at. In such a chunk the ownership rule below
+// decides alone: the run is read by the one chunk that owns it.
 //
 // The lower bound is on the run's own last-updated time, not its start time --
 // a re-run, a retried job, or a suite that lands late all bump that value, so
@@ -802,22 +832,23 @@ func githubTestsArtifactRunQuery(claim Claim) url.Values {
 // last-updated time is never excluded -- a run we cannot date is a run we
 // must not silently drop.
 func githubTestsReportRunOutsideWindow(pipeline githubTestsPipelineRow, claim Claim) bool {
-	if claim.BeforeAt != nil && pipeline.StartedAt.After(claim.BeforeAt.UTC()) {
-		return true
-	}
+	startedAfter := claim.BeforeAt != nil && pipeline.StartedAt.After(claim.BeforeAt.UTC())
 	if claim.SinceAt == nil || claim.BeforeAt == nil || pipeline.FinishedAt == nil {
-		return false
+		return startedAfter
 	}
 	since := claim.SinceAt.UTC()
 	width := claim.BeforeAt.UTC().Sub(since)
 	if width <= 0 {
-		return false
+		return startedAfter
 	}
 	finished := pipeline.FinishedAt.UTC()
 	if claim.Mode == "backfill" {
+		if startedAfter && claim.BackfillNext == nil {
+			return true
+		}
 		return finished.Before(since) || !githubTestsBackfillReadsLaterRun(pipeline, claim, finished)
 	}
-	return finished.Before(since.Add(-width))
+	return startedAfter || finished.Before(since.Add(-width))
 }
 
 func githubTestsBackfillReadsLaterRun(pipeline githubTestsPipelineRow, claim Claim, finished time.Time) bool {

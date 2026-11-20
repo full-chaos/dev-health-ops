@@ -396,6 +396,11 @@ const (
 	githubTestsRunInventorySaturatedComponent      = "run_inventory_saturated"
 	githubTestsArtifactInventorySaturatedComponent = "artifact_inventory_saturated"
 	githubTestsListingSaturatedCause               = "listing_saturated"
+	// githubTestsLateRerunRunsComponent records that the deep range of the
+	// runs phase (the daily late re-run relist) stopped at its page budget or a
+	// saturated second: cicd pipeline rows of older re-runs keep their stored
+	// attempt. It advances the watermark (the window itself was walked).
+	githubTestsLateRerunRunsComponent = "late_rerun_runs"
 	// The per-run components record that ONE workflow run held more items than
 	// its cap allows, so that run was committed with only the first cap-worth
 	// (CHAOS-4142). Count is the number of RUNS truncated in that category,
@@ -619,6 +624,9 @@ var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 	githubTestsRunJobsComponent:      {githubTestsPerRunCapCause: {}},
 	githubTestsRunArtifactsComponent: {githubTestsPerRunCapCause: {}},
 	githubTestsRunReportsComponent:   {githubTestsPerRunCapCause: {}, githubTestsAggregateOfPartsCause: {}},
+	// The deep range is a second look at runs older than the window; a stop
+	// there leaves no part of the window unread.
+	githubTestsLateRerunRunsComponent: {githubTestsPageBudgetCause: {}, githubTestsListingSaturatedCause: {}},
 	// The late re-run re-list stops before its oldest runs: the regular range was walked whole, so the gap is the deep range's
 	// oldest part only. Holding the watermark would hold a busy repository for ever; reports_complete stays false.
 	githubTestsLateRerunReportsComponent: {githubTestsPageBudgetCause: {}, githubTestsListingSaturatedCause: {}},
@@ -997,6 +1005,7 @@ var githubTestsIncompleteVocabulary = map[string]map[string]struct{}{
 var githubTestsDerivedIncompleteVocabulary = map[string]map[string]struct{}{
 	githubTestsRunInventorySaturatedComponent:      {githubTestsListingSaturatedCause: {}},
 	githubTestsArtifactInventorySaturatedComponent: {githubTestsListingSaturatedCause: {}},
+	githubTestsLateRerunRunsComponent:              {githubTestsPageBudgetCause: {}, githubTestsListingSaturatedCause: {}},
 	githubTestsLateRerunReportsComponent:           {githubTestsPageBudgetCause: {}, githubTestsListingSaturatedCause: {}},
 }
 
@@ -1055,6 +1064,7 @@ type lcovFileMetrics struct {
 	functionsCovered   *int64
 	lineNumbers        map[int64]struct{}
 	coveredLineNumbers map[int64]struct{}
+	hitLineNumbers     map[int64]struct{}
 }
 
 type junitDocument struct {
@@ -1372,6 +1382,7 @@ func parseCoberturaRow(body []byte, reportPath, artifactID, repoID, runID, orgID
 	type metrics struct {
 		path                                                     string
 		linesTotal, linesCovered, branchesTotal, branchesCovered int64
+		linesWithHits                                            int64
 	}
 	files := make([]metrics, 0, len(document.Classes))
 	positions := map[string]int{}
@@ -1382,7 +1393,11 @@ func parseCoberturaRow(body []byte, reportPath, artifactID, repoID, runID, orgID
 		current := metrics{path: class.Filename}
 		current.linesTotal = int64(len(class.Lines))
 		for _, line := range class.Lines {
-			if hits := parseOptionalInt64(line.Hits); hits != nil && *hits > 0 {
+			hits := parseOptionalInt64(line.Hits)
+			if hits != nil {
+				current.linesWithHits++
+			}
+			if hits != nil && *hits > 0 {
 				current.linesCovered++
 			}
 			total, covered := coberturaConditionCounts(line.ConditionCoverage)
@@ -1408,11 +1423,21 @@ func parseCoberturaRow(body []byte, reportPath, artifactID, repoID, runID, orgID
 		linesTotal = nilIfZero(value)
 	}
 	if linesCovered == nil {
-		var value int64
+		// Covered lines are known from a known zero total or from hit records on every counted line; a total with no such
+		// records (a rate alone, or fewer detail lines than the total) leaves them unknown (NULL), never 0.
+		var detailLines, detailHits, value int64
 		for _, file := range files {
+			detailLines += file.linesTotal
+			detailHits += file.linesWithHits
 			value += file.linesCovered
 		}
-		linesCovered = nilIfZero(value)
+		switch {
+		case linesTotal != nil && *linesTotal == 0:
+			zero := int64(0)
+			linesCovered = &zero
+		case detailLines > 0 && detailHits == detailLines && (linesTotal == nil || *linesTotal == detailLines):
+			linesCovered = &value
+		}
 	}
 	if branchesTotal == nil {
 		var value int64
@@ -1716,6 +1741,7 @@ func parseLCOVRow(body []byte, reportPath, artifactID, repoID, runID, orgID stri
 	var linesTotal, linesCovered, branchesTotal, branchesCovered, functionsTotal, functionsCovered *int64
 	lineNumbers := map[int64]struct{}{}
 	coveredLineNumbers := map[int64]struct{}{}
+	hitLineNumbers := map[int64]struct{}{}
 	files := make([]lcovFileMetrics, 0)
 	flush := func() {
 		if currentPath == nil {
@@ -1725,7 +1751,7 @@ func parseLCOVRow(body []byte, reportPath, artifactID, repoID, runID, orgID stri
 			path: *currentPath, linesTotal: linesTotal, linesCovered: linesCovered,
 			branchesTotal: branchesTotal, branchesCovered: branchesCovered,
 			functionsTotal: functionsTotal, functionsCovered: functionsCovered,
-			lineNumbers: lineNumbers, coveredLineNumbers: coveredLineNumbers,
+			lineNumbers: lineNumbers, coveredLineNumbers: coveredLineNumbers, hitLineNumbers: hitLineNumbers,
 		})
 		currentPath = nil
 		linesTotal, linesCovered = nil, nil
@@ -1733,6 +1759,7 @@ func parseLCOVRow(body []byte, reportPath, artifactID, repoID, runID, orgID stri
 		functionsTotal, functionsCovered = nil, nil
 		lineNumbers = map[int64]struct{}{}
 		coveredLineNumbers = map[int64]struct{}{}
+		hitLineNumbers = map[int64]struct{}{}
 	}
 	for _, raw := range strings.Split(string(body), "\n") {
 		line := strings.TrimSpace(raw)
@@ -1758,6 +1785,9 @@ func parseLCOVRow(body []byte, reportPath, artifactID, repoID, runID, orgID stri
 			lineNumbers[lineNumber] = struct{}{}
 			if len(parts) > 1 {
 				hits, hitErr := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
+				if hitErr == nil {
+					hitLineNumbers[lineNumber] = struct{}{}
+				}
 				if hitErr == nil && hits > 0 {
 					coveredLineNumbers[lineNumber] = struct{}{}
 				}
@@ -1785,7 +1815,21 @@ func parseLCOVRow(body []byte, reportPath, artifactID, repoID, runID, orgID stri
 	var aggregateFunctionsTotal, aggregateFunctionsCovered int64
 	serviceCounts := map[string]int{}
 	serviceOrder := make([]string, 0)
+	// The total and the covered count are known apart: the total from LF or DA records, the covered count from LH, from DA hit
+	// records that cover every counted line, or from a known zero total. A file with a total and no such evidence leaves the
+	// covered count unknown (NULL), never 0.
+	var hasLineTotal, hasLineHits, hitsUnknown bool
 	for _, file := range files {
+		totalKnown := file.linesTotal != nil || len(file.lineNumbers) > 0
+		fileTotal := int64(len(file.lineNumbers))
+		if file.linesTotal != nil {
+			fileTotal = *file.linesTotal
+		}
+		hitsKnown := file.linesCovered != nil || fileTotal == 0 ||
+			(len(file.lineNumbers) > 0 && len(file.hitLineNumbers) == len(file.lineNumbers) && fileTotal == int64(len(file.lineNumbers)))
+		hasLineTotal = hasLineTotal || totalKnown
+		hasLineHits = hasLineHits || file.linesCovered != nil || (totalKnown && hitsKnown)
+		hitsUnknown = hitsUnknown || (totalKnown && !hitsKnown)
 		aggregateLinesTotal += int64(len(file.lineNumbers))
 		if file.linesTotal != nil {
 			aggregateLinesTotal += *file.linesTotal - int64(len(file.lineNumbers))
@@ -1820,7 +1864,7 @@ func parseLCOVRow(body []byte, reportPath, artifactID, repoID, runID, orgID stri
 	format := "lcov"
 	row := coverageSnapshotRow{
 		RepoID: repoID, RunID: runID, SnapshotID: githubTestsSnapshotID(runID, artifactID, format, reportPath),
-		ReportFormat: &format, LinesTotal: nilIfZero(aggregateLinesTotal), LinesCovered: nilIfZero(aggregateLinesCovered),
+		ReportFormat: &format, LinesTotal: presentIf(hasLineTotal, aggregateLinesTotal), LinesCovered: presentIf(hasLineHits && !hitsUnknown, aggregateLinesCovered),
 		BranchesTotal: nilIfZero(aggregateBranchesTotal), BranchesCovered: nilIfZero(aggregateBranchesCovered),
 		FunctionsTotal: nilIfZero(aggregateFunctionsTotal), FunctionsCovered: nilIfZero(aggregateFunctionsCovered),
 		ServiceID: serviceID, OrgID: orgID, LastSynced: normalizedAt,
@@ -2005,6 +2049,14 @@ func looksQuarantined(values ...string) bool {
 
 func nilIfZero(value int64) *int64 {
 	if value == 0 {
+		return nil
+	}
+	return &value
+}
+
+// presentIf stores a count that the report really holds, zero included; no line data at all is missing, never 0.
+func presentIf(present bool, value int64) *int64 {
+	if !present {
 		return nil
 	}
 	return &value

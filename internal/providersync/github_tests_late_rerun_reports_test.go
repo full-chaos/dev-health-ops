@@ -22,9 +22,9 @@ func lateRerunClaim(since, before time.Time) Claim {
 	return claim
 }
 
-// lateRerunDeepRanges is the deep created ranges a fake was asked for: their end is one second before a UTC midnight, never a
+// lateRerunReportsDeepRanges is the deep created ranges a fake was asked for: their end is one second before a UTC midnight, never a
 // claim edge in these cells.
-func lateRerunDeepRanges(fake *listingFake) map[string]bool {
+func lateRerunReportsDeepRanges(fake *listingFake) map[string]bool {
 	out := map[string]bool{}
 	for _, created := range fake.listRanges {
 		if strings.HasSuffix(created, "T23:59:59Z") {
@@ -109,11 +109,11 @@ func TestGitHubTestsLateRerunMidnightEdges(t *testing.T) {
 	ending := lateRerunClaim(m.Add(-time.Hour), m)
 	starting := lateRerunClaim(m, m.Add(time.Hour))
 	_, fake, _ := lateRerunReads(t, ending, nil, 0)
-	if got := lateRerunDeepRanges(fake); len(got) != 1 || !got["2026-06-23..2026-06-29T23:59:59Z"] {
+	if got := lateRerunReportsDeepRanges(fake); len(got) != 1 || !got["2026-06-23..2026-06-29T23:59:59Z"] {
 		t.Errorf("M == before: deep ranges %v, want exactly 2026-06-23..2026-06-29T23:59:59Z", got)
 	}
 	_, fake, _ = lateRerunReads(t, starting, nil, 0)
-	if got := lateRerunDeepRanges(fake); len(got) != 0 {
+	if got := lateRerunReportsDeepRanges(fake); len(got) != 0 {
 		t.Errorf("M == since: deep ranges %v, want none (the previous claim owns M)", got)
 	}
 	open := lateRerunClaim(m.Add(-time.Hour), m)
@@ -123,12 +123,12 @@ func TestGitHubTestsLateRerunMidnightEdges(t *testing.T) {
 	resync := lateRerunClaim(m.Add(-time.Hour), m)
 	resync.Mode = "full_resync"
 	for name, claim := range map[string]Claim{"open start": open, "backfill": backfill, "full_resync": resync} {
-		if githubTestsRelistOwned(claim) {
+		if githubTestsHoldsMidnight(claim) {
 			t.Errorf("%s claim owns the deep range, want only incremental claims with both edges", name)
 		}
 	}
 	_, fake, _ = lateRerunReads(t, backfill, nil, 0)
-	if got := lateRerunDeepRanges(fake); len(got) != 0 {
+	if got := lateRerunReportsDeepRanges(fake); len(got) != 0 {
 		t.Errorf("backfill: deep ranges %v, want none", got)
 	}
 }
@@ -142,7 +142,7 @@ func TestGitHubTestsLateRerunDeepRangeCost(t *testing.T) {
 	for index := range 72 {
 		claim := lateRerunClaim(lateRerunS0().Add(time.Duration(index)*time.Hour), lateRerunS0().Add(time.Duration(index+1)*time.Hour))
 		reads, fake, _ := lateRerunReads(t, claim, []listingRun{stale}, stale.id)
-		if len(lateRerunDeepRanges(fake)) > 0 {
+		if len(lateRerunReportsDeepRanges(fake)) > 0 {
 			owners++
 		}
 		if reads != 0 {
@@ -172,7 +172,7 @@ func TestGitHubTestsLateRerunHeldClaimReownsMidnight(t *testing.T) {
 	if held.final.Watermark != nil {
 		t.Fatalf("held claim watermark=%v, want nil (regular artifacts budget exhausted)", held.final.Watermark)
 	}
-	if got := lateRerunDeepRanges(fake); len(got) != 0 || fake.artifactGets[late.id] != 0 {
+	if got := lateRerunReportsDeepRanges(fake); len(got) != 0 || fake.artifactGets[late.id] != 0 {
 		t.Fatalf("held claim: deep ranges %v, late reads %d; want none", got, fake.artifactGets[late.id])
 	}
 	reads, _, retry := lateRerunReads(t, lateRerunClaim(since, before), runs, late.id)
@@ -216,7 +216,9 @@ func TestGitHubTestsLateRerunDeepStopAdvances(t *testing.T) {
 			if decodeCompletionValue(walk.final.Result, "incomplete", &incomplete) != nil {
 				t.Fatal("result incomplete does not decode")
 			}
-			for _, observation := range incomplete {
+			// The runs phase's deep range lists the same old runs on the same page budget and records its own late_rerun_runs
+			// stop; this cell pins the artifacts phase's component.
+			for _, observation := range lateRerunIncompleteOf(incomplete, githubTestsLateRerunReportsComponent) {
 				got = append(got, observation.Component+"/"+observation.Cause)
 			}
 			if strings.Join(got, ",") != strings.Join(want, ",") {
@@ -239,7 +241,10 @@ func TestGitHubTestsLateRerunDeepStopAdvances(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Collect: %v", err)
 			}
-			if decodeCompletionValue(batch.Result, "incomplete", &incomplete) != nil || len(incomplete) != 1 || incomplete[0].Component != githubTestsLateRerunReportsComponent ||
+			if decodeCompletionValue(batch.Result, "incomplete", &incomplete) != nil {
+				t.Fatal("oracle result incomplete does not decode")
+			}
+			if incomplete = lateRerunIncompleteOf(incomplete, githubTestsLateRerunReportsComponent); len(incomplete) != 1 ||
 				batch.Watermark == nil || oracleFake.artifactGets[late.id] != 1 {
 				t.Errorf("oracle: incomplete=%+v watermark=%v late reads=%d, want the deep-range stop, an advanced watermark and 1 read", incomplete, batch.Watermark, oracleFake.artifactGets[late.id])
 			}
@@ -266,8 +271,8 @@ func TestGitHubTestsLateRerunCursorState(t *testing.T) {
 	}
 	claim := lateRerunClaim(time.Date(2026, 7, 4, 23, 0, 0, 0, time.UTC), time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC))
 	_, fake, walk := lateRerunReads(t, claim, nil, 0)
-	if len(lateRerunDeepRanges(fake)) != 1 || walk.cursor.Relist != 0 || walk.cursor.Phase != "done" {
-		t.Errorf("deep ranges=%v final relist=%d phase=%q, want one deep range walked and the state back at 0", lateRerunDeepRanges(fake), walk.cursor.Relist, walk.cursor.Phase)
+	if len(lateRerunReportsDeepRanges(fake)) != 1 || walk.cursor.Relist != 0 || walk.cursor.Phase != "done" {
+		t.Errorf("deep ranges=%v final relist=%d phase=%q, want one deep range walked and the state back at 0", lateRerunReportsDeepRanges(fake), walk.cursor.Relist, walk.cursor.Phase)
 	}
 }
 
@@ -294,14 +299,12 @@ func TestGitHubTestsLateRerunDeepRangeResumesAcrossChunks(t *testing.T) {
 	}
 }
 
-// The deep range's settings are refused outside their bounds by both routes, before any request.
+// A deep-range page budget over 1,000 is refused by both routes, before any request.
 func TestGitHubTestsLateRerunRefusesBadSettings(t *testing.T) {
 	claim := lateRerunClaim(time.Date(2026, 7, 4, 23, 0, 0, 0, time.UTC), time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC))
 	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	for name, handler := range map[string]GitHubTestsRouteHandler{
-		"pages over 1000": {LateRerunMaxPages: githubTestsLateRerunMaxPagesDefault + 1},
-		"negative pages":  {LateRerunMaxPages: -1},
-		"negative L":      {LateRerunLookback: -time.Hour},
+		"pages over 1000": {LateRerunMaxPages: githubTestsLateRerunMaxPages + 1},
 	} {
 		client := githubTestsClient(t, fakehttp.Client(newListingFake(t, nil)))
 		if err := handler.CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client, now, "", func(ChunkRouteEmission) error { return nil }); !errors.Is(err, ErrInvalidConfiguration) {
@@ -389,9 +392,9 @@ func TestGitHubTestsLateRerunRegularRangeResumeKeepsItsPageCount(t *testing.T) {
 	for _, observation := range walk.cursor.Incomplete {
 		truncated = truncated || observation.Component == githubTestsArtifactInventoryComponent && observation.Cause == githubTestsPageBudgetCause
 	}
-	if !truncated || walk.final.Watermark != nil || len(lateRerunDeepRanges(fake)) != 0 || walk.cursor.ArtifactPages < 1 || walk.cursor.ArtifactPages > 2 {
+	if !truncated || walk.final.Watermark != nil || len(lateRerunReportsDeepRanges(fake)) != 0 || walk.cursor.ArtifactPages < 1 || walk.cursor.ArtifactPages > 2 {
 		t.Errorf("incomplete=%+v watermark=%v deep ranges=%v artifact pages=%d, want the regular budget to stop at 2 pages, no watermark, no deep range",
-			walk.cursor.Incomplete, walk.final.Watermark, lateRerunDeepRanges(fake), walk.cursor.ArtifactPages)
+			walk.cursor.Incomplete, walk.final.Watermark, lateRerunReportsDeepRanges(fake), walk.cursor.ArtifactPages)
 	}
 }
 

@@ -132,3 +132,86 @@ func TestBaselinesPoolTheLineCounts(t *testing.T) {
 		t.Errorf("scope of C only: line = %v over %d days, want no value over 0 days", show(gamma.LineBaselinePct), gamma.LineDays)
 	}
 }
+
+// A repo-day that measured zero covered lines is a counted day with value 0 (CHAOS-14284). A day with line data and no
+// lines (lines_total 0, pct NULL: not applicable) and a day with no line data (lines_total NULL: unknown) are in neither
+// sum and have no value; the stored rows keep them apart (0 against NULL).
+func TestBaselinesKeepZeroHitNotApplicableAndUnknownApart(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	ch, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse: %v", err)
+	}
+	t.Cleanup(func() { _ = ch.Close(context.Background()) })
+	chschema.Apply(ctx, t, ch)
+	options, err := stdclickhouse.ParseDSN(ch.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := stdclickhouse.Open(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = admin.Close() })
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: ch.URI})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	const (
+		org     = "org-14284"
+		zeroHit = "14284000-0000-4000-8000-00000000000a"
+		noLines = "14284000-0000-4000-8000-00000000000b"
+		unknown = "14284000-0000-4000-8000-00000000000c"
+	)
+	end := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	at := time.Date(2026, 9, 2, 1, 0, 0, 0, time.UTC)
+	exec := func(statement string, args ...any) {
+		t.Helper()
+		if err := admin.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed: %v\n%s", err, statement)
+		}
+	}
+	for repo, name := range map[string]string{zeroHit: "acme/zero", noLines: "acme/nolines", unknown: "acme/unknown"} {
+		exec(`INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (?, ?, 'github', ?, ?, ?)`, repo, name, org, at, at)
+	}
+	for back := 1; back <= 8; back++ {
+		day := end.AddDate(0, 0, -back)
+		insert := `INSERT INTO testops_coverage_metrics_daily
+			(repo_id, day, line_coverage_pct, lines_covered, lines_total, uncovered_files_count, coverage_regression_count, org_id, computed_at)
+			VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)`
+		exec(insert, zeroHit, day, 0.0, uint32(0), uint32(100), org, at)
+		exec(insert, noLines, day, nil, uint32(0), uint32(0), org, at)
+		exec(insert, unknown, day, nil, nil, nil, org, at)
+	}
+
+	rows, err := Resolve(ctx, client, org, graphqldate.New(end), Scope{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("%d rows, want 3: %+v", len(rows), rows)
+	}
+	byRepo := map[string]int{}
+	for index, row := range rows {
+		byRepo[row.RepoID] = index
+	}
+	if z := rows[byRepo[zeroHit]]; z.LineBaselinePct == nil || *z.LineBaselinePct != 0 || z.LineDays != 8 {
+		t.Errorf("zero-hit repo line = %v over %d days, want 0 over 8 counted days", show(z.LineBaselinePct), z.LineDays)
+	}
+	for name, repo := range map[string]string{"not applicable (lines_total 0)": noLines, "unknown (lines_total NULL)": unknown} {
+		if r := rows[byRepo[repo]]; r.LineBaselinePct != nil || r.LineDays != 0 {
+			t.Errorf("%s: line = %v over %d days, want no value over 0 days", name, show(r.LineBaselinePct), r.LineDays)
+		}
+	}
+	var notApplicable, missing uint64
+	if err := admin.QueryRow(ctx, `SELECT countIf(lines_total = 0 AND lines_covered = 0 AND line_coverage_pct IS NULL),
+		countIf(lines_total IS NULL) FROM testops_coverage_metrics_daily FINAL WHERE org_id = ?`, org).Scan(&notApplicable, &missing); err != nil {
+		t.Fatal(err)
+	}
+	if notApplicable != 8 || missing != 8 {
+		t.Errorf("stored rows: %d not-applicable and %d unknown, want 8 and 8 kept apart", notApplicable, missing)
+	}
+}

@@ -156,7 +156,7 @@ INTEGRATION_CONTAINER_HARNESS="${ROOT}/internal/testsupport/containers/harness.g
 # able to change which suite a verb runs.
 # CHAOS-11745: GO_TEST_LEG_JSON_DIR and DEV_HEALTH_GO_FRESH_SECURITY belong to the leg: a test that starts check_go.sh as a child
 # must not empty the leg's -json file (its receipt reads it) or run in the leg's merge_group mode.
-GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u GOFLAGS -u GOEXPERIMENT -u CHECK_GO_FRESH -u GO_TEST_LEG_JSON_DIR -u DEV_HEALTH_GO_FRESH_SECURITY)
+GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u GOFLAGS -u GOEXPERIMENT -u CHECK_GO_FRESH -u GO_TEST_LEG_JSON_DIR -u GO_TEST_COVER_DIR -u DEV_HEALTH_GO_FRESH_SECURITY)
 
 # INTEGRATION_TEST_ENV (CHAOS-6634): environment for the MULTI-PACKAGE
 # `go test -tags=integration pkgA pkgB ...` invocations below (integration and
@@ -961,6 +961,18 @@ leg_json_file() {
   printf '%s\n' "${dir}/$1-$2-of-$3.json"
 }
 
+# go_test_cover_args ARG...: CHAOS-13767: the -coverprofile flag of one go test call of a non-race test leg, or nothing. The workflow sets
+# GO_TEST_COVER_DIR on main pushes of the test legs only; each call writes its own file (the split parts run in parallel), which the
+# go-quality-coverage job merges. Unset dir, or a -race call: no flag (the call is as before). Never fails the call.
+go_test_cover_args() {
+  local a f
+  [ -n "${GO_TEST_COVER_DIR:-}" ] || return 0
+  for a in "$@"; do [ "${a}" != -race ] || return 0; done
+  mkdir -p -- "${GO_TEST_COVER_DIR}" 2>/dev/null || return 0
+  f="$(mktemp "${GO_TEST_COVER_DIR}/cover-XXXXXX.out" 2>/dev/null)" || return 0
+  printf -- '-coverprofile=%s\n' "${f}"
+}
+
 # go_test_leg LOG LEGJSON ARG...: `go test -json ARG...` of one stage of a test or race leg (run it from the module directory).
 # The plain log, on stdout and in LOG, is every Output field of the event stream verbatim, whole lines per package (GO_TEST_LEG_JQ; the -v form: more
 # lines than plain go test, never fewer). A line that is not a JSON event passes through raw. The raw stream is kept in a stage
@@ -997,12 +1009,13 @@ foreach ((inputs | ((fromjson? | select(type == "object" and ((.Action | type) =
     .out)'
 go_test_leg() {
   local log="$1" legjson="$2" rc raw problem=0
-  local -a ps fb
+  local -a ps fb cov
   shift 2
+  mapfile -t cov < <(go_test_cover_args "$@")
   command -v jq >/dev/null 2>&1 || die "the test and race legs need jq to read go test -json"
   raw="$(mktemp "${TMPDIR:-/tmp}/dev-health-leg-raw.XXXXXX")" || die "go_test_leg: no temp file for the raw go test -json stream"
   set +e
-  "${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath ${MERGE_GROUP_FRESH:+-count=1} -json "$@" 2>&1 \
+  "${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath ${MERGE_GROUP_FRESH:+-count=1} ${cov[@]+"${cov[@]}"} -json "$@" 2>&1 \
     | tee "${raw}" \
     | { jq -nR --unbuffered -rj "${GO_TEST_LEG_JQ}"; jqrc=$?; [ "${jqrc}" -eq 0 ] || cat >/dev/null; exit "${jqrc}"; } \
     | tee -a "${log}"
@@ -1076,8 +1089,10 @@ go_test_json_run() {
 go_test_json_run_t() {
   local timeout="$1" json="$2" log="$3"
   shift 3
+  local -a cov
+  mapfile -t cov < <(go_test_cover_args "$@")
   command -v jq >/dev/null 2>&1 || die "the race-excluded receipts need jq to read go test -json events"
-  "${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath -json -count=1 -timeout "${timeout}" "$@" \
+  "${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath -json -count=1 -timeout "${timeout}" ${cov[@]+"${cov[@]}"} "$@" \
     | tee -a "${json}" \
     | jq -nR --unbuffered -rj "${GO_TEST_LEG_JQ}" \
     | tee -a "${log}"

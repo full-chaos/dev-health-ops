@@ -757,6 +757,12 @@ const nullableIntoPlainSites = `
 //	fetchChangeFailureAgg 78aa9a6d5455 -> 33e78a54a14c
 //	fetchStateDurations 4e40f48a6488 -> dd682a464928
 //	fetchWorkItems 02d2157b4812 -> 6adb8910eb84
+// CHAOS-14393: the WORK_TYPE nodes and edges templates filter blank types with match() instead of != ''. Select lists,
+// column types and scan targets are unchanged; only the statement text moved. Re-pinned by hand, digests copied from the
+// local TestScanTypeCensus failure output (not computed):
+//
+//	queryEdges 5935396ef678 -> d6369bb81568
+//	queryNodes 3dacd49c8128 -> 92e198fc2e0f
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|e67003e26fc2|not-describable
@@ -769,8 +775,8 @@ internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|9df0068c57ab
 internal/queryapi/aianalytics/scope.go|ownerTeams|*string,*string|c0b3734eb92d|not-describable
 internal/queryapi/analytics/breakdown.go|executeBreakdownRaw|**string,**float64|7d5055461009|statement-not-static
 internal/queryapi/analytics/catalog.go|executeCatalogValues|*string,*uint64|92f0953d0b7c|statement-not-static
-internal/queryapi/analytics/flowmatrix.go|queryEdges|*string,*string,**string,**string,**float64|5935396ef678|statement-not-static
-internal/queryapi/analytics/flowmatrix.go|queryNodes|*string,**string,**float64|3dacd49c8128|statement-not-static
+internal/queryapi/analytics/flowmatrix.go|queryEdges|*string,*string,**string,**string,**float64|d6369bb81568|statement-not-static
+internal/queryapi/analytics/flowmatrix.go|queryNodes|*string,**string,**float64|92e198fc2e0f|statement-not-static
 internal/queryapi/analytics/investmentquality.go|executeEvidenceQualityByGroup|*string,*float64,*uint64,*uint64|30049a8da29f|statement-not-static
 internal/queryapi/analytics/investmentquality.go|executeInvestmentQualityStats|*uint64,*uint64,*float64,*float64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64|2219e7f838c7|statement-not-static
 internal/queryapi/analytics/sankeycoverage.go|runSankeyCoverageQuery|*float64,*float64,*float64,*float64,**float64,**float64,**float64,**float64,**float64|7474017a0a07|statement-not-static

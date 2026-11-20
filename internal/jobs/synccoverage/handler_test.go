@@ -91,6 +91,7 @@ func TestHandlerRetriesUnlessEveryFailureIsDeterministic(t *testing.T) {
 		return result
 	}
 	countOnly := coverage.RefreshResult{Refreshed: 2, Failed: 2, Failures: fail(limit).Failures}
+	var nilLimit *coverage.LimitError
 	for name, tc := range map[string]struct {
 		result coverage.RefreshResult
 		want   jobruntime.ErrorCategory
@@ -108,6 +109,11 @@ func TestHandlerRetriesUnlessEveryFailureIsDeterministic(t *testing.T) {
 		"joined with transient":       {fail(errors.Join(coverage.ErrConfigNotFound, io.EOF)), jobruntime.CategoryRetryable},
 		"failed count above failures": {countOnly, jobruntime.CategoryRetryable},
 		"count without failures":      {coverage.RefreshResult{Refreshed: 2, Failed: 1}, jobruntime.CategoryRetryable},
+		"typed nil limit":             {fail(nilLimit), jobruntime.CategoryRetryable},
+		"typed nil limit wrapped":     {fail(fmt.Errorf("build: %w", nilLimit)), jobruntime.CategoryRetryable},
+		"typed nil and not found":     {fail(errors.Join(nilLimit, coverage.ErrConfigNotFound)), jobruntime.CategoryRetryable},
+		"typed nil and limit":         {fail(errors.Join(nilLimit, limit)), jobruntime.CategoryRetryable},
+		"limit and typed nil config":  {fail(limit, nilLimit), jobruntime.CategoryRetryable},
 	} {
 		t.Run(name, func(t *testing.T) {
 			logs, err := logRecords(t, &recordingProjector{result: tc.result})
@@ -116,6 +122,9 @@ func TestHandlerRetriesUnlessEveryFailureIsDeterministic(t *testing.T) {
 			}
 			if got := strings.Count(logs, "sync_coverage_refresh.config_failed"); got != len(tc.result.Failures) {
 				t.Fatalf("config_failed lines = %d, want %d", got, len(tc.result.Failures))
+			}
+			if strings.HasPrefix(name, "typed nil") && !strings.Contains(logs, "cause_class=other") && !strings.Contains(logs, "cause_class=config_not_found") {
+				t.Fatalf("typed-nil failure not logged with a safe class:\n%s", logs)
 			}
 			cause, ok := jobruntime.SafeCause(err)
 			if want := fmt.Sprintf("sync coverage refresh: failed=%d refreshed=2", max(tc.result.Failed, len(tc.result.Failures))); !ok || cause != want {

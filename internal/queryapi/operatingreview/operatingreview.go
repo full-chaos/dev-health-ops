@@ -506,11 +506,10 @@ func fetchWorkItems(ctx context.Context, client QueryClient, orgID string, teams
             picked.17 AS lead_time_p90_hours,
             picked.18 AS wip_age_p50_hours,
             picked.19 AS wip_age_p90_hours
-          FROM work_item_metrics_daily
+          FROM ` + workItemSource("work_item_metrics_daily", teams) + `
           WHERE org_id = {org_id:String}
             ` + teamFilter + `
-            AND day >= {start:Date} AND day < {end:Date}
-            AND ` + rowview.OrgPredicate("work_item_metrics_daily", "") + `
+            AND day >= {start:Date} AND day < {end:Date}` + workItemView("work_item_metrics_daily", teams) + `
           GROUP BY day, provider, work_scope_id, row_view` + teamGroup + `
         ) AS newest
         WHERE ` + liverow.Predicate("work_item_metrics_daily", "newest") + `
@@ -578,11 +577,10 @@ func fetchStateDurations(ctx context.Context, client QueryClient, orgID string, 
             picked.1 AS duration_hours,
             picked.2 AS items_touched,
             picked.3 AS avg_wip
-          FROM work_item_state_durations_daily
+          FROM ` + workItemSource("work_item_state_durations_daily", teams) + `
           WHERE org_id = {org_id:String}
             ` + teamFilter + `
-            AND day >= {start:Date} AND day < {end:Date}
-            AND ` + rowview.OrgPredicate("work_item_state_durations_daily", "") + `
+            AND day >= {start:Date} AND day < {end:Date}` + workItemView("work_item_state_durations_daily", teams) + `
           GROUP BY day, provider, work_scope_id, status, row_view` + teamGroup + `
         ) AS newest
         WHERE ` + liverow.Predicate("work_item_state_durations_daily", "newest") + `
@@ -1463,6 +1461,35 @@ func teamClauses(teams teamSelection) (teamFilter, teamGroup string, binding *cl
 	// team exactly as the all-teams mode keeps them, so the reducers see the
 	// UNION of the teams' stored rows and never a pre-mixed row.
 	return "AND team_id IN {team_ids:Array(String)}", ", team_id", &clickhouse.Binding{Name: "team_ids", Value: []string(teams)}
+}
+
+// workItemSource is the FROM source of a read of a work item daily table. No team
+// and a team set read the table (a team set is CHAOS-10665's). Exactly one team
+// reads the served team view of that team (CHAOS-14379): one row per key, the
+// newest row of each view of the key, a live row first, then team, org, legacy
+// (rowview.ServedTeamSource); the argMax/GROUP BY of the read runs over that row.
+// Each call names its table as a literal, so a census reads the table.
+func workItemSource(table string, teams teamSelection) string {
+	if len(teams) != 1 {
+		return table
+	}
+	const where = "team_id = {team_id:String} AND day >= {start:Date} AND day < {end:Date}"
+	switch table {
+	case "work_item_metrics_daily":
+		return rowview.ServedTeamSource("work_item_metrics_daily", where) + " AS work_item_metrics_daily"
+	case "work_item_state_durations_daily":
+		return rowview.ServedTeamSource("work_item_state_durations_daily", where) + " AS work_item_state_durations_daily"
+	}
+	panic("operatingreview: no team view of " + table)
+}
+
+// workItemView is the view predicate of a read of a work item daily table: the org
+// view, or none when workItemSource already picked the one team's view.
+func workItemView(table string, teams teamSelection) string {
+	if len(teams) == 1 {
+		return ""
+	}
+	return "\n            AND " + rowview.OrgPredicate(table, "")
 }
 
 // teamSelection is the teams a review is for: none (all teams), one, or several

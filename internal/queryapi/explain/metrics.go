@@ -132,9 +132,20 @@ func metricValueProjection(column string) string {
 // both the current window (start_day/end_day) and the comparison window
 // (compare_start/compare_end), matching Python's own start_param/
 // end_param default-override parameters.
-func metricFromClause(table, column, scopeFilterSQL, startParam, endParam string) string {
+//
+// oneTeam is a read for exactly one team: a table with team rows is then read
+// through the served team view (CHAOS-14379), one row per key, and the
+// argMax/GROUP BY below runs over that row.
+func metricFromClause(table, column, scopeFilterSQL, startParam, endParam string, oneTeam bool) string {
 	keys := dedupNaturalKeys[table]
-	if rowview.Has(table) {
+	source, teamView := "", false
+	if oneTeam {
+		source, teamView = teamViewSource(table, fmt.Sprintf("day >= {%s:Date} AND day < {%s:Date}%s", startParam, endParam, scopeFilterSQL))
+	}
+	if !teamView {
+		source = table
+	}
+	if !teamView && rowview.Has(table) {
 		// Each item once in the organization (CHAOS-8863): legacy rows and the org view. row_view is in the natural
 		// key, so a legacy retraction row never merges with an org row under argMax.
 		scopeFilterSQL += "\n      AND " + rowview.OrgPredicate(table, "")
@@ -153,7 +164,20 @@ func metricFromClause(table, column, scopeFilterSQL, startParam, endParam string
     %s
       AND org_id = {org_id:String}
     GROUP BY %s%s
-)`, keyColumns, strings.Join(projections, ",\n        "), table, startParam, endParam, scopeFilterSQL, keyColumns, liveRowHaving(table))
+)`, keyColumns, strings.Join(projections, ",\n        "), source, startParam, endParam, scopeFilterSQL, keyColumns, liveRowHaving(table))
+}
+
+// teamViewSource is the served team view of a table with team rows (CHAOS-14379), aliased as the table: one row per
+// key, the newest row of each view of the key, a live row first, then team, org, legacy (rowview.ServedTeamSource). ok
+// is false for a table without team rows. Each call names its table as a literal, so a census reads the table.
+func teamViewSource(table, where string) (source string, ok bool) {
+	switch table {
+	case "work_item_metrics_daily":
+		return rowview.ServedTeamSource("work_item_metrics_daily", where) + " AS work_item_metrics_daily", true
+	case "work_item_state_durations_daily":
+		return rowview.ServedTeamSource("work_item_state_durations_daily", where) + " AS work_item_state_durations_daily", true
+	}
+	return "", false
 }
 
 // liveRowHaving keeps a key of a team-keyed daily table only when its newest
@@ -174,12 +198,12 @@ func liveRowHaving(table string) string {
 // two-layer None-then-NaN/Inf handling (fetch_metric_value's inner
 // `float(value or 0.0)`, then build_explain_response's own outer
 // safe_float call).
-func (reader *Reader) fetchMetricValue(ctx context.Context, table, column, aggregator string, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID, shareSQL string) (float64, bool, error) {
+func (reader *Reader) fetchMetricValue(ctx context.Context, table, column, aggregator string, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID, shareSQL string, oneTeam bool) (float64, bool, error) {
 	if reader == nil || reader.client == nil {
 		return 0, false, ErrUnavailable
 	}
 
-	fromClause := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day")
+	fromClause := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day", oneTeam)
 	// toFloat64(...) around the outer aggregator: a
 	// sum-aggregator metric over an integer column (deploy_freq's
 	// deployments_count, churn's total_loc_touched) makes ClickHouse's
@@ -244,7 +268,7 @@ func (reader *Reader) fetchChangeFailureView(ctx context.Context, startDay, endD
 SELECT %s
 FROM %s
 %s
-`, changefailure.ViewSumsSQL, metricFromClause(changefailure.Table, "change_failure_rate", scopeFilterSQL, "start_day", "end_day"), settingsMaxExecutionTime())
+`, changefailure.ViewSumsSQL, metricFromClause(changefailure.Table, "change_failure_rate", scopeFilterSQL, "start_day", "end_day", false), settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},
 		{Name: "end_day", Value: dateBindingValue(endDay)},
@@ -302,7 +326,7 @@ func (reader *Reader) fetchMetricContributors(ctx context.Context, table, column
 	}
 	const limit = 6
 
-	fromClause := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day")
+	fromClause := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day", false)
 	// toFloat64(...) around the outer aggregator: same fix as
 	// fetchMetricValue's own doc comment -- a sum-aggregated integer
 	// column returns UInt64, which this binary's native driver refuses to
@@ -367,8 +391,8 @@ func (reader *Reader) fetchMetricDriverDelta(ctx context.Context, table, column,
 	}
 	const limit = 3
 
-	currentFrom := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day")
-	previousFrom := metricFromClause(table, column, scopeFilterSQL, "compare_start", "compare_end")
+	currentFrom := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day", false)
+	previousFrom := metricFromClause(table, column, scopeFilterSQL, "compare_start", "compare_end", false)
 	valueSQL, _ := aggregateSQL(aggregator, column, shareSQL)
 	// current/previous were a `WITH current AS (...), previous AS (...)`
 	// CTE pair until this fix: dev-health-go's client-side read-only

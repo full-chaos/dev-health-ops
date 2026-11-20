@@ -63,7 +63,7 @@ func TestExplainReadersGiveRetractionRowsNoWeight(t *testing.T) {
 			}
 			var answer explainAnswers
 			var err error
-			answer.Value, answer.HasData, err = reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, start, end, filter, nil, org, "")
+			answer.Value, answer.HasData, err = reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, start, end, filter, nil, org, "", false)
 			if err != nil {
 				t.Fatalf("%s %s value: %v", org, metric, err)
 			}

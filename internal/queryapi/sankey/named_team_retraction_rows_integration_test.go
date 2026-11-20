@@ -44,11 +44,11 @@ func TestStateAndExpenseCountsOfANamedRetiredTeamGiveRetractionRowsNoWeight(t *t
 		filter, bindings := teamScopeFilter("team", []string{teamID}, teamColumn)
 		var out answers
 		var err error
-		if out.Statuses, err = fetchStateStatusCounts(ctx, client, from, end, filter, bindings, org); err != nil {
+		if out.Statuses, err = fetchStateStatusCounts(ctx, client, from, end, filter, bindings, org, false); err != nil {
 			t.Fatalf("%s %s status counts: %v", org, teamID, err)
 		}
 		sort.Slice(out.Statuses, func(i, j int) bool { return out.Statuses[i].Status < out.Statuses[j].Status })
-		if out.Expense, err = fetchExpenseCounts(ctx, client, from, end, filter, bindings, org); err != nil {
+		if out.Expense, err = fetchExpenseCounts(ctx, client, from, end, filter, bindings, org, false); err != nil {
 			t.Fatalf("%s %s expense counts: %v", org, teamID, err)
 		}
 		return out

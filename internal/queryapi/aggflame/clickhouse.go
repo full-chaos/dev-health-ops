@@ -102,6 +102,14 @@ func fetchCycleBreakdown(ctx context.Context, client QueryClient, orgID string, 
 		bindings = append(bindings, dhclickhouse.Binding{Name: "work_scope_id", Value: workScopeID})
 	}
 
+	// One team reads the served team view of that team (CHAOS-14379): one row per key, the newest row of each view of
+	// the key, a live row first, then team, org, legacy (rowview.ServedTeamSource); the argMax/GROUP BY below runs over
+	// that row. No team reads the org view.
+	source, view := "work_item_state_durations_daily", "\n              AND "+rowview.OrgPredicate("work_item_state_durations_daily", "")
+	if teamID != "" {
+		source, view = rowview.ServedTeamSource("work_item_state_durations_daily", "day >= {start_day:Date} AND day < {end_day:Date}"+filter)+" AS work_item_state_durations_daily", ""
+	}
+
 	query := `
         SELECT
             status,
@@ -116,11 +124,10 @@ func fetchCycleBreakdown(ctx context.Context, client QueryClient, orgID string, 
                 status,
                 argMax(duration_hours, computed_at) AS duration_hours,
                 argMax(items_touched, computed_at) AS items_touched
-            FROM work_item_state_durations_daily
+            FROM ` + source + `
             WHERE org_id = {org_id:String}
               AND day >= {start_day:Date}
-              AND day < {end_day:Date}` + filter + `
-              AND ` + rowview.OrgPredicate("work_item_state_durations_daily", "") + `
+              AND day < {end_day:Date}` + filter + view + `
             GROUP BY day, provider, work_scope_id, team_id, status, row_view
             HAVING ` + liverow.NewestPredicate("work_item_state_durations_daily", "") + `
         )

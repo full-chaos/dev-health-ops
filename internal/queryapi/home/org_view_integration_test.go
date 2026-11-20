@@ -72,7 +72,7 @@ func TestBlockedHoursTakeTheOrgViewWithoutADeadKey(t *testing.T) {
 		}
 	}
 
-	total, rows, hasData, err := fetchBlockedHours(ctx, client, legacyOnlyDay, recomputedDay.AddDate(0, 0, 1), "", nil, org)
+	total, rows, hasData, err := fetchBlockedHours(ctx, client, legacyOnlyDay, recomputedDay.AddDate(0, 0, 1), "", nil, org, false)
 	if err != nil {
 		t.Fatalf("fetchBlockedHours: %v", err)
 	}

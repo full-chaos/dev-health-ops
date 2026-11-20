@@ -509,6 +509,8 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		Repo:     repoFilterColumn,
 		TeamRepo: teamRepoColumn,
 		Author:   "author_email",
+		// The flag of the chart's own filter columns (the zero owner: the coverage has no ownership join).
+		StoredTeamKey: testopsOwner{}.filterColumns(req.Measure, useInvestment).StoredTeamKey,
 		// CHAOS-5498: this is the ONE caller that never reads
 		// subcategory_kv.2 -- it needs the filter only to decide which units
 		// are in scope -- so it takes the unit-selecting predicate and skips

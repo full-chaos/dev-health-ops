@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"maps"
 	"net/url"
 	"slices"
 	"strings"
@@ -651,7 +652,10 @@ func TestGitHubTestsBackfillLateStartRunIsReadOnce(t *testing.T) {
 // CHAOS-14249: outside a backfill chunk that knows the tiling, the
 // run_started_at cutoff stays: incremental and full_resync claims, a backfill
 // claim with no tiling, a run with no updated_at, and a zero-width claim read
-// these shapes as before. (The incremental late re-run loss is ticket 14299.)
+// these shapes as before. An incremental claim that holds a UTC midnight also
+// lists the late re-run deep range of the artifacts phase: in the two shapes
+// whose re-run starts in the second window, that window's deep range reads it
+// ([0 1] and [0 1 0]); the start cutoff of the first window is unchanged.
 func TestGitHubTestsLateStartKeepsTheStartCutoffOutsideKnownTiling(t *testing.T) {
 	t.Parallel()
 	want := map[string][]int{
@@ -670,13 +674,16 @@ func TestGitHubTestsLateStartKeepsTheStartCutoffOutsideKnownTiling(t *testing.T)
 		"full chunk, re-run in the next full chunk": {0, 0, 0},
 		"next chunk lists it":                       {0, 1},
 	}
+	wantIncremental := maps.Clone(want)
+	wantIncremental["full chunk before a short last chunk"] = []int{0, 1}
+	wantIncremental["full chunk, re-run in the next full chunk"] = []int{0, 1, 0}
 	for _, shape := range githubTestsLateStartShapes() {
 		for _, claim := range []struct {
 			mode  string
 			tiled bool
 			want  []int
 		}{
-			{"incremental", false, want[shape.name]},
+			{"incremental", false, wantIncremental[shape.name]},
 			{"full_resync", false, want[shape.name]},
 			{"backfill", false, wantNoTiling[shape.name]},
 		} {

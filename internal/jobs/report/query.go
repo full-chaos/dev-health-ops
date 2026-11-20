@@ -205,6 +205,14 @@ func decodeReportDefinition(
 	return result, nil
 }
 
+const (
+	reportTypeWeeklyHealth  = "weekly_health"
+	reportTypeMonthlyReview = "monthly_review"
+)
+
+// builtinReportTypes holds every report type the product builds (defaultWirePlan); only these keys show title-cased.
+var builtinReportTypes = map[string]struct{}{reportTypeWeeklyHealth: {}, reportTypeMonthlyReview: {}}
+
 func defaultWirePlan(reportID, organizationID string, parameters map[string]any, now time.Time) wirePlan {
 	days := 7
 	switch parameters["dateRange"] {
@@ -217,9 +225,9 @@ func defaultWirePlan(reportID, organizationID string, parameters map[string]any,
 	}
 	end := now.Format(time.DateOnly)
 	start := now.AddDate(0, 0, -days).Format(time.DateOnly)
-	reportType, comparison := "weekly_health", "prior_week"
+	reportType, comparison := reportTypeWeeklyHealth, "prior_week"
 	if days > 7 {
-		reportType, comparison = "monthly_review", "prior_month"
+		reportType, comparison = reportTypeMonthlyReview, "prior_month"
 	}
 	plan := wirePlan{
 		PlanID: "auto-" + reportID, ReportType: reportType, Audience: "team_lead",

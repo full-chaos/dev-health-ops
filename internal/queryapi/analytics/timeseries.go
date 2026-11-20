@@ -228,6 +228,8 @@ func CompileTimeseries(req TimeseriesRequest, orgID string, timeoutSeconds int, 
 	}
 	owner := newTestopsOwner(orgID, req.Measure, []Dimension{req.Dimension}, useInvestment, filters)
 	dimCol = owner.column(req.Dimension, dimCol)
+	dimOut := keyProjection(req.Dimension, useInvestment, dimCol)
+	dimGroup := groupRef("dimension_value", dimOut, dimCol)
 
 	fc, err := translateFilters(orgID, filters, useInvestment, owner.filterColumns(req.Measure, useInvestment))
 	if err != nil {
@@ -288,10 +290,10 @@ FROM %s
 WHERE %s
   AND %s.org_id = {org_id:String}
 %s
-GROUP BY bucket, dimension_value
-ORDER BY bucket ASC, value DESC, dimension_value ASC
+GROUP BY bucket, %s
+ORDER BY bucket ASC, value DESC, %s ASC
 %s
-`, dateTruncUnit(req.Interval), dateCol, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, statementSettings(source, timeoutSeconds))
+`, dateTruncUnit(req.Interval), dateCol, dimOut, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, dimGroup, dimGroup, statementSettings(source, timeoutSeconds))
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},

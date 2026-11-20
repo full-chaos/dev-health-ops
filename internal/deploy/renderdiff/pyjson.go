@@ -207,7 +207,7 @@ func (p *jsonParser) str(begin int) (any, int, error) {
 			}
 		}
 		if u >= 0xd800 && u <= 0xdfff {
-			return nil, 0, &crashError{msg: "a lone surrogate in a rows file string is not ported"}
+			return nil, 0, &crashError{msg: "NotPorted: a lone surrogate in a rows file string"}
 		}
 		b.WriteRune(u)
 	}

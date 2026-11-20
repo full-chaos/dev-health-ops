@@ -1,67 +1,67 @@
-filter-v3n-741-a.yaml	0	51c694d41ae229a274947f8c11d12051e127e7bd1a0ed4338825c0ebfc9cfb7d	filter < v3n-741-a.yaml
-names-v3n-741-a.yaml	0	dda9656957098a53970ce3d84afb1ae740877213a93d6b16a6e7aa4afdeef294	names < v3n-741-a.yaml
-filter-v3n-741-b.yaml	0	f12ba24eac20fbd0fd3a3510a63ae6030d19964bb9bad51e63fe759455bfba91	filter < v3n-741-b.yaml
-names-v3n-741-b.yaml	0	dda9656957098a53970ce3d84afb1ae740877213a93d6b16a6e7aa4afdeef294	names < v3n-741-b.yaml
-filter-v3w-s76-a.yaml	0	2adba62a9003324073bc669096af58882fb114574ece0364cc58be7ba1204128	filter < v3w-s76-a.yaml
-names-v3w-s76-a.yaml	0	426aec5d3af203aeccadd1d011f2ef9a4385c72a3bef8d94e204dedc0eec2d27	names < v3w-s76-a.yaml
-filter-v3w-s76-b.yaml	0	d7c378dbab83859ad5eb858294c350d2498fdd213ed2c1cefd1bfe40b8531c0c	filter < v3w-s76-b.yaml
-names-v3w-s76-b.yaml	0	426aec5d3af203aeccadd1d011f2ef9a4385c72a3bef8d94e204dedc0eec2d27	names < v3w-s76-b.yaml
-filter-v3z18-13954-main.yaml	0	e096d4e55e2beca74fe0e6abfff8f43aa4f91e739118942a4988cb7fb0dc2be1	filter < v3z18-13954-main.yaml
-names-v3z18-13954-main.yaml	0	60ff9e5f3b82065fe16897edbed8b2d07cb7165ac4ff8266fcd7464e63b983be	names < v3z18-13954-main.yaml
-filter-v3z18-13954-1110.yaml	0	3ba534260ee07bdb14ad4820f5e45c962fc9e70f55e16dbace71fb9c841b0af3	filter < v3z18-13954-1110.yaml
-names-v3z18-13954-1110.yaml	0	60ff9e5f3b82065fe16897edbed8b2d07cb7165ac4ff8266fcd7464e63b983be	names < v3z18-13954-1110.yaml
-filter-v3z19-13954-snip.yaml	0	5a81b2054b4f4fc811a814e15ffd925b9aa2b9369646cb1d9780cbc4c964e9f6	filter < v3z19-13954-snip.yaml
-names-v3z19-13954-snip.yaml	0	60ff9e5f3b82065fe16897edbed8b2d07cb7165ac4ff8266fcd7464e63b983be	names < v3z19-13954-snip.yaml
-filter-v3z19-13954-sniphash.yaml	0	427114e8c14a57aecc36f5022661211288d5570f3dc44d7e78c39b77901c34e2	filter < v3z19-13954-sniphash.yaml
-names-v3z19-13954-sniphash.yaml	0	60ff9e5f3b82065fe16897edbed8b2d07cb7165ac4ff8266fcd7464e63b983be	names < v3z19-13954-sniphash.yaml
-filter-v3x-np-b.yaml	0	d7fa5e28a13169b5810befb41d3632229d2a0980f577509c19884d17653a6c95	filter < v3x-np-b.yaml
-names-v3x-np-b.yaml	0	d763f4734e8bb7c43ec249b684d0f2899d3bf8a088ae0404a71d1c9e45c03712	names < v3x-np-b.yaml
-filter-hooks-auth-migrate.yaml	0	95fc7becabe0e66c1fe3dd4418907e947788e4e1740459f97c0e01101dd1d9db	filter < hooks-auth-migrate.yaml
-names-hooks-auth-migrate.yaml	0	755cb0238604dd62653e807e6b08fb0554d6e583050ea1b4f52c978f061c9a3c	names < hooks-auth-migrate.yaml
-filter-ingress-live.manifest	0	ad14ec41e37e8b970c92fd567a071bbf6275b6348f735d11721ece7ef794e564	filter < ingress-live.manifest
-names-ingress-live.manifest	0	60ff9e5f3b82065fe16897edbed8b2d07cb7165ac4ff8266fcd7464e63b983be	names < ingress-live.manifest
-filter-ingress-dry.manifest	0	7b09e43f50789392c908499355c6dec07dbeaf05ca82c04638900261c152bcad	filter < ingress-dry.manifest
-names-ingress-dry.manifest	0	60ff9e5f3b82065fe16897edbed8b2d07cb7165ac4ff8266fcd7464e63b983be	names < ingress-dry.manifest
-filter-syn-base-a.yaml	0	92e4e6e7ce32c313b95d08e4ff3c299fe75bc79982e4f428af35aba73c6817d2	filter < syn-base-a.yaml
-names-syn-base-a.yaml	0	a46a1d6ada012278e958415969f77f65ea857be0916948e9de3471f4e44e13ad	names < syn-base-a.yaml
-filter-syn-base-b.yaml	0	e3b1d40deae88d5a193df3e4df0d2ca9bfccf9d8d630796d28ebb459483a11f3	filter < syn-base-b.yaml
-names-syn-base-b.yaml	0	61014456fa2183018edf80f28cca7076044b9981ddd51fb15f9b03fec38098a5	names < syn-base-b.yaml
-filter-syn-dupkey-b.yaml	0	21e3a7acb4c222f2fcb27d789a2f7f7a185e5990c41870c62f180d89313f4072	filter < syn-dupkey-b.yaml
-names-syn-dupkey-b.yaml	0	33f41282f74221e7c47a573208a020f90eb61522c67b0c16a51b62a37bfe625b	names < syn-dupkey-b.yaml
-filter-syn-dupdoc.yaml	0	8b1ebbe900618fa994c31480678e9670489374f179a2ad14de57788baef7d610	filter < syn-dupdoc.yaml
-names-syn-dupdoc.yaml	0	9d7b2ee925b6839c6ff40d679c1d7c36dc12e753d728d586fcc3d20206b94539	names < syn-dupdoc.yaml
-filter-syn-badyaml.yaml	1	a64133bd35f7ad7431e1325ff3787aa061ce104508303ae31b5e10b488757a33	filter < syn-badyaml.yaml
-names-syn-badyaml.yaml	1	6c198e2271a85177b752602f6e0954407a939e45cbd955f534bdb9b26c2fd15d	names < syn-badyaml.yaml
-filter-syn-empty.yaml	0	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	filter < syn-empty.yaml
-names-syn-empty.yaml	0	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	names < syn-empty.yaml
-info-v3n	0	e8a6fd92dd0b93f4778bc1be06004f636a43567af7cbaa2d844046adf6bbb471	v3n-741-a.yaml v3n-741-b.yaml --rc-a 0 --rc-b 0 --info
-info-v3w	0	9a8d78bf62acb2390c9af9558a4fd00565a6e17e081140be9407c95f5d04d1a5	v3w-s76-a.yaml v3w-s76-b.yaml --rc-a 0 --rc-b 0 --info
-info-v3z18	0	6df2eda0d4cd339315d1e63315aae6d1e1f145c896ff7908d7eb52549478d5a8	v3z18-13954-main.yaml v3z18-13954-1110.yaml --rc-a 0 --rc-b 0 --info
-info-v3z19	0	3f2faf4f8f8100bb0df399166f84daecf8da7e6551c574000c4cc8d942a76e65	v3z19-13954-snip.yaml v3z19-13954-sniphash.yaml --rc-a 0 --rc-b 0 --info
-info-ingress-live	0	617dd7c2d20f60a7b89539cbc661dc24a8c601be3b3a048a61041d4fa80b7231	ingress-live.f.yaml ingress-dry.f.yaml --rc-a 0 --rc-b 0 --info --live
-info-syn-base	0	aa561ce3a77f03599cb8316a43e9367d0ea19b82151d0883a731a87f49f302c4	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --info
-info-syn-dupkey	1	ef6d85c3cab3f9eb2a22d7478b343a9ec7c7046c657248f68b60015051159bb5	syn-base-a.yaml syn-dupkey-b.yaml --rc-a 0 --rc-b 0 --info
-info-syn-dupdoc	2	2f0eb500b8fbf3b049ea15f8ade579acaaf652aeeb52a3915fb86efafabe41dd	syn-dupdoc.yaml syn-base-a.yaml --rc-a 0 --rc-b 0 --info
-info-syn-badyaml	1	60a5052ed05bc849986f4d758606f5b84716977de5eca1ca976746e5cb93656f	syn-base-a.yaml syn-badyaml.yaml --rc-a 0 --rc-b 0 --info
-info-syn-empty-b	1	d3a4b5bcb0903355ac657cad7006aade3dc45721282eb5ed65d5db15b52eaa87	syn-base-a.yaml syn-empty.yaml --rc-a 0 --rc-b 0 --info
-info-syn-mindocs	1	089ac2af4f9015d4112627242a0c6889ba3792b8f35d3cd3ccbf1f7751121f46	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --info --min-docs 5
-info-syn-rc-a-1	1	07dc688ee242a2aa716b5b0dce2527e340aa41ff17cc4ef750f31338f99fdef6	syn-base-a.yaml syn-base-b.yaml --rc-a 1 --rc-b 0 --info
-info-syn-same	0	5c29e7332ad194e69de8a8ce334f4f69fb5ad7b055692a9b6fd53bdc704dfe58	syn-base-a.yaml syn-base-a.yaml --rc-a 0 --rc-b 0 --info
-usage-no-mode	2	ecf1ae60d69eaf8307101d833cd709ebc7e3d2a05b4aaf05e4bf76748035a86d	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0
-usage-two-modes	2	ecf1ae60d69eaf8307101d833cd709ebc7e3d2a05b4aaf05e4bf76748035a86d	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --info --expect-added X/y
-usage-no-rc	2	b1e5a33dd98625cb03114948449a56fe69b3dbb6a5afcc907994f75808633560	syn-base-a.yaml syn-base-b.yaml --info
-added-same-pass	0	9cbb0ac78cf73d9eba1698f5af1e9ddf374e82bc523aacff51c56c5f55e66924	syn-base-a.yaml syn-base-a.yaml --rc-a 0 --rc-b 0 --expect-added 
-added-base-stop	1	f4d3de982f2f19315cd964990750a7a8a76ab1dfbf1bbbbf6743e08c076891e9	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-added NetworkPolicy/new-np
-rows-syn-exact	1	5ae6c02549b927cfe86029de83a6b45dcea4878a3d533c8c7fe901ff0e1a6390	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-syn-exact.json
-rows-syn-drop	1	bed44a2a735a0ecc22c458484050513a6764cca016eb8d3576bd1f63d0b95144	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-syn-drop.json
-rows-syn-extra	1	5b30d36889ddf8bae66edaae0c3d244774b250fe6f701ac2d10c98ee63de66a5	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-syn-extra.json
-rows-syn-noadd	1	f0fbe06f0ef08210af663e01226394de0942e648b0922caf72c9f8ef73c5e540	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-syn-noadd.json
-rows-syn-noreorder	1	0eae863b91451a65506124954d2cdfa1a61ece92f2eee699af5a9b04bd5cb524	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-syn-noreorder.json
-rows-syn-exact-live	1	71be18fcfff1b9a6755fb5e4c58f90a3fa654fc38be5952e854efec38d381701	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --live --min-docs 4 --expect-rows rows-syn-exact.json
-rows2-syn-exact	0	a2a3059bb1ba168132ade7214afc0c928a02d5722893f8d8b062c1aad400d4d6	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows2-syn-exact.json
-rows2-syn-drop	1	a2e7b1ff9bfa00285b27a5f47ddcba33f0051d7bb7ceffd6cae535656cd3e516	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows2-syn-drop.json
-rows2-syn-extra	1	5bf528979cfa0f862950160a03d30137b90275e3aee574ee61ed0ca16670d8ac	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows2-syn-extra.json
-rows2-syn-noadd	1	14e9c1fe7993855fbb31018bc12baaf0e9067ab80f38d4ee05403ba6741f2f77	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows2-syn-noadd.json
-rows2-syn-verb	1	f050ba52e8e73204b6b3aa618db042c2bee83a6036a012a0e3aa7e67ed6952e8	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows2-syn-verb.json
-rows2-syn-reorder-wrong	1	1bd0e1eb6327c0f2bae9c0ea8a7a2f50f7cfbd68560ad0a6a252186f6c430002	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows2-syn-reorder-wrong.json
-rows2-syn-exact-live	1	639ffb86e8fab0b13b107a45b4bad833cd493d366187baa87f238ab4bd54ffe2	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --live --min-docs 4 --expect-rows rows2-syn-exact.json
+filter-v3n-741-a.yaml	0	51c694d41ae229a274947f8c11d12051e127e7bd1a0ed4338825c0ebfc9cfb7d	filter < v3n-741-a.yaml	-
+names-v3n-741-a.yaml	0	dda9656957098a53970ce3d84afb1ae740877213a93d6b16a6e7aa4afdeef294	names < v3n-741-a.yaml	-
+filter-v3n-741-b.yaml	0	f12ba24eac20fbd0fd3a3510a63ae6030d19964bb9bad51e63fe759455bfba91	filter < v3n-741-b.yaml	-
+names-v3n-741-b.yaml	0	dda9656957098a53970ce3d84afb1ae740877213a93d6b16a6e7aa4afdeef294	names < v3n-741-b.yaml	-
+filter-v3w-s76-a.yaml	0	2adba62a9003324073bc669096af58882fb114574ece0364cc58be7ba1204128	filter < v3w-s76-a.yaml	-
+names-v3w-s76-a.yaml	0	426aec5d3af203aeccadd1d011f2ef9a4385c72a3bef8d94e204dedc0eec2d27	names < v3w-s76-a.yaml	-
+filter-v3w-s76-b.yaml	0	d7c378dbab83859ad5eb858294c350d2498fdd213ed2c1cefd1bfe40b8531c0c	filter < v3w-s76-b.yaml	-
+names-v3w-s76-b.yaml	0	426aec5d3af203aeccadd1d011f2ef9a4385c72a3bef8d94e204dedc0eec2d27	names < v3w-s76-b.yaml	-
+filter-v3z18-13954-main.yaml	0	e096d4e55e2beca74fe0e6abfff8f43aa4f91e739118942a4988cb7fb0dc2be1	filter < v3z18-13954-main.yaml	-
+names-v3z18-13954-main.yaml	0	60ff9e5f3b82065fe16897edbed8b2d07cb7165ac4ff8266fcd7464e63b983be	names < v3z18-13954-main.yaml	-
+filter-v3z18-13954-1110.yaml	0	3ba534260ee07bdb14ad4820f5e45c962fc9e70f55e16dbace71fb9c841b0af3	filter < v3z18-13954-1110.yaml	-
+names-v3z18-13954-1110.yaml	0	60ff9e5f3b82065fe16897edbed8b2d07cb7165ac4ff8266fcd7464e63b983be	names < v3z18-13954-1110.yaml	-
+filter-v3z19-13954-snip.yaml	0	5a81b2054b4f4fc811a814e15ffd925b9aa2b9369646cb1d9780cbc4c964e9f6	filter < v3z19-13954-snip.yaml	-
+names-v3z19-13954-snip.yaml	0	60ff9e5f3b82065fe16897edbed8b2d07cb7165ac4ff8266fcd7464e63b983be	names < v3z19-13954-snip.yaml	-
+filter-v3z19-13954-sniphash.yaml	0	427114e8c14a57aecc36f5022661211288d5570f3dc44d7e78c39b77901c34e2	filter < v3z19-13954-sniphash.yaml	-
+names-v3z19-13954-sniphash.yaml	0	60ff9e5f3b82065fe16897edbed8b2d07cb7165ac4ff8266fcd7464e63b983be	names < v3z19-13954-sniphash.yaml	-
+filter-v3x-np-b.yaml	0	d7fa5e28a13169b5810befb41d3632229d2a0980f577509c19884d17653a6c95	filter < v3x-np-b.yaml	-
+names-v3x-np-b.yaml	0	d763f4734e8bb7c43ec249b684d0f2899d3bf8a088ae0404a71d1c9e45c03712	names < v3x-np-b.yaml	-
+filter-hooks-auth-migrate.yaml	0	95fc7becabe0e66c1fe3dd4418907e947788e4e1740459f97c0e01101dd1d9db	filter < hooks-auth-migrate.yaml	-
+names-hooks-auth-migrate.yaml	0	755cb0238604dd62653e807e6b08fb0554d6e583050ea1b4f52c978f061c9a3c	names < hooks-auth-migrate.yaml	-
+filter-ingress-live.manifest	0	ad14ec41e37e8b970c92fd567a071bbf6275b6348f735d11721ece7ef794e564	filter < ingress-live.manifest	-
+names-ingress-live.manifest	0	60ff9e5f3b82065fe16897edbed8b2d07cb7165ac4ff8266fcd7464e63b983be	names < ingress-live.manifest	-
+filter-ingress-dry.manifest	0	7b09e43f50789392c908499355c6dec07dbeaf05ca82c04638900261c152bcad	filter < ingress-dry.manifest	-
+names-ingress-dry.manifest	0	60ff9e5f3b82065fe16897edbed8b2d07cb7165ac4ff8266fcd7464e63b983be	names < ingress-dry.manifest	-
+filter-syn-base-a.yaml	0	92e4e6e7ce32c313b95d08e4ff3c299fe75bc79982e4f428af35aba73c6817d2	filter < syn-base-a.yaml	-
+names-syn-base-a.yaml	0	a46a1d6ada012278e958415969f77f65ea857be0916948e9de3471f4e44e13ad	names < syn-base-a.yaml	-
+filter-syn-base-b.yaml	0	e3b1d40deae88d5a193df3e4df0d2ca9bfccf9d8d630796d28ebb459483a11f3	filter < syn-base-b.yaml	-
+names-syn-base-b.yaml	0	61014456fa2183018edf80f28cca7076044b9981ddd51fb15f9b03fec38098a5	names < syn-base-b.yaml	-
+filter-syn-dupkey-b.yaml	0	21e3a7acb4c222f2fcb27d789a2f7f7a185e5990c41870c62f180d89313f4072	filter < syn-dupkey-b.yaml	-
+names-syn-dupkey-b.yaml	0	33f41282f74221e7c47a573208a020f90eb61522c67b0c16a51b62a37bfe625b	names < syn-dupkey-b.yaml	-
+filter-syn-dupdoc.yaml	0	8b1ebbe900618fa994c31480678e9670489374f179a2ad14de57788baef7d610	filter < syn-dupdoc.yaml	-
+names-syn-dupdoc.yaml	0	9d7b2ee925b6839c6ff40d679c1d7c36dc12e753d728d586fcc3d20206b94539	names < syn-dupdoc.yaml	-
+filter-syn-badyaml.yaml	1	a64133bd35f7ad7431e1325ff3787aa061ce104508303ae31b5e10b488757a33	filter < syn-badyaml.yaml	YAMLError@docs_of
+names-syn-badyaml.yaml	1	6c198e2271a85177b752602f6e0954407a939e45cbd955f534bdb9b26c2fd15d	names < syn-badyaml.yaml	YAMLError@docs_of
+filter-syn-empty.yaml	0	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	filter < syn-empty.yaml	-
+names-syn-empty.yaml	0	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	names < syn-empty.yaml	-
+info-v3n	0	e8a6fd92dd0b93f4778bc1be06004f636a43567af7cbaa2d844046adf6bbb471	v3n-741-a.yaml v3n-741-b.yaml --rc-a 0 --rc-b 0 --info	-
+info-v3w	0	9a8d78bf62acb2390c9af9558a4fd00565a6e17e081140be9407c95f5d04d1a5	v3w-s76-a.yaml v3w-s76-b.yaml --rc-a 0 --rc-b 0 --info	-
+info-v3z18	0	6df2eda0d4cd339315d1e63315aae6d1e1f145c896ff7908d7eb52549478d5a8	v3z18-13954-main.yaml v3z18-13954-1110.yaml --rc-a 0 --rc-b 0 --info	-
+info-v3z19	0	3f2faf4f8f8100bb0df399166f84daecf8da7e6551c574000c4cc8d942a76e65	v3z19-13954-snip.yaml v3z19-13954-sniphash.yaml --rc-a 0 --rc-b 0 --info	-
+info-ingress-live	0	617dd7c2d20f60a7b89539cbc661dc24a8c601be3b3a048a61041d4fa80b7231	ingress-live.f.yaml ingress-dry.f.yaml --rc-a 0 --rc-b 0 --info --live	-
+info-syn-base	0	aa561ce3a77f03599cb8316a43e9367d0ea19b82151d0883a731a87f49f302c4	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --info	-
+info-syn-dupkey	1	ef6d85c3cab3f9eb2a22d7478b343a9ec7c7046c657248f68b60015051159bb5	syn-base-a.yaml syn-dupkey-b.yaml --rc-a 0 --rc-b 0 --info	-
+info-syn-dupdoc	2	2f0eb500b8fbf3b049ea15f8ade579acaaf652aeeb52a3915fb86efafabe41dd	syn-dupdoc.yaml syn-base-a.yaml --rc-a 0 --rc-b 0 --info	-
+info-syn-badyaml	1	60a5052ed05bc849986f4d758606f5b84716977de5eca1ca976746e5cb93656f	syn-base-a.yaml syn-badyaml.yaml --rc-a 0 --rc-b 0 --info	-
+info-syn-empty-b	1	d3a4b5bcb0903355ac657cad7006aade3dc45721282eb5ed65d5db15b52eaa87	syn-base-a.yaml syn-empty.yaml --rc-a 0 --rc-b 0 --info	-
+info-syn-mindocs	1	089ac2af4f9015d4112627242a0c6889ba3792b8f35d3cd3ccbf1f7751121f46	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --info --min-docs 5	-
+info-syn-rc-a-1	1	07dc688ee242a2aa716b5b0dce2527e340aa41ff17cc4ef750f31338f99fdef6	syn-base-a.yaml syn-base-b.yaml --rc-a 1 --rc-b 0 --info	-
+info-syn-same	0	5c29e7332ad194e69de8a8ce334f4f69fb5ad7b055692a9b6fd53bdc704dfe58	syn-base-a.yaml syn-base-a.yaml --rc-a 0 --rc-b 0 --info	-
+usage-no-mode	2	ecf1ae60d69eaf8307101d833cd709ebc7e3d2a05b4aaf05e4bf76748035a86d	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0	-
+usage-two-modes	2	ecf1ae60d69eaf8307101d833cd709ebc7e3d2a05b4aaf05e4bf76748035a86d	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --info --expect-added X/y	-
+usage-no-rc	2	b1e5a33dd98625cb03114948449a56fe69b3dbb6a5afcc907994f75808633560	syn-base-a.yaml syn-base-b.yaml --info	-
+added-same-pass	0	9cbb0ac78cf73d9eba1698f5af1e9ddf374e82bc523aacff51c56c5f55e66924	syn-base-a.yaml syn-base-a.yaml --rc-a 0 --rc-b 0 --expect-added 	-
+added-base-stop	1	f4d3de982f2f19315cd964990750a7a8a76ab1dfbf1bbbbf6743e08c076891e9	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-added NetworkPolicy/new-np	-
+rows-syn-exact	1	5ae6c02549b927cfe86029de83a6b45dcea4878a3d533c8c7fe901ff0e1a6390	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-syn-exact.json	-
+rows-syn-drop	1	bed44a2a735a0ecc22c458484050513a6764cca016eb8d3576bd1f63d0b95144	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-syn-drop.json	-
+rows-syn-extra	1	5b30d36889ddf8bae66edaae0c3d244774b250fe6f701ac2d10c98ee63de66a5	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-syn-extra.json	-
+rows-syn-noadd	1	f0fbe06f0ef08210af663e01226394de0942e648b0922caf72c9f8ef73c5e540	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-syn-noadd.json	-
+rows-syn-noreorder	1	0eae863b91451a65506124954d2cdfa1a61ece92f2eee699af5a9b04bd5cb524	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-syn-noreorder.json	-
+rows-syn-exact-live	1	71be18fcfff1b9a6755fb5e4c58f90a3fa654fc38be5952e854efec38d381701	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --live --min-docs 4 --expect-rows rows-syn-exact.json	-
+rows2-syn-exact	0	a2a3059bb1ba168132ade7214afc0c928a02d5722893f8d8b062c1aad400d4d6	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows2-syn-exact.json	-
+rows2-syn-drop	1	a2e7b1ff9bfa00285b27a5f47ddcba33f0051d7bb7ceffd6cae535656cd3e516	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows2-syn-drop.json	-
+rows2-syn-extra	1	5bf528979cfa0f862950160a03d30137b90275e3aee574ee61ed0ca16670d8ac	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows2-syn-extra.json	-
+rows2-syn-noadd	1	14e9c1fe7993855fbb31018bc12baaf0e9067ab80f38d4ee05403ba6741f2f77	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows2-syn-noadd.json	-
+rows2-syn-verb	1	f050ba52e8e73204b6b3aa618db042c2bee83a6036a012a0e3aa7e67ed6952e8	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows2-syn-verb.json	-
+rows2-syn-reorder-wrong	1	1bd0e1eb6327c0f2bae9c0ea8a7a2f50f7cfbd68560ad0a6a252186f6c430002	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows2-syn-reorder-wrong.json	-
+rows2-syn-exact-live	1	639ffb86e8fab0b13b107a45b4bad833cd493d366187baa87f238ab4bd54ffe2	syn-base-a.yaml syn-base-b.yaml --rc-a 0 --rc-b 0 --live --min-docs 4 --expect-rows rows2-syn-exact.json	-

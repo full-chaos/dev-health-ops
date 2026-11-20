@@ -56,7 +56,16 @@ func strsToAny(xs []string) []any {
 	return out
 }
 
+// sig is the kit's nested sig(): a TypeError raised here has "sig" as its innermost kit function.
 func sig(doc, path, verb, old, new any) pyTuple {
+	defer func() {
+		if p := recover(); p != nil {
+			if ce, ok := p.(*crashError); ok && ce.fn == "" {
+				ce.fn = "sig"
+			}
+			panic(p)
+		}
+	}()
 	t := func(v any) any {
 		if v == nil {
 			return nil
@@ -147,7 +156,7 @@ func (r *run) rowsGate(path, final string, added, removed []string, rows []row, 
 	defer func() {
 		if p := recover(); p != nil {
 			if ce, ok := p.(*crashError); ok {
-				r.crash(ce)
+				r.crash(ce, "rows_gate")
 			}
 			panic(p)
 		}
@@ -165,7 +174,7 @@ func (r *run) rowsGate(path, final string, added, removed []string, rows []row, 
 		if _, ok := err.(*pyJSONError); ok {
 			r.usage(fmt.Sprintf("cannot read the rows file %s: %s", path, err.Error()))
 		}
-		r.crash(err)
+		r.crash(err, "rows_gate")
 	}
 	wd, isDict := want.(*pyDict)
 	if !isDict {

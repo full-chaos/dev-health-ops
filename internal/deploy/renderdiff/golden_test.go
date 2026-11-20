@@ -12,23 +12,28 @@ import (
 )
 
 // goldensManifestSHA256 pins testdata/goldens-1/MANIFEST.tsv: the 67 cases the kit tool (sha256 ecf6771eb509...)
-// produced, one row per case: name, exit code, sha256 of the captured stdout+stderr, argv. The source capture's
+// produced, one row per case: name, exit code, sha256 of the captured stdout+stderr, argv, crash token (the last
+// column is added here; see TestTheCrashTokensAreTheKitsOwn). The source capture's
 // MANIFEST sha12 is bc7e47ef923a; this copy differs only in the sha of the two filter outputs whose secret-derived
 // hashes (four ClickHouse password_sha256_hex values, one checksum/secret annotation) are replaced by same-length
 // letter-only placeholders, in the inputs and the outputs alike.
-const goldensManifestSHA256 = "c317a11176c17f386966618f6e7ca04239853c7e656909a4c779366d520bc37b"
+const goldensManifestSHA256 = "c99c0e27f1cf584a10b38668a0a181bf27c2779bafbfe318a072ede41097246f"
 
 // goldens2ManifestSHA256 pins testdata/goldens-2/MANIFEST.tsv: 84 more kit cases on synthetic fixtures (the
 // redaction forms, the empty forms, keyed and index lists, Python scalar types and YAML 1.1 resolution, the dump
 // styles, the rows-file value checks, JSON errors, the names files and every usage refusal), captured with stdout
-// and stderr apart: name, exit code, sha256(stdout), sha256(stderr), argv.
-const goldens2ManifestSHA256 = "1616cf392f7034196bb2eeb17121475f389aeffc252b8576c69859f9193d484e"
+// and stderr apart: name, exit code, sha256(stdout), sha256(stderr), argv, crash token.
+const goldens2ManifestSHA256 = "4892fccbcc57f4b4e5101b5aa1575dffb06f5d5715c6e24fc47199838e6243c2"
 
 // goldens3ManifestSHA256 pins testdata/goldens-3/MANIFEST.tsv: 3 kit cases (same form as goldens-2) for what the
 // first mutant run showed goldens-1/-2 do not reach: a float at exponent 16, dict keys of mixed types in the dump
 // (insertion order kept), a value check that names "<none>" for a missing value, an args entry with :// and @
 // that the userinfo rule does not match.
-const goldens3ManifestSHA256 = "ff8c4c77e536d0bb7c9e3c39a654e54ac4b0d2819c58bc9a09ca8bed7d267938"
+const goldens3ManifestSHA256 = "b7710e41570e205851b895bac71e14e1f1446fefae6ba6fd2165c381333ce79b"
+
+// goldens4ManifestSHA256 pins testdata/goldens-4/MANIFEST.tsv: 1 kit case (same form as goldens-2), a TypeError in
+// the kit's nested sig() (a rows-file "old" that is an int), so the crash token names "sig".
+const goldens4ManifestSHA256 = "e68d0e273cf0998f4810fe43c761871bd3da2194b6533089a3c72e50da8a3e0d"
 
 const tracebackHead = "Traceback (most recent call last):\n"
 
@@ -36,9 +41,10 @@ type goldenCase struct {
 	name   string
 	rc     int
 	sha    string
-	errSHA string // goldens-2 only: the kit's stdout and stderr were captured apart
+	errSHA string // goldens-2/-3 only: the kit's stdout and stderr were captured apart
 	args   []string
 	stdin  string
+	crash  string // the crash-token column: "-", or the kit traceback's class token
 }
 
 func readManifest(t *testing.T, dir string) []goldenCase {
@@ -49,17 +55,18 @@ func readManifest(t *testing.T, dir string) []goldenCase {
 	}
 	var cases []goldenCase
 	for _, line := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {
+		// goldens-1: name rc sha(stdout+stderr) argv crash; goldens-2/-3: name rc sha(stdout) sha(stderr) argv crash.
 		f := strings.Split(line, "\t")
-		if len(f) != 4 && len(f) != 5 {
-			t.Fatalf("manifest row %q: want 4 or 5 fields", line)
+		if len(f) != 5 && len(f) != 6 {
+			t.Fatalf("manifest row %q: want 5 or 6 fields", line)
 		}
 		rc, err := strconv.Atoi(f[1])
 		if err != nil {
 			t.Fatal(err)
 		}
-		c := goldenCase{name: f[0], rc: rc, sha: f[2]}
-		argv := f[len(f)-1]
-		if len(f) == 5 {
+		c := goldenCase{name: f[0], rc: rc, sha: f[2], crash: f[len(f)-1]}
+		argv := f[len(f)-2]
+		if len(f) == 6 {
 			c.errSHA = f[3]
 		}
 		if mode, file, ok := strings.Cut(argv, " < "); ok {
@@ -115,22 +122,28 @@ func runGoldens(t *testing.T, dir string) (byteEqual, tracebacks int) {
 				t.Errorf("%s: stdout differs from the kit golden at byte %d\n got: %q\nwant: %q", c.name, firstDiff(stdout.Bytes(), want), clip(stdout.Bytes(), want), clip(want, stdout.Bytes()))
 				continue
 			}
-			switch {
-			case len(wantErr) == 0 && stderr.Len() == 0:
-				byteEqual++
-			case strings.HasPrefix(string(wantErr), tracebackHead) && stderr.Len() > 0:
-				tracebacks++
-			default:
-				t.Errorf("%s: stderr %q, the kit's stderr %q", c.name, stderr.String(), string(wantErr))
-			}
-			continue
-		}
-		if strings.HasPrefix(string(want), tracebackHead) {
-			if stdout.Len() != 0 || stderr.Len() == 0 {
-				t.Errorf("%s: a kit traceback case must give empty stdout and one stderr line; stdout %q stderr %q", c.name, stdout.String(), stderr.String())
+			if c.crash != "-" {
+				if checkCrash(t, c, stderr.String()) {
+					tracebacks++
+				}
 				continue
 			}
-			tracebacks++
+			if len(wantErr) != 0 || stderr.Len() != 0 {
+				t.Errorf("%s: stderr %q, the kit's stderr %q", c.name, stderr.String(), string(wantErr))
+				continue
+			}
+			byteEqual++
+			continue
+		}
+		if c.crash != "-" {
+			// The kit's stdout is empty here: the captured stream is the traceback alone (its stderr came first).
+			if stdout.Len() != 0 {
+				t.Errorf("%s: stdout %q, the kit's stdout is empty", c.name, stdout.String())
+				continue
+			}
+			if checkCrash(t, c, stderr.String()) {
+				tracebacks++
+			}
 			continue
 		}
 		if stderr.Len() != 0 {
@@ -144,6 +157,101 @@ func runGoldens(t *testing.T, dir string) (byteEqual, tracebacks int) {
 		byteEqual++
 	}
 	return byteEqual, tracebacks
+}
+
+// checkCrash is the kit-crash parity form (ACP-WORD-14332-1): rc = crashRC and the stderr is exactly one line
+// that carries the case's fixed class token (string equality).
+func checkCrash(t *testing.T, c goldenCase, stderr string) bool {
+	t.Helper()
+	if c.rc != crashRC {
+		t.Errorf("%s: a crash case with kit rc %d, crashRC is %d", c.name, c.rc, crashRC)
+		return false
+	}
+	if want := "full-render-diff: crash " + c.crash + "\n"; stderr != want {
+		t.Errorf("%s: stderr %q, want %q", c.name, stderr, want)
+		return false
+	}
+	return true
+}
+
+// kitCrashToken derives the class token from a kit traceback with plain string steps: the exception type of the
+// first unindented line after the header (every yaml.* type as its base class YAMLError) and the function of the
+// last frame in the kit file.
+func kitCrashToken(kitStream string) string {
+	if !strings.HasPrefix(kitStream, tracebackHead) {
+		return "-"
+	}
+	lines := strings.Split(kitStream, "\n")
+	fn, typ := "", ""
+	for _, l := range lines[1:] {
+		if strings.HasPrefix(l, "  File \"") && strings.Contains(l, "full-render-diff.py\", line ") {
+			_, fn, _ = strings.Cut(l, ", in ")
+		}
+		if typ == "" && l != "" && !strings.HasPrefix(l, " ") {
+			typ, _, _ = strings.Cut(l, ":")
+		}
+	}
+	if strings.HasPrefix(typ, "yaml.") {
+		typ = "YAMLError"
+	}
+	return typ + "@" + fn
+}
+
+// TestTheCrashTokensAreTheKitsOwn: the crash column of every manifest row is what the kit's own captured stream
+// gives (a "-" row has no traceback), so no token is chosen by hand.
+func TestTheCrashTokensAreTheKitsOwn(t *testing.T) {
+	crashes := 0
+	for _, dir := range []string{"testdata/goldens-1", "testdata/goldens-2", "testdata/goldens-3", "testdata/goldens-4"} {
+		for _, c := range readManifest(t, dir) {
+			stream := filepath.Join(dir, "out", c.name+".out")
+			if c.errSHA != "" {
+				stream = filepath.Join(dir, "out", c.name+".err")
+			}
+			raw, err := os.ReadFile(stream)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := kitCrashToken(string(raw)); got != c.crash {
+				t.Errorf("%s/%s: manifest crash token %q, the kit traceback gives %q", dir, c.name, c.crash, got)
+			}
+			if c.crash != "-" {
+				crashes++
+			}
+		}
+	}
+	if crashes != 15 {
+		t.Fatalf("%d crash rows, want 15 (2 in goldens-1, 12 in goldens-2, 1 in goldens-4)", crashes)
+	}
+}
+
+// TestACrashLineHoldsNoInputBytes: the crash line is the fixed token even when the failing value, key, anchor or
+// tag is a planted canary.
+func TestACrashLineHoldsNoInputBytes(t *testing.T) {
+	const canary = "CANARYq7x"
+	both := []string{"filter", "names"}
+	for _, tc := range []struct {
+		in    string
+		modes []string
+	}{
+		{"kind: ConfigMap\nmetadata: {name: x}\ndata: {a: !!bool " + canary + "}\n", both},
+		{"kind: ConfigMap\nmetadata: {name: x}\ndata: {a: !!int " + canary + "}\n", both},
+		{"kind: ConfigMap\nmetadata: {name: x}\ndata: {a: !" + canary + " 1}\n", both},
+		{"kind: ConfigMap\nmetadata: {name: x}\ndata: {a: *" + canary + "}\n", both},
+		{"kind: ConfigMap\nmetadata: {name: x, " + canary + ": [\n", both},
+		{"kind: ConfigMap\nmetadata: " + canary + "\n", []string{"names"}},
+	} {
+		in := tc.in
+		for _, mode := range tc.modes {
+			var stdout, stderr bytes.Buffer
+			rc := Main([]string{mode}, strings.NewReader(in), &stdout, &stderr)
+			if rc != crashRC || !strings.HasPrefix(stderr.String(), "full-render-diff: crash ") || strings.Count(stderr.String(), "\n") != 1 {
+				t.Errorf("%s %q: rc %d stderr %q, want rc %d and one crash line", mode, in, rc, stderr.String(), crashRC)
+			}
+			if strings.Contains(stdout.String()+stderr.String(), canary) {
+				t.Errorf("%s %q: the canary reached the output: %q", mode, in, stderr.String())
+			}
+		}
+	}
 }
 
 func firstDiff(a, b []byte) int {
@@ -166,6 +274,7 @@ func TestTheGoldensManifestsArePinned(t *testing.T) {
 		"testdata/goldens-1/MANIFEST.tsv": goldensManifestSHA256,
 		"testdata/goldens-2/MANIFEST.tsv": goldens2ManifestSHA256,
 		"testdata/goldens-3/MANIFEST.tsv": goldens3ManifestSHA256,
+		"testdata/goldens-4/MANIFEST.tsv": goldens4ManifestSHA256,
 	} {
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -178,9 +287,9 @@ func TestTheGoldensManifestsArePinned(t *testing.T) {
 	}
 }
 
-// TestEveryKitGoldenIsReproduced is the parity oracle: every one of the 67 kit cases gives the kit's exit code, and
-// its exact stdout bytes. The two cases where the kit dies in a Python traceback (filter and names on a render that
-// is not YAML) give rc 1, empty stdout and one stderr line.
+// TestEveryKitGoldenIsReproduced is the parity oracle: 65 of the 67 kit cases are byte-equal on rc, stdout and
+// stderr. The two cases where the kit dies in a Python traceback (filter and names on a render that is not YAML)
+// give crashRC, the kit's (empty) stdout and one stderr line with the case's crash token.
 func TestEveryKitGoldenIsReproduced(t *testing.T) {
 	byteEqual, tracebacks := runGoldens(t, "testdata/goldens-1")
 	t.Logf("byte-equal %d, traceback cases %d", byteEqual, tracebacks)
@@ -190,7 +299,7 @@ func TestEveryKitGoldenIsReproduced(t *testing.T) {
 }
 
 // TestTheEdgeGoldensAreReproduced: every goldens-2 case gives the kit's exit code and stdout bytes; the kit's stderr
-// is empty there too, except in the 12 cases where the kit dies in a traceback (the port prints one stderr line).
+// is empty there too, except in the 12 cases where the kit dies in a traceback (crashRC and the crash-token line).
 func TestTheEdgeGoldensAreReproduced(t *testing.T) {
 	byteEqual, tracebacks := runGoldens(t, "testdata/goldens-2")
 	t.Logf("byte-equal %d, traceback cases %d", byteEqual, tracebacks)
@@ -203,5 +312,12 @@ func TestTheMutantGapGoldensAreReproduced(t *testing.T) {
 	byteEqual, tracebacks := runGoldens(t, "testdata/goldens-3")
 	if byteEqual != 3 || tracebacks != 0 {
 		t.Fatalf("byte-equal %d (want 3), traceback cases %d (want 0)", byteEqual, tracebacks)
+	}
+}
+
+func TestTheSigCrashGoldenIsReproduced(t *testing.T) {
+	byteEqual, tracebacks := runGoldens(t, "testdata/goldens-4")
+	if byteEqual != 0 || tracebacks != 1 {
+		t.Fatalf("byte-equal %d (want 0), crash-token cases %d (want 1)", byteEqual, tracebacks)
 	}
 }

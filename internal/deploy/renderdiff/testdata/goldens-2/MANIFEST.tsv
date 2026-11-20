@@ -1,84 +1,84 @@
-filter-e2-scalars.yaml	0	6a82c1e29b976a6dc0398e352e88ab36abdd8ecca2d63272d4dab28d8f7f5c8d	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	filter < e2-scalars.yaml
-names-e2-scalars.yaml	0	c4ba50e63623d2e0673d5371937d1feef00ad712392e8b2ff0489b2197b27b66	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	names < e2-scalars.yaml
-filter-e2-keys.yaml	0	a4989d198b305f5f7c9e97cf010e6221518b937173f426ebe0cff4674d43f5da	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	filter < e2-keys.yaml
-names-e2-keys.yaml	0	3b1823c082d8a7a6d34260d8397962db32fe9b65fa398356884b6db246b56afe	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	names < e2-keys.yaml
-filter-e2-crlf.yaml	0	f444c64103bf56307729003ad30109afc592d1e1630a1b8f4c82cf1cbb85887d	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	filter < e2-crlf.yaml
-names-e2-crlf.yaml	0	5227ba2ab181ce12d960f413bf25bfcdc54da724b881938b5f980ac87219879d	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	names < e2-crlf.yaml
-filter-e2-badtag.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	7cc013c222c07ce8c7431e1ec5cda5340d2d1c9e629b972e76f9c64c8c80e803	filter < e2-badtag.yaml
-names-e2-badtag.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	61a6184c0105baeb0dccc635ca6d168ad28bdb06edcde02b1d9e1042a79bd816	names < e2-badtag.yaml
-filter-e2-eqvalue.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	35c90dfe76e61f7acc8a85708174f2c2811f3319c093cb8df2df3a73ce2b52cc	filter < e2-eqvalue.yaml
-names-e2-eqvalue.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	8ca59661fe35222ad0ced791e6b459988ce66a64d57e92ff36f217bdbba62e83	names < e2-eqvalue.yaml
-filter-e2-eqkey.yaml	0	6cd7149d5bf5139298917d3c8c09ac620dda114d34ad7dce3c3f508da118e8e1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	filter < e2-eqkey.yaml
-names-e2-eqkey.yaml	0	4c8f45260b9a3ecfe0028e26a3e21bdf63f9d0ecdbbe641c4522149f402addcb	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	names < e2-eqkey.yaml
-filter-e2-dupanchor.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	1afa7bca041dbba7a606b3ef5a9c54687a373fdea962da7ce3a7c882689eb06c	filter < e2-dupanchor.yaml
-names-e2-dupanchor.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	74f4090f268b5ec78dada7d0133f280820a835c75084eb3af300c2b540378b49	names < e2-dupanchor.yaml
-filter-e2-xdocalias.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	57d53081d2b751e2cccc7f1dfcc52cd9a2a1cf806c0177fe90d89cea434d8cb6	filter < e2-xdocalias.yaml
-names-e2-xdocalias.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	aeb47428b5d7e54a0b6cdfddf0512ba60a159360aec7a0d6e6418571017a2702	names < e2-xdocalias.yaml
-filter-e2-unhashable.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	cd44bac4241a7315cd70a9b2e6106fea916c2726f7da63ec3b720587b518f5ad	filter < e2-unhashable.yaml
-names-e2-unhashable.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	1c18d4c51fb855abd8657c6e0461feed0f16fcb67e2fab61cd94c7cf52aa9122	names < e2-unhashable.yaml
-filter-d-a.yaml	0	4f968accc4df95c34c8ab358d6837ef2a5662615c6541678d9d3f3f90d982e25	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	filter < d-a.yaml
-names-d-a.yaml	0	af21cbc25aea2b01d99d51a6baf3bcc994790cfe48eb3f5553bbd747c56e35bf	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	names < d-a.yaml
-filter-d-b.yaml	0	f7a2e816f25b3f308fe9531d6c9fb34c68ed644ffaf445490fe3d0f69573975b	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	filter < d-b.yaml
-names-d-b.yaml	0	fa1f8d60c1ade319af1e2668ca412e552562114e90d2aa15b45e82a09549baf3	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	names < d-b.yaml
-filter-d-dupport.yaml	0	4feeb39b6a687e5256d9f08233c8b8be865b88286957b5654eb5b4ae3cad9db8	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	filter < d-dupport.yaml
-names-d-dupport.yaml	0	302a2d8709664e85862c6eb9b218b729b5a291d9e1f21ce1bd77319cedcdc9da	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	names < d-dupport.yaml
-info-d	0	04f847f260e2274ccc0345d99fb265e0863d3c4e29fad62485520ec54b35b4e2	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info
-info-d-live	0	50c70bd49dd5dca925ec48622b7e9349575fa5ba9717d7f656ebfe06c8bf5d83	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --live
-info-d-rev	0	9c36523b497bbc209f30fb28c0e7f683038bab526ba044fe0c7feb3fccff9bfe	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-b.yaml d-a.yaml --rc-a 0 --rc-b 0 --info
-info-d-scalars	0	991ee7f0b7907ed6a51d3d383b7554a663430ab59fdaa30a9218f40c255885fc	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	e2-scalars.yaml e2-scalars.yaml --rc-a 0 --rc-b 0 --info
-info-d-keys	0	cf641fae9b381037c7554c244c2850558afa758e8c5d300db52ddfa5f7c5a119	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	e2-keys.yaml e2-keys.yaml --rc-a 0 --rc-b 0 --info
-info-dupport	1	ce1c201f237b702d01ed21490db1bfae9fc4c38e65bc2ce5201eae6b7a216c91	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-dupport.yaml --rc-a 0 --rc-b 0 --info
-rows-dupport	1	3123d4a2ddebc73db333836bca6c53d076a2f791ab61c88f7606aa3708fb1224	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-dupport.yaml d-a.yaml --rc-a 0 --rc-b 0 --expect-rows rows-d-exact.json
-info-badtag	1	855f030da38678ed378e7541962d9648ad8edb50d22392a19dabab486d57b5f0	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml e2-badtag.yaml --rc-a 0 --rc-b 0 --info
-info-eqvalue	1	428f0c66a55aec95ea2d04d8fe781b2e4dab689dedb6df3d1e4ff42c6c46f909	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	e2-eqvalue.yaml e2-eqkey.yaml --rc-a 0 --rc-b 0 --info
-info-dupanchor	1	14d50ca8a87cfc777492ef13fa2141fddfbe3758cfdf22650fcabcd72fe6e9ea	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	e2-dupanchor.yaml e2-xdocalias.yaml --rc-a 0 --rc-b 0 --info
-info-unhashable	1	16f25124a61603cfd53b7c5ddd3a6eb8ecb3508d125c7ee01b403af2e71b1505	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	e2-unhashable.yaml d-a.yaml --rc-a 0 --rc-b 0 --info
-info-crlf	0	ea2c72049a3b4b57d0f56428b3f9805efeec8a2ecfdf129c5a7fd1525b5f4b7e	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	e2-crlf.yaml e2-crlf.yaml --rc-a 0 --rc-b 0 --info
-live-secret-only	1	a07d9af5da6c8ac8f686304b342d9feae52becf700d4561d44b38e9a70e02e22	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-same-secret.yaml d-same-secret.yaml --rc-a 0 --rc-b 0 --info --live
-live-mindocs	1	089ac2af4f9015d4112627242a0c6889ba3792b8f35d3cd3ccbf1f7751121f46	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --live --min-docs 5
-rc-both	1	af782876de18a32a25f5895541557f36a0f40d24355a7aed3c08ca3f26532a6d	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 3 --rc-b -1 --info --min-docs 0
-rc-big	1	3b159f4c67ee44af984cdbdaa83e58ef371670ef0d6fe7a6732681eb2827cb92	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 123456789012345678901234567890 --rc-b 0 --info
-mindocs-zero	0	04f847f260e2274ccc0345d99fb265e0863d3c4e29fad62485520ec54b35b4e2	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --min-docs 00
-rows-exact	1	e9dac8df9a5f3c1eeadbaa4912b05cb60786329327bdab4fd9ad1b1ae260f529	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-d-exact.json
-rows-valfail	1	6f0d227c226a23d709baf8e0905351d25849f63b8871d0657d8186a2649013db	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-d-valfail.json
-rows-oldstr	1	fc93d34b5cafad45dec639b63097d90346cfc792d38fa462f8e2d4337a8c7430	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-d-oldstr.json
-rows-docs	1	a6965d958fc055c874ca7ecd7b5950d3f0f61c07c11ad990039135be56f0c2e1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-d-docs.json
-rows-docs2	1	92184629c93da749d9f15b386141057fee8abe940f6ecbdda7247e480d009531	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-d-docs2.json
-rows-names-ok	1	9a94cb752d12ab4f839c3a98fc11a7e8aa824c97156de9e7e785c4d2c8bea524	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-d-exact.json --names n-a.names n-b.names --expect-names-added Secret/new-secret
-rows-names-bad	1	28e91a68a308a3bbd1a37bd281b8ec70c3e7e2e0f924cea52541d5c600000db7	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-d-exact.json --names n-b.names n-a.names --expect-names-added Secret/new-secret
-rows-bad1	2	f1d7916a1f2e01a55971a7ae08feb60ce4ee60701c0b29e972b09f2d5f137056	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-bad1.json
-rows-bad2	2	e9a956e0d137e7319853edebd842c0578bc3a3d1323098481932357434a2f1dc	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-bad2.json
-rows-bad3	2	7e51e78f9359cd9881556c709af79469db657b6f1814e72e0ae6373385c5939c	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-bad3.json
-rows-bad4	1	a96bde3f5d49f6a9877872179e0edef4ef70d419ab17930b24d495e1436a18f7	534c2c116d27111f87ceb7cd623d1138f1b41fe083715ad50ceeeae3491d8159	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-bad4.json
-rows-bad5	1	101974cf82355106fcac41b42f469c99e74971922c47939b25cc13a8ba23f75d	c54d7e1782c2de7d203e4cf5307299c60a82f517c3e5d108671fa011f1af693a	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-bad5.json
-rows-bad6	2	86ee873bb3086b04c9d8d4054b2ec39307171a9aab50c34412cf9916a479eea8	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-bad6.json
-rows-nan	1	c6846414221ddee29ed47f76449520180ad21d56bc227930bee2f783322cde3d	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-nan.json
-rows-dup	1	5caa8743e8f5ca5115eebe3e4194affea2e4e98a6fd2683913638a41c274176e	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-dup.json
-rows-missing	2	55115aaec03b62f930a484124d5f5a3b7c01265510a7a42a42f6c12d6be4e6c9	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows no-such-rows.json
-rows-dir	2	e3a4cccc69495577f6900b0c28a7e7d1f703deb9fb785921910320f64d910a55	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows .
-rows-path	2	328458e6e1e26df5e72311380c3fca8f4f117925a8072e3662037997ee9a9e98	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows ./sub/
-names-info	0	136c9a31c4284847bc8d8b107e9d8be22f69c2c2537ed395a3c86ad2b405ff4e	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --names n-a.names n-b.names
-names-empty	1	b4938e09bb632facdcd9c86e98d28271e700cbfc069f652d7cd27c0785b89d14	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --names n-empty.names n-b.names
-names-added-pass	1	a4de21c879deda6e2f04340de25de4bd0c921d0b071dccfd1de014f9dc1e6277	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-a.yaml --rc-a 0 --rc-b 0 --expect-added  --names n-a.names n-b.names --expect-names-added Secret/new-secret
-names-added-fail	1	a4de21c879deda6e2f04340de25de4bd0c921d0b071dccfd1de014f9dc1e6277	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-a.yaml --rc-a 0 --rc-b 0 --expect-added  --names n-a.names n-b.names --expect-names-added Secret/other,Secret/new-secret
-names-info-expect	1	9f208631ab8cda8177f609ca34ddb9cd86e77e122243fa7806c89042544d6389	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-a.yaml --rc-a 0 --rc-b 0 --info --names n-a.names n-b.names --expect-names-added X/y
-names-missing	2	382cded0833e4ba99c84dac02a360ebf9b5a84ab46173480c5bf9531c9e32d68	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --names n-a.names nope.names
-added-ok	1	705a4ec4daaa71e73f1be7168e57be6e9f412bce254cd93f9128bd8a00c681dc	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-added ,Secret/new-secret,
-missing-a	2	4fff21aa38a37bc774a0e9ae6f59f6ae0ae3e4a2a2e25116ba3114891cb10c7e	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	nope.yaml d-b.yaml --rc-a 0 --rc-b 0 --info
-missing-b	2	4fff21aa38a37bc774a0e9ae6f59f6ae0ae3e4a2a2e25116ba3114891cb10c7e	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml nope.yaml --rc-a 0 --rc-b 0 --info
-dir-a	2	4dd46c1b89329bfe294d1647c7ca69244ce915ade2cc331ea5e8a8b9e073a430	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	. d-b.yaml --rc-a 0 --rc-b 0 --info
-usage-unknown	2	3943d65e3ed4f77d50e9c73fe12642239c5901ba604be0112796bc66012e21dd	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --bogus
-usage-expect	2	a49b9f3549582716dd3ac38ed662071a53f9d923b9e73dd8de760a48e9c99c25	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect pin
-usage-rc-text	2	eba1510feba54ad87ee7cee36767311b4dbb9a5581d3f08b4051f23a90851e97	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a x --rc-b 0 --info
-usage-rc-plus	2	eba1510feba54ad87ee7cee36767311b4dbb9a5581d3f08b4051f23a90851e97	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a +1 --rc-b 0 --info
-usage-mindocs	2	b68a0b80923565f7fdccffe0b370b1e1dcac14d47af958c0b4f688166b516ee1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --min-docs -1
-usage-novalue	2	82bf93ed315fdef795258ab5166364afee9310a5bad4020c8927bd3aca2f0d00	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b
-usage-names-short	2	7491ee6f0e6ed43bd6e4e95117d0f7b913f6e12b56e28b3a88d938ded5dd55ef	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --names n-a.names
-usage-names-noexpect	2	d6b5f7e24b52b86855bee49b3a39e6264475bea972c8e00684c89b698aedb497	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-added  --names n-a.names n-b.names
-usage-expectnames-nonames	2	77968e32ac6cf89b5dce6d75cc056b0506d3b2cde73bf55a039626bb995a07b1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --expect-names-added X/y
-usage-three	2	e2d0007fce389968c28165f3079bde46bac9767b54eb12b2e52fdc59a2cbe902	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml d-a.yaml --rc-a 0 --rc-b 0 --info
-usage-dash	2	2ba7604d37d227a1ab6e7411b073770501100d4673665199d797c45e541d4d12	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml -x --rc-a 0 --rc-b 0 --info
-help-h	0	396316a3eba7a1670f57e88c4674486c3ae5921e78634a93de2d80ae963f7a93	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml --help
-help-late	0	396316a3eba7a1670f57e88c4674486c3ae5921e78634a93de2d80ae963f7a93	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info -h
-usage-empty	2	e2d0007fce389968c28165f3079bde46bac9767b54eb12b2e52fdc59a2cbe902	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	
-usage-filter-extra	2	b1e5a33dd98625cb03114948449a56fe69b3dbb6a5afcc907994f75808633560	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	filter x
+filter-e2-scalars.yaml	0	6a82c1e29b976a6dc0398e352e88ab36abdd8ecca2d63272d4dab28d8f7f5c8d	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	filter < e2-scalars.yaml	-
+names-e2-scalars.yaml	0	c4ba50e63623d2e0673d5371937d1feef00ad712392e8b2ff0489b2197b27b66	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	names < e2-scalars.yaml	-
+filter-e2-keys.yaml	0	a4989d198b305f5f7c9e97cf010e6221518b937173f426ebe0cff4674d43f5da	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	filter < e2-keys.yaml	-
+names-e2-keys.yaml	0	3b1823c082d8a7a6d34260d8397962db32fe9b65fa398356884b6db246b56afe	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	names < e2-keys.yaml	-
+filter-e2-crlf.yaml	0	f444c64103bf56307729003ad30109afc592d1e1630a1b8f4c82cf1cbb85887d	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	filter < e2-crlf.yaml	-
+names-e2-crlf.yaml	0	5227ba2ab181ce12d960f413bf25bfcdc54da724b881938b5f980ac87219879d	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	names < e2-crlf.yaml	-
+filter-e2-badtag.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	7cc013c222c07ce8c7431e1ec5cda5340d2d1c9e629b972e76f9c64c8c80e803	filter < e2-badtag.yaml	YAMLError@docs_of
+names-e2-badtag.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	61a6184c0105baeb0dccc635ca6d168ad28bdb06edcde02b1d9e1042a79bd816	names < e2-badtag.yaml	YAMLError@docs_of
+filter-e2-eqvalue.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	35c90dfe76e61f7acc8a85708174f2c2811f3319c093cb8df2df3a73ce2b52cc	filter < e2-eqvalue.yaml	YAMLError@docs_of
+names-e2-eqvalue.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	8ca59661fe35222ad0ced791e6b459988ce66a64d57e92ff36f217bdbba62e83	names < e2-eqvalue.yaml	YAMLError@docs_of
+filter-e2-eqkey.yaml	0	6cd7149d5bf5139298917d3c8c09ac620dda114d34ad7dce3c3f508da118e8e1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	filter < e2-eqkey.yaml	-
+names-e2-eqkey.yaml	0	4c8f45260b9a3ecfe0028e26a3e21bdf63f9d0ecdbbe641c4522149f402addcb	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	names < e2-eqkey.yaml	-
+filter-e2-dupanchor.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	1afa7bca041dbba7a606b3ef5a9c54687a373fdea962da7ce3a7c882689eb06c	filter < e2-dupanchor.yaml	YAMLError@docs_of
+names-e2-dupanchor.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	74f4090f268b5ec78dada7d0133f280820a835c75084eb3af300c2b540378b49	names < e2-dupanchor.yaml	YAMLError@docs_of
+filter-e2-xdocalias.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	57d53081d2b751e2cccc7f1dfcc52cd9a2a1cf806c0177fe90d89cea434d8cb6	filter < e2-xdocalias.yaml	YAMLError@docs_of
+names-e2-xdocalias.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	aeb47428b5d7e54a0b6cdfddf0512ba60a159360aec7a0d6e6418571017a2702	names < e2-xdocalias.yaml	YAMLError@docs_of
+filter-e2-unhashable.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	cd44bac4241a7315cd70a9b2e6106fea916c2726f7da63ec3b720587b518f5ad	filter < e2-unhashable.yaml	YAMLError@docs_of
+names-e2-unhashable.yaml	1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	1c18d4c51fb855abd8657c6e0461feed0f16fcb67e2fab61cd94c7cf52aa9122	names < e2-unhashable.yaml	YAMLError@docs_of
+filter-d-a.yaml	0	4f968accc4df95c34c8ab358d6837ef2a5662615c6541678d9d3f3f90d982e25	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	filter < d-a.yaml	-
+names-d-a.yaml	0	af21cbc25aea2b01d99d51a6baf3bcc994790cfe48eb3f5553bbd747c56e35bf	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	names < d-a.yaml	-
+filter-d-b.yaml	0	f7a2e816f25b3f308fe9531d6c9fb34c68ed644ffaf445490fe3d0f69573975b	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	filter < d-b.yaml	-
+names-d-b.yaml	0	fa1f8d60c1ade319af1e2668ca412e552562114e90d2aa15b45e82a09549baf3	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	names < d-b.yaml	-
+filter-d-dupport.yaml	0	4feeb39b6a687e5256d9f08233c8b8be865b88286957b5654eb5b4ae3cad9db8	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	filter < d-dupport.yaml	-
+names-d-dupport.yaml	0	302a2d8709664e85862c6eb9b218b729b5a291d9e1f21ce1bd77319cedcdc9da	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	names < d-dupport.yaml	-
+info-d	0	04f847f260e2274ccc0345d99fb265e0863d3c4e29fad62485520ec54b35b4e2	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info	-
+info-d-live	0	50c70bd49dd5dca925ec48622b7e9349575fa5ba9717d7f656ebfe06c8bf5d83	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --live	-
+info-d-rev	0	9c36523b497bbc209f30fb28c0e7f683038bab526ba044fe0c7feb3fccff9bfe	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-b.yaml d-a.yaml --rc-a 0 --rc-b 0 --info	-
+info-d-scalars	0	991ee7f0b7907ed6a51d3d383b7554a663430ab59fdaa30a9218f40c255885fc	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	e2-scalars.yaml e2-scalars.yaml --rc-a 0 --rc-b 0 --info	-
+info-d-keys	0	cf641fae9b381037c7554c244c2850558afa758e8c5d300db52ddfa5f7c5a119	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	e2-keys.yaml e2-keys.yaml --rc-a 0 --rc-b 0 --info	-
+info-dupport	1	ce1c201f237b702d01ed21490db1bfae9fc4c38e65bc2ce5201eae6b7a216c91	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-dupport.yaml --rc-a 0 --rc-b 0 --info	-
+rows-dupport	1	3123d4a2ddebc73db333836bca6c53d076a2f791ab61c88f7606aa3708fb1224	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-dupport.yaml d-a.yaml --rc-a 0 --rc-b 0 --expect-rows rows-d-exact.json	-
+info-badtag	1	855f030da38678ed378e7541962d9648ad8edb50d22392a19dabab486d57b5f0	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml e2-badtag.yaml --rc-a 0 --rc-b 0 --info	-
+info-eqvalue	1	428f0c66a55aec95ea2d04d8fe781b2e4dab689dedb6df3d1e4ff42c6c46f909	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	e2-eqvalue.yaml e2-eqkey.yaml --rc-a 0 --rc-b 0 --info	-
+info-dupanchor	1	14d50ca8a87cfc777492ef13fa2141fddfbe3758cfdf22650fcabcd72fe6e9ea	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	e2-dupanchor.yaml e2-xdocalias.yaml --rc-a 0 --rc-b 0 --info	-
+info-unhashable	1	16f25124a61603cfd53b7c5ddd3a6eb8ecb3508d125c7ee01b403af2e71b1505	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	e2-unhashable.yaml d-a.yaml --rc-a 0 --rc-b 0 --info	-
+info-crlf	0	ea2c72049a3b4b57d0f56428b3f9805efeec8a2ecfdf129c5a7fd1525b5f4b7e	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	e2-crlf.yaml e2-crlf.yaml --rc-a 0 --rc-b 0 --info	-
+live-secret-only	1	a07d9af5da6c8ac8f686304b342d9feae52becf700d4561d44b38e9a70e02e22	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-same-secret.yaml d-same-secret.yaml --rc-a 0 --rc-b 0 --info --live	-
+live-mindocs	1	089ac2af4f9015d4112627242a0c6889ba3792b8f35d3cd3ccbf1f7751121f46	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --live --min-docs 5	-
+rc-both	1	af782876de18a32a25f5895541557f36a0f40d24355a7aed3c08ca3f26532a6d	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 3 --rc-b -1 --info --min-docs 0	-
+rc-big	1	3b159f4c67ee44af984cdbdaa83e58ef371670ef0d6fe7a6732681eb2827cb92	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 123456789012345678901234567890 --rc-b 0 --info	-
+mindocs-zero	0	04f847f260e2274ccc0345d99fb265e0863d3c4e29fad62485520ec54b35b4e2	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --min-docs 00	-
+rows-exact	1	e9dac8df9a5f3c1eeadbaa4912b05cb60786329327bdab4fd9ad1b1ae260f529	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-d-exact.json	-
+rows-valfail	1	6f0d227c226a23d709baf8e0905351d25849f63b8871d0657d8186a2649013db	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-d-valfail.json	-
+rows-oldstr	1	fc93d34b5cafad45dec639b63097d90346cfc792d38fa462f8e2d4337a8c7430	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-d-oldstr.json	-
+rows-docs	1	a6965d958fc055c874ca7ecd7b5950d3f0f61c07c11ad990039135be56f0c2e1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-d-docs.json	-
+rows-docs2	1	92184629c93da749d9f15b386141057fee8abe940f6ecbdda7247e480d009531	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-d-docs2.json	-
+rows-names-ok	1	9a94cb752d12ab4f839c3a98fc11a7e8aa824c97156de9e7e785c4d2c8bea524	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-d-exact.json --names n-a.names n-b.names --expect-names-added Secret/new-secret	-
+rows-names-bad	1	28e91a68a308a3bbd1a37bd281b8ec70c3e7e2e0f924cea52541d5c600000db7	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-d-exact.json --names n-b.names n-a.names --expect-names-added Secret/new-secret	-
+rows-bad1	2	f1d7916a1f2e01a55971a7ae08feb60ce4ee60701c0b29e972b09f2d5f137056	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-bad1.json	-
+rows-bad2	2	e9a956e0d137e7319853edebd842c0578bc3a3d1323098481932357434a2f1dc	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-bad2.json	-
+rows-bad3	2	7e51e78f9359cd9881556c709af79469db657b6f1814e72e0ae6373385c5939c	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-bad3.json	-
+rows-bad4	1	a96bde3f5d49f6a9877872179e0edef4ef70d419ab17930b24d495e1436a18f7	534c2c116d27111f87ceb7cd623d1138f1b41fe083715ad50ceeeae3491d8159	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-bad4.json	AttributeError@rows_gate
+rows-bad5	1	101974cf82355106fcac41b42f469c99e74971922c47939b25cc13a8ba23f75d	c54d7e1782c2de7d203e4cf5307299c60a82f517c3e5d108671fa011f1af693a	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-bad5.json	KeyError@rows_gate
+rows-bad6	2	86ee873bb3086b04c9d8d4054b2ec39307171a9aab50c34412cf9916a479eea8	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-bad6.json	-
+rows-nan	1	c6846414221ddee29ed47f76449520180ad21d56bc227930bee2f783322cde3d	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-nan.json	-
+rows-dup	1	5caa8743e8f5ca5115eebe3e4194affea2e4e98a6fd2683913638a41c274176e	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-dup.json	-
+rows-missing	2	55115aaec03b62f930a484124d5f5a3b7c01265510a7a42a42f6c12d6be4e6c9	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows no-such-rows.json	-
+rows-dir	2	e3a4cccc69495577f6900b0c28a7e7d1f703deb9fb785921910320f64d910a55	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows .	-
+rows-path	2	328458e6e1e26df5e72311380c3fca8f4f117925a8072e3662037997ee9a9e98	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows ./sub/	-
+names-info	0	136c9a31c4284847bc8d8b107e9d8be22f69c2c2537ed395a3c86ad2b405ff4e	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --names n-a.names n-b.names	-
+names-empty	1	b4938e09bb632facdcd9c86e98d28271e700cbfc069f652d7cd27c0785b89d14	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --names n-empty.names n-b.names	-
+names-added-pass	1	a4de21c879deda6e2f04340de25de4bd0c921d0b071dccfd1de014f9dc1e6277	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-a.yaml --rc-a 0 --rc-b 0 --expect-added  --names n-a.names n-b.names --expect-names-added Secret/new-secret	-
+names-added-fail	1	a4de21c879deda6e2f04340de25de4bd0c921d0b071dccfd1de014f9dc1e6277	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-a.yaml --rc-a 0 --rc-b 0 --expect-added  --names n-a.names n-b.names --expect-names-added Secret/other,Secret/new-secret	-
+names-info-expect	1	9f208631ab8cda8177f609ca34ddb9cd86e77e122243fa7806c89042544d6389	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-a.yaml --rc-a 0 --rc-b 0 --info --names n-a.names n-b.names --expect-names-added X/y	-
+names-missing	2	382cded0833e4ba99c84dac02a360ebf9b5a84ab46173480c5bf9531c9e32d68	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --names n-a.names nope.names	-
+added-ok	1	705a4ec4daaa71e73f1be7168e57be6e9f412bce254cd93f9128bd8a00c681dc	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-added ,Secret/new-secret,	-
+missing-a	2	4fff21aa38a37bc774a0e9ae6f59f6ae0ae3e4a2a2e25116ba3114891cb10c7e	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	nope.yaml d-b.yaml --rc-a 0 --rc-b 0 --info	-
+missing-b	2	4fff21aa38a37bc774a0e9ae6f59f6ae0ae3e4a2a2e25116ba3114891cb10c7e	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml nope.yaml --rc-a 0 --rc-b 0 --info	-
+dir-a	2	4dd46c1b89329bfe294d1647c7ca69244ce915ade2cc331ea5e8a8b9e073a430	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	. d-b.yaml --rc-a 0 --rc-b 0 --info	-
+usage-unknown	2	3943d65e3ed4f77d50e9c73fe12642239c5901ba604be0112796bc66012e21dd	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --bogus	-
+usage-expect	2	a49b9f3549582716dd3ac38ed662071a53f9d923b9e73dd8de760a48e9c99c25	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect pin	-
+usage-rc-text	2	eba1510feba54ad87ee7cee36767311b4dbb9a5581d3f08b4051f23a90851e97	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a x --rc-b 0 --info	-
+usage-rc-plus	2	eba1510feba54ad87ee7cee36767311b4dbb9a5581d3f08b4051f23a90851e97	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a +1 --rc-b 0 --info	-
+usage-mindocs	2	b68a0b80923565f7fdccffe0b370b1e1dcac14d47af958c0b4f688166b516ee1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --min-docs -1	-
+usage-novalue	2	82bf93ed315fdef795258ab5166364afee9310a5bad4020c8927bd3aca2f0d00	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b	-
+usage-names-short	2	7491ee6f0e6ed43bd6e4e95117d0f7b913f6e12b56e28b3a88d938ded5dd55ef	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --names n-a.names	-
+usage-names-noexpect	2	d6b5f7e24b52b86855bee49b3a39e6264475bea972c8e00684c89b698aedb497	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-added  --names n-a.names n-b.names	-
+usage-expectnames-nonames	2	77968e32ac6cf89b5dce6d75cc056b0506d3b2cde73bf55a039626bb995a07b1	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info --expect-names-added X/y	-
+usage-three	2	e2d0007fce389968c28165f3079bde46bac9767b54eb12b2e52fdc59a2cbe902	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml d-a.yaml --rc-a 0 --rc-b 0 --info	-
+usage-dash	2	2ba7604d37d227a1ab6e7411b073770501100d4673665199d797c45e541d4d12	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml -x --rc-a 0 --rc-b 0 --info	-
+help-h	0	396316a3eba7a1670f57e88c4674486c3ae5921e78634a93de2d80ae963f7a93	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml --help	-
+help-late	0	396316a3eba7a1670f57e88c4674486c3ae5921e78634a93de2d80ae963f7a93	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --info -h	-
+usage-empty	2	e2d0007fce389968c28165f3079bde46bac9767b54eb12b2e52fdc59a2cbe902	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855		-
+usage-filter-extra	2	b1e5a33dd98625cb03114948449a56fe69b3dbb6a5afcc907994f75808633560	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	filter x	-

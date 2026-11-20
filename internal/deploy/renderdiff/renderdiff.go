@@ -38,9 +38,32 @@ func (r *run) usage(msg string) {
 	panic(exitCode(2))
 }
 
-func (r *run) crash(err error) {
-	fmt.Fprintf(r.stderr, "full-render-diff: %s\n", err.Error())
-	panic(exitCode(1))
+// crashRC is the exit code of a kit crash (the kit's uncaught Python exception exits 1).
+const crashRC = 1
+
+// crashToken is the failure class of a kit crash: the Python exception type (every PyYAML error as its base
+// class, YAMLError) and the innermost kit function, "<type>@<function>". It is built from fixed text only, so the
+// stderr line never holds input bytes.
+func crashToken(err error, fn string) string {
+	class := "OSError"
+	var ye *yamlError
+	var ce *crashError
+	switch {
+	case errors.As(err, &ye):
+		class = "YAMLError"
+	case errors.As(err, &ce):
+		class, _, _ = strings.Cut(ce.msg, ":")
+		if ce.fn != "" {
+			fn = ce.fn
+		}
+	}
+	return class + "@" + fn
+}
+
+// crash ends the run as the kit's traceback does: rc 1, the stdout printed so far, and one stderr line.
+func (r *run) crash(err error, fn string) {
+	fmt.Fprintf(r.stderr, "full-render-diff: crash %s\n", crashToken(err, fn))
+	panic(exitCode(crashRC))
 }
 
 // Main runs the kit tool on argv (without the program name) and returns its exit code.
@@ -96,15 +119,16 @@ func readFile(path string) ([]byte, error) {
 func (r *run) readStdinDocs() []*pyDict {
 	raw, err := io.ReadAll(r.stdin)
 	if err != nil {
-		r.crash(err)
+		r.crash(err, "docs_of")
 	}
 	text, err := pythonText(raw)
 	if err != nil {
-		r.crash(err)
+		// sys.stdin decodes with surrogateescape; PyYAML's reader then refuses the escaped byte.
+		r.crash(&yamlError{msg: "unacceptable character"}, "docs_of")
 	}
 	all, err := loadAll(text)
 	if err != nil {
-		r.crash(err)
+		r.crash(err, "docs_of")
 	}
 	return docsOf(all)
 }
@@ -120,7 +144,7 @@ func (r *run) main(argv []string) int {
 		}
 		out, err := safeDumpAll(kept)
 		if err != nil {
-			r.crash(err)
+			r.crash(err, "main")
 		}
 		_, _ = io.WriteString(r.stdout, out)
 		return 0
@@ -130,7 +154,7 @@ func (r *run) main(argv []string) int {
 		for _, d := range r.readStdinDocs() {
 			k, err := key(d)
 			if err != nil {
-				r.crash(err)
+				r.crash(err, "key")
 			}
 			names = append(names, k)
 		}
@@ -371,7 +395,7 @@ func (r *run) newSide(label, path string, rc *big.Int) *side {
 	}
 	text, err := pythonText(raw)
 	if err != nil {
-		r.crash(err)
+		r.crash(err, "docs_of")
 	}
 	var parsed []*pyDict
 	all, err := loadAll(text)
@@ -380,7 +404,7 @@ func (r *run) newSide(label, path string, rc *big.Int) *side {
 	case errors.As(err, &ye):
 		s.err = fmt.Sprintf("render %s is not valid YAML", label)
 	case err != nil:
-		r.crash(err)
+		r.crash(err, "docs_of")
 	default:
 		parsed = docsOf(all)
 	}
@@ -388,7 +412,7 @@ func (r *run) newSide(label, path string, rc *big.Int) *side {
 	for _, d := range parsed {
 		k, err := key(d)
 		if err != nil {
-			r.crash(err)
+			r.crash(err, "key")
 		}
 		if _, dup := s.docs.docs[k]; dup {
 			r.print("DUPLICATE doc %s in %s", k, path)
@@ -526,7 +550,7 @@ func (r *run) readNames(path string) map[string]bool {
 	}
 	text, err := pythonText(raw)
 	if err != nil {
-		r.crash(err)
+		r.crash(&crashError{msg: "UnicodeDecodeError: the names file is not UTF-8"}, "read_names")
 	}
 	out := map[string]bool{}
 	for _, line := range strings.SplitAfter(text, "\n") {

@@ -22,8 +22,9 @@ type yamlError struct{ msg string }
 func (e *yamlError) Error() string { return e.msg }
 
 // crashError is any other Python exception on the kit's path (ValueError, KeyError, RecursionError, ...): the kit
-// exits 1 with a traceback on stderr. The port exits 1 with one stderr line.
-type crashError struct{ msg string }
+// exits 1 with a traceback on stderr. msg starts with the Python exception type; fn, when set, is the innermost kit
+// function of that traceback. The port exits 1 with one stderr line that holds only the class token (crashToken).
+type crashError struct{ msg, fn string }
 
 func (e *crashError) Error() string { return e.msg }
 
@@ -79,7 +80,7 @@ var timestampRe = regexp.MustCompile(`^([0-9][0-9][0-9][0-9])-([0-9][0-9]?)-([0-
 func pythonText(raw []byte) (string, error) {
 	s := string(raw)
 	if !utf8.ValidString(s) {
-		return "", &crashError{msg: "UnicodeDecodeError: the input is not UTF-8"}
+		return "", &crashError{msg: "UnicodeDecodeError: the input is not UTF-8", fn: "docs_of"}
 	}
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	return strings.ReplaceAll(s, "\r", "\n"), nil
@@ -189,7 +190,7 @@ func (l *loader) construct(n *yaml.Node, isKey bool) (any, error) {
 		return v, nil
 	}
 	if l.busy[n] {
-		return nil, &crashError{msg: "RecursionError: a recursive alias"}
+		return nil, &crashError{msg: "RecursionError: a recursive alias", fn: "redact"}
 	}
 	l.busy[n] = true
 	defer delete(l.busy, n)

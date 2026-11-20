@@ -326,7 +326,7 @@ func TestEveryGoTestLineOfTheTestAndRaceLegsNamesCountOne(t *testing.T) {
 	if len(missing) != 0 {
 		t.Errorf("go test line(s) with no -count=1 on merge_group: %v", missing)
 	}
-	planted := strings.Replace(script, "-trimpath ${MERGE_GROUP_FRESH:+-count=1} -json \"$@\"", "-trimpath -json \"$@\"", 1)
+	planted := strings.Replace(script, "-trimpath ${MERGE_GROUP_FRESH:+-count=1} ${cov[@]+\"${cov[@]}\"} -json \"$@\"", "-trimpath ${cov[@]+\"${cov[@]}\"} -json \"$@\"", 1)
 	if planted == script {
 		t.Fatal("the go_test_leg call to plant is not in ci/check_go.sh")
 	}

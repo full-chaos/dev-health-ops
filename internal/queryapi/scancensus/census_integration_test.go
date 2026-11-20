@@ -735,15 +735,27 @@ const nullableIntoPlainSites = `
 //	loadRepoFlowRows 39a7e63ddf0e -> d2aa188ecd2d
 //	loadTeamFlowRows 2653b84e5b21 -> 7f2f10dcf329
 //	fetchChangeFailureAgg 73d54a21b859 -> 78aa9a6d5455
+//
+// CHAOS-14355: the argMax(x, computed_at) reads of aianalytics pick ONE version per key, ordered by (computed_at,
+// cityHash64(tuple(values))) (loadImpactRowsForOpportunities in ai_opportunities.go; dailyStatement and
+// concentrationStatement in loaders.go). The statements of the four pinned sites below are not edited; the SQL digest of
+// their file moved. Their scan targets and column types are unchanged. Re-pinned by hand, digests copied from the local
+// TestScanTypeCensus failure output (not computed):
+//
+//	loadClusters (repetitive) 87d2d1cf0eaf -> e67003e26fc2
+//	loadClusters (title toil) 87d2d1cf0eaf -> e67003e26fc2
+//	loadDocDrift 598c61985afe -> 3c8b7092e723
+//	loadFlaky 2673b9f034d0 -> 9c8219b2ccb8
+//	loadLabels ffbc61d0410c -> 9df0068c57ab
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|87d2d1cf0eaf|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|87d2d1cf0eaf|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|598c61985afe|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|2673b9f034d0|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|e67003e26fc2|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|e67003e26fc2|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|3c8b7092e723|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|9c8219b2ccb8|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadRepoFlowRows|*string,*uint64,**float64,**float64,**float64,**float64|d2aa188ecd2d|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*uint64,**float64,**float64,**float64|7f2f10dcf329|not-describable
-internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|ffbc61d0410c|spliced-select-list
+internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|9df0068c57ab|spliced-select-list
 internal/queryapi/aianalytics/scope.go|ownerTeams|*string,*string|c0b3734eb92d|not-describable
 internal/queryapi/analytics/breakdown.go|executeBreakdownRaw|**string,**float64|7d5055461009|statement-not-static
 internal/queryapi/analytics/catalog.go|executeCatalogValues|*string,*uint64|92f0953d0b7c|statement-not-static

@@ -604,6 +604,14 @@ const nullableIntoPlainSites = `
 //
 //	ExecuteOrgTimeseries 1e3ee3af097b -> 6637e944ff79
 //	ExecuteTimeseries f2eec06b6811 -> 8842c256cd1a
+//
+// CHAOS-14271: two pins re-pinned by hand, digests copied from the local TestScanTypeCensus failure output (not computed).
+// executeSankeyGrouped's statement gains, on the health path, a post-aggregation condition per node set (a NULL node key
+// is dropped, as the edge sets already did); its scan targets are unchanged. scanMetricRows reads the value into **float64
+// (a NULL value is no point); the statements are unchanged:
+//
+//	executeSankeyGrouped 02426fb74c03 -> 06df22123891
+//	scanMetricRows 433c0a3205e2 -> c4875f19dfda (*float64 -> **float64)
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|f62124ab26af|not-describable
@@ -621,7 +629,7 @@ internal/queryapi/analytics/flowmatrix.go|queryNodes|*string,*string,**float64|c
 internal/queryapi/analytics/investmentquality.go|executeEvidenceQualityByGroup|*string,*float64,*uint64,*uint64|30049a8da29f|statement-not-static
 internal/queryapi/analytics/investmentquality.go|executeInvestmentQualityStats|*uint64,*uint64,*float64,*float64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64|2219e7f838c7|statement-not-static
 internal/queryapi/analytics/sankeycoverage.go|runSankeyCoverageQuery|*float64,*float64,*float64,*float64,**float64,**float64,**float64,**float64,**float64|7474017a0a07|statement-not-static
-internal/queryapi/analytics/sankeygrouped.go|executeSankeyGrouped|[]any|02426fb74c03|variadic-destinations
+internal/queryapi/analytics/sankeygrouped.go|executeSankeyGrouped|[]any|06df22123891|variadic-destinations
 internal/queryapi/analytics/timeseries.go|ExecuteOrgTimeseries|*time.Time,**float64,**float64|6637e944ff79|statement-not-static
 internal/queryapi/analytics/timeseries.go|ExecuteTimeseries|*time.Time,*string,**float64|8842c256cd1a|statement-not-static
 internal/queryapi/cognitiveload/cognitiveload.go|fetchOwnershipCandidates|*string,*string,*uint8,*uint16|e598129679a3|spliced-select-list
@@ -667,7 +675,7 @@ internal/queryapi/people/search.go|BuildSearchResponse|*string,*time.Time|afd45e
 internal/queryapi/people/summary.go|fetchPersonCollaboration|*string,*string,*float64|be7c30414391|not-describable
 internal/queryapi/pooledmttr/pooledmttr.go|scorecard|*string,**string,**float64|3a0c54cda9e6|spliced-select-list
 internal/queryapi/producttelemetry/platform.go|LoadOrgNames|*string,*string,*string|64c4ca805d17|not-describable
-internal/queryapi/quadrant/quadrant.go|scanMetricRows|*time.Time,*string,*string,*float64|433c0a3205e2|statement-not-static
+internal/queryapi/quadrant/quadrant.go|scanMetricRows|*time.Time,*string,*string,**float64|c4875f19dfda|statement-not-static
 internal/queryapi/reports/reports.go|scanCount|*int64|8d2d39db7d2b|not-describable
 internal/queryapi/reports/reports.go|scanReportRun|*string,*string,*string,**time.Time,**time.Time,**float64,**string,**string,**string,**string,*string,*time.Time|0121a67bb651|not-describable
 internal/queryapi/reports/reports.go|scanSavedReport|*string,*string,*string,**string,**string,*bool,**string,**string,**string,*bool,**time.Time,**string,*time.Time,*time.Time,**string|835998e4481b|not-describable

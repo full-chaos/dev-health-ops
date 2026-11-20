@@ -40,6 +40,13 @@ func (s *fixtureRowScanner) Scan(dest ...any) error {
 			*typed = row[i].(string)
 		case *float64:
 			*typed = row[i].(float64)
+		case **float64:
+			if row[i] == nil {
+				*typed = nil
+				continue
+			}
+			v := row[i].(float64)
+			*typed = &v
 		}
 	}
 	return nil

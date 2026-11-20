@@ -610,3 +610,4 @@ internal/workerservice	dependencies_test.go	unexpressed	-	-
 internal/workerservice	reports_test.go	unexpressed	-	-
 internal/workerservice	venue_golden_address_test.go	unexpressed	-	-
 internal/workerservice	writer_metrics_registration_test.go	unexpressed	-	-
+tools/lcovmerge	main.go	unexpressed	-	-

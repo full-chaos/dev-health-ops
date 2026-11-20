@@ -175,3 +175,69 @@ func TestDispatchSweepRunsLastWithAnEarlierDeadline(t *testing.T) {
 		t.Fatalf("sweep deadline %s is not before the dispatch deadline %s", store.sweepDeadline, dispatchDeadline)
 	}
 }
+
+// The sweep's rollback ends at the sweep's own deadline (the operations'
+// deadline plus the reserve), never on a fresh timeout; the operator path keeps
+// its own bound.
+func TestSweepRollbackIsBoundedBySweepDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer cancel()
+	operations, _ := ctx.Deadline()
+	sweepCtx, sweepCancel := rollbackContext(ctx, true)
+	defer sweepCancel()
+	if deadline, _ := sweepCtx.Deadline(); !deadline.Equal(operations.Add(sweepRollbackReserve)) {
+		t.Fatalf("sweep rollback deadline = %s, want the operations' deadline %s plus the reserve", deadline, operations)
+	}
+	operatorCtx, operatorCancel := rollbackContext(ctx, false)
+	defer operatorCancel()
+	if deadline, _ := operatorCtx.Deadline(); !deadline.After(operations.Add(sweepRollbackReserve)) {
+		t.Fatalf("operator rollback deadline = %s, want its own fresh bound", deadline)
+	}
+}
+
+type stuckSweepStore struct {
+	sweepingStore
+	rollbackEnded time.Time
+}
+
+func (store *stuckSweepStore) SweepStrandedFinalizeForOrg(
+	ctx context.Context, _ redriveFinalizePublisher, _ string,
+) (int, error) {
+	<-ctx.Done()
+	rollbackCtx, cancel := rollbackContext(ctx, true)
+	defer cancel()
+	<-rollbackCtx.Done()
+	store.rollbackEnded = time.Now()
+	return 0, ctx.Err()
+}
+
+// A sweep that uses its whole budget and then its rollback ends before the
+// dispatch deadline, so the dispatch result and the adapter's category are the
+// main hooks' own: no timeout from the sweep, one WARN line.
+func TestDispatchSweepTimeoutNeverChangesTheJobResult(t *testing.T) {
+	store := &stuckSweepStore{sweepingStore: sweepingStore{fakeStore: fakeStore{run: runningRun()}}}
+	handler, err := NewDispatcher(store, redrivingPublisher{}, &fakeRepositoryDiscoverer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	dispatchDeadline, _ := ctx.Deadline()
+	var workErr error
+	records := captureDefaultLog(t, func() { workErr = handler.Work(ctx, blockedDispatchExecution()) })
+	if workErr != nil || ctx.Err() != nil {
+		t.Fatalf("Work = %v, ctx.Err = %v, want the main hooks' result with a live dispatch context", workErr, ctx.Err())
+	}
+	if !store.rollbackEnded.Before(dispatchDeadline) {
+		t.Fatalf("the sweep's rollback ended at %s, not before the dispatch deadline %s", store.rollbackEnded, dispatchDeadline)
+	}
+	warns := 0
+	for _, record := range records {
+		if record["msg"] == StrandedFinalizeSweepFailedLogMessage {
+			warns++
+		}
+	}
+	if warns != 1 {
+		t.Fatalf("sweep failure lines = %d, want 1", warns)
+	}
+}

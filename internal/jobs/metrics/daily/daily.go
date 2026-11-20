@@ -532,11 +532,14 @@ func (handler *Dispatcher) sweepStrandedFinalize(ctx context.Context, organizati
 	if !ok {
 		return
 	}
-	// Half of the remaining dispatch deadline: a candidate row lock must not
-	// spend the time that the dispatch result and its adapter still need.
+	// Half of the remaining dispatch deadline, less the reserve for the
+	// rollbacks: every operation of the sweep, its rollbacks included, ends
+	// inside that budget (a rollback ends at the budget's end, see
+	// rollbackContext), so a slow or stuck sweep never spends the time that the
+	// dispatch result and its adapter still need.
 	if deadline, ok := ctx.Deadline(); ok {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Until(deadline)/2)
+		ctx, cancel = context.WithTimeout(ctx, time.Until(deadline)/2-sweepRollbackReserve)
 		defer cancel()
 	}
 	redriven, err := sweeper.SweepStrandedFinalizeForOrg(ctx, publisher, organizationID)
@@ -598,9 +601,12 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 	// "cannot affect the job's outcome" property: reconcileBlockedRuns is
 	// fail-open and returns nothing.
 	// The organization's never-attempted stranded finalizes, on the same
-	// nightly tick and fail-open for the same reason. Registered FIRST so it
-	// runs LAST: the drain and the reconcile keep the full dispatch deadline,
-	// and the sweep gets only half of what is left (sweepStrandedFinalize).
+	// nightly tick and fail-open for the same reason. THE RULE: the sweep is
+	// best-effort and isolated. It runs after every other hook has finished,
+	// every operation in it (rollbacks included) is bounded by its own budget,
+	// and its outcome never changes the job's result or the adapter's category:
+	// an error or a timeout is one WARN line and one counter, nothing else.
+	// Registered FIRST so it runs LAST (sweepStrandedFinalize sets its budget).
 	defer handler.sweepStrandedFinalize(ctx, run.OrganizationID)
 	defer handler.reconcileBlockedRuns(ctx, run.OrganizationID)
 	// The floor of the touched-day drain (CHAOS-8846): the nightly run is the

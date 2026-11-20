@@ -654,6 +654,26 @@ func (store *PostgresStore) RedriveStrandedFinalize(
 // redriveOneStrandedFinalize re-verifies and, if still eligible, redrives
 // exactly one run's finalize inside its own transaction, so one run's
 // dedupe/policy rejection cannot roll back an otherwise-successful batch.
+// sweepRollbackReserve is the part of the sweep's budget kept back for the
+// rollbacks of its transactions: the sweep's operations end this long before
+// the sweep's own deadline and a rollback may use the rest.
+const sweepRollbackReserve = 500 * time.Millisecond
+
+// rollbackContext bounds a transaction rollback. The operator path keeps a
+// fresh 5 s. The nightly sweep is best-effort and isolated from the dispatch
+// result, so its rollback ends at the sweep's own deadline (the operations'
+// deadline plus the reserve taken off the sweep's budget up front) and never
+// outlives it.
+func rollbackContext(ctx context.Context, sweep bool) (context.Context, context.CancelFunc) {
+	base := context.WithoutCancel(ctx)
+	if sweep {
+		if deadline, ok := ctx.Deadline(); ok {
+			return context.WithDeadline(base, deadline.Add(sweepRollbackReserve))
+		}
+	}
+	return context.WithTimeout(base, 5*time.Second)
+}
+
 func (store *PostgresStore) redriveOneStrandedFinalize(
 	ctx context.Context,
 	publisher redriveFinalizePublisher,
@@ -667,7 +687,7 @@ func (store *PostgresStore) redriveOneStrandedFinalize(
 		return false, ErrUnavailable
 	}
 	defer func() {
-		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		rollbackCtx, cancel := rollbackContext(ctx, sweepCutoff != nil)
 		defer cancel()
 		_ = tx.Rollback(rollbackCtx)
 	}()

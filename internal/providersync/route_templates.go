@@ -65,7 +65,15 @@ const (
 	gitlabMilestonesRoute    = gitlabProjectRoute + "/milestones"
 	gitlabVersionRoute       = "/version"
 
+	jiraSearchJQLRoute     = "/rest/api/3/search/jql"
+	jiraServiceDeskRoute   = "/rest/servicedeskapi/servicedesk"
+	jiraIssueCommentRoute  = "/rest/api/3/issue/{issue}/comment"
+	jiraIssueWorklogRoute  = "/rest/api/3/issue/{issue}/worklog"
+	jiraChangelogBulkRoute = "/rest/api/3/changelog/bulkfetch"
+	jiraBoardSprintRoute   = "/rest/agile/1.0/board/{board}/sprint"
+
 	launchDarklyFlagsRoute = "/api/v2/flags/{project}"
 	// The audit log walk sends this literal route from providerfoundation.
-	launchDarklyAuditRoute = "/api/v2/auditlog"
+	launchDarklyAuditRoute    = "/api/v2/auditlog"
+	launchDarklyCodeRefsRoute = "/api/v2/code-refs/repositories"
 )

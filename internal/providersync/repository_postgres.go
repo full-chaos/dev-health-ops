@@ -412,9 +412,59 @@ func (repository *PostgresRepository) ReleaseForRetry(
 type RateLimitEpisode struct {
 	Deferrals   int
 	FirstSeenAt *time.Time
+	// Checkpoint is the unit's live chunk checkpoint position; nil when the
+	// unit has no checkpoint row of its own generation.
+	Checkpoint *RateLimitProgressMark
+	// Mark is the checkpoint position the last rate-limit deferral stored in
+	// result.rate_limit_progress_mark; nil before the first one.
+	Mark *RateLimitProgressMark
 }
 
-// RateLimitEpisode reads the current deferral counters for a leased unit.
+// RateLimitProgressMark is a chunked walk's durable position.
+type RateLimitProgressMark struct {
+	PreparedChunks int64 `json:"prepared_chunks"`
+	NextOrdinal    int64 `json:"next_ordinal"`
+}
+
+// Advanced reports that mark is past previous: neither field lower, one
+// higher. Within a generation every checkpoint writer only raises both
+// (GREATEST in updateChunkPreparedSQL and advanceChunkCheckpointSQL), but a
+// delete and a fresh insert start again at zero, so this compares the pair
+// rather than a sum.
+func (mark RateLimitProgressMark) Advanced(previous RateLimitProgressMark) bool {
+	return mark.PreparedChunks >= previous.PreparedChunks && mark.NextOrdinal >= previous.NextOrdinal &&
+		(mark.PreparedChunks > previous.PreparedChunks || mark.NextOrdinal > previous.NextOrdinal)
+}
+
+// Progressed reports that the walk prepared or committed a chunk since the
+// last rate-limit deferral. A unit with no checkpoint, or a row deferred
+// before the mark existed, never restarts its episode.
+func (episode RateLimitEpisode) Progressed() bool {
+	return episode.Checkpoint != nil && episode.Mark != nil && episode.Checkpoint.Advanced(*episode.Mark)
+}
+
+// RateLimitEpisodeStep is what one rate-limit deferral writes besides the
+// fence: Restart starts a fresh episode at this deferral, and a non-nil Mark
+// is stored as result.rate_limit_progress_mark.
+type RateLimitEpisodeStep struct {
+	Restart bool
+	Mark    *RateLimitProgressMark
+}
+
+const rateLimitEpisodeSQL = `
+SELECT COALESCE(unit.rate_limit_deferrals, 0), unit.rate_limit_first_seen_at,
+       checkpoint.prepared_chunks, checkpoint.next_ordinal,
+       unit.result::jsonb -> 'rate_limit_progress_mark'
+FROM public.sync_run_units AS unit
+LEFT JOIN public.sync_run_unit_chunk_checkpoints AS checkpoint
+  ON checkpoint.org_id = unit.org_id
+ AND checkpoint.sync_run_unit_id = unit.id
+ AND checkpoint.generation = $3
+WHERE unit.id = $1::uuid
+  AND unit.org_id = $2`
+
+// RateLimitEpisode reads the current deferral counters for a leased unit,
+// with its live checkpoint position and the mark of its last deferral.
 func (repository *PostgresRepository) RateLimitEpisode(
 	ctx context.Context,
 	claim Claim,
@@ -423,14 +473,32 @@ func (repository *PostgresRepository) RateLimitEpisode(
 		return RateLimitEpisode{}, ErrInvalidConfiguration
 	}
 	var episode RateLimitEpisode
-	if err := repository.Pool.QueryRow(ctx, `
-		SELECT COALESCE(rate_limit_deferrals, 0), rate_limit_first_seen_at
-		FROM public.sync_run_units
-		WHERE id = $1::uuid`, claim.ID,
-	).Scan(&episode.Deferrals, &episode.FirstSeenAt); err != nil {
+	var preparedChunks, nextOrdinal *int64
+	var mark []byte
+	if err := repository.Pool.QueryRow(ctx, rateLimitEpisodeSQL, claim.ID, claim.OrgID, claim.GenerationKey()).Scan(
+		&episode.Deferrals, &episode.FirstSeenAt, &preparedChunks, &nextOrdinal, &mark,
+	); err != nil {
 		return RateLimitEpisode{}, ErrInvalidConfiguration
 	}
+	if preparedChunks != nil && nextOrdinal != nil {
+		episode.Checkpoint = &RateLimitProgressMark{PreparedChunks: *preparedChunks, NextOrdinal: *nextOrdinal}
+	}
+	episode.Mark = decodeRateLimitProgressMark(mark)
 	return episode, nil
+}
+
+// decodeRateLimitProgressMark reads a stored mark. Anything but an object with
+// both counts reads as no mark: no restart, and the next deferral rewrites it.
+func decodeRateLimitProgressMark(raw []byte) *RateLimitProgressMark {
+	var fields map[string]*int64
+	if len(raw) == 0 || json.Unmarshal(raw, &fields) != nil {
+		return nil
+	}
+	prepared, next := fields["prepared_chunks"], fields["next_ordinal"]
+	if prepared == nil || next == nil {
+		return nil
+	}
+	return &RateLimitProgressMark{PreparedChunks: *prepared, NextOrdinal: *next}
 }
 
 // RateLimitObservation is the normalized, durable record of the rate limit that
@@ -467,11 +535,20 @@ func (repository *PostgresRepository) DeferForRateLimit(
 	availableAt time.Time,
 	now time.Time,
 	observation RateLimitObservation,
+	step RateLimitEpisodeStep,
 ) error {
 	if repository == nil || repository.Pool == nil || ctx == nil ||
 		claim.Validate() != nil || now.IsZero() || !availableAt.After(now) ||
 		availableAt.Sub(now) > rateLimitMaxTotalWait {
 		return ErrInvalidConfiguration
+	}
+	var mark any
+	if step.Mark != nil {
+		encoded, err := json.Marshal(step.Mark)
+		if err != nil {
+			return ErrInvalidConfiguration
+		}
+		mark = string(encoded)
 	}
 	tx, err := repository.Pool.Begin(ctx)
 	if err != nil {
@@ -480,7 +557,7 @@ func (repository *PostgresRepository) DeferForRateLimit(
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	command, err := tx.Exec(
 		ctx, deferForRateLimitSQL,
-		claim.ID, claim.Owner, now.UTC(), availableAt.UTC(),
+		claim.ID, claim.Owner, now.UTC(), availableAt.UTC(), step.Restart, mark,
 	)
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
@@ -1092,15 +1169,17 @@ SET status = 'dispatching',
     attempts = GREATEST(unit.attempts - 1, 0),
     available_at = $4,
     error = 'provider_rate_limited',
-    rate_limit_deferrals = COALESCE(unit.rate_limit_deferrals, 0) + 1,
-    rate_limit_first_seen_at = COALESCE(unit.rate_limit_first_seen_at, $3),
+    rate_limit_deferrals = CASE WHEN $5::boolean THEN 1 ELSE COALESCE(unit.rate_limit_deferrals, 0) + 1 END,
+    rate_limit_first_seen_at = CASE WHEN $5::boolean THEN $3 ELSE COALESCE(unit.rate_limit_first_seen_at, $3) END,
     result = (
       COALESCE(unit.result::jsonb, jsonb_build_object()) ||
       jsonb_build_object(
         'error_category', 'provider_rate_limited',
         'not_before', to_jsonb($4::timestamptz),
-        'rate_limit_deferrals', COALESCE(unit.rate_limit_deferrals, 0) + 1
-      )
+        'rate_limit_deferrals', CASE WHEN $5::boolean THEN 1 ELSE COALESCE(unit.rate_limit_deferrals, 0) + 1 END
+      ) ||
+      CASE WHEN $6::jsonb IS NULL THEN jsonb_build_object()
+           ELSE jsonb_build_object('rate_limit_progress_mark', $6::jsonb) END
     ),
     first_blocked_at = COALESCE(unit.first_blocked_at, $3),
     lease_owner = NULL,

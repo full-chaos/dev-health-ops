@@ -31,6 +31,12 @@ func (r *scopeRows) Scan(dest ...any) error {
 			*p = row[i].(time.Time)
 		case *string:
 			*p = row[i].(string)
+		case **time.Time:
+			v := row[i].(time.Time)
+			*p = &v
+		case **string:
+			v := row[i].(string)
+			*p = &v
 		case **float64:
 			v := row[i].(float64)
 			*p = &v

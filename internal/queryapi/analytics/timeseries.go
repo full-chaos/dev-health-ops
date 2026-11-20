@@ -371,11 +371,19 @@ func ExecuteTimeseries(ctx context.Context, client QueryClient, q compiledQuery,
 		// no Scan method, so it is not an sql.Scanner and the native
 		// Date.ScanRow rejects it outright -- every non-empty result
 		// failed. Precedent: reviewedges.go:152.
-		var bucketDay time.Time
-		var dimValue string
+		var bucketValue *time.Time
+		var dimValueValue *string
 		var value *float64 // nullable scan destination -- see this func's doc comment (CHAOS-4657)
-		if scanErr := rows.Scan(&bucketDay, &dimValue, &value); scanErr != nil {
+		if scanErr := rows.Scan(&bucketValue, &dimValueValue, &value); scanErr != nil {
 			return nil, fmt.Errorf("scan: %w", scanErr)
+		}
+		var bucketDay time.Time
+		if bucketValue != nil {
+			bucketDay = *bucketValue
+		}
+		var dimValue string
+		if dimValueValue != nil {
+			dimValue = *dimValueValue
 		}
 		bucket := graphqldate.New(bucketDay)
 		if _, seen := buckets[dimValue]; !seen {
@@ -526,10 +534,14 @@ func ExecuteOrgTimeseries(ctx context.Context, client QueryClient, q compiledQue
 
 	buckets := []model.TimeseriesBucket{}
 	for rows.Next() {
-		var bucketDay time.Time
+		var bucketValue *time.Time
 		var num, den *float64
-		if scanErr := rows.Scan(&bucketDay, &num, &den); scanErr != nil {
+		if scanErr := rows.Scan(&bucketValue, &num, &den); scanErr != nil {
 			return model.TimeseriesResult{}, fmt.Errorf("scan: %w", scanErr)
+		}
+		var bucketDay time.Time
+		if bucketValue != nil {
+			bucketDay = *bucketValue
 		}
 		var value *float64
 		switch {

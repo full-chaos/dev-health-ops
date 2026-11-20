@@ -233,6 +233,7 @@ dev_health_execution_liveness_probe_failures_total	probe,reason	code: internal/p
 dev_health_execution_liveness_seconds_since_success	probe	code: internal/platform/selfprobe/monitor.go
 dev_health_gate_penalize_errors_total	path,provider	code: internal/providerfoundation/budget.go
 dev_health_github_tree_walk_near_ceiling_total	limit	code: internal/providerfoundation/budget.go
+dev_health_github_tests_cursor_cut_list_dropped_total	list	code: internal/providerfoundation/budget.go
 dev_health_github_work_items_issue_list_cap_exceeded_total	reason	code: internal/providerfoundation/budget.go
 dev_health_github_work_items_issue_list_stopped_total	reason	code: internal/providerfoundation/budget.go
 dev_health_github_work_items_issue_list_tie_paged_total	reason	code: internal/providerfoundation/budget.go

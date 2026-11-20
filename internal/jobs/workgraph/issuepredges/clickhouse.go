@@ -182,7 +182,7 @@ func (loader *Loader) LoadTextParseInputs(ctx context.Context, orgID string, win
 func (loader *Loader) loadPullRequests(ctx context.Context, orgID string, window Window) ([]PullRequestRow, error) {
 	query := `
 SELECT repo_id, number, title, body, head_branch, created_at
-FROM git_pull_requests
+FROM git_pull_requests FINAL
 WHERE org_id = {org_id:String}`
 	args := []any{clickhouse.Named("org_id", orgID)}
 	if window.From != nil {

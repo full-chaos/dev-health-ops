@@ -86,8 +86,18 @@ func pythonText(raw []byte) (string, error) {
 	return strings.ReplaceAll(s, "\r", "\n"), nil
 }
 
-// loadAll is yaml.safe_load_all over a text: every document, or the first error.
-func loadAll(text string) ([]any, error) {
+// The kit's Python recursion limit (1000 frames), as node depths measured on the kit (ecf6771eb509, CPython 3.12):
+// composing a document dies in a RecursionError at node depth composeDepthStdin when the kit reads stdin (filter,
+// names) and one level earlier when it reads a render file (the diff; Side.__init__ adds a frame). The flow styles
+// reach two levels further on the kit; the bound takes the block styles, so the port fails closed there.
+// Depth: the document's root node is 1, each nested node (a key, a value, an item) one more; an alias is not followed.
+const (
+	composeDepthStdin = 492
+	composeDepthFile  = 491
+)
+
+// loadAll is yaml.safe_load_all over a text: every document, or the first error. maxDepth is the composer bound.
+func loadAll(text string, maxDepth int) ([]any, error) {
 	for _, r := range text {
 		if !(r == 0x09 || r == 0x0A || r == 0x0D || (r >= 0x20 && r <= 0x7E) || r == 0x85 || (r >= 0xA0 && r <= 0xD7FF) || (r >= 0xE000 && r <= 0xFFFD) || (r >= 0x10000 && r <= 0x10FFFF)) {
 			return nil, &yamlError{msg: "unacceptable character"}
@@ -102,13 +112,20 @@ func loadAll(text string) ([]any, error) {
 			return docs, nil
 		}
 		if err != nil {
+			if strings.Contains(err.Error(), "exceeded max depth") {
+				return nil, &crashError{msg: "RecursionError: maximum recursion depth exceeded", fn: "docs_of"}
+			}
 			return nil, &yamlError{msg: err.Error()}
 		}
 		if len(n.Content) == 0 {
 			docs = append(docs, nil)
 			continue
 		}
-		l := &loader{memo: map[*yaml.Node]any{}, busy: map[*yaml.Node]bool{}, defined: map[*yaml.Node]bool{}, anchors: map[string]bool{}}
+		if nodeDepth(n.Content[0]) >= maxDepth {
+			return nil, &crashError{msg: "RecursionError: maximum recursion depth exceeded", fn: "docs_of"}
+		}
+		l := &loader{memo: map[*yaml.Node]any{}, defined: map[*yaml.Node]bool{}, anchors: map[string]bool{},
+			vals: map[*yaml.Node]*pairList{}, strKey: map[*yaml.Node]bool{}}
 		if err := l.checkAnchors(n.Content[0]); err != nil {
 			return nil, err
 		}
@@ -122,9 +139,26 @@ func loadAll(text string) ([]any, error) {
 
 type loader struct {
 	memo    map[*yaml.Node]any
-	busy    map[*yaml.Node]bool
 	defined map[*yaml.Node]bool
 	anchors map[string]bool
+	vals    map[*yaml.Node]*pairList // a mapping node's pair list as PyYAML's flatten_mapping leaves it
+	strKey  map[*yaml.Node]bool      // a "=" key that flatten_mapping retagged as str
+}
+
+// pairList is a mapping node's value list (PyYAML's node.value): flatten_mapping deletes from it in place and
+// rebinds the node to a new list, and those two acts reach different holders, so the port keeps that shape.
+type pairList struct{ items [][2]*yaml.Node }
+
+func nodeDepth(n *yaml.Node) int {
+	deepest := 0
+	for _, c := range n.Content {
+		if c.Kind == yaml.AliasNode {
+			deepest = max(deepest, 1)
+			continue
+		}
+		deepest = max(deepest, nodeDepth(c))
+	}
+	return 1 + deepest
 }
 
 // checkAnchors holds PyYAML's composer rules that yaml.v3 does not: an anchor is defined once per document, and an
@@ -189,17 +223,12 @@ func (l *loader) construct(n *yaml.Node, isKey bool) (any, error) {
 	if v, ok := l.memo[n]; ok {
 		return v, nil
 	}
-	if l.busy[n] {
-		return nil, &crashError{msg: "RecursionError: a recursive alias", fn: "redact"}
-	}
-	l.busy[n] = true
-	defer delete(l.busy, n)
 	var v any
 	var err error
 	switch n.Kind {
 	case yaml.ScalarNode:
 		tag := scalarTag(n)
-		if isKey && tag == yamlTag+"value" {
+		if (isKey || l.strKey[n]) && tag == yamlTag+"value" {
 			tag = yamlTag + "str"
 		}
 		v, err = constructScalar(tag, n.Value)
@@ -207,20 +236,28 @@ func (l *loader) construct(n *yaml.Node, isKey bool) (any, error) {
 		if t, ok := explicitTag(n); ok && t != yamlTag+"seq" {
 			return nil, unknownTag(t)
 		}
-		list := []any{}
-		for _, c := range n.Content {
+		// PyYAML yields the list before it fills it: an alias inside the list to the list itself gets the same list.
+		// A slice of its final length, registered first and filled in place, shares that backing array.
+		list := make([]any, len(n.Content))
+		l.memo[n] = list
+		for i, c := range n.Content {
 			e, err := l.construct(c, false)
 			if err != nil {
 				return nil, err
 			}
-			list = append(list, e)
+			list[i] = e
 		}
-		v = list
+		return list, nil
 	case yaml.MappingNode:
 		if t, ok := explicitTag(n); ok && t != yamlTag+"map" {
 			return nil, unknownTag(t)
 		}
-		v, err = l.constructMapping(n)
+		d := newDict()
+		l.memo[n] = d
+		if err := l.fillMapping(n, d); err != nil {
+			return nil, err
+		}
+		return d, nil
 	default:
 		return nil, &yamlError{msg: fmt.Sprintf("unexpected node kind %d", n.Kind)}
 	}
@@ -235,74 +272,90 @@ func unknownTag(t string) error {
 	return &yamlError{msg: "could not determine a constructor for the tag " + pyStrRepr(t)}
 }
 
-func isMergeKey(k *yaml.Node) bool {
-	k = deref(k)
-	return k.Kind == yaml.ScalarNode && scalarTag(k) == yamlTag+"merge"
-}
-
-// flatten is SafeConstructor.flatten_mapping: the merged pairs first, then the mapping's own pairs.
-func flatten(n *yaml.Node) ([][2]*yaml.Node, error) {
-	var merge, own [][2]*yaml.Node
+func (l *loader) pairs(n *yaml.Node) *pairList {
+	if pl, ok := l.vals[n]; ok {
+		return pl
+	}
+	pl := &pairList{}
 	for i := 0; i+1 < len(n.Content); i += 2 {
-		k, v := n.Content[i], n.Content[i+1]
-		if !isMergeKey(k) {
-			own = append(own, [2]*yaml.Node{k, v})
-			continue
-		}
-		vv := deref(v)
-		switch vv.Kind {
-		case yaml.MappingNode:
-			sub, err := flatten(vv)
-			if err != nil {
-				return nil, err
-			}
-			merge = append(merge, sub...)
-		case yaml.SequenceNode:
-			var subs [][][2]*yaml.Node
-			for _, s := range vv.Content {
-				s = deref(s)
-				if s.Kind != yaml.MappingNode {
-					return nil, &yamlError{msg: "expected a mapping for merging"}
-				}
-				sub, err := flatten(s)
-				if err != nil {
-					return nil, err
-				}
-				subs = append(subs, sub)
-			}
-			for i := len(subs) - 1; i >= 0; i-- {
-				merge = append(merge, subs[i]...)
-			}
-		default:
-			return nil, &yamlError{msg: "expected a mapping or list of mappings for merging"}
-		}
+		pl.items = append(pl.items, [2]*yaml.Node{n.Content[i], n.Content[i+1]})
 	}
-	return append(merge, own...), nil
+	l.vals[n] = pl
+	return pl
 }
 
-func (l *loader) constructMapping(n *yaml.Node) (any, error) {
-	pairs, err := flatten(n)
-	if err != nil {
-		return nil, err
+// flatten is SafeConstructor.flatten_mapping, step for step: a merge pair is deleted from the node's list IN PLACE
+// before its value is flattened (so a mapping that merges itself sees its list without that pair: v: &m {<<: *m} is
+// {}), the merged pairs come first, and the node is rebound to a new list. Each step deletes one merge pair, so the
+// recursion ends.
+func (l *loader) flatten(n *yaml.Node) error {
+	var merge [][2]*yaml.Node
+	for index := 0; index < len(l.pairs(n).items); {
+		pl := l.pairs(n)
+		k, v := pl.items[index][0], pl.items[index][1]
+		kd := deref(k)
+		switch {
+		case kd.Kind == yaml.ScalarNode && scalarTag(kd) == yamlTag+"merge":
+			pl.items = append(pl.items[:index:index], pl.items[index+1:]...)
+			vv := deref(v)
+			switch vv.Kind {
+			case yaml.MappingNode:
+				if err := l.flatten(vv); err != nil {
+					return err
+				}
+				merge = append(merge, l.pairs(vv).items...)
+			case yaml.SequenceNode:
+				var subs []*pairList
+				for _, s := range vv.Content {
+					s = deref(s)
+					if s.Kind != yaml.MappingNode {
+						return &yamlError{msg: "expected a mapping for merging"}
+					}
+					if err := l.flatten(s); err != nil {
+						return err
+					}
+					subs = append(subs, l.pairs(s))
+				}
+				for i := len(subs) - 1; i >= 0; i-- {
+					merge = append(merge, subs[i].items...)
+				}
+			default:
+				return &yamlError{msg: "expected a mapping or list of mappings for merging"}
+			}
+		case kd.Kind == yaml.ScalarNode && scalarTag(kd) == yamlTag+"value":
+			l.strKey[kd] = true
+			index++
+		default:
+			index++
+		}
 	}
-	d := newDict()
-	for _, p := range pairs {
+	if len(merge) > 0 {
+		l.vals[n] = &pairList{items: append(merge, l.pairs(n).items...)}
+	}
+	return nil
+}
+
+func (l *loader) fillMapping(n *yaml.Node, d *pyDict) error {
+	if err := l.flatten(n); err != nil {
+		return err
+	}
+	for _, p := range l.pairs(n).items {
 		k, err := l.construct(p[0], true)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if _, ok := hashKey(k); !ok {
-			return nil, &yamlError{msg: "found unhashable key"}
+			return &yamlError{msg: "found unhashable key"}
 		}
 		v, err := l.construct(p[1], false)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if err := d.set(k, v); err != nil {
-			return nil, &yamlError{msg: "found unhashable key"}
+			return &yamlError{msg: "found unhashable key"}
 		}
 	}
-	return d, nil
+	return nil
 }
 
 func constructScalar(tag, value string) (any, error) {
@@ -447,7 +500,7 @@ func constructFloat(value string) (any, error) {
 	case value == ".inf":
 		return sign * math.Inf(1), nil
 	case value == ".nan":
-		return math.NaN(), nil
+		return sharedNaN, nil
 	case strings.Contains(value, ":"):
 		v, base := 0.0, 1.0
 		parts := strings.Split(value, ":")

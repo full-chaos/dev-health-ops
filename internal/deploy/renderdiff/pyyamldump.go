@@ -15,7 +15,7 @@ func safeDumpAll(docs []any) (string, error) {
 	evs := []event{{kind: evStreamStart}}
 	for _, d := range docs {
 		r := &representer{seen: map[any]*rnode{}}
-		root, err := r.represent(d)
+		root, err := r.represent(d, 1)
 		if err != nil {
 			return "", err
 		}
@@ -56,7 +56,15 @@ type representer struct {
 
 // represent is SafeRepresenter.represent_data. Only date and datetime objects can be shared inside one document (a
 // YAML alias of a timestamp); every dict and list the kit dumps is a fresh copy made by redact().
-func (r *representer) represent(v any) (*rnode, error) {
+// representDepth is the node depth at which the kit's safe_dump_all dies in a RecursionError (three Python frames
+// per level: represent_data, represent_dict/list, represent_mapping/sequence; measured on the kit: a value 330 levels
+// under a top-level key dumps, 331 does not). The token names main, the kit's innermost frame of its own file.
+const representDepth = 332
+
+func (r *representer) represent(v any, depth int) (*rnode, error) {
+	if depth >= representDepth {
+		return nil, &crashError{msg: "RecursionError: maximum recursion depth exceeded", fn: "main"}
+	}
 	switch x := v.(type) {
 	case nil:
 		return &rnode{kind: rScalar, tag: yamlTag + "null", value: "null"}, nil
@@ -105,7 +113,7 @@ func (r *representer) represent(v any) (*rnode, error) {
 	case []any:
 		n := &rnode{kind: rSeq, tag: yamlTag + "seq"}
 		for _, e := range x {
-			c, err := r.represent(e)
+			c, err := r.represent(e, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -113,15 +121,15 @@ func (r *representer) represent(v any) (*rnode, error) {
 		}
 		return n, nil
 	case pyTuple:
-		return r.represent([]any(x))
+		return r.represent([]any(x), depth)
 	case *pyDict:
 		n := &rnode{kind: rMap, tag: yamlTag + "map"}
 		for _, i := range sortedItems(x) {
-			k, err := r.represent(x.keys[i])
+			k, err := r.represent(x.keys[i], depth+1)
 			if err != nil {
 				return nil, err
 			}
-			v, err := r.represent(x.vals[i])
+			v, err := r.represent(x.vals[i], depth+1)
 			if err != nil {
 				return nil, err
 			}

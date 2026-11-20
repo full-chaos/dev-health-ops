@@ -1,0 +1,7 @@
+data:
+  password: <redacted>
+  plain: SNTSELF02Z
+kind: ConfigMap
+metadata:
+  name: selfm
+v: {}

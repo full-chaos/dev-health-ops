@@ -41,8 +41,17 @@ const (
 )
 
 // redact is the kit's redact(o): a fresh copy with every secret-like value replaced, applied on load.
-func redact(o any) any {
+func redact(o any) any { return redactAt(o, 1) }
+
+// redactDepth bounds redact's recursion as the kit's Python stack does (one frame per level): a structure that holds
+// itself (a mapping alias inside its own anchor) dies there in a RecursionError, never in an unbounded Go recursion.
+const redactDepth = 990
+
+func redactAt(o any, depth int) any {
 	defer kitFrame("redact")
+	if depth >= redactDepth {
+		panic(&crashError{msg: "RecursionError: maximum recursion depth exceeded"})
+	}
 	switch x := o.(type) {
 	case *pyDict:
 		d := x.copy()
@@ -87,13 +96,13 @@ func redact(o any) any {
 		}
 		out := newDict()
 		for i, k := range d.keys {
-			_ = out.set(k, redact(d.vals[i]))
+			_ = out.set(k, redactAt(d.vals[i], depth+1))
 		}
 		return out
 	case []any:
 		out := make([]any, len(x))
 		for i, e := range x {
-			out[i] = redact(e)
+			out[i] = redactAt(e, depth+1)
 		}
 		return out
 	case string:
@@ -310,7 +319,7 @@ func unionKeys(a, b *pyDict) []any {
 	for _, d := range []*pyDict{a, b} {
 		for _, k := range d.keys {
 			h, _ := hashKey(k)
-			if !seen[h] {
+			if h == "" || !seen[h] {
 				seen[h] = true
 				all = append(all, k)
 			}

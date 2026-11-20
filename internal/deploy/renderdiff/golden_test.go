@@ -15,8 +15,7 @@ import (
 // order and argv), recorded by the kit tool (sha256 ecf6771eb509...) on SYNTHETIC renders: the prod renders of the
 // first capture are replaced by same-shape synthetic ones (example.invalid hosts, fake digests, every other string
 // value, names and namespaces too, a fresh random string; the same diff and redaction features). One row per case:
-// name, exit code, sha256 of the captured stdout+stderr, argv, crash token (the last column is added here; see
-// TestTheCrashTokensAreTheKitsOwn).
+// name, exit code, sha256 of the captured stdout+stderr, argv, crash token (the last column is added here; see TestTheCrashTokensAreTheKitsOwn).
 const goldensManifestSHA256 = "5b950abcd5e0039f9e7798cc369dc0f921d6f06af6207dd6788875b96a0f3193"
 
 // goldens2ManifestSHA256 pins testdata/goldens-2/MANIFEST.tsv: 84 more kit cases on synthetic fixtures (the
@@ -39,6 +38,16 @@ const goldens4ManifestSHA256 = "e68d0e273cf0998f4810fe43c761871bd3da2194b6533089
 // classes the first r1 log showed: Python re.IGNORECASE on secret-like names (U+0130, U+0131, U+017F, U+212A), the
 // 4300-digit int<->str limit at every site, int()/float() text under an explicit tag, a bare sign, base64 padding.
 const goldens5ManifestSHA256 = "bec4f83df092b025e887fc9d2f007a1788201036cff552f7a1e940a02661382d"
+
+// goldens6ManifestSHA256 pins testdata/goldens-6/MANIFEST.tsv: 29 kit cases (same form as goldens-2) on the
+// verify-6720 repro inputs: every `.nan` key is ONE key (PyYAML's shared nan_value), and a mapping that merges
+// itself (v: &m {<<: *m} and its variants) is what flatten_mapping leaves, or the kit's RecursionError in redact;
+// a list that holds itself is one list (names lists it, redact dies).
+const goldens6ManifestSHA256 = "1017e2a92f0eac9343a77fc3c2c9e1719e6cf5af4263e1958f7b747aa5a319ab"
+
+// depthKitSHA256 pins testdata/goldens-6/depth-kit.tsv: the kit's rc, sha256(stdout) and crash token for generated
+// deep renders (the verify-6720 depth_sweep generator) in filter, names and the diff.
+const depthKitSHA256 = "7fb953b5dbad7b4caffae68a4b318d44c121f4ba2b26770eb4a39d019a5a2c6b"
 
 const tracebackHead = "Traceback (most recent call last):\n"
 
@@ -212,7 +221,7 @@ func kitCrashToken(kitStream string) string {
 // gives (a "-" row has no traceback), so no token is chosen by hand.
 func TestTheCrashTokensAreTheKitsOwn(t *testing.T) {
 	crashes := 0
-	for _, dir := range []string{"testdata/goldens-1", "testdata/goldens-2", "testdata/goldens-3", "testdata/goldens-4", "testdata/goldens-5"} {
+	for _, dir := range []string{"testdata/goldens-1", "testdata/goldens-2", "testdata/goldens-3", "testdata/goldens-4", "testdata/goldens-5", "testdata/goldens-6"} {
 		for _, c := range readManifest(t, dir) {
 			stream := filepath.Join(dir, "out", c.name+".out")
 			if c.errSHA != "" {
@@ -230,8 +239,8 @@ func TestTheCrashTokensAreTheKitsOwn(t *testing.T) {
 			}
 		}
 	}
-	if crashes != 35 {
-		t.Fatalf("%d crash rows, want 35 (2 in goldens-1, 12 in goldens-2, 1 in goldens-4, 20 in goldens-5)", crashes)
+	if crashes != 45 {
+		t.Fatalf("%d crash rows, want 45 (2 in goldens-1, 12 in goldens-2, 1 in goldens-4, 20 in goldens-5, 10 in goldens-6)", crashes)
 	}
 }
 
@@ -311,11 +320,13 @@ func clip(a, b []byte) string {
 
 func TestTheGoldensManifestsArePinned(t *testing.T) {
 	for path, pin := range map[string]string{
-		"testdata/goldens-1/MANIFEST.tsv": goldensManifestSHA256,
-		"testdata/goldens-2/MANIFEST.tsv": goldens2ManifestSHA256,
-		"testdata/goldens-3/MANIFEST.tsv": goldens3ManifestSHA256,
-		"testdata/goldens-4/MANIFEST.tsv": goldens4ManifestSHA256,
-		"testdata/goldens-5/MANIFEST.tsv": goldens5ManifestSHA256,
+		"testdata/goldens-1/MANIFEST.tsv":  goldensManifestSHA256,
+		"testdata/goldens-2/MANIFEST.tsv":  goldens2ManifestSHA256,
+		"testdata/goldens-3/MANIFEST.tsv":  goldens3ManifestSHA256,
+		"testdata/goldens-4/MANIFEST.tsv":  goldens4ManifestSHA256,
+		"testdata/goldens-5/MANIFEST.tsv":  goldens5ManifestSHA256,
+		"testdata/goldens-6/MANIFEST.tsv":  goldens6ManifestSHA256,
+		"testdata/goldens-6/depth-kit.tsv": depthKitSHA256,
 	} {
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -367,5 +378,12 @@ func TestTheRoundOneClassGoldensAreReproduced(t *testing.T) {
 	byteEqual, tracebacks := runGoldens(t, "testdata/goldens-5")
 	if byteEqual != 9 || tracebacks != 20 {
 		t.Fatalf("byte-equal %d (want 9), crash-token cases %d (want 20)", byteEqual, tracebacks)
+	}
+}
+
+func TestTheVerifyReproGoldensAreReproduced(t *testing.T) {
+	byteEqual, tracebacks := runGoldens(t, "testdata/goldens-6")
+	if byteEqual != 19 || tracebacks != 10 {
+		t.Fatalf("byte-equal %d (want 19), crash-token cases %d (want 10)", byteEqual, tracebacks)
 	}
 }

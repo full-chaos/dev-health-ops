@@ -57,7 +57,7 @@ func TestTheScrubKeptEverySecretLikeVerdict(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		docs, err := loadAll(string(raw))
+		docs, err := loadAll(string(raw), composeDepthFile)
 		if err != nil {
 			t.Fatal(err)
 		}

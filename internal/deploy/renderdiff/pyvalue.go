@@ -103,7 +103,7 @@ var errUnhashable error = unhashableError{}
 // hashKey is the dict key identity under Python equality. A NaN key is never equal to another (Python keeps each NaN
 // object apart), so each one gets its own slot.
 func (d *pyDict) hashKey(k any) (string, bool) {
-	if f, ok := k.(float64); ok && math.IsNaN(f) {
+	if f, ok := k.(float64); ok && math.IsNaN(f) && !isSharedNaN(f) {
 		d.nan++
 		return "nan:" + strconv.Itoa(d.nan), true
 	}
@@ -122,6 +122,9 @@ func hashKey(k any) (string, bool) {
 	case *big.Int:
 		return "n:" + v.String(), true
 	case float64:
+		if isSharedNaN(v) {
+			return "nan:shared", true
+		}
 		if math.IsNaN(v) {
 			return "", true
 		}
@@ -155,6 +158,15 @@ func hashKey(k any) (string, bool) {
 	}
 	return "", false
 }
+
+// sharedNaN is PyYAML's SafeConstructor.nan_value: every `.nan` scalar is that ONE float object, so all of them are
+// one dict key (Python's dict compares a key by identity first). A NaN from
+// float('nan') (a JSON NaN, an explicit !!float nan) is a new object each time. The port tells them apart by payload.
+const sharedNaNBits = 0x7ff8000000000ace
+
+var sharedNaN = math.Float64frombits(sharedNaNBits)
+
+func isSharedNaN(f float64) bool { return math.Float64bits(f) == sharedNaNBits }
 
 func (t *pyDateTime) utcMicros() int64 {
 	days := daysFromCivil(t.y, t.mo, t.d)

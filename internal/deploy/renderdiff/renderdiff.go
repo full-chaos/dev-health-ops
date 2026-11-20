@@ -133,7 +133,7 @@ func (r *run) readStdinDocs() []*pyDict {
 		// sys.stdin decodes with surrogateescape; PyYAML's reader then refuses the escaped byte.
 		r.crash(&yamlError{msg: "unacceptable character"}, "docs_of")
 	}
-	all, err := loadAll(text)
+	all, err := loadAll(text, composeDepthStdin)
 	if err != nil {
 		r.crash(err, "docs_of")
 	}
@@ -405,7 +405,7 @@ func (r *run) newSide(label, path string, rc *big.Int) *side {
 		r.crash(err, "docs_of")
 	}
 	var parsed []*pyDict
-	all, err := loadAll(text)
+	all, err := loadAll(text, composeDepthFile)
 	var ye *yamlError
 	switch {
 	case errors.As(err, &ye):

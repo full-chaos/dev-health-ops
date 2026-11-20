@@ -78,9 +78,11 @@ func optInUnreadableReason(err error) string {
 // so a test can swap each for a stub; the production wiring is
 // NewOrgCategorizeBYO.
 type orgCategorizeBYO struct {
-	logger      *slog.Logger
-	optedIn     func(ctx context.Context, orgID string) (bool, error)
-	gate        func(ctx context.Context, orgID string) llmorgsettings.Decision
+	logger  *slog.Logger
+	optedIn func(ctx context.Context, orgID string) (bool, error)
+	// gate decides over the config the given source reads; Build hands it the
+	// one read it serves from, so the gate and the build see the same rows.
+	gate        func(ctx context.Context, orgID string, config llmorgsettings.ConfigSource) llmorgsettings.Decision
 	config      func(ctx context.Context, orgID string) (llmorgsettings.OrgConfig, bool, error)
 	newProvider func(kind categorize.ProviderKind, apiKey, baseURL, model string) (categorize.Provider, error)
 	guard       func(provider categorize.Provider, orgID string, kind categorize.ProviderKind, baseURL string) categorize.Provider
@@ -117,12 +119,9 @@ func newOrgCategorizeBYO(
 	newClef func(cfg categorize.ClefClientConfig) (*categorize.TypeSafeClient, error),
 ) *orgCategorizeBYO {
 	store := llmorgsettings.Store{Pool: pool, Decryptor: decryptor, Relation: llmorgsettings.CategorizeBYODefiner}.ForPurpose(llmorgsettings.PurposeCategorize)
-	gate := llmorgsettings.Gate{
-		Source: llmorgsettings.PgSource{
-			Licensing: licensing.PostgresStore{Pool: pool}, Queryer: pool, Config: store,
-			Relation: llmorgsettings.CategorizeBYODefiner,
-		},
-		Logger: logger,
+	source := llmorgsettings.PgSource{
+		Licensing: licensing.PostgresStore{Pool: pool}, Queryer: pool,
+		Relation: llmorgsettings.CategorizeBYODefiner,
 	}
 	budget := llmbudget.PgStore{Pool: pool, Limit: llmbudget.LimitFromCategorizeBYODefiner}
 	return &orgCategorizeBYO{
@@ -130,7 +129,11 @@ func newOrgCategorizeBYO(
 		optedIn: func(ctx context.Context, orgID string) (bool, error) {
 			return llmorgsettings.CategorizeBYOEnabled(ctx, pool, orgID)
 		},
-		gate:        gate.Decide,
+		gate: func(ctx context.Context, orgID string, config llmorgsettings.ConfigSource) llmorgsettings.Decision {
+			scoped := source
+			scoped.Config = config
+			return llmorgsettings.Gate{Source: scoped, Logger: logger}.Decide(ctx, orgID)
+		},
 		config:      store.OrgConfig,
 		newProvider: newProvider,
 		guard: func(provider categorize.Provider, orgID string, kind categorize.ProviderKind, baseURL string) categorize.Provider {
@@ -179,7 +182,8 @@ func refuseBYO(code string) error {
 // Build never draws the platform model: the gate must answer Own, and any other
 // verdict, or any unusable configuration, is a refusal.
 func (byo *orgCategorizeBYO) Build(ctx context.Context, orgID string) (*ServedDecision, error) {
-	decision := byo.gate(ctx, orgID)
+	read := &oneConfigRead{read: byo.config}
+	decision := byo.gate(ctx, orgID, read)
 	switch decision.Kind {
 	case llmorgsettings.Own:
 	case llmorgsettings.Platform:
@@ -187,7 +191,7 @@ func (byo *orgCategorizeBYO) Build(ctx context.Context, orgID string) (*ServedDe
 	default:
 		return nil, refuseBYO(decision.Code)
 	}
-	cfg, found, err := byo.config(ctx, orgID)
+	cfg, found, err := read.OrgConfig(ctx, orgID)
 	if err != nil {
 		byo.logger.ErrorContext(ctx, "categorize byo config unreadable", slog.String("org_id", orgID), slog.String("error", err.Error()))
 		return nil, refuseBYO(string(llmorgsettings.ConfigUnreadableRow))
@@ -226,6 +230,29 @@ func (byo *orgCategorizeBYO) Build(ctx context.Context, orgID string) (*ServedDe
 	}
 	served.backend.baseURL = cfg.BaseURL
 	return served, nil
+}
+
+// oneConfigRead reads the org's config once and answers every later call with
+// that answer: a save between the gate's read and the build's cannot hand the
+// build a base_url (or key) the gate never checked.
+type oneConfigRead struct {
+	read  func(ctx context.Context, orgID string) (llmorgsettings.OrgConfig, bool, error)
+	done  bool
+	org   string
+	cfg   llmorgsettings.OrgConfig
+	found bool
+	err   error
+}
+
+func (r *oneConfigRead) OrgConfig(ctx context.Context, orgID string) (llmorgsettings.OrgConfig, bool, error) {
+	if !r.done {
+		r.cfg, r.found, r.err = r.read(ctx, orgID)
+		r.done, r.org = true, orgID
+	}
+	if r.org != orgID {
+		return llmorgsettings.OrgConfig{}, false, errors.New("categorize byo: config read for another org")
+	}
+	return r.cfg, r.found, r.err
 }
 
 // buildClef builds the backend of an org whose categorize config names clef: the

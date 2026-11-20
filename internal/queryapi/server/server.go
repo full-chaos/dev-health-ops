@@ -30,6 +30,7 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/99designs/gqlgen/graphql"
@@ -475,7 +476,7 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 
 	handler, internal, mcp, gate := gatedListenerHandlers(lookup, mux, internalMux, mcpMux)
 	cleanups = append(cleanups, gate.Wait)
-	return &Plane{Handler: handler, InternalHandler: internal, MCPHandler: mcp, Ready: ready, Probes: probes, Close: closeAll}, nil
+	return &Plane{Handler: handler, InternalHandler: internal, MCPHandler: mcp, Ready: ready, Probes: probes, Close: sync.OnceFunc(closeAll)}, nil
 }
 
 // recordErrorCount stamps the number of errors a GraphQL response carried on

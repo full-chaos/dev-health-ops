@@ -169,7 +169,7 @@ func TestServedAnswersUnchangedByPrintRedaction(t *testing.T) {
 		projected := project(raw, purpose)
 		return served{
 			projected:  map[string]string(projected),
-			storedKey:  storedKeyInBaseURL(raw, projected[keyBaseURL]),
+			storedKey:  Store{}.storedKeyInBaseURL(raw, projected[keyBaseURL]),
 			carriesKey: storedBaseURLCarriesKey(projected, "openai"),
 		}
 	}

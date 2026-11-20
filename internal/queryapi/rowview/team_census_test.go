@@ -11,15 +11,21 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
-// The census of the readers of the two tables that hold team rows (CHAOS-14340): every reader of
+// The census of the readers of the two tables that hold team rows (CHAOS-14340): a reader of
 // work_item_metrics_daily or work_item_state_durations_daily says which form it reads, so a reader that answers for
-// one team cannot keep reading the org view (a co-owner team would read none of its items), and a reader that sums
-// several teams cannot take the team form (an item of two teams of the set would count twice).
+// one team does not keep reading the org view (a co-owner team would read none of its items), and a reader that sums
+// several teams does not take the team form (an item of two teams of the set would count twice).
 //
-// A reader is a non-test file that names one of the two tables and is a reader in readerRoles, a file that readerRoles
-// lists under another role but that teamReaderRoles lists as a reader, or a file that calls a view predicate of this
-// package and names no table of the view column (it reads the table through a registry). A file that reaches the
-// table only through a parameter (explain/repositories.go: a DISTINCT provider listing, view-invariant) is not seen.
+// What it checks: the TEXT of each non-test file, per file. A file is a reader when it contains the name of one of
+// the two tables and is a reader in readerRoles or is listed in teamReaderRoles, when it contains the direct spelling
+// "rowview.OrgPredicate(" or "rowview.ScopePredicate(" and no table name of the view column, or when it contains
+// "rowview.TeamSource(". The form of a file must match whether it contains "rowview.TeamSource(".
+//
+// NOT pinned (the census does not bind Go references; ticket 14348 does): a helper call through a renamed or dot
+// import of rowview; a helper stored as a func value and called later; a registry read of a team table in a file that
+// also names a table of the view column (a person query), and a direct read added to a file that readerRoles lists as
+// writer or names. A helper name in a comment or a string counts as a call. A file that reaches the table only
+// through a parameter (explain/repositories.go: a DISTINCT provider listing, view-invariant) is not seen.
 //
 // Forms:
 //
@@ -168,7 +174,7 @@ func TestTeamCensusEveryReaderIsClassified(t *testing.T) {
 	}
 }
 
-// The census refuses a new reader that says nothing about its form, in each way a file can be a reader.
+// The census refuses a new reader that says nothing about its form, in each of the text forms it checks.
 func TestTeamCensusRejectsANewUnclassifiedReader(t *testing.T) {
 	const fresh = "internal/queryapi/fresh/fresh.go"
 	for _, reader := range []struct {

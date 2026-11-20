@@ -2724,6 +2724,13 @@ func manualBackstopTriggerReadbackHint(family, org string) (string, bool) {
 			"ClickHouse: SELECT team_id, rule_id, fired, computed_at FROM recommendations_daily FINAL WHERE org_id = '%s' ORDER BY computed_at DESC LIMIT 5",
 			org,
 		), true
+	case "membership_backfill":
+		// work_unit_membership_runs IS ReplacingMergeTree(completed_at); a
+		// run is visible to readers only once its marker row is written.
+		return fmt.Sprintf(
+			"ClickHouse: SELECT run_id, completed_at FROM work_unit_membership_runs FINAL WHERE org_id = '%s' ORDER BY completed_at DESC LIMIT 5",
+			org,
+		), true
 	default:
 		return "", false
 	}
@@ -2993,6 +3000,12 @@ func dispatchMetricsRemainingTriggerBackstop(
 			outcome, startErr = store.StartManualCapacityTriggerRun(ctx, *org, dayString, generation, teamID, *allTeams, publisher)
 		case "recommendations":
 			outcome, startErr = store.StartManualRecommendationsTriggerRun(ctx, *org, dayString, generation, teamID, *window, publisher)
+		case "membership_backfill":
+			graphBuild, err := newManualMembershipGraphBuild(runtime.registry, *org)
+			if err != nil {
+				return writeError(stderr, "operator_backend_unavailable")
+			}
+			outcome, startErr = store.StartManualMembershipTriggerRun(ctx, *org, dayString, generation, graphBuild, publisher)
 		default:
 			outcome, startErr = store.StartManualBackfillRun(ctx, *family, *org, dayString, generation, publisher)
 		}
@@ -3009,11 +3022,17 @@ func dispatchMetricsRemainingTriggerBackstop(
 		case outcome.AlreadyRan:
 			status = "already_ran"
 		}
+		// A ":retry-N" run carries its own generation; print the one the run
+		// (and, for membership, its graph build) is stored under.
+		printedGeneration := generation
+		if outcome.Generation != "" {
+			printedGeneration = outcome.Generation
+		}
 		result := map[string]any{
 			"family":          *family,
 			"org":             *org,
 			"day":             dayString,
-			"generation":      generation,
+			"generation":      printedGeneration,
 			"review_evidence": *reviewEvidence,
 			"status":          status,
 			"run_id":          outcome.RunID,

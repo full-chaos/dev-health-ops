@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -53,8 +54,18 @@ func (doer *gitLabEdgeDoer) Do(request *http.Request) (*http.Response, error) {
 		body = `{"id":123,"path_with_namespace":"acme/api","default_branch":"main","only_allow_merge_if_pipeline_succeeds":true}`
 	case path == "/api/v4/projects/123/pipelines":
 		query := request.URL.Query()
+		// GitLab answers order_by=id&sort=desc newest id first; the chunked route fences each page on that order. Another
+		// order (the direct route's updated_at) keeps the fixture order.
+		listed := slices.Clone(doer.pipelines)
+		if query.Get("order_by") == "id" && query.Get("sort") == "desc" {
+			slices.SortStableFunc(listed, func(a, b gitLabEdgePipeline) int {
+				left, _ := strconv.Atoi(a.ID)
+				right, _ := strconv.Atoi(b.ID)
+				return right - left
+			})
+		}
 		items := []string{}
-		for _, pipeline := range doer.pipelines {
+		for _, pipeline := range listed {
 			updated := gitLabEdgeTime(pipeline.Updated)
 			if raw := query.Get("updated_after"); raw != "" && updated.Before(gitLabEdgeTime(raw)) {
 				continue

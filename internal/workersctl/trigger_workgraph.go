@@ -26,7 +26,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboperator"
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -287,6 +291,47 @@ func writeManualWorkgraphTrigger(
 		"review_evidence": reviewEvidence,
 		"status":          "started",
 	})
+}
+
+// manualMembershipGraphBuildRequest builds the work-graph build a manual
+// membership trigger chains, in the shape the nightly binding's
+// startGraphBuild writes (internal/scheduler/fixed/producers.go), keyed on
+// the trigger's own generation so a retried request reuses its build and a
+// ":retry-N" run gets a new one. It returns the build's completion key.
+func manualMembershipGraphBuildRequest(org, generation string) (workgraph.Request, string, error) {
+	request := workgraph.Request{
+		ID:             manualTriggerRequestID(manualWorkGraphTriggerNamespace, "workgraph.build|"+generation),
+		OrganizationID: org,
+		Kind:           workgraph.KindBuild,
+		Scope:          []byte("{}"),
+		LLMConcurrency: 1,
+		CorrelationID:  generation,
+		IdempotencyKey: generation + ":" + jobcontract.KindWorkGraphBuild + ":" + org,
+	}
+	completionKey, err := joboutbox.CompletionKey("work_graph_execution_request", request.ID)
+	if err != nil {
+		return workgraph.Request{}, "", err
+	}
+	return request, completionKey, nil
+}
+
+// newManualMembershipGraphBuild returns the prerequisite that writes that
+// build in the trigger's transaction.
+func newManualMembershipGraphBuild(registry *jobruntime.Registry, org string) (remaining.ManualTriggerPrerequisite, error) {
+	writer, err := workgraph.NewRequestWriter(registry)
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, tx pgx.Tx, generation string) (string, error) {
+		request, completionKey, err := manualMembershipGraphBuildRequest(org, generation)
+		if err != nil {
+			return "", err
+		}
+		if err := writer.WriteTx(ctx, tx, request); err != nil {
+			return "", err
+		}
+		return completionKey, nil
+	}, nil
 }
 
 // parseOptionalUTCDateRange parses two optional YYYY-MM-DD flags. Either,

@@ -330,7 +330,8 @@ type GitHubTestsRouteHandler struct {
 	OpenRuns GitHubOpenRunsReader
 	// CoalesceRuns marks each runs-phase run emission coalescable, so the
 	// executor may commit several runs in one chunk group, and fences the open
-	// phase with a barrier. False keeps one chunk group per run.
+	// phase with a barrier. False (the default, and the production wiring in
+	// git_family_route.go) keeps one chunk group per run: coalescing ships dark.
 	CoalesceRuns bool
 	// RefreshLookback is how far before the window the runs phase lists; zero
 	// keeps githubTestsRefreshLookbackDefault.

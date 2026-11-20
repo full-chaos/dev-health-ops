@@ -111,11 +111,12 @@ func githubTestsRelistRunOutsideWindow(pipeline githubTestsPipelineRow, claim Cl
 	return pipeline.FinishedAt.UTC().Before(since.Add(-githubTestsArtifactFloorWidth(since, before)))
 }
 
-// githubTestsRelistedAtOrAfterFloor reports a run the deep listing answered although it was created at or after the regular
-// floor. It belongs to the regular range, whatever the listing answered, so each route skips it in the deep range and the two
-// ranges never read one run twice in a claim.
-func githubTestsRelistedAtOrAfterFloor(pipeline githubTestsPipelineRow, claim Claim) bool {
-	return pipeline.QueuedAt != nil && !pipeline.QueuedAt.UTC().Before(githubTestsRelistFloor(claim.SinceAt.UTC(), claim.BeforeAt.UTC()))
+// githubTestsRelistedOutsideDeepRange reports a run the deep listing answered although it is not in the deep created range:
+// created at or after the regular floor (it belongs to the regular range), or with no created time (GitHub cannot list it by
+// created). Each route skips it in the deep range, whatever the listing answered, so the two ranges never read one run twice
+// in a claim. The regular range's rule is unchanged: it never excludes a run it cannot date.
+func githubTestsRelistedOutsideDeepRange(pipeline githubTestsPipelineRow, claim Claim) bool {
+	return pipeline.QueuedAt == nil || !pipeline.QueuedAt.UTC().Before(githubTestsRelistFloor(claim.SinceAt.UTC(), claim.BeforeAt.UTC()))
 }
 
 // githubTestsArtifactRunOutside is the read rule of the range a run was listed in.

@@ -1914,7 +1914,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				coverage := []coverageSnapshotRow(nil)
 				var completeness []testOpsRunReportCompletenessRow
 				if include && githubTestsRunReadable(run) && !githubTestsArtifactRunOutside(pipeline, claim, cursor.Relist == githubTestsRelistWalking) &&
-					!(cursor.Relist == githubTestsRelistWalking && githubTestsRelistedAtOrAfterFloor(pipeline, claim)) &&
+					!(cursor.Relist == githubTestsRelistWalking && githubTestsRelistedOutsideDeepRange(pipeline, claim)) &&
 					!githubTestsSkipCutRun(cursor, cutSecond, cutKey) {
 					// The run's losses are the deltas of the cursor's exact loss counters across the run (CHAOS-13826).
 					lossBefore := githubTestsTakeRunLossCounts(cursor)

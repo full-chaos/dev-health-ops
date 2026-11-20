@@ -506,7 +506,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 		}
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
 		if !include || !githubTestsRunReadable(run) || githubTestsArtifactRunOutside(pipeline, claim, listed.relist) ||
-			listed.relist && githubTestsRelistedAtOrAfterFloor(pipeline, claim) {
+			listed.relist && githubTestsRelistedOutsideDeepRange(pipeline, claim) {
 			continue
 		}
 		artPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{

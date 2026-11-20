@@ -35,6 +35,7 @@ require (
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/valkey-io/valkey-go v1.0.76
 	github.com/vektah/gqlparser/v2 v2.5.22
+	github.com/yuin/goldmark v1.7.8
 	go.opentelemetry.io/contrib/bridges/prometheus v0.69.0
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.45.0

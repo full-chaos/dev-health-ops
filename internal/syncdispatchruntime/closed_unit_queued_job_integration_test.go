@@ -285,6 +285,9 @@ func TestQueuedJobOfAUnitNotClosedByACancelStillRetries(t *testing.T) {
 		// The cancel category on a unit whose run is not terminal: a live sibling keeps it open.
 		{name: "cancelled unit in an open run", runStatus: "running", siblingRun: true,
 			unit: pgseed.SyncRunUnit{Status: "failed", ResultJSON: `{"error_category": "cancelled"}`}},
+		// Not written by any cancel: it pins that only a failed unit counts as closed.
+		{name: "unit that is not failed, cancel category, terminal run", runStatus: "failed",
+			unit: pgseed.SyncRunUnit{Status: "retrying", ResultJSON: `{"error_category": "cancelled"}`}},
 		{name: "cancelled unit, job of another organization", runStatus: "dispatching", cancelRun: true,
 			jobOrg: closedUnitOtherOrg, unit: pgseed.SyncRunUnit{Status: "dispatching"}},
 	} {

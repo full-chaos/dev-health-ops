@@ -79,11 +79,11 @@ func TestStoredKeyInBaseURLChecksEveryStoredKey(t *testing.T) {
 		"empty url":               {"", false},
 		"another key is not ours": {"https://p.example.invalid/sk-someone-else-0123456789", false},
 	} {
-		if got := storedKeyInBaseURL(raw, tc.baseURL); got != tc.want {
+		if got := (Store{}).storedKeyInBaseURL(raw, tc.baseURL); got != tc.want {
 			t.Fatalf("%s: storedKeyInBaseURL(%q) = %v, want %v", name, tc.baseURL, got, tc.want)
 		}
 	}
-	if storedKeyInBaseURL(orgSettings{}, "https://p.example.invalid/v1") {
+	if (Store{}).storedKeyInBaseURL(orgSettings{}, "https://p.example.invalid/v1") {
 		t.Fatal("an org with no stored key cannot carry one")
 	}
 }

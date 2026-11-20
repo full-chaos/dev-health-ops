@@ -185,7 +185,9 @@ func gitLabEntryStored(claim Claim, final CompleteRouteBatch, completedAt time.T
 	if final.Watermark == nil {
 		return *claim.SinceAt
 	}
-	return normalizeWatermarkWrite(*final.Watermark, claim.BeforeAt, completedAt, claim.OrgID, claim.SourceExternalID, claim.Dataset)
+	normalized, clampLog := normalizeWatermarkWrite(*final.Watermark, claim.BeforeAt, completedAt, claim.OrgID, claim.SourceExternalID, claim.Dataset)
+	clampLog()
+	return normalized
 }
 
 func gitLabEntryClaim(beforeAt time.Time) Claim {

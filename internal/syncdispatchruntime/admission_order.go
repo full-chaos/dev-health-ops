@@ -126,7 +126,13 @@ WHERE id = $1::uuid`, runID).Scan(&order.createdAt, &order.backfill, &order.mode
 //     through the other signs;
 //   - heartbeat: a running unit sent a heartbeat;
 //   - lease: a running unit holds a live lease;
-//   - dispatching: a unit was claimed (dispatching) inside the window.
+//   - dispatching: a unit was claimed (dispatching) inside the window;
+//   - wake armed (CHAOS-14394): the run's dispatch_sync_run outbox row is pending, has no last_error and is due inside
+//     the window, before or after now. A run left unclaimed by the bucket cap or by hold-back re-arms that row on every
+//     pass (schedule_redispatch.go), so a run that waits for a slot stays live though it never had a unit claimed.
+//     Own refusals do not show here: they end as terminal units, retrying units due later (not waiting) or no pending
+//     dispatch row (discovery block, paused route, publish failure sets last_error). available_at, never updated_at
+//     (the relay rewrites it). One probe on uq_sync_dispatch_outbox_run_kind.
 //
 // The unit probes read only the run's running or dispatching units (ix_sync_run_units_run_status), which the
 // concurrency caps keep few; a run's planned backlog and its finished units are never read.
@@ -182,6 +188,14 @@ WHERE run.status NOT IN ('success', 'partial_failed', 'failed')
             SELECT 1 FROM public.sync_run_units AS unit
             WHERE unit.sync_run_id = run.id AND unit.status = 'dispatching'
                 AND unit.updated_at > $7::timestamptz - make_interval(secs => $9::double precision)
+            LIMIT 1
+        )
+        OR EXISTS (
+            SELECT 1 FROM public.sync_dispatch_outbox AS wake
+            WHERE wake.sync_run_id = run.id AND wake.kind = 'dispatch_sync_run'
+                AND wake.status = 'pending' AND wake.last_error IS NULL
+                AND wake.available_at > $7::timestamptz - make_interval(secs => $9::double precision)
+                AND wake.available_at <= $7::timestamptz + make_interval(secs => $9::double precision)
             LIMIT 1
         )
     )

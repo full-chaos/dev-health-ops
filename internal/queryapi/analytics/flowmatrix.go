@@ -572,7 +572,7 @@ LIMIT {limit_per_dim:UInt32}
 		bridgeNotEmpty = "repo_id IS NOT NULL"
 	case DimensionRepo:
 		bridgeCol = "ut.team_id"
-		bridgeNotEmpty = "ut.team_id != ''"
+		bridgeNotEmpty = "ut.team_id IS NOT NULL AND match(ut.team_id, '[^\\\\s\\\\x{0B}\\\\p{Z}\\\\x{FEFF}]')"
 	default:
 		return compiledQuery{}, compiledQuery{}, fmt.Errorf(
 			"analytics: compileFlowMatrixInvestmentTeamRepoDimension: unsupported dimension %q", req.Dimension)
@@ -659,6 +659,7 @@ LIMIT {max_edges:UInt32}
 // ErrUnsafeStatement, which resolveFlowMatrix then SWALLOWS to an empty
 // result. Shape copied from Lane A's workgraph/scope.go, which hit the
 // identical guard live.
+// A team key must hold a char that is not whitespace: the match() class is the ECMA-262 "White Space" and "Line Terminators" set (what JS trim removes), not just the empty string.
 const flowMatrixTeamActivitySelect = `
     SELECT
         wct.work_item_id,
@@ -673,7 +674,7 @@ const flowMatrixTeamActivitySelect = `
       AND wct.completed_at IS NOT NULL
       AND wct.org_id = {org_id:String}
       AND t.team_id IS NOT NULL
-      AND t.team_id != ''
+      AND match(t.team_id, '[^\\s\\x{0B}\\p{Z}\\x{FEFF}]')
 `
 
 const flowMatrixTeamNodesTemplate = `
@@ -759,7 +760,7 @@ const flowMatrixRepoEnrichedSelect = `
       AND wct.completed_at IS NOT NULL
       AND wi.org_id = {org_id:String}
       AND t.team_id IS NOT NULL
-      AND t.team_id != ''
+      AND match(t.team_id, '[^\\s\\x{0B}\\p{Z}\\x{FEFF}]')
 `
 
 // flowMatrixWorkTypeEnrichedSelect ports _FLOW_MATRIX_WORK_TYPE_ENRICHED_CTE
@@ -884,8 +885,8 @@ INNER JOIN (` + flowMatrixRepoEnrichedSelect + `) AS b
   ON a.team_id = b.team_id
   AND a.day = b.day
   AND a.org_id = b.org_id
-WHERE a.team_id IS NOT NULL AND a.team_id != ''
-  AND b.team_id IS NOT NULL AND b.team_id != ''
+WHERE a.team_id IS NOT NULL AND match(a.team_id, '[^\\s\\x{0B}\\p{Z}\\x{FEFF}]')
+  AND b.team_id IS NOT NULL AND match(b.team_id, '[^\\s\\x{0B}\\p{Z}\\x{FEFF}]')
   AND a.repo_id IS NOT NULL
   AND b.repo_id IS NOT NULL
   AND a.repo_id != b.repo_id

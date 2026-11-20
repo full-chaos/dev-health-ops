@@ -990,9 +990,9 @@ func collectLinearReferenceProjectTeams(
 		return result, err
 	}
 	for _, item := range raw {
-		var team linearReferenceProjectTeamPayload
-		if err := json.Unmarshal(item, &team); err != nil {
-			return result, providerfoundation.ErrNormalizationInvalid
+		team, err := decodeLinearReferenceProjectTeamItem(item)
+		if err != nil {
+			return result, providerfoundation.RouteFailure(graphQLRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		result.nodes = append(result.nodes, team)
 	}
@@ -1034,4 +1034,12 @@ func collectLinearReferenceTeamMembers(
 		)
 	}
 	return raw, pages, false, err
+}
+
+func decodeLinearReferenceProjectTeamItem(raw json.RawMessage) (linearReferenceProjectTeamPayload, error) {
+	var team linearReferenceProjectTeamPayload
+	if err := json.Unmarshal(raw, &team); err != nil {
+		return team, providerfoundation.ErrNormalizationInvalid
+	}
+	return team, nil
 }

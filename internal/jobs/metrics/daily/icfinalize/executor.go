@@ -311,7 +311,8 @@ func (executor *Executor) loadGitMetrics(
 		var reviewsGiven, changesRequestedGiven, reviewsReceived uint32
 		var prInterruptionLoad, contextSpreadCount, reviewRequestLoad uint32
 		var weekendDays uint8
-		if err := rows.Scan(&metric.AuthorEmail, &metric.TeamID, &metric.RepoID, &locAdded,
+		var teamID, teamName *string
+		if err := rows.Scan(&metric.AuthorEmail, &teamID, &metric.RepoID, &locAdded,
 			&locDeleted, &prsAuthored, &prsMerged,
 			&metric.MedianPRCycleHours, &metric.PRCycleP90Hours,
 			&commitsCount, &filesChanged, &largeCommitsCount, &metric.AvgCommitSizeLOC,
@@ -319,9 +320,15 @@ func (executor *Executor) loadGitMetrics(
 			&metric.PRFirstReviewP50Hours, &metric.PRFirstReviewP90Hours, &metric.PRReviewTimeP50Hours,
 			&metric.PRPickupTimeP50Hours, &reviewsGiven, &changesRequestedGiven,
 			&reviewsReceived, &metric.ReviewReciprocity, &prInterruptionLoad,
-			&contextSpreadCount, &reviewRequestLoad, &metric.TeamName, &metric.ActiveHours, &weekendDays,
+			&contextSpreadCount, &reviewRequestLoad, &teamName, &metric.ActiveHours, &weekendDays,
 		); err != nil {
 			return nil, err
+		}
+		if teamID != nil {
+			metric.TeamID = *teamID
+		}
+		if teamName != nil {
+			metric.TeamName = *teamName
 		}
 		if metric.RepoID == SynthesizedRepoID(orgID, metric.AuthorEmail) {
 			// This family's own row of a person with no git record (zeros
@@ -375,10 +382,17 @@ func (executor *Executor) loadWorkItemMetrics(
 		// (001_metrics_v2.sql), not the Go int64 WorkItemUserMetric models them
 		// as -- scan into the matching width, then widen.
 		var itemsStarted, itemsCompleted, wipCountEndOfDay uint32
+		var cycleTimeP50Hrs, cycleTimeP90Hrs *float64
 		if err := rows.Scan(&metric.UserIdentity, &metric.Provider, &metric.WorkScopeID,
 			&metric.TeamID, &metric.TeamName, &itemsStarted, &itemsCompleted,
-			&wipCountEndOfDay, &metric.CycleTimeP50Hrs, &metric.CycleTimeP90Hrs); err != nil {
+			&wipCountEndOfDay, &cycleTimeP50Hrs, &cycleTimeP90Hrs); err != nil {
 			return nil, err
+		}
+		if cycleTimeP50Hrs != nil {
+			metric.CycleTimeP50Hrs = *cycleTimeP50Hrs
+		}
+		if cycleTimeP90Hrs != nil {
+			metric.CycleTimeP90Hrs = *cycleTimeP90Hrs
 		}
 		if inactive.Has(metric.TeamID) {
 			metric.TeamID, metric.TeamName = unassignedTeamID, unassignedTeamName

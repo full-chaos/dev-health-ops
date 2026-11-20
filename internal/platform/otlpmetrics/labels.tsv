@@ -39,6 +39,7 @@ devhealth_acr_workload_refused_total	reason,route	code: internal/apiservice/acr/
 devhealth_api_auth_proxy_impersonation_config_invalid		code: internal/apiservice/authproxy.go
 devhealth_api_auth_proxy_requests_total	aggregate,outcome	code: internal/apiservice/authproxy.go
 devhealth_api_auth_proxy_upstream_duration_seconds	aggregate	code: internal/apiservice/authproxy.go
+devhealth_api_llm_settings_save_lock_timeout_total	scope	code: internal/apiservice/admin/llmsettings_leakcheck.go
 devhealth_api_org_acr_revoke_skipped_total	event,reason	code: internal/apiservice/admin/org_acr_revoke.go
 devhealth_api_orgdelete_auth_deprovision_skipped_total	reason	code: internal/apiservice/admin/orgdeletion_auth.go
 devhealth_auth_access_token_accepted_total	class,profile,service	code: internal/auth/accessverify/accessverify.go
@@ -190,6 +191,7 @@ river.work_duration_histogram	attempt,cancel,kind,priority,queue,snooze,status	t
 session_org_activity_fallback_total		code: internal/api/session/activity_metrics.go
 session_org_activity_read_failures_total	error_class,table	code: internal/api/session/activity_metrics.go
 sync_finalize_delivery_not_current_total	reason	code: internal/syncdispatchruntime/native_finalize_sync_run.go
+sync_fence_commit_snapshot_busy_total	kind,reason	code: internal/syncdispatchruntime/transport_fence.go
 sync_route_generation_stranded_total	action,kind	code: internal/syncreconciler/generation_reconcile.go
 team_catalog_snapshot_close_abandoned_total	kind,provider,reason	code: internal/providersync/snapshot_close_report.go
 team_repo_ownership_retraction_held_total	kind,provider,reason	code: internal/providersync/team_repo_ownership_retraction_guard.go
@@ -379,6 +381,7 @@ sync_initial_backfill_total	outcome	code: internal/scheduler/sync/initial_backfi
 sync_manual_trigger_await_latency_seconds	outcome	code: internal/synchandoff/await_metrics.go
 sync_manual_trigger_await_outcome_total	outcome	code: internal/synchandoff/await_metrics.go
 sync_plan_gate_total	dataset,outcome,provider	code: internal/scheduler/sync/plan_gate_telemetry.go
+sync_reconciler_chunk_sidecar_reclaim_lock_skipped_total		code: internal/syncreconciler/pipeline.go
 sync_reconciler_stage_budget_seconds	stage	code: internal/syncreconciler/pipeline.go
 sync_reconciler_stage_degraded	stage	code: internal/syncreconciler/pipeline.go
 sync_reconciler_stage_duration_seconds	stage	code: internal/syncreconciler/pipeline.go

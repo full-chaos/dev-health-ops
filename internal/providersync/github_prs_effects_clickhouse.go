@@ -342,13 +342,14 @@ WHERE org_id = ? AND repo_id = ? AND number = ?`,
 		found       bool
 	)
 	for rows.Next() {
-		// additions/deletions/changed_files/comments_count/
-		// changes_requested_count/reviews_count are non-nullable UInt32
-		// columns; clickhouse-go requires scanning into *uint32, not *int.
-		var additions, deletions, changedFiles, commentsCount uint32
-		var changesRequestedCount, reviewsCount uint32
+		// comments_count/changes_requested_count/reviews_count are UInt32;
+		// additions/deletions/changed_files are Nullable(UInt32). clickhouse-go
+		// requires a *uint32 (or **uint32 for the Nullable ones), not *int.
+		var commentsCount, changesRequestedCount, reviewsCount uint32
+		var additions, deletions, changedFiles *uint32
+		var state, authorName *string
 		if err := rows.Scan(
-			&actual.Title, &actual.Body, &actual.State, &actual.AuthorName,
+			&actual.Title, &actual.Body, &state, &authorName,
 			&actual.AuthorEmail, &actual.CreatedAt, &actual.MergedAt,
 			&actual.ClosedAt, &actual.HeadBranch, &actual.BaseBranch,
 			&additions, &deletions, &changedFiles,
@@ -358,8 +359,9 @@ WHERE org_id = ? AND repo_id = ? AND number = ?`,
 		); err != nil {
 			return pullRequestVersion{}, err
 		}
-		actual.Additions, actual.Deletions = int(additions), int(deletions)
-		actual.ChangedFiles, actual.CommentsCount = int(changedFiles), int(commentsCount)
+		actual.State, actual.AuthorName = derefString(state), derefString(authorName)
+		actual.Additions, actual.Deletions = int(derefUint32(additions)), int(derefUint32(deletions))
+		actual.ChangedFiles, actual.CommentsCount = int(derefUint32(changedFiles)), int(commentsCount)
 		actual.ChangesRequestedCount = int(changesRequestedCount)
 		actual.ReviewsCount = int(reviewsCount)
 		found = true
@@ -501,3 +503,10 @@ func timePointersEqual(left, right *time.Time) bool {
 
 var _ EffectSink = GitHubPullRequestClickHouseEffects{}
 var _ EffectReadback = GitHubPullRequestClickHouseEffects{}
+
+func derefUint32(value *uint32) uint32 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}

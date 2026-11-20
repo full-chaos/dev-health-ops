@@ -193,11 +193,15 @@ func queryStrings(ctx context.Context, c Conn, query string, args ...any) ([]str
 	defer rows.Close()
 	var out []string
 	for rows.Next() {
-		var id string
+		var id *string
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
-		out = append(out, id)
+		if id == nil {
+			out = append(out, "")
+			continue
+		}
+		out = append(out, *id)
 	}
 	return out, rows.Err()
 }

@@ -43,7 +43,7 @@ var pinnedTableFiles = map[string]censusPin{
 		"not a reader: the test, coverage and pipeline writers retire a day (a marker row); the file names the test table only in comments and an error text"},
 	"internal/jobs/metrics/testops/rules_sql.go": {"6877297e3f2af05dd7a2586a997afd5f981a1ef4857809128bf8e684dc6dbab4",
 		"reader rule applied: TestPassRateWindowSQL, over passed_count and failed_count; TestFailureRecurrenceWindowSQL over the two recurrence counts; the retired-day HAVING is added to StabilityLiveRowsSQL only"},
-	"internal/jobs/report/dedup.go": {"6cf328ff8bdfc645e6e8699a244f487fe02c81de59c8174c65ba448250ec5f2a",
+	"internal/jobs/report/dedup.go": {"2ad71f303a140e4bd5d8abb56e3c21cfc137b8c22eb3cb667a376c4f3ef03039",
 		"reader rule applied: the pass_rate chart rule reads the counts; the failure_recurrence_score rule reads its two counts"},
 	"internal/jobs/report/pooled.go": {"91e9760c0b9c160d8b2bba40e517f9772dc32e8c06a827d4d0640315405ca5b9",
 		"not a reader of pass_rate: suite duration percentiles"},

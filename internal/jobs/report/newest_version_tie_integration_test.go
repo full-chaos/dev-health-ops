@@ -7,6 +7,8 @@ import (
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 )
 
 // The cells of the report chart's newest-version pick on a computed_at tie
@@ -115,5 +117,40 @@ func TestReportChartPicksOneVersionOnATie(t *testing.T) {
 				t.Errorf("a computed_at tie gives a chart that depends on the insert order: %v", tie)
 			}
 		})
+	}
+}
+
+// On a tie the one-team and org charts of work_item_metrics_daily serve the
+// version that the table's one order (rowview.WorkItemMetricsNewestOrder), the
+// order of the served readers, picks. The pairs vary so that each version wins.
+func TestReportChartServesTheServedVersionOnATie(t *testing.T) {
+	e := startPooledEnv(t)
+	e.exec(`SYSTEM STOP MERGES work_item_metrics_daily`)
+	wins := [2]int{}
+	for k := uint32(0); k < 12; k++ {
+		e.tieReset()
+		versions := []teamChartRow{
+			{"2026-02-02", "P", 1 + k, "2026-02-02 10:00:00", ""},
+			{"2026-02-02", "P", 100 + k, "2026-02-02 10:00:00", ""},
+		}
+		e.seedTeamChartRows(reportTieOrg, versions[:1])
+		e.seedTeamChartRows(reportTieOrg, versions[1:])
+		var served uint32
+		if err := e.conn.QueryRow(e.ctx, `SELECT argMax(work_item_metrics_daily.items_completed, `+
+			rowview.WorkItemMetricsNewestOrder+`) FROM work_item_metrics_daily WHERE org_id = ?`, reportTieOrg).Scan(&served); err != nil {
+			t.Fatal(err)
+		}
+		if served == versions[0].completed {
+			wins[0]++
+		} else {
+			wins[1]++
+		}
+		want := map[string]float64{"2026-02-02": float64(served)}
+		wantTeamChart(t, fmt.Sprintf("k=%d team P", k), e.teamChart(reportTieOrg, "P"), want)
+		wantTeamChart(t, fmt.Sprintf("k=%d org form", k), e.teamChart(reportTieOrg), want)
+	}
+	t.Logf("version 1 served %d times, version 2 %d times", wins[0], wins[1])
+	if wins[0] == 0 || wins[1] == 0 {
+		t.Fatalf("fixture: each version must win at least once: %v", wins)
 	}
 }

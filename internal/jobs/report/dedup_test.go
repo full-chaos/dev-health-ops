@@ -100,7 +100,7 @@ func TestDedupFromSourceEveryAppendOnlyTableAndEveryReplacingTable(t *testing.T)
 		// The tables below with a live-row rule: the newest row of each key
 		// is read first (LIMIT 1 BY) and the retraction rows are dropped
 		// after, by the row test of the table registry.
-		{"work_item_metrics_daily", "(SELECT * FROM (SELECT * FROM work_item_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, provider, day, work_scope_id, team_id, row_view) AS work_item_metrics_daily WHERE " + teamkeytables.WorkItemMetricsDaily.LiveRow("work_item_metrics_daily.") + " AND " + rowview.OrgPredicate("work_item_metrics_daily", "") + ") AS work_item_metrics_daily"},
+		{"work_item_metrics_daily", "(SELECT * FROM (SELECT * FROM work_item_metrics_daily ORDER BY " + rowview.WorkItemMetricsNewestOrder + " DESC LIMIT 1 BY org_id, provider, day, work_scope_id, team_id, row_view) AS work_item_metrics_daily WHERE " + teamkeytables.WorkItemMetricsDaily.LiveRow("work_item_metrics_daily.") + " AND " + rowview.OrgPredicate("work_item_metrics_daily", "") + ") AS work_item_metrics_daily"},
 		// The own writer marks the retraction row in a Retracted column (migration 159).
 		{"cicd_metrics_daily", "(SELECT * FROM (SELECT * FROM cicd_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day) AS cicd_metrics_daily WHERE (cicd_metrics_daily.retracted = 0)) AS cicd_metrics_daily"},
 		{"deploy_metrics_daily", "(SELECT * FROM (SELECT * FROM deploy_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day) AS deploy_metrics_daily WHERE (deploy_metrics_daily.retracted = 0)) AS deploy_metrics_daily"},

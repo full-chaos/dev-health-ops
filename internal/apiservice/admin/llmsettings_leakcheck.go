@@ -124,8 +124,7 @@ func (h *handlers) readerLeakKeys(ctx context.Context, orgID, baseURL string, he
 	return append(keys, stored...), nil
 }
 
-// storedDefaultKeyOn is storedLLMKey's key over db: the stored default key
-// whatever its binding.
+// storedDefaultKeyOn is the stored default key over db, whatever its binding.
 func (h *handlers) storedDefaultKeyOn(ctx context.Context, db pgExecer, orgID string) (string, error) {
 	if h.storedKey != nil {
 		return h.storedKey(ctx, orgID)

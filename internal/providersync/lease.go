@@ -181,16 +181,26 @@ func (claim Claim) GenerationKey() string { return "sync-unit:" + claim.ID }
 
 // OperatorCancelCategory is the unit error_category an operator cancel writes: the
 // `dho workers sync-runs cancel` verb (jobruntime.CategoryCancelled) and the guarded SQL cancel
-// forms. A feature-gate termination writes feature_disabled and is not a cancel.
+// forms.
 const OperatorCancelCategory = "cancelled"
 
-// ErrUnitClosedByCancel is ErrUnitNotClaimable for a unit an operator cancel closed; Claim returns
-// it inside a *UnitClosedError.
-var ErrUnitClosedByCancel = fmt.Errorf("%w: closed by an operator cancel", ErrUnitNotClaimable)
+// FeatureDisabledCategory is the unit error_category the feature gate writes (reference discovery
+// gate, dispatch gate, the worker's entitlement re-check) and that the dispatch pass and the
+// unreclaimable sweep also stamp on a unit no runtime can run.
+const FeatureDisabledCategory = "feature_disabled"
 
-// UnitClosedError is Claim's refusal of a unit an operator cancel closed: the unit failed with
-// OperatorCancelCategory in a terminal run of the same organization. No writer moves such a unit
-// out of failed, so a job for it has no work left. It Is ErrUnitNotClaimable.
+// closedUnitCategories are the unit error_categories whose unit is closed for good once its run is
+// terminal.
+var closedUnitCategories = []string{OperatorCancelCategory, FeatureDisabledCategory}
+
+// ErrUnitClosed is ErrUnitNotClaimable for a unit that failed with one of closedUnitCategories in
+// a terminal run; Claim returns it inside a *UnitClosedError.
+var ErrUnitClosed = fmt.Errorf("%w: closed by a terminal unit failure", ErrUnitNotClaimable)
+
+// UnitClosedError is Claim's refusal of a unit that failed with Category (an operator cancel or the
+// feature gate) in a terminal run of the same organization. No writer moves such a unit out of
+// failed, and a feature re-enable plans a new run with new unit ids, so a job for it has no work
+// left. It Is ErrUnitNotClaimable.
 type UnitClosedError struct {
 	Category  string
 	SyncRunID string
@@ -199,8 +209,8 @@ type UnitClosedError struct {
 	Mode      string
 }
 
-func (err *UnitClosedError) Error() string { return ErrUnitClosedByCancel.Error() }
-func (err *UnitClosedError) Unwrap() error { return ErrUnitClosedByCancel }
+func (err *UnitClosedError) Error() string { return ErrUnitClosed.Error() }
+func (err *UnitClosedError) Unwrap() error { return ErrUnitClosed }
 
 type ClaimRequest struct {
 	UnitID               string

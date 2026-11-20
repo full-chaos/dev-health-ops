@@ -8,13 +8,17 @@ package deploycli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/deploy/inputs"
+	deployrun "github.com/full-chaos/dev-health-ops/internal/deploy/run"
 	"github.com/full-chaos/dev-health-ops/internal/deploy/selfpin"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 )
 
@@ -23,10 +27,11 @@ type host struct {
 	pinPath string
 	selfExe string
 	commit  string
+	harden  func() error
 }
 
 func prodHost() host {
-	return host{pinPath: selfpin.PinPath, selfExe: selfpin.SelfExe, commit: version.Current("dho").Commit}
+	return host{pinPath: selfpin.PinPath, selfExe: selfpin.SelfExe, commit: version.Current("dho").Commit, harden: deployrun.Harden}
 }
 
 var rollPhases = map[string][]string{
@@ -125,6 +130,37 @@ func readInputs(env cli.Env) ([]byte, error) {
 	return inputs.Read(env.Stdin)
 }
 
+// inputsDecisionEvent is the event field of the one Info line each inputs
+// decision writes to stderr. Fixed tokens and counts only: never an input
+// value, image ref or name.
+const inputsDecisionEvent = "dho.deploy.inputs_decision"
+
+// decide writes the one event of an inputs decision: err nil = PASS.
+func decide(env cli.Env, verb string, in *inputs.Inputs, err error) {
+	attrs := []slog.Attr{
+		slog.String("event", inputsDecisionEvent),
+		slog.String("tool", "dho"),
+		slog.String("verb", verb),
+	}
+	if err == nil {
+		attrs = append(attrs, slog.String("outcome", "PASS"), slog.String("reason_class", "none"),
+			slog.Bool("not_built", false), slog.String("input_key", ""), slog.Int("input_line", 0),
+			slog.String("target", in.Target))
+		if in.DevHealth != nil {
+			attrs = append(attrs, slog.Int("rows", len(in.DevHealth.Rows)))
+		}
+	} else {
+		var ref *inputs.Refusal
+		class, key, line, nb := inputs.ClassStdinUnreadable, "", 0, false
+		if errors.As(err, &ref) {
+			class, key, line, nb = ref.Class, ref.Key, ref.Line, ref.NotBuilt
+		}
+		attrs = append(attrs, slog.String("outcome", "REFUSED"), slog.String("reason_class", class),
+			slog.Bool("not_built", nb), slog.String("input_key", key), slog.Int("input_line", line))
+	}
+	logging.NewJSON(env.Stderr, slog.LevelInfo).LogAttrs(context.Background(), slog.LevelInfo, inputsDecisionEvent, attrs...)
+}
+
 func selfCheck(h host, env cli.Env) int {
 	words, code, ok := positional("self-check [-]", env)
 	if !ok {
@@ -140,6 +176,7 @@ func selfCheck(h host, env cli.Env) int {
 		var err error
 		if buf, err = readInputs(env); err != nil {
 			fmt.Fprintln(env.Stdout, "INPUTS: REFUSED: stdin is unreadable")
+			decide(env, "self-check", nil, err)
 			return cli.ExitRefused
 		}
 		r.hasInputs, r.inputsSHA = true, inputs.SHA256(buf)
@@ -152,6 +189,7 @@ func selfCheck(h host, env cli.Env) int {
 	}
 	if r.hasInputs {
 		in, err := inputs.Parse(buf)
+		decide(env, "self-check", in, err)
 		if err != nil {
 			fmt.Fprintf(r.out, "INPUTS: REFUSED: %v\n", err)
 			rc = cli.ExitRefused
@@ -180,9 +218,14 @@ func roll(h host, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "usage: dho deploy roll <dev-health pre|deploy|wait|post | ingress-nginx pre|upgrade|post | acr pre|upgrade|post> - (nothing read)")
 		return cli.ExitUsage
 	}
+	if err := h.harden(); err != nil {
+		fmt.Fprintln(env.Stdout, "DHO-DEPLOY REFUSED: cannot set umask 077 and cd /; nothing read")
+		return cli.ExitRefused
+	}
 	buf, err := readInputs(env)
 	if err != nil {
 		fmt.Fprintln(env.Stdout, "INPUTS: REFUSED: stdin is unreadable")
+		decide(env, "roll", nil, err)
 		return cli.ExitRefused
 	}
 	r := &run{out: env.Stdout, cmd: "roll " + strings.Join(words, " "), hasInputs: true, inputsSHA: inputs.SHA256(buf)}
@@ -192,12 +235,14 @@ func roll(h host, env cli.Env) int {
 		return r.end(cli.ExitRefused)
 	}
 	in, err := inputs.Parse(buf)
-	if err != nil {
-		fmt.Fprintf(r.out, "INPUTS: REFUSED: %v\n", err)
+	if err == nil && in.Target != words[0] {
+		decide(env, "roll", in, &inputs.Refusal{Class: inputs.ClassTargetMismatch, Key: "TARGET", Line: in.TargetLine})
+		fmt.Fprintln(r.out, "INPUTS: REFUSED: TARGET is not the target of the command")
 		return r.end(cli.ExitRefused)
 	}
-	if in.Target != words[0] {
-		fmt.Fprintln(r.out, "INPUTS: REFUSED: TARGET is not the target of the command")
+	decide(env, "roll", in, err)
+	if err != nil {
+		fmt.Fprintf(r.out, "INPUTS: REFUSED: %v\n", err)
 		return r.end(cli.ExitRefused)
 	}
 	fmt.Fprintf(r.out, "INPUTS: PASS %s\n", summary(in))

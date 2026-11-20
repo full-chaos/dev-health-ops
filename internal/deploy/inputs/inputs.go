@@ -5,6 +5,7 @@
 package inputs
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -29,6 +30,8 @@ type Refusal struct {
 	Line     int
 	Reason   string
 	NotBuilt bool
+	Class    string
+	Key      string
 }
 
 func (r *Refusal) Error() string {
@@ -42,12 +45,63 @@ func (r *Refusal) Error() string {
 	return s
 }
 
-func refuse(line int, format string, a ...any) *Refusal {
-	return &Refusal{Line: line, Reason: fmt.Sprintf(format, a...)}
+func refuse(class, key string, line int, format string, a ...any) *Refusal {
+	return &Refusal{Line: line, Reason: fmt.Sprintf(format, a...), Class: class, Key: key}
 }
 
-func notBuilt(line int, format string, a ...any) *Refusal {
-	return &Refusal{Line: line, Reason: fmt.Sprintf(format, a...), NotBuilt: true}
+func notBuilt(class, key string, line int, format string, a ...any) *Refusal {
+	return &Refusal{Line: line, Reason: fmt.Sprintf(format, a...), NotBuilt: true, Class: class, Key: key}
+}
+
+// Reason classes of an inputs decision: the fixed set of the structured event.
+const (
+	ClassTooLarge        = "too_large"
+	ClassNulByte         = "nul_byte"
+	ClassBadByte         = "bad_byte"
+	ClassTooManyLines    = "too_many_lines"
+	ClassNotKeyValue     = "not_key_value"
+	ClassNoEntries       = "no_entries"
+	ClassVersionFirst    = "version_first"
+	ClassVersionMismatch = "version_mismatch"
+	ClassKitFile         = "kit_file"
+	ClassDuplicateKey    = "duplicate_key"
+	ClassBadValue        = "bad_value"
+	ClassMissingKey      = "missing_key"
+	ClassUnknownKey      = "unknown_key"
+	ClassRepeatLimit     = "repeat_limit"
+	ClassForbiddenKey    = "forbidden_key"
+	ClassKitTarget       = "kit_target"
+	ClassKitKey          = "kit_key"
+	ClassHookRow         = "hook_row"
+	ClassAuthRow         = "auth_row"
+	ClassRevRule         = "rev_rule"
+	ClassShaRule         = "sha_rule"
+	ClassDigestRule      = "digest_rule"
+	ClassStdinUnreadable = "stdin_unreadable"
+	ClassTargetMismatch  = "target_mismatch"
+)
+
+// Classes is the closed set of reason classes.
+var Classes = []string{
+	ClassTooLarge, ClassNulByte, ClassBadByte, ClassTooManyLines, ClassNotKeyValue, ClassNoEntries,
+	ClassVersionFirst, ClassVersionMismatch, ClassKitFile, ClassDuplicateKey, ClassBadValue, ClassMissingKey,
+	ClassUnknownKey, ClassRepeatLimit, ClassForbiddenKey, ClassKitTarget, ClassKitKey, ClassHookRow,
+	ClassAuthRow, ClassRevRule, ClassShaRule, ClassDigestRule, ClassStdinUnreadable, ClassTargetMismatch,
+}
+
+// scrubKey keeps a key only when it is one of the fixed key names of this
+// binary; a key from the input that is not (an unknown key) is input bytes.
+func scrubKey(k string) string {
+	switch k {
+	case versionKey, "TARGET", "RUN_TAG", "AUTHOR", "RENDER_FILE", "PRODROLL_INPUTS":
+		return k
+	}
+	for _, t := range targets {
+		if _, ok := t.keys[k]; ok || t.notBuilt[k] {
+			return k
+		}
+	}
+	return ""
 }
 
 // Read takes the whole buffer in ONE read pass with a bound; the caller hashes
@@ -68,14 +122,15 @@ func SHA256(buf []byte) string {
 // Inputs is a parsed buffer. Values holds the scalar keys, Lists the
 // repeatable ones, in file order.
 type Inputs struct {
-	SHA256    string
-	Target    string
-	RunTag    string
-	Author    string
-	Values    map[string]string
-	Lists     map[string][]string
-	DevHealth *DevHealth
-	lines     map[string][]int
+	SHA256     string
+	Target     string
+	TargetLine int
+	RunTag     string
+	Author     string
+	Values     map[string]string
+	Lists      map[string][]string
+	DevHealth  *DevHealth
+	lines      map[string][]int
 }
 
 // line is the first file line of key k (0 = none).
@@ -110,6 +165,22 @@ var (
 	kitTarget = map[string]bool{"ingress-nginx": true, "f1pipe": true, "acr": true}
 )
 
+// keyOnLine is the text before the first "=" on file line n (1-based), or ""
+// when the line has none. It is only a candidate: Parse keeps it only if it
+// is a fixed key name of this binary.
+func keyOnLine(buf []byte, n int) string {
+	for i, l := range bytes.Split(buf, []byte{'\n'}) {
+		if i+1 != n {
+			continue
+		}
+		if j := bytes.IndexByte(l, '='); j >= 0 {
+			return string(l[:j])
+		}
+		return ""
+	}
+	return ""
+}
+
 type entry struct {
 	line       int
 	key, value string
@@ -118,9 +189,17 @@ type entry struct {
 // Parse checks buf and returns the inputs, or a *Refusal. The sha256 is of
 // buf itself, so the hash and the parse can never see different bytes.
 func Parse(buf []byte) (*Inputs, error) {
+	in, err := parse(buf)
+	if r, ok := err.(*Refusal); ok {
+		r.Key = scrubKey(r.Key)
+	}
+	return in, err
+}
+
+func parse(buf []byte) (*Inputs, error) {
 	in := &Inputs{SHA256: SHA256(buf), Values: map[string]string{}, Lists: map[string][]string{}, lines: map[string][]int{}}
 	if len(buf) > MaxBytes {
-		return in, refuse(0, "larger than %d bytes", MaxBytes)
+		return in, refuse(ClassTooLarge, "", 0, "larger than %d bytes", MaxBytes)
 	}
 	bad, badLine, nulLine, line := 0, 0, 0, 1
 	for _, b := range buf {
@@ -139,17 +218,17 @@ func Parse(buf []byte) (*Inputs, error) {
 		}
 	}
 	if nulLine > 0 {
-		return in, refuse(nulLine, "the buffer holds a NUL byte")
+		return in, refuse(ClassNulByte, keyOnLine(buf, nulLine), nulLine, "the buffer holds a NUL byte")
 	}
 	if bad > 0 {
-		return in, refuse(badLine, "%d byte(s) outside printable ASCII + LF (TAB, CR, non-ASCII); the first is on this line", bad)
+		return in, refuse(ClassBadByte, keyOnLine(buf, badLine), badLine, "%d byte(s) outside printable ASCII + LF (TAB, CR, non-ASCII); the first is on this line", bad)
 	}
 	lines := strings.Split(string(buf), "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
 	if len(lines) > MaxLines {
-		return in, refuse(0, "more than %d lines", MaxLines)
+		return in, refuse(ClassTooManyLines, "", 0, "more than %d lines", MaxLines)
 	}
 	var entries []entry
 	for i, l := range lines {
@@ -158,21 +237,21 @@ func Parse(buf []byte) (*Inputs, error) {
 		}
 		m := keyLine.FindStringSubmatch(l)
 		if m == nil {
-			return in, refuse(i+1, "not KEY=VALUE (KEY = [A-Z][A-Z0-9_]*, no space)")
+			return in, refuse(ClassNotKeyValue, "", i+1, "not KEY=VALUE (KEY = [A-Z][A-Z0-9_]*, no space)")
 		}
 		entries = append(entries, entry{i + 1, m[1], m[2]})
 	}
 	if len(entries) == 0 {
-		return in, refuse(0, "no KEY=VALUE line")
+		return in, refuse(ClassNoEntries, "", 0, "no KEY=VALUE line")
 	}
 	first := entries[0]
 	switch {
 	case first.key == "PRODROLL_INPUTS":
-		return in, refuse(first.line, "a kit inputs file (PRODROLL_INPUTS); dho reads %s=%s", versionKey, Version)
+		return in, refuse(ClassKitFile, first.key, first.line, "a kit inputs file (PRODROLL_INPUTS); dho reads %s=%s", versionKey, Version)
 	case first.key != versionKey:
-		return in, refuse(first.line, "the first KEY=VALUE line must be %s=%s", versionKey, Version)
+		return in, refuse(ClassVersionFirst, first.key, first.line, "the first KEY=VALUE line must be %s=%s", versionKey, Version)
 	case first.value != Version:
-		return in, refuse(first.line, "inputs version is not %s", Version)
+		return in, refuse(ClassVersionMismatch, versionKey, first.line, "inputs version is not %s", Version)
 	}
 	entries = entries[1:]
 
@@ -182,19 +261,20 @@ func Parse(buf []byte) (*Inputs, error) {
 			continue
 		}
 		if targetLine != 0 {
-			return in, refuse(e.line, "duplicate key TARGET")
+			return in, refuse(ClassDuplicateKey, "TARGET", e.line, "duplicate key TARGET")
 		}
 		targetLine = e.line
 		if !reTarget.MatchString(e.value) {
-			return in, refuse(e.line, "bad value for TARGET")
+			return in, refuse(ClassBadValue, "TARGET", e.line, "bad value for TARGET")
 		}
 		in.Target = e.value
+		in.TargetLine = e.line
 	}
 	if targetLine == 0 {
-		return in, refuse(0, "missing key TARGET")
+		return in, refuse(ClassMissingKey, "TARGET", 0, "missing key TARGET")
 	}
 	if kitTarget[in.Target] {
-		return in, notBuilt(targetLine, "TARGET names a kit-only target")
+		return in, notBuilt(ClassKitTarget, "TARGET", targetLine, "TARGET names a kit-only target")
 	}
 	spec := targets[in.Target]
 
@@ -203,44 +283,44 @@ func Parse(buf []byte) (*Inputs, error) {
 		case "TARGET":
 			continue
 		case versionKey:
-			return in, refuse(e.line, "duplicate key %s", versionKey)
+			return in, refuse(ClassDuplicateKey, versionKey, e.line, "duplicate key %s", versionKey)
 		case "RUN_TAG", "AUTHOR":
 			re := reRunTag
 			if e.key == "AUTHOR" {
 				re = reAuthor
 			}
 			if _, dup := in.Values[e.key]; dup {
-				return in, refuse(e.line, "duplicate key %s", e.key)
+				return in, refuse(ClassDuplicateKey, e.key, e.line, "duplicate key %s", e.key)
 			}
 			if !re.MatchString(e.value) {
-				return in, refuse(e.line, "bad value for %s", e.key)
+				return in, refuse(ClassBadValue, e.key, e.line, "bad value for %s", e.key)
 			}
 			in.Values[e.key] = e.value
 			in.lines[e.key] = append(in.lines[e.key], e.line)
 			continue
 		case "RENDER_FILE":
-			return in, refuse(e.line, "RENDER_FILE is not a dho key: dho renders tree B on the node and gates it on RENDER_SHA256")
+			return in, refuse(ClassForbiddenKey, e.key, e.line, "RENDER_FILE is not a dho key: dho renders tree B on the node and gates it on RENDER_SHA256")
 		}
 		if spec.notBuilt[e.key] {
-			return in, notBuilt(e.line, "key %s", e.key)
+			return in, notBuilt(ClassKitKey, e.key, e.line, "key %s", e.key)
 		}
 		ks, known := spec.keys[e.key]
 		if !known {
-			return in, refuse(e.line, "unknown key for this target")
+			return in, refuse(ClassUnknownKey, e.key, e.line, "unknown key for this target")
 		}
 		if !ks.match(e.value) {
-			return in, refuse(e.line, "bad value for %s", e.key)
+			return in, refuse(ClassBadValue, e.key, e.line, "bad value for %s", e.key)
 		}
 		if ks.maxRepeat > 0 {
 			in.Lists[e.key] = append(in.Lists[e.key], e.value)
 			in.lines[e.key] = append(in.lines[e.key], e.line)
 			if len(in.Lists[e.key]) > ks.maxRepeat {
-				return in, refuse(e.line, "more than %d %s lines", ks.maxRepeat, e.key)
+				return in, refuse(ClassRepeatLimit, e.key, e.line, "more than %d %s lines", ks.maxRepeat, e.key)
 			}
 			continue
 		}
 		if _, dup := in.Values[e.key]; dup {
-			return in, refuse(e.line, "duplicate key %s", e.key)
+			return in, refuse(ClassDuplicateKey, e.key, e.line, "duplicate key %s", e.key)
 		}
 		in.Values[e.key] = e.value
 		in.lines[e.key] = append(in.lines[e.key], e.line)
@@ -255,7 +335,7 @@ func Parse(buf []byte) (*Inputs, error) {
 	for _, k := range required {
 		_, scalar := in.Values[k]
 		if !scalar && len(in.Lists[k]) == 0 {
-			return in, refuse(0, "missing key %s", k)
+			return in, refuse(ClassMissingKey, k, 0, "missing key %s", k)
 		}
 	}
 	in.RunTag, in.Author = in.Values["RUN_TAG"], in.Values["AUTHOR"]

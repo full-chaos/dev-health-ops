@@ -1,0 +1,5 @@
+render A: helm rc=0 docs=6
+render B: helm rc=0 docs=2
+DUPLICATE name E in Deployment/x .spec.template.spec.containers[0].env (render B)
+DUPLICATE name 80/TCP in Service/svc .spec.ports (render B)
+FULL RENDER DIFF: STOP (duplicate names)

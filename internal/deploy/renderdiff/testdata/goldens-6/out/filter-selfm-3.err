@@ -1,0 +1,18 @@
+Traceback (most recent call last):
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1/in/full-render-diff.py", line 487, in <module>
+    sys.exit(main(sys.argv[1:]))
+             ^^^^^^^^^^^^^^^^^^
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1/in/full-render-diff.py", line 355, in main
+    yaml.safe_dump_all([redact(d) for d in docs_of(sys.stdin) if d["kind"] != "Secret"], sys.stdout, sort_keys=True)
+                        ^^^^^^^^^
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1/in/full-render-diff.py", line 67, in redact
+    return {k: redact(v) for k, v in o.items()}
+               ^^^^^^^^^
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1/in/full-render-diff.py", line 67, in redact
+    return {k: redact(v) for k, v in o.items()}
+               ^^^^^^^^^
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1/in/full-render-diff.py", line 67, in redact
+    return {k: redact(v) for k, v in o.items()}
+               ^^^^^^^^^
+  [Previous line repeated 995 more times]
+RecursionError: maximum recursion depth exceeded

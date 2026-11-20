@@ -85,11 +85,11 @@ func TestEveryFileThatNamesAViewTableIsInTheReaderAllowlist(t *testing.T) {
 // predicate or the group column fails here; the golden statements in the reader packages hold the SQL text.
 var viewReaders = map[string][]string{
 	"internal/jobs/metrics/remaining/capacity_native_clickhouse.go":        {"rowview.OrgPredicate("},
-	"internal/jobs/metrics/remaining/recommendations_loader.go":            {"rowview.OrgPredicate(", "GROUP BY day, provider, work_scope_id, row_view"},
+	"internal/jobs/metrics/remaining/recommendations_loader.go":            {"rowview.TeamSource("},
 	"internal/jobs/metrics/remaining/recommendations_native_clickhouse.go": {"rowview.OrgPredicate("},
 	"internal/jobs/metrics/daily/benchmarking/clickhouse.go":               {"rowview.OrgPredicate(", `"row_view"`},
-	"internal/queryapi/capacityforecast/clickhouse.go":                     {"rowview.OrgPredicate("},
-	"internal/queryapi/throughputforecast/clickhouse.go":                   {"rowview.OrgPredicate(", "GROUP BY day, provider, work_scope_id, team_id, row_view", "GROUP BY provider, work_scope_id, team_id, row_view", "GROUP BY team_id, work_scope_id, provider, row_view"},
+	"internal/queryapi/capacityforecast/clickhouse.go":                     {"rowview.OrgPredicate(", "rowview.ServedTeamSource(", "rowview.ServedTeamPick("},
+	"internal/queryapi/throughputforecast/clickhouse.go":                   {"rowview.OrgPredicate(", "rowview.ServedTeamSource(", "rowview.ServedTeamPick(", "GROUP BY day, provider, work_scope_id, team_id, row_view", "GROUP BY provider, work_scope_id, team_id, row_view", "GROUP BY team_id, work_scope_id, provider, row_view"},
 	"internal/queryapi/aggflame/clickhouse.go":                             {"rowview.OrgPredicate(", "GROUP BY day, provider, work_scope_id, team_id, status, row_view"},
 	"internal/queryapi/aianalytics/flow_opportunities.go":                  {"rowview.OrgPredicate("},
 	"internal/queryapi/sankey/queries.go":                                  {"rowview.OrgPredicate("},

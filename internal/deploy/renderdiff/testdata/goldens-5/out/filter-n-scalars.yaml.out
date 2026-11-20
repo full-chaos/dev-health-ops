@@ -1,0 +1,17 @@
+data:
+  b1: !!binary |
+    Zg==
+  b2: !!binary |
+    Zm9vYmFy
+  b3: !!binary |
+    Zg==
+  b4: !!binary |
+    Zm9v
+  f1: 1.5
+  f2: 1.5
+  i1: 12
+  i2: 123
+  i3: 12
+kind: ConfigMap
+metadata:
+  name: n

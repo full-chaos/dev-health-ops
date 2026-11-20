@@ -1,0 +1,7 @@
+render A: helm rc=0 docs=91
+render B: helm rc=0 docs=91
+Deployment/dat-vjzdgj-bkm-wd-ksf .spec.template.spec.containers[name=qi-utz].env[name=KZI_JXKZYX_VVJLEY_LGIIMW_IZBFJDS] ELEMENT-REMOVED
+Deployment/dat-vjzdgj-bkm-wd-ksf .spec.template.spec.containers[name=qi-utz].image CHANGED
+docs A 91 B 91 (all kinds, Secrets as Kind/name only; hook-included: a helm template render); kinds in A: ClusterRole=1, ClusterRoleBinding=1, ConfigMap=7, Deployment=18, HorizontalPodAutoscaler=1, Ingress=8, Job=8, NetworkPolicy=5, PersistentVolumeClaim=1, PodDisruptionBudget=4, Role=1, RoleBinding=1, ScaledObject=3, Service=15, ServiceAccount=14, StatefulSet=2, TriggerAuthentication=1
+added []; removed []; changed field rows 1; element rows added 0 removed 1; reordered rows 0; pod-template label/annotation rows 0; postgres sts rows 0
+FULL RENDER DIFF: INFO (no expectation; the floor held)

@@ -12,44 +12,80 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
-// A Nullable column reads through a tuple: argMax skips a NULL, so until the
-// merge a retraction row's NULL would lose to the value of the old row under it.
+// impactNewestOrder orders the versions of one ai_impact_metrics_daily key:
+// the newest computed_at, then a hash of the version's values, so two versions
+// that share a computed_at serve one of them whatever the scan order. Every
+// read of the table in this package orders by it, so they pick the same version.
+const impactNewestOrder = `(metrics.computed_at, cityHash64(tuple(
+    metrics.prs_total, metrics.prs_merged, metrics.ai_assisted_prs, metrics.agent_created_prs,
+    metrics.human_prs, metrics.unknown_prs, metrics.ai_assisted_pr_ratio, metrics.cycle_time_avg_hours,
+    metrics.ai_cycle_time_delta_hours, metrics.reviews_per_pr, metrics.ai_review_amplification,
+    metrics.changes_requested_per_pr, metrics.rework_prs, metrics.rework_drag_rate,
+    metrics.followup_commits_count, metrics.revert_prs, metrics.revert_rate, metrics.incidents_count,
+    metrics.incident_drag_rate, metrics.test_gap_prs, metrics.test_gap_rate, metrics.leverage_prs_component,
+    metrics.leverage_cycle_time_component, metrics.leverage_review_component,
+    metrics.leverage_rework_component, metrics.leverage_test_component, metrics.leverage_incident_component)))`
+
+// The value columns come from ONE version (one argMax over a tuple), never a
+// column of one version and a column of another. The tuple is not Nullable, so
+// a NULL of the newest version stays NULL: argMax over a Nullable column would
+// skip it and serve the older value under it.
 const dailyStatement = `SELECT
     team_id,
     toString(repo_id) AS repo_id_str,
     day,
     attribution_bucket,
-    argMax(prs_total, metrics.computed_at) AS prs_total,
-    argMax(prs_merged, metrics.computed_at) AS prs_merged,
-    argMax(ai_assisted_prs, metrics.computed_at) AS ai_assisted_prs,
-    argMax(agent_created_prs, metrics.computed_at) AS agent_created_prs,
-    argMax(human_prs, metrics.computed_at) AS human_prs,
-    argMax(unknown_prs, metrics.computed_at) AS unknown_prs,
-    (argMax(tuple(ai_assisted_pr_ratio), metrics.computed_at)).1 AS ai_assisted_pr_ratio,
-    (argMax(tuple(cycle_time_avg_hours), metrics.computed_at)).1 AS cycle_time_avg_hours,
-    (argMax(tuple(ai_cycle_time_delta_hours), metrics.computed_at)).1 AS ai_cycle_time_delta_hours,
-    (argMax(tuple(reviews_per_pr), metrics.computed_at)).1 AS reviews_per_pr,
-    (argMax(tuple(ai_review_amplification), metrics.computed_at)).1 AS ai_review_amplification,
-    (argMax(tuple(changes_requested_per_pr), metrics.computed_at)).1 AS changes_requested_per_pr,
-    argMax(rework_prs, metrics.computed_at) AS rework_prs,
-    (argMax(tuple(rework_drag_rate), metrics.computed_at)).1 AS rework_drag_rate,
-    argMax(followup_commits_count, metrics.computed_at) AS followup_commits_count,
-    argMax(revert_prs, metrics.computed_at) AS revert_prs,
-    (argMax(tuple(revert_rate), metrics.computed_at)).1 AS revert_rate,
-    argMax(incidents_count, metrics.computed_at) AS incidents_count,
-    (argMax(tuple(incident_drag_rate), metrics.computed_at)).1 AS incident_drag_rate,
-    argMax(test_gap_prs, metrics.computed_at) AS test_gap_prs,
-    (argMax(tuple(test_gap_rate), metrics.computed_at)).1 AS test_gap_rate,
-    argMax(leverage_prs_component, metrics.computed_at) AS leverage_prs_component,
-    (argMax(tuple(leverage_cycle_time_component), metrics.computed_at)).1 AS leverage_cycle_time_component,
-    (argMax(tuple(leverage_review_component), metrics.computed_at)).1 AS leverage_review_component,
-    (argMax(tuple(leverage_rework_component), metrics.computed_at)).1 AS leverage_rework_component,
-    (argMax(tuple(leverage_test_component), metrics.computed_at)).1 AS leverage_test_component,
-    (argMax(tuple(leverage_incident_component), metrics.computed_at)).1 AS leverage_incident_component,
-    max(metrics.computed_at) AS computed_at
-FROM ai_impact_metrics_daily AS metrics
-WHERE %s
-GROUP BY org_id, team_id, repo_id, work_type, day, attribution_bucket
+    newest.1 AS prs_total,
+    newest.2 AS prs_merged,
+    newest.3 AS ai_assisted_prs,
+    newest.4 AS agent_created_prs,
+    newest.5 AS human_prs,
+    newest.6 AS unknown_prs,
+    newest.7 AS ai_assisted_pr_ratio,
+    newest.8 AS cycle_time_avg_hours,
+    newest.9 AS ai_cycle_time_delta_hours,
+    newest.10 AS reviews_per_pr,
+    newest.11 AS ai_review_amplification,
+    newest.12 AS changes_requested_per_pr,
+    newest.13 AS rework_prs,
+    newest.14 AS rework_drag_rate,
+    newest.15 AS followup_commits_count,
+    newest.16 AS revert_prs,
+    newest.17 AS revert_rate,
+    newest.18 AS incidents_count,
+    newest.19 AS incident_drag_rate,
+    newest.20 AS test_gap_prs,
+    newest.21 AS test_gap_rate,
+    newest.22 AS leverage_prs_component,
+    newest.23 AS leverage_cycle_time_component,
+    newest.24 AS leverage_review_component,
+    newest.25 AS leverage_rework_component,
+    newest.26 AS leverage_test_component,
+    newest.27 AS leverage_incident_component,
+    computed_at
+FROM (
+    SELECT
+        team_id,
+        repo_id,
+        work_type,
+        day,
+        attribution_bucket,
+        argMax(tuple(
+            metrics.prs_total, metrics.prs_merged, metrics.ai_assisted_prs, metrics.agent_created_prs,
+            metrics.human_prs, metrics.unknown_prs, metrics.ai_assisted_pr_ratio, metrics.cycle_time_avg_hours,
+            metrics.ai_cycle_time_delta_hours, metrics.reviews_per_pr, metrics.ai_review_amplification,
+            metrics.changes_requested_per_pr, metrics.rework_prs, metrics.rework_drag_rate,
+            metrics.followup_commits_count, metrics.revert_prs, metrics.revert_rate, metrics.incidents_count,
+            metrics.incident_drag_rate, metrics.test_gap_prs, metrics.test_gap_rate,
+            metrics.leverage_prs_component, metrics.leverage_cycle_time_component,
+            metrics.leverage_review_component, metrics.leverage_rework_component,
+            metrics.leverage_test_component, metrics.leverage_incident_component
+        ), ` + impactNewestOrder + `) AS newest,
+        max(metrics.computed_at) AS computed_at
+    FROM ai_impact_metrics_daily AS metrics
+    WHERE %s
+    GROUP BY org_id, team_id, repo_id, work_type, day, attribution_bucket
+)
 ORDER BY day, repo_id, work_type, attribution_bucket`
 
 // dateValue is a Date parameter's text form: the UTC calendar day.
@@ -324,13 +360,23 @@ func loadEngagement(ctx context.Context, client QueryClient, orgID string, start
 	return out, nil
 }
 
+// The inner read picks ONE version of each (repository, reviewer, day): the
+// newest computed_at, then a hash of its values, so two versions that share a
+// computed_at serve one of them whatever the scan order. The outer WHERE leaves
+// out a key whose picked version is a retraction row (package liverow), tested
+// on that same version.
 var concentrationStatement = `SELECT toFloat64(ifNull(sum(reviews_given), 0)) AS reviews_total
 FROM (
     SELECT
         umd.repo_id,
         umd.author_email,
         umd.day,
-        argMax(umd.reviews_given, umd.computed_at) AS reviews_given
+        argMax(
+            tuple(umd.reviews_given, umd.retracted),
+            (umd.computed_at, cityHash64(tuple(umd.reviews_given, umd.retracted)))
+        ) AS picked,
+        picked.1 AS reviews_given,
+        picked.2 AS retracted
     FROM user_metrics_daily AS umd
     INNER JOIN (
         SELECT DISTINCT attr.repo_id AS repo_id
@@ -342,8 +388,8 @@ FROM (
     ) AS ai_repos ON ai_repos.repo_id = umd.repo_id
     WHERE %s
     GROUP BY umd.repo_id, umd.author_email, umd.day
-    HAVING ` + liverow.NewestPredicate("user_metrics_daily", "umd") + `
-)
+) AS newest
+WHERE ` + liverow.Predicate("user_metrics_daily", "newest") + `
 GROUP BY author_email`
 
 // loadReviewerConcentration returns the Gini coefficient of per-reviewer

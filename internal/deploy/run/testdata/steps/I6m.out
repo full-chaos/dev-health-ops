@@ -1,0 +1,3 @@
+JOB acme-app-migrate uid 11ca5547-2938-4ad2-91da-b01b5e436246 Complete
+LOG lines 12, errors 0
+MIGJOBLOG warehouse action=none (no schema step)

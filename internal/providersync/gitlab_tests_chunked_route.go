@@ -81,7 +81,7 @@ type gitLabTestsChunkCursor struct {
 	// (gitLabTestsSeek). Page and Index only say where to look for it. 0 = the phase has not emitted yet.
 	LastID int64 `json:"li,omitempty"`
 	// WindowStart is the unix second up to which the walk can claim coverage: GitLab's clock when the walk started (the
-	// Date of the first 2xx response, before any listing) minus gitLabTestsWindowStartMargin. It is set once, by the
+	// Date of the project read, which comes before any listing) minus gitLabTestsWindowStartMargin. It is set once, by the
 	// invocation that starts the walk, and never changes. 0 = a cursor an older binary wrote (gitLabTestsWatermark).
 	WindowStart int64 `json:"ws,omitempty"`
 }
@@ -287,9 +287,11 @@ func recordGitLabTestsInventoryTruncation(
 // A window-blocking truncation withholds the claim (CHAOS-2587), as does a cursor without WindowStart (an older binary
 // started the walk, so its start is unknown): the next window walks the range again rather than skip a pipeline.
 //
-// NOT closed: when no response carried a Date, WindowStart comes from our clock (normalizedAt), so a GitLab clock behind
-// ours by more than the margin still loses what it stamps between its walk-start time and ours; a Date written by a proxy
-// whose clock is behind GitLab's by more than the margin is the same case.
+// The walk start is the Date of the project read only (GitLab sends Date on every response: RFC 9110, an origin server
+// with a clock sends it). NOT closed: when the project read carries no usable Date (none, unparseable, or less than the
+// margin after the epoch), WindowStart comes from our clock (normalizedAt), so a GitLab clock behind ours by more than the
+// margin still loses what it stamps between its walk-start time and ours; a Date written by a proxy whose clock is behind
+// GitLab's by more than the margin is the same case.
 func gitLabTestsWatermark(cursor gitLabTestsChunkCursor, claim Claim) *time.Time {
 	if gitLabTestsBlocksWatermark(cursor.Truncated) || claim.BeforeAt == nil {
 		return nil
@@ -366,7 +368,9 @@ func encodeGitLabTestsChunkCursor(cursor gitLabTestsChunkCursor) (string, error)
 //   - resumed (LastID > 0 at invocation start = seekID): start on the page that held it (Page, or Page-1 after a page
 //     end). On the FIRST page of a visit, if the page is empty or its first id < seekID and it is not page 1, the
 //     boundary may sit on an earlier page: step back one page and visit again, until a page's first id >= seekID or
-//     page 1. Then skip every id >= seekID (only the resume-time id: inside one invocation every listed item is read).
+//     page 1. Then, on every page, skip every id at or above the last emitted id (cursor.LastID; seekID at a resume): it
+//     was read already (the offset pages shifted under the walk when a pipeline entered the listing above the page
+//     boundary) or it entered the listing after the walk start, which the next window reads (gitLabTestsWatermark).
 //   - legacy (Page > 0 with no LastID: a cursor written by the updated_at-ordered binary): its position names another
 //     order, so the phase starts again at page 1. Rows read twice replace the stored ones (every destination is a
 //     ReplacingMergeTree on its natural key); nothing is skipped.
@@ -625,15 +629,16 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 	}
 	if strings.TrimSpace(resumeCursor) == "" {
 		// The walk starts here: the project read came before any listing, so its Date is GitLab's clock at or before the
-		// first listed page. normalizedAt (the attempt start, before any request) stands in when no response had one.
-		start := gitLabDate
-		if start.IsZero() {
-			start = normalizedAt
+		// first listed page. normalizedAt (the attempt start, before any request) stands in when the project read had no
+		// usable Date; a window start below 1 s is not usable (it cannot be persisted: 0 means an older binary's cursor).
+		windowStart := gitLabDate.Add(-gitLabTestsWindowStartMargin).Unix()
+		if gitLabDate.IsZero() || windowStart < 1 {
+			windowStart = normalizedAt.Add(-gitLabTestsWindowStartMargin).Unix()
 			slog.Warn("gitlab tests/cicd window start unknown",
 				"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-				"reason", "no Date header from GitLab: the window start uses our clock")
+				"reason", "no usable Date header on the project read: the window start uses our clock")
 		}
-		cursor.WindowStart = start.Add(-gitLabTestsWindowStartMargin).Unix()
+		cursor.WindowStart = windowStart
 	}
 	fullName := gitLabProjectFullName(project)
 	cursor.Repo, cursor.ProjectID = fullName, parsedProjectID
@@ -683,7 +688,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 				if idErr != nil {
 					return idErr
 				}
-				if seek.seekID > 0 && id >= seek.seekID {
+				if cursor.LastID > 0 && id >= cursor.LastID {
 					continue
 				}
 				before := cursor
@@ -828,7 +833,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 			if idErr != nil {
 				return idErr
 			}
-			if reportSeek.seekID > 0 && id >= reportSeek.seekID {
+			if cursor.LastID > 0 && id >= cursor.LastID {
 				continue
 			}
 			before := cursor

@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,9 +23,17 @@ type gitLabEntryFake struct {
 	step    time.Duration
 	rawDate string
 	first   time.Time
+	// insert, when armed, joins the pipelines just before the next listing request for page 2: inside one invocation,
+	// a pipeline that enters the listing above the page boundary shifts the offset pages by one.
+	insert *gitLabResumePipeline
+	armed  bool
 }
 
 func (fake *gitLabEntryFake) Do(request *http.Request) (*http.Response, error) {
+	if fake.armed && fake.insert != nil && strings.HasSuffix(request.URL.Path, "/pipelines") && request.URL.Query().Get("page") == "2" {
+		fake.pipelines = append(fake.pipelines, *fake.insert)
+		fake.armed, fake.insert = false, nil
+	}
 	response, err := fake.gitLabResumeFake.Do(request)
 	if err != nil {
 		return response, err
@@ -54,6 +63,9 @@ type gitLabEntryOptions struct {
 	change       func(yield int)
 	rewrite      func(raw string) string
 	start        string
+	// armAt, when > 0, arms fake's insert at the armAt-th emission of phase (cumulative).
+	armAt int
+	fake  *gitLabEntryFake
 }
 
 // gitLabEntryResult counts, per phase and pipeline id, the reads before and after the first change.
@@ -106,6 +118,9 @@ func gitLabEntryRun(t *testing.T, fake *gitLabEntryFake, options gitLabEntryOpti
 				}
 				if before.Phase == options.phase {
 					emitted++
+					if options.armAt > 0 && emitted == options.armAt {
+						options.fake.armed = true
+					}
 				}
 				if next < len(options.yields) && emitted == options.yields[next] {
 					return stop
@@ -312,14 +327,20 @@ func TestGitLabTestsWindowStartMarginEdge(t *testing.T) {
 	}
 }
 
-// With no usable Date header (none, or one that does not parse) the walk start is our clock: normalizedAt (the attempt
-// start, before any request) - 60 s. The unit still advances; it does not withhold for ever on a Date-less instance.
+// With no usable Date header on the project read (none, one that does not parse, or one so close to the epoch that the
+// derived window start is below 1 s) the walk start is our clock: normalizedAt (the attempt start, before any request)
+// - 60 s. The unit still advances, across a resume; it does not withhold for ever on a Date-less instance.
 func TestGitLabTestsWindowStartWithoutADateUsesOurClock(t *testing.T) {
 	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
 		name    string
 		rawDate string
-	}{{"no Date header", ""}, {"a Date that does not parse", "yesterday-ish"}} {
+	}{
+		{"no Date header", ""},
+		{"a Date that does not parse", "yesterday-ish"},
+		{"a Date 30 s after the epoch (derived window start < 0)", time.Unix(30, 0).UTC().Format(http.TimeFormat)},
+		{"a Date 60 s after the epoch (derived window start 0)", time.Unix(60, 0).UTC().Format(http.TimeFormat)},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			fake := &gitLabEntryFake{gitLabResumeFake: &gitLabResumeFake{t: t, pipelines: gitLabResumeFixture()}, rawDate: tc.rawDate}
@@ -400,5 +421,68 @@ func TestGitLabTestsDoneResumeRepublishesTheWatermark(t *testing.T) {
 		!walk.final.Watermark.Equal(normalizedAt.Add(2*time.Minute)) {
 		t.Fatalf("watermark %v, after the done resume %v; want %s both times", walk.final.Watermark, again.final.Watermark,
 			normalizedAt.Add(2*time.Minute).Format(time.RFC3339))
+	}
+}
+
+// The first usable epoch second is accepted as GitLab's clock: a Date 61 s after the epoch gives a window start of 1 s.
+func TestGitLabTestsWindowStartAtTheFirstEpochSecond(t *testing.T) {
+	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	fake := &gitLabEntryFake{gitLabResumeFake: &gitLabResumeFake{t: t, pipelines: gitLabResumeFixture()}, rawDate: time.Unix(61, 0).UTC().Format(http.TimeFormat)}
+	walk := gitLabEntryRun(t, fake, gitLabEntryOptions{claim: gitLabEntryClaim(normalizedAt.Add(24 * time.Hour)), normalizedAt: normalizedAt,
+		phase: "pipelines", yields: []int{50}})
+	if want := time.Unix(1, 0).UTC(); walk.final.Watermark == nil || !walk.final.Watermark.Equal(want) {
+		t.Fatalf("watermark=%v, want %s", walk.final.Watermark, want.Format(time.RFC3339))
+	}
+}
+
+// Inside one invocation the listing moves under the walk: a pipeline that enters the window above the page boundary
+// shifts the offset pages by one, so the last pipeline of page 1 is listed again first on page 2. No pipeline is read
+// twice by one walk in either phase, on a fresh walk and on a resumed one; the entering pipeline is read by this walk or
+// by the next window (its updated_at is after the walk start).
+func TestGitLabTestsAPipelineAboveThePageBoundaryIsNotReadTwiceByOneWalk(t *testing.T) {
+	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	completedAt := normalizedAt.Add(30 * time.Minute)
+	for _, phase := range []string{"pipelines", "reports"} {
+		for _, tc := range []struct {
+			name   string
+			yields []int
+			armAt  int
+		}{{"fresh walk", nil, 1}, {"resumed walk", []int{50}, 51}} {
+			t.Run(phase+": "+tc.name, func(t *testing.T) {
+				t.Parallel()
+				claim := gitLabEntryClaim(normalizedAt.Add(24 * time.Hour))
+				enters := gitLabResumePipeline{id: 1300, started: normalizedAt.Add(time.Minute), updated: normalizedAt.Add(2 * time.Minute)}
+				fake := &gitLabEntryFake{gitLabResumeFake: &gitLabResumeFake{t: t, pipelines: gitLabResumeFixture()}, date: normalizedAt, insert: &enters}
+				walk := gitLabEntryRun(t, fake, gitLabEntryOptions{claim: claim, normalizedAt: normalizedAt, phase: phase, yields: tc.yields,
+					armAt: tc.armAt, fake: fake})
+				if fake.insert != nil {
+					t.Fatal("the pipeline never entered the listing: the cell proves nothing")
+				}
+				stored := gitLabEntryStored(claim, walk.final, completedAt)
+				next := claim
+				nextBefore := completedAt.Add(time.Hour)
+				next.SinceAt, next.BeforeAt = &stored, &nextBefore
+				following := gitLabEntryRun(t, fake, gitLabEntryOptions{claim: next, normalizedAt: completedAt})
+				reads := map[int]int{}
+				for id, count := range walk.before.of(phase) {
+					reads[id] += count
+				}
+				for id, count := range walk.after.of(phase) {
+					reads[id] += count
+				}
+				var twice []string
+				for id, count := range reads {
+					if count > 1 {
+						twice = append(twice, strconv.Itoa(id)+"x"+strconv.Itoa(count))
+					}
+				}
+				if len(twice) != 0 {
+					t.Errorf("%s: read twice by one walk: %v", phase, twice)
+				}
+				if reads[1300]+following.before.of(phase)[1300] == 0 {
+					t.Errorf("%s: the entering pipeline is read by neither this walk nor the next window (since %s)", phase, stored.Format(time.RFC3339))
+				}
+			})
+		}
 	}
 }

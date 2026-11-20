@@ -88,7 +88,7 @@ func SelectGitFamilyRoute(provider, dataset string, deps GitFamilyDeps) (route G
 			return GitFamilyRoute{GitHubPullRequestSocialRouteHandler{PullRequests: GitHubPullRequestRouteHandler{RepoIdentity: identity}}, sink, sink}, true
 		case "cicd", "tests":
 			sink := GitHubTestsClickHouseEffects{Conn: conn, Lease: lease}
-			handler := GitHubTestsRouteHandler{MaxArtifactBytes: deps.GitHubTestsMaxArtifactBytes, RepoIdentity: identity, OpenRuns: GitHubOpenRunsClickHouseReader{Conn: conn, Lease: lease}}
+			handler := GitHubTestsRouteHandler{MaxArtifactBytes: deps.GitHubTestsMaxArtifactBytes, RepoIdentity: identity, OpenRuns: GitHubOpenRunsClickHouseReader{Conn: conn, Lease: lease}, CoalesceRuns: true}
 			return GitFamilyRoute{handler, sink, sink}, true
 		case "commits":
 			sink := GitHubCommitsClickHouseEffects{Conn: conn, Lease: lease}

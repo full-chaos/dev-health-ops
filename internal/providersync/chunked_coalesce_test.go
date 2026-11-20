@@ -8,379 +8,12 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
-	"github.com/google/uuid"
 )
-
-const runsGroupFirstID = 9_000_001
-
-// coalesceClock is the executor clock of the wall cells: GitHub reads and sink writes advance it by their measured cost.
-type coalesceClock struct {
-	mu  sync.Mutex
-	now time.Time
-}
-
-func (clock *coalesceClock) Now() time.Time {
-	clock.mu.Lock()
-	defer clock.mu.Unlock()
-	return clock.now
-}
-
-func (clock *coalesceClock) advance(by time.Duration) {
-	if clock == nil {
-		return
-	}
-	clock.mu.Lock()
-	clock.now = clock.now.Add(by)
-	clock.mu.Unlock()
-}
-
-// runsGroupDoer lists `runs` completed runs newest first, perPage per listing page (Link to the next page), and answers
-// each run's jobs read with jobsPerRun small jobs (bigJobs for bigRun, 100 per page). The artifacts listing is empty, so
-// a walk is the runs phase and the final emission. failJobsOnce fails one run's first jobs read.
-type runsGroupDoer struct {
-	t             *testing.T
-	runs          int
-	perPage       int
-	jobsPerRun    int
-	bigRun        string
-	bigJobs       int
-	failJobsOnce  string
-	clock         *coalesceClock
-	readCost      time.Duration
-	wallAt        time.Time
-	readsPastWall int
-	mu            sync.Mutex
-	jobGets       map[string]int
-}
-
-func newRunsGroupDoer(t *testing.T, runs, jobsPerRun int) *runsGroupDoer {
-	return &runsGroupDoer{t: t, runs: runs, perPage: 100, jobsPerRun: jobsPerRun, jobGets: map[string]int{}}
-}
-
-func runsGroupRunID(index int) string { return strconv.Itoa(runsGroupFirstID + index) }
-
-func (doer *runsGroupDoer) Do(request *http.Request) (*http.Response, error) {
-	header := http.Header{"Content-Type": {"application/json"}}
-	path := request.URL.Path
-	page := 1
-	if raw := request.URL.Query().Get("page"); raw != "" {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 1 {
-			doer.t.Errorf("page query %q", raw)
-		}
-		page = parsed
-	}
-	switch {
-	case path == "/repos/acme/api":
-		return githubTestsHTTPResponse(request, header, gitHubRepositoryFixture), nil
-	case path == "/repos/acme/api/actions/runs":
-		if githubTestsIsArtifactRunListing(request.URL.Query()) {
-			return githubTestsHTTPResponse(request, header, `{"workflow_runs":[]}`), nil
-		}
-		first := (page - 1) * doer.perPage
-		last := min(first+doer.perPage, doer.runs)
-		if last < doer.runs {
-			next := *request.URL
-			query := next.Query()
-			query.Set("page", strconv.Itoa(page+1))
-			next.RawQuery = query.Encode()
-			header.Set("Link", "<"+next.String()+">; rel=\"next\"")
-		}
-		var body strings.Builder
-		body.WriteString(`{"workflow_runs":[`)
-		base := time.Date(2026, 7, 22, 15, 0, 0, 0, time.UTC)
-		for index := first; index < last; index++ {
-			if index > first {
-				body.WriteByte(',')
-			}
-			id := runsGroupRunID(index)
-			created := base.Add(-time.Duration(index) * 10 * time.Second)
-			body.WriteString(`{"id":` + id + `,"name":"CI","status":"completed","conclusion":"success","created_at":"` +
-				created.Format(time.RFC3339) + `","run_started_at":"` + created.Add(time.Minute).Format(time.RFC3339) +
-				`","updated_at":"` + created.Add(5*time.Minute).Format(time.RFC3339) +
-				`","run_attempt":1,"event":"push","head_sha":"abc","head_branch":"main","html_url":"https://github.com/acme/api/actions/runs/` +
-				id + `","pull_requests":[]}`)
-		}
-		body.WriteString(`]}`)
-		return githubTestsHTTPResponse(request, header, body.String()), nil
-	case strings.HasPrefix(path, "/repos/acme/api/actions/runs/") && strings.HasSuffix(path, "/jobs"):
-		runID := strings.TrimSuffix(strings.TrimPrefix(path, "/repos/acme/api/actions/runs/"), "/jobs")
-		doer.mu.Lock()
-		if doer.clock != nil && !doer.wallAt.IsZero() && !doer.clock.Now().Before(doer.wallAt) {
-			doer.readsPastWall++
-		}
-		doer.mu.Unlock()
-		doer.clock.advance(doer.readCost)
-		doer.mu.Lock()
-		doer.jobGets[runID]++
-		fail := runID == doer.failJobsOnce
-		if fail {
-			doer.failJobsOnce = ""
-		}
-		doer.mu.Unlock()
-		if fail {
-			return &http.Response{StatusCode: http.StatusInternalServerError, Header: header,
-				Body: http.NoBody, Request: request}, nil
-		}
-		total := doer.jobsPerRun
-		if runID == doer.bigRun {
-			total = doer.bigJobs
-		}
-		first := (page - 1) * githubTestsPerRunPerPage
-		last := min(first+githubTestsPerRunPerPage, total)
-		if last < total {
-			next := *request.URL
-			query := next.Query()
-			query.Set("page", strconv.Itoa(page+1))
-			next.RawQuery = query.Encode()
-			header.Set("Link", "<"+next.String()+">; rel=\"next\"")
-		}
-		var body strings.Builder
-		body.WriteString(`{"total_count":` + strconv.Itoa(total) + `,"jobs":[`)
-		for job := first; job < last; job++ {
-			if job > first {
-				body.WriteByte(',')
-			}
-			body.WriteString(`{"id":` + runID + fmt.Sprintf("%04d", job) + `,"name":"job-` + strconv.Itoa(job) +
-				`","status":"completed","conclusion":"success","started_at":"2026-07-22T13:01:00Z","completed_at":"2026-07-22T13:04:00Z","labels":["ubuntu-latest"]}`)
-		}
-		body.WriteString(`]}`)
-		return githubTestsHTTPResponse(request, header, body.String()), nil
-	default:
-		doer.t.Errorf("unexpected request %s", request.URL.String())
-		return &http.Response{StatusCode: http.StatusNotFound, Header: header, Body: http.NoBody, Request: request}, nil
-	}
-}
-
-// runsGroupSink records every written row (a ReplacingMergeTree reader sees each physical row), counts the writes that
-// carry pipeline rows (one per committed runs-phase chunk) and reads back exactly what it holds. failJobWrite fails that
-// one ci_job_runs write (1-based) once.
-type runsGroupSink struct {
-	mu             sync.Mutex
-	clock          *coalesceClock
-	writeCost      time.Duration
-	failJobWrite   int
-	jobWrites      int
-	pipelineWrites int
-	pipelineRows   map[string]int
-	jobRows        map[string]int
-	rows           map[string]map[string]int
-}
-
-func newRunsGroupSink() *runsGroupSink {
-	return &runsGroupSink{pipelineRows: map[string]int{}, jobRows: map[string]int{}, rows: map[string]map[string]int{}}
-}
-
-func (sink *runsGroupSink) WriteEffect(_ context.Context, _ Claim, batch EffectBatch) error {
-	if len(batch.Rows) > 0 {
-		sink.clock.advance(sink.writeCost)
-	}
-	sink.mu.Lock()
-	defer sink.mu.Unlock()
-	if batch.Destination == "ci_job_runs" && len(batch.Rows) > 0 {
-		sink.jobWrites++
-		if sink.jobWrites == sink.failJobWrite {
-			return errors.New("sink unavailable")
-		}
-	}
-	if sink.rows[batch.Destination] == nil {
-		sink.rows[batch.Destination] = map[string]int{}
-	}
-	for _, raw := range batch.Rows {
-		sink.rows[batch.Destination][string(raw)]++
-		var row struct {
-			RunID string `json:"run_id"`
-		}
-		if err := json.Unmarshal(raw, &row); err != nil {
-			return err
-		}
-		switch batch.Destination {
-		case "ci_pipeline_runs":
-			sink.pipelineRows[row.RunID]++
-		case "ci_job_runs":
-			sink.jobRows[row.RunID]++
-		}
-	}
-	if batch.Destination == "ci_pipeline_runs" && len(batch.Rows) > 0 {
-		sink.pipelineWrites++
-	}
-	return nil
-}
-
-func (sink *runsGroupSink) InspectEffect(_ context.Context, _ Claim, batch EffectBatch) (EffectInspection, error) {
-	sink.mu.Lock()
-	defer sink.mu.Unlock()
-	found := 0
-	for _, raw := range batch.Rows {
-		if sink.rows[batch.Destination][string(raw)] > 0 {
-			found++
-		}
-	}
-	switch found {
-	case len(batch.Rows):
-		return EffectExact, nil
-	case 0:
-		return EffectAbsent, nil
-	default:
-		return EffectConflict, nil
-	}
-}
-
-// duplicates counts rows physically written more than once.
-func (sink *runsGroupSink) duplicates() int {
-	sink.mu.Lock()
-	defer sink.mu.Unlock()
-	total := 0
-	for _, rows := range sink.rows {
-		for _, count := range rows {
-			if count > 1 {
-				total++
-			}
-		}
-	}
-	return total
-}
-
-// runsGroupSession is a github/cicd claim over 2026-07-22 12:00..20:00 (no UTC midnight, so no deep re-run range).
-func runsGroupSession(t *testing.T, now time.Time) (Claim, *LeaseSession) {
-	t.Helper()
-	unit := nativeTestClaim("github", "cicd").Unit
-	since, before := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC), time.Date(2026, 7, 22, 20, 0, 0, 0, time.UTC)
-	unit.SinceAt, unit.BeforeAt = &since, &before
-	leases := newMemoryLeaseRepository(unit, "dispatching")
-	claim, err := leases.Claim(context.Background(), ClaimRequest{
-		UnitID: unit.ID, Owner: uuid.NewString(), Now: now, LeaseDuration: 15 * time.Minute,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return claim, &LeaseSession{
-		Repository: leases, Claim: claim, LeaseDuration: 15 * time.Minute,
-		Deadline: now.Add(48 * time.Hour), Now: func() time.Time { return now },
-	}
-}
-
-func runsGroupExecutor(
-	now time.Time, handler CompleteRouteHandler, store EffectLedger, sink *runsGroupSink, doer *runsGroupDoer, clock *coalesceClock,
-) CompleteRouteExecutor {
-	executor := completeRouteExecutor(now, handler, store, sink)
-	executor.Committer.Readback = sink
-	executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
-	executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
-	executor.Doer = fakehttp.Client(doer)
-	executor.BudgetLimits = map[CostClass]int{CostMedium: 100_000, CostHeavy: 100_000, CostLight: 100_000}
-	if clock != nil {
-		executor.Now = clock.Now
-	}
-	return executor
-}
-
-// noCoalesceHandler is the tests route with every emission's Coalescable cleared: today's one group per emission.
-type noCoalesceHandler struct{ GitHubTestsRouteHandler }
-
-func (handler noCoalesceHandler) CollectChunks(
-	ctx context.Context, claim Claim, credential providerfoundation.Credential, client *providerfoundation.HTTPClient,
-	normalizedAt time.Time, resumeCursor string, emit func(ChunkRouteEmission) error,
-) error {
-	return handler.GitHubTestsRouteHandler.CollectChunks(ctx, claim, credential, client, normalizedAt, resumeCursor,
-		func(emission ChunkRouteEmission) error {
-			emission.Coalescable = false
-			return emit(emission)
-		})
-}
-
-// runUntilDone runs attempts until the unit completes and returns each attempt's continuation (nil for the last).
-func runUntilDone(t *testing.T, executor CompleteRouteExecutor, session *LeaseSession, descriptor CompleteRouteDescriptor) []*ChunkContinuationError {
-	t.Helper()
-	var stops []*ChunkContinuationError
-	for attempt := 1; ; attempt++ {
-		if attempt > 200 {
-			t.Fatal("the unit does not complete in 200 attempts")
-		}
-		_, err := executor.Execute(context.Background(), session, descriptor)
-		if err == nil {
-			return append(stops, nil)
-		}
-		var stopped ChunkContinuationError
-		if !errors.As(err, &stopped) {
-			t.Fatalf("attempt %d: %v", attempt, err)
-		}
-		stops = append(stops, &stopped)
-	}
-}
-
-func cicdDescriptor(t *testing.T) CompleteRouteDescriptor {
-	t.Helper()
-	descriptor, ok := Descriptor("github", "cicd")
-	if !ok || !descriptor.Chunked {
-		t.Fatalf("descriptor=%+v", descriptor)
-	}
-	return descriptor
-}
-
-func assertEachRunOnce(t *testing.T, sink *runsGroupSink, doer *runsGroupDoer, runs int) {
-	t.Helper()
-	if len(sink.pipelineRows) != runs {
-		t.Fatalf("pipeline rows for %d runs, want %d", len(sink.pipelineRows), runs)
-	}
-	for index := 0; index < runs; index++ {
-		id := runsGroupRunID(index)
-		if sink.pipelineRows[id] != 1 {
-			t.Fatalf("run %s pipeline row written %d times, want 1", id, sink.pipelineRows[id])
-		}
-		want := doer.jobsPerRun
-		if id == doer.bigRun {
-			want = doer.bigJobs
-		}
-		if sink.jobRows[id] != want {
-			t.Fatalf("run %s job rows=%d, want %d", id, sink.jobRows[id], want)
-		}
-	}
-	if duplicated := sink.duplicates(); duplicated != 0 {
-		t.Fatalf("%d rows written more than once", duplicated)
-	}
-}
-
-// storedRunGroups returns the run ids of each stored chunk that carries pipeline rows, in ordinal order, and checks
-// that no destination of any stored chunk passes the policy's row cap.
-func storedRunGroups(t *testing.T, store *chunkMemoryStore, policy ChunkPolicy) [][]string {
-	t.Helper()
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	groups := [][]string{}
-	for ordinal := 0; ordinal < len(store.chunks); ordinal++ {
-		chunk, ok := store.chunks[ordinal]
-		if !ok {
-			t.Fatalf("stored chunks have a gap at %d", ordinal)
-		}
-		var runs []string
-		for _, effect := range chunk.Effects {
-			if len(effect.Rows) > min(policy.MaxEffectRows, policy.MaxSourceItems) {
-				t.Fatalf("chunk %d %s holds %d rows over the cap", ordinal, effect.Destination, len(effect.Rows))
-			}
-			if effect.Destination != "ci_pipeline_runs" {
-				continue
-			}
-			for _, raw := range effect.Rows {
-				var row struct {
-					RunID string `json:"run_id"`
-				}
-				_ = json.Unmarshal(raw, &row)
-				runs = append(runs, row.RunID)
-			}
-		}
-		if len(runs) > 0 {
-			groups = append(groups, runs)
-		}
-	}
-	return groups
-}
 
 // 100 small runs (3 jobs each) fill chunk groups up to the 100-row cap of ci_job_runs: 33 + 33 + 33 + 1, each group one
 // sub-chunk, each run written once. The base committed 100 groups.
@@ -389,7 +22,7 @@ func TestChunkedRunsPhaseFillsGroupsUpToTheRowCap(t *testing.T) {
 	_, session := runsGroupSession(t, now)
 	descriptor := cicdDescriptor(t)
 	doer, sink, store := newRunsGroupDoer(t, 100, 3), newRunsGroupSink(), newChunkMemoryStore()
-	runUntilDone(t, runsGroupExecutor(now, GitHubTestsRouteHandler{}, store, sink, doer, nil), session, descriptor)
+	runUntilDone(t, runsGroupExecutor(now, GitHubTestsRouteHandler{CoalesceRuns: true}, store, sink, doer, nil), session, descriptor)
 	assertEachRunOnce(t, sink, doer, 100)
 	groups := storedRunGroups(t, store, descriptor.ChunkPolicy)
 	sizes := make([]int, 0, len(groups))
@@ -417,7 +50,7 @@ func TestChunkedRunsPhaseGroupNeverSpansAListingPage(t *testing.T) {
 	descriptor := cicdDescriptor(t)
 	doer, sink, store := newRunsGroupDoer(t, 250, 1), newRunsGroupSink(), newChunkMemoryStore()
 	doer.perPage = 30
-	runUntilDone(t, runsGroupExecutor(now, GitHubTestsRouteHandler{}, store, sink, doer, nil), session, descriptor)
+	runUntilDone(t, runsGroupExecutor(now, GitHubTestsRouteHandler{CoalesceRuns: true}, store, sink, doer, nil), session, descriptor)
 	assertEachRunOnce(t, sink, doer, 250)
 	groups := storedRunGroups(t, store, descriptor.ChunkPolicy)
 	if len(groups) != 9 {
@@ -434,31 +67,31 @@ func TestChunkedRunsPhaseGroupNeverSpansAListingPage(t *testing.T) {
 	}
 }
 
-// A stream error drops only the group that was not durable yet: the five runs held before the failing jobs read are
-// read again by the next attempt and written once; nothing was prepared for them.
-func TestChunkedRunsPhaseStreamErrorDropsOnlyTheHeldGroup(t *testing.T) {
+// A source error on a run's jobs read commits the runs held before it under the live lease (a group per run would
+// already have committed them): the five held runs are written once and not read again; the failing run is read again.
+func TestChunkedRunsPhaseStreamErrorCommitsTheHeldGroup(t *testing.T) {
 	now := time.Date(2026, 7, 22, 21, 0, 0, 0, time.UTC)
 	claim, session := runsGroupSession(t, now)
 	descriptor := cicdDescriptor(t)
 	doer, sink, store := newRunsGroupDoer(t, 40, 2), newRunsGroupSink(), newChunkMemoryStore()
 	doer.failJobsOnce = runsGroupRunID(5)
-	executor := runsGroupExecutor(now, GitHubTestsRouteHandler{}, store, sink, doer, nil)
+	executor := runsGroupExecutor(now, GitHubTestsRouteHandler{CoalesceRuns: true}, store, sink, doer, nil)
 	if _, err := executor.Execute(context.Background(), session, descriptor); err == nil || errors.As(err, new(ChunkContinuationError)) {
 		t.Fatalf("attempt 1 err=%v, want the jobs read failure", err)
 	}
 	checkpoint, err := store.LoadChunkCheckpoint(context.Background(), claim, now)
-	if err != nil && !errors.Is(err, ErrChunkCheckpointNotFound) {
+	if err != nil {
 		t.Fatal(err)
 	}
-	if checkpoint.PreparedChunks != 0 || len(sink.pipelineRows) != 0 {
-		t.Fatalf("after the failed attempt: prepared=%d written runs=%d, want 0 0 (the held group is not durable)",
-			checkpoint.PreparedChunks, len(sink.pipelineRows))
+	if checkpoint.PreparedChunks != 1 || checkpoint.NextOrdinal != 1 || len(sink.pipelineRows) != 5 {
+		t.Fatalf("after the failed attempt: prepared=%d next=%d written runs=%d, want 1 1 5 (the held group committed)",
+			checkpoint.PreparedChunks, checkpoint.NextOrdinal, len(sink.pipelineRows))
 	}
 	runUntilDone(t, executor, session, descriptor)
 	assertEachRunOnce(t, sink, doer, 40)
 	for index := 0; index < 40; index++ {
 		want := 1
-		if index <= 5 {
+		if index == 5 {
 			want = 2
 		}
 		if got := doer.jobGets[runsGroupRunID(index)]; got != want {
@@ -468,7 +101,8 @@ func TestChunkedRunsPhaseStreamErrorDropsOnlyTheHeldGroup(t *testing.T) {
 }
 
 // A run whose jobs split into several sub-chunks is never coalesced: it keeps its own prepared group and the yield
-// inside it, and the attempt chunk bound holds; every run is written once.
+// inside it, and the attempt chunk bound holds; every run is written once. A run that arrives when a flush reaches the
+// bound is staged as its own group (the lone 1 after the second 33).
 func TestChunkedRunsPhaseBigRunKeepsItsOwnGroupAndTheBounds(t *testing.T) {
 	now := time.Date(2026, 7, 22, 21, 0, 0, 0, time.UTC)
 	_, session := runsGroupSession(t, now)
@@ -476,7 +110,7 @@ func TestChunkedRunsPhaseBigRunKeepsItsOwnGroupAndTheBounds(t *testing.T) {
 	descriptor.ChunkPolicy.MaxChunksPerAttempt = 2
 	doer, sink, store := newRunsGroupDoer(t, 100, 3), newRunsGroupSink(), newChunkMemoryStore()
 	doer.bigRun, doer.bigJobs = runsGroupRunID(50), 250
-	stops := runUntilDone(t, runsGroupExecutor(now, GitHubTestsRouteHandler{}, store, sink, doer, nil), session, descriptor)
+	stops := runUntilDone(t, runsGroupExecutor(now, GitHubTestsRouteHandler{CoalesceRuns: true}, store, sink, doer, nil), session, descriptor)
 	assertEachRunOnce(t, sink, doer, 100)
 	for index, stop := range stops {
 		if stop != nil && stop.Chunks > 2 {
@@ -499,8 +133,8 @@ func TestChunkedRunsPhaseBigRunKeepsItsOwnGroupAndTheBounds(t *testing.T) {
 	for _, group := range groups {
 		sizes = append(sizes, len(group))
 	}
-	if bigChunks != 3 || fmt.Sprint(sizes) != "[33 17 1 33 16]" {
-		t.Fatalf("big run in %d sub-chunks, run groups %v; want 3 and [33 17 1 33 16]", bigChunks, sizes)
+	if bigChunks != 3 || fmt.Sprint(sizes) != "[33 17 1 33 1 15]" {
+		t.Fatalf("big run in %d sub-chunks, run groups %v; want 3 and [33 17 1 33 1 15]", bigChunks, sizes)
 	}
 }
 
@@ -528,8 +162,8 @@ func TestChunkedRunsPhaseThroughputPerAttemptBaseVersusHead(t *testing.T) {
 		doer.wallAt = time.Time{}
 		return len(sink.pipelineRows), &stopped, sink, doer, executor, session
 	}
-	base, baseStop, _, _, _, _ := attempt(noCoalesceHandler{})
-	head, headStop, sink, doer, executor, session := attempt(GitHubTestsRouteHandler{})
+	base, baseStop, _, _, _, _ := attempt(GitHubTestsRouteHandler{})
+	head, headStop, sink, doer, executor, session := attempt(GitHubTestsRouteHandler{CoalesceRuns: true})
 	t.Logf("THROUGHPUT: runs per 45 s attempt base=%d (%d chunks) head=%d (%d chunks)", base, baseStop.Chunks, head, headStop.Chunks)
 	if head*4 < base*5 {
 		t.Fatalf("head commits %d runs per attempt, base %d: want at least 1.25x", head, base)
@@ -652,35 +286,297 @@ func TestChunkedCoalescingKeepsRecoveryPoliciesApart(t *testing.T) {
 	}
 }
 
-// Only the runs phase marks its emissions coalescable: the open phase carries a skip event in its own emission's cursor
-// (ObserveCommittedChunk reads it from the committed chunk), and the artifacts and final emissions keep one group each.
+// Only the flag-on runs phase marks its emissions coalescable; the open phase (its skip event rides in its own
+// emission's cursor), the artifacts phase and the final emission stay unmarked. Flag off marks nothing and emits no
+// barrier. (Here the artifacts emissions already end the held group, so no barrier is needed before the open phase.)
 func TestGitHubTestsRouteMarksOnlyRunsPhaseEmissionsCoalescable(t *testing.T) {
-	repoID := listingRepoID(t)
-	fake := newListingFake(t, makeListingRuns(1, 3, listingSince, time.Minute))
-	reader := openSkipStore(repoID, fake, 7200, 3)
-	doer := newOpenSkipDoer(fake)
-	doer.runs[7201] = []openSkipReply{{status: 410, body: openSkipPoisonBody}}
-	client := githubTestsClient(t, fakehttp.Client(doer))
-	phases := map[string]int{}
-	err := GitHubTestsRouteHandler{OpenRuns: reader}.CollectChunks(context.Background(), openWindowClaim(),
-		providerfoundation.Credential{}, client, time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "",
-		func(emission ChunkRouteEmission) error {
-			before, err := decodeGitHubTestsChunkCursor(emission.CursorBefore)
+	for _, on := range []bool{true, false} {
+		repoID := listingRepoID(t)
+		fake := newListingFake(t, makeListingRuns(1, 3, listingSince, time.Minute))
+		reader := openSkipStore(repoID, fake, 7200, 3)
+		doer := newOpenSkipDoer(fake)
+		doer.runs[7201] = []openSkipReply{{status: 410, body: openSkipPoisonBody}}
+		client := githubTestsClient(t, fakehttp.Client(doer))
+		phases, barriers, unfenced, lastCoalescable := map[string]int{}, 0, 0, false
+		err := GitHubTestsRouteHandler{OpenRuns: reader, CoalesceRuns: on}.CollectChunks(context.Background(), openWindowClaim(),
+			providerfoundation.Credential{}, client, time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "",
+			func(emission ChunkRouteEmission) error {
+				if emission.Barrier {
+					barriers++
+					lastCoalescable = false
+					return nil
+				}
+				before, err := decodeGitHubTestsChunkCursor(emission.CursorBefore)
+				if err != nil {
+					return err
+				}
+				want := on && before.Phase == githubTestsRunsPhase && !emission.Final
+				if emission.Coalescable != want {
+					t.Errorf("flag %t: emission in phase %q final=%t coalescable=%t, want %t", on, before.Phase, emission.Final, emission.Coalescable, want)
+				}
+				if before.Phase == githubTestsOpenPhase && lastCoalescable {
+					unfenced++
+				}
+				lastCoalescable = emission.Coalescable
+				phases[before.Phase]++
+				return nil
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if phases[githubTestsRunsPhase] == 0 || phases[githubTestsArtifactsPhase] == 0 || phases[githubTestsOpenPhase] == 0 {
+			t.Fatalf("flag %t: emissions by phase %v, want runs, artifacts and open emissions", on, phases)
+		}
+		if unfenced != 0 || (!on && barriers != 0) {
+			t.Fatalf("flag %t: %d barriers, %d open emissions right after a coalescable one; want none unfenced and no barrier when off",
+				on, barriers, unfenced)
+		}
+	}
+}
+
+// The re-seek after a moved page re-writes one surviving run with the flag on, exactly as the base does
+// (TestGitHubTestsMovedPageReseekRewriteBaseControl): coalescing does not add a rewrite.
+func TestGitHubTestsMovedPageReseekRewriteMatchesTheBase(t *testing.T) {
+	off := reseekRewrittenRuns(t, GitHubTestsRouteHandler{})
+	on := reseekRewrittenRuns(t, GitHubTestsRouteHandler{CoalesceRuns: true})
+	if on != off || off != 1 {
+		t.Fatalf("runs written twice after the re-seek: flag on %d, off %d, want 1 and 1", on, off)
+	}
+}
+
+// A run read at or after the wall is committed by its attempt with the flag on, as on the base: 2 runs either way.
+func TestGitHubTestsRunReadAtTheWallMatchesTheBase(t *testing.T) {
+	for _, late := range []time.Duration{0, time.Millisecond} {
+		offRuns, offPipelines := wallDurableRuns(t, GitHubTestsRouteHandler{}, late)
+		onRuns, onPipelines := wallDurableRuns(t, GitHubTestsRouteHandler{CoalesceRuns: true}, late)
+		if onRuns != offRuns || onPipelines != offPipelines || offRuns != 2 {
+			t.Fatalf("late %s: first attempt runs on %d/%d off %d/%d, want 2/2 both", late, onRuns, onPipelines, offRuns, offPipelines)
+		}
+	}
+}
+
+// The run whose arrival ends a full group is kept when that group's flush stops the attempt: on the chunk bound
+// (continuation) and on a sink failure (error), the arriving run is prepared as its own group and the next attempt
+// drains it without reading GitHub again.
+func TestChunkedRunsPhaseFlushStopStagesTheArrivingRun(t *testing.T) {
+	for _, path := range []string{"continuation", "error"} {
+		t.Run(path, func(t *testing.T) {
+			now := time.Date(2026, 7, 22, 21, 0, 0, 0, time.UTC)
+			claim, session := runsGroupSession(t, now)
+			descriptor := cicdDescriptor(t)
+			doer, sink, store := newRunsGroupDoer(t, 100, 3), newRunsGroupSink(), newChunkMemoryStore()
+			wantNext := 0
+			if path == "continuation" {
+				descriptor.ChunkPolicy.MaxChunksPerAttempt = 1
+				wantNext = 1
+			} else {
+				sink.failJobWrite = 1
+			}
+			executor := runsGroupExecutor(now, GitHubTestsRouteHandler{CoalesceRuns: true}, store, sink, doer, nil)
+			_, err := executor.Execute(context.Background(), session, descriptor)
+			isStop := errors.As(err, new(ChunkContinuationError))
+			if err == nil || isStop != (path == "continuation") {
+				t.Fatalf("attempt 1 err=%v, want the %s", err, path)
+			}
+			checkpoint, err := store.LoadChunkCheckpoint(context.Background(), claim, now)
 			if err != nil {
-				return err
+				t.Fatal(err)
 			}
-			want := before.Phase == githubTestsRunsPhase && !emission.Final
-			if emission.Coalescable != want {
-				t.Errorf("emission in phase %q final=%t coalescable=%t, want %t", before.Phase, emission.Final, emission.Coalescable, want)
+			if checkpoint.PreparedChunks != 2 || checkpoint.NextOrdinal != wantNext {
+				t.Fatalf("after attempt 1 prepared=%d next=%d, want 2 %d (the full group and the arriving run 33 prepared)",
+					checkpoint.PreparedChunks, checkpoint.NextOrdinal, wantNext)
 			}
-			phases[before.Phase]++
-			return nil
+			runUntilDone(t, executor, session, descriptor)
+			assertEachRunOnce(t, sink, doer, 100)
+			for index := 0; index < 100; index++ {
+				if gets := doer.jobGets[runsGroupRunID(index)]; gets != 1 {
+					t.Fatalf("run %d jobs read %d times, want once", index, gets)
+				}
+			}
 		})
-	if err != nil {
-		t.Fatal(err)
 	}
-	if phases[githubTestsRunsPhase] == 0 || phases[githubTestsArtifactsPhase] == 0 || phases[githubTestsOpenPhase] == 0 {
-		t.Fatalf("emissions by phase %v, want runs, artifacts and open emissions", phases)
+}
+
+// barrierCountingHandler counts the barrier emissions the route sends to the executor.
+type barrierCountingHandler struct {
+	GitHubTestsRouteHandler
+	barriers *int
+}
+
+func (handler barrierCountingHandler) CollectChunks(
+	ctx context.Context, claim Claim, credential providerfoundation.Credential, client *providerfoundation.HTTPClient,
+	normalizedAt time.Time, resumeCursor string, emit func(ChunkRouteEmission) error,
+) error {
+	return handler.GitHubTestsRouteHandler.CollectChunks(ctx, claim, credential, client, normalizedAt, resumeCursor,
+		func(emission ChunkRouteEmission) error {
+			if emission.Barrier {
+				*handler.barriers++
+			}
+			return emit(emission)
+		})
+}
+
+// openBarrierSink writes like the ClickHouse sink and refreshes the stored open rows the way the open reader sees them.
+type openBarrierSink struct {
+	*runsGroupSink
+	reader *fakeOpenRuns
+}
+
+func (sink openBarrierSink) WriteEffect(ctx context.Context, claim Claim, effect EffectBatch) error {
+	if err := sink.runsGroupSink.WriteEffect(ctx, claim, effect); err != nil {
+		return err
 	}
-	t.Logf("emissions by phase %v", phases)
+	if effect.Destination == "ci_pipeline_runs" {
+		rows, err := decodeEffectRows[githubTestsPipelineRow](effect)
+		if err != nil {
+			return err
+		}
+		sink.reader.finalize(rows)
+	}
+	return nil
+}
+
+// The open phase reads stored pipeline rows, so the runs-phase group the executor holds is made durable first (the
+// barrier): a run stored as running, read completed by the runs phase and gone from GitHub before the artifacts listing,
+// is written once as success and never re-read by id or written as deleted.
+func TestGitHubTestsOpenPhaseReadsAfterTheHeldRunsAreDurable(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		for _, oldStatus := range []string{"running", "queued"} {
+			since, before := listingSince.Add(-time.Hour), listingSince.Add(time.Hour)
+			now := before.Add(time.Hour)
+			claim, session := runsGroupWindowSession(t, now, since, before)
+			created := since.Add(-48 * time.Hour)
+			runs := makeListingRuns(42, 1, created, time.Minute)
+			runs[0].updated = before
+			fake := newListingFake(t, runs)
+			reader := &fakeOpenRuns{rows: []githubTestsPipelineRow{openRow(listingRepoID(t), "42", created, oldStatus)}}
+			sink := newRunsGroupSink()
+			barriers := 0
+			executor := runsGroupExecutor(now, barrierCountingHandler{GitHubTestsRouteHandler{OpenRuns: reader, CoalesceRuns: on}, &barriers},
+				NewInProcessChunkLedger(claim), sink, coalesceDoerFunc(func(request *http.Request) (*http.Response, error) {
+					response, err := fake.Do(request)
+					if strings.HasSuffix(request.URL.Path, "/42/jobs") {
+						fake.runs = nil
+					}
+					return response, err
+				}), nil)
+			executor.Committer.Sink = openBarrierSink{sink, reader}
+			runUntilDone(t, executor, session, cicdDescriptor(t))
+			if wantBarriers := map[bool]int{true: 1, false: 0}[on]; barriers != wantBarriers {
+				t.Fatalf("flag %t stored %s: %d barriers, want %d", on, oldStatus, barriers, wantBarriers)
+			}
+			if status := stringPtrValue(reader.rows[0].Status); sink.pipelineRows["42"] != 1 || len(fake.runGets) != 0 || status != "success" {
+				t.Fatalf("flag %t stored %s: run 42 written %d times, by-id reads %v, last status %q; want 1, none, success",
+					on, oldStatus, sink.pipelineRows["42"], fake.runGets, status)
+			}
+		}
+	}
+}
+
+// A barrier with nothing held is a no-op; one between two contiguous emissions ends the held group there.
+func TestChunkedBarrierFlushesOnlyAHeldGroup(t *testing.T) {
+	store := runSynthetic(t, []ChunkRouteEmission{
+		{Barrier: true},
+		syntheticRunEmission(t, "a", "b", 1, EffectReadbackRequired),
+		syntheticRunEmission(t, "b", "c", 1, EffectReadbackRequired),
+	})
+	if got := fmt.Sprint(storedCursors(store)); got != "[a>c c>c]" {
+		t.Fatalf("leading barrier: stored chunk cursors %s, want [a>c c>c]", got)
+	}
+	store = runSynthetic(t, []ChunkRouteEmission{
+		syntheticRunEmission(t, "a", "b", 1, EffectReadbackRequired),
+		{Barrier: true},
+		syntheticRunEmission(t, "b", "c", 1, EffectReadbackRequired),
+	})
+	if got := fmt.Sprint(storedCursors(store)); got != "[a>b b>c c>c]" {
+		t.Fatalf("barrier between: stored chunk cursors %s, want [a>b b>c c>c]", got)
+	}
+}
+
+// An emission kind the executor does not know fails the attempt loudly: a barrier that carries anything else, and a
+// final emission marked coalescable.
+func TestChunkedExecutorRefusesAnUnknownEmissionKind(t *testing.T) {
+	barrierWithBatch := syntheticRunEmission(t, "a", "b", 1, EffectReadbackRequired)
+	barrierWithBatch.Barrier, barrierWithBatch.Coalescable = true, false
+	finalCoalescable := syntheticRunEmission(t, "a", "b", 1, EffectReadbackRequired)
+	finalCoalescable.Final = true
+	for name, emission := range map[string]ChunkRouteEmission{
+		"barrier and final":       {Barrier: true, Final: true},
+		"barrier and coalescable": {Barrier: true, Coalescable: true},
+		"barrier with a cursor":   {Barrier: true, CursorAfter: "x"},
+		"barrier with a batch":    barrierWithBatch,
+		"final and coalescable":   finalCoalescable,
+	} {
+		now := time.Date(2026, 7, 22, 21, 0, 0, 0, time.UTC)
+		_, session := runsGroupSession(t, now)
+		store := newChunkMemoryStore()
+		executor := runsGroupExecutor(now, &coalesceSyntheticHandler{emissions: []ChunkRouteEmission{emission}}, store,
+			newRunsGroupSink(), newRunsGroupDoer(t, 0, 0), nil)
+		if _, err := executor.Execute(context.Background(), session, cicdDescriptor(t)); !errors.Is(err, ErrInvalidConfiguration) {
+			t.Fatalf("%s: err=%v, want ErrInvalidConfiguration", name, err)
+		}
+		if len(store.chunks) != 0 {
+			t.Fatalf("%s: %d chunks stored, want none", name, len(store.chunks))
+		}
+	}
+}
+
+// A terminal source error after held runs commits them under the live lease, as the base had already committed them;
+// the error keeps its class. A lost lease writes nothing; a failed flush is joined to the source error.
+func TestChunkedRunsPhaseTerminalErrorKeepsTheHeldRuns(t *testing.T) {
+	sinkDown := errors.New("sink down")
+	for _, cell := range []string{"flag off", "flag on", "lease lost", "flush fails"} {
+		t.Run(cell, func(t *testing.T) {
+			since, before := listingSince, listingSince.Add(2*time.Hour)
+			now := before.Add(time.Hour)
+			claim, session := runsGroupWindowSession(t, now, since, before)
+			fake := newListingFake(t, makeListingRuns(42, 3, since, time.Second))
+			sink := newRunsGroupSink()
+			failWrites := false
+			store := NewInProcessChunkLedger(claim)
+			executor := runsGroupExecutor(now, GitHubTestsRouteHandler{CoalesceRuns: cell != "flag off"}, store, sink,
+				coalesceDoerFunc(func(request *http.Request) (*http.Response, error) {
+					if strings.HasSuffix(request.URL.Path, "/42/jobs") {
+						switch cell {
+						case "lease lost":
+							leases := session.Repository.(*memoryLeaseRepository)
+							leases.mu.Lock()
+							leases.terminal = true
+							leases.mu.Unlock()
+						case "flush fails":
+							failWrites = true
+						}
+						return fake.respond(request, http.Header{}, `{"message":"Not Found"}`, http.StatusNotFound), nil
+					}
+					return fake.Do(request)
+				}), nil)
+			executor.Committer.Sink = failingAfterSink{sink, &failWrites, sinkDown}
+			_, err := executor.Execute(context.Background(), session, cicdDescriptor(t))
+			var providerErr *providerfoundation.ProviderError
+			if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorNotFound {
+				t.Fatalf("err=%v, want the provider not-found class", err)
+			}
+			want := map[string]int{"flag off": 2, "flag on": 2, "lease lost": 0, "flush fails": 0}[cell]
+			if len(sink.pipelineRows) != want {
+				t.Fatalf("runs written %v, want %d", sink.pipelineRows, want)
+			}
+			if cell == "flush fails" && !errors.Is(err, sinkDown) {
+				t.Fatalf("err=%v, want the flush failure joined", err)
+			}
+		})
+	}
+}
+
+// failingAfterSink fails every write once *fail is set.
+type failingAfterSink struct {
+	*runsGroupSink
+	fail *bool
+	err  error
+}
+
+func (sink failingAfterSink) WriteEffect(ctx context.Context, claim Claim, effect EffectBatch) error {
+	if *sink.fail && len(effect.Rows) > 0 {
+		return sink.err
+	}
+	return sink.runsGroupSink.WriteEffect(ctx, claim, effect)
 }

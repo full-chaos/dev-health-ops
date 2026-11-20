@@ -328,6 +328,10 @@ type GitHubTestsRouteHandler struct {
 	// id. Nil leaves the open phase out (the oracle and unit fixtures without a
 	// store).
 	OpenRuns GitHubOpenRunsReader
+	// CoalesceRuns marks each runs-phase run emission coalescable, so the
+	// executor may commit several runs in one chunk group, and fences the open
+	// phase with a barrier. False keeps one chunk group per run.
+	CoalesceRuns bool
 	// RefreshLookback is how far before the window the runs phase lists; zero
 	// keeps githubTestsRefreshLookbackDefault.
 	RefreshLookback time.Duration

@@ -71,7 +71,7 @@ func TestGitHubTestsRunsPhaseFillsChunkGroups(t *testing.T) {
 	defer cancel()
 	repository, session, pool := runsGroupPostgres(t, ctx)
 	doer, sink := newRunsGroupDoer(t, 100, 3), newRunsGroupSink()
-	stops := runUntilDone(t, runsGroupExecutor(time.Now().UTC(), GitHubTestsRouteHandler{}, repository, sink, doer, nil),
+	stops := runUntilDone(t, runsGroupExecutor(time.Now().UTC(), GitHubTestsRouteHandler{CoalesceRuns: true}, repository, sink, doer, nil),
 		session, cicdDescriptor(t))
 	assertEachRunOnce(t, sink, doer, 100)
 	for id, gets := range doer.jobGets {
@@ -87,15 +87,16 @@ func TestGitHubTestsRunsPhaseFillsChunkGroups(t *testing.T) {
 	}
 }
 
-// A sink failure inside a coalesced group on real Postgres: the group was prepared whole before its first write, so the
-// next attempt drains it from the store (no GitHub read again) and every row lands exactly once.
+// A sink failure inside a coalesced group on real Postgres: the group was prepared whole before its first write and the
+// run whose arrival started the flush is staged as its own group, so the next attempt drains both from the store (no
+// GitHub read again) and every row lands exactly once.
 func TestGitHubTestsRunsPhaseCrashInsideACoalescedGroupDrainsOnce(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	repository, session, pool := runsGroupPostgres(t, ctx)
 	doer, sink := newRunsGroupDoer(t, 100, 3), newRunsGroupSink()
 	sink.failJobWrite = 2
-	executor := runsGroupExecutor(time.Now().UTC(), GitHubTestsRouteHandler{}, repository, sink, doer, nil)
+	executor := runsGroupExecutor(time.Now().UTC(), GitHubTestsRouteHandler{CoalesceRuns: true}, repository, sink, doer, nil)
 	if _, err := executor.Execute(ctx, session, cicdDescriptor(t)); err == nil || errors.As(err, new(ChunkContinuationError)) {
 		t.Fatalf("attempt 1 err=%v, want the sink failure", err)
 	}
@@ -103,21 +104,15 @@ func TestGitHubTestsRunsPhaseCrashInsideACoalescedGroupDrainsOnce(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if checkpoint.PreparedChunks != 2 || checkpoint.NextOrdinal != 1 {
-		t.Fatalf("after the crash prepared=%d next=%d, want 2 1 (the second group prepared whole, not committed)",
-			checkpoint.PreparedChunks, checkpoint.NextOrdinal)
+	if checkpoint.PreparedChunks != 3 || checkpoint.NextOrdinal != 1 {
+		t.Fatalf("after the crash prepared=%d next=%d, want 3 1 (the second group prepared whole, not committed, and run 66 "+
+			"whose arrival started its flush staged as its own group)", checkpoint.PreparedChunks, checkpoint.NextOrdinal)
 	}
 	runUntilDone(t, executor, session, cicdDescriptor(t))
 	assertEachRunOnce(t, sink, doer, 100)
-	// Run 66 arrived, did not fit the second group and started its flush: it was never held or prepared, so it is the
-	// one run read again. The 33 runs of the prepared group drain without GitHub.
 	for index := 0; index < 100; index++ {
-		want := 1
-		if index == 66 {
-			want = 2
-		}
-		if gets := doer.jobGets[runsGroupRunID(index)]; gets != want {
-			t.Fatalf("run %d jobs read %d times, want %d", index, gets, want)
+		if gets := doer.jobGets[runsGroupRunID(index)]; gets != 1 {
+			t.Fatalf("run %d jobs read %d times, want once (prepared groups drain without GitHub)", index, gets)
 		}
 	}
 	t.Logf("CRASH: %d stored chunks after recovery", storedChunkCount(t, ctx, pool))

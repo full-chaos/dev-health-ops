@@ -243,9 +243,9 @@ func TestCanonicalOnlyCensus_BranchSites(t *testing.T) {
 // (TestNullRepositoryIsOneUnassignedGroupAndNoSankeyNode, TestSankeyGrouped_SeededRealClickHouse_EqualsPerDimensionQueries).
 func censusPinnedSites() map[string]int {
 	return map[string]int{
-		"breakdown.go": 7, "catalog.go": 5, "filtertranslation.go": 14, "flowmatrix.go": 9, "investment.go": 5,
-		"investmentquality.go": 4, "resolve.go": 35, "sankey.go": 6, "sankeycoverage.go": 21, "sankeygrouped.go": 9,
-		"teamownership.go": 4, "testopsownership.go": 4, "timeseries.go": 5, "validate.go": 7,
+		"breakdown.go": 8, "catalog.go": 5, "filtertranslation.go": 14, "flowmatrix.go": 9, "investment.go": 5,
+		"investmentquality.go": 4, "resolve.go": 35, "sankey.go": 9, "sankeycoverage.go": 22, "sankeygrouped.go": 10,
+		"teamownership.go": 4, "testopsownership.go": 5, "timeseries.go": 6, "validate.go": 9,
 	}
 }
 

@@ -139,14 +139,17 @@ const (
 // readBackLockTimeout bounds how long one read-back waits on the unit row lock.
 const readBackLockTimeout = 5 * time.Second
 
-// readBackUnitWriteSQL tells a committed unit write from one that did not
-// commit. completeUnitSQL, failUnitSQL and releaseForRetrySQL each set status,
-// clear lease_owner and stamp updated_at and last_heartbeat_at with the write's
-// own instant; a unit still running under the same owner did not commit.
+// ReadBackUnitWriteSQL tells a committed unit write from one that did not
+// commit. It is exported only for the worker-role grant cell that runs it under
+// the NOSUPERUSER domain role (FOR SHARE needs UPDATE privilege on the table);
+// its one caller is readBackUnitWrite. completeUnitSQL, failUnitSQL and
+// releaseForRetrySQL each set status, clear lease_owner and stamp updated_at
+// and last_heartbeat_at with the write's own instant; a unit still running
+// under the same owner did not commit.
 // FOR SHARE waits on the row lock an in-flight COMMIT of the first transaction
 // still holds, so the row read is the committed or the aborted truth, never the
 // version from before a COMMIT that is about to land.
-const readBackUnitWriteSQL = `
+const ReadBackUnitWriteSQL = `
 SELECT unit.status = $3 AND unit.lease_owner IS NULL
        AND unit.updated_at = $4::timestamptz AND unit.last_heartbeat_at = $4::timestamptz,
        unit.status = 'running' AND unit.lease_owner IS NOT DISTINCT FROM $5
@@ -187,7 +190,7 @@ func (repository *PostgresRepository) readBackUnitWrite(
 		return storeOutcomeNotCommitted, err
 	}
 	var committed, ours bool
-	err = tx.QueryRow(ctx, readBackUnitWriteSQL,
+	err = tx.QueryRow(ctx, ReadBackUnitWriteSQL,
 		claim.ID, claim.OrgID, wantStatus, writtenAt.UTC(), claim.Owner,
 	).Scan(&committed, &ours)
 	if errors.Is(err, pgx.ErrNoRows) {

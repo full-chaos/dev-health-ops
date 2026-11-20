@@ -423,7 +423,6 @@ func TestUnitWriteWithALostCommitAfterLeaseRecoveryIsLeaseLost(t *testing.T) {
 	})
 }
 
-
 // S4 on a private server: ending the session in the Bump is a lost connection
 // before COMMIT; the write is retried in place and commits once.
 func TestCompleteRetriesALostConnectionInPlace(t *testing.T) {

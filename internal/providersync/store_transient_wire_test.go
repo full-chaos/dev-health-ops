@@ -404,8 +404,9 @@ func TestReleaseWithALostAcknowledgementReadsBackTheRelease(t *testing.T) {
 
 // P1-3 (r1): a write the read-back confirmed runs the same post-commit steps as
 // an acknowledged one: the wake, the needs-attention line and the failure
-// counter once; the rollup bump is counted as ambiguous_commit (its counts are
-// not re-read), never as a bump with counts.
+// counter once; the rollup bump is a WARN plus the counter's "other" outcome
+// (its counts are not re-read; ambiguous_commit has no outcome of its own yet),
+// never a bump with counts.
 func TestCommitConfirmedByTheReadBackRunsThePostCommitSteps(t *testing.T) {
 	for _, write := range []string{"complete", "fail"} {
 		t.Run(write, func(t *testing.T) {
@@ -413,7 +414,7 @@ func TestCommitConfirmedByTheReadBackRunsThePostCommitSteps(t *testing.T) {
 			if write == "fail" {
 				outcome = "failed"
 			}
-			ambiguousBefore := rollupBumpCount(t, "ambiguous_commit")
+			otherBefore := rollupBumpCount(t, "other")
 			bumpedBefore := rollupBumpCount(t, outcome)
 			wakesBefore := dispatchWakesArmed()
 			w := &storeWire{faults: []*wireFault{{step: "commit", code: "57P01", times: 1}}}
@@ -421,8 +422,8 @@ func TestCommitConfirmedByTheReadBackRunsThePostCommitSteps(t *testing.T) {
 			if run.err != nil {
 				t.Fatalf("%s()=%v, want the read-back to find the commit", write, run.err)
 			}
-			if got := rollupBumpCount(t, "ambiguous_commit") - ambiguousBefore; got != 1 {
-				t.Fatalf("ambiguous_commit bumps=%d, want 1", got)
+			if got := rollupBumpCount(t, "other") - otherBefore; got != 1 {
+				t.Fatalf("other bumps=%d, want 1 (the ambiguous commit)", got)
 			}
 			if got := rollupBumpCount(t, outcome) - bumpedBefore; got != 0 {
 				t.Fatalf("%s bumps=%d, want 0 (counts unknown)", outcome, got)

@@ -992,7 +992,8 @@ func (repository *PostgresRepository) recordRollupBump(
 }
 
 // syncRunRollupBumpAmbiguousCommit is the rollup bump outcome of a commit that
-// only a read-back confirmed.
+// only a read-back confirmed. The metric's outcome vocabulary does not list it
+// yet, so the counter records it as "other"; the WARN line names it.
 const syncRunRollupBumpAmbiguousCommit = "ambiguous_commit"
 
 // recordUnitFailed counts one committed unit failure.

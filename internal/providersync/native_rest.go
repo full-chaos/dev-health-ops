@@ -130,14 +130,14 @@ func (handler NativeRESTHandler) fetchGitHub(
 			Path: root + "/labels", Route: githubLabelsRoute, Query: url.Values{"per_page": {"100"}},
 			MaxPages: nativeMaxPages,
 		})
-		envelopes, normalizeErr := handler.normalizeNamedRecords(claim, "work_item_label", "label", page.Items)
+		envelopes, normalizeErr := handler.normalizeNamedRecords(claim, githubLabelsRoute, "work_item_label", "label", page.Items)
 		return pageFetchResult(claim, envelopes, page, err, normalizeErr, requests)
 	case "work-item-projects":
 		page, err := providerfoundation.CollectGitHubLinkPages(ctx, &counted, providerfoundation.GitHubPageOptions{
 			Path: root + "/milestones", Route: githubMilestonesRoute, Query: url.Values{"state": {"all"}, "per_page": {"100"}},
 			MaxPages: nativeMaxPages,
 		})
-		envelopes, normalizeErr := handler.normalizeProjects(claim, page.Items)
+		envelopes, normalizeErr := handler.normalizeProjects(claim, githubMilestonesRoute, page.Items)
 		return pageFetchResult(claim, envelopes, page, err, normalizeErr, requests)
 	case "work-item-history", "work-item-comments":
 		return handler.fetchGitHubChildren(ctx, claim, &counted, root, &requests)
@@ -180,14 +180,14 @@ func (handler NativeRESTHandler) fetchGitLab(
 		page, err := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
 			Path: root + "/labels", Route: gitlabLabelsRoute, PerPage: nativePerPage, MaxPages: nativeMaxPages,
 		})
-		envelopes, normalizeErr := handler.normalizeNamedRecords(claim, "work_item_label", "label", page.Items)
+		envelopes, normalizeErr := handler.normalizeNamedRecords(claim, gitlabLabelsRoute, "work_item_label", "label", page.Items)
 		return pageFetchResult(claim, envelopes, page, err, normalizeErr, requests)
 	case "work-item-projects":
 		page, err := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
 			Path: root + "/milestones", Route: gitlabMilestonesRoute, Query: url.Values{"state": {"all"}},
 			PerPage: nativePerPage, MaxPages: nativeMaxPages,
 		})
-		envelopes, normalizeErr := handler.normalizeProjects(claim, page.Items)
+		envelopes, normalizeErr := handler.normalizeProjects(claim, gitlabMilestonesRoute, page.Items)
 		return pageFetchResult(claim, envelopes, page, err, normalizeErr, requests)
 	case "work-item-history", "work-item-comments":
 		return handler.fetchGitLabChildren(ctx, claim, &counted, root, &requests)
@@ -275,9 +275,9 @@ func collectGitHubIssues(
 	}
 	items := make([]json.RawMessage, 0, len(page.Items))
 	for _, raw := range page.Items {
-		var item workItemPayload
-		if json.Unmarshal(raw, &item) != nil {
-			return nil, evidence, providerfoundation.ErrNormalizationInvalid
+		item, err := decodeNativeWorkItem(raw)
+		if err != nil {
+			return nil, evidence, providerfoundation.RouteFailure(githubIssuesRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		// GitHub's /issues endpoint includes pull requests. The production
 		// GitHubWorkClient always removes them here and fetches /pulls only when
@@ -437,19 +437,18 @@ func (handler NativeRESTHandler) normalizeGitLabWorkItems(
 
 func (handler NativeRESTHandler) normalizeNamedRecords(
 	claim Claim,
+	route string,
 	entityType string,
 	identityPrefix string,
 	items []json.RawMessage,
 ) ([]providerfoundation.NormalizedEnvelope, error) {
 	envelopes := make([]providerfoundation.NormalizedEnvelope, 0, len(items))
 	for _, raw := range items {
-		var item struct {
-			ID        json.Number `json:"id"`
-			Name      string      `json:"name"`
-			Color     string      `json:"color"`
-			UpdatedAt string      `json:"updated_at"`
+		item, err := decodeNativeNamedRecordItem(raw)
+		if err != nil {
+			return nil, providerfoundation.RouteFailure(route, providerfoundation.ReasonBodyDecode, err)
 		}
-		if json.Unmarshal(raw, &item) != nil || item.Name == "" {
+		if item.Name == "" {
 			return nil, providerfoundation.ErrNormalizationInvalid
 		}
 		observedAt := firstTime(item.UpdatedAt)
@@ -472,21 +471,16 @@ func (handler NativeRESTHandler) normalizeNamedRecords(
 
 func (handler NativeRESTHandler) normalizeProjects(
 	claim Claim,
+	route string,
 	items []json.RawMessage,
 ) ([]providerfoundation.NormalizedEnvelope, error) {
 	envelopes := make([]providerfoundation.NormalizedEnvelope, 0, len(items))
 	for _, raw := range items {
-		var item struct {
-			ID        json.Number `json:"id"`
-			Number    int         `json:"number"`
-			IID       int         `json:"iid"`
-			Title     string      `json:"title"`
-			State     string      `json:"state"`
-			UpdatedAt string      `json:"updated_at"`
-			DueOn     string      `json:"due_on"`
-			DueDate   string      `json:"due_date"`
+		item, err := decodeNativeProjectItem(raw)
+		if err != nil {
+			return nil, providerfoundation.RouteFailure(route, providerfoundation.ReasonBodyDecode, err)
 		}
-		if json.Unmarshal(raw, &item) != nil || item.Title == "" {
+		if item.Title == "" {
 			return nil, providerfoundation.ErrNormalizationInvalid
 		}
 		id := item.ID.String()
@@ -539,9 +533,10 @@ func (handler NativeRESTHandler) fetchGitHubChildren(
 		if claim.Dataset == "work-item-comments" {
 			suffix, entityType, maxPages = "/comments", "work_item_comment", nativeMaxCommentsPage
 		}
+		childRoute := githubRepoRoute + "/issues/{number}" + suffix
 		page, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 			Path:  root + "/issues/" + strconv.Itoa(item.Number) + suffix,
-			Route: githubRepoRoute + "/issues/{number}" + suffix,
+			Route: childRoute,
 			Query: url.Values{"per_page": {"100"}}, MaxPages: maxPages,
 		})
 		evidence.Pages += page.Pages
@@ -549,7 +544,7 @@ func (handler NativeRESTHandler) fetchGitHubChildren(
 		if pageErr != nil {
 			return FetchResult{}, pageErr
 		}
-		child, normalizeErr := handler.normalizeChildren(claim, entityType, strconv.Itoa(item.Number), page.Items)
+		child, normalizeErr := handler.normalizeChildren(claim, childRoute, entityType, strconv.Itoa(item.Number), page.Items)
 		if normalizeErr != nil {
 			return FetchResult{}, normalizeErr
 		}
@@ -602,7 +597,7 @@ func (handler NativeRESTHandler) fetchGitLabChildren(
 			if pageErr != nil {
 				return FetchResult{}, pageErr
 			}
-			child, normalizeErr := handler.normalizeChildren(claim, entityType, strconv.Itoa(item.IID), page.Items)
+			child, normalizeErr := handler.normalizeChildren(claim, routes[index], entityType, strconv.Itoa(item.IID), page.Items)
 			if normalizeErr != nil {
 				return FetchResult{}, normalizeErr
 			}
@@ -615,25 +610,16 @@ func (handler NativeRESTHandler) fetchGitLabChildren(
 
 func (handler NativeRESTHandler) normalizeChildren(
 	claim Claim,
+	route string,
 	entityType string,
 	parentID string,
 	items []json.RawMessage,
 ) ([]providerfoundation.NormalizedEnvelope, error) {
 	envelopes := make([]providerfoundation.NormalizedEnvelope, 0, len(items))
 	for index, raw := range items {
-		var item struct {
-			ID        json.Number     `json:"id"`
-			Event     string          `json:"event"`
-			State     string          `json:"state"`
-			Action    string          `json:"action"`
-			Body      string          `json:"body"`
-			System    bool            `json:"system"`
-			CreatedAt string          `json:"created_at"`
-			UpdatedAt string          `json:"updated_at"`
-			Label     json.RawMessage `json:"label"`
-		}
-		if json.Unmarshal(raw, &item) != nil {
-			return nil, providerfoundation.ErrNormalizationInvalid
+		item, err := decodeNativeChildItem(raw)
+		if err != nil {
+			return nil, providerfoundation.RouteFailure(route, providerfoundation.ReasonBodyDecode, err)
 		}
 		if entityType == "work_item_comment" && item.System {
 			continue
@@ -891,3 +877,65 @@ func resultWithEvidence(
 var _ DatasetHandler = NativeRESTHandler{}
 
 const providerResponseMaxBytes = 32 << 20
+
+func decodeNativeWorkItem(raw json.RawMessage) (workItemPayload, error) {
+	var item workItemPayload
+	if json.Unmarshal(raw, &item) != nil {
+		return item, providerfoundation.ErrNormalizationInvalid
+	}
+	return item, nil
+}
+
+type nativeNamedRecordItem struct {
+	ID        json.Number `json:"id"`
+	Name      string      `json:"name"`
+	Color     string      `json:"color"`
+	UpdatedAt string      `json:"updated_at"`
+}
+
+func decodeNativeNamedRecordItem(raw json.RawMessage) (nativeNamedRecordItem, error) {
+	var item nativeNamedRecordItem
+	if json.Unmarshal(raw, &item) != nil {
+		return item, providerfoundation.ErrNormalizationInvalid
+	}
+	return item, nil
+}
+
+type nativeProjectItem struct {
+	ID        json.Number `json:"id"`
+	Number    int         `json:"number"`
+	IID       int         `json:"iid"`
+	Title     string      `json:"title"`
+	State     string      `json:"state"`
+	UpdatedAt string      `json:"updated_at"`
+	DueOn     string      `json:"due_on"`
+	DueDate   string      `json:"due_date"`
+}
+
+func decodeNativeProjectItem(raw json.RawMessage) (nativeProjectItem, error) {
+	var item nativeProjectItem
+	if json.Unmarshal(raw, &item) != nil {
+		return item, providerfoundation.ErrNormalizationInvalid
+	}
+	return item, nil
+}
+
+type nativeChildItem struct {
+	ID        json.Number     `json:"id"`
+	Event     string          `json:"event"`
+	State     string          `json:"state"`
+	Action    string          `json:"action"`
+	Body      string          `json:"body"`
+	System    bool            `json:"system"`
+	CreatedAt string          `json:"created_at"`
+	UpdatedAt string          `json:"updated_at"`
+	Label     json.RawMessage `json:"label"`
+}
+
+func decodeNativeChildItem(raw json.RawMessage) (nativeChildItem, error) {
+	var item nativeChildItem
+	if json.Unmarshal(raw, &item) != nil {
+		return item, providerfoundation.ErrNormalizationInvalid
+	}
+	return item, nil
+}

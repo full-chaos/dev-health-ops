@@ -191,7 +191,7 @@ func (handler PagerDutyServicesRouteHandler) Collect(
 	counted.Doer = pagerDutyServicesCountingDoer{delegate: client.Doer, attempts: &requests}
 	pages, err := providerfoundation.CollectPagerDutyOffsetPages(
 		ctx, &counted, providerfoundation.PagerDutyOffsetOptions{
-			Path: "/services", Route: "/services", DataKey: "services", PerPage: perPage, MaxPages: maxPages,
+			Path: "/services", Route: pagerDutyServicesRoute, DataKey: "services", PerPage: perPage, MaxPages: maxPages,
 		},
 	)
 	if err != nil {
@@ -204,18 +204,18 @@ func (handler PagerDutyServicesRouteHandler) Collect(
 	mappings := make([]pagerDutyServiceRepositoryMappingRow, 0)
 	inputs := pagerDutyServiceRepositoryMappingInputsFromOptions(claim.DatasetOptions)
 	for _, raw := range pages.Items {
-		var payload pagerDutyServicePayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+		payload, err := decodePagerDutyServiceItem(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(pagerDutyServicesRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		service, err := normalizePagerDutyService(claim, providerInstance, payload, normalizedAt)
 		if err != nil {
 			return CompleteRouteBatch{}, err
 		}
 		services = append(services, service)
-		var metadata map[string]any
-		if err := json.Unmarshal(raw, &metadata); err != nil || metadata == nil {
-			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+		metadata, err := decodePagerDutyServiceMetadataItem(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(pagerDutyServicesRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		serviceMappings, err := pagerDutyServiceMappings(
 			service, metadata, normalizedAt, inputs,
@@ -670,3 +670,22 @@ func fillPagerDutyServiceMappingOrdering(row *pagerDutyServiceRepositoryMappingR
 }
 
 var _ CompleteRouteHandler = PagerDutyServicesRouteHandler{}
+
+// pagerDutyServicesRoute is the route template of the /services list.
+const pagerDutyServicesRoute = "/services"
+
+func decodePagerDutyServiceItem(raw json.RawMessage) (pagerDutyServicePayload, error) {
+	var payload pagerDutyServicePayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
+}
+
+func decodePagerDutyServiceMetadataItem(raw json.RawMessage) (map[string]any, error) {
+	var metadata map[string]any
+	if err := json.Unmarshal(raw, &metadata); err != nil || metadata == nil {
+		return nil, providerfoundation.ErrNormalizationInvalid
+	}
+	return metadata, nil
+}

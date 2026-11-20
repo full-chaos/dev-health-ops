@@ -260,10 +260,12 @@ func verifyJiraServiceProject(
 		if page.IsLastPage == nil {
 			return pages, pages, providerfoundation.ErrNormalizationInvalid
 		}
-		var values []json.RawMessage
-		if len(page.Values) == 0 || bytes.Equal(bytes.TrimSpace(page.Values), []byte("null")) ||
-			json.Unmarshal(page.Values, &values) != nil {
+		if len(page.Values) == 0 || bytes.Equal(bytes.TrimSpace(page.Values), []byte("null")) {
 			return pages, pages, providerfoundation.ErrNormalizationInvalid
+		}
+		values, err := decodeJiraRawArray(page.Values)
+		if err != nil {
+			return pages, pages, providerfoundation.RouteFailure(jiraServiceDeskRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		rowsSeen += len(values)
 		if rowsSeen > maxRows {
@@ -325,14 +327,16 @@ func collectJiraIncidentIssues(
 			IsLast        *bool           `json:"isLast"`
 			NextPageToken any             `json:"nextPageToken"`
 		}
-		if err := jiraIncidentFetchObject(ctx, client, http.MethodPost, "/rest/api/3/search/jql", "/rest/api/3/search/jql", bytes.NewReader(encoded), &page); err != nil {
+		if err := jiraIncidentFetchObject(ctx, client, http.MethodPost, jiraSearchJQLRoute, "/rest/api/3/search/jql", bytes.NewReader(encoded), &page); err != nil {
 			return nil, pages + 1, err
 		}
-		var pageIssues []json.RawMessage
 		if page.IsLast == nil || len(page.Issues) == 0 ||
-			bytes.Equal(bytes.TrimSpace(page.Issues), []byte("null")) ||
-			json.Unmarshal(page.Issues, &pageIssues) != nil {
+			bytes.Equal(bytes.TrimSpace(page.Issues), []byte("null")) {
 			return nil, pages + 1, providerfoundation.ErrNormalizationInvalid
+		}
+		pageIssues, err := decodeJiraRawArray(page.Issues)
+		if err != nil {
+			return nil, pages + 1, providerfoundation.RouteFailure(jiraSearchJQLRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		if len(issues)+len(pageIssues) > maxRows {
 			return nil, pages + 1, ErrPaginationCapExceeded
@@ -340,7 +344,7 @@ func collectJiraIncidentIssues(
 		for _, raw := range pageIssues {
 			var issue jiraIncidentPayload
 			if err := decodeJiraIncidentJSON(raw, &issue); err != nil {
-				return nil, pages + 1, err
+				return nil, pages + 1, providerfoundation.RouteFailure(jiraSearchJQLRoute, providerfoundation.ReasonBodyDecode, err)
 			}
 			issues = append(issues, issue)
 		}
@@ -426,6 +430,14 @@ func jiraIncidentFetchObject(
 		return providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
 	}
 	return nil
+}
+
+func decodeJiraRawArray(raw json.RawMessage) ([]json.RawMessage, error) {
+	var values []json.RawMessage
+	if json.Unmarshal(raw, &values) != nil {
+		return nil, providerfoundation.ErrNormalizationInvalid
+	}
+	return values, nil
 }
 
 func decodeJiraIncidentJSON(raw []byte, target any) error {

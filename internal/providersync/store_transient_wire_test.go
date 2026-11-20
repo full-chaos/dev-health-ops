@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 	"log/slog"
 	"net"
 	"strings"
@@ -33,15 +34,23 @@ type wireFault struct {
 // real server cannot do for a read or a lost acknowledgement. The unit row is
 // modelled by one flag: done, once a unit write committed.
 type storeWire struct {
-	mu       sync.Mutex
-	faults   []*wireFault
-	done     bool
-	updates  int // unit UPDATEs: one per write attempt
-	commits  int // write transactions that committed
-	reads    int // read-backs
-	stamps   int // needs-attention stamp UPDATEs
-	wakes    int // dispatch wake INSERTs
-	sourceID string
+	mu               sync.Mutex
+	faults           []*wireFault
+	done             bool
+	updates          int // unit UPDATEs: one per write attempt
+	commits          int // write transactions that committed
+	reads            int // read-backs
+	stamps           int // needs-attention stamp UPDATEs
+	wakes            int // dispatch wake INSERTs
+	sourceID         string
+	firstCommitState string
+	probablyReading  bool
+	pending          bool
+	lockedReads      int
+	readAcksLost     int
+	clampCeiling     string
+	shortStreak      bool
+	stampMissing     bool
 }
 
 func (w *storeWire) pool(t *testing.T, ctx context.Context) *pgxpool.Pool {
@@ -159,7 +168,17 @@ func wireFail(c *wireConn, code string) bool {
 func (w *storeWire) commitPoint(c *wireConn, tag string) bool {
 	code := w.fault("commit")
 	lost := strings.HasPrefix(code, "57") || strings.HasPrefix(code, "08")
-	if c.wroteUnit && (code == "" || lost) {
+	if c.wroteUnit && lost {
+		w.probablyReading = true
+		switch w.firstCommitState {
+		case "race":
+			w.pending = true
+		case "ours", "other", "missing":
+		default:
+			w.done = true
+			w.commits++
+		}
+	} else if c.wroteUnit && code == "" {
 		w.done = true
 		w.commits++
 	}
@@ -176,9 +195,27 @@ func (w *storeWire) answer(c *wireConn, sql string) bool {
 	lower := strings.ToLower(sql)
 	switch {
 	case lower == "begin":
+		if w.probablyReading {
+			if w.readAcksLost > 0 {
+				if code := w.fault("post_read_commit_begin"); code != "" {
+					return wireFail(c, code)
+				}
+			}
+			if code := w.fault("read_begin"); code != "" {
+				return wireFail(c, code)
+			}
+		}
 		c.status, c.readTx = 'T', false
 		wireTag(c, "BEGIN")
 	case lower == "rollback":
+		if c.readTx {
+			c.status, c.readTx = 'I', false
+			if code := w.fault("read_end"); code != "" {
+				w.readAcksLost++
+				return wireFail(c, code)
+			}
+			w.probablyReading = false
+		}
 		c.status, c.wroteUnit, c.readTx = 'I', false, false
 		wireTag(c, "ROLLBACK")
 	case lower == "commit":
@@ -190,6 +227,18 @@ func (w *storeWire) answer(c *wireConn, sql string) bool {
 		c.status = 'I'
 		if c.readTx {
 			c.readTx = false
+			if code := w.fault("read_end"); code != "" {
+				w.readAcksLost++
+				return wireFail(c, code)
+			}
+			if code := w.fault("read_commit"); code != "" {
+				w.readAcksLost++
+				if code == "EOF" {
+					return false
+				}
+				return wireFail(c, code)
+			}
+			w.probablyReading = false
 			wireTag(c, "COMMIT")
 			return true
 		}
@@ -213,6 +262,9 @@ func (w *storeWire) answer(c *wireConn, sql string) bool {
 	case c.status == 'E':
 		c.backend.Send(&pgproto3.ErrorResponse{Severity: "ERROR", SeverityUnlocalized: "ERROR", Code: "25P02", Message: "aborted"})
 	case strings.HasPrefix(sql, "SELECT set_config("):
+		if code := w.fault("read_config"); code != "" {
+			return wireFail(c, code)
+		}
 		wireRows(c, []uint32{25}, []string{"5000ms"})
 	case strings.HasPrefix(sql, "SELECT unit.status ="):
 		w.reads++
@@ -220,17 +272,36 @@ func (w *storeWire) answer(c *wireConn, sql string) bool {
 		if code := w.fault("read_back"); code != "" {
 			return wireFail(c, code)
 		}
+		locking := strings.HasSuffix(strings.ToUpper(sql), "FOR SHARE OF UNIT")
+		if locking {
+			w.lockedReads++
+		}
+		applyPending := func() {
+			if w.pending {
+				w.pending, w.done = false, true
+				w.commits++
+			}
+		}
+		if locking {
+			applyPending()
+		}
 		committed, ours := "f", "t"
 		if w.done {
 			committed, ours = "t", "f"
+		} else if w.firstCommitState == "other" {
+			ours = "f"
+		} else if w.firstCommitState == "missing" {
+			wireRows(c, []uint32{16, 16})
+			return true
 		}
 		wireRows(c, []uint32{16, 16}, []string{committed, ours})
+		applyPending()
 	case strings.HasPrefix(sql, "UPDATE public.sync_run_units"):
 		w.updates++
 		if code := w.fault("unit_update"); code != "" {
 			return wireFail(c, code)
 		}
-		if w.done {
+		if w.done || w.firstCommitState == "other" && w.updates > 1 {
 			wireTag(c, "UPDATE 0")
 			return true
 		}
@@ -253,13 +324,21 @@ func (w *storeWire) answer(c *wireConn, sql string) bool {
 			return wireFail(c, code)
 		}
 		row := []string{w.sourceID, "t", "unclassified", "2026-11-19 00:00:00+00"}
-		wireRows(c, []uint32{25, 16, 25, 1184}, row, row, row)
+		if w.shortStreak {
+			wireRows(c, []uint32{25, 16, 25, 1184}, row)
+		} else {
+			wireRows(c, []uint32{25, 16, 25, 1184}, row, row, row)
+		}
 	case strings.HasPrefix(sql, "UPDATE public.integration_datasets"):
 		w.stamps++
 		if code := w.fault("stamp"); code != "" {
 			return wireFail(c, code)
 		}
-		wireTag(c, "UPDATE 1")
+		if w.stampMissing {
+			wireTag(c, "UPDATE 0")
+		} else {
+			wireTag(c, "UPDATE 1")
+		}
 	case strings.Contains(sql, "'dispatch_sync_run'") && strings.Contains(sql, "INSERT"):
 		w.wakes++
 		wireTag(c, "INSERT 0 1")
@@ -281,8 +360,9 @@ func runWireWrite(t *testing.T, w *storeWire, write string, watermark *time.Time
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	claim := nativeTestClaim("github", "commits")
-	if strings.HasPrefix(write, "fail") {
-		claim, _ = linearTypedLifecycleFixture(t)
+	var linearRoute LinearWorkItemsRouteBatch
+	if strings.HasPrefix(write, "fail") || strings.Contains(write, "family") {
+		claim, linearRoute = linearTypedLifecycleFixture(t)
 		claim.LeaseExpiresAt = time.Date(2026, 7, 23, 13, 0, 0, 0, time.UTC)
 	}
 	w.sourceID = claim.SourceID
@@ -297,11 +377,32 @@ func runWireWrite(t *testing.T, w *storeWire, write string, watermark *time.Time
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	defer slog.SetDefault(previous)
 	start := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	if w.clampCeiling == "window_end" {
+		earlier := start.Add(-2 * time.Hour)
+		claim.BeforeAt = &earlier
+	}
 	end := start.Add(2 * time.Second)
 	var run wireRun
 	switch write {
-	case "complete":
+	case "complete", "complete_family":
 		run.err = repository.Complete(ctx, claim, map[string]any{"records": 1}, watermark, start, end)
+	case "typed_family":
+		sink := linearWorkItemEffectsFixture(newLinearSemanticEffectBackend(), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+		result, _, err := (LinearWorkItemsLifecycle{
+			Committer: EffectCommitter{Ledger: &memoryEffectLedger{}, Sink: sink, Readback: sink, Now: func() time.Time { return start }},
+		}).Commit(ctx, claim, linearRoute, start)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if watermark != nil {
+			result.Watermark = *watermark
+		}
+		run.err = repository.CompleteLinearWorkItemFamily(ctx, claim, result, start, end)
+	case "fail_class":
+		run.err = repository.FailWithCauseClass(ctx, claim, "provider_error", CauseClassUnclassified, nil, start, end)
+	case "fail_duplicate":
+		run.err = repository.FailWithDuplicateKeyDetail(ctx, claim, CauseClassUnclassified, "test_suite_results",
+			[]DuplicateNaturalKeyField{{Name: "run_id", Value: "1"}}, start, end)
 	case "fail":
 		run.err = repository.Fail(ctx, claim, "provider_error", start, end)
 	case "release":
@@ -491,6 +592,259 @@ func TestWatermarkClampIsLoggedOnlyAfterCommit(t *testing.T) {
 			if got := strings.Count(run.logs, "sync.watermark.write_clamped"); got != testCase.want {
 				t.Fatalf("clamp WARN lines=%d (err=%v), want %d", got, run.err, testCase.want)
 			}
+		})
+	}
+}
+
+var round2Writes = []string{"complete", "typed_family", "fail", "fail_class", "fail_duplicate", "release"}
+
+func reviewStatus(err error) string {
+	switch {
+	case err == nil:
+		return "success"
+	case errors.Is(err, ErrLeaseLost):
+		return "lease_lost"
+	case errors.Is(err, ErrStoreTransient):
+		return "store_transient"
+	case errors.Is(err, ErrInvalidConfiguration):
+		return "invalid_configuration"
+	default:
+		return fmt.Sprint(err)
+	}
+}
+
+func reviewOutcome(t *testing.T, w *storeWire, run wireRun, want string, updates, commits, reads int) {
+	t.Helper()
+	got := reviewStatus(run.err)
+	t.Logf("result=%s committed=%t updates=%d commits=%d reads=%d locking_reads=%d read_commit_disconnects=%d wakes=%d",
+		got, w.done, w.updates, w.commits, w.reads, w.lockedReads, w.readAcksLost, w.wakes)
+	if got != want || w.updates != updates || w.commits != commits || w.reads != reads {
+		t.Errorf("want result=%s updates=%d commits=%d reads=%d", want, updates, commits, reads)
+	}
+}
+
+func TestRound2ReadBackMatrix(t *testing.T) {
+	for _, write := range round2Writes {
+		for _, state := range []struct {
+			name, outcome    string
+			updates, commits int
+		}{
+			{"committed", "success", 1, 1}, {"ours", "success", 2, 1}, {"other", "lease_lost", 1, 0}, {"missing", "lease_lost", 1, 0},
+		} {
+			for _, code := range []string{"57P01", "08006", "55P03"} {
+				t.Run(write+"/"+state.name+"/"+code, func(t *testing.T) {
+					w := &storeWire{firstCommitState: state.name, faults: []*wireFault{
+						{step: "commit", code: "57P01", times: 1}, {step: "read_back", code: code, times: 1},
+					}}
+					result := runWireWrite(t, w, write, nil)
+					reviewOutcome(t, w, result, state.outcome, state.updates, state.commits, 2)
+				})
+			}
+		}
+		for _, step := range []string{"read_begin", "read_config", "read_back"} {
+			for _, n := range []int{1, 3} {
+				t.Run(fmt.Sprintf("%s/%s/faults_%d", write, step, n), func(t *testing.T) {
+					w := &storeWire{faults: []*wireFault{
+						{step: "commit", code: "57P01", times: 1}, {step: step, code: "57P01", times: n},
+					}}
+					run := runWireWrite(t, w, write, nil)
+					want, reads := "success", 1
+					if n == 3 {
+						want, reads = "store_transient", 0
+					}
+					if step == "read_back" {
+						reads += n
+					}
+					reviewOutcome(t, w, run, want, 1, 1, reads)
+				})
+			}
+		}
+	}
+}
+
+func TestRound2CommitLockRace(t *testing.T) {
+	for _, write := range round2Writes {
+		t.Run(write, func(t *testing.T) {
+			w := &storeWire{firstCommitState: "race", faults: []*wireFault{{step: "commit", code: "57P01", times: 1}}}
+			run := runWireWrite(t, w, write, nil)
+			reviewOutcome(t, w, run, "success", 1, 1, 1)
+			if w.lockedReads != 1 {
+				t.Fatal("did not wait using a row-locking read")
+			}
+		})
+	}
+}
+
+func TestRound2PostCommitMatrix(t *testing.T) {
+	for _, write := range round2Writes {
+		for _, commit := range []string{"ack", "lost_ack", "retry", "refused"} {
+			t.Run(write+"/"+commit, func(t *testing.T) {
+				w := &storeWire{}
+				want, updates, commits, reads := "success", 1, 1, 0
+				metric := "success"
+				if strings.HasPrefix(write, "fail") {
+					metric = "failed"
+				}
+				switch commit {
+				case "lost_ack":
+					w.faults = []*wireFault{{step: "commit", code: "57P01", times: 1}}
+					metric, reads = "other", 1
+				case "retry":
+					w.faults = []*wireFault{{step: "commit", code: "40001", times: 1}}
+					updates = 2
+				case "refused":
+					w.faults = []*wireFault{{step: "commit", code: "40001", times: 3}}
+					want, updates, commits = "store_transient", 3, 0
+				}
+				before := rollupBumpCount(t, metric)
+				run := runWireWrite(t, w, write, nil)
+				reviewOutcome(t, w, run, want, updates, commits, reads)
+				bumps := int(rollupBumpCount(t, metric) - before)
+				rollupLogs := strings.Count(run.logs, "sync_run.rollup_bump")
+				attention := strings.Count(run.logs, "providersync.needs_attention_stamped")
+				failureMetric := strings.Count(run.metrics, "dev_health_provider_unit_failed_total{")
+				wantRollup, wantFail := commits, 0
+				if write == "release" {
+					wantRollup = 0
+				}
+				if strings.HasPrefix(write, "fail") {
+					wantFail = commits
+				}
+				t.Logf("rollup_label=%s rollup_bumps=%d rollup_logs=%d attention=%d failure_series=%d",
+					metric, bumps, rollupLogs, attention, failureMetric)
+				if bumps != wantRollup || rollupLogs != wantRollup || w.wakes != wantRollup || attention != wantFail || failureMetric != wantFail {
+					t.Errorf("want rollup bumps/logs/wakes=%d attention/failure series=%d", wantRollup, wantFail)
+				}
+			})
+		}
+	}
+}
+
+func TestRound2SavepointMatrix(t *testing.T) {
+	for _, write := range []string{"fail", "fail_class", "fail_duplicate"} {
+		for _, branch := range []string{"savepoint", "streak", "stamp", "savepoint_release", "rollback_streak_error", "rollback_short_streak", "rollback_stamp_error", "rollback_zero_stamp"} {
+			for _, code := range []string{"40P01", "40001", "57P01", "08006"} {
+				for _, n := range []int{1, 3} {
+					t.Run(fmt.Sprintf("%s/%s/%s/faults_%d", write, branch, code, n), func(t *testing.T) {
+						w := &storeWire{}
+						step := branch
+						if strings.HasPrefix(branch, "rollback") {
+							step = "savepoint_rollback"
+						}
+						w.faults = []*wireFault{{step: step, code: code, times: n}}
+						switch branch {
+						case "rollback_streak_error":
+							w.faults = append(w.faults, &wireFault{step: "streak", code: "22000", times: n})
+						case "rollback_short_streak":
+							w.shortStreak = true
+						case "rollback_stamp_error":
+							w.faults = append(w.faults, &wireFault{step: "stamp", code: "22000", times: n})
+						case "rollback_zero_stamp":
+							w.stampMissing = true
+						}
+						run := runWireWrite(t, w, write, nil)
+						if n == 1 {
+							reviewOutcome(t, w, run, "success", 2, 1, 0)
+						} else {
+							reviewOutcome(t, w, run, "store_transient", 3, 0, 0)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestRound2ClampMatrix(t *testing.T) {
+	for _, write := range []string{"complete", "complete_family", "typed_family"} {
+		for _, bound := range []string{"window_end", "now"} {
+			for _, failure := range []string{"refused_update_40P01", "refused_update_42501", "refused_commit", "ack", "lost_ack", "retry"} {
+				t.Run(write+"/"+bound+"/"+failure, func(t *testing.T) {
+					w := &storeWire{}
+					// Fixtures have a July 2026 cutoff. Wall clock is chosen
+					// first for the later cutoff in runWireWrite.
+					skewed := time.Date(2026, 7, 31, 23, 59, 59, 0, time.UTC).Add(time.Hour)
+					w.clampCeiling = bound
+					want := 1
+					if write != "complete" {
+						want = len(workitemcontract.FamilyDatasets())
+					}
+					switch failure {
+					case "refused_update_40P01":
+						w.faults = []*wireFault{{step: "unit_update", code: "40P01", times: 3}}
+						want = 0
+					case "refused_update_42501":
+						w.faults = []*wireFault{{step: "unit_update", code: "42501", times: 1}}
+						want = 0
+					case "refused_commit":
+						w.faults = []*wireFault{{step: "commit", code: "40001", times: 3}}
+						want = 0
+					case "lost_ack":
+						w.faults = []*wireFault{{step: "commit", code: "57P01", times: 1}}
+					case "retry":
+						w.faults = []*wireFault{{step: "commit", code: "40001", times: 1}}
+					}
+					run := runWireWrite(t, w, write, &skewed)
+					warnings := strings.Count(run.logs, "sync.watermark.write_clamped")
+					t.Logf("result=%s commits=%d updates=%d clamp_warnings=%d", reviewStatus(run.err), w.commits, w.updates, warnings)
+					if warnings != want || warnings > 0 && !strings.Contains(run.logs, "ceiling="+bound) {
+						t.Errorf("want %d warnings with bound %s, logs=%q", want, bound, run.logs)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestRound2ConfirmedSelectSurvivesLostReadCommitAck(t *testing.T) {
+	for _, write := range round2Writes {
+		for _, scenario := range []struct {
+			name, state, want string
+			extra             []*wireFault
+			updates, commits  int
+		}{
+			{"continued_outage", "committed", "success", []*wireFault{{step: "read_commit", code: "EOF", times: 1}, {step: "post_read_commit_begin", code: "57P01", times: 2}}, 1, 1},
+			{"repeat_disconnect", "committed", "success", []*wireFault{{step: "read_commit", code: "08006", times: 3}}, 1, 1},
+			{"lease_taken", "other", "lease_lost", []*wireFault{{step: "read_commit", code: "EOF", times: 1}, {step: "post_read_commit_begin", code: "57P01", times: 2}}, 1, 0},
+			{"same_owner", "ours", "success", []*wireFault{{step: "read_commit", code: "08006", times: 3}}, 2, 1},
+			{"row_gone_control", "missing", "lease_lost", []*wireFault{{step: "read_commit", code: "EOF", times: 1}, {step: "post_read_commit_begin", code: "57P01", times: 2}}, 1, 0},
+		} {
+			t.Run(write+"/"+scenario.name, func(t *testing.T) {
+				faults := append([]*wireFault{{step: "commit", code: "57P01", times: 1}}, scenario.extra...)
+				w := &storeWire{firstCommitState: scenario.state, faults: faults}
+				run := runWireWrite(t, w, write, nil)
+				reviewOutcome(t, w, run, scenario.want, scenario.updates, scenario.commits, 1)
+				t.Logf("post_commit_rollup_warns=%d needs_attention_infos=%d", strings.Count(run.logs, "sync_run.rollup_bump_ambiguous"), strings.Count(run.logs, "providersync.needs_attention_stamped"))
+			})
+		}
+	}
+}
+
+// r2 P1: the read-back's SELECT ... FOR SHARE completed, then ending its
+// lock-only transaction loses the connection (read_end: FATAL on its COMMIT or
+// ROLLBACK, every time). The outcome comes from the completed SELECT, so a
+// confirmed commit is success, not ErrStoreTransient after failed re-reads. The
+// control: a SELECT that itself fails every time still answers ErrStoreTransient.
+func TestReadBackOutcomeSurvivesALostReadTransactionEnd(t *testing.T) {
+	for _, write := range round2Writes {
+		t.Run(write+"/read_end_lost", func(t *testing.T) {
+			w := &storeWire{faults: []*wireFault{
+				{step: "commit", code: "57P01", times: 1},
+				{step: "read_end", code: "08006", times: 100},
+			}}
+			run := runWireWrite(t, w, write, nil)
+			reviewOutcome(t, w, run, "success", 1, 1, 1)
+			if w.readAcksLost != 1 {
+				t.Fatalf("read transaction ends lost=%d, want 1 (premise: the fault fired)", w.readAcksLost)
+			}
+		})
+		t.Run(write+"/select_fails_control", func(t *testing.T) {
+			w := &storeWire{faults: []*wireFault{
+				{step: "commit", code: "57P01", times: 1},
+				{step: "read_back", code: "57P01", times: 100},
+			}}
+			run := runWireWrite(t, w, write, nil)
+			reviewOutcome(t, w, run, "store_transient", 1, 1, storeWriteAttempts)
 		})
 	}
 }

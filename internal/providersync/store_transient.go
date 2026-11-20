@@ -220,9 +220,9 @@ func (repository *PostgresRepository) readBackUnitWrite(
 	if err != nil {
 		return storeOutcomeNotCommitted, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return storeOutcomeNotCommitted, err
-	}
+	// The SELECT read committed state under the row lock; ending the lock-only
+	// transaction cannot change what it read, so its error is ignored.
+	_ = tx.Rollback(ctx)
 	switch {
 	case committed:
 		return storeOutcomeCommitted, nil

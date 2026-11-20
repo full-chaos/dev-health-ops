@@ -481,9 +481,10 @@ func SupportsBlockedRunReconcile(store Store) bool {
 //
 // This is the periodic tick. The daily fan-out is genuinely scheduled
 // (fixed-scheduler entry daily_metrics_fanout, DailyAt(1, 0), per
-// organization), whereas the stranded-finalize sweep it might otherwise have
-// hung off is NOT periodic -- FindStrandedFinalizeRuns has exactly one
-// non-test caller, the workerctl CLI, so hanging this off it would mean a
+// organization), whereas FindStrandedFinalizeRuns (the operator sweep it might
+// otherwise have hung off) is NOT periodic -- its only caller is the workerctl
+// CLI (the nightly sweepStrandedFinalize uses its own org-scoped query), so
+// hanging this off it would mean a
 // wedged run only becomes visible once an operator already went looking,
 // which is the situation the marker exists to end.
 func (handler *Dispatcher) reconcileBlockedRuns(ctx context.Context, organizationID string) {

@@ -30,6 +30,22 @@ func (h *handlers) storedLeakKeys(ctx context.Context, orgID string) ([]string, 
 	return keys, nil
 }
 
+// readerLeakKeys are the keys a default-row reader checks its stored base_url
+// against: the keys it holds and, for a non-empty url, every stored key of the
+// org (storedLeakKeys), so a url that carries another scope's key is refused
+// before any lookup.
+func (h *handlers) readerLeakKeys(ctx context.Context, orgID, baseURL string, held ...string) ([]string, error) {
+	keys := append([]string{}, held...)
+	if baseURL == "" {
+		return keys, nil
+	}
+	stored, err := h.storedLeakKeys(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	return append(keys, stored...), nil
+}
+
 func (h *handlers) storedScopeBaseURLOf(ctx context.Context, orgID string, purpose llmorgsettings.Purpose) (string, error) {
 	if h.storedScopeBaseURL != nil {
 		return h.storedScopeBaseURL(ctx, orgID, purpose)

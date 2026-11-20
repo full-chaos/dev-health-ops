@@ -94,7 +94,9 @@ func withServedDefaultKey(settings orgSettings) orgSettings {
 }
 
 // keysForLeakChecks are the loaded keys a base_url must not carry, bound or
-// not: the default row's and the investigate and explain overrides'.
+// not: the default row's and the investigate and explain overrides'. A store
+// other than the categorize store also checks the categorize key
+// (categorizeKeyInBaseURL).
 func keysForLeakChecks(raw orgSettings) []string {
 	keys := []string{raw[keyAPIKey]}
 	for _, key := range otherPurposeAPIKeys() {

@@ -538,6 +538,7 @@ internal/schedulerservice	readiness_timeout_test.go	internal/schedulerservice	di
 internal/shadowvenue	requestsites_test.go	unexpressed	-	-
 internal/signingkey	keygen.go	unexpressed	-	-
 internal/signingkey	keygen_state_test.go	unexpressed	-	-
+internal/storage/clickhouse	batch_options_census_test.go	.	tree	*
 internal/storage/clickhouse/liverow	census_test.go	cmd	tree	*.go
 internal/storage/clickhouse/liverow	census_test.go	internal	tree	*.go
 internal/storage/postgres	api_authorization_platform_roles_test.go	internal/api	tree	*

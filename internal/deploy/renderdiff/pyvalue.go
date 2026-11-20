@@ -111,7 +111,7 @@ func (d *pyDict) hashKey(k any) (string, bool) {
 }
 
 func hashKey(k any) (string, bool) {
-	switch v := k.(type) {
+	switch v := asKit(k).(type) {
 	case nil:
 		return "N", true
 	case bool:
@@ -188,6 +188,7 @@ func daysFromCivil(y, m, d int) int64 {
 
 // pyEq is Python `x == y` for the values same() and rows_gate meet (scalars, empty containers, tuples).
 func pyEq(a, b any) bool {
+	a, b = asKit(a), asKit(b)
 	if na, ok := numeric(a); ok {
 		nb, ok := numeric(b)
 		return ok && numEq(na, nb)
@@ -253,9 +254,13 @@ func pyEq(a, b any) bool {
 	return false
 }
 
-// identical stands in for Python's `is` shortcut inside container equality (a NaN equals itself there).
+// identical stands in for Python's `is` shortcut inside container equality (a NaN equals itself there). PyYAML's
+// .nan is one shared float object (sharedNaN), so [.nan] == [.nan] in Python; a scalar .nan still differs from itself.
 func identical(a, b any) bool {
 	switch x := a.(type) {
+	case float64:
+		y, ok := b.(float64)
+		return ok && isSharedNaN(x) && isSharedNaN(y)
 	case *pyDict:
 		y, ok := b.(*pyDict)
 		return ok && x == y
@@ -338,7 +343,7 @@ func numEq(a, b pyNum) bool {
 
 // pyTypeName is type(x).__name__, for same()'s `type(x) is type(y)`.
 func pyTypeName(v any) string {
-	switch v.(type) {
+	switch asKit(v).(type) {
 	case nil:
 		return "NoneType"
 	case bool:
@@ -369,7 +374,7 @@ func pyTypeName(v any) string {
 
 // truthy is Python bool(x).
 func truthy(v any) bool {
-	switch x := v.(type) {
+	switch x := asKit(v).(type) {
 	case nil:
 		return false
 	case bool:
@@ -394,7 +399,7 @@ func truthy(v any) bool {
 
 // pyStr is Python str(x).
 func pyStr(v any) string {
-	switch x := v.(type) {
+	switch x := asKit(v).(type) {
 	case string:
 		return x
 	case *pyDate:
@@ -423,7 +428,7 @@ func utcOffsetText(off int) string {
 
 // pyRepr is Python repr(x).
 func pyRepr(v any) string {
-	switch x := v.(type) {
+	switch x := asKit(v).(type) {
 	case nil:
 		return "None"
 	case bool:
@@ -643,6 +648,7 @@ func pyBytesRepr(s string) string {
 
 // pyLess is Python `a < b` for sort keys; ok is false where Python raises TypeError.
 func pyLess(a, b any) (bool, bool) {
+	a, b = asKit(a), asKit(b)
 	if na, ok := numeric(a); ok {
 		nb, ok := numeric(b)
 		if !ok {

@@ -29,7 +29,7 @@ metadata: {name: cfg}
 data:
   LOG_LEVEL: debug
   api_token: SENTINEL-TOKEN-zzzz
-  ADDED_KEY: "x"
+  ADDED_KEY: "syn-redact-5"
   URL: "https://bob@example.com/p"
 ---
 apiVersion: v1

@@ -1,0 +1,15 @@
+render A: helm rc=0 docs=2
+render B: helm rc=0 docs=2
+ConfigMap/c .data.credentıal CHANGED <redacted>
+ConfigMap/c .data.paſsword CHANGED <redacted>
+ConfigMap/c .data.plain CHANGED
+ConfigMap/c .data.secİret CHANGED
+ConfigMap/c .data.Key1 CHANGED <redacted>
+Pod/p .spec.containers[name=c].env[name=API_KEY].value CHANGED <redacted>
+Pod/p .spec.containers[name=c].env[name=PRİVATE_X].value CHANGED <redacted>
+Pod/p .spec.containers[name=c].env[name=PRıVATE_Y].value CHANGED <redacted>
+Pod/p .spec.containers[name=c].env[name=paſsword].value CHANGED <redacted>
+Pod/p .spec.containers[name=c].env[name=plain].value CHANGED
+docs A 2 B 2 (all kinds, Secrets as Kind/name only; hook-included: a helm template render); kinds in A: ConfigMap=1, Pod=1
+added []; removed []; changed field rows 10; element rows added 0 removed 0; reordered rows 0; pod-template label/annotation rows 0; postgres sts rows 0
+FULL RENDER DIFF: INFO (no expectation; the floor held)

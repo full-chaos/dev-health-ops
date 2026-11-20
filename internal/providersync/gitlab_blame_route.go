@@ -430,8 +430,11 @@ func gitLabBlameTreeRef(
 	if len(page.Items) == 0 {
 		return "", page.Pages, nil
 	}
-	var commit gitLabBlameCommitRefPayload
-	if err := json.Unmarshal(page.Items[0], &commit); err != nil || strings.TrimSpace(commit.ID) == "" {
+	commit, err := decodeGitLabBlameCommitRef(page.Items[0])
+	if err != nil {
+		return "", page.Pages, providerfoundation.RouteFailure(gitlabCommitsRoute, providerfoundation.ReasonBodyDecode, err)
+	}
+	if strings.TrimSpace(commit.ID) == "" {
 		return "", page.Pages, providerfoundation.ErrNormalizationInvalid
 	}
 	return commit.ID, page.Pages, nil
@@ -625,3 +628,11 @@ func gitLabBlameBatch(
 }
 
 var _ CompleteRouteHandler = GitLabBlameRouteHandler{}
+
+func decodeGitLabBlameCommitRef(raw json.RawMessage) (gitLabBlameCommitRefPayload, error) {
+	var commit gitLabBlameCommitRefPayload
+	if json.Unmarshal(raw, &commit) != nil {
+		return commit, providerfoundation.ErrNormalizationInvalid
+	}
+	return commit, nil
+}

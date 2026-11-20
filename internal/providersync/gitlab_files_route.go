@@ -263,8 +263,11 @@ func gitLabFilesTreeRef(
 	if len(page.Items) == 0 {
 		return "", page.Pages, nil
 	}
-	var commit gitLabCommitRefPayload
-	if err := json.Unmarshal(page.Items[0], &commit); err != nil || strings.TrimSpace(commit.ID) == "" {
+	commit, err := decodeGitLabCommitRef(page.Items[0])
+	if err != nil {
+		return "", page.Pages, providerfoundation.RouteFailure(gitlabCommitsRoute, providerfoundation.ReasonBodyDecode, err)
+	}
+	if strings.TrimSpace(commit.ID) == "" {
 		return "", page.Pages, providerfoundation.ErrNormalizationInvalid
 	}
 	return commit.ID, page.Pages, nil
@@ -560,3 +563,11 @@ func gitLabFilesBatch(
 }
 
 var _ CompleteRouteHandler = GitLabFilesRouteHandler{}
+
+func decodeGitLabCommitRef(raw json.RawMessage) (gitLabCommitRefPayload, error) {
+	var commit gitLabCommitRefPayload
+	if json.Unmarshal(raw, &commit) != nil {
+		return commit, providerfoundation.ErrNormalizationInvalid
+	}
+	return commit, nil
+}

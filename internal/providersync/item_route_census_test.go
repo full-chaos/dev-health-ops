@@ -197,12 +197,15 @@ func blockReturnsRouted(body *ast.BlockStmt, errName string) bool {
 
 // inlineDecodeFamilies are the file families whose item decodes CHAOS-13631 moved into item decoders. The inline decodes of the
 // other files are not sorted yet (item or whole body): CHAOS-14235.
-var inlineDecodeFamilies = []string{"github_work_items_", "gitlab_tests_", "launchdarkly_"}
+var inlineDecodeFamilies = []string{"github_", "gitlab_", "launchdarkly_"}
 
 // inlineDecodeExceptions are functions of those families that decode inline and return the bare ErrNormalizationInvalid,
 // keyed "file:function", each with its reason.
 var inlineDecodeExceptions = map[string]string{
 	"launchdarkly_references_clickhouse.go:parseLaunchDarklyCodeReferences": "decodes the whole code-references document, not a page item",
+	"github_tests_chunked_route.go:GitHubTestsRouteHandler.CollectChunks":   "the job item decode in collectRunDetail stays bare: its error reaches githubTestsOpenRunSkip, which compares it by identity (github_tests_run_listing.go:66)",
+	"github_tests_run_listing.go:fetchGitHubTestsRun":                       "decodes the whole single-run body, not a page item; its error reaches githubTestsOpenRunSkip, which compares it by identity (github_tests_run_listing.go:66)",
+	"gitlab_feature_flags_route.go:ensureJSONEOF":                           "trailing-data check inside the item decoder decodeGitLabFeatureFlagObject; its callers (gitlab_feature_flags_route.go:217, :255) already name the route",
 }
 
 // TestInlineItemDecodesAreListed: an inline decode (json.Unmarshal or a Decoder's Decode in an if statement) whose branch returns the

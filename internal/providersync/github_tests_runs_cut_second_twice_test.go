@@ -16,8 +16,9 @@ import (
 )
 
 // runsTwiceCell is one layout of the runs listing at the 1,000-result cap: count runs, the oldest ties of them in one
-// second, ids from 13,000,000,001 (11 digits) when long, each run at attempt 2. The deep layout is created three days
-// before the window (the deep range of the midnight claim), the regular one inside the window.
+// second, ids from 13,000,000,001 (11 digits) when long, each run at attempt 2. Every run is listed, but only the runs of
+// the cut second (the newest 10 of a saturated second) changed since the window start (regular) or late (deep): only those
+// are read, so a cell costs one jobs request and one row per run that matters (the race cost of 1,000 reads).
 type runsTwiceCell struct {
 	name               string
 	count, ties, chunk int
@@ -25,25 +26,70 @@ type runsTwiceCell struct {
 	saturated          bool
 }
 
-func runsTwiceRuns(cell runsTwiceCell, rangeName string, since time.Time) []listingRun {
+const runsTwiceSaturatedReads = 10
+
+func (cell runsTwiceCell) read(index int) bool {
+	if cell.saturated {
+		return index >= cell.count-runsTwiceSaturatedReads
+	}
+	return index < max(1, cell.ties)
+}
+
+// runsTwiceRuns: the regular layout is created 60 h before the window, inside the 72 h refresh lookback of
+// runsTwiceHandler and before the artifacts range (read only when it changed after the window start; no artifacts
+// listing reads it), the deep layout three days before the window (read only when it changed late).
+func runsTwiceRuns(cell runsTwiceCell, rangeName string, since time.Time) ([]listingRun, int) {
 	first := 1
 	if cell.long {
 		first = 13_000_000_001
 	}
-	var runs []listingRun
-	if rangeName == "deep" {
-		runs = lateRerunRuns(first, cell.count, since)
-	} else {
-		for index := range cell.count {
-			created := since.Add(time.Minute + time.Duration(index)*time.Second)
-			runs = append(runs, listingRun{id: first + index, created: created, updated: created.Add(time.Minute),
-				status: "completed", conclusion: "success", attempt: 2})
+	runs := make([]listingRun, 0, cell.count)
+	for index := range cell.count {
+		run := listingRun{id: first + index, status: "completed", conclusion: "success", attempt: 2}
+		if rangeName == "deep" {
+			run.created = since.Add(-72*time.Hour + time.Duration(index)*time.Minute)
+		} else {
+			run.created = since.Add(-60*time.Hour + time.Duration(index)*time.Second)
 		}
+		run.updated = run.created.Add(time.Minute)
+		runs = append(runs, run)
 	}
 	for index := 1; index < cell.ties; index++ {
 		runs[index].created = runs[0].created
 	}
-	return runs
+	reads := 0
+	for index := range runs {
+		if !cell.read(index) {
+			continue
+		}
+		reads++
+		if rangeName == "deep" {
+			runs[index].startedAt, runs[index].updated = since.Add(-2*time.Hour), since.Add(-time.Hour)
+		} else {
+			runs[index].updated = since.Add(time.Minute)
+		}
+	}
+	return runs, reads
+}
+
+// runsTwiceClaim: the deep layout needs the claim that holds a UTC midnight; the regular layout takes an hour that does
+// not, so no deep range or deep re-list walks it again.
+func runsTwiceClaim(rangeName string) Claim {
+	if rangeName == "deep" {
+		return lateRerunMidnightClaim("incremental")
+	}
+	since := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+	claim := listingClaim(since, since.Add(time.Hour))
+	claim.Mode = "incremental"
+	return claim
+}
+
+// runsTwiceHandler: the regular layout is listed by a runs range of a 72 h refresh lookback.
+func runsTwiceHandler(rangeName string) GitHubTestsRouteHandler {
+	if rangeName == "regular" {
+		return GitHubTestsRouteHandler{RefreshLookback: 72 * time.Hour}
+	}
+	return GitHubTestsRouteHandler{}
 }
 
 // runsTwiceFullJobs answers run 1's jobs with exactly 100 jobs, total_count 100 and no Link header.
@@ -76,10 +122,10 @@ func runsTwiceExtraJobs(fake *listingFake) int {
 // wants each run read once: one pipeline row per id and one jobs request per id on each route.
 func runsTwiceCheck(t *testing.T, cell runsTwiceCell, rangeName string) {
 	t.Helper()
-	claim := lateRerunMidnightClaim("incremental")
-	runs := runsTwiceRuns(cell, rangeName, claim.SinceAt.UTC())
+	claim := runsTwiceClaim(rangeName)
+	runs, reads := runsTwiceRuns(cell, rangeName, claim.SinceAt.UTC())
 	walkFake, oracleFake := newListingFake(t, runs), newListingFake(t, runs)
-	handler := GitHubTestsRouteHandler{}
+	handler := runsTwiceHandler(rangeName)
 	var walk listingWalk
 	var oracleDoer providerfoundation.HTTPDoer = oracleFake
 	if cell.fullJobs {
@@ -88,8 +134,14 @@ func runsTwiceCheck(t *testing.T, cell runsTwiceCell, rangeName string) {
 	} else {
 		walk = walkListing(t, handler, claim, walkFake, cell.chunk)
 	}
-	batch, oracleErr := handler.Collect(context.Background(), claim, providerfoundation.Credential{},
-		githubTestsClient(t, fakehttp.Client(oracleDoer)), claim.BeforeAt.Add(time.Hour))
+	// A resumed cell walks the fixture of a fresh cell: Collect answers the same, so it runs in the fresh cell only.
+	oracle := cell.chunk == 0
+	var batch CompleteRouteBatch
+	var oracleErr error
+	if oracle {
+		batch, oracleErr = handler.Collect(context.Background(), claim, providerfoundation.Credential{},
+			githubTestsClient(t, fakehttp.Client(oracleDoer)), claim.BeforeAt.Add(time.Hour))
+	}
 	oracleRows := 0
 	for _, effect := range batch.Effects {
 		if effect.Destination == "ci_pipeline_runs" {
@@ -104,8 +156,8 @@ func runsTwiceCheck(t *testing.T, cell runsTwiceCell, rangeName string) {
 	t.Logf("%s/%s: chunk_rows=%d unique=%d extra_jobs=%d oracle_rows=%d oracle_extra_jobs=%d oracle_err=%v watermark=%t incomplete=%v",
 		rangeName, cell.name, len(walk.pipelines), unique, runsTwiceExtraJobs(walkFake), oracleRows, runsTwiceExtraJobs(oracleFake),
 		oracleErr, walk.final.Watermark != nil, observed)
-	if unique != len(runs) && !cell.saturated || cell.saturated && unique != githubTestsSearchResultCap {
-		t.Errorf("%s/%s: %d distinct runs written, want every listable run", rangeName, cell.name, unique)
+	if unique != reads {
+		t.Errorf("%s/%s: %d distinct runs written, want the %d changed runs", rangeName, cell.name, unique, reads)
 	}
 	if len(walk.pipelines) != unique || runsTwiceExtraJobs(walkFake) != 0 {
 		t.Errorf("%s/%s: CollectChunks wrote %d rows for %d runs with %d extra jobs requests, want each run once",
@@ -114,22 +166,30 @@ func runsTwiceCheck(t *testing.T, cell runsTwiceCell, rangeName string) {
 	if runsTwiceExtraJobs(oracleFake) != 0 {
 		t.Errorf("%s/%s: Collect made %d extra jobs requests, want each run once", rangeName, cell.name, runsTwiceExtraJobs(oracleFake))
 	}
+	// The saturated range is listed once: GitHub's cap of runs in pages, no second listing of the same second.
+	wantPages := githubTestsSearchResultCap / 100
+	if rangeName == "deep" {
+		wantPages++ // the empty runs range of the midnight claim
+	}
+	if pages := walk.cursor.RunPages + walk.cursor.LateRunPages; cell.saturated && pages != wantPages {
+		t.Errorf("%s/%s: %d runs-phase listing pages, want %d (the saturated range once)", rangeName, cell.name, pages, wantPages)
+	}
 	switch {
 	case cell.saturated && rangeName == "regular":
 		// The regular range of a saturated second withholds the watermark and Collect refuses at the cap, as on main.
-		if !errors.Is(oracleErr, ErrPaginationCapExceeded) || walk.final.Watermark != nil ||
+		if oracle && !errors.Is(oracleErr, ErrPaginationCapExceeded) || walk.final.Watermark != nil ||
 			!slices.Contains(observed, githubTestsRunInventorySaturatedComponent+"/"+githubTestsListingSaturatedCause) {
 			t.Errorf("regular/%s: oracle err=%v watermark=%t incomplete=%v, want the run inventory saturated and no watermark",
 				cell.name, oracleErr, walk.final.Watermark != nil, observed)
 		}
 	case cell.saturated:
-		if oracleErr != nil || oracleRows != unique || walk.final.Watermark == nil ||
+		if oracle && (oracleErr != nil || oracleRows != unique) || walk.final.Watermark == nil ||
 			!slices.Contains(observed, githubTestsLateRerunRunsComponent+"/"+githubTestsListingSaturatedCause) {
 			t.Errorf("deep/%s: oracle rows=%d err=%v watermark=%t incomplete=%v, want the deep stop and the watermark",
 				cell.name, oracleRows, oracleErr, walk.final.Watermark != nil, observed)
 		}
 	default:
-		if oracleErr != nil || oracleRows != unique || walk.final.Watermark == nil || len(observed) != 0 {
+		if oracle && (oracleErr != nil || oracleRows != unique) || walk.final.Watermark == nil || len(observed) != 0 {
 			t.Errorf("%s/%s: oracle rows=%d err=%v watermark=%t incomplete=%v, want %d rows, the watermark and no observation",
 				rangeName, cell.name, oracleRows, oracleErr, walk.final.Watermark != nil, observed, unique)
 		}
@@ -145,13 +205,14 @@ func runsTwiceRanges(t *testing.T, cells []runsTwiceCell) {
 	}
 }
 
-// Four or five 11-digit cut-second keys at attempt 2 (over 52 bytes) are read once, fresh and resumed.
+// Four 11-digit cut-second keys at attempt 2 (55 bytes, over 52) are read once on both routes.
 func TestGitHubTestsRunsCutSecondLongKeysAreReadOnce(t *testing.T) {
-	runsTwiceRanges(t, []runsTwiceCell{
-		{name: "four_long_ids", count: 1001, ties: 5, long: true},
-		{name: "five_long_ids", count: 1001, ties: 6, long: true},
-		{name: "five_long_ids_resumed", count: 1001, ties: 6, long: true, chunk: 64},
-	})
+	runsTwiceRanges(t, []runsTwiceCell{{name: "four_long_ids", count: 1001, ties: 5, long: true}})
+}
+
+// Five long cut-second keys are carried over a resume every 64 emissions and read once.
+func TestGitHubTestsRunsCutSecondLongKeysAreReadOnceAcrossResumes(t *testing.T) {
+	runsTwiceRanges(t, []runsTwiceCell{{name: "five_long_ids_resumed", count: 1001, ties: 6, long: true, chunk: 64}})
 }
 
 // A cut-second run whose jobs answer is exactly one full page with total_count equal to it and no Link is whole.
@@ -160,22 +221,19 @@ func TestGitHubTestsRunsCutSecondFullJobsPageWithItsTotalIsReadOnce(t *testing.T
 }
 
 // A range whose 1,000 runs share one second is listed once: the same runs are not listed and read again before the
-// saturated second is recorded.
+// saturated second is recorded. Ten of them are read: their keys pass 52 bytes, as on main.
 func TestGitHubTestsRunsSaturatedSecondIsReadOnce(t *testing.T) {
-	runsTwiceRanges(t, []runsTwiceCell{
-		{name: "saturated_second", count: 1001, ties: 1001, saturated: true},
-		{name: "saturated_second_resumed", count: 1001, ties: 1001, saturated: true, chunk: 64},
-	})
+	runsTwiceRanges(t, []runsTwiceCell{{name: "saturated_second", count: 1001, ties: 1001, saturated: true}})
 }
 
-// Controls: a cut second that the cut list already holds is read once.
+// The count of runs at the saturated second is carried over a resume every 64 emissions.
+func TestGitHubTestsRunsSaturatedSecondIsReadOnceAcrossResumes(t *testing.T) {
+	runsTwiceRanges(t, []runsTwiceCell{{name: "saturated_second_resumed", count: 1001, ties: 1001, saturated: true, chunk: 64}})
+}
+
+// Control: three long cut-second keys (41 bytes) fit the 52 bytes of main and are read once on both routes, as on main.
 func TestGitHubTestsRunsCutSecondControlsAreReadOnce(t *testing.T) {
-	runsTwiceRanges(t, []runsTwiceCell{
-		{name: "one_cut_run", count: 1000},
-		{name: "shared_cut_second", count: 1001, ties: 2},
-		{name: "shared_cut_second_resumed", count: 1001, ties: 2, chunk: 64},
-		{name: "three_long_ids_fit", count: 1001, ties: 4, long: true},
-	})
+	runsTwiceRanges(t, []runsTwiceCell{{name: "three_long_ids_fit", count: 1001, ties: 4, long: true}})
 }
 
 // The runs phase keeps up to githubTestsMaxRunsCutKeysBytes of cut keys and the artifacts phase 52: one key past the cap

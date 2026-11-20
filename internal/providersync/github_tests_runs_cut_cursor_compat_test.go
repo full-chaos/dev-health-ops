@@ -13,13 +13,13 @@ import (
 
 // runsCompatWalk drives CollectChunks to its final emission, yields once at the first after cursor yieldAt picks, and
 // resumes a new invocation from that cursor as rewrite returns it.
-func runsCompatWalk(t *testing.T, claim Claim, fake *listingFake, yieldAt func(githubTestsChunkCursor) bool, rewrite func(string) string) (listingWalk, bool) {
+func runsCompatWalk(t *testing.T, handler GitHubTestsRouteHandler, claim Claim, fake *listingFake, yieldAt func(githubTestsChunkCursor) bool, rewrite func(string) string) (listingWalk, bool) {
 	t.Helper()
 	client := githubTestsClient(t, fakehttp.Client(fake))
 	stop := errors.New("yield")
 	walk, resume, yielded := listingWalk{}, "", false
 	for pass := 1; pass <= 3; pass++ {
-		err := GitHubTestsRouteHandler{}.CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client, claim.BeforeAt.Add(time.Hour), resume,
+		err := handler.CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client, claim.BeforeAt.Add(time.Hour), resume,
 			func(emission ChunkRouteEmission) error {
 				resume = emission.CursorAfter
 				for _, effect := range emission.Batch.Effects {
@@ -57,19 +57,12 @@ func runsCompatWalk(t *testing.T, claim Claim, fake *listingFake, yieldAt func(g
 	return walk, yielded
 }
 
-// A cursor written by the binary before CHAOS-14321 (cut lists of at most 52 bytes, no rq) decodes and resumes: every
-// run is read once, mid-range (active list) and in the revisit (carried list). The same cell runs on the old binary.
+// A cursor written by the binary before CHAOS-14321 (cut lists of at most 52 bytes, no rq) decodes and resumes: each of
+// the three changed runs at the cut second is read once, mid-range (active list) and in the revisit (carried list). The
+// same cell runs on the old binary.
 func TestGitHubTestsRunsCutCursorFromBeforeTheCapResumes(t *testing.T) {
-	claim := lateRerunMidnightClaim("incremental")
-	since := claim.SinceAt.UTC()
-	var runs []listingRun
-	for index := range 1001 {
-		created := since.Add(time.Minute + time.Duration(index)*time.Second)
-		runs = append(runs, listingRun{id: index + 1, created: created, updated: created.Add(time.Minute), status: "completed", conclusion: "success", attempt: 2})
-	}
-	for index := 1; index < 3; index++ {
-		runs[index].created = runs[0].created
-	}
+	claim := runsTwiceClaim("regular")
+	runs, reads := runsTwiceRuns(runsTwiceCell{count: 1001, ties: 3}, "regular", claim.SinceAt.UTC())
 	old := func(raw string) string {
 		var fields map[string]any
 		if err := json.Unmarshal([]byte(raw), &fields); err != nil {
@@ -99,12 +92,12 @@ func TestGitHubTestsRunsCutCursorFromBeforeTheCapResumes(t *testing.T) {
 		}},
 	} {
 		fake := newListingFake(t, runs)
-		walk, yielded := runsCompatWalk(t, claim, fake, tc.yieldAt, old)
+		walk, yielded := runsCompatWalk(t, runsTwiceHandler("regular"), claim, fake, tc.yieldAt, old)
 		t.Logf("%s: yielded=%t rows=%d unique=%d extra_jobs=%d watermark=%t", tc.name, yielded, len(walk.pipelines), len(walk.pipelineIDs()),
 			runsTwiceExtraJobs(fake), walk.final.Watermark != nil)
-		if !yielded || len(walk.pipelines) != len(runs) || len(walk.pipelineIDs()) != len(runs) || runsTwiceExtraJobs(fake) != 0 || walk.final.Watermark == nil {
-			t.Errorf("%s: yielded=%t rows=%d unique=%d extra jobs=%d, want a resume and each of %d runs once", tc.name, yielded,
-				len(walk.pipelines), len(walk.pipelineIDs()), runsTwiceExtraJobs(fake), len(runs))
+		if !yielded || len(walk.pipelines) != reads || len(walk.pipelineIDs()) != reads || runsTwiceExtraJobs(fake) != 0 || walk.final.Watermark == nil {
+			t.Errorf("%s: yielded=%t rows=%d unique=%d extra jobs=%d, want a resume and each of %d changed runs once", tc.name, yielded,
+				len(walk.pipelines), len(walk.pipelineIDs()), runsTwiceExtraJobs(fake), reads)
 		}
 	}
 }

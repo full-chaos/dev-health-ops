@@ -529,9 +529,9 @@ jobs:
           # CHAOS-11684: the test and race stages run go test -json; the raw events (they carry test output) stay in this runner
           # directory and are reduced to package/test/action/elapsed by the step below. Never under go-test-json/ (uploaded as is).
           GO_TEST_LEG_JSON_DIR: ${{ runner.temp }}/go-test-leg-json
-          # CHAOS-13767: cover profiles of the non-race test legs of main pushes only (check_go.sh go_test_cover_args). To turn
-          # coverage off, empty this one line: the legs run as before.
-          GO_TEST_COVER_DIR: ''
+          # CHAOS-13767: cover profiles of the non-race test legs of main pushes only (check_go.sh go_test_cover_args); the PR head
+          # that added it ran the same path on pull requests (all 13 test legs green). To turn coverage off, empty this one line.
+          GO_TEST_COVER_DIR: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(matrix.name, 'test-') && format('{0}/go-cover', runner.temp) || '' }}
         # Each stage of the leg prints UTC start/done stamps (`==> stage ...`).
         run: bash ci/check_go.sh ci-leg ${{ matrix.args }}
 

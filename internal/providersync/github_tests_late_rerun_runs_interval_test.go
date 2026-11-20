@@ -3,6 +3,8 @@ package providersync
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -273,10 +275,45 @@ func TestLateRerunRunsIntervalKeepsANilCreatedRunOfTheRunsRange(t *testing.T) {
 	}
 }
 
-// A run that a peeled (narrowed) response supplies first, created above that response's ceiling, is not read: the oracle
-// admits each listed run under the ceiling of the response that supplied it, as the chunked route does, for both ranges of
-// a midnight claim. A run inside the ceiling (at it, below it, or the same first-seen run at the ceiling) is read once. A
-// claim with no deep range keeps main's oracle admission (the first-seen run is read there).
+// lateRerunPeeledExtraDoer serves the fake GitHub and puts extra runs ahead of the first page of one created filter.
+type lateRerunPeeledExtraDoer struct {
+	*listingFake
+	filter string
+	extra  []listingRun
+	served int
+}
+
+func (doer *lateRerunPeeledExtraDoer) Do(request *http.Request) (*http.Response, error) {
+	if request.URL.Path != "/repos/acme/api/actions/runs" || request.URL.Query().Get("created") != doer.filter || request.URL.Query().Get("page") != "" {
+		return doer.listingFake.Do(request)
+	}
+	doer.served++
+	response, err := doer.listingFake.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	body, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	items := make([]string, 0, len(doer.extra))
+	for _, run := range doer.extra {
+		items = append(items, run.json())
+	}
+	remainder := strings.TrimPrefix(string(body), `{"workflow_runs":[`)
+	if !strings.HasPrefix(remainder, "]") {
+		remainder = "," + remainder
+	}
+	response.Body = io.NopCloser(strings.NewReader(`{"workflow_runs":[` + strings.Join(items, ",") + remainder))
+	return response, nil
+}
+
+// A run that a peeled (narrowed) response supplies first, created above that response's ceiling, is not read by the
+// oracle: it admits each listed run under the ceiling of the response that supplied it, as the chunked route does
+// (TestLateRerunRunsPeeledRangeAdmitsUnderItsCeiling), for both ranges of a midnight claim. Runs inside the ceiling (a
+// first-seen run at it, a listed run at it and below it) are read once. A claim with no deep range keeps main's oracle
+// admission (the first-seen run above the ceiling is read there). One oracle walk per range.
 func TestLateRerunRunsOracleAdmitsUnderTheSupplyingResponseCeiling(t *testing.T) {
 	midnight, regular, deep := lateRerunRunsIntervalClaim()
 	m := *midnight.BeforeAt
@@ -291,48 +328,33 @@ func TestLateRerunRunsOracleAdmitsUnderTheSupplyingResponseCeiling(t *testing.T)
 		{"deep range", deep, midnight, m.AddDate(0, 0, -5).Add(10 * time.Hour), true},
 		{"runs range, no deep range", githubTestsRunsQuery(noDeep, githubTestsRefreshLookbackDefault, "").Get("created"), noDeep, noDeep.SinceAt.Add(-5 * time.Hour), false},
 	} {
-		for _, firstSeen := range []time.Duration{time.Second, 0} {
-			for _, route := range []string{"chunked", "oracle"} {
-				label := "first seen above the ceiling"
-				if firstSeen == 0 {
-					label = "first seen at the ceiling"
-				}
-				t.Run(cell.name+"/"+label+"/"+route, func(t *testing.T) {
-					lo, _, _ := strings.Cut(cell.first, "..")
-					peeled := lo + ".." + cell.cut.Format(time.RFC3339)
-					probe := func(id int, created time.Time) listingRun {
-						return listingRun{id: id, created: created, startedAt: cell.claim.SinceAt.Add(time.Minute), updated: cell.claim.SinceAt.Add(2 * time.Minute),
-							status: "completed", conclusion: "success", attempt: 2}
-					}
-					first, at, below := probe(9001, cell.cut.Add(firstSeen)), probe(1, cell.cut), probe(9003, cell.cut.Add(-time.Second))
-					fake := newListingFake(t, append(makeListingRuns(100, 1000, cell.cut, time.Second), at, below))
-					served := 0
-					doer := &lateRerunR2Doer{listingFake: fake, report: -1, extra: func(created string) *listingRun {
-						if created == peeled {
-							served++
-							return &first
-						}
-						return nil
-					}}
-					rows, _, _ := lateRerunRunsIntervalRead(t, route, cell.claim, doer)
-					if served != 1 {
-						t.Fatalf("peeled query served %d times, want 1", served)
-					}
-					wantFirst := 1
-					if firstSeen > 0 && (cell.bounded || route == "chunked") {
-						wantFirst = 0
-					}
-					for _, want := range []struct {
-						run  listingRun
-						want int
-					}{{first, wantFirst}, {at, 1}, {below, 1}} {
-						if fake.jobGets[want.run.id] != want.want || rows[fmt.Sprint(want.run.id)] != want.want {
-							t.Errorf("run %d created %s: jobs reads=%d rows=%d, want %d and %d", want.run.id, want.run.created.Format(time.RFC3339),
-								fake.jobGets[want.run.id], rows[fmt.Sprint(want.run.id)], want.want, want.want)
-						}
-					}
-				})
+		t.Run(cell.name, func(t *testing.T) {
+			lo, _, _ := strings.Cut(cell.first, "..")
+			probe := func(id int, created time.Time) listingRun {
+				return listingRun{id: id, created: created, startedAt: cell.claim.SinceAt.Add(time.Minute), updated: cell.claim.SinceAt.Add(2 * time.Minute),
+					status: "completed", conclusion: "success", attempt: 2}
 			}
-		}
+			above, firstAt := probe(9001, cell.cut.Add(time.Second)), probe(9002, cell.cut)
+			at, below := probe(1, cell.cut), probe(9003, cell.cut.Add(-time.Second))
+			doer := &lateRerunPeeledExtraDoer{listingFake: newListingFake(t, append(makeListingRuns(100, 1000, cell.cut, time.Second), at, below)),
+				filter: lo + ".." + cell.cut.Format(time.RFC3339), extra: []listingRun{above, firstAt}}
+			rows, _, _ := lateRerunRunsIntervalRead(t, "oracle", cell.claim, doer)
+			if doer.served != 1 {
+				t.Fatalf("peeled query served %d times, want 1", doer.served)
+			}
+			wantAbove := 0
+			if !cell.bounded {
+				wantAbove = 1
+			}
+			for _, want := range []struct {
+				run  listingRun
+				want int
+			}{{above, wantAbove}, {firstAt, 1}, {at, 1}, {below, 1}} {
+				if doer.jobGets[want.run.id] != want.want || rows[fmt.Sprint(want.run.id)] != want.want {
+					t.Errorf("run %d created %s: jobs reads=%d rows=%d, want %d and %d", want.run.id, want.run.created.Format(time.RFC3339),
+						doer.jobGets[want.run.id], rows[fmt.Sprint(want.run.id)], want.want, want.want)
+				}
+			}
+		})
 	}
 }

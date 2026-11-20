@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -15,9 +16,14 @@ func gitLabLongRepo(length int) string { return "g/" + strings.Repeat("a", lengt
 // gitLabCollectFrom runs CollectChunks once from raw (no yield) and returns the last cursor and the final batch.
 func gitLabCollectFrom(t *testing.T, fake *gitLabResumeFake, raw string) (last string, final CompleteRouteBatch, err error) {
 	t.Helper()
+	return gitLabCollectFromWith(t, context.Background(), nativeTestClaim("gitlab", "tests"), fake, raw)
+}
+
+func gitLabCollectFromWith(t *testing.T, ctx context.Context, claim Claim, fake *gitLabResumeFake, raw string) (last string, final CompleteRouteBatch, err error) {
+	t.Helper()
 	client := gitLabRepositoryClient(t, fake, "https://gitlab.example")
 	client.Metrics = providerfoundation.NewMetrics()
-	err = GitLabTestsRouteHandler{}.CollectChunks(context.Background(), nativeTestClaim("gitlab", "tests"),
+	err = GitLabTestsRouteHandler{}.CollectChunks(ctx, claim,
 		providerfoundation.Credential{}, client, time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), raw,
 		func(emission ChunkRouteEmission) error {
 			last = emission.CursorAfter
@@ -219,4 +225,52 @@ func TestGitLabTestsLegacyDoneCursorFollowsTheSameLengthPolicy(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Main finalized a done checkpoint with no project read, so a project that cannot be read at the done resume (deleted:
+// 404) must not leave the finished scan unfinalized. A cursor that holds the path (legacy, any length) publishes it; one
+// that dropped it (a new cursor, path over the limit) publishes the unit's source name, or nothing when it has none. A
+// cancelled context is still an error.
+func TestGitLabTestsDoneResumeFinalizesWhenTheProjectCannotBeRead(t *testing.T) {
+	legacy := func(repo string) string {
+		return `{"phase":"done","pipelines":1,"jobs":0,"acceptance":0,"suites":0,"cases":0,"coverage":0,"requests":2,"pages":1,` +
+			`"pipeline_pages":1,"report_pages":1,"repo":"` + repo + `","project_id":123}`
+	}
+	for _, status := range []int{404, 429, 500} {
+		for _, tc := range []struct {
+			name       string
+			raw        string
+			sourceName string
+			want       string
+		}{
+			{"legacy cursor, 3800 byte path", legacy(gitLabLongRepo(3800)), "acme/source", gitLabLongRepo(3800)},
+			{"legacy cursor, path one byte over the limit", legacy(gitLabLongRepo(gitLabTestsCursorRepoMaxBytes + 1)), "", gitLabLongRepo(gitLabTestsCursorRepoMaxBytes + 1)},
+			{"new cursor, 1000 byte path, source name", gitLabDoneCursor(gitLabLongRepo(1000)), "acme/source", "acme/source"},
+			{"new cursor, 1000 byte path, no source name", gitLabDoneCursor(gitLabLongRepo(1000)), "", ""},
+		} {
+			t.Run(strconv.Itoa(status)+" "+tc.name, func(t *testing.T) {
+				fake := &gitLabResumeFake{t: t, pipelines: gitLabResumeFixture(), projectStatus: status}
+				claim := nativeTestClaim("gitlab", "tests")
+				claim.SourceName = tc.sourceName
+				_, final, err := gitLabCollectFromWith(t, context.Background(), claim, fake, tc.raw)
+				if err != nil {
+					t.Fatalf("an unreadable project left a finished scan unfinalized: %v", err)
+				}
+				if got, _ := final.Result["repo"].(string); got != tc.want || final.Result["project_id"] != int64(123) {
+					t.Fatalf("result repo = %.40q (want %.40q), project_id = %v", got, tc.want, final.Result["project_id"])
+				}
+				if fake.projectGets != 1 {
+					t.Fatalf("project reads = %d, want 1", fake.projectGets)
+				}
+			})
+		}
+	}
+	t.Run("cancelled context is an error", func(t *testing.T) {
+		fake := &gitLabResumeFake{t: t, pipelines: gitLabResumeFixture(), projectStatus: 500}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, _, err := gitLabCollectFromWith(t, ctx, nativeTestClaim("gitlab", "tests"), fake, gitLabDoneCursor(gitLabLongRepo(1000))); err == nil {
+			t.Fatal("a cancelled context finalized the unit")
+		}
+	})
 }

@@ -33,6 +33,8 @@ type gitLabResumeFake struct {
 	// repoPath is the project's path_with_namespace ("acme/api" when empty); projectGets counts project reads.
 	repoPath    string
 	projectGets int
+	// projectStatus, when set, is the status the project read answers with.
+	projectStatus int
 }
 
 func (fake *gitLabResumeFake) Do(request *http.Request) (*http.Response, error) {
@@ -44,6 +46,10 @@ func (fake *gitLabResumeFake) Do(request *http.Request) (*http.Response, error) 
 	switch {
 	case path == "/api/v4/projects/123":
 		fake.projectGets++
+		if fake.projectStatus != 0 {
+			return &http.Response{StatusCode: fake.projectStatus, Header: header,
+				Body: io.NopCloser(strings.NewReader(`{"message":"unavailable"}`)), Request: request}, nil
+		}
 		repoPath := fake.repoPath
 		if repoPath == "" {
 			repoPath = "acme/api"

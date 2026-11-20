@@ -564,10 +564,21 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 	if cursor.Phase == "done" {
 		if (cursor.Repo == "" || len(cursor.Repo) > gitLabTestsCursorRepoMaxBytes) && cursor.ProjectID > 0 {
 			project, _, fetchErr := fetchProject()
-			if fetchErr != nil {
+			switch {
+			case fetchErr == nil:
+				cursor.Repo = gitLabProjectFullName(project)
+			case ctx.Err() != nil:
 				return fetchErr
+			default:
+				// Main published the stored path with no project read, so a project that cannot be read now (deleted,
+				// moved, rate limited) must not leave a finished scan unfinalized: keep the stored path, or the source
+				// name when the cursor holds none.
+				slog.Warn("gitlab tests/cicd done resume could not read the project; publishing without a refreshed repo",
+					"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "error", fetchErr)
+				if cursor.Repo == "" {
+					cursor.Repo = claim.SourceName
+				}
 			}
-			cursor.Repo = gitLabProjectFullName(project)
 		}
 		return emitFinalMetadata(cursor)
 	}

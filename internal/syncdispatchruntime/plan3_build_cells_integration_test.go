@@ -209,7 +209,8 @@ func TestB3SweepsPerHourStayWithinReleases(t *testing.T) {
 }
 
 // Q3: revision 0167 builds its two indexes inside the migration walk's transaction, so writes to sync_runs and
-// sync_run_units wait for the build. Seeded rows -> seconds, for the roll window (acp: STOP if > ~10 s at live size).
+// sync_run_units wait for the build. A measurement, not a bound: seeded rows -> seconds and rows per second, which the
+// live row counts (SIZING-14250) turn into the roll window's lock time (acp: STOP if > ~10 s at live size).
 func TestB3IndexBuildTimeOnSeededRows(t *testing.T) {
 	const runs, unitsPerRun = 100_000, 10
 	withRearmQueuePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
@@ -262,9 +263,6 @@ FROM generate_series(1, $4::int) AS n, generate_series(1, $5::int) AS k`, rqOrg,
 			}
 			t.Logf("%s: %d %s rows -> build %s (%.0f rows/s)", index.name, rows, index.table, elapsed.Round(time.Millisecond),
 				float64(rows)/elapsed.Seconds())
-			if elapsed > 10*time.Second {
-				t.Errorf("%s: build over %d rows took %s, want <= 10 s", index.name, rows, elapsed)
-			}
 		}
 	})
 }

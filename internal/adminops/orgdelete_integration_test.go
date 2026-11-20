@@ -156,7 +156,9 @@ var orgDeleteTablesAfterThePythonFreeze = map[string]string{
 // it. The frozen state cannot hold it, so it is left out of the Go side before the comparison; the rows of
 // such a table are proven by their own test (TestOrgsDeleteRemovesTheOrgActivityRowOfTheDeletedOrganization).
 var orgDeletePostgresTablesAfterThePythonFreeze = map[string]string{
-	"org_activity.org_id": "0162_add_org_activity.sql",
+	"org_activity.org_id":                      "0162_add_org_activity.sql",
+	"sync_dispatch_bucket_signals.org_id":      "0167_seed_sync_bucket_sweep_route.sql",
+	"sync_dispatch_bucket_reservations.org_id": "0167_seed_sync_bucket_sweep_route.sql",
 }
 
 // orgDeleteTablesDroppedAfterThePythonFreeze names each ClickHouse table a migration dropped after
@@ -659,5 +661,46 @@ func TestOrgsDeleteRemovesTheOrgActivityRowOfTheDeletedOrganization(t *testing.T
 	}
 	if count(targetOrg) != 0 || count(controlOrg) != 1 {
 		t.Fatalf("after the delete org_activity has target %d, control %d rows, want 0 and 1", count(targetOrg), count(controlOrg))
+	}
+}
+
+// A deleted organization leaves no bucket sweep signal row: the table is not in the frozen Python plan, so the
+// deletion removes it by org_id ahead of the plan's tables (the reservations go the same way, and with their run).
+// The control organization keeps its row, and a dry run removes nothing.
+func TestOrgsDeleteRemovesTheBucketSweepSignalsOfTheDeletedOrganization(t *testing.T) {
+	db := startDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	t.Cleanup(cancel)
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start clickhouse: %v", err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	chschema.Apply(ctx, t, instance)
+	clickhouseEnv := map[string]string{"CLICKHOUSE_URI": instance.URI}
+	db.seedOrganizations(t, false)
+	for _, org := range []string{targetOrg, controlOrg} {
+		db.insertRow(t, "sync_dispatch_bucket_signals", map[string]string{"org_id": quote(org), "provider": quote("github"),
+			"cost_class": quote("medium"), "generation": "1", "updated_at": "now()"})
+	}
+	count := func(org string) int {
+		t.Helper()
+		var n int
+		if err := db.conn.QueryRow(context.Background(), "SELECT count(*) FROM sync_dispatch_bucket_signals WHERE org_id = $1", org).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if code, out := goVerbEnv(t, db, clickhouseEnv, []string{"orgs", "delete", "--org-id", targetOrg, "--dry-run"}); code != 0 {
+		t.Fatalf("dry run: exit %d: %s", code, out)
+	}
+	if count(targetOrg) != 1 || count(controlOrg) != 1 {
+		t.Fatalf("a dry run changed sync_dispatch_bucket_signals: target %d, control %d", count(targetOrg), count(controlOrg))
+	}
+	if code, out := goVerbEnv(t, db, clickhouseEnv, []string{"orgs", "delete", "--org-id", targetOrg}); code != 0 {
+		t.Fatalf("delete: exit %d: %s", code, out)
+	}
+	if count(targetOrg) != 0 || count(controlOrg) != 1 {
+		t.Fatalf("after the delete sync_dispatch_bucket_signals has target %d, control %d rows, want 0 and 1", count(targetOrg), count(controlOrg))
 	}
 }

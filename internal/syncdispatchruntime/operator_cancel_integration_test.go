@@ -331,8 +331,6 @@ func TestCancelSyncRunDryRunWritesNothing(t *testing.T) {
 }
 
 // differentialSnapshot is the closed state of a run without its ids, the category or the message.
-var errorCategoryValue = regexp.MustCompile(`("error_category"\s*:\s*)"(cancelled|feature_disabled)"`)
-
 func differentialSnapshot(t *testing.T, ctx context.Context, pool *pgxpool.Pool, runID string, message string) string {
 	t.Helper()
 	var snapshot string
@@ -361,6 +359,7 @@ SELECT json_build_object(
 	}
 	snapshot = strings.ReplaceAll(snapshot, message, "<message>")
 	snapshot = strings.ReplaceAll(snapshot, sanitizeErrorText(message), "<message>")
+	errorCategoryValue := regexp.MustCompile(`("error_category"\s*:\s*)"(cancelled|feature_disabled)"`)
 	return errorCategoryValue.ReplaceAllString(snapshot, `$1"<category>"`)
 }
 

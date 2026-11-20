@@ -179,6 +179,9 @@ func requireRetriedWithoutWork(t *testing.T, got closedUnitAttempt, before, afte
 // A provider-unit job still queued for a unit that `dho workers sync-runs cancel` closed completes
 // on its first attempt in every queued state, changes no domain row and logs why at Info.
 func TestQueuedJobOfACancelledUnitCompletesOnItsFirstAttemptWithoutADomainWrite(t *testing.T) {
+	if operatorCancelErrorCategory != providersync.OperatorCancelCategory {
+		t.Fatalf("the cancel writes %q, the claim classifies %q", operatorCancelErrorCategory, providersync.OperatorCancelCategory)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	instance := pgschema.Start(ctx, t)

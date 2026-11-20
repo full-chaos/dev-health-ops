@@ -168,10 +168,7 @@ WHERE event_type = $1 AND attributes->>'decision_id' = $2`, audit.EventAuthorize
 			}
 		})
 	}
-	logs := a.logs.String()
-	for _, needle := range []string{"23503", "foreign key", "violates"} {
-		if n := strings.Count(logs, needle); n != 0 {
-			t.Errorf("the auth-service log holds %d %q lines", n, needle)
-		}
+	if fields := foreignKeyLogFields(a.logs.String()); len(fields) != 0 {
+		t.Errorf("the auth-service log holds a foreign key error: %v", fields)
 	}
 }

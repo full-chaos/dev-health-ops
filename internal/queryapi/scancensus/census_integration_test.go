@@ -570,6 +570,26 @@ const nullableIntoPlainSites = `
 //
 //	loadClusters f62124ab26af -> 0dcb9c7aceb8
 //
+// ai_opportunities.go re-pinned by hand again (CHAOS-14258), digests copied from the local TestScanTypeCensus failure output
+// (not computed): the four workflow reads end with a total ORDER BY (each read's own GROUP BY key after its count) before
+// LIMIT 100. Only ORDER BY terms are added: the SELECT columns, their types and the scan targets of loadClusters, loadDocDrift
+// and loadFlaky are unchanged:
+//
+//	loadClusters 0dcb9c7aceb8 -> 9b80cc03e333
+//	loadDocDrift f049a4598b46 -> 3a7b416f4596
+//	loadFlaky be2a35ea7bc8 -> f848d53341ed
+//
+// ai_opportunities.go re-pinned by hand again (CHAOS-14258 round 1), digests copied from the local TestScanTypeCensus failure
+// output (not computed): the repetitive read selects two more columns, cluster_author (the author email, else the author
+// name, else empty; String) and cluster_work_type (the work item type, else pull_request; String), scanned into two more *string targets; its
+// ORDER BY uses them. Both are non-Nullable String expressions, so *string is the right target. The other sites' SQL and scan
+// targets are unchanged (the file's SQL digest moved):
+//
+//	loadClusters (with prefix) *string,*string,*uint64,*[]string 9b80cc03e333 -> *string,*string,*uint64,*[]string,*string,*string 6782179e5bab
+//	loadClusters (no prefix) 9b80cc03e333 -> 6782179e5bab
+//	loadDocDrift 3a7b416f4596 -> 9d9f4e10b7aa
+//	loadFlaky f848d53341ed -> e2c82e8e8355
+//
 // timeseries.go ExecuteOrgTimeseries re-pinned by hand, digest copied from the local TestScanTypeCensus failure output
 // (not computed): the org series of the pooled TestOps measures (PIPELINE_DURATION_P95, TEST_SUITE_DURATION_P95,
 // PIPELINE_QUEUE_TIME) take the bucket value unscaled when the sample count is above 0. The statement and the scan
@@ -630,10 +650,10 @@ const nullableIntoPlainSites = `
 // TestScanTypeCensus failure output (job 135986472250), not computed.
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|0dcb9c7aceb8|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|0dcb9c7aceb8|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|f049a4598b46|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|be2a35ea7bc8|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*string|6782179e5bab|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|6782179e5bab|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|9d9f4e10b7aa|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|e2c82e8e8355|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadRepoFlowRows|*string,*uint64,**float64,**float64,**float64,**float64|39a7e63ddf0e|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*uint64,**float64,**float64,**float64|2653b84e5b21|not-describable
 internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|ffbc61d0410c|spliced-select-list

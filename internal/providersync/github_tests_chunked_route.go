@@ -1634,7 +1634,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		firstPage = false
 		return action == githubTestsResumeReseek, nil
 	}
-	emitCursor := func(before, after githubTestsChunkCursor, batch CompleteRouteBatch, final bool) error {
+	emitCursorAs := func(before, after githubTestsChunkCursor, batch CompleteRouteBatch, final, coalescable bool) error {
 		before, _ = githubTestsFitCursor(before)
 		beforeRaw, beforeErr := encodeGitHubTestsChunkCursor(before)
 		if beforeErr != nil {
@@ -1649,7 +1649,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		if afterErr != nil {
 			return afterErr
 		}
-		return emit(ChunkRouteEmission{Batch: batch, CursorBefore: beforeRaw, CursorAfter: afterRaw, Final: final})
+		return emit(ChunkRouteEmission{Batch: batch, CursorBefore: beforeRaw, CursorAfter: afterRaw, Final: final, Coalescable: coalescable})
+	}
+	emitCursor := func(before, after githubTestsChunkCursor, batch CompleteRouteBatch, final bool) error {
+		return emitCursorAs(before, after, batch, final, false)
 	}
 	lookback := handler.refreshLookback()
 	lateLookback := handler.lateRerunLookback()
@@ -1916,7 +1919,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					after = endRunsRange(after)
 				}
 			}
-			if err := emitCursor(before, after, CompleteRouteBatch{Effects: effects}, false); err != nil {
+			// A listed run is one small emission the resume re-reads from its before cursor: the executor may commit
+			// several contiguous runs in one chunk group (CHAOS-14408).
+			if err := emitCursorAs(before, after, CompleteRouteBatch{Effects: effects}, false, true); err != nil {
 				return err
 			}
 			cursor = after

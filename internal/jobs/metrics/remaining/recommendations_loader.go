@@ -143,26 +143,26 @@ func measuredKeyHaving(table string) string {
 	return "\n                HAVING " + liverow.NewestPredicate(table, "")
 }
 
+// teamMetricsSource is the team view of work_item_metrics_daily for the loader's
+// one team in the window (CHAOS-14353): one live row per (provider, work scope,
+// day), the team row where one exists, else the org row, else the legacy row
+// (rowview.TeamSource). A co-owner team reads the items of its team rows.
+func (loader *RecommendationsLoader) teamMetricsSource() string {
+	return rowview.TeamSource("work_item_metrics_daily",
+		"team_id = {team_id:String} AND day >= {start:Date} AND day < {end:Date}"+loader.orgClause())
+}
+
 // loadWIPThroughput ports _load_wip_throughput.
 //
-// TEAM-SCOPED (work_item_metrics_daily carries team_id). The inner GROUP BY
-// includes provider and work_scope_id so each scope's latest computed_at row is
-// taken before the per-day sum, then the outer query sums across scopes.
+// TEAM-SCOPED (work_item_metrics_daily carries team_id). The source holds the
+// newest live row of each scope of the team and day, then the query sums across
+// scopes.
 func (loader *RecommendationsLoader) loadWIPThroughput(
 	ctx context.Context, teamID string, windowStart, windowEnd time.Time,
 ) ([]float64, []float64, error) {
 	query := `
-            SELECT day, sum(wip) AS wip_total, sum(completed) AS tp_total
-            FROM (
-                SELECT day,
-                       argMax(wip_count_end_of_day, computed_at) AS wip,
-                       argMax(items_completed, computed_at) AS completed
-                FROM work_item_metrics_daily
-                WHERE team_id = {team_id:String}
-                  AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
-                  AND ` + rowview.OrgPredicate("work_item_metrics_daily", "") + `
-                GROUP BY day, provider, work_scope_id, row_view` + measuredKeyHaving("work_item_metrics_daily") + `
-            )
+            SELECT day, sum(wip_count_end_of_day) AS wip_total, sum(items_completed) AS tp_total
+            FROM ` + loader.teamMetricsSource() + ` AS work_item_metrics_daily
             GROUP BY day ORDER BY day
         `
 	rows, err := loader.conn.Query(ctx, query,
@@ -416,20 +416,12 @@ func (loader *RecommendationsLoader) loadSustainabilitySignals(
 		return 0, false, nil, nil, closeErr
 	}
 
-	// cycle_time_p50_hours is Nullable(Float64) on work_item_metrics_daily;
-	// tuple-wrapped so argMax cannot skip the newest row when it carries
-	// NULL.
+	// cycle_time_p50_hours is Nullable(Float64) on work_item_metrics_daily: the
+	// team source holds whole newest rows, so a newest row that carries NULL
+	// stays NULL and avg() leaves it out.
 	cycleQuery := `
-            SELECT day, avg(ct) AS avg_ct
-            FROM (
-                SELECT day, provider, work_scope_id,
-                       (argMax(tuple(cycle_time_p50_hours), computed_at)).1 AS ct
-                FROM work_item_metrics_daily
-                WHERE team_id = {team_id:String}
-                  AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
-                  AND ` + rowview.OrgPredicate("work_item_metrics_daily", "") + `
-                GROUP BY day, provider, work_scope_id, row_view` + measuredKeyHaving("work_item_metrics_daily") + `
-            )
+            SELECT day, avg(cycle_time_p50_hours) AS avg_ct
+            FROM ` + loader.teamMetricsSource() + ` AS work_item_metrics_daily
             GROUP BY day ORDER BY day
         `
 	cycleRows, err := loader.conn.Query(ctx, cycleQuery, namedArguments(arguments)...)

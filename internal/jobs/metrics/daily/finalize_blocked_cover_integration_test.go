@@ -249,8 +249,10 @@ func TestFinalizeFailedBlockedMarkerCover(t *testing.T) {
 			clock = marked
 			s.reconcile(ticking)
 			expect(t, s, blocked, BlockedReasonPartialPartitionsPermanent, "a failed_permanent partition with nothing left to run")
-			if _, err := pool.Exec(ctx, `UPDATE daily_metrics_partitions SET status = 'failed', failure_reason = NULL
-                WHERE run_id = $1::uuid AND status = 'failed_permanent'`, blocked); err != nil {
+			// The redrive's own reset write (redrive.go): a 'failed' row with no
+			// write past failedPartitionRetryHorizon would count as ended.
+			if _, err := pool.Exec(ctx, `UPDATE daily_metrics_partitions SET status = 'failed', failure_reason = NULL, updated_at = $2
+                WHERE run_id = $1::uuid AND status = 'failed_permanent'`, blocked, cleared); err != nil {
 				t.Fatal(err)
 			}
 			clock = cleared
@@ -335,6 +337,33 @@ func TestFinalizeFailedBlockedMarkerCover(t *testing.T) {
 		s.reopen(later, "partition-recompute")
 		s.reconcile(store)
 		expect(t, s, failed, BlockedReasonFinalizeFailed, "the later run did not succeed on repository r2")
+	})
+
+	// Not symmetric with the failed_permanent cell above: a 'failed' later
+	// partition past failedPartitionRetryHorizon still covers, so the mark and
+	// the alert sit on the later run only (pm ruling, CHAOS-8422).
+	t.Run("AReopenedLaterRunWithAFailedPartitionPastTheRetryHorizonStillCovers", func(t *testing.T) {
+		s := seed(t)
+		failed := s.run(coverDay, "failed", "failed", false, 0, ok(r1, r2))
+		later := s.run(coverDay, "succeeded", "succeeded", false, 10, ok(r1), ok(r2))
+		clock = marked
+		s.reconcile(ticking)
+		expect(t, s, failed, "", "the later run covers before the reopen")
+		s.reopen(later, "partition-recompute")
+		if _, err := pool.Exec(ctx, `UPDATE daily_metrics_partitions SET status = 'failed', updated_at = $2
+            WHERE run_id = $1::uuid AND ordinal = 1`, later, marked); err != nil {
+			t.Fatal(err)
+		}
+		clock = marked.Add(failedPartitionRetryHorizon + time.Hour)
+		outcome := s.reconcile(ticking)
+		t.Logf("failed=%q later=%q marked=%d cleared=%d blocked=%d",
+			s.reason(failed), s.reason(later), outcome.Marked, outcome.Cleared, outcome.Blocked)
+		expect(t, s, later, BlockedReasonPartitionsFailedNoRetry, "the later run's 'failed' partition has had no write past the horizon")
+		expect(t, s, failed, "", "a 'failed' later partition is not failed_permanent, so it still covers")
+		if outcome.Marked != 1 || outcome.Cleared != 0 || outcome.Blocked != 1 {
+			t.Fatalf("marked=%d cleared=%d blocked=%d, want 1/0/1: only the later run is marked",
+				outcome.Marked, outcome.Cleared, outcome.Blocked)
+		}
 	})
 
 	t.Run("StaysBlockedWhenTheLaterRunEndsFinalizeFailed", func(t *testing.T) {

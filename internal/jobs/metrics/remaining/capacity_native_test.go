@@ -315,11 +315,13 @@ func TestThroughputQueryUsesTheClientSideWindow(t *testing.T) {
 		t.Error("team_id must not be bound when the scope carries none")
 	}
 
+	// A forecast of one team keeps every view in the collapse: capacitySource picks the team view on top of it
+	// (CHAOS-14353), so the org predicate is not among the conditions.
 	teamID := "team-a"
 	arguments = map[string]any{}
 	conditions = capacityScopeFilters("org", capacityTarget{TeamID: &teamID}, arguments)
-	if len(conditions) != 3 {
-		t.Fatalf("a team-scoped forecast needs both filters: %v", conditions)
+	if len(conditions) != 2 || conditions[1] != "team_id = {team_id:String}" {
+		t.Fatalf("a team-scoped forecast needs the org and the team filter, and no view filter: %v", conditions)
 	}
 	if arguments["team_id"] != teamID {
 		t.Errorf("team_id = %v", arguments["team_id"])

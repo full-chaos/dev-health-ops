@@ -363,4 +363,99 @@ func TestLLMSettingsOperatorAliasSaveWritesTheCanonicalRows(t *testing.T) {
 	}
 }
 
+// A save that sends the masked form of the stored base_url, when another save
+// changes that base_url between this save's first resolve and its lock, decides
+// on the value read under the lock: the new url has the same masked form, the
+// two resolves differ, the save is refused with 400 invalid_base_url and the
+// other save's url stays stored (the url of the first resolve is never written).
+func TestLLMSettingsMaskedURLSaveUsesTheValueReadUnderTheLock(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	pool, org := saveLockPool(t, ctx)
+	h := saveLockHandlers(pool)
+	const first, second = "https://user:" + "first-secret" + "@p.example.invalid/v1", "https://user:" + "second-secret" + "@p.example.invalid/v1"
+	sent := maskBaseURL(first, nil)
+	if sent == first || maskBaseURL(second, nil) != sent {
+		t.Fatalf("masks %q / %q: the cell needs two urls with one masked form", sent, maskBaseURL(second, nil))
+	}
+	save := func(scope llmorgsettings.Purpose, baseURL string) (*llmRefusal, error) {
+		if scope == "" {
+			_, refusal, err := h.applyLLMSettings(ctx, org, llmUpsert{provider: "openai", model: strPtr("m"), baseURL: &baseURL, requireModel: true})
+			return refusal, err
+		}
+		_, refusal, err := h.applyLLMPurpose(ctx, org, llmPurposeUpsert{purpose: scope, provider: "openai", model: "m", baseURL: &baseURL})
+		return refusal, err
+	}
+	for _, scope := range []llmorgsettings.Purpose{"", llmorgsettings.PurposeExplain} {
+		name := scopeName(scope)
+		key := "base_url"
+		if scope != "" {
+			key = llmorgsettings.PurposeKey(scope, "base_url")
+		}
+		if refusal, err := save(scope, first); refusal != nil || err != nil {
+			t.Fatalf("%s: seed: refusal=%v err=%v", name, refusal, err)
+		}
+		holder, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := holder.Exec(ctx, llmSettingsSaveLockSQL, llmSettingsSaveLockKey(org)); err != nil {
+			_ = holder.Rollback(ctx)
+			t.Fatal(err)
+		}
+		if _, err := holder.Exec(ctx, `UPDATE settings SET value = $3 WHERE org_id = $1 AND category = 'llm' AND key = $2`, org.String(), key, second); err != nil {
+			_ = holder.Rollback(ctx)
+			t.Fatal(err)
+		}
+		type result struct {
+			refusal *llmRefusal
+			err     error
+		}
+		done := make(chan result, 1)
+		go func() {
+			refusal, err := save(scope, sent)
+			done <- result{refusal, err}
+		}()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			var waiting int
+			if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&waiting); err != nil {
+				t.Fatal(err)
+			}
+			if waiting >= 1 {
+				break
+			}
+			select {
+			case r := <-done:
+				_ = holder.Rollback(ctx)
+				t.Fatalf("%s: the save answered (%v, %v) before it waited on the held save lock", name, r.refusal, r.err)
+			default:
+			}
+			if time.Now().After(deadline) {
+				_ = holder.Rollback(ctx)
+				t.Fatalf("%s: the save did not wait on the held save lock", name)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if err := holder.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+		var r result
+		select {
+		case r = <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s: the save did not finish after the release", name)
+		}
+		var stored string
+		if err := pool.QueryRow(ctx, `SELECT value FROM settings WHERE org_id = $1 AND category = 'llm' AND key = $2`, org.String(), key).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		storedName := map[string]string{first: "first", second: "second"}[stored]
+		t.Logf("%s: masked save after a change under the lock: refusal %v, err %v; stored url = %s", name, r.refusal != nil, r.err, storedName)
+		if r.err != nil || r.refusal == nil || r.refusal.status != 400 || r.refusal.message() != llmorgsettings.BaseURLKeyRefusal || stored != second {
+			t.Errorf("%s: refusal=%v err=%v stored=%s; want 400 invalid_base_url and the second url kept", name, r.refusal, r.err, storedName)
+		}
+	}
+}
+
 func ptrInt64(v int64) *int64 { return &v }

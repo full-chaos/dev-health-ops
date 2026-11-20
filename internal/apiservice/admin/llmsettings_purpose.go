@@ -188,6 +188,11 @@ func (h *handlers) applyLLMPurpose(ctx context.Context, org uuid.UUID, in llmPur
 	if refused || !sameBaseURL(inTx, in.baseURL) {
 		return nil, maskedBaseURLRefusal(), nil
 	}
+	// From here the save checks and writes the base_url as read under the lock.
+	in.baseURL, baseURLText = inTx, ""
+	if inTx != nil {
+		baseURLText = *inTx
+	}
 	if refusal, err := h.saveKeyRefusal(ctx, tx, orgID, in.purpose, in.apiKey, in.baseURL, false); refusal != nil || err != nil {
 		return nil, refusal, err
 	}

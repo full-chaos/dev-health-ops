@@ -196,7 +196,7 @@ func AttributedPrs(ctx context.Context, client QueryClient, orgID string, dr mod
 			teamIDs, useIDs = ids, true
 		}
 	}
-	raw, err := loadAttributedPRs(ctx, client, orgID, dr.StartDate.Time(), dr.EndDate.Time(), sc.repoID, teamIDs, useIDs, pageSize+1, pageOffset)
+	raw, err := loadAttributedPRs(ctx, client, orgID, dr.StartDate.Time(), dr.EndDate.Time(), sc.repoID, teamIDs, useIDs, sc.workType, pageSize+1, pageOffset)
 	if err != nil {
 		return nil, err
 	}
@@ -216,9 +216,6 @@ func AttributedPrs(ctx context.Context, client QueryClient, orgID string, dr mod
 	}
 	if sc.teamID != "" {
 		page = filterAttributed(page, func(r attributedPR) bool { return derefString(r.TeamID) == sc.teamID })
-	}
-	if sc.workType != "" {
-		page = filterAttributed(page, func(r attributedPR) bool { return derefString(r.WorkType) == sc.workType })
 	}
 
 	rows := make([]model.AiAttributedPr, 0, len(page))

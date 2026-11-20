@@ -115,6 +115,8 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	// bytes; the canary below stays 150).
 	cursor.RangeHi, cursor.RangeOldest, cursor.RangeItems = "2026-07-20T23:59:59Z", "2026-07-20T00:00:00Z", githubTestsSearchResultCap
 	cursor.ActiveCutKeys, cursor.CarriedCutKeys = githubTestsWidestCutKeys(t), githubTestsWidestCutKeys(t)
+	// Mid-listing it also carries its resume anchor at the widest id (CHAOS-14316; one fewer exclusion sample record pays for it).
+	cursor.AnchorID = githubTestsWidestAnchorID
 
 	encoded, err := encodeGitHubTestsChunkCursor(cursor)
 	if err != nil {
@@ -465,14 +467,14 @@ func githubTestsWidestCutKeys(t *testing.T) string {
 }
 
 // githubTestsWidestRunsCutKeys is a valid runs-phase cut key list of exactly githubTestsMaxRunsCutKeysBytes bytes: 31 of
-// the widest keys (27 bytes) and two short ones.
+// the widest keys (27 bytes) and one of 14 digits.
 func githubTestsWidestRunsCutKeys(t *testing.T) string {
 	t.Helper()
 	keys := make([]string, 0, 33)
 	for index := range 31 {
 		keys = append(keys, "9999999999999999"+strconv.Itoa(9999-index)+".999999")
 	}
-	keys = append(keys, strings.Repeat("8", 13), strings.Repeat("7", 14))
+	keys = append(keys, strings.Repeat("7", 14))
 	list := strings.Join(keys, ",")
 	if len(list) != githubTestsMaxRunsCutKeysBytes || !githubTestsCutKeyListValid(list, githubTestsMaxRunsCutKeysBytes) ||
 		githubTestsCutKeyListValid(list, githubTestsMaxCutKeysBytes) {
@@ -480,3 +482,6 @@ func githubTestsWidestRunsCutKeys(t *testing.T) string {
 	}
 	return list
 }
+
+// githubTestsWidestAnchorID is the widest resume anchor a cursor can carry: a 20-digit run id.
+const githubTestsWidestAnchorID = "99999999999999999999"

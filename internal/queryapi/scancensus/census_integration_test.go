@@ -713,14 +713,22 @@ const nullableIntoPlainSites = `
 //	loadClusters (title toil) 3306241167e7 -> 70a278016bab
 //	loadDocDrift 018c6639543c -> cb6682629840
 //	loadFlaky c0315233e3ef -> 965f0e7bc997
+//
+// CHAOS-14351: the repo-flow and change-failure newest-row picks order by computed_at DESC, cityHash64(tuple(*)) DESC
+// (a total order for two versions of one day in one second). The selected columns, their types and the scan targets are
+// unchanged; the file's SQL digest moved. Re-pinned by hand, digests copied from the local TestScanTypeCensus failure output (not computed):
+//
+//	loadRepoFlowRows 39a7e63ddf0e -> d2aa188ecd2d
+//	loadTeamFlowRows 2653b84e5b21 -> 7f2f10dcf329
+//	fetchChangeFailureAgg 73d54a21b859 -> 78aa9a6d5455
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|70a278016bab|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|70a278016bab|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|cb6682629840|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|965f0e7bc997|not-describable
-internal/queryapi/aianalytics/flow_opportunities.go|loadRepoFlowRows|*string,*uint64,**float64,**float64,**float64,**float64|39a7e63ddf0e|not-describable
-internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*uint64,**float64,**float64,**float64|2653b84e5b21|not-describable
+internal/queryapi/aianalytics/flow_opportunities.go|loadRepoFlowRows|*string,*uint64,**float64,**float64,**float64,**float64|d2aa188ecd2d|not-describable
+internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*uint64,**float64,**float64,**float64|7f2f10dcf329|not-describable
 internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|ffbc61d0410c|spliced-select-list
 internal/queryapi/aianalytics/scope.go|ownerTeams|*string,*string|c0b3734eb92d|not-describable
 internal/queryapi/analytics/breakdown.go|executeBreakdownRaw|**string,**float64|7d5055461009|statement-not-static
@@ -766,7 +774,7 @@ internal/queryapi/investment/sunburst.go|FetchInvestmentSunburst|*string,*string
 internal/queryapi/investmentexplain/reader.go|FetchInvestmentBreakdown|*string,*string,*float64|2283428d08a0|spliced-select-list
 internal/queryapi/investmentexplain/reader.go|FetchInvestmentThemeEffort|*string,*float64,*float64,*float64|fd01dffa31fe|spliced-select-list
 internal/queryapi/investmentexplain/workunitreader.go|FetchWorkUnitInvestments|*string,**string,**string,*time.Time,*time.Time,**string,**string,**string,**float64,*float64,*[]string,*[]float64,*[]string,*[]float64,**string,**float64,**string,**string,**string,**string,*time.Time|63286cc9b046|spliced-select-list
-internal/queryapi/operatingreview/operatingreview.go|fetchChangeFailureAgg|[]any|73d54a21b859|variadic-destinations
+internal/queryapi/operatingreview/operatingreview.go|fetchChangeFailureAgg|[]any|78aa9a6d5455|variadic-destinations
 internal/queryapi/operatingreview/operatingreview.go|fetchStateDurations|*string,*uint64,*float64,*float64|4e40f48a6488|not-describable
 internal/queryapi/operatingreview/operatingreview.go|fetchWorkItems|*time.Time,*uint64,*uint64,*uint32,**float64,**float64,**float64,**float64|02d2157b4812|not-describable
 internal/queryapi/people/metricqueries.go|fetchPersonBreakdown|*string,*float64|f158cf132a83|spliced-select-list

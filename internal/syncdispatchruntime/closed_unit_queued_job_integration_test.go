@@ -133,9 +133,19 @@ func finishedLines(t *testing.T, logs string) []map[string]any {
 	return records
 }
 
+// closedUnitLine is what the Info line of a job completed without work names besides the ids.
+type closedUnitLine struct{ closedBy, provider, dataset string }
+
+var cancelledUnitLine = closedUnitLine{closedBy: "cancelled", provider: "github", dataset: "commits"}
+
 // requireCompletedWithoutWork: one attempt, nil error, result success, no domain row changed, and
 // one Info line that names the unit and why it completed without work.
 func requireCompletedWithoutWork(t *testing.T, got closedUnitAttempt, before, after, unitID, runID string) {
+	t.Helper()
+	requireCompletedWithoutWorkAs(t, got, before, after, unitID, runID, cancelledUnitLine)
+}
+
+func requireCompletedWithoutWorkAs(t *testing.T, got closedUnitAttempt, before, after, unitID, runID string, want closedUnitLine) {
 	t.Helper()
 	if got.err != nil || len(got.results) != 1 || got.results[0] != jobruntime.ResultSuccess {
 		t.Errorf("err=%v results=%v, want nil error and [success]: the job completes on this attempt", got.err, got.results)
@@ -147,12 +157,12 @@ func requireCompletedWithoutWork(t *testing.T, got closedUnitAttempt, before, af
 	if len(lines) != 1 {
 		t.Fatalf("sync_provider_unit_finished lines=%d want 1; logs:\n%s", len(lines), got.logs)
 	}
-	for key, want := range map[string]any{
-		"level": "INFO", "result": "unit_closed", "closed_by": "cancelled",
-		"sync_unit_id": unitID, "sync_run_id": runID, "provider": "github", "dataset": "commits",
+	for key, wantValue := range map[string]any{
+		"level": "INFO", "result": "unit_closed", "closed_by": want.closedBy,
+		"sync_unit_id": unitID, "sync_run_id": runID, "provider": want.provider, "dataset": want.dataset,
 	} {
-		if lines[0][key] != want {
-			t.Errorf("finished line [%q]=%#v want %#v; line=%#v", key, lines[0][key], want, lines[0])
+		if lines[0][key] != wantValue {
+			t.Errorf("finished line [%q]=%#v want %#v; line=%#v", key, lines[0][key], wantValue, lines[0])
 		}
 	}
 	if _, present := lines[0]["error_detail"]; present {
@@ -244,7 +254,7 @@ func TestQueuedJobOfAUnitCancelledByTheSQLFormCompletesOnItsFirstAttempt(t *test
 	requireCompletedWithoutWork(t, got, before, closedUnitSnapshot(t, ctx, pool, runID), unitID, runID)
 }
 
-// Every unit that is not closed by a cancel in a terminal run keeps today's retry, one row each.
+// Every unit that is not closed for good (a cancel, the feature gate) in a terminal run keeps today's retry, one row each.
 func TestQueuedJobOfAUnitNotClosedByACancelStillRetries(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -280,8 +290,6 @@ func TestQueuedJobOfAUnitNotClosedByACancelStillRetries(t *testing.T) {
 			unit: pgseed.SyncRunUnit{Status: "success", ResultJSON: `{}`}},
 		{name: "unit failed with another category", runStatus: "failed", runResult: `{"error_category": "provider_unit_exhausted"}`,
 			unit: pgseed.SyncRunUnit{Status: "failed", ResultJSON: `{"error_category": "provider_unit_exhausted"}`}},
-		{name: "unit failed by the feature gate", runStatus: "failed", runResult: `{"error_category": "feature_disabled"}`,
-			unit: pgseed.SyncRunUnit{Status: "failed", ResultJSON: `{"error_category": "feature_disabled"}`}},
 		// The cancel category on a unit whose run is not terminal: a live sibling keeps it open.
 		{name: "cancelled unit in an open run", runStatus: "running", siblingRun: true,
 			unit: pgseed.SyncRunUnit{Status: "failed", ResultJSON: `{"error_category": "cancelled"}`}},

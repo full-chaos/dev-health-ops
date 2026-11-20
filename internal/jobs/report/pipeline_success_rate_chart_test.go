@@ -21,7 +21,7 @@ func TestSuccessRateChartIsTheCompletedRunRuleOverTheCounts(t *testing.T) {
 	if definition.SourceTable != "testops_pipeline_metrics_daily" || definition.rule != testops.PipelineSuccessRateWindowSQL {
 		t.Fatalf("success_rate chart definition = %+v, want the completed-run rule on the TestOps pipeline counts", definition)
 	}
-	const source = "FROM (SELECT * FROM testops_pipeline_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_pipeline_metrics_daily"
+	const source = "FROM (SELECT * FROM testops_pipeline_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day) AS testops_pipeline_metrics_daily"
 	rule := strings.Join(strings.Fields(testops.PipelineSuccessRateWindowSQL), " ")
 	for _, shape := range []struct{ chartType, groupBy string }{{"line", "day"}, {"bar", "repo"}, {"scorecard", ""}, {"line", "week"}} {
 		query, _, err := buildChartQuery(ChartSpec{

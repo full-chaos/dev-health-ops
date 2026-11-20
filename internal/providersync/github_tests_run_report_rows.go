@@ -476,7 +476,10 @@ func githubTestsPlanRunReportsWithin(parsed []githubTestsParsedReport, bound git
 // at whole, as many times, counting one work unit per instance read.
 // githubTestsCopyRepresentative picks a copy family's representative by content, not by id (CHAOS-14045): a member that holds
 // coverage rows first (a copy is dropped only without them, so a family with one coverage-bearing member then drops the others in
-// any upload order), then the lowest content digest, then the lowest id (members are in id order).
+// any upload order), then the lowest content digest, then the lowest id (members are in id order). The digest holds the suite
+// instances and the coverage rows as the writer stores them, without the fields that name the artifact or the report format
+// (snapshot_id, report_format, report_slot, run_attempt, legacy_snapshot_ids), each part sorted: so the upload id decides only
+// between members of equal content.
 func githubTestsCopyRepresentative(
 	parsed []githubTestsParsedReport, content func(int) (githubTestsCaseCounts, error), members []int,
 ) (int, error) {
@@ -490,7 +493,17 @@ func githubTestsCopyRepresentative(
 			keys = append(keys, key+":"+strconv.Itoa(count))
 		}
 		sort.Strings(keys)
-		return strings.Join(keys, ","), nil
+		coverage := make([]string, 0, len(parsed[index].Coverage))
+		for _, row := range parsed[index].Coverage {
+			row.SnapshotID, row.ReportFormat, row.ReportSlot, row.RunAttempt, row.LegacySnapshotIDs = "", nil, "", 0, nil
+			encoded, err := json.Marshal(row)
+			if err != nil {
+				return "", err
+			}
+			coverage = append(coverage, string(encoded))
+		}
+		sort.Strings(coverage)
+		return strings.Join(keys, ",") + "\x00coverage\x00" + strings.Join(coverage, "\x00"), nil
 	}
 	best := members[0]
 	bestDigest, err := digest(best)

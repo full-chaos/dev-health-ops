@@ -261,3 +261,134 @@ func TestGitHubTestsRunReportsAdmitOnTheFinalKeptSet(t *testing.T) {
 		t.Fatal("the watermark advanced although the run was cut by the bound")
 	}
 }
+
+const (
+	coverageMissLCOV      = "TN:\nSF:foo.go\nDA:1,1\nDA:2,0\nLF:2\nLH:1\nend_of_record\n"
+	coverageMissCobertura = `<coverage lines-valid="2" lines-covered="1"><packages><package name="example"><classes><class filename="foo.go">` +
+		`<lines><line number="1" hits="1"/><line number="2" hits="0"/></lines></class></classes></package></packages></coverage>`
+)
+
+// coveragePayload is a coverage report in one format ("lcov", "cobertura" or "both"), all lines covered (hit) or half of them.
+func coveragePayload(format string, hit bool) map[string]string {
+	lcov, cobertura := coverageMissLCOV, coverageMissCobertura
+	if hit {
+		lcov, cobertura = groupLCOV, groupCobertura
+	}
+	switch format {
+	case "lcov":
+		return map[string]string{"coverage.info": lcov}
+	case "cobertura":
+		return map[string]string{"coverage.xml": cobertura}
+	}
+	return map[string]string{"coverage.info": lcov, "coverage.xml": cobertura}
+}
+
+// markedCopyRole walks two timed copies of one JUnit report (ids 1 and 2; swapped puts the second role at id 1) and returns the
+// role marked aggregate_mismatch; both must be kept and the watermark withheld.
+func markedCopyRole(t *testing.T, first, second map[string]string, swapped, reversed bool) string {
+	t.Helper()
+	body := fxJUnit([]fxSuite{{name: "left", cases: []fxCase{{name: "a", dur: "0.25"}}}})
+	roles := []string{"first", "second"}
+	artifacts := []rowsArtifact{{id: "1", body: body, extra: first}, {id: "2", body: body, extra: second}}
+	if swapped {
+		artifacts[0].id, artifacts[1].id = artifacts[1].id, artifacts[0].id
+	}
+	if reversed {
+		slices.Reverse(artifacts)
+		slices.Reverse(roles)
+	}
+	walk, got := matrixRoleWalk(t, roles, artifacts)
+	marked := ""
+	for role, decision := range got {
+		switch decision {
+		case githubTestsAggregateMismatchCause:
+			if marked != "" {
+				t.Fatalf("decisions %v: more than one copy reported", got)
+			}
+			marked = role
+		case "kept":
+		default:
+			t.Fatalf("decisions %v: a coverage-bearing copy was dropped", got)
+		}
+	}
+	if marked == "" || walk.cursor.Suites != 2 || walk.final.Watermark != nil {
+		t.Fatalf("decisions %v, %d suites, advanced %t: want both copies kept, one reported, the watermark withheld",
+			got, walk.cursor.Suites, walk.final.Watermark != nil)
+	}
+	return marked
+}
+
+// CHAOS-14045 round 2 P1: two copies with identical JUnit and DIFFERENT coverage both hold coverage rows, so the coverage rows
+// are in the content key: the same copy is reported in every upload order and listing order, for all 6 pairings of LCOV,
+// Cobertura and both.
+func TestGitHubTestsRunReportsCoverageChoosesTheRepresentativeOfCoveredCopies(t *testing.T) {
+	formats := []string{"lcov", "cobertura", "both"}
+	for _, hitFormat := range formats {
+		for _, missFormat := range formats {
+			if hitFormat == missFormat {
+				continue
+			}
+			t.Run("hit-"+hitFormat+"/miss-"+missFormat, func(t *testing.T) {
+				hit, miss := coveragePayload(hitFormat, true), coveragePayload(missFormat, false)
+				want := markedCopyRole(t, hit, miss, false, false)
+				for _, swapped := range []bool{false, true} {
+					for _, reversed := range []bool{false, true} {
+						if got := markedCopyRole(t, hit, miss, swapped, reversed); got != want {
+							t.Fatalf("ids swapped %t, listing reversed %t: reported %s, want %s as in the first order", swapped, reversed, got, want)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+// Equal coverage in two formats is equal content (the key holds the stored rows without their format), so the tie goes to the
+// lowest upload id: the copy at id 2 is the one reported, whichever format it carries.
+func TestGitHubTestsRunReportsEqualCoverageInTwoFormatsTiesToTheLowestID(t *testing.T) {
+	for _, hit := range []bool{true, false} {
+		lcov, cobertura := coveragePayload("lcov", hit), coveragePayload("cobertura", hit)
+		for _, swapped := range []bool{false, true} {
+			wantMarked := "second"
+			if swapped {
+				wantMarked = "first"
+			}
+			if got := markedCopyRole(t, lcov, cobertura, swapped, false); got != wantMarked {
+				t.Fatalf("hit %t, ids swapped %t: reported %s, want %s (the higher id)", hit, swapped, got, wantMarked)
+			}
+		}
+	}
+}
+
+// Two coverage rows per copy, the same two rows in each copy but read in archive order (the archive's member order is not fixed):
+// the rows are sorted in the key, so the tie still goes to the lowest upload id. Repeated, since the member order is random.
+func TestGitHubTestsRunReportsCoverageRowOrderDoesNotChooseTheRepresentative(t *testing.T) {
+	first := map[string]string{"coverage.info": groupLCOV, "coverage.xml": coverageMissCobertura}
+	second := map[string]string{"coverage.info": coverageMissLCOV, "coverage.xml": groupCobertura}
+	for attempt := range 16 {
+		for _, swapped := range []bool{false, true} {
+			wantMarked := "second"
+			if swapped {
+				wantMarked = "first"
+			}
+			if got := markedCopyRole(t, first, second, swapped, false); got != wantMarked {
+				t.Fatalf("attempt %d, ids swapped %t: reported %s, want %s (the higher id)", attempt, swapped, got, wantMarked)
+			}
+		}
+	}
+}
+
+// KNOWN GAP (CHAOS-14045 round 2): zero line coverage is not stored alike in the two formats. LCOV with LH:0 stores lines_covered
+// NULL (the LCOV parser keeps a zero aggregate as absent), Cobertura with lines-covered="0" stores 0, so the two copies have
+// different keys although they report the same coverage. This pins today's behaviour: the keys differ, so the same copy (the
+// LCOV one; the Cobertura copy is the representative) is reported in both upload orders instead of the lowest id winning a tie.
+func TestGitHubTestsRunReportsZeroCoverageKnownGapLCOVAndCobertura(t *testing.T) {
+	lcov := map[string]string{"coverage.info": "TN:\nSF:foo.go\nDA:1,0\nLF:1\nLH:0\nend_of_record\n"}
+	cobertura := map[string]string{"coverage.xml": `<coverage lines-valid="1" lines-covered="0"><packages><package name="example"><classes>` +
+		`<class filename="foo.go"><lines><line number="1" hits="0"/></lines></class></classes></package></packages></coverage>`}
+	for _, swapped := range []bool{false, true} {
+		if got := markedCopyRole(t, lcov, cobertura, swapped, false); got != "first" {
+			t.Fatalf("ids swapped %t: reported %s, want the LCOV copy (first) in both orders: the keys differ today", swapped, got)
+		}
+	}
+}

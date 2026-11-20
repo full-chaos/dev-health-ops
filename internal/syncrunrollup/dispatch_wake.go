@@ -156,6 +156,26 @@ WHERE run.id = $2::uuid
   )
 ` + OutboxWakeupOnConflictSQL
 
+// WakeDispatchAtSQL is WakeDispatchSQL with the wake instant ($3) apart from the write instant ($4): a run whose
+// unit was moved to a retry in the future is due at that retry (CHAOS-14250), and the claim columns are judged at now.
+const WakeDispatchAtSQL = `
+INSERT INTO public.sync_dispatch_outbox (
+    id, org_id, sync_run_id, kind, status, available_at, attempts,
+    created_at, updated_at
+)
+SELECT $1::uuid, run.org_id, run.id, 'dispatch_sync_run', 'pending',
+    $3::timestamptz, 0, $4::timestamptz, $4::timestamptz
+FROM public.sync_runs AS run
+WHERE run.id = $2::uuid
+  AND run.status NOT IN ('success', 'partial_failed', 'failed')
+  AND EXISTS (
+      SELECT 1
+      FROM public.sync_run_units AS unit
+      WHERE unit.sync_run_id = run.id
+        AND unit.status IN ('planned', 'retrying')
+  )
+` + OutboxWakeupOnConflictSQL
+
 // Execer is the one method WakeDispatch needs: *pgxpool.Pool and pgx.Tx both
 // satisfy it.
 type Execer interface {
@@ -223,6 +243,29 @@ func WakeDispatch(ctx context.Context, db Execer, syncRunID string, now time.Tim
 		synclog.Text(synclog.KeyPath, synclog.ParseLabel(path)),
 		synclog.Instant(synclog.KeyAvailableAt, now.UTC()),
 	)
+	return true
+}
+
+// WakeDispatchAt arms the run's dispatch wakeup at the instant at (an existing row keeps an earlier one), with the
+// same contract as WakeDispatch.
+func WakeDispatchAt(ctx context.Context, db Execer, syncRunID string, at, now time.Time, path string) bool {
+	wakeCtx, cancel := context.WithTimeout(ctx, DispatchWakeTimeout)
+	defer cancel()
+	command, err := db.Exec(wakeCtx, WakeDispatchAtSQL, uuid.New(), syncRunID, at.UTC(), now.UTC())
+	if err != nil {
+		dispatchWakeCounts.record(path, DispatchWakeOutcomeFailed)
+		synclog.Default().Warn(ctx, synclog.MsgDispatchSyncRunUnitCompletionWakeFailed,
+			synclog.Run(synclog.ParseID(syncRunID)),
+			synclog.Text(synclog.KeyPath, synclog.ParseLabel(path)),
+			synclog.Failure(err),
+		)
+		return false
+	}
+	if command.RowsAffected() == 0 {
+		dispatchWakeCounts.record(path, DispatchWakeOutcomeNotWaiting)
+		return false
+	}
+	dispatchWakeCounts.record(path, DispatchWakeOutcomeArmed)
 	return true
 }
 

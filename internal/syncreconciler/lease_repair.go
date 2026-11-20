@@ -238,7 +238,11 @@ func (repair *LeaseRepair) Step(ctx context.Context, now time.Time, limit int) (
 			return LeaseRepairResult{}, ErrUnavailable
 		}
 		if affected == 1 {
-			wakeRuns = appendWakeRun(wakeRuns, syncrunrollup.SlotFree{RunID: candidate.syncRunID, OrgID: candidate.orgID, Provider: candidate.provider, CostClass: candidate.costClass})
+			slot := syncrunrollup.SlotFree{RunID: candidate.syncRunID, OrgID: candidate.orgID, Provider: candidate.provider, CostClass: candidate.costClass}
+			if decision.retry {
+				slot.RetryAt = expiredLeaseRetryAt(now, repair.config)
+			}
+			wakeRuns = appendWakeRun(wakeRuns, slot)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -321,6 +325,11 @@ func selectExpiredLeaseCandidates(
 	return candidates, nil
 }
 
+// expiredLeaseRetryAt is the available_at markExpiredLeaseRetrying writes.
+func expiredLeaseRetryAt(now time.Time, config LeaseRepairConfig) time.Time {
+	return now.Add(config.RetryBackoff)
+}
+
 func markExpiredLeaseRetrying(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -328,7 +337,7 @@ func markExpiredLeaseRetrying(
 	now time.Time,
 	config LeaseRepairConfig,
 ) (int64, error) {
-	retryAt := now.Add(config.RetryBackoff)
+	retryAt := expiredLeaseRetryAt(now, config)
 	command, err := tx.Exec(ctx, markExpiredLeaseRetryingSQL,
 		candidate.id, candidate.leaseOwner, now, retryAt,
 		workitemcontract.LinearExpiredLeaseRetryDestinations())

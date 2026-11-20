@@ -16,29 +16,20 @@ import (
 // starts.
 
 type slotShareBucket struct {
-	active, activeBackfill int
-	older                  []olderRun
+	active, activeBackfill     int
+	reserved, reservedBackfill int
 }
 
 func slotSharePass(t *testing.T, self runOrder, costClass string, waiting int, state slotShareBucket) (admitted, headroom int) {
 	t.Helper()
 	bucket := dispatchBucket{orgID: admissionOrg, provider: "github", costClass: costClass}
 	env := guardEnv{
-		lockBuckets: func([]dispatchBucket) error { return nil },
-		totalCap:    func() int { return 0 },
-		activeCount: func(dispatchBucket) (int, int, error) { return state.active, state.activeBackfill, nil },
-		emit:        func(dispatchBucket, int, int, int, int, int, int) {},
-		self:        self,
-		olderRuns: func(dispatchBucket) ([]olderRun, error) {
-			// olderRunsInBucketSQL lists older backfill runs only to a backfill run.
-			var older []olderRun
-			for _, run := range state.older {
-				if self.backfill || !run.backfill {
-					older = append(older, run)
-				}
-			}
-			return older, nil
-		},
+		lockBuckets:  func([]dispatchBucket) error { return nil },
+		totalCap:     func() int { return 0 },
+		activeCount:  func(dispatchBucket) (int, int, error) { return state.active, state.activeBackfill, nil },
+		emit:         func(dispatchBucket, int, int, int, int, int, int) {},
+		self:         self,
+		reservations: func(dispatchBucket) (int, int, error) { return state.reserved, state.reservedBackfill, nil },
 	}
 	decision, err := decideDispatchGuard(sliceSource(plannedUnits("u", waiting, "github", costClass)), env, admissionOrg, admissionNow)
 	if err != nil {
@@ -131,16 +122,15 @@ func TestBackfillShareIsCapMinusOneForALightBucket(t *testing.T) {
 	assertAdmitted(t, "backfill pass, empty light bucket", got, 3)
 }
 
-// The backfill share goes to an older live backfill run first; an older incremental run does not take it.
-func TestBackfillShareGoesToTheOlderBackfillRunFirst(t *testing.T) {
+// A sweep's reservation of another backfill run takes the backfill share (CHAOS-14250); a reservation of an
+// incremental run takes a slot but leaves the share.
+func TestBackfillShareCountsBackfillReservationsOfOtherRuns(t *testing.T) {
 	newer := backfillRun(admissionRunB, admissionNow.Add(-time.Minute))
-	olderBackfill := liveOlder(backfillRun(admissionRunA, admissionNow.Add(-time.Hour)), 1)
-	got, _ := slotSharePass(t, newer, "medium", 1, slotShareBucket{older: []olderRun{olderBackfill}})
-	assertAdmitted(t, "newer backfill, older backfill run waits", got, 0)
+	got, _ := slotSharePass(t, newer, "medium", 1, slotShareBucket{reserved: 1, reservedBackfill: 1})
+	assertAdmitted(t, "backfill pass, another backfill run holds a reservation", got, 0)
 
-	olderIncremental := liveOlder(scheduledRun(admissionRunA, admissionNow.Add(-time.Hour)), 1)
-	got, _ = slotSharePass(t, newer, "medium", 1, slotShareBucket{older: []olderRun{olderIncremental}})
-	assertAdmitted(t, "newer backfill, older incremental run waits", got, 1)
+	got, _ = slotSharePass(t, newer, "medium", 1, slotShareBucket{reserved: 1})
+	assertAdmitted(t, "backfill pass, an incremental run holds a reservation", got, 1)
 }
 
 // The capped line names the run's mode and trigger.

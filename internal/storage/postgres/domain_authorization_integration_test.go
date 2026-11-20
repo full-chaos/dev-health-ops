@@ -92,6 +92,9 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.sync_run_unit_effect_chunks (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_watermarks (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.sync_dispatch_outbox (id bigint PRIMARY KEY, state text)",
+		// CHAOS-14250: no FK to sync_runs here (this fixture's sync_runs.id is bigint).
+		"CREATE TABLE public.sync_dispatch_bucket_signals (org_id text NOT NULL, provider character varying(64) NOT NULL, cost_class character varying(32) NOT NULL, generation bigint DEFAULT 0 NOT NULL, acked_generation bigint DEFAULT 0 NOT NULL, updated_at timestamp with time zone NOT NULL, CONSTRAINT sync_dispatch_bucket_signals_pkey PRIMARY KEY (org_id, provider, cost_class))",
+		"CREATE TABLE public.sync_dispatch_bucket_reservations (org_id text NOT NULL, provider character varying(64) NOT NULL, cost_class character varying(32) NOT NULL, sync_run_id uuid NOT NULL, backfill boolean NOT NULL, reserved_at timestamp with time zone NOT NULL, CONSTRAINT sync_dispatch_bucket_reservations_pkey PRIMARY KEY (org_id, provider, cost_class, sync_run_id))",
 		"CREATE TABLE public.worker_job_outbox (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.sync_configurations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.scheduled_jobs (id uuid PRIMARY KEY)",
@@ -179,6 +182,8 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"GRANT SELECT, UPDATE ON TABLE public.backfill_jobs, public.job_runs TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_coverage_projections TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_executed_proof_ledger, public.sync_dispatch_outbox, public.remaining_metric_runs, public.remaining_metric_partitions, public.work_graph_execution_requests, public.work_graph_execution_ledger, public.daily_metrics_partitions, public.daily_metrics_runs, public.daily_metrics_finalize_redrive_events, public.worker_job_runs TO " + authorizedDomainRole,
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_bucket_signals TO " + authorizedDomainRole,
+		"GRANT SELECT, INSERT, DELETE ON TABLE public.sync_dispatch_bucket_reservations TO " + authorizedDomainRole,
 		// CHAOS-6622: Jira source discovery moves a renamed project's
 		// watermarks to its new key and drops the superseded row, so the
 		// domain role's watermark posture includes DELETE.

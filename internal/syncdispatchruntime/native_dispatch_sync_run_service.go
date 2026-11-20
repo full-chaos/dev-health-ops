@@ -627,17 +627,19 @@ WHERE id = $1::uuid`,
 	if slotsFreedInPass > 0 {
 		defer syncrunrollup.WakeDispatch(ctx, service.pool, run.id, service.nowUTC(), syncrunrollup.DispatchWakePathDispatchPass)
 	}
-	// CHAOS-8880: this pass left free slots to older runs of a bucket; their next pass is due now, not at their
-	// back-off. After the commit, like the wake above, so the older pass sees this pass's claims.
-	if len(decision.heldBackRunIDs) > 0 {
-		defer wakeHeldBackRuns(ctx, service.pool, decision.heldBackRunIDs, service.nowUTC())
-	}
 	// CHAOS-14250: after the commit, each bucket that capped this run, and each bucket that gave this pass slots it
 	// did not fill (a budget or cooldown refusal, a deferred or terminalized unit, fewer units than slots), gets its
 	// sync.bucket_sweep: the sweep, not a timer of this run, brings the next pass of the bucket's oldest eligible
 	// waiter. A refused unit is retrying with a future available_at, so the sweep passes over this run until then.
 	capCovered := service.enqueueBucketSweeps(ctx, decision.cappedBuckets, handOffBuckets(decision.grantedSlots, claimedUnits)) &&
 		decision.concurrencyCapped
+	// CHAOS-14250 r1 class 1: a run the cap holds back whose bucket's sweep is enqueued parks its own dispatch row, so
+	// the reconciler's materializer does not re-arm it as a stale delivery: the sweep's wake unparks it. Deferred, so
+	// it runs after any re-arm below (a re-armed row is no longer dispatched and stays as it is) and before the
+	// in-pass release wake above, which unparks it.
+	if capCovered {
+		defer service.parkCappedDelivery(ctx, fence)
+	}
 
 	if riverQueued > 0 {
 		switch {
@@ -1001,11 +1003,13 @@ func (service *NativeDispatchSyncRunService) enqueueBucketSweeps(ctx context.Con
 			continue
 		}
 		// A slot this pass was given and did not use is a release (the sweep is due now); a cap only needs the
-		// bucket to have a sweep.
-		var err error
-		if release[bucket] {
+		// bucket to have a sweep. Both signal the bucket first, so a sweep already running sweeps again.
+		err := syncrunrollup.BumpBucketGeneration(ctx, service.pool, bucket.orgID, bucket.provider, bucket.costClass, service.nowUTC())
+		switch {
+		case err != nil:
+		case release[bucket]:
 			err = service.sweeps.EnqueueBucketSweep(ctx, bucket.orgID, bucket.provider, bucket.costClass)
-		} else {
+		default:
 			err = service.sweeps.EnsureBucketSweep(ctx, bucket.orgID, bucket.provider, bucket.costClass)
 		}
 		done[bucket] = err == nil
@@ -1018,6 +1022,31 @@ func (service *NativeDispatchSyncRunService) enqueueBucketSweeps(ctx context.Con
 		allCapped = allCapped && done[bucket]
 	}
 	return allCapped
+}
+
+// bucketParkedError is the last_error of a dispatch row whose run the cap holds back and whose bucket's sweep will
+// wake it (CHAOS-14250). The reconciler's materializer leaves such a row alone; any dispatch wakeup clears it.
+const bucketParkedError = "bucket_parked"
+
+// parkDeliverySQL parks this delivery's own row: only while it is still the dispatched row of this delivery (the
+// transport fence's identity), so a wake or a newer delivery since the commit is never parked.
+const parkDeliverySQL = `
+UPDATE public.sync_dispatch_outbox
+SET last_error = '` + bucketParkedError + `'
+WHERE id = $1::uuid AND sync_run_id = $2::uuid AND org_id = $3 AND kind = $4
+    AND status = 'dispatched' AND dispatched_transport = 'river'
+    AND dispatched_route_generation = $5 AND attempts = $6
+    AND last_error IS NULL`
+
+// parkCappedDelivery runs parkDeliverySQL after the pass's commit. A failure is logged: the row then stays a stale
+// delivery the materializer re-arms, as before parking.
+func (service *NativeDispatchSyncRunService) parkCappedDelivery(ctx context.Context, fence *transportFence) {
+	args := fence.args
+	if _, err := service.pool.Exec(ctx, parkDeliverySQL, args.OutboxID(), args.SyncRunID(), args.OrganizationID(), fence.kind,
+		args.RouteGeneration(), args.Attempt()); err != nil {
+		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunUnitCompletionWakeFailed, synclog.Run(synclog.ParseID(args.SyncRunID())),
+			synclog.Text(synclog.KeyPath, synclog.ParseLabel(syncrunrollup.DispatchWakePathBucketSweep)), synclog.Failure(err))
+	}
 }
 
 // handOffBuckets lists the buckets that granted this pass more slots than it claimed there, in bucket order.

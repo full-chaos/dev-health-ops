@@ -278,6 +278,9 @@ func apiPosture() RolePosture {
 			{"sync_watermarks", false, true, true},
 			{"sync_run_reference_discoveries", false, false, true},
 			{"sync_dispatch_outbox", false, false, true},
+			// CHAOS-14250 bucket sweep tables: org deletion removes their rows.
+			{"sync_dispatch_bucket_signals", false, false, true},
+			{"sync_dispatch_bucket_reservations", false, false, true},
 			{"sync_run_post_dispatches", false, false, true},
 			{"sync_run_units", false, false, true},
 			{"sync_runs", false, false, true},

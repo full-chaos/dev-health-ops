@@ -983,6 +983,8 @@ func createKernelIntegrationFixture(
 		// not -- it failed closed here until these were added.
 		"CREATE TABLE public.sync_run_reference_discoveries (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_post_dispatches (id uuid PRIMARY KEY, post_sync_outcome text NULL, post_sync_committed_at timestamptz NULL)",
+		"CREATE TABLE public.sync_dispatch_bucket_signals (org_id text NOT NULL, provider character varying(64) NOT NULL, cost_class character varying(32) NOT NULL, generation bigint DEFAULT 0 NOT NULL, acked_generation bigint DEFAULT 0 NOT NULL, updated_at timestamp with time zone NOT NULL, CONSTRAINT sync_dispatch_bucket_signals_pkey PRIMARY KEY (org_id, provider, cost_class))",
+		"CREATE TABLE public.sync_dispatch_bucket_reservations (org_id text NOT NULL, provider character varying(64) NOT NULL, cost_class character varying(32) NOT NULL, sync_run_id uuid NOT NULL, backfill boolean NOT NULL, reserved_at timestamp with time zone NOT NULL, CONSTRAINT sync_dispatch_bucket_reservations_pkey PRIMARY KEY (org_id, provider, cost_class, sync_run_id))",
 		"CREATE TABLE public.org_activity (org_id uuid PRIMARY KEY, has_data boolean NOT NULL, computed_at timestamptz, refreshed_at timestamptz NOT NULL)",
 		"CREATE TABLE public.sync_coverage_projections (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",

@@ -104,8 +104,6 @@ type guardDecision struct {
 	// matching slotHeadroom's own convention (the hard-deny branch returns
 	// before any bucket is visited and its caller never reaches claimUnits).
 	authorizedUnitIDs map[string]bool
-	// heldBackRunIDs are the older runs this pass left free slots to (CHAOS-8880), oldest first per bucket.
-	heldBackRunIDs []string
 	// grantedSlots are the slots each bucket gave this run after the cap, the hold-back and the backfill share; a
 	// pass that claims fewer gives the rest back through the bucket's sweep (CHAOS-14250).
 	grantedSlots map[dispatchBucket]int
@@ -270,8 +268,11 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, orgID,
 		emit: func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, heldBack int) {
 			emitBucketDecision(ctx, logger, bucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, heldBack)
 		},
-		self:      self,
-		olderRuns: func(bucket dispatchBucket) ([]olderRun, error) { return readOlderRuns(ctx, tx, bucket, self, now) },
+		self: self,
+		reservations: func(bucket dispatchBucket) (int, int, error) {
+			return countBucketReservations(ctx, tx, bucket, runID, now)
+		},
+		retireReservations: func() error { return retireRunReservations(ctx, tx, runID) },
 	}
 	source := func(fold func(dispatchGuardUnit) error) error {
 		return forEachDispatchGuardUnit(ctx, tx, runID, fold)
@@ -288,10 +289,11 @@ type guardEnv struct {
 	// activeCount returns the bucket's active units and, of those, the units of backfill runs, from one read.
 	activeCount func(dispatchBucket) (active, activeBackfill int, err error)
 	emit        func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, heldBack int)
-	// self is the deciding run's admission position; olderRuns lists the bucket's older open runs with waiting units
-	// (CHAOS-8880).
-	self      runOrder
-	olderRuns func(dispatchBucket) ([]olderRun, error)
+	// self is the deciding run's admission position. reservations counts the bucket's live sweep reservations of other
+	// runs, all and backfill (CHAOS-14250); retireReservations drops the deciding run's own, after the bucket locks.
+	self               runOrder
+	reservations       func(dispatchBucket) (reserved, reservedBackfill int, err error)
+	retireReservations func() error
 }
 
 // guardUnitSource folds every unit of the run in id order; each call is one full paged read.
@@ -426,6 +428,11 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 	if err := env.lockBuckets(sortBucketList(lockBuckets)); err != nil {
 		return guardDecision{}, err
 	}
+	if env.retireReservations != nil {
+		if err := env.retireReservations(); err != nil {
+			return guardDecision{}, err
+		}
+	}
 	allBuckets := sortBucketList(loopBuckets)
 
 	totalCap := env.totalCap()
@@ -452,8 +459,6 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 	activeCounts := make(map[dispatchBucket]int, len(allBuckets))
 	heldBack := make(map[dispatchBucket]int, len(allBuckets))
 	folds := make(map[dispatchBucket]*guardBucketFold, len(allBuckets))
-	livenessBound := admissionLivenessBound()
-	var heldBackRunIDs []string
 	for _, bucket := range allBuckets {
 		activeCount, activeBackfill, err := env.activeCount(bucket)
 		if err != nil {
@@ -465,23 +470,20 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 		if slots < 0 {
 			slots = 0
 		}
-		// CHAOS-8880: free slots go to older live runs of the bucket first. Read under the bucket lock, in this
-		// transaction, right after the active count the slots come from.
-		var older []olderRun
-		if slots > 0 && env.olderRuns != nil {
-			older, err = env.olderRuns(bucket)
+		// CHAOS-14250: a slot a bucket sweep reserved for another run is not free; read under the bucket lock, in this
+		// transaction, right after the active count the slots come from. The in-flight slots stay in the active count.
+		reserved, reservedBackfill := 0, 0
+		if env.reservations != nil {
+			reserved, reservedBackfill, err = env.reservations(bucket)
 			if err != nil {
 				return guardDecision{}, err
 			}
-			held, oldest := holdBackFor(env.self, older, slots, now, livenessBound)
-			slots -= held
-			heldBack[bucket] = held
-			if oldest != "" {
-				heldBackRunIDs = append(heldBackRunIDs, oldest)
-			}
 		}
+		held := min(reserved, slots)
+		slots -= held
+		heldBack[bucket] = held
 		if slots > 0 {
-			slots = min(slots, backfillSlotLimit(env.self, capValue, activeBackfill, older, now, livenessBound))
+			slots = min(slots, backfillSlotLimit(env.self, capValue, activeBackfill+reservedBackfill))
 		}
 		folds[bucket] = &guardBucketFold{slots: slots}
 	}
@@ -541,12 +543,11 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 			concurrencyCapped: true,
 			slotHeadroom:      slotHeadroom,
 			authorizedUnitIDs: authorizedUnitIDs,
-			heldBackRunIDs:    heldBackRunIDs,
 			grantedSlots:      grantedSlots,
 			cappedBuckets:     cappedBuckets,
 		}, nil
 	}
-	return guardDecision{allowed: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs, heldBackRunIDs: heldBackRunIDs,
+	return guardDecision{allowed: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs,
 		grantedSlots: grantedSlots}, nil
 }
 
@@ -597,25 +598,14 @@ func forEachDispatchGuardUnit(ctx context.Context, tx pgx.Tx, runID string, fold
 }
 
 // backfillSlotLimit is the most units a backfill run's pass may admit in a bucket (CHAOS-14211): backfill units hold
-// at most cap-1 of the bucket's slots, so one slot always stays for non-backfill work, and the backfill share goes to
-// older live backfill runs first. A non-backfill run, or a bucket with cap 1 (a reserve there would stop backfill for
-// ever), has no limit beyond the cap.
-func backfillSlotLimit(self runOrder, capValue, activeBackfill int, older []olderRun, now time.Time, bound time.Duration) int {
+// at most cap-1 of the bucket's slots, so one slot always stays for non-backfill work. backfillHeld counts the active
+// backfill units and the live backfill reservations of other runs. A non-backfill run, or a bucket with cap 1 (a
+// reserve there would stop backfill for ever), has no limit beyond the cap.
+func backfillSlotLimit(self runOrder, capValue, backfillHeld int) int {
 	if !self.backfill || capValue < 2 {
 		return capValue
 	}
-	share := capValue - 1 - activeBackfill
-	if share <= 0 {
-		return 0
-	}
-	olderBackfill := make([]olderRun, 0, len(older))
-	for _, run := range older {
-		if run.backfill {
-			olderBackfill = append(olderBackfill, run)
-		}
-	}
-	held, _ := holdBackFor(self, olderBackfill, share, now, bound)
-	return share - held
+	return max(0, capValue-1-backfillHeld)
 }
 
 // countActiveBucketUnits counts the capacity-CONSUMER set for one bucket

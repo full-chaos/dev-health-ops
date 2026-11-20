@@ -516,6 +516,7 @@ func buildSyncMutationPipeline(
 		return nil, err
 	}
 	repair.WithBucketSweeps(bucketSweeps)
+	materializer.WithBucketSweeps(bucketSweeps)
 	if unreclaimable, ok := sweep.(*syncreconciler.UnreclaimableSweep); ok {
 		unreclaimable.WithBucketSweeps(bucketSweeps)
 	}

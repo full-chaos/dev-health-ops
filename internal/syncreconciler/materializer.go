@@ -8,6 +8,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
+	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 )
 
 // runawayDispatchAttempts is the ATTEMPT COUNT at which a dispatch wakeup
@@ -121,6 +124,8 @@ type MaterializerResult struct {
 	// can hold row values, and the reason an operator needs is which
 	// statement stopped working.
 	RunawayReportStep string
+	// BucketSweepsRecovered counts the bucket sweeps Step enqueued for signals no sweep acknowledged (CHAOS-14250).
+	BucketSweepsRecovered int64
 }
 
 type materializerBeginFunc func(context.Context) (pgx.Tx, error)
@@ -134,7 +139,51 @@ type materializerBeginFunc func(context.Context) (pgx.Tx, error)
 // transitions match that compatibility contract; post_sync is deliberately
 // stricter and never re-arms an existing row.
 type Materializer struct {
-	begin materializerBeginFunc
+	begin  materializerBeginFunc
+	sweeps syncrunrollup.BucketSweepEnqueuer
+}
+
+// WithBucketSweeps turns on the bucket-signal recovery of Step (CHAOS-14250): a bucket signalled more than
+// bucketSignalRecoveryAge ago whose sweep has not acknowledged the signal gets its sweep again.
+func (materializer *Materializer) WithBucketSweeps(sweeps syncrunrollup.BucketSweepEnqueuer) *Materializer {
+	if materializer != nil {
+		materializer.sweeps = sweeps
+	}
+	return materializer
+}
+
+// bucketSignalRecoveryAge is how long a bucket signal may stay unacknowledged before the materializer enqueues the
+// bucket's sweep: the window between a sweep's acknowledgement read and River finishing that sweep's job, in which a
+// signal's enqueue is dropped as the running job's duplicate. A signal is recovered within this age plus one tick.
+const bucketSignalRecoveryAge = 60 * time.Second
+
+// unacknowledgedBucketSignalsSQL lists the buckets whose last signal is at least the recovery age old ($1 is now less
+// that age) and still unacknowledged, oldest signal first.
+const unacknowledgedBucketSignalsSQL = `
+SELECT signal.org_id, signal.provider, signal.cost_class
+FROM public.sync_dispatch_bucket_signals AS signal
+WHERE signal.generation > signal.acked_generation
+	AND signal.updated_at <= $1
+ORDER BY signal.updated_at, signal.org_id, signal.provider, signal.cost_class
+LIMIT $2`
+
+type signaledBucket struct{ orgID, provider, costClass string }
+
+func readUnacknowledgedBucketSignals(ctx context.Context, tx pgx.Tx, now time.Time, limit int) ([]signaledBucket, error) {
+	rows, err := tx.Query(ctx, unacknowledgedBucketSignalsSQL, now.Add(-bucketSignalRecoveryAge), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var buckets []signaledBucket
+	for rows.Next() {
+		var bucket signaledBucket
+		if err := rows.Scan(&bucket.orgID, &bucket.provider, &bucket.costClass); err != nil {
+			return nil, err
+		}
+		buckets = append(buckets, bucket)
+	}
+	return buckets, rows.Err()
 }
 
 func NewMaterializer(pool *pgxpool.Pool) (*Materializer, error) {
@@ -168,6 +217,7 @@ const (
 	materializerStepPostSync   = "post_sync materialization insert of public.sync_dispatch_outbox"
 	materializerStepRowCount   = "materialization affected-row count"
 	materializerStepCommit     = "commit coordinator transaction"
+	materializerStepSignals    = "unacknowledged bucket signal read of public.sync_dispatch_bucket_signals"
 )
 
 // materializerStepError names the Step statement that failed while keeping
@@ -367,8 +417,23 @@ func (materializer *Materializer) Step(
 	} else {
 		result.Runaway, result.RunawayTotal, result.RunawayTruncated = runaway, total, truncated
 	}
+	var signaled []signaledBucket
+	if materializer.sweeps != nil {
+		signaled, err = readUnacknowledgedBucketSignals(ctx, tx, now, limit)
+		if err != nil {
+			return MaterializerResult{}, materializerUnavailable(materializerStepSignals, err)
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return MaterializerResult{}, materializerUnavailable(materializerStepCommit, err)
+	}
+	for _, bucket := range signaled {
+		if err := materializer.sweeps.EnqueueBucketSweep(ctx, bucket.orgID, bucket.provider, bucket.costClass); err != nil {
+			synclog.Default().Warn(ctx, synclog.MsgDispatchSyncRunUnitCompletionWakeFailed,
+				synclog.Text(synclog.KeyPath, synclog.ParseLabel(syncrunrollup.DispatchWakePathBucketSweep)), synclog.Failure(err))
+			continue
+		}
+		result.BucketSweepsRecovered++
 	}
 	return result, nil
 }
@@ -537,6 +602,10 @@ func readRunawayDispatchWakeups(
 // a job a second (prod 2026-09-26 08:14-08:23Z: 480 jobs, delivery_attempt 7 170).
 // TestMaterializerDoesNotRepublishAStaleUnitsRunEveryTickWhileItsJobIsQueued closes
 // that loop the way the relay does.
+//
+// CHAOS-14250: a run whose own pass parked its row (last_error 'bucket_parked': the cap holds it back and its
+// bucket's sync.bucket_sweep wakes it) is neither a candidate nor re-armed. Both places: parked runs left in the
+// candidates would fill the LIMIT and starve other runs. Any dispatch wakeup clears the park.
 const materializeDispatchSQL = `
 WITH active AS MATERIALIZED (
 	SELECT run.id, run.org_id
@@ -569,6 +638,13 @@ candidates AS (
 			)
 		LIMIT 1
 	) AS dispatchable
+	WHERE NOT EXISTS (
+		SELECT 1
+		FROM public.sync_dispatch_outbox AS parked
+		WHERE parked.sync_run_id = active.id
+			AND parked.kind = 'dispatch_sync_run'
+			AND parked.last_error = 'bucket_parked'
+	)
 	ORDER BY active.id
 	LIMIT $3
 )
@@ -661,6 +737,7 @@ SET available_at = CASE
 	updated_at = $1
 WHERE sync_dispatch_outbox.status <> 'pending'
 	AND sync_dispatch_outbox.last_error IS DISTINCT FROM 'feature_disabled'
+	AND sync_dispatch_outbox.last_error IS DISTINCT FROM 'bucket_parked'
 	AND (
 		sync_dispatch_outbox.dispatched_transport IS DISTINCT FROM 'river'
 		OR EXISTS (

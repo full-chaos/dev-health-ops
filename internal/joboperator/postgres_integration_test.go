@@ -546,6 +546,8 @@ func createOperatorIntegrationSchema(
 			id uuid PRIMARY KEY,
 			state text NOT NULL
 		)`,
+		"CREATE TABLE public.sync_dispatch_bucket_signals (org_id text NOT NULL, provider character varying(64) NOT NULL, cost_class character varying(32) NOT NULL, generation bigint DEFAULT 0 NOT NULL, acked_generation bigint DEFAULT 0 NOT NULL, updated_at timestamp with time zone NOT NULL, CONSTRAINT sync_dispatch_bucket_signals_pkey PRIMARY KEY (org_id, provider, cost_class))",
+		"CREATE TABLE public.sync_dispatch_bucket_reservations (org_id text NOT NULL, provider character varying(64) NOT NULL, cost_class character varying(32) NOT NULL, sync_run_id uuid NOT NULL, backfill boolean NOT NULL, reserved_at timestamp with time zone NOT NULL, CONSTRAINT sync_dispatch_bucket_reservations_pkey PRIMARY KEY (org_id, provider, cost_class, sync_run_id), CONSTRAINT fk_sync_dispatch_bucket_reservations_run FOREIGN KEY (sync_run_id) REFERENCES public.sync_runs(id) ON DELETE CASCADE)",
 		`CREATE TABLE public.sync_dispatch_transport_routes (
 			kind text PRIMARY KEY,
 			generation bigint NOT NULL

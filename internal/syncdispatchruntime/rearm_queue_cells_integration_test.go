@@ -556,9 +556,9 @@ func TestRefusingLiveHeadDoesNotCycleWithTheNextRun(t *testing.T) {
 	})
 }
 
-// S8 + O2 (r1b P2-2): the sweep's mark makes the run it picked live for the older-run hold-back however old its
-// dispatch row is (601 s here), and a later sweep moves the mark.
-func TestSweptHeadWithAStaleRowIsLiveAndTheMarkMoves(t *testing.T) {
+// S8 (r1b P2-2, CHAOS-14250 plan 3): the sweep's reservation keeps the slot of the run it picked however old its
+// dispatch row is (601 s here): a newer run's pass leaves that slot, and a later sweep does not reserve it twice.
+func TestSweptHeadWithAStaleRowKeepsItsReservedSlot(t *testing.T) {
 	withRearmQueuePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		rqSetEnv(t)
 		t0 := pgNow()
@@ -570,20 +570,13 @@ func TestSweptHeadWithAStaleRowIsLiveAndTheMarkMoves(t *testing.T) {
 			t.Fatal(err)
 		}
 		newer := sim.seed(rqRunSpec{index: 2, createdAt: t0.Add(-1 * time.Hour), medium: 2})
-		mark := func() float64 {
-			var value *float64
-			if err := pool.QueryRow(ctx, `SELECT (result::jsonb ->> '`+rqSweepMarkKey+`')::double precision FROM sync_runs WHERE id = $1::uuid`, older).Scan(&value); err != nil {
-				t.Fatal(err)
-			}
-			if value == nil {
-				return 0
-			}
-			return *value
-		}
 		if _, _, err := rqSweep(ctx, pool, rqOrg, "github", "medium", t0); err != nil {
 			t.Fatal(err)
 		}
-		first := mark()
+		first, reserved, err := rqReservation(ctx, pool, rqOrg, "github", "medium", older)
+		if err != nil {
+			t.Fatal(err)
+		}
 		tx, err := pool.Begin(ctx)
 		if err != nil {
 			t.Fatal(err)
@@ -593,15 +586,24 @@ func TestSweptHeadWithAStaleRowIsLiveAndTheMarkMoves(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("swept head with a 601 s old row: mark=%.0f heldBack=%v", first, decision.heldBackRunIDs)
-		if first == 0 || len(decision.heldBackRunIDs) != 1 || decision.heldBackRunIDs[0] != older {
-			t.Fatalf("swept head with a 601 s old dispatch row: mark=%v heldBack=%v, want a mark and [%s]", first, decision.heldBackRunIDs, older)
+		admitted := len(decision.authorizedUnitIDs) - len(decision.cappedUnitIDs)
+		t.Logf("swept head with a 601 s old row: reserved=%v newer admitted=%d", reserved, admitted)
+		if !reserved || admitted != 1 {
+			t.Fatalf("swept head with a 601 s old dispatch row: reserved=%v, newer admitted %d, want a reservation and 1 (cap 2)", reserved, admitted)
 		}
 		if _, _, err := rqSweep(ctx, pool, rqOrg, "github", "medium", t0.Add(2*time.Minute)); err != nil {
 			t.Fatal(err)
 		}
-		if second := mark(); second <= first {
-			t.Fatalf("a later sweep did not move the mark: %.3f -> %.3f", first, second)
+		var rows int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM sync_dispatch_bucket_reservations WHERE sync_run_id = $1::uuid`, older).Scan(&rows); err != nil {
+			t.Fatal(err)
+		}
+		second, _, err := rqReservation(ctx, pool, rqOrg, "github", "medium", older)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rows != 1 || !second.Equal(first) {
+			t.Fatalf("a later sweep re-reserved the reserved head: rows=%d reserved_at %s -> %s, want 1 row, unchanged", rows, first, second)
 		}
 	})
 }
@@ -663,8 +665,8 @@ func TestLostReleaseIsBoundedByTheSweepRearm(t *testing.T) {
 	})
 }
 
-// S11 (H-STARVE): an older run picked by a sweep whose pass never runs (paused route) holds newer runs back only while
-// its mark is inside the liveness bound.
+// S11 (H-STARVE): a run reserved by a sweep whose pass never runs (paused route) holds its slot only while the
+// reservation is inside the liveness bound.
 func TestPausedRouteSweptRunStopsHoldingBackWithinTheBound(t *testing.T) {
 	withRearmQueuePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		t0 := pgNow()
@@ -672,13 +674,7 @@ func TestPausedRouteSweptRunStopsHoldingBackWithinTheBound(t *testing.T) {
 		bound := admissionLivenessBound()
 		older := sim.seed(rqRunSpec{index: 1, createdAt: t0.Add(-5 * time.Hour), medium: 2})
 		newer := sim.seed(rqRunSpec{index: 2, createdAt: t0.Add(-1 * time.Hour), medium: 2})
-		setMark := func(at time.Time) {
-			if _, err := pool.Exec(ctx, `UPDATE sync_runs SET result = jsonb_build_object('`+rqSweepMarkKey+`', $2::double precision)::json WHERE id = $1::uuid`,
-				older, float64(at.UnixMicro())/1e6); err != nil {
-				t.Fatal(err)
-			}
-		}
-		admits := func() (int, []string) {
+		admits := func() int {
 			tx, err := pool.Begin(ctx)
 			if err != nil {
 				t.Fatal(err)
@@ -688,22 +684,26 @@ func TestPausedRouteSweptRunStopsHoldingBackWithinTheBound(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			return len(decision.authorizedUnitIDs) - len(decision.cappedUnitIDs), decision.heldBackRunIDs
+			return len(decision.authorizedUnitIDs) - len(decision.cappedUnitIDs)
 		}
-		setMark(t0.Add(-bound + time.Minute))
-		if got, held := admits(); got != 0 || len(held) != 1 || held[0] != older {
-			t.Fatalf("mark inside the bound: newer admitted %d held for %v, want 0 held for [%s]", got, held, older)
+		if err := rqSetReservation(ctx, pool, rqOrg, "github", "medium", older, false, t0.Add(-bound+time.Minute)); err != nil {
+			t.Fatal(err)
 		}
-		setMark(t0.Add(-bound - time.Second))
-		if got, held := admits(); got != 2 || len(held) != 0 {
-			t.Fatalf("mark past the bound (paused route): newer admitted %d held for %v, want 2 and none", got, held)
+		if got := admits(); got != 1 {
+			t.Fatalf("reservation inside the bound: newer admitted %d, want 1 (one of 2 slots reserved)", got)
+		}
+		if err := rqSetReservation(ctx, pool, rqOrg, "github", "medium", older, false, t0.Add(-bound-time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if got := admits(); got != 2 {
+			t.Fatalf("reservation past the bound (paused route): newer admitted %d, want 2", got)
 		}
 	})
 }
 
-// S12 (acp 14265 condition 5): the sweep commits its pick and mark before it wakes the picked run, each wake its own
-// statement, so it never holds another run's outbox row across a commit. B's fence holds B's row while the sweep picks
-// B: the mark is committed while the fence still holds the row, and the fence re-locks NOWAIT and commits.
+// S12 (acp 14265 condition 5): the sweep commits its pick and reservation before it wakes the picked run, each wake its
+// own statement, so it never holds another run's outbox row across a commit. B's fence holds B's row while the sweep
+// picks B: the reservation is committed while the fence still holds the row, and the fence re-locks NOWAIT and commits.
 func TestSweepWakeHoldsNoRowAcrossACommit(t *testing.T) {
 	withRearmQueuePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		t0 := pgNow()
@@ -728,11 +728,11 @@ func TestSweepWakeHoldsNoRowAcrossACommit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var marked bool
-		if err := pool.QueryRow(ctx, `SELECT (result::jsonb ? '`+rqSweepMarkKey+`') FROM sync_runs WHERE id = $1::uuid`, runB).Scan(&marked); err != nil {
+		_, marked, err := rqReservation(ctx, pool, rqOrg, "github", "medium", runB)
+		if err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("cond-5: sweep returned in %s while B's fence held B's row; woken=%v; B's mark committed=%v", elapsed.Round(time.Millisecond), woken, marked)
+		t.Logf("cond-5: sweep returned in %s while B's fence held B's row; woken=%v; B's reservation committed=%v", elapsed.Round(time.Millisecond), woken, marked)
 		if !marked || len(woken) != 1 {
 			t.Fatalf("the sweep did not commit its pick of B while B's fence held B's row (marked=%v woken=%v)", marked, woken)
 		}

@@ -57,13 +57,18 @@ const (
 // (service.go). Everything it opens is closed by t.Cleanup.
 func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, extras ...adminDepsExtra) (base string, pool *pgxpool.Pool) {
 	t.Helper()
+	return startGoServerLogged(t, ctx, venue, slog.New(slog.NewTextHandler(io.Discard, nil)), extras...)
+}
+
+// startGoServerLogged is startGoServer with the routes' logger given.
+func startGoServerLogged(t *testing.T, ctx context.Context, venue *venueoracle.Venue, logger *slog.Logger, extras ...adminDepsExtra) (base string, pool *pgxpool.Pool) {
+	t.Helper()
 	goPool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {
 		t.Fatalf("go pool: %v", err)
 	}
 	t.Cleanup(goPool.Close)
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	auth := venue.TokenIssuer.Authenticator(t, policy.PGStore{Pool: goPool}, logger)
 	guard := policy.NewGuard(auth, logger)
 	valkeyClient, err := valkey.Open(ctx, valkey.DefaultConfig(venue.ValkeyURI))

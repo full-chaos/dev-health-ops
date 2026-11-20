@@ -848,10 +848,10 @@ func (o Operator) SetLLMSettings(ctx context.Context, orgID string, in LLMSettin
 		return nil, refuse("invalid LLM settings input: provider must not be empty")
 	}
 	h := o.llmHandlers(config)
-	refusal, err := h.byoLLMAccess(ctx, orgID, false)
+	org, refusal, err := h.byoLLMAccessOrg(ctx, orgID, false)
 	if refusal == nil && err == nil {
 		var out *pyjson.Object
-		out, refusal, err = h.applyLLMSettings(ctx, orgID, llmUpsert{provider: provider, model: in.Model, apiKey: in.APIKey, baseURL: in.BaseURL, requireModel: true})
+		out, refusal, err = h.applyLLMSettings(ctx, org, llmUpsert{provider: provider, model: in.Model, apiKey: in.APIKey, baseURL: in.BaseURL, requireModel: true})
 		if refusal == nil && err == nil {
 			return llmSettingsDocument(out), nil
 		}

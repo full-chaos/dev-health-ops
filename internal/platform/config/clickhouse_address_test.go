@@ -148,7 +148,7 @@ func TestServiceClickHouseDSNWarnsOnNoUsableHost(t *testing.T) {
 }
 
 func TestServiceClickHouseDSNStillRefusesWhatItRefusedBefore(t *testing.T) {
-	for _, dsn := range []string{"clickhouse://a:9000,/db", "clickhouse://[::1]:9000,[not-ip]:9000/db", "http://a:8443,/db", "http://:8443,:8444/db", "https://a:8443,:8444/db", "http://[::1]:8443,[x]:1/db", "clickhouse://[::1]:9000,[fe80::2]:9000/db?secure=ture", "clickhouse://[::1]:9000,[fe80::2]:9000/db?dial_timeout=abc", "clickhouse://[::1]:9000,[fe80::2]:9000/db?max_open_conns=abc", "clickhouse://a:9000,[::1]:9000/db?secure=ture", "http://:8123:8443/db", "https://:8123:8443/db", "https://a:8443,b:8443/db"} {
+	for _, dsn := range []string{"clickhouse://a:9000,/db", "clickhouse://[::1]:9000,[not-ip]:9000/db", "http://a:8443,/db", "http://:8443,:8444/db", "https://a:8443,:8444/db", "http://[::1]:8443,[x]:1/db", "clickhouse://[::1]:9000,[fe80::2]:9000/db?secure=ture", "clickhouse://[::1]:9000,[fe80::2]:9000/db?dial_timeout=abc", "clickhouse://[::1]:9000,[fe80::2]:9000/db?max_open_conns=abc", "clickhouse://a:9000,[::1]:9000/db?secure=ture", "http://:8123:8443/db", "https://:8123:8443/db", "https://a:8443,b:8443/db", "https://leader:8443,backup]:8443/db", "http://leader:8123,backup node:8123/db", "http://leader:8123,backup]:8123/db"} {
 		if _, err := Load(workerSpec(map[string]string{"CLICKHOUSE_URI": dsn})); err == nil {
 			t.Fatalf("Load accepted %q", dsn)
 		}
@@ -174,6 +174,15 @@ func TestServiceClickHouseDSNMalformedAddressesWarnNotRefuse(t *testing.T) {
 		"clickhouse://a:9000/db?alt_hosts=%5Bfe80::1%2525%5D:9000": "",
 		"http://a:8123/db?hosts=%5Bfe80::1%2525%5D:8123":           "",
 		"clickhouse://[fe80::1%2524]:9000/db":                      "",
+		"clickhouse://a:9000/db?alt_hosts=backup%20node:9000":      hostProblemEmptyHostElement,
+		"clickhouse://a:9000/db?hosts=backup%5D:9000":              hostProblemEmptyHostElement,
+		"http://a:8123/db?hosts=backup%20node:8123":                hostProblemEmptyHostElement,
+		"clickhouse://:9000/db?alt_hosts=backup%20node:9000":       hostProblemNoUsableHost,
+		"clickhouse://:9000/db?alt_hosts=backup%5D:9000":           hostProblemNoUsableHost,
+		"clickhouse://host-1.example_x:9000,h2:9000/db":            "",
+		"http://a~b:8123/db":                                       hostProblemNoUsableHost,
+		"clickhouse://a~b:9000/db":                                 hostProblemNoUsableHost,
+		"http://münchen.example:8123/db":                           "",
 	}
 	for dsn, cause := range cases {
 		t.Run(dsn, func(t *testing.T) {

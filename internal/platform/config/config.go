@@ -1600,7 +1600,7 @@ func validateClickHouseServiceURI(key string, value secrets.Value) error {
 	if parsed.Host == "" || !slices.Contains([]string{"clickhouse", "http", "https"}, scheme) {
 		return fmt.Errorf("%s must be a valid supported URI", key)
 	}
-	if (scheme == "http" || scheme == "https") && clickHouseAuthorityHostProblem(parsed) != "" {
+	if (scheme == "http" || scheme == "https") && !httpAuthorityAccepted(value.Reveal(), parsed) {
 		return fmt.Errorf("%s must be a valid supported URI", key)
 	}
 	return nil

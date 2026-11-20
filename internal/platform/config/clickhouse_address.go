@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net"
 	"net/netip"
 	"net/url"
 	"strings"
@@ -62,7 +63,7 @@ func hostListParam(value string) []string {
 }
 
 // addrHasUsableHost reports whether one host[:port] address is well formed and names a host: a bracketed IP literal
-// (nothing after "]" but an optional :port), or a name with a letter or digit and at most one colon. The parsed host
+// (nothing after "]" but an optional :port), or a name of letters, digits, '-', '.' and '_' with at most one colon. The parsed host
 // part is already percent-decoded, so an IPv6 zone is passed to netip as it stands.
 func addrHasUsableHost(addr string) bool {
 	var host, port string
@@ -88,9 +89,22 @@ func addrHasUsableHost(addr string) bool {
 	if !portDigits(port) {
 		return false
 	}
-	return strings.ContainsFunc(host, func(r rune) bool {
-		return unicode.IsLetter(r) || unicode.IsDigit(r)
-	})
+	return hostNameChars(host)
+}
+
+// hostNameChars reports whether host holds only letters, digits, '-', '.' and '_' and at least one letter or digit.
+func hostNameChars(host string) bool {
+	named := false
+	for _, r := range host {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			named = true
+		case r == '-' || r == '.' || r == '_':
+		default:
+			return false
+		}
+	}
+	return named
 }
 
 func portDigits(port string) bool {
@@ -106,6 +120,26 @@ func portDigits(port string) bool {
 // "empty_host_element".
 func clickHouseHostProblem(parsed *url.URL) string {
 	return hostProblemOf(clickHouseAddrs(parsed))
+}
+
+// httpAuthorityAccepted is the http and https host gate: every authority address is well formed, or net/url reads the DSN
+// and its host passes the check it had at base (a letter or digit, or a bracketed IP), so every form that loaded still
+// loads. An address list, which net/url refused, needs a usable host in each address.
+func httpAuthorityAccepted(raw string, parsed *url.URL) bool {
+	if clickHouseAuthorityHostProblem(parsed) == "" {
+		return true
+	}
+	legacy, err := url.Parse(raw)
+	if err != nil || legacy == nil {
+		return false
+	}
+	host := legacy.Hostname()
+	if strings.HasPrefix(legacy.Host, "[") {
+		return net.ParseIP(host) != nil
+	}
+	return strings.ContainsFunc(host, func(r rune) bool {
+		return unicode.IsLetter(r) || unicode.IsDigit(r)
+	})
 }
 
 // clickHouseAuthorityHostProblem is clickHouseHostProblem over the host part only. The http and https gate uses it:

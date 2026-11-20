@@ -505,7 +505,8 @@ func (handler GitHubTestsRouteHandler) Collect(
 			return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
-		if !include || !githubTestsRunReadable(run) || githubTestsArtifactRunOutside(pipeline, claim, listed.relist) {
+		if !include || !githubTestsRunReadable(run) || githubTestsArtifactRunOutside(pipeline, claim, listed.relist) ||
+			listed.relist && githubTestsRelistedAtOrAfterFloor(pipeline, claim) {
 			continue
 		}
 		artPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{

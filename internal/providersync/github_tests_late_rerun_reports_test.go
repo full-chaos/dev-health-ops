@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -308,5 +309,73 @@ func TestGitHubTestsLateRerunRefusesBadSettings(t *testing.T) {
 		if _, err := handler.Collect(context.Background(), claim, providerfoundation.Credential{}, client, now); !errors.Is(err, ErrInvalidConfiguration) {
 			t.Errorf("%s: Collect err=%v, want ErrInvalidConfiguration", name, err)
 		}
+	}
+}
+
+// lateRerunLooseDoer is a GitHub whose created filter is loose on the deep range: a deep listing answers every run. Each route
+// must still read a run created at or after the regular floor only once, in the regular range.
+type lateRerunLooseDoer struct {
+	*listingFake
+	deep *int
+}
+
+func (doer lateRerunLooseDoer) Do(request *http.Request) (*http.Response, error) {
+	if request.URL.Path == "/repos/acme/api/actions/runs" && strings.HasSuffix(request.URL.Query().Get("created"), "T23:59:59Z") {
+		*doer.deep++
+		loose := *request.URL
+		query := loose.Query()
+		query.Del("created")
+		loose.RawQuery = query.Encode()
+		request = request.Clone(request.Context())
+		request.URL = &loose
+	}
+	return doer.listingFake.Do(request)
+}
+
+func TestGitHubTestsLateRerunDeepRangeSkipsRunsAtOrAfterTheFloor(t *testing.T) {
+	claim := lateRerunClaim(time.Date(2026, 7, 4, 23, 0, 0, 0, time.UTC), time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC))
+	inWindow := listingRun{id: 9, created: time.Date(2026, 7, 4, 23, 10, 0, 0, time.UTC), status: "completed", conclusion: "success"}
+	inWindow.updated = inWindow.created.Add(20 * time.Minute)
+	t.Run("chunked", func(t *testing.T) {
+		fake, deep := newListingFake(t, []listingRun{inWindow}), 0
+		client := githubTestsClient(t, fakehttp.Client(lateRerunLooseDoer{fake, &deep}))
+		if err := (GitHubTestsRouteHandler{}).CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "",
+			func(ChunkRouteEmission) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+		if deep != 1 || fake.artifactGets[inWindow.id] != 1 {
+			t.Errorf("deep listings=%d reads=%d, want one deep listing that answered the run and one read (regular range only)", deep, fake.artifactGets[inWindow.id])
+		}
+	})
+	t.Run("oracle", func(t *testing.T) {
+		fake, deep := newListingFake(t, []listingRun{inWindow}), 0
+		client := githubTestsClient(t, fakehttp.Client(lateRerunLooseDoer{fake, &deep}))
+		if _, err := (GitHubTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)); err != nil {
+			t.Fatal(err)
+		}
+		if deep != 1 || fake.artifactGets[inWindow.id] != 1 {
+			t.Errorf("deep listings=%d reads=%d, want one deep listing that answered the run and one read (regular range only)", deep, fake.artifactGets[inWindow.id])
+		}
+	})
+}
+
+// The deep range starts the page count again only once the regular range is walked whole. A walk that yields and resumes many
+// times inside the regular range keeps its count: the regular budget (2 pages) still stops a 3-page regular range (a re-entered
+// page takes its paginator allowance, so it stops after the first page here), the watermark is held and no deep range is
+// listed.
+func TestGitHubTestsLateRerunRegularRangeResumeKeepsItsPageCount(t *testing.T) {
+	claim := lateRerunClaim(time.Date(2026, 7, 4, 23, 0, 0, 0, time.UTC), time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC))
+	fake := newListingFake(t, makeListingRuns(500, 300, time.Date(2026, 7, 4, 0, 0, 0, 0, time.UTC), time.Minute))
+	walk := walkListing(t, GitHubTestsRouteHandler{MaxRuns: 200}, claim, fake, 40)
+	if walk.passes < 3 {
+		t.Fatalf("passes=%d, want resumes inside the regular range", walk.passes)
+	}
+	truncated := false
+	for _, observation := range walk.cursor.Incomplete {
+		truncated = truncated || observation.Component == githubTestsArtifactInventoryComponent && observation.Cause == githubTestsPageBudgetCause
+	}
+	if !truncated || walk.final.Watermark != nil || len(lateRerunDeepRanges(fake)) != 0 || walk.cursor.ArtifactPages < 1 || walk.cursor.ArtifactPages > 2 {
+		t.Errorf("incomplete=%+v watermark=%v deep ranges=%v artifact pages=%d, want the regular budget to stop at 2 pages, no watermark, no deep range",
+			walk.cursor.Incomplete, walk.final.Watermark, lateRerunDeepRanges(fake), walk.cursor.ArtifactPages)
 	}
 }

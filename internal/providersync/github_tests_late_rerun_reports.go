@@ -99,20 +99,23 @@ func githubTestsRelistFloor(since, before time.Time) time.Time {
 }
 
 // githubTestsRelistRunOutsideWindow is the read rule of the deep range: the incremental rule with the width floored at one day.
-// A run created at or after the regular floor belongs to the regular range, whatever the listing answered, so the two ranges
-// never read one run twice in a claim. A run with no last-updated time is never excluded.
+// A run with no last-updated time is never excluded.
 func githubTestsRelistRunOutsideWindow(pipeline githubTestsPipelineRow, claim Claim) bool {
 	since, before := claim.SinceAt.UTC(), claim.BeforeAt.UTC()
 	if pipeline.StartedAt.After(before) {
-		return true
-	}
-	if pipeline.QueuedAt != nil && !pipeline.QueuedAt.UTC().Before(githubTestsRelistFloor(since, before)) {
 		return true
 	}
 	if pipeline.FinishedAt == nil {
 		return false
 	}
 	return pipeline.FinishedAt.UTC().Before(since.Add(-githubTestsArtifactFloorWidth(since, before)))
+}
+
+// githubTestsRelistedAtOrAfterFloor reports a run the deep listing answered although it was created at or after the regular
+// floor. It belongs to the regular range, whatever the listing answered, so each route skips it in the deep range and the two
+// ranges never read one run twice in a claim.
+func githubTestsRelistedAtOrAfterFloor(pipeline githubTestsPipelineRow, claim Claim) bool {
+	return pipeline.QueuedAt != nil && !pipeline.QueuedAt.UTC().Before(githubTestsRelistFloor(claim.SinceAt.UTC(), claim.BeforeAt.UTC()))
 }
 
 // githubTestsArtifactRunOutside is the read rule of the range a run was listed in.

@@ -510,3 +510,177 @@ func TestGitHubTestsLateRerunNilUpdatedIsNotReadByTheDeepRange(t *testing.T) {
 		}
 	}
 }
+
+// lateRerunReportsListDoer rewrites the created filter of a runs listing (change), so a test can serve a listing looser
+// than its filter, and counts every created filter it was asked for.
+type lateRerunReportsListDoer struct {
+	*listingFake
+	change func(string) string
+	asked  *[]string
+}
+
+func (doer lateRerunReportsListDoer) Do(request *http.Request) (*http.Response, error) {
+	if request.URL.Path == "/repos/acme/api/actions/runs" {
+		created := request.URL.Query().Get("created")
+		if doer.asked != nil {
+			*doer.asked = append(*doer.asked, created)
+		}
+		if changed := doer.change(created); changed != created {
+			loose := *request.URL
+			query := loose.Query()
+			query.Set("created", changed)
+			loose.RawQuery = query.Encode()
+			request = request.Clone(request.Context())
+			request.URL = &loose
+		}
+	}
+	return doer.listingFake.Do(request)
+}
+
+func lateRerunReportsRead(t *testing.T, route string, claim Claim, handler GitHubTestsRouteHandler, doer providerfoundation.HTTPDoer) CompleteRouteBatch {
+	t.Helper()
+	client := githubTestsClient(t, fakehttp.Client(doer))
+	now := claim.BeforeAt.Add(30 * time.Minute)
+	if route == "oracle" {
+		batch, err := handler.Collect(context.Background(), claim, providerfoundation.Credential{}, client, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return batch
+	}
+	var batch CompleteRouteBatch
+	if err := handler.CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client, now, "", func(emission ChunkRouteEmission) error {
+		if emission.Final {
+			batch = emission.Batch
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return batch
+}
+
+// Each artifacts range admits only the runs of its own created interval, whatever the listing answered: a loose deep listing
+// does not read a run older than its interval, and a run that a loose regular listing and the deep listing both answer is
+// read once, by the range whose interval holds it. Claim [07-04 23:00, 07-05 00:00]: regular [07-03, 07-05 00:00:01), deep
+// [06-26, 07-03).
+func TestGitHubTestsLateRerunIntervalAdmitsOnlyItsOwnRuns(t *testing.T) {
+	m := time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC)
+	claim := lateRerunClaim(m.Add(-time.Hour), m)
+	const regular = "2026-07-03..2026-07-05T00:00:00Z"
+	const deep = "2026-06-26..2026-07-02T23:59:59Z"
+	lo, floor := time.Date(2026, 6, 26, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC)
+	widen := func(target string) func(string) string {
+		return func(created string) string {
+			if created != target {
+				return created
+			}
+			_, end, _ := strings.Cut(created, "..")
+			return "2026-06-25.." + end
+		}
+	}
+	for _, cell := range []struct {
+		name    string
+		loose   string
+		created time.Time
+		want    int
+	}{
+		{"loose deep, one second below the deep interval", deep, lo.Add(-time.Second), 0},
+		{"loose deep, at the deep interval start", deep, lo, 1},
+		{"loose regular, one second below the regular floor (in both listings)", regular, floor.Add(-time.Second), 1},
+		{"loose regular, at the regular floor", regular, floor, 1},
+	} {
+		for _, route := range []string{"chunked", "oracle"} {
+			t.Run(cell.name+"/"+route, func(t *testing.T) {
+				run := listingRun{id: 781, created: cell.created, startedAt: m.Add(-30 * time.Minute), updated: m.Add(-10 * time.Minute), status: "completed", conclusion: "success", attempt: 2}
+				fake := newListingFake(t, []listingRun{run})
+				lateRerunReportsRead(t, route, claim, GitHubTestsRouteHandler{}, lateRerunReportsListDoer{listingFake: fake, change: widen(cell.loose)})
+				if got := fake.artifactGets[run.id]; got != cell.want {
+					t.Errorf("artifact reads=%d, want %d", got, cell.want)
+				}
+			})
+		}
+	}
+}
+
+// A full deep page whose oldest run lies outside the deep interval (a loose listing) never moves the next range outside it:
+// an oldest run below the interval ends the range (it reached past the start), and a page wholly above the interval is a
+// stop with one advancing late_rerun_reports observation. No run outside the interval is read.
+func TestGitHubTestsLateRerunIntervalKeepsThePeelInside(t *testing.T) {
+	m := time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC)
+	claim := lateRerunClaim(m.Add(-time.Hour), m)
+	const deep = "2026-06-26..2026-07-02T23:59:59Z"
+	older := time.Date(2026, 6, 25, 23, 59, 59, 0, time.UTC)
+	for _, cell := range []struct {
+		name, replacement string
+		runs              []listingRun
+		outside           int
+		stop              bool
+	}{
+		{"oldest below the interval", "2026-06-25..2026-07-02T23:59:59Z",
+			append(makeListingRuns(20, 999, m.AddDate(0, 0, -5), time.Second), listingRun{id: 3000, created: older, updated: m.Add(-time.Minute), startedAt: m.Add(-2 * time.Minute), status: "completed", conclusion: "success"}),
+			3000, false},
+		{"page wholly above the interval", "2026-07-05T01:00:00Z..2026-07-05T01:16:39Z",
+			makeListingRuns(20, 1000, m.Add(time.Hour), time.Second), 20, true},
+	} {
+		for _, route := range []string{"chunked", "oracle"} {
+			t.Run(cell.name+"/"+route, func(t *testing.T) {
+				fake := newListingFake(t, cell.runs)
+				var asked []string
+				batch := lateRerunReportsRead(t, route, claim, GitHubTestsRouteHandler{}, lateRerunReportsListDoer{listingFake: fake, asked: &asked, change: func(created string) string {
+					if created == deep {
+						return cell.replacement
+					}
+					return created
+				}})
+				var outsideRanges []string
+				for _, created := range asked {
+					start, end, _ := strings.Cut(created, "..")
+					if start == "2026-06-26" && created != deep {
+						if hi, err := time.Parse(time.RFC3339, end); err != nil || !hi.After(time.Date(2026, 6, 26, 0, 0, 0, 0, time.UTC)) || !hi.Before(time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC)) {
+							outsideRanges = append(outsideRanges, created)
+						}
+					}
+				}
+				var incomplete []GitHubTestsIncomplete
+				if decodeCompletionValue(batch.Result, "incomplete", &incomplete) != nil {
+					t.Fatal("result incomplete does not decode")
+				}
+				stops := lateRerunIncompleteOf(incomplete, githubTestsLateRerunReportsComponent)
+				if len(outsideRanges) != 0 || fake.artifactGets[cell.outside] != 0 || (len(stops) == 1) != cell.stop || batch.Watermark == nil {
+					t.Errorf("follow-up ranges outside the interval=%v outside run reads=%d stops=%v watermark=%v, want none, 0, stop=%v and the watermark advanced",
+						outsideRanges, fake.artifactGets[cell.outside], stops, batch.Watermark, cell.stop)
+				}
+			})
+		}
+	}
+}
+
+// RESIDUAL by design (acp, PR round 1 P1-A), pinned so a change is visible: adjacent midnight claims re-read one completed
+// attempt (its update is inside both claims' update floors), and an attempt finishing just after a midnight is read by the
+// claim before it too. The rows are idempotent by key; the cost is a second read.
+func TestGitHubTestsLateRerunAdjacentMidnightClaimsReReadPinned(t *testing.T) {
+	m := time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC)
+	for _, cell := range []struct {
+		name    string
+		updated time.Time
+	}{
+		{"hourly, update inside the overlap", m.Add(-time.Minute)},
+		{"hourly, finishes just after the first midnight", m.Add(time.Minute)},
+	} {
+		for _, route := range []string{"chunked", "oracle"} {
+			t.Run(cell.name+"/"+route, func(t *testing.T) {
+				run := listingRun{id: 782, created: m.AddDate(0, 0, -5), startedAt: m.Add(-2 * time.Minute), updated: cell.updated, status: "completed", conclusion: "success", attempt: 2}
+				var got [2]int
+				for index, claim := range []Claim{lateRerunClaim(m.Add(-time.Hour), m), lateRerunClaim(m.Add(23*time.Hour), m.AddDate(0, 0, 1))} {
+					fake := newListingFake(t, []listingRun{run})
+					lateRerunReportsRead(t, route, claim, GitHubTestsRouteHandler{}, fake)
+					got[index] = fake.artifactGets[run.id]
+				}
+				if got != [2]int{1, 1} {
+					t.Errorf("artifact reads first/next midnight claim=%v, want the pinned [1 1]", got)
+				}
+			})
+		}
+	}
+}

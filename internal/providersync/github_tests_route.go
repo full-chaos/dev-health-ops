@@ -408,9 +408,10 @@ func (handler GitHubTestsRouteHandler) Collect(
 			return CompleteRouteBatch{}, err
 		}
 	}
-	artifactRunItems, artifactListPages, artifactsOver, err := collectGitHubTestsRunsPeeled(ctx, client, root, runPages, func(hi string) url.Values {
+	regularInterval, deepInterval := githubTestsArtifactInterval(claim, false, 0), githubTestsCreatedInterval{deep: true}
+	artifactRunItems, artifactListPages, artifactsOver, err := collectGitHubTestsRunsPeeledBy(ctx, client, root, runPages, func(hi string) url.Values {
 		return githubTestsArtifactRunQueryAt(claim, hi)
-	})
+	}, regularInterval.peel)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
@@ -424,9 +425,10 @@ func (handler GitHubTestsRouteHandler) Collect(
 	var relistPages int
 	relistStopped := false
 	if githubTestsHoldsMidnight(claim) {
-		relistItems, pages, over, err := collectGitHubTestsRunsPeeled(ctx, client, root, lateMaxPages, func(hi string) url.Values {
+		deepInterval = githubTestsArtifactInterval(claim, true, handler.lateRerunLookback())
+		relistItems, pages, over, err := collectGitHubTestsRunsPeeledBy(ctx, client, root, lateMaxPages, func(hi string) url.Values {
 			return githubTestsRelistQueryAt(claim, handler.lateRerunLookback(), hi)
-		})
+		}, deepInterval.peel)
 		if err != nil {
 			return CompleteRouteBatch{}, err
 		}
@@ -531,8 +533,11 @@ func (handler GitHubTestsRouteHandler) Collect(
 			return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
-		if !include || !githubTestsRunReadable(run) || githubTestsArtifactRunOutside(pipeline, claim, listed.relist) ||
-			listed.relist && githubTestsRelistedOutsideDeepRange(pipeline, claim) {
+		interval := regularInterval
+		if listed.relist {
+			interval = deepInterval
+		}
+		if !include || !githubTestsRunReadable(run) || githubTestsArtifactRunOutside(pipeline, claim, listed.relist) || !interval.admits(pipeline.QueuedAt) {
 			continue
 		}
 		artPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{

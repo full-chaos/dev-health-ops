@@ -1502,7 +1502,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		return c
 	}
 	endArtifactsRange := func(c githubTestsChunkCursor) githubTestsChunkCursor {
-		nextHi, saturated, stuck := githubTestsPeel(c.RangeItems, c.RangeOldest, c.RangeHi)
+		nextHi, saturated, stuck := githubTestsArtifactInterval(claim, c.Relist == githubTestsRelistWalking, lateLookback).peel(c.RangeItems, c.RangeOldest, c.RangeHi)
 		items, hi := c.RangeItems, c.RangeHi
 		c.RangeItems, c.RangeOldest = 0, ""
 		switch {
@@ -2035,7 +2035,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				coverage := []coverageSnapshotRow(nil)
 				var completeness []testOpsRunReportCompletenessRow
 				if include && githubTestsRunReadable(run) && !githubTestsArtifactRunOutside(pipeline, claim, cursor.Relist == githubTestsRelistWalking) &&
-					!(cursor.Relist == githubTestsRelistWalking && githubTestsRelistedOutsideDeepRange(pipeline, claim)) &&
+					githubTestsArtifactInterval(claim, cursor.Relist == githubTestsRelistWalking, lateLookback).admits(pipeline.QueuedAt) &&
 					!githubTestsSkipCutRun(cursor, cutSecond, cutKey) {
 					// The run's losses are the deltas of the cursor's exact loss counters across the run (CHAOS-13826).
 					lossBefore := githubTestsTakeRunLossCounts(cursor)

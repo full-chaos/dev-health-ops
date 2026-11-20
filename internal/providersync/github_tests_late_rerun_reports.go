@@ -63,9 +63,71 @@ func githubTestsRelistRunOutsideWindow(pipeline githubTestsPipelineRow, claim Cl
 	return pipeline.FinishedAt.UTC().Before(githubTestsLateRerunFloor(claim))
 }
 
-// githubTestsRelistedOutsideDeepRange is githubTestsLateRerunListedOutsideDeepRange at the artifacts floor.
-func githubTestsRelistedOutsideDeepRange(pipeline githubTestsPipelineRow, claim Claim) bool {
-	return githubTestsLateRerunListedOutsideDeepRange(pipeline, githubTestsRelistFloor(claim))
+// githubTestsCreatedInterval is the created interval [lo, hi) of one artifacts-phase listing range: the regular range
+// [date(since - max(1 d, width)), before + 1 s) or the deep range [date(floor - L), regular floor). A zero bound is open.
+// The two intervals of a claim are disjoint. One interval decides, for its range, both which listed runs are admitted
+// and how a full page peels, so a listing looser than its created filter never reads a run outside the interval and
+// never moves the next range outside it.
+type githubTestsCreatedInterval struct {
+	lo, hi time.Time
+	deep   bool
+}
+
+// githubTestsArtifactInterval is the created interval of the artifacts phase's regular range (deep false) or deep range.
+func githubTestsArtifactInterval(claim Claim, deep bool, lookback time.Duration) githubTestsCreatedInterval {
+	if deep {
+		return githubTestsCreatedInterval{lo: githubTestsLateRerunFloor(claim).Add(-lookback).Truncate(24 * time.Hour), hi: githubTestsRelistFloor(claim), deep: true}
+	}
+	var interval githubTestsCreatedInterval
+	if claim.SinceAt != nil {
+		interval.lo, _ = time.Parse(time.DateOnly, githubTestsArtifactRunsCreatedFrom(claim))
+	}
+	if claim.BeforeAt != nil {
+		interval.hi = claim.BeforeAt.UTC().Truncate(time.Second).Add(time.Second)
+	}
+	return interval
+}
+
+// admits reports whether a listed run with this created time belongs to the range. A run with no created time is refused by
+// the deep range (GitHub cannot list it by created) and kept by the regular range (its rule never excludes a run it cannot
+// date).
+func (interval githubTestsCreatedInterval) admits(created *time.Time) bool {
+	if created == nil {
+		return !interval.deep
+	}
+	at := created.UTC()
+	return (interval.lo.IsZero() || !at.Before(interval.lo)) && (interval.hi.IsZero() || at.Before(interval.hi))
+}
+
+// peel is githubTestsPeel inside the interval. A full page whose oldest created time is below the interval reached past
+// its start, so the range is complete. A next range that would not end strictly before the current one (its end is the
+// interval's when rangeHi is empty) makes no progress inside the interval: stuck, so the range stops with its observation
+// and nothing outside the interval is listed.
+func (interval githubTestsCreatedInterval) peel(items int, oldest, rangeHi string) (nextHi string, saturated, stuck bool) {
+	if items < githubTestsSearchResultCap {
+		return "", false, false
+	}
+	oldestTime, err := time.Parse(time.RFC3339, oldest)
+	if err != nil {
+		return "", true, true
+	}
+	if !interval.lo.IsZero() && oldestTime.Before(interval.lo) {
+		return "", false, false
+	}
+	end := interval.hi
+	if rangeHi != "" {
+		hiTime, hiErr := time.Parse(time.RFC3339, rangeHi)
+		if hiErr != nil {
+			return "", true, true
+		}
+		end = hiTime
+	} else if !end.IsZero() {
+		end = end.Add(-time.Second)
+	}
+	if !end.IsZero() && !oldestTime.Before(end) {
+		return "", true, true
+	}
+	return oldest, true, false
 }
 
 // githubTestsArtifactRunOutside is the read rule of the range a run was listed in.

@@ -544,6 +544,15 @@ func collectGitHubTestsRunsPeeled(
 	ctx context.Context, client *providerfoundation.HTTPClient, root string, pageBudget int,
 	queryFor func(peeledHi string) url.Values,
 ) (items []json.RawMessage, pages int, over bool, err error) {
+	return collectGitHubTestsRunsPeeledBy(ctx, client, root, pageBudget, queryFor, githubTestsPeel)
+}
+
+// collectGitHubTestsRunsPeeledBy is collectGitHubTestsRunsPeeled with the peel rule given (an artifacts-phase range peels
+// inside its created interval).
+func collectGitHubTestsRunsPeeledBy(
+	ctx context.Context, client *providerfoundation.HTTPClient, root string, pageBudget int,
+	queryFor func(peeledHi string) url.Values, peel func(items int, oldest, rangeHi string) (string, bool, bool),
+) (items []json.RawMessage, pages int, over bool, err error) {
 	seen := map[string]struct{}{}
 	hi := ""
 	for {
@@ -571,7 +580,7 @@ func collectGitHubTestsRunsPeeled(
 		if page.PageBudgetExhausted {
 			return items, pages, true, nil
 		}
-		nextHi, saturated, stuck := githubTestsPeel(count, oldest, hi)
+		nextHi, saturated, stuck := peel(count, oldest, hi)
 		switch {
 		case !saturated:
 			return items, pages, false, nil

@@ -128,6 +128,10 @@ func splitTablesPresent() map[string]bool {
 		// if that manifest does not permit the write, this harness stays red --
 		// which is the CHAOS-4035 property this file exists for.
 		"sync_dispatch_outbox": true,
+		// CHAOS-14250: the sweep reserves the slots it frees for the bucket's oldest eligible waiter in the same
+		// transaction (syncbucket.ReserveHeads reads the discoveries and writes the reservations); posture-derived too.
+		"sync_run_reference_discoveries":    true,
+		"sync_dispatch_bucket_reservations": true,
 	}
 }
 

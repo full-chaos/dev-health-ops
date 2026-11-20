@@ -12,9 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/syncbucket"
 	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
-	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,7 +23,7 @@ import (
 
 // CHAOS-14250 acp lock-1 rule 2: ONE lock order everywhere, the bucket lock first, then rows. On the migrated schema,
 // each iteration runs four slot writers of one medium bucket (cap 2) at once, each on its own connection: a unit
-// writer's release shaped like providersync Complete (p4WriterRelease: LockCommitPath, the unit's success, Bump,
+// writer's release by the REAL providersync repository (Complete or Fail: LockCommitPath, the unit's write, Bump,
 // ArmFinalize, ReserveHeads, commit, then the wakes and the release), a dispatch pass of a waiting run (the service's
 // Dispatch), a bucket sweep (runBucketSweep) and the reconciler's lease repair of an expired lease in the bucket
 // (syncreconciler.LeaseRepair.Step). No goroutine may end in a deadlock (40P01) or a lock-not-available (55P03); no
@@ -148,7 +149,7 @@ func TestB4OneLockOrderNoDeadlockNoLostReservation(t *testing.T) {
 			t.Fatalf("premise: medium cap = %d, want 2", capValue)
 		}
 		start := sim.now
-		holder := sim.seed(rqRunSpec{index: 0, createdAt: start.Add(-40 * time.Hour), running: 2, runningEnd: start.Add(10 * time.Hour)})
+		holder := sim.seed(rqRunSpec{index: 0, createdAt: start.Add(-40 * time.Hour), running: 1, runningEnd: start.Add(10 * time.Hour)})
 		next := 1
 		far := start.Add(50 * time.Minute)
 		seedWaiter := func() {
@@ -163,6 +164,24 @@ func TestB4OneLockOrderNoDeadlockNoLostReservation(t *testing.T) {
 		classes := map[string]map[string]int{}
 		var others []string
 		var writes, claims, passes, woken, repaired, overlapped int
+		// The real writer's claim reads the run's credential binding (providersync claimUnitSQL).
+		const writerCredential = "00000000-0000-4000-8000-0000001425c1"
+		if _, err := pool.Exec(ctx, `INSERT INTO integration_credentials (id, provider, name, created_at, updated_at)
+VALUES ($1::uuid, 'github', 'b4-writer', now(), now())`, writerCredential); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE sync_runs SET credential_id = $2::uuid, credential_fingerprint = 'b4-fingerprint',
+	auth_source = 'integration_credential' WHERE id = $1::uuid`, holder, writerCredential); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE integrations SET credential_id = $2::uuid WHERE id = $1::uuid`, rqIntegration, writerCredential); err != nil {
+			t.Fatal(err)
+		}
+		writer, err := providersync.NewPostgresRepository(pool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writer.BucketSweeps = sweeps
 		for iteration := 0; iteration < iterations; iteration++ {
 			sim.now = start.Add(time.Duration(iteration+1) * time.Second)
 			now := sim.now
@@ -171,15 +190,17 @@ func TestB4OneLockOrderNoDeadlockNoLostReservation(t *testing.T) {
 				seedWaiter()
 				waiters = b4EligibleWaiters(t, ctx, pool)
 			}
-			// (a) the oldest running unit with a live lease; none left: a new running unit of the holder.
-			var unitID, unitRun string
-			if err := pool.QueryRow(ctx, `SELECT id::text, sync_run_id::text FROM sync_run_units
-WHERE cost_class = 'medium' AND status = 'running' AND lease_expires_at > $1 ORDER BY updated_at, id LIMIT 1`, now).Scan(&unitID, &unitRun); err != nil {
-				if !errors.Is(err, pgx.ErrNoRows) {
-					t.Fatal(err)
-				}
-				unitID, unitRun = rqID(3, 0, 100+iteration), holder
-				b4InsertRunningUnit(t, ctx, pool, unitID, holder, now)
+			// (a) the REAL providersync writer: a new unit of the holder, claimed through the repository (dispatching ->
+			// running with a lease), then ended concurrently by Complete (even iterations) or Fail (odd).
+			unitID := rqID(3, 0, 100+iteration)
+			b4InsertRunningUnit(t, ctx, pool, unitID, holder, now)
+			if _, err := pool.Exec(ctx, `UPDATE sync_run_units SET status = 'dispatching', lease_owner = NULL, lease_expires_at = NULL WHERE id = $1::uuid`, unitID); err != nil {
+				t.Fatal(err)
+			}
+			claim, err := writer.Claim(ctx, providersync.ClaimRequest{UnitID: unitID, OrgID: rqOrg, Owner: uuid.NewString(), Now: now,
+				LeaseDuration: time.Minute})
+			if err != nil {
+				t.Fatalf("iteration %d: claim the writer's unit: %v", iteration, err)
 			}
 			// (d) a running unit whose lease expired a second ago, in its own run.
 			sim.seed(rqRunSpec{index: 5000 + iteration, createdAt: now.Add(-50 * time.Hour), running: 1, runningEnd: now.Add(-10*time.Hour - time.Second)})
@@ -209,8 +230,10 @@ ORDER BY run.created_at, run.id LIMIT 1`, rqOrg).Scan(&reservedRun)
 			gate := make(chan struct{})
 			jobs := [4]func() error{
 				func() error {
-					slot := syncrunrollup.SlotFree{RunID: unitRun, OrgID: rqOrg, Provider: "github", CostClass: "medium"}
-					return p4WriterRelease(ctx, pool, sweeps, slot, now, syncrunrollup.DispatchWakePathProviderUnit, b4EndUnitWrite(ctx, unitID, unitRun, now))
+					if iteration%2 == 0 {
+						return writer.Complete(ctx, claim, map[string]any{"records": 1}, nil, now, now)
+					}
+					return writer.Fail(ctx, claim, "provider_error", now, now)
 				},
 				func() (err error) {
 					claimed, err = b4DeliverAndPass(ctx, pool, sim.service, passRun, now)

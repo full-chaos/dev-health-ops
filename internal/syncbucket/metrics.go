@@ -39,10 +39,15 @@ func (recorder *lockWaitRecorder) observe(ctx context.Context, path string, wait
 	histogram, err := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/syncbucket").Float64Histogram(
 		LockWaitMetricName,
 		metric.WithUnit("s"),
-		metric.WithDescription("wait for the sync dispatch bucket advisory lock on a unit writer's commit path, by writer path (observed, never enforced)"))
-	if err == nil {
-		histogram.Record(ctx, wait.Seconds(), metric.WithAttributes(attribute.String("path", path)))
+		metric.WithDescription("wait for the sync dispatch bucket advisory lock on a unit writer's commit path, by writer (observed, never enforced)"))
+	if err != nil {
+		return
 	}
+	if path == LockWaitPathProviderUnit {
+		histogram.Record(ctx, wait.Seconds(), metric.WithAttributes(attribute.String("writer", LockWaitPathProviderUnit)))
+		return
+	}
+	histogram.Record(ctx, wait.Seconds(), metric.WithAttributes(attribute.String("writer", "other")))
 }
 
 // LockWaitCount is how many commit-path waits were observed for path, for tests in other packages.

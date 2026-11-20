@@ -113,6 +113,10 @@ func runDir(root, target, runTag, inputsSHA string) (string, error) {
 	return filepath.Join(root, target, runTag), nil
 }
 
+// closeFile closes a file the run wrote; its error is always checked. A
+// cell swaps it to make a Close fail (no other use).
+var closeFile = func(f *os.File) error { return f.Close() }
+
 // create writes a new file O_EXCL; an existing file is a STOP.
 func (s *State) create(name string, data []byte) error {
 	f, err := os.OpenFile(filepath.Join(s.Dir, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -157,8 +161,20 @@ func (s *State) Put(key, value string) error {
 	if err != nil {
 		return Stop("cannot open %s", stateFile)
 	}
-	defer f.Close()
-	// The check and the append hold one exclusive lock, across handles and processes.
+	if err := s.putLocked(f, key, value); err != nil {
+		_ = closeFile(f) // the first STOP stands; this Close error is dropped
+		return err
+	}
+	if err := closeFile(f); err != nil {
+		return Stop("cannot write %s", stateFile)
+	}
+	return nil
+}
+
+// putLocked takes the exclusive lock (released by the Close), checks that
+// key is not set and appends KEY=VALUE: the check and the append hold one
+// lock across handles and processes.
+func (s *State) putLocked(f *os.File, key, value string) error {
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
 		return Stop("cannot lock %s", stateFile)
 	}
@@ -170,9 +186,6 @@ func (s *State) Put(key, value string) error {
 		return Stop("STATE %s is already set in %s", key, filepath.Join(s.Dir, stateFile))
 	}
 	if _, err := fmt.Fprintf(f, "%s=%s\n", key, value); err != nil {
-		return Stop("cannot write %s", stateFile)
-	}
-	if err := f.Close(); err != nil {
 		return Stop("cannot write %s", stateFile)
 	}
 	return nil

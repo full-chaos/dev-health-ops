@@ -241,3 +241,34 @@ func TestAStopLineHoldsNoToolText(t *testing.T) {
 		t.Fatalf("a good parse: %v %v", v, err)
 	}
 }
+
+// failClose makes every checked Close of a run file fail (the file is still closed).
+func failClose(t *testing.T) {
+	t.Helper()
+	orig := closeFile
+	closeFile = func(f *os.File) error {
+		_ = f.Close()
+		return errors.New("close failed")
+	}
+	t.Cleanup(func() { closeFile = orig })
+}
+
+// A record whose Close fails is a STOP on the success path; on a STOP path
+// the first STOP stands.
+func TestARecordCloseFailureIsAStop(t *testing.T) {
+	failClose(t)
+	c := newClock()
+	atoi := func(o Output) (number, error) {
+		n, err := strconv.Atoi(strings.TrimSpace(string(o.Stdout)))
+		return number(n), err
+	}
+	log := &bytes.Buffer{}
+	_, err := Do(context.Background(), &fake{out: Output{Stdout: []byte("7\n")}}, newOut(t), log, c.now, Step[number]{Label: "N", Cmd: Cmd{Argv: []string{"helm"}}, Parse: atoi})
+	if Code(err) != CodeStop || err.Error() != "N: cannot close the record" || !strings.Contains(log.String(), "STOP: N: cannot close the record") || strings.Contains(log.String(), "N=7") {
+		t.Fatalf("a failed record Close on the success path: %v, log %q", err, log.String())
+	}
+	_, err = Do(context.Background(), &fake{out: Output{Stdout: []byte("x\n")}}, newOut(t), &bytes.Buffer{}, c.now, Step[number]{Label: "N", Cmd: Cmd{Argv: []string{"helm"}}, Parse: atoi})
+	if Code(err) != CodeStop || err.Error() != "N rc=0 but its output is not the PASS form" {
+		t.Fatalf("on a STOP path the first STOP must stand: %v", err)
+	}
+}

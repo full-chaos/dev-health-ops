@@ -28,36 +28,52 @@ var stopWord = regexp.MustCompile(`\b(FAIL|REFUSED|HOLD)\b`)
 // Do runs s once. <label>.out is created O_EXCL first (an existing one is a
 // STOP and nothing runs). A STOP is fixed text per failure class (label, rc,
 // rule): the text of a runner or parser error is dropped, since it can hold
-// tool output.
+// tool output. The record's Close error is checked on every path: on the
+// success path a failed Close is a STOP; on a STOP path the first STOP stands.
 func Do[T Record](ctx context.Context, r Runner, out *Out, log io.Writer, now func() time.Time, s Step[T]) (T, error) {
 	var zero T
 	f, err := out.create(s.Label)
 	if err != nil {
 		return zero, err
 	}
-	defer f.Close()
-	fmt.Fprintf(log, "== %s %s\n", s.Label, now().UTC().Format(time.RFC3339))
-	o, err := r.Run(ctx, s.Cmd)
-	if err != nil {
-		return zero, stopRecord(f, log, Stop("%s: the exec did not run to an exit code", s.Label))
+	v, rec, serr := doStep(ctx, r, f, log, now, s)
+	cerr := closeFile(f)
+	if serr != nil {
+		return zero, serr
 	}
-	fmt.Fprintf(log, "== %s rc=%d\n", s.Label, o.RC)
-	if !rcAllowed(o.RC, s.OK) {
-		return zero, stopRecord(f, log, Stop("%s rc=%d", s.Label, o.RC))
-	}
-	v, err := s.Parse(o)
-	if err != nil {
-		return zero, stopRecord(f, log, Stop("%s rc=%d but its output is not the PASS form", s.Label, o.RC))
-	}
-	if stopWord.Match(o.Stdout) {
-		return zero, stopRecord(f, log, Stop("%s printed FAIL, REFUSED or HOLD", s.Label))
-	}
-	rec := v.Record()
-	if _, err := io.WriteString(f, rec+"\n"); err != nil {
-		return zero, stopRecord(f, log, Stop("%s: cannot write its record", s.Label))
+	if cerr != nil {
+		e := Stop("%s: cannot close the record", s.Label)
+		fmt.Fprintln(log, "STOP: "+e.Msg)
+		return zero, e
 	}
 	fmt.Fprintln(log, rec)
 	return v, nil
+}
+
+// doStep runs the exec and writes the record (or the STOP line) to f.
+func doStep[T Record](ctx context.Context, r Runner, f io.Writer, log io.Writer, now func() time.Time, s Step[T]) (T, string, *Error) {
+	var zero T
+	fmt.Fprintf(log, "== %s %s\n", s.Label, now().UTC().Format(time.RFC3339))
+	o, err := r.Run(ctx, s.Cmd)
+	if err != nil {
+		return zero, "", stopRecord(f, log, Stop("%s: the exec did not run to an exit code", s.Label))
+	}
+	fmt.Fprintf(log, "== %s rc=%d\n", s.Label, o.RC)
+	if !rcAllowed(o.RC, s.OK) {
+		return zero, "", stopRecord(f, log, Stop("%s rc=%d", s.Label, o.RC))
+	}
+	v, err := s.Parse(o)
+	if err != nil {
+		return zero, "", stopRecord(f, log, Stop("%s rc=%d but its output is not the PASS form", s.Label, o.RC))
+	}
+	if stopWord.Match(o.Stdout) {
+		return zero, "", stopRecord(f, log, Stop("%s printed FAIL, REFUSED or HOLD", s.Label))
+	}
+	rec := v.Record()
+	if _, err := io.WriteString(f, rec+"\n"); err != nil {
+		return zero, "", stopRecord(f, log, Stop("%s: cannot write its record", s.Label))
+	}
+	return v, rec, nil
 }
 
 func stopRecord(f io.Writer, log io.Writer, e *Error) *Error {

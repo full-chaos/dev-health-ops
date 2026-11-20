@@ -587,3 +587,23 @@ func TestTwoProcessesWaitAtOnce(t *testing.T) {
 		}
 	}
 }
+
+// A state.txt whose Close fails after the append is a STOP; when the check
+// already failed, that STOP stands.
+func TestAStateCloseFailureIsAStop(t *testing.T) {
+	r, c := root(t), newClock()
+	s, err := BeginPre(r, "dev-health", "s41-a", shaA, c.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put("LIVEREV", "449"); err != nil {
+		t.Fatal(err)
+	}
+	failClose(t)
+	if err := s.Put("RESTARTS0", "3"); Code(err) != CodeStop || err.Error() != "cannot write state.txt" {
+		t.Fatalf("a failed Close after the append: %v", err)
+	}
+	if err := s.Put("LIVEREV", "450"); Code(err) != CodeStop || !strings.HasPrefix(err.Error(), "STATE LIVEREV is already set") {
+		t.Fatalf("the first STOP must stand: %v", err)
+	}
+}

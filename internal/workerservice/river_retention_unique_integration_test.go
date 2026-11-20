@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -23,10 +24,11 @@ import (
 
 const (
 	retentionUniqueRolePassword = "retention_unique_password"
-	// The prune_worker_job_terminal default (scheduler/fixed/producers.go:369-395),
-	// not imported: a test import of scheduler/fixed would tie this package's
-	// test selection to every scheduler change.
-	retentionUniqueOutboxRetention = 30 * 24 * time.Hour
+	// The prune_worker_job_terminal default is one day above the River discarded
+	// retention. scheduler/fixed is not imported here (it would tie this package's
+	// test selection to scheduler changes); TestOutboxPruneDefaultIsOneDayAboveRiverDiscardedRetention
+	// in scheduler/fixed pins the prune default to this same value.
+	retentionUniqueOutboxRetention = config.DefaultDiscardedJobRetention + 24*time.Hour
 )
 
 type retentionUniqueKind struct {
@@ -121,6 +123,15 @@ func retentionUniqueKinds() []retentionUniqueKind {
 				Payload:         jobcontract.BillingNotificationPayload{NotificationID: "00000000-0000-4000-8000-000000000107"},
 			},
 		},
+	}
+}
+
+// The cell below accepts any margin in (22h, 26h); this exact check closes
+// that gap and runs before PostgreSQL starts.
+func TestRetentionUniqueOutboxMarginIsExactlyOneDay(t *testing.T) {
+	margin := retentionUniqueOutboxRetention - config.DefaultDiscardedJobRetention
+	if margin != 24*time.Hour {
+		t.Fatalf("outbox retention - River discarded retention = %s, want exactly 24h", margin)
 	}
 }
 

@@ -52,7 +52,7 @@ func TestStoreReadersRefuseABaseURLCarryingAKeyTheProjectionDropped(t *testing.T
 			in[key] = value
 		}
 		in[PurposeKey(PurposeInvestigate, keyBaseURL)] = baseURL
-		return markKeyInBaseURL(in, project(in, PurposeInvestigate))
+		return Store{purpose: PurposeInvestigate}.markKeyInBaseURL(in, project(in, PurposeInvestigate))
 	}
 	keyed := withURL("https://p.example.invalid/" + storedTestKey)
 	clean := withURL("https://p.example.invalid/v1")

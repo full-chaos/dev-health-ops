@@ -26,14 +26,6 @@ var Allowlist = []Entry{
 	{File: "internal/api/session/store.go", Func: "touchLastLogin", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/api/session/store.go", Func: "updateAttempt", Table: "public.login_attempts", Verb: "UPDATE"},
 	{File: "internal/api/session/verify.go", Func: "revokeAllForUser", Table: "public.refresh_tokens", Verb: "UPDATE"},
-	{File: "internal/api/sso/login.go", Func: "handlers.finishSSOLogin", Table: "public.sso_providers", Verb: "UPDATE"},
-	{File: "internal/api/sso/login.go", Func: "handlers.recordSSOFailure", Table: "public.sso_providers", Verb: "UPDATE"},
-	{File: "internal/api/sso/oauth.go", Func: "handlers.oauthProvisionUser", Table: "public.users", Verb: "UPDATE"},
-	{File: "internal/api/sso/providers.go", Func: "handlers.setStatus", Table: "public.sso_providers", Verb: "UPDATE"},
-	{File: "internal/api/sso/provision.go", Func: "handlers.createAccountAndMembership", Table: "public.memberships", Verb: "INSERT"},
-	{File: "internal/api/sso/provision.go", Func: "handlers.createAccountAndMembership", Table: "public.users", Verb: "INSERT"},
-	{File: "internal/api/sso/provision.go", Func: "handlers.membershipOrJoin", Table: "public.memberships", Verb: "INSERT"},
-	{File: "internal/api/sso/provision.go", Func: "handlers.provisionOrGetUser", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/invites.go", Func: "handlers.createInvite", Table: "public.org_invites", Verb: "INSERT"},
 	// CHAOS-13531 acp ruling Q2: a real org delete sets is_active false before the acr revoke, so acr refuses the
 	// organization's credentials at once.

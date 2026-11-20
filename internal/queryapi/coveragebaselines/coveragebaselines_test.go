@@ -54,7 +54,7 @@ func (f *fakeRows) Scan(dest ...any) error {
 }
 
 type fakeClient struct {
-	rows      [][]any // repo_id, repo_name, line_mean, line_days, branch_mean, branch_days
+	rows      [][]any // repo_id, repo_name, line_value, line_days, branch_mean, branch_days
 	err       error
 	statement string
 	bindings  []clickhouse.Binding
@@ -174,9 +174,12 @@ func TestResolve_BindsTheOrgAndTheThirtyDaysBeforeTheEndDay(t *testing.T) {
 	}
 	for _, text := range []string{
 		"AND day >= {start_day:Date}", "AND day < {end_day:Date}",
-		"(argMax(tuple(line_coverage_pct), computed_at)).1 AS line_pct",
+		"argMax(tuple(lines_covered, lines_total), computed_at) AS day_lines",
+		"day_lines_covered IS NOT NULL AND day_lines_total IS NOT NULL AND day_lines_total > 0 AS line_counted",
 		"(argMax(tuple(branch_coverage_pct), computed_at)).1 AS branch_pct",
-		"GROUP BY repo_id, day", "avg(b.line_pct) AS line_mean", "countIf(b.line_pct IS NOT NULL) AS line_days",
+		"GROUP BY repo_id, day",
+		"100 * sumIf(b.day_lines_covered, b.line_counted) / nullIf(sumIf(b.day_lines_total, b.line_counted), 0) AS line_value",
+		"countIf(b.line_counted) AS line_days",
 		"avg(b.branch_pct) AS branch_mean", "countIf(b.branch_pct IS NOT NULL) AS branch_days", "ORDER BY repo_id",
 	} {
 		if !strings.Contains(client.statement, text) {

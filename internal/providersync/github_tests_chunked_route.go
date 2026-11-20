@@ -223,8 +223,9 @@ type githubTestsChunkCursor struct {
 	// describes -- it only ever under-reports one telemetry field on a
 	// resumed walk, never mis-terminalizes a unit.
 	ArtifactsExcludedNotFound int `json:"artifacts_excluded_not_found,omitempty"`
-	// ActiveCutKeys and CarriedCutKeys (artifacts phase only) keep a peeled range from reading again the runs the previous
-	// range read whole at its cut second (github_tests_cut_runs.go). A cursor without them skips nothing.
+	// ActiveCutKeys and CarriedCutKeys (the runs or the artifacts phase; cleared when either ends) keep a peeled range from
+	// reading again the runs the previous range read whole at its cut second (github_tests_cut_runs.go). A cursor without
+	// them skips nothing.
 	ActiveCutKeys  string `json:"ak,omitempty"`
 	CarriedCutKeys string `json:"ck,omitempty"`
 }
@@ -1011,7 +1012,7 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 	if !githubTestsCutKeysValid(cursor) {
 		return githubTestsChunkCursor{}, chunkConflictBecause(githubTestsCutRunsConflict)
 	}
-	if cursor.Phase != githubTestsArtifactsPhase {
+	if cursor.Phase != githubTestsRunsPhase && cursor.Phase != githubTestsArtifactsPhase {
 		cursor = githubTestsClearCutKeys(cursor)
 	}
 	// A cursor already carrying aggregate overflow with no per-cause ledger
@@ -1433,12 +1434,15 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		case !saturated:
 			c.RangeHi = ""
 			c.Phase = githubTestsArtifactsPhase
+			c = githubTestsClearCutKeys(c)
 		case stuck:
 			c = recordGitHubTestsSaturated(c, client, claim, githubTestsRunInventorySaturatedComponent, githubTestsRunsPhase, hi, items)
 			c.RangeHi = ""
 			c.Phase = githubTestsArtifactsPhase
+			c = githubTestsClearCutKeys(c)
 		default:
 			c.RangeHi = nextHi
+			c = githubTestsFreezeCutKeys(c)
 		}
 		return c
 	}
@@ -1578,10 +1582,15 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			}
 			pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
 			cursor.RangeItems++
-			cursor.RangeOldest = githubTestsOlderCreated(cursor.RangeOldest, parseGitHubWorkflowTime(run.CreatedAt))
+			if oldest := githubTestsOlderCreated(cursor.RangeOldest, parseGitHubWorkflowTime(run.CreatedAt)); oldest != cursor.RangeOldest {
+				cursor.RangeOldest, cursor.ActiveCutKeys = oldest, ""
+			}
+			cutSecond, cutKey := githubTestsCutRunKey(run)
+			read := include && githubTestsRunWanted(run, pipeline, claim) && !githubTestsSkipCutRun(cursor, cutSecond, cutKey)
 			jobs := make([]githubTestsJobRow, 0)
 			acceptance := make([]githubTestsAcceptanceRow, 0)
-			if include && githubTestsRunWanted(run, pipeline, claim) {
+			var pipelines []githubTestsPipelineRow
+			if read {
 				var detailErr error
 				jobs, acceptance, detailErr = collectRunDetail(run, pipeline)
 				if detailErr != nil {
@@ -1590,16 +1599,16 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				cursor.Pipelines++
 				cursor.Jobs += len(jobs)
 				cursor.Acceptance += len(acceptance)
+				pipelines = []githubTestsPipelineRow{pipeline}
+				// A run read with a final status is recorded in the same emission as its rows (a run cut at the per-run jobs cap
+				// too: the cap is deterministic). An open run is read again by the revisit, for its newer status.
+				if githubTestsRunStatusOpen(pipeline.Status) {
+					cursor = githubTestsDropCutRun(cursor, cutKey)
+				} else {
+					cursor = githubTestsRecordCutRun(cursor, cutSecond, cutKey)
+				}
 			}
-			effects, effectErr := testOpsEffects(
-				func() []githubTestsPipelineRow {
-					if include && githubTestsRunWanted(run, pipeline, claim) {
-						return []githubTestsPipelineRow{pipeline}
-					}
-					return nil
-				}(),
-				jobs, acceptance, nil, nil, nil,
-			)
+			effects, effectErr := testOpsEffects(pipelines, jobs, acceptance, nil, nil, nil)
 			if effectErr != nil {
 				return effectErr
 			}
@@ -1668,6 +1677,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	if cursor.Phase == githubTestsRunsPhase {
 		cursor.Phase = githubTestsArtifactsPhase
 		cursor.NextURL, cursor.Index = "", 0
+		cursor = githubTestsClearCutKeys(cursor)
 	}
 	handlerOpenRan := false
 	// collectOpenRuns is the open phase: stored pipeline rows still open and

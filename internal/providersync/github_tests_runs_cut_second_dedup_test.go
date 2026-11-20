@@ -261,6 +261,9 @@ func TestGitHubTestsRunsCutSecondFailedReadIsReadOnResume(t *testing.T) {
 // decode.
 func TestGitHubTestsRunsCutListIsClearedForTheArtifactsPhase(t *testing.T) {
 	doer := newRunsCutDoer(t, cutDedupRuns(cutDedupBefore.Add(-time.Hour)))
+	// Each cut-second run holds a report, so the artifacts phase reads it whole once (a run with no report is read again
+	// by design).
+	doer.withReports(cutDedupIDs...)
 	walk := walkCutDedup(t, cutDedupClaim(false), doer, nil, nil)
 	withList, entered := 0, 0
 	for index := 0; index+1 < len(walk.cursors); index += 2 {

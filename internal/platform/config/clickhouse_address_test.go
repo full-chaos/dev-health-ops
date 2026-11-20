@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -94,6 +95,36 @@ func TestServiceClickHouseDSNAcceptsAddressLists(t *testing.T) {
 	}
 }
 
+// dsnLeakField names a field of a JSON log record whose value holds DSN text. The time is skipped: its nanoseconds can
+// hold "9000" by chance.
+func dsnLeakField(record map[string]any) (string, bool) {
+	for field, value := range record {
+		if field == slog.TimeKey {
+			continue
+		}
+		if text := fmt.Sprint(value); strings.Contains(text, "9000") || strings.Contains(text, "u:p") {
+			return field, true
+		}
+	}
+	return "", false
+}
+
+func TestDSNLeakFieldSkipsOnlyTheTime(t *testing.T) {
+	for line, want := range map[string]string{
+		`{"time":"2026-11-20T09:59:58.359000964Z","level":"WARN","msg":"no usable host","key":"API_CLICKHOUSE_URI"}`: "",
+		`{"time":"2026-11-20T09:59:58.1Z","level":"WARN","msg":"no usable host","key":"clickhouse://:9000/db"}`:      "key",
+		`{"time":"2026-11-20T09:59:58.1Z","level":"WARN","msg":"no usable host","dsn":"clickhouse://u:p@a:1/db"}`:    "dsn",
+	} {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		if field, _ := dsnLeakField(record); field != want {
+			t.Errorf("dsnLeakField(%s) = %q, want %q", line, field, want)
+		}
+	}
+}
+
 func TestServiceClickHouseDSNWarnsOnNoUsableHost(t *testing.T) {
 	cases := map[string]string{
 		"clickhouse://:9000/db":                         hostProblemNoUsableHost,
@@ -139,8 +170,8 @@ func TestServiceClickHouseDSNWarnsOnNoUsableHost(t *testing.T) {
 				if record["level"] != "WARN" || record["key"] != key || record["cause"] != cause {
 					t.Fatalf("record = %v", record)
 				}
-				if strings.Contains(out, "9000") || strings.Contains(out, "u:p") {
-					t.Fatalf("log leaks the DSN: %s", out)
+				if field, leaks := dsnLeakField(record); leaks {
+					t.Fatalf("log field %s leaks the DSN: %s", field, out)
 				}
 			})
 		}

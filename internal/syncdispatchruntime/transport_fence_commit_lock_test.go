@@ -109,17 +109,20 @@ func busyCounts(t *testing.T, reader *sdkmetric.ManualReader) map[string]int64 {
 }
 
 // snapshotTx is a pass transaction whose commit snapshot read number n (from 1) returns result(n): nil is a current
-// dispatched row, anything else is the read's error. Each read runs inside a savepoint (Begin); onRead and onRollback
-// run at the read and at the rollback to its savepoint.
+// dispatched row, anything else is the read's error. Each read runs inside a savepoint (Begin); onBegin, onRead and
+// onRollback run when savepoint n opens, at read n and at the rollback after read n.
 type snapshotTx struct {
 	pgx.Tx
 	result                                                  func(read int) error
-	onRead, onRollback                                      func(read int)
+	onBegin, onRead, onRollback                             func(n int)
 	savepoints, reads, rollbacks, released, commit, readSQL int
 }
 
 func (tx *snapshotTx) Begin(context.Context) (pgx.Tx, error) {
 	tx.savepoints++
+	if tx.onBegin != nil {
+		tx.onBegin(tx.savepoints)
+	}
 	return &snapshotSavepoint{parent: tx}, nil
 }
 
@@ -248,7 +251,7 @@ func TestTheFencedCommitRetriesOnlyALockNotAvailable(t *testing.T) {
 
 // TestTheCommitWindowSendsNoReadOnceTheDeadlineIsReached: the injected clock reaches the deadline between reads 3
 // and 4 (a slow round trip), at it or past it. Read 4 is not sent; the pass gives up with the reason, one WARN and the
-// counter at 1. The rollback to the savepoint of read 3 is still sent.
+// counter at 1. Every savepoint opened is rolled back, the one opened for read 4 included.
 func TestTheCommitWindowSendsNoReadOnceTheDeadlineIsReached(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -268,8 +271,8 @@ func TestTheCommitWindowSendsNoReadOnceTheDeadlineIsReached(t *testing.T) {
 				}
 			}}
 			outcome, err := testFence(&logs).commit(context.Background(), tx)
-			if tx.reads != 3 || tx.rollbacks != 3 {
-				t.Fatalf("reads = %d, rollbacks = %d; want 3 and 3 (read 4 would start at or after the deadline)", tx.reads, tx.rollbacks)
+			if tx.reads != 3 || tx.rollbacks != tx.savepoints {
+				t.Fatalf("reads = %d, rollbacks = %d of %d savepoints; want 3 reads (read 4 would start at or after the deadline), every savepoint rolled back", tx.reads, tx.rollbacks, tx.savepoints)
 			}
 			assertGaveUp(t, outcome, err, tx, &logs, reader)
 		})
@@ -316,4 +319,66 @@ func TestTheCommitReadCapEndsAFastWindowFirst(t *testing.T) {
 		t.Fatalf("reads = %d, waits = %d; want %d and %d (the cap, not the deadline, ends the window)", tx.reads, clock.sleepCount(), want, want-1)
 	}
 	assertGaveUp(t, outcome, err, tx, &logs, reader)
+}
+
+// TestASlowRetrySavepointPastTheDeadlineSendsNoQuery: the deadline is checked after a retry savepoint opens, right
+// before its query. When opening savepoint 2 (or savepoint 7, at 310 ms) moves the injected clock to or past the
+// deadline, that savepoint is rolled back, its query is not sent, and the pass gives up with the reason, one WARN and
+// the counter at 1.
+func TestASlowRetrySavepointPastTheDeadlineSendsNoQuery(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		savepoint int
+		slow      time.Duration
+	}{
+		{"second savepoint takes 400 ms", 2, 400 * time.Millisecond},
+		{"seventh savepoint opens at the deadline", 7, 5 * time.Millisecond},
+		{"seventh savepoint opens past the deadline", 7, 10 * time.Millisecond},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			reader := installBusyMeter(t)
+			clock := installFakeSnapshotClock(t)
+			var logs bytes.Buffer
+			tx := &snapshotTx{result: lockNotAvailable, onBegin: func(n int) {
+				if n == c.savepoint {
+					clock.advance(c.slow)
+				}
+			}}
+			outcome, err := testFence(&logs).commit(context.Background(), tx)
+			if tx.savepoints != c.savepoint || tx.reads != c.savepoint-1 || tx.rollbacks != tx.savepoints {
+				t.Fatalf("savepoints = %d, queries = %d, rollbacks = %d; want %d, %d and every savepoint rolled back", tx.savepoints, tx.reads, tx.rollbacks, c.savepoint, c.savepoint-1)
+			}
+			assertGaveUp(t, outcome, err, tx, &logs, reader)
+		})
+	}
+}
+
+// TestASlowFirstSavepointDoesNotShiftTheWindow: the window starts when the first query is sent, after its savepoint
+// opened. Opening savepoint 1 takes 12 ms on the injected clock; the retry due 310 ms after the first query is still
+// sent, finds the row free, and the pass commits.
+func TestASlowFirstSavepointDoesNotShiftTheWindow(t *testing.T) {
+	reader := installBusyMeter(t)
+	clock := installFakeSnapshotClock(t)
+	var logs bytes.Buffer
+	last := len(commitSnapshotLockBackoff) + 1
+	tx := &snapshotTx{
+		result: func(read int) error {
+			if read < last {
+				return &pgconn.PgError{Code: "55P03"}
+			}
+			return nil
+		},
+		onBegin: func(n int) {
+			if n == 1 {
+				clock.advance(12 * time.Millisecond)
+			}
+		},
+	}
+	outcome, err := testFence(&logs).commit(context.Background(), tx)
+	if err != nil || !outcome.committed || tx.reads != last || tx.commit != 1 {
+		t.Fatalf("commit = %+v, %v (queries %d, commits %d); want committed on query %d", outcome, err, tx.reads, tx.commit, last)
+	}
+	if strings.Contains(logs.String(), "commit_snapshot_busy") || len(busyCounts(t, reader)) != 0 {
+		t.Fatalf("a slow first savepoint cost the last retry: %v\n%s", busyCounts(t, reader), logs.String())
+	}
 }

@@ -118,11 +118,12 @@ type transportFence struct {
 // another transaction holds (55P03). The usual holder is a wake of the same run
 // (an autocommit upsert of the row, CHAOS-14265), whose wall time measured
 // p99 = 5.2 ms (bigboy PG, 4-connection pool, 3 concurrent wakers, 200
-// samples). The window, 315 ms, is k = 60 times that p99. It is a deadline
-// from the first read on one monotonic clock: database round trips spend it
-// too. No read starts at or after the deadline; a read that started before it
-// counts even when it returns after it, so the true bound is "deadline + one
-// in-flight read round trip". A variable so the tests can change it;
+// samples). The window, 315 ms, is k = 60 times that p99. It is a deadline on
+// one monotonic clock, from the moment the first snapshot query is sent (after
+// its savepoint opened, so a slow first savepoint does not spend it); later
+// round trips, savepoints included, spend it. No query is sent at or after the
+// deadline; a query sent before it counts even when it returns after it, so
+// the true bound is "deadline + one in-flight read round trip". A variable so the tests can change it;
 // production never does.
 var commitSnapshotWindow = 315 * time.Millisecond
 
@@ -215,25 +216,35 @@ func (fence *transportFence) commit(ctx context.Context, tx pgx.Tx) (commitOutco
 }
 
 // lockCommitSnapshot reads the commit snapshot inside a savepoint. A 55P03
-// aborts only the savepoint: it is rolled back (also past the deadline), and
-// after the next backoff step the snapshot is read again, never reused. NOWAIT
-// stays, so the pass still adds no wait-for edge; it only polls. On success the
-// savepoint is released and the row lock stays with the pass to its COMMIT.
-// The window ends at the read cap or at the deadline, whichever comes first;
-// then the pass gives up.
+// aborts only the savepoint: it is rolled back, and after the next backoff step
+// the snapshot is read again, never reused. NOWAIT stays, so the pass still
+// adds no wait-for edge; it only polls. The deadline is checked after each
+// savepoint opens, right before its query: a savepoint that opens at or after
+// it is rolled back and no query is sent. On success the savepoint is released
+// and the row lock stays with the pass to its COMMIT. The window ends at the
+// read cap or at the deadline, whichever comes first; then the pass gives up.
 func (fence *transportFence) lockCommitSnapshot(ctx context.Context, tx pgx.Tx) (commitSnapshot, error) {
 	clock := commitSnapshotClock
-	readStart := clock.now()
-	deadline := readStart.Add(commitSnapshotWindow)
+	var deadline time.Time
+	var lastErr error
 	maxReads := len(commitSnapshotLockBackoff) + 1
 	for read := 1; ; read++ {
 		savepoint, err := tx.Begin(ctx)
 		if err != nil {
 			return commitSnapshot{}, fence.unavailable
 		}
+		queryStart := clock.now()
+		if read == 1 {
+			deadline = queryStart.Add(commitSnapshotWindow)
+		} else if !commitSnapshotReadMayStart(queryStart, deadline) {
+			if rollbackErr := savepoint.Rollback(ctx); rollbackErr != nil {
+				return commitSnapshot{}, fence.unavailable
+			}
+			return commitSnapshot{}, fence.commitSnapshotBusy(ctx, read-1, lastErr)
+		}
 		snapshot, err := readCommitSnapshot(ctx, savepoint, fence.args, fence.kind)
 		if err == nil {
-			if !commitSnapshotReadCounts(readStart, clock.now(), deadline) {
+			if !commitSnapshotReadCounts(queryStart, clock.now(), deadline) {
 				if rollbackErr := savepoint.Rollback(ctx); rollbackErr != nil {
 					return commitSnapshot{}, fence.unavailable
 				}
@@ -253,14 +264,11 @@ func (fence *transportFence) lockCommitSnapshot(ctx context.Context, tx pgx.Tx) 
 		if read >= maxReads {
 			return commitSnapshot{}, fence.commitSnapshotBusy(ctx, read, err)
 		}
+		lastErr = err
 		if remaining := deadline.Sub(clock.now()); remaining > 0 {
 			if clock.sleep(ctx, min(commitSnapshotLockBackoff[read-1], remaining)) != nil {
 				return commitSnapshot{}, fence.unavailable
 			}
-		}
-		readStart = clock.now()
-		if !commitSnapshotReadMayStart(readStart, deadline) {
-			return commitSnapshot{}, fence.commitSnapshotBusy(ctx, read, err)
 		}
 	}
 }

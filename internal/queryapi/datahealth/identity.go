@@ -16,7 +16,7 @@ SELECT provider, identity, display_name, sum(observed_count) AS observed_count
 FROM (
     SELECT 'git' AS provider, lower(author_email) AS identity,
            any(author_name) AS display_name, count() AS observed_count
-    FROM git_commits
+    FROM git_commits FINAL
     WHERE org_id = {org_id:String} AND lower(author_email) != ''
     GROUP BY identity
     UNION ALL

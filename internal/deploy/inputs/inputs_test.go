@@ -399,3 +399,32 @@ func TestDigestRefusalsPointAtTheirRow(t *testing.T) {
 		})
 	}
 }
+
+// ACP-WORD-11788-4 (b): route-activate is an app-roll row (the kit s41-a form)
+// under the same one-pair image check as every .image row, while the seven
+// migrate, data and grant hook names stay kit forms on any kind.
+func TestRouteActivateIsAnAppRollRowUnderTheOnePairCheck(t *testing.T) {
+	img := ".spec.template.spec.containers[0].image"
+	other := "4d61345532cc"
+	for _, r := range []string{
+		row("Job/dev-health-ops-route-activate", img, oldDig, newDig),
+		row("Job/dev-health-ops-route-activate", ".spec.template.spec.initContainers[2].image", oldDig, newDig),
+		row("Job/dev-health-ops-route-activate", ".spec.backoffLimit", "1", "2"),
+	} {
+		if _, err := Parse([]byte(goodDev + r)); err != nil {
+			t.Fatalf("route-activate on the step's pair is admitted: %v", err)
+		}
+	}
+	for _, r := range []string{
+		row("Job/dev-health-ops-route-activate", img, other, newDig),
+		row("Job/dev-health-ops-route-activate", img, oldDig, other),
+		row("Job/dev-health-ops-route-activate", ".spec.template.spec.initContainers[2].image", other, other+"ab"),
+	} {
+		mustRefuse(t, goodDev+r, false, "is not the one digest pair of the step")
+	}
+	for _, name := range []string{"river-migrate", "provision-roles", "migrate", "streak-index", "open-units-index", "auth-migrate", "auth-grants"} {
+		for _, kind := range []string{"Job", "NetworkPolicy", "ServiceAccount"} {
+			mustRefuse(t, goodDev+row(kind+"/dev-health-ops-"+name, ".metadata.labels.x", "a", "b"), true, "an IMGROW row on a")
+		}
+	}
+}

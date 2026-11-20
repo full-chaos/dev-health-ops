@@ -21,8 +21,8 @@ const (
 	PreMaxAge = 1800 * time.Second
 	// PostTries is the kit POST_TRIES: post, post-2 .. post-5.
 	PostTries = 5
-	// MaxWaits bounds the wait tries of one RUN_TAG: wait-1 .. wait-99.
-	MaxWaits = 99
+	// NoCap is the try bound of wait: wait-1, wait-2, ... until deploy.pass.
+	NoCap = 0
 
 	inputsFile = "inputs.sha256"
 	stateFile  = "state.txt"
@@ -286,7 +286,7 @@ func (s *State) Begin(phase string) (*Out, error) {
 		if s.Has(DeployPass) {
 			return nil, Refuse("deploy.pass exists: run the post phase")
 		}
-		return s.reserve("wait", MaxWaits)
+		return s.reserve("wait", NoCap)
 	case "post":
 		if !s.Has(DeployPass) {
 			return nil, Refuse("no deploy.pass in %s", s.Dir)
@@ -307,9 +307,10 @@ func tryDir(phase string, n int) string {
 }
 
 // reserve makes the first free try dir of a phase with O_EXCL mkdir: a dir
-// another call took moves on to the next number; all max taken is refused.
+// another call took moves on to the next number; with a max (NoCap = none),
+// all max taken is refused.
 func (s *State) reserve(phase string, max int) (*Out, error) {
-	for n := 1; n <= max; n++ {
+	for n := 1; max == NoCap || n <= max; n++ {
 		dir := filepath.Join(s.Dir, tryDir(phase, n))
 		err := os.Mkdir(dir, 0o700)
 		if err == nil {

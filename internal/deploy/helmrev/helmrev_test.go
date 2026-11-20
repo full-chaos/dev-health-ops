@@ -12,13 +12,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/deploy/run"
 )
 
-// The real `helm history` tables of the kit (tests/fixtures/real; their
-// sha256 is pinned to the kit SHA256SUMS by internal/deploy/run).
-const realDir = "../run/testdata/real"
+// The synthetic `helm history` tables (helm's tab + padded column form,
+// made-up chart and revisions; pinned by internal/deploy/run SHA256SUMS).
+const stepsDir = "../run/testdata/steps"
 
-func readReal(t *testing.T, name string) []byte {
+func readTable(t *testing.T, name string) []byte {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(realDir, name))
+	b, err := os.ReadFile(filepath.Join(stepsDir, name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,12 +53,12 @@ func stop(t *testing.T, err error, what string) {
 }
 
 func TestTheRealHistoryTablesParse(t *testing.T) {
-	rows, err := ParseHistory(readReal(t, "11699-helm-history.out"))
-	if err != nil || !reflect.DeepEqual(rows, []Row{{3, "superseded"}, {4, "deployed"}}) {
+	rows, err := ParseHistory(readTable(t, "HISTORY.out"))
+	if err != nil || !reflect.DeepEqual(rows, []Row{{8, "superseded"}, {9, "deployed"}}) {
 		t.Fatalf("HISTORY: %v %v", rows, err)
 	}
-	rows, err = ParseHistory(readReal(t, "11699-helm-history-max1.out"))
-	if err != nil || !reflect.DeepEqual(rows, []Row{{4, "deployed"}}) {
+	rows, err = ParseHistory(readTable(t, "NEWEST.out"))
+	if err != nil || !reflect.DeepEqual(rows, []Row{{9, "deployed"}}) {
 		t.Fatalf("NEWEST: %v %v", rows, err)
 	}
 	for name, out := range map[string]string{
@@ -93,13 +93,13 @@ func TestTheReleaseIsTheKitRelArgs(t *testing.T) {
 // the newest deployed row is LIVEREV and the rows above it are those, failed.
 func TestNewestIs(t *testing.T) {
 	ctx := context.Background()
-	f := &fake{history: readReal(t, "11699-helm-history-max1.out")}
-	n, err := NewestIs(ctx, f, DevHealth, 4, nil)
-	if err != nil || n.Record() != "NEWEST 4 deployed = the pre LIVEREV" || f.calls[0] != "helm history dev-health -n dev-health --max 1" {
+	f := &fake{history: readTable(t, "NEWEST.out")}
+	n, err := NewestIs(ctx, f, DevHealth, 9, nil)
+	if err != nil || n.Record() != "NEWEST 9 deployed = the pre LIVEREV" || f.calls[0] != "helm history dev-health -n dev-health --max 1" {
 		t.Fatalf("%v %q %q", err, n.Record(), f.calls)
 	}
-	_, err = NewestIs(ctx, f, DevHealth, 3, nil)
-	stop(t, err, "newest 4 is not LIVEREV 3")
+	_, err = NewestIs(ctx, f, DevHealth, 8, nil)
+	stop(t, err, "newest 9 is not LIVEREV 8")
 	_, err = NewestIs(ctx, &fake{history: []byte(hdr + row("449", "deployed") + row("450", "failed"))}, DevHealth, 449, nil)
 	stop(t, err, "a failed row above LIVEREV with no FAILED_REVS")
 	_, err = NewestIs(ctx, &fake{history: []byte(hdr + row("449", "pending-upgrade"))}, DevHealth, 449, nil)
@@ -139,7 +139,7 @@ func TestAForgedLiveRevStopsBeforeTheUpgrade(t *testing.T) {
 	for _, c := range []struct {
 		liverev string
 		pass    bool
-	}{{"3", false}, {"4", true}} {
+	}{{"8", false}, {"9", true}} {
 		s, err := run.BeginPre(root, "dev-health", "s41-"+c.liverev, sha, now)
 		if err != nil {
 			t.Fatal(err)
@@ -151,7 +151,7 @@ func TestAForgedLiveRevStopsBeforeTheUpgrade(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		f := &fake{history: readReal(t, "11699-helm-history-max1.out")}
+		f := &fake{history: readTable(t, "NEWEST.out")}
 		_, _, err = Guarded(ctx, f, DevHealth, int(live), nil, upgrade)
 		want := []string{"helm history dev-health -n dev-health --max 1"}
 		if c.pass {
@@ -172,29 +172,29 @@ func TestAForgedLiveRevStopsBeforeTheUpgrade(t *testing.T) {
 // (g_HAS); a miss stops after the one history read, before any later step.
 func TestRollbackRevIsTheLiveRev(t *testing.T) {
 	ctx := context.Background()
-	f := &fake{history: readReal(t, "11699-helm-history.out")}
-	live, err := RollbackGate(ctx, f, DevHealth, 4)
-	if err != nil || live.Record() != "STATE LIVEREV=4" || !reflect.DeepEqual(f.calls, []string{"helm history dev-health -n dev-health --max 256"}) {
+	f := &fake{history: readTable(t, "HISTORY.out")}
+	live, err := RollbackGate(ctx, f, DevHealth, 9)
+	if err != nil || live.Record() != "STATE LIVEREV=9" || !reflect.DeepEqual(f.calls, []string{"helm history dev-health -n dev-health --max 256"}) {
 		t.Fatalf("%v %q %q", err, live.Record(), f.calls)
 	}
-	f = &fake{history: readReal(t, "11699-helm-history.out")}
-	_, err = RollbackGate(ctx, f, DevHealth, 3)
-	stop(t, err, "ROLLBACK_REV 3 != the live 4")
+	f = &fake{history: readTable(t, "HISTORY.out")}
+	_, err = RollbackGate(ctx, f, DevHealth, 8)
+	stop(t, err, "ROLLBACK_REV 8 != the live 9")
 	if len(f.calls) != 1 {
 		t.Fatalf("a refused rollback rev must stop after the history read; calls %q", f.calls)
 	}
 	_, _, err = LiveRev(ctx, &fake{history: []byte(hdr + row("450", "failed"))}, DevHealth)
 	stop(t, err, "no deployed revision")
 
-	rows, err := ParseHistory(readReal(t, "11699-helm-history.out"))
+	rows, err := ParseHistory(readTable(t, "HISTORY.out"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r, err := InHistory(rows, 3); err != nil || r != (Row{3, "superseded"}) {
-		t.Fatalf("rev 3 is in the history: %v %v", r, err)
+	if r, err := InHistory(rows, 8); err != nil || r != (Row{8, "superseded"}) {
+		t.Fatalf("rev 8 is in the history: %v %v", r, err)
 	}
-	_, err = InHistory(rows, 5)
-	stop(t, err, "rev 5 is not in the history")
+	_, err = InHistory(rows, 10)
+	stop(t, err, "rev 10 is not in the history")
 	stop(t, RollbackIsLive(449, 450), "ROLLBACK_REV 449 != LIVEREV 450")
 	if err := RollbackIsLive(449, 449); err != nil {
 		t.Fatal(err)

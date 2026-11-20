@@ -8,9 +8,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -60,6 +63,9 @@ func CheckClone(ctx context.Context, r run.Runner, url, tree string) (Clone, err
 	if err != nil || o.RC != 0 || strings.TrimSuffix(string(o.Stdout), "\n") != tree {
 		return Clone{}, run.Stop("%s: not the top of a git work tree", tree)
 	}
+	if err := noInitializedSubmodule(ctx, r, tree); err != nil {
+		return Clone{}, err
+	}
 	o, err = git(ctx, r, tree, "remote", "get-url", "origin")
 	if err != nil || o.RC != 0 {
 		return Clone{}, run.Stop("%s: no origin fetch URL", tree)
@@ -82,6 +88,51 @@ func CheckClone(ctx context.Context, r run.Runner, url, tree string) (Clone, err
 		return Clone{}, run.Stop("%s: git status --porcelain shows %d line(s)", tree, n)
 	}
 	return Clone{Tree: tree}, nil
+}
+
+// noInitializedSubmodule refuses (exit 3) a tree with any initialized
+// submodule: a submodule.<name>.* key in any git config scope, a
+// submodules git dir (.git/modules), or a gitlink of the index whose work-tree
+// dir is not empty (checked out; a nested submodule sits inside one). Git's
+// status reads each submodule's own config, so a checked-out submodule can
+// hide its changes from both status gates; dho serves only trees whose
+// gitlinks are uninitialized (an empty dir, as a plain clone leaves them).
+func noInitializedSubmodule(ctx context.Context, r run.Runner, tree string) error {
+	refuse := func(what string) error {
+		return run.Refuse("%s: an initialized submodule (%s): dho deploy serves only a tree with uninitialized submodules", tree, what)
+	}
+	o, err := git(ctx, r, tree, "config", "--name-only", "--get-regexp", `^submodule\..+\.`)
+	if err != nil || (o.RC != 0 && o.RC != 1) {
+		return run.Stop("%s: git config --get-regexp failed", tree)
+	}
+	if len(lines(o.Stdout)) != 0 {
+		return refuse("a submodule.<name> config key")
+	}
+	o, err = git(ctx, r, tree, "rev-parse", "--path-format=absolute", "--git-path", "modules")
+	if err != nil || o.RC != 0 {
+		return run.Stop("%s: git rev-parse --git-path failed", tree)
+	}
+	if _, err := os.Lstat(strings.TrimSuffix(string(o.Stdout), "\n")); err == nil {
+		return refuse("a modules git dir")
+	}
+	o, err = git(ctx, r, tree, "ls-files", "--stage", "-z")
+	if err != nil || o.RC != 0 {
+		return run.Stop("%s: git ls-files failed", tree)
+	}
+	for _, e := range strings.Split(string(o.Stdout), "\x00") {
+		meta, path, ok := strings.Cut(e, "\t")
+		if !ok || !strings.HasPrefix(meta, "160000 ") {
+			continue
+		}
+		ents, err := os.ReadDir(filepath.Join(tree, path))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return run.Stop("%s: a gitlink dir is unreadable", tree)
+		}
+		if len(ents) != 0 {
+			return refuse("a checked-out gitlink")
+		}
+	}
+	return nil
 }
 
 // Main is the fetched main sha, equal to ls-remote refs/heads/main.
@@ -194,6 +245,9 @@ func (p Pinned) Record() string {
 func TreePin(ctx context.Context, r run.Runner, p Pin) (Pinned, error) {
 	if !sha40.MatchString(p.TreeSHA) || !sha40.MatchString(p.ValuesBlob) || !sha256x.MatchString(p.TgzSHA256) || !inTree(p.ValuesPath) {
 		return Pinned{}, run.Stop("tree pin: a bad pin value")
+	}
+	if err := noInitializedSubmodule(ctx, r, p.Tree); err != nil {
+		return Pinned{}, err
 	}
 	var got Pinned
 	o, err := git(ctx, r, p.Tree, "rev-parse", "--verify", "HEAD^{commit}")

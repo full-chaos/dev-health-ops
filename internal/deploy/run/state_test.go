@@ -266,8 +266,12 @@ func TestDeployNeedsThePreMarkerNotOnlyPreEnd(t *testing.T) {
 	if _, err := s.Begin("pre"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put("PREEND", "1795176000"); err != nil {
+	// a fresh PREEND (unix ns, as EndPre writes it): only the missing marker refuses
+	if err := s.Put("PREEND", strconv.FormatInt(c.now().UnixNano(), 10)); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := s.PreFresh(); err != nil {
+		t.Fatalf("the PREEND of this cell must be fresh: %v", err)
 	}
 	_, err = s.Begin("deploy")
 	wantCode(t, err, CodeRefused, "deploy with PREEND and no pre.pass")
@@ -426,7 +430,7 @@ func TestALongStateLineHidesNoKey(t *testing.T) {
 }
 
 // deployRaceArgs are the words after "--" that make TestDeployRaceHelper a
-// child: <root> <RUN_TAG>...
+// child: <root> <phase> <RUN_TAG>...
 func deployRaceArgs() []string {
 	for i, a := range os.Args {
 		if a == "--" {
@@ -436,24 +440,78 @@ func deployRaceArgs() []string {
 	return nil
 }
 
-// TestDeployRaceHelper is the child of TestTwoProcessesRaceForOneDeploy: per
-// RUN_TAG it waits for one byte on stdin, calls Begin("deploy") and prints its code.
+// TestDeployRaceHelper is the child of the two-process race cells: per
+// RUN_TAG it waits for one byte on stdin, calls Begin(<phase>) and prints its
+// code and its try dir.
 func TestDeployRaceHelper(t *testing.T) {
 	args := deployRaceArgs()
-	if len(args) < 2 {
-		t.Skip("a child of TestTwoProcessesRaceForOneDeploy only")
+	if len(args) < 3 {
+		t.Skip("a child of the two-process race cells only")
 	}
 	c := newClock()
-	for _, tag := range args[1:] {
+	for _, tag := range args[2:] {
 		if _, err := os.Stdin.Read(make([]byte, 1)); err != nil {
 			t.Fatal(err)
 		}
+		dir := "-"
 		s, err := Open(args[0], "dev-health", tag, shaA, c.now)
 		if err == nil {
-			_, err = s.Begin("deploy")
+			var o *Out
+			if o, err = s.Begin(args[1]); err == nil {
+				dir = filepath.Base(o.Dir)
+			}
 		}
-		fmt.Printf("DEPLOY-RACE %s code=%d\n", tag, Code(err))
+		fmt.Printf("DEPLOY-RACE %s code=%d dir=%s\n", tag, Code(err), dir)
 	}
+}
+
+// raceTwo runs 2 child processes that call Begin(phase) on each tag, released
+// together per tag; it returns per tag the 2 (code, dir) pairs, sorted.
+func raceTwo(t *testing.T, r, phase string, tags []string) map[string][]string {
+	t.Helper()
+	var cmds [2]*exec.Cmd
+	var gates [2]io.WriteCloser
+	var outs [2]*bufio.Reader
+	for i := range cmds {
+		cmds[i] = exec.Command(os.Args[0], append([]string{"-test.run=^TestDeployRaceHelper$", "-test.count=1", "--", r, phase}, tags...)...)
+		var err error
+		if gates[i], err = cmds[i].StdinPipe(); err != nil {
+			t.Fatal(err)
+		}
+		pipe, err := cmds[i].StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		outs[i] = bufio.NewReader(pipe)
+		if err := cmds[i].Start(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	line := regexp.MustCompile(`^DEPLOY-RACE (r[0-9]+) code=([0-9]) dir=(\S+)\n$`)
+	got := map[string][]string{}
+	for _, tag := range tags {
+		for i := range gates {
+			if _, err := gates[i].Write([]byte{1}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i := range outs {
+			l, err := outs[i].ReadString('\n')
+			m := line.FindStringSubmatch(l)
+			if err != nil || m == nil || m[1] != tag {
+				t.Fatalf("%s child %d: %q %v", tag, i, l, err)
+			}
+			got[tag] = append(got[tag], m[2]+" "+m[3])
+		}
+		slices.Sort(got[tag])
+	}
+	for i := range cmds {
+		gates[i].Close()
+		if err := cmds[i].Wait(); err != nil {
+			t.Fatalf("child %d: %v", i, err)
+		}
+	}
+	return got
 }
 
 // r1 P1 #6 (acp): 2 REAL concurrent calls, each in its own process, released
@@ -477,49 +535,55 @@ func TestTwoProcessesRaceForOneDeploy(t *testing.T) {
 		}
 		tags = append(tags, tag)
 	}
-	var cmds [2]*exec.Cmd
-	var gates [2]io.WriteCloser
-	var outs [2]*bufio.Reader
-	for i := range cmds {
-		cmds[i] = exec.Command(os.Args[0], append([]string{"-test.run=^TestDeployRaceHelper$", "-test.count=1", "--", r}, tags...)...)
-		var err error
-		if gates[i], err = cmds[i].StdinPipe(); err != nil {
-			t.Fatal(err)
+	for tag, got := range raceTwo(t, r, "deploy", tags) {
+		if got[0] != "0 deploy" || got[1] != "3 -" {
+			t.Fatalf("%s: %v, want one deploy (0 deploy) and one refusal (3 -)", tag, got)
 		}
-		pipe, err := cmds[i].StdoutPipe()
+	}
+}
+
+// r2 P1 (acp): wait has no fixed try cap while the deploy is pending; post
+// stays at PostTries.
+func TestWaitHasNoTryCap(t *testing.T) {
+	r, c := root(t), newClock()
+	s := pre(t, r, c)
+	if _, err := s.Begin("deploy"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 120; i++ {
+		c.t = c.t.Add(30 * time.Second)
+		o, err := s.Begin("wait")
+		if err != nil || filepath.Base(o.Dir) != "wait-"+strconv.Itoa(i) {
+			t.Fatalf("wait %d: %v %+v", i, err, o)
+		}
+	}
+}
+
+// r2 P1 (acp): 2 processes that wait at once get distinct try dirs, never a
+// refusal or a STOP; 20 rounds.
+func TestTwoProcessesWaitAtOnce(t *testing.T) {
+	r, c := root(t), newClock()
+	var tags []string
+	for round := 0; round < 20; round++ {
+		tag := "r" + strconv.Itoa(round)
+		s, err := BeginPre(r, "dev-health", tag, shaA, c.now)
 		if err != nil {
 			t.Fatal(err)
 		}
-		outs[i] = bufio.NewReader(pipe)
-		if err := cmds[i].Start(); err != nil {
+		if _, err := s.Begin("pre"); err != nil {
 			t.Fatal(err)
 		}
+		if err := s.EndPre(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Begin("deploy"); err != nil {
+			t.Fatal(err)
+		}
+		tags = append(tags, tag)
 	}
-	line := regexp.MustCompile(`^DEPLOY-RACE (r[0-9]+) code=([0-9])\n$`)
-	for _, tag := range tags {
-		for i := range gates {
-			if _, err := gates[i].Write([]byte{1}); err != nil {
-				t.Fatal(err)
-			}
-		}
-		var got []string
-		for i := range outs {
-			l, err := outs[i].ReadString('\n')
-			m := line.FindStringSubmatch(l)
-			if err != nil || m == nil || m[1] != tag {
-				t.Fatalf("%s child %d: %q %v", tag, i, l, err)
-			}
-			got = append(got, m[2])
-		}
-		slices.Sort(got)
-		if strings.Join(got, ",") != "0,3" {
-			t.Fatalf("%s: codes %v, want one 0 (the deploy) and one 3 (refused)", tag, got)
-		}
-	}
-	for i := range cmds {
-		gates[i].Close()
-		if err := cmds[i].Wait(); err != nil {
-			t.Fatalf("child %d: %v", i, err)
+	for tag, got := range raceTwo(t, r, "wait", tags) {
+		if got[0] != "0 wait-1" || got[1] != "0 wait-2" {
+			t.Fatalf("%s: %v, want wait-1 and wait-2, both exit 0", tag, got)
 		}
 	}
 }

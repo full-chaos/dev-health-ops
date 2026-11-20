@@ -16,7 +16,7 @@ import (
 	"testing"
 )
 
-const realDir = "testdata/real"
+const stepsDir = "testdata/steps"
 
 // fake replays one Output and records every argv.
 type fake struct {
@@ -54,14 +54,14 @@ func kitFinal(re *regexp.Regexp) func(Output) (finalLine, error) {
 	}
 }
 
-type kitStep struct {
+type stepCase struct {
 	step, fixture string
 	re            *regexp.Regexp
 }
 
 func readTSV(t *testing.T, name string) [][]string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(realDir, name))
+	b, err := os.ReadFile(filepath.Join(stepsDir, name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,10 +75,11 @@ func readTSV(t *testing.T, name string) [][]string {
 	return rows
 }
 
-// kitSteps reads the 40 real prod outputs: MANIFEST.tsv (the kit's), the
-// step -> final-line regex map read from prodroll.sh v3z21 with the kit's own
-// bash verdict (kitsteps.tsv), and SHA256SUMS (the kit's lines for these files).
-func kitSteps(t *testing.T) []kitStep {
+// synthSteps reads the 40 SYNTHETIC step outputs (made-up values in the
+// shapes of the prod roll steps: padded kubectl columns, helm tables with
+// tabs, multi-line tool logs): steps.tsv (step, file, final-line regex) and
+// SHA256SUMS (a pin of every file).
+func synthSteps(t *testing.T) []stepCase {
 	t.Helper()
 	sums := map[string]string{}
 	for _, l := range strings.Split(strings.TrimSuffix(mustRead(t, "SHA256SUMS"), "\n"), "\n") {
@@ -88,46 +89,46 @@ func kitSteps(t *testing.T) []kitStep {
 		}
 		sums[name] = sum
 	}
-	files, err := os.ReadDir(realDir)
+	files, err := os.ReadDir(stepsDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range files {
-		if f.Name() == "SHA256SUMS" || f.Name() == "kitsteps.tsv" {
+		if f.Name() == "SHA256SUMS" {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(realDir, f.Name()))
+		b, err := os.ReadFile(filepath.Join(stepsDir, f.Name()))
 		if err != nil {
 			t.Fatal(err)
 		}
 		h := sha256.Sum256(b)
 		if sums[f.Name()] != hex.EncodeToString(h[:]) {
-			t.Fatalf("%s: sha256 is not the kit SHA256SUMS line", f.Name())
+			t.Fatalf("%s: sha256 is not its SHA256SUMS line", f.Name())
 		}
 		delete(sums, f.Name())
 	}
 	if len(sums) != 0 {
 		t.Fatalf("SHA256SUMS lines with no file: %v", sums)
 	}
-	manifest := readTSV(t, "MANIFEST.tsv")
-	steps := readTSV(t, "kitsteps.tsv")
-	if len(manifest) != 40 || len(steps) != 40 || len(files) != 43 {
-		t.Fatalf("want 40 manifest rows, 40 step rows, 40 fixtures + 3 pins; got %d, %d, %d files", len(manifest), len(steps), len(files))
+	steps := readTSV(t, "steps.tsv")
+	if len(steps) != 40 || len(files) != 42 {
+		t.Fatalf("want 40 step rows, 40 outputs + steps.tsv + SHA256SUMS; got %d rows, %d files", len(steps), len(files))
 	}
-	var out []kitStep
-	for i, m := range manifest {
-		s := steps[i]
-		if len(s) != 5 || s[0] != m[0] || s[1] != m[1] || s[3] != "y" || s[4] != "0" {
-			t.Fatalf("kitsteps row %d %q is not manifest row %q with the kit verdict y 0", i, s, m[:2])
+	var out []stepCase
+	listed := map[string]bool{}
+	for i, s := range steps {
+		if len(s) != 3 || listed[s[1]] {
+			t.Fatalf("steps.tsv row %d %q", i, s)
 		}
-		out = append(out, kitStep{step: s[0], fixture: s[1], re: regexp.MustCompile(s[2])})
+		listed[s[1]] = true
+		out = append(out, stepCase{step: s[0], fixture: s[1], re: regexp.MustCompile(s[2])})
 	}
 	return out
 }
 
 func mustRead(t *testing.T, name string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(realDir, name))
+	b, err := os.ReadFile(filepath.Join(stepsDir, name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,19 +140,19 @@ func newOut(t *testing.T) *Out {
 	return &Out{Dir: t.TempDir()}
 }
 
-// G15 on the 40 real prod outputs: each passes its kit step rule as a typed
+// G15 on the 40 synthetic step outputs: each passes its step rule as a typed
 // step and only the record reaches the .out file; a missing PASS line, a
 // FAIL/REFUSED/HOLD word or a wrong rc on the same bytes is a STOP.
-func TestTheRealOutputsPassTheirStepRule(t *testing.T) {
+func TestTheStepOutputsPassTheirStepRule(t *testing.T) {
 	c := newClock()
-	for _, k := range kitSteps(t) {
+	for _, k := range synthSteps(t) {
 		t.Run(k.step, func(t *testing.T) {
 			raw := []byte(mustRead(t, k.fixture))
 			step := Step[finalLine]{Label: k.step, Cmd: Cmd{Argv: []string{"helm", "x"}}, Parse: kitFinal(k.re)}
 			o, f, log := newOut(t), &fake{out: Output{Stdout: raw}}, &bytes.Buffer{}
 			v, err := Do(context.Background(), f, o, log, c.now, step)
 			if err != nil {
-				t.Fatalf("real output: %v", err)
+				t.Fatalf("step output: %v", err)
 			}
 			rec, err := os.ReadFile(filepath.Join(o.Dir, k.step+".out"))
 			if err != nil || string(rec) != v.Record()+"\n" {

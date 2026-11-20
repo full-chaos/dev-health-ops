@@ -320,6 +320,7 @@ internal/cigates/workflows	workflows_venue_shards_test.go	ci/venue_oracle_weight
 internal/cigates/workflows	workflows_venue_shards_test.go	unexpressed	-	-
 internal/clicredentials	opensites_test.go	cmd	tree	*.go
 internal/clicredentials	opensites_test.go	internal	tree	*.go
+internal/deploy/gitgate	gitgate.go	unexpressed	-	-
 internal/deploy/inputs	hookrender_test.go	unexpressed	-	-
 internal/deploy/run	census_test.go	unexpressed	-	*.go
 internal/deploy/run	step_test.go	unexpressed	-	-

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -79,31 +80,49 @@ func (w *world) commit(path, body string) string {
 	return w.git(w.work, "rev-parse", "HEAD")
 }
 
-// addSubmodule records a gitlink "module" (with .gitmodules) on main, pulls it
-// into the deploy clone and checks the module out there, at the recorded commit.
-func (w *world) addSubmodule() {
+// newRepo makes a repo at dir with one commit and returns its sha.
+func (w *world) newRepo(dir, file string) string {
 	w.t.Helper()
-	sub := filepath.Join(w.dir, "sub")
-	w.git("", "init", "-q", "-b", "main", sub)
-	w.write(sub, "s.txt", "s\n")
-	w.git(sub, "add", "s.txt")
-	w.git(sub, "commit", "-q", "-m", "s")
-	sha := w.git(sub, "rev-parse", "HEAD")
-	w.write(w.work, ".gitmodules", "[submodule \"module\"]\n\tpath = module\n\turl = file://"+sub+"\n")
-	w.git(w.work, "update-index", "--add", "--cacheinfo", "160000,"+sha+",module")
-	w.git(w.work, "add", ".gitmodules")
-	w.git(w.work, "commit", "-q", "-m", "module")
-	w.git(w.work, "push", "-q", "origin", "refs/heads/main:refs/heads/main")
-	w.git(w.tree, "pull", "-q", "--ff-only")
-	w.git("", "clone", "-q", "file://"+sub, filepath.Join(w.tree, "module"))
+	w.git("", "init", "-q", "-b", "main", dir)
+	w.write(dir, file, file+"\n")
+	w.git(dir, "add", "--", file)
+	w.git(dir, "commit", "-q", "-m", file)
+	return w.git(dir, "rev-parse", "HEAD")
 }
 
-// moveSubmodule commits in the checked-out module: the gitlink is now changed.
-func (w *world) moveSubmodule() {
+// gitlink records a gitlink at path in repo (with its .gitmodules row) and commits.
+func (w *world) gitlink(repo, path, url, sha string) {
+	w.t.Helper()
+	w.appendConfig(filepath.Join(repo, ".gitmodules"), "[submodule \""+path+"\"]\n\tpath = "+path+"\n\turl = "+url+"\n")
+	w.git(repo, "update-index", "--add", "--cacheinfo", "160000,"+sha+","+path)
+	w.git(repo, "add", ".gitmodules")
+	w.git(repo, "commit", "-q", "-m", "gitlink "+path)
+}
+
+// addSubmodule records the gitlink "module" on main and pulls it into the
+// deploy clone, uninitialized (an empty dir, as a plain clone leaves it).
+// It returns the module repo, which itself has the gitlink "inner".
+func (w *world) addSubmodule() string {
+	w.t.Helper()
+	inner := filepath.Join(w.dir, "inner")
+	innerSHA := w.newRepo(inner, "i.txt")
+	sub := filepath.Join(w.dir, "sub")
+	w.newRepo(sub, "s.txt")
+	w.gitlink(sub, "inner", "file://"+inner, innerSHA)
+	w.gitlink(w.work, "module", "file://"+sub, w.git(sub, "rev-parse", "HEAD"))
+	w.git(w.work, "push", "-q", "origin", "refs/heads/main:refs/heads/main")
+	w.git(w.tree, "pull", "-q", "--ff-only")
+	return sub
+}
+
+// checkout checks the module out in the deploy clone (and, nested, its inner).
+func (w *world) checkout(sub string, nested bool) {
 	w.t.Helper()
 	m := filepath.Join(w.tree, "module")
-	w.write(m, "s.txt", "moved\n")
-	w.git(m, "commit", "-q", "-a", "-m", "moved")
+	w.git("", "clone", "-q", "file://"+sub, m)
+	if nested {
+		w.git("", "clone", "-q", "file://"+filepath.Join(w.dir, "inner"), filepath.Join(m, "inner"))
+	}
 }
 
 func (w *world) appendConfig(path, text string) {
@@ -183,18 +202,6 @@ func TestCloneChecks(t *testing.T) {
 			w.write(w.tree, "stray.txt", "x\n")
 			return w.url, w.tree
 		},
-		"a moved submodule under submodule.<name>.ignore=all": func(w *world) (string, string) {
-			w.addSubmodule()
-			w.appendConfig(filepath.Join(w.tree, ".git", "config"), "[submodule \"module\"]\n\tignore = all\n")
-			w.moveSubmodule()
-			return w.url, w.tree
-		},
-		"a moved submodule under .gitmodules ignore=dirty": func(w *world) (string, string) {
-			w.addSubmodule()
-			w.appendConfig(filepath.Join(w.tree, ".gitmodules"), "\tignore = dirty\n")
-			w.moveSubmodule()
-			return w.url, w.tree
-		},
 		"a url.* key longer than 64 KiB in the global config": func(w *world) (string, string) {
 			g := filepath.Join(w.dir, "global.gitconfig")
 			w.appendConfig(g, "[url \"file:///"+strings.Repeat("e", 70000)+"\"]\n\tinsteadOf = x\n")
@@ -215,13 +222,6 @@ func TestCloneChecks(t *testing.T) {
 		w := newWorld(t)
 		w.git(w.tree, "remote", "set-url", "--add", "origin", w.url+"x")
 		w.git(w.tree, "remote", "set-url", "--push", "origin", w.url+"y")
-		if _, err := CheckClone(ctx, w.r, w.url, w.tree); err != nil {
-			t.Fatal(err)
-		}
-	})
-	t.Run("a clean checked-out submodule", func(t *testing.T) {
-		w := newWorld(t)
-		w.addSubmodule()
 		if _, err := CheckClone(ctx, w.r, w.url, w.tree); err != nil {
 			t.Fatal(err)
 		}
@@ -371,12 +371,6 @@ func TestTreePin(t *testing.T) {
 			}
 			w.git(w.tree, "checkout", "--", "prod/values.yaml")
 		}, "disk"},
-		"a moved submodule under submodule.<name>.ignore=all": {func(w *world, p *Pin) {
-			w.addSubmodule()
-			*p = newPin(w)
-			w.appendConfig(filepath.Join(w.tree, ".git", "config"), "[submodule \"module\"]\n\tignore = all\n")
-			w.moveSubmodule()
-		}, "dirty"},
 		"a tgz byte change": {func(w *world, p *Pin) {
 			if err := os.WriteFile(p.TgzPath, []byte("chart bytez"), 0o600); err != nil {
 				t.Fatal(err)
@@ -399,4 +393,152 @@ func TestTreePin(t *testing.T) {
 	p.ValuesPath = "../etc/passwd"
 	_, err = TreePin(ctx, w.r, p)
 	stop(t, err, "a values path out of the tree")
+}
+
+func refused(t *testing.T, err error, tree, what string) {
+	t.Helper()
+	want := tree + ": an initialized submodule (" + what + "): dho deploy serves only a tree with uninitialized submodules"
+	if run.Code(err) != run.CodeRefused || err.Error() != want {
+		t.Fatalf("want exit 3 %q, got %v", want, err)
+	}
+}
+
+// r2 P1 (acp (a)): both gates refuse a tree with an initialized submodule
+// (exit 3, fixed text), since git status reads each submodule's own config;
+// an uninitialized gitlink passes.
+func TestInitializedSubmodulesAreRefused(t *testing.T) {
+	ctx := context.Background()
+	tgz := func(w *world) Pin {
+		p := filepath.Join(w.dir, "chart.tgz")
+		if err := os.WriteFile(p, []byte("chart bytes"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256([]byte("chart bytes"))
+		return Pin{Tree: w.tree, TreeSHA: w.git(w.tree, "rev-parse", "HEAD"), ValuesPath: "prod/values.yaml",
+			ValuesBlob: w.git(w.tree, "rev-parse", "HEAD:prod/values.yaml"), TgzPath: p, TgzSHA256: hex.EncodeToString(sum[:])}
+	}
+	for name, c := range map[string]struct {
+		defect func(w *world, sub string)
+		what   string
+	}{
+		"a checked-out submodule": {func(w *world, sub string) { w.checkout(sub, false) }, "a checked-out gitlink"},
+		"nested 2 levels, inner edit under .gitmodules ignore=dirty": {func(w *world, sub string) {
+			w.checkout(sub, true)
+			w.appendConfig(filepath.Join(w.tree, "module", ".gitmodules"), "\tignore = dirty\n")
+			w.write(filepath.Join(w.tree, "module", "inner"), "i.txt", "edited\n")
+		}, "a checked-out gitlink"},
+		"its own status.showUntrackedFiles=no hides an untracked file": {func(w *world, sub string) {
+			w.checkout(sub, false)
+			w.appendConfig(filepath.Join(w.tree, "module", ".git", "config"), "[status]\n\tshowUntrackedFiles = no\n")
+			w.write(filepath.Join(w.tree, "module"), "stray.txt", "x\n")
+		}, "a checked-out gitlink"},
+		"git submodule init (url in the local config), dir empty": {func(w *world, sub string) {
+			w.git(w.tree, "submodule", "init")
+		}, "a submodule.<name> config key"},
+		"submodule.<name>.ignore in the local config, dir empty": {func(w *world, sub string) {
+			w.appendConfig(filepath.Join(w.tree, ".git", "config"), "[submodule \"module\"]\n\tignore = all\n")
+		}, "a submodule.<name> config key"},
+		"a modules git dir, dir empty": {func(w *world, sub string) {
+			if err := os.Mkdir(filepath.Join(w.tree, ".git", "modules"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}, "a modules git dir"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			sub := w.addSubmodule()
+			p := tgz(w)
+			c.defect(w, sub)
+			_, err := CheckClone(ctx, w.r, w.url, w.tree)
+			refused(t, err, w.tree, c.what)
+			_, err = TreePin(ctx, w.r, p)
+			refused(t, err, w.tree, c.what)
+		})
+	}
+	t.Run("an uninitialized gitlink passes both gates", func(t *testing.T) {
+		w := newWorld(t)
+		w.addSubmodule()
+		if _, err := CheckClone(ctx, w.r, w.url, w.tree); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := TreePin(ctx, w.r, tgz(w)); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// synthShape is a SYNTHETIC deploy-tree-like layout (made-up names, modelled
+// on the shape of the real deploy tree, not its paths): 400 blobs (213 mode
+// 100644, 187 mode 100755) in nested dirs, a .gitignore that ignores one
+// tracked path, a .gitmodules with 3 entries (path + url keys, example.invalid
+// URLs) and 3 vendor gitlinks (mode 160000) at made-up shas.
+func synthShape() (blobs map[string]string, execs map[string]bool, links [][2]string) {
+	blobs, execs = map[string]string{}, map[string]bool{}
+	names := []string{"alpha", "bravo", "charlie"}
+	var gm strings.Builder
+	for _, n := range names {
+		path := "vendor/example-" + n
+		fmt.Fprintf(&gm, "[submodule %q]\n\tpath = %s\n\turl = https://git.example.invalid/example/%s.git\n", path, path, n)
+		sum := sha256.Sum256([]byte(n))
+		links = append(links, [2]string{hex.EncodeToString(sum[:20]), path})
+	}
+	blobs[".gitmodules"] = gm.String()
+	blobs[".gitignore"] = "build/\n"
+	blobs["build/keep.txt"] = "tracked under an ignored dir\n"
+	blobs["prod/example.values.yaml"] = "image: example\n"
+	for i := 0; len(blobs) < 400; i++ {
+		p := fmt.Sprintf("area-%d/part-%d/file-%03d.yaml", i%7, i%3, i)
+		blobs[p] = p + "\n"
+		if len(execs) < 187 {
+			execs[p] = true
+		}
+	}
+	return blobs, execs, links
+}
+
+// acp control: a clone of a deploy-tree-like shape (synthShape) passes both
+// gates: its 3 vendor gitlinks stay uninitialized (empty dirs).
+func TestTheDeployTreeShapePassesBothGates(t *testing.T) {
+	ctx := context.Background()
+	blobs, execs, links := synthShape()
+	if len(blobs) != 400 || len(execs) != 187 || len(links) != 3 {
+		t.Fatalf("synthetic shape: %d blobs, %d executable, %d gitlinks", len(blobs), len(execs), len(links))
+	}
+	w := newWorld(t)
+	shape := filepath.Join(w.dir, "shape")
+	w.git("", "init", "-q", "-b", "main", shape)
+	for path, body := range blobs {
+		w.write(shape, path, body)
+		if execs[path] {
+			if err := os.Chmod(filepath.Join(shape, path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	w.git(shape, "add", "-f", "--", ".")
+	// gitlinks after `git add .`: it stages a gitlink with no dir on disk as removed
+	for _, l := range links {
+		w.git(shape, "update-index", "--add", "--cacheinfo", "160000,"+l[0]+","+l[1])
+	}
+	w.git(shape, "commit", "-q", "-m", "synthetic deploy tree shape")
+	got := w.git(shape, "ls-tree", "-r", "HEAD")
+	if strings.Count(got, "160000 commit") != 3 || strings.Count(got, "100755 blob") != 187 || strings.Count(got, "\n")+1 != 403 {
+		t.Fatalf("the shape commit holds %d gitlinks, %d executables of %d entries, want 3, 187 of 403", strings.Count(got, "160000 commit"), strings.Count(got, "100755 blob"), strings.Count(got, "\n")+1)
+	}
+	tree := filepath.Join(w.dir, "deploy-shape")
+	url := "file://" + shape
+	w.git("", "clone", "-q", url, tree)
+	if _, err := CheckClone(ctx, w.r, url, tree); err != nil {
+		t.Fatalf("CheckClone: %v", err)
+	}
+	sum := sha256.Sum256([]byte("chart bytes"))
+	p := filepath.Join(w.dir, "chart.tgz")
+	if err := os.WriteFile(p, []byte("chart bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pin := Pin{Tree: tree, TreeSHA: w.git(tree, "rev-parse", "HEAD"), ValuesPath: "prod/example.values.yaml",
+		ValuesBlob: w.git(tree, "rev-parse", "HEAD:prod/example.values.yaml"), TgzPath: p, TgzSHA256: hex.EncodeToString(sum[:])}
+	if _, err := TreePin(ctx, w.r, pin); err != nil {
+		t.Fatalf("TreePin: %v", err)
+	}
 }

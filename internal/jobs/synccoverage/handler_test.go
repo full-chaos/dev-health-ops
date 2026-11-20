@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"strings"
@@ -79,6 +80,51 @@ func TestHandlerDoesNotReportAPartialSweepAsSuccess(t *testing.T) {
 	}
 }
 
+func TestHandlerRetriesUnlessEveryFailureIsDeterministic(t *testing.T) {
+	t.Parallel()
+	limit := &coverage.LimitError{Bound: "backfill_pair", Count: 20001, Max: 20000}
+	fail := func(errs ...error) coverage.RefreshResult {
+		result := coverage.RefreshResult{Refreshed: 2, Failed: len(errs)}
+		for _, err := range errs {
+			result.Failures = append(result.Failures, coverage.RefreshFailure{OrgID: "org-a", ConfigID: uuid.New(), Err: err})
+		}
+		return result
+	}
+	countOnly := coverage.RefreshResult{Refreshed: 2, Failed: 2, Failures: fail(limit).Failures}
+	for name, tc := range map[string]struct {
+		result coverage.RefreshResult
+		want   jobruntime.ErrorCategory
+	}{
+		"limit alone":                 {fail(limit), jobruntime.CategoryPermanent},
+		"flags alone":                 {fail(coverage.ErrInvalidProcessorFlags), jobruntime.CategoryPermanent},
+		"not found alone":             {fail(coverage.ErrConfigNotFound), jobruntime.CategoryPermanent},
+		"wrapped limit":               {fail(fmt.Errorf("build: %w", limit)), jobruntime.CategoryPermanent},
+		"joined deterministic":        {fail(errors.Join(coverage.ErrConfigNotFound, limit)), jobruntime.CategoryPermanent},
+		"limit and connection":        {fail(limit, io.EOF), jobruntime.CategoryRetryable},
+		"limit and postgres":          {fail(limit, &pgconn.PgError{Code: "40001"}), jobruntime.CategoryRetryable},
+		"limit and deadline":          {fail(limit, context.DeadlineExceeded), jobruntime.CategoryRetryable},
+		"limit and unknown":           {fail(limit, errors.New("other")), jobruntime.CategoryRetryable},
+		"limit and nil error":         {fail(limit, nil), jobruntime.CategoryRetryable},
+		"joined with transient":       {fail(errors.Join(coverage.ErrConfigNotFound, io.EOF)), jobruntime.CategoryRetryable},
+		"failed count above failures": {countOnly, jobruntime.CategoryRetryable},
+		"count without failures":      {coverage.RefreshResult{Refreshed: 2, Failed: 1}, jobruntime.CategoryRetryable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			logs, err := logRecords(t, &recordingProjector{result: tc.result})
+			if err == nil || !strings.Contains(err.Error(), string(tc.want)) {
+				t.Fatalf("Work() = %v, want %s", err, tc.want)
+			}
+			if got := strings.Count(logs, "sync_coverage_refresh.config_failed"); got != len(tc.result.Failures) {
+				t.Fatalf("config_failed lines = %d, want %d", got, len(tc.result.Failures))
+			}
+			cause, ok := jobruntime.SafeCause(err)
+			if want := fmt.Sprintf("sync coverage refresh: failed=%d refreshed=2", max(tc.result.Failed, len(tc.result.Failures))); !ok || cause != want {
+				t.Fatalf("SafeCause = %q, %v, want %q", cause, ok, want)
+			}
+		})
+	}
+}
+
 func TestHandlerRejectsAnInvalidOrUnconfiguredRequest(t *testing.T) {
 	t.Parallel()
 	if _, err := NewHandler(nil, slog.New(slog.DiscardHandler)); err == nil {
@@ -117,8 +163,8 @@ func TestHandlerNamesEachFailingConfigAndItsCauseClass(t *testing.T) {
 		},
 	}}
 	logs, err := logRecords(t, projector)
-	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
-		t.Fatalf("Work() = %v, want retryable", err)
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryPermanent)) {
+		t.Fatalf("Work() = %v, want permanent: every failure is deterministic", err)
 	}
 	for _, want := range []string{
 		"org_id=org-a", "config_id=" + first.String(), "cause_class=invalid_processor_flags",

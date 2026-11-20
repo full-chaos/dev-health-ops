@@ -62,9 +62,10 @@ func TestGitHubTestsChunkRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 		t.Fatalf("terminal phase=%q, want done", walk.cursor.Phase)
 	}
 	// 2 (repo, retried) + 1 (runs-phase listing) + 1 (jobs) + 1
-	// (artifacts-phase listing) + 1 (artifacts listing) = 6.
-	if walk.cursor.Requests != 6 {
-		t.Fatalf("cursor=%+v want Requests=6 (every physical attempt, from one source)", walk.cursor)
+	// (artifacts-phase listing) + 1 (artifacts listing) + 1 (late re-run deep
+	// listing: the claim holds a UTC midnight) = 7.
+	if walk.cursor.Requests != 7 {
+		t.Fatalf("cursor=%+v want Requests=7 (every physical attempt, from one source)", walk.cursor)
 	}
 }
 
@@ -114,18 +115,19 @@ func TestGitHubTestsChunkRouteCountsListingPagesWhoseRunsAllFailNormalization(t 
 	walk := walkGitHubTestsChunks(t, GitHubTestsRouteHandler{}, claim, client, 10)
 
 	// The artifacts phase re-lists the same /actions/runs endpoint (a 3rd
-	// hit) -- runsPage covers both phases.
-	if runsPage != 3 {
-		t.Fatalf("runs listing pages served=%d want 3 (2 runs-phase + 1 artifacts-phase)", runsPage)
+	// hit), and the late re-run deep range once more (the claim holds a UTC
+	// midnight) -- runsPage covers both phases.
+	if runsPage != 4 {
+		t.Fatalf("runs listing pages served=%d want 4 (2 runs-phase + 1 artifacts-phase + 1 deep range)", runsPage)
 	}
 	if walk.cursor.Phase != "done" {
 		t.Fatalf("terminal phase=%q, want done", walk.cursor.Phase)
 	}
-	// 1 (repo) + 2 (runs-phase listing pages) + 1 (artifacts-phase listing) =
-	// 4. No job or artifact fetch ever fires because every run fails
-	// normalization in both phases.
-	if walk.cursor.Requests != 4 {
-		t.Fatalf("cursor=%+v want Requests=4 (every listing page counted even though no item ever reached the old refresh point)", walk.cursor)
+	// 1 (repo) + 2 (runs-phase listing pages) + 1 (artifacts-phase listing) +
+	// 1 (deep range listing) = 5. No job or artifact fetch ever fires because
+	// every run fails normalization in both phases.
+	if walk.cursor.Requests != 5 {
+		t.Fatalf("cursor=%+v want Requests=5 (every listing page counted even though no item ever reached the old refresh point)", walk.cursor)
 	}
 }
 

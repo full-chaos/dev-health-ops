@@ -577,9 +577,25 @@ properties of that listing shape the walk:
   The 6-hour lookback and the 100 / 300 re-read caps are fixed defaults, not
   configurable.
 
-One case stays unseen: a run that was final at its last read and is rerun
-weeks later, after it left both the lookback and the open set, is not re-read,
-because no listing key reaches it.
+- The artifacts phase (test reports) lists runs created from the UTC date of
+  the window start minus the larger of one day and the window width. A run
+  re-run after it left that floor is listed by no claim that holds the re-run.
+  So an incremental unit whose window holds a UTC midnight (start < midnight <=
+  end) also lists a deeper range: from the same date minus 7 days to one second
+  before the floor. It reads a run of that range when the run is completed,
+  started by the window end, and changed since the window start minus the
+  larger of one day and the window width. Each midnight has one owning unit, so
+  this costs one extra listing a day per repository, and a late re-run's
+  reports land up to one day plus a window width after it changed. The deeper
+  range has its own page budget. When it runs out, or a second cannot be peeled
+  past, the unit records `late_rerun_relist` (`page_budget_exhausted` or
+  `listing_saturated`): `reports_complete` stays false and the watermark still
+  advances. A re-run more than about 7 days after its run was created stays
+  unread (GitHub allows a re-run up to 30 days later).
+
+One case stays unseen in the runs phase: a run that was final at its last read
+and is rerun weeks later, after it left both the lookback and the open set, is
+not re-read, because no listing key reaches it.
 
 ### What a re-anchor cannot see
 

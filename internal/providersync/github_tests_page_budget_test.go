@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"log/slog"
@@ -765,7 +766,9 @@ func TestGitHubTestsChunkRouteWalkBoundInsideTheArtifactsPhase(t *testing.T) {
 	if len(full.Incomplete) != 0 || full.Phase != "done" || fullFinal.Watermark == nil {
 		t.Fatalf("unbounded walk incomplete=%+v phase=%q watermark=%v, want a complete walk", full.Incomplete, full.Phase, fullFinal.Watermark)
 	}
-	if fullChunks != 4 || full.Pipelines != 2 || full.Cases == 0 || full.Cases%2 != 0 {
+	// 6 chunks: 2 runs-phase runs, 2 artifacts-phase runs, and the same 2 runs again in the late re-run deep range (the claim holds
+	// a UTC midnight; this fixture ignores the created filter, and the deep rule reads none of them).
+	if fullChunks != 6 || full.Pipelines != 2 || full.Cases == 0 || full.Cases%2 != 0 {
 		t.Fatalf("premise broken: chunks=%d pipelines=%d cases=%d, want 2 runs in each phase and the same report on both",
 			fullChunks, full.Pipelines, full.Cases)
 	}
@@ -914,9 +917,13 @@ func TestGitHubTestsChunkRouteListingEndingExactlyAtTheBoundIsComplete(t *testin
 
 	artifactsEnd := collectGitHubTestsOnePass(t, GitHubTestsRouteHandler{MaxWalkRecords: githubTestsWalkRecords(full)}, claim,
 		githubTestsPagedReportDoer{githubTestsPagedDoer: &githubTestsPagedDoer{t: t, pages: 3, perPage: 2}, archive: archive})
-	if len(artifactsEnd.Incomplete) != 0 || githubTestsWalkRecords(artifactsEnd) != githubTestsWalkRecords(full) {
-		t.Fatalf("artifacts listing ended at the bound: incomplete=%+v records=%d, want a complete walk of %d",
-			artifactsEnd.Incomplete, githubTestsWalkRecords(artifactsEnd), githubTestsWalkRecords(full))
+	// The regular listing is complete; the bound stops the late re-run deep range before it starts, which is its own advancing
+	// observation.
+	deepStop := []GitHubTestsIncomplete{{Component: githubTestsLateRerunRelistComponent, Cause: githubTestsPageBudgetCause, Count: 1}}
+	if fmt.Sprint(githubTestsSaturatedObservations(artifactsEnd)) != fmt.Sprint(deepStop) || len(artifactsEnd.Incomplete) != 0 ||
+		githubTestsWalkRecords(artifactsEnd) != githubTestsWalkRecords(full) {
+		t.Fatalf("artifacts listing ended at the bound: incomplete=%+v derived=%+v records=%d, want a complete regular walk of %d and only the deep-range stop",
+			artifactsEnd.Incomplete, githubTestsSaturatedObservations(artifactsEnd), githubTestsWalkRecords(artifactsEnd), githubTestsWalkRecords(full))
 	}
 }
 

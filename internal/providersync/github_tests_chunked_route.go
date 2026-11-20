@@ -227,6 +227,9 @@ type githubTestsChunkCursor struct {
 	// range read whole at its cut second (github_tests_cut_runs.go). A cursor without them skips nothing.
 	ActiveCutKeys  string `json:"ak,omitempty"`
 	CarriedCutKeys string `json:"ck,omitempty"`
+	// Relist is the state of the late re-run re-list (github_tests_late_rerun_relist.go): walking its deep range, or why it
+	// stopped before its oldest runs. The deep range starts ArtifactPages again from zero: the regular range is done by then.
+	Relist int `json:"rl,omitempty"`
 }
 
 // markGitHubTestsSkippedArtifactCauseOverflow returns a NEW map with cause
@@ -997,7 +1000,7 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 		cursor.OpenSkipped < 0 || cursor.OpenTransientRun < 0 ||
 		cursor.OpenSkipEvent != nil && (cursor.OpenSkipEvent.RunID == "" || cursor.OpenSkipEvent.Reason == "") ||
 		cursor.Index < 0 || cursor.NextURL == "" && cursor.Index != 0 ||
-		cursor.RunPages < 0 || cursor.ArtifactPages < 0 ||
+		cursor.RunPages < 0 || cursor.ArtifactPages < 0 || cursor.Relist < 0 || cursor.Relist > githubTestsRelistStoppedSaturated ||
 		// The counter pair is either both known or both unknown, never split:
 		// a cursor carrying exactly one is corrupt, not a legacy shape (a
 		// legacy cursor predates the field entirely, so it is missing BOTH).
@@ -1421,6 +1424,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		return emit(ChunkRouteEmission{Batch: batch, CursorBefore: beforeRaw, CursorAfter: afterRaw, Final: final})
 	}
 	lookback := handler.refreshLookback()
+	relistLookback := handler.lateRerunLookback()
 	// endRunsRange is the end of one runs-phase listing range. A listing that
 	// consumed GitHub's cap of results may hide older runs: the next range ends
 	// at the oldest created time seen, in the same phase. A range that makes no
@@ -1449,10 +1453,14 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		switch {
 		case !saturated:
 			c.RangeHi = ""
-			c.Phase = githubTestsPhaseAfterArtifacts(handler)
 			c = githubTestsClearCutKeys(c)
+			c = githubTestsEndArtifactsListing(c, claim, handler)
 		case stuck:
-			c = recordGitHubTestsSaturated(c, client, claim, githubTestsArtifactInventorySaturatedComponent, githubTestsArtifactsPhase, hi, items)
+			if c.Relist == githubTestsRelistWalking {
+				c = recordGitHubTestsRelistStop(c, client, claim, githubTestsListingSaturatedCause, hi, items)
+			} else {
+				c = recordGitHubTestsSaturated(c, client, claim, githubTestsArtifactInventorySaturatedComponent, githubTestsArtifactsPhase, hi, items)
+			}
 			c.RangeHi = ""
 			c.Phase = githubTestsPhaseAfterArtifacts(handler)
 			c = githubTestsClearCutKeys(c)
@@ -1834,10 +1842,13 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	}
 	for cursor.Phase == githubTestsArtifactsPhase {
 		if githubTestsWalkRecords(cursor) >= maxWalkRecords {
-			cursor = recordGitHubTestsWalkBound(cursor, client, claim, githubTestsArtifactInventoryComponent, maxWalkRecords)
+			cursor = recordGitHubTestsArtifactsWalkBound(cursor, client, claim, maxWalkRecords)
 			break
 		}
 		artifactQuery := githubTestsArtifactRunQueryAt(claim, cursor.RangeHi)
+		if cursor.Relist == githubTestsRelistWalking {
+			artifactQuery = githubTestsRelistQueryAt(claim, relistLookback, cursor.RangeHi)
+		}
 		artifactPage := func(page providerfoundation.PageVisit) error {
 			cursor.Pages++
 			// See emitRunPage's identical unconditional refresh above: this
@@ -1902,7 +1913,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				cases := []testCaseResultRow(nil)
 				coverage := []coverageSnapshotRow(nil)
 				var completeness []testOpsRunReportCompletenessRow
-				if include && githubTestsRunReadable(run) && !githubTestsReportRunOutsideWindow(pipeline, claim) &&
+				if include && githubTestsRunReadable(run) && !githubTestsArtifactRunOutside(pipeline, claim, cursor.Relist == githubTestsRelistWalking) &&
 					!githubTestsSkipCutRun(cursor, cutSecond, cutKey) {
 					// The run's losses are the deltas of the cursor's exact loss counters across the run (CHAOS-13826).
 					lossBefore := githubTestsTakeRunLossCounts(cursor)
@@ -2455,8 +2466,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			}
 			return nil
 		}
-		allowance, budgetErr := remainingPageBudget(
-			(maxRuns+nativePerPage-1)/nativePerPage, cursor.ArtifactPages)
+		allowance, budgetErr := remainingPageBudget((maxRuns+nativePerPage-1)/nativePerPage, cursor.ArtifactPages)
+		if errors.Is(budgetErr, ErrPaginationCapExceeded) && cursor.Relist == githubTestsRelistWalking {
+			cursor = recordGitHubTestsRelistStop(cursor, client, claim, githubTestsPageBudgetCause, cursor.RangeHi, cursor.RangeItems)
+			break
+		}
 		if errors.Is(budgetErr, ErrPaginationCapExceeded) {
 			cursor = recordGitHubTestsInventoryTruncation(
 				cursor, client, claim, githubTestsArtifactInventoryComponent, cursor.ArtifactPages)
@@ -2467,11 +2481,15 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Route: githubRunsRoute, Query: artifactQuery, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}, artifactPage)
 		if errors.Is(visitErr, errGitHubTestsWalkBound) {
-			cursor = recordGitHubTestsWalkBound(cursor, client, claim, githubTestsArtifactInventoryComponent, maxWalkRecords)
+			cursor = recordGitHubTestsArtifactsWalkBound(cursor, client, claim, maxWalkRecords)
 			break
 		}
 		if visitErr != nil {
 			return visitErr
+		}
+		if collection.PageBudgetExhausted && cursor.Relist == githubTestsRelistWalking {
+			cursor = recordGitHubTestsRelistStop(cursor, client, claim, githubTestsPageBudgetCause, cursor.RangeHi, cursor.RangeItems)
+			break
 		}
 		if collection.PageBudgetExhausted {
 			cursor = recordGitHubTestsInventoryTruncation(
@@ -2484,6 +2502,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	// with its phase unchanged; the open phase does not depend on it.
 	if cursor.Phase == githubTestsArtifactsPhase {
 		cursor.Phase = githubTestsPhaseAfterArtifacts(handler)
+	}
+	if cursor.Relist == githubTestsRelistWalking {
+		cursor.Relist = 0
 	}
 	cursor = githubTestsClearCutKeys(cursor)
 	if cursor.Phase == githubTestsOpenPhase {

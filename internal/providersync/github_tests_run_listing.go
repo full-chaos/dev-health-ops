@@ -386,6 +386,12 @@ func githubTestsSaturatedObservations(cursor githubTestsChunkCursor) []GitHubTes
 	if cursor.SaturatedArtifacts {
 		out = append(out, GitHubTestsIncomplete{Component: githubTestsArtifactInventorySaturatedComponent, Cause: githubTestsListingSaturatedCause, Count: 1})
 	}
+	switch cursor.Relist {
+	case githubTestsRelistStoppedBudget:
+		out = append(out, GitHubTestsIncomplete{Component: githubTestsLateRerunRelistComponent, Cause: githubTestsPageBudgetCause, Count: 1})
+	case githubTestsRelistStoppedSaturated:
+		out = append(out, GitHubTestsIncomplete{Component: githubTestsLateRerunRelistComponent, Cause: githubTestsListingSaturatedCause, Count: 1})
+	}
 	return out
 }
 

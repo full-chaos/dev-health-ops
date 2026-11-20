@@ -1,0 +1,2 @@
+P3 managed fields of the controller ConfigMap
+helm Update keys=f:allow-snippet-annotations,f:use-forwarded-headers

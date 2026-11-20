@@ -1,0 +1,13 @@
+Release "edge-proxy" has been upgraded. Happy Helming!
+NAME: edge-proxy
+LAST DEPLOYED: Tue Mar 03 09:41:27 2026
+NAMESPACE: edge
+STATUS: deployed
+REVISION: 9
+TEST SUITE: None
+NOTES:
+The edge proxy controller has been installed.
+It may take a few minutes for the load balancer IP to be available.
+You can watch the status by running:
+kubectl get service --namespace edge edge-proxy-controller
+upgrade rc=0

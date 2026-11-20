@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/deploy/inputs"
+	deployrun "github.com/full-chaos/dev-health-ops/internal/deploy/run"
 	"github.com/full-chaos/dev-health-ops/internal/deploy/selfpin"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 )
@@ -23,10 +24,11 @@ type host struct {
 	pinPath string
 	selfExe string
 	commit  string
+	harden  func() error
 }
 
 func prodHost() host {
-	return host{pinPath: selfpin.PinPath, selfExe: selfpin.SelfExe, commit: version.Current("dho").Commit}
+	return host{pinPath: selfpin.PinPath, selfExe: selfpin.SelfExe, commit: version.Current("dho").Commit, harden: deployrun.Harden}
 }
 
 var rollPhases = map[string][]string{
@@ -179,6 +181,10 @@ func roll(h host, env cli.Env) int {
 	if !rollGrammar(words) {
 		fmt.Fprintln(env.Stderr, "usage: dho deploy roll <dev-health pre|deploy|wait|post | ingress-nginx pre|upgrade|post | acr pre|upgrade|post> - (nothing read)")
 		return cli.ExitUsage
+	}
+	if err := h.harden(); err != nil {
+		fmt.Fprintln(env.Stdout, "DHO-DEPLOY REFUSED: cannot set umask 077 and cd /; nothing read")
+		return cli.ExitRefused
 	}
 	buf, err := readInputs(env)
 	if err != nil {

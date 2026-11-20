@@ -69,7 +69,8 @@ func Match(sql string) (table Table, kind Kind, ok bool) {
 
 // FileSites returns the sites of one parsed file; rel is the slash-separated path
 // a Site carries. A string literal outside a + join is matched alone; each outermost + join that
-// holds a string literal is matched as one text (its literal operands are not matched alone), a non-literal part
+// holds a string literal is matched as one text (its literal operands are matched alone only when the joined text is not a site, so a
+// runtime prefix such as `q + "UPDATE users SET password_hash = $1"` is still seen), a non-literal part
 // read as RuntimePart. The caller walks the files (the read stays in its test).
 func FileSites(fset *token.FileSet, file *ast.File, rel string) []Site {
 	var sites []Site
@@ -91,13 +92,16 @@ func FileSites(fset *token.FileSet, file *ast.File, rel string) []Site {
 			if x.Op != token.ADD {
 				return true
 			}
+			matchedJoin := false
 			if sql, joined := join(x); joined {
+				before := len(sites)
 				add(x.Pos(), sql)
+				matchedJoin = len(sites) > before
 			}
 			var operands []ast.Expr
 			flatten(x, &operands)
 			for _, o := range operands {
-				if lit, ok := o.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				if lit, ok := o.(*ast.BasicLit); ok && lit.Kind == token.STRING && matchedJoin {
 					continue
 				}
 				ast.Inspect(o, visit)

@@ -30,20 +30,24 @@ func TestRaisesTokenVersionReadsTheSetClauseOnly(t *testing.T) {
 func TestCensusReadsASplitLiteralAsOneStatement(t *testing.T) {
 	const src = "package x\n" +
 		"var a = \"UPDATE users SET \" + \"password_hash = $2\"\n" +
-		"var b = \"UPDATE users SET password_hash = $2, \" + \"token_version = token_version + 1 WHERE id = $1\"\n"
+		"var b = \"UPDATE users SET password_hash = $2, \" + \"token_version = token_version + 1 WHERE id = $1\"\n" +
+		"var c = prefix + \"UPDATE users SET password_hash = $2 WHERE id = $1\"\n"
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "x.go", src, parser.SkipObjectResolution)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sites := passwordwriters.FileSites(fset, file, "x.go")
-	if len(sites) != 2 {
-		t.Fatalf("sites = %d, want 2: %+v", len(sites), sites)
+	if len(sites) != 3 {
+		t.Fatalf("sites = %d, want 3: %+v", len(sites), sites)
 	}
 	if raisesTokenVersion(sites[0].SQL) {
 		t.Errorf("split literal without token_version passed: %q", sites[0].SQL)
 	}
 	if !raisesTokenVersion(sites[1].SQL) {
 		t.Errorf("split literal with token_version in SET failed: %q", sites[1].SQL)
+	}
+	if raisesTokenVersion(sites[2].SQL) {
+		t.Errorf("runtime-prefixed writer without token_version passed: %q", sites[2].SQL)
 	}
 }

@@ -1652,7 +1652,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			cutSecond, cutKey := githubTestsCutRunKey(run)
 			wanted := githubTestsRunWanted(run, pipeline, claim)
 			if cursor.LateRuns {
-				wanted = githubTestsLateRerunWanted(run, claim, lookback)
+				wanted = !githubTestsLateRerunListedOutsideDeepRange(pipeline, claim, lookback) && githubTestsLateRerunWanted(run, claim, lookback)
 			}
 			read := include && wanted && !githubTestsSkipCutRun(cursor, cutSecond, cutKey)
 			jobs := make([]githubTestsJobRow, 0)

@@ -447,7 +447,8 @@ func (handler GitHubTestsRouteHandler) Collect(
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
 		keep := include && githubTestsRunWanted(run, pipeline, claim)
 		if index >= len(runItems) {
-			keep = include && githubTestsLateRerunWanted(run, claim, handler.refreshLookback())
+			keep = include && !githubTestsLateRerunListedOutsideDeepRange(pipeline, claim, handler.refreshLookback()) &&
+				githubTestsLateRerunWanted(run, claim, handler.refreshLookback())
 		}
 		if !keep {
 			continue

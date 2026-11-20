@@ -192,17 +192,23 @@ func githubTestsLateRerunRunsQuery(claim Claim, lookback, late time.Duration, pe
 // changed at or after the floor, and at least the refresh lookback after its
 // creation. A run that last changed sooner was read in its final state by the
 // runs range of the claim that holds that change. A run with no creation time
-// is refused (GitHub cannot list it by created); one with no last-updated time
-// is kept.
+// (GitHub cannot list it by created) or no last-updated time (no late change
+// can be shown) is refused; the runs range's own rule for such a run is
+// unchanged.
 func githubTestsLateRerunWanted(run gitHubWorkflowRunPayload, claim Claim, lookback time.Duration) bool {
 	created, updated := parseGitHubWorkflowTime(run.CreatedAt), parseGitHubWorkflowTime(run.UpdatedAt)
-	if created == nil {
+	if created == nil || updated == nil {
 		return false
 	}
-	if updated == nil {
-		return true
-	}
 	return !updated.UTC().Before(githubTestsLateRerunFloor(claim)) && !updated.UTC().Before(created.UTC().Add(lookback))
+}
+
+// githubTestsLateRerunListedOutsideDeepRange reports a run the deep listing answered although it is not in the deep
+// created range: created at or after the runs range's floor (it belongs to the runs range), or with no created time
+// (GitHub cannot list it by created). Each route skips it in the deep range, whatever the listing answered, so the two
+// ranges never read one run twice in a claim.
+func githubTestsLateRerunListedOutsideDeepRange(pipeline githubTestsPipelineRow, claim Claim, lookback time.Duration) bool {
+	return pipeline.QueuedAt == nil || !pipeline.QueuedAt.UTC().Before(claim.SinceAt.UTC().Add(-lookback))
 }
 
 // githubTestsRunsQuery is the created range of one runs-phase listing.

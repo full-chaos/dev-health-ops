@@ -768,3 +768,103 @@ func TestLateRerunRunsRefuseARunWithNoCreationTime(t *testing.T) {
 		t.Fatalf("chunked: deep listings=%d jobs reads=%d rows=%d, want 2, 0, 0", deep, jobs, len(walk.pipelines))
 	}
 }
+
+// lateRerunRouteDoer answers the runs listings of a midnight claim: deep (ending one second below the runs range) and
+// every other listing get their own run payloads; jobs and artifacts reads are counted per run id.
+func lateRerunRouteDoer(t *testing.T, claim Claim, deep, other []string, jobs map[string]int) jiraWorkItemsDoerFunc {
+	deepHi := claim.SinceAt.Add(-githubTestsRefreshLookbackDefault - time.Second).Format(time.RFC3339)
+	return func(request *http.Request) (*http.Response, error) {
+		header := http.Header{"Content-Type": {"application/json"}}
+		path := request.URL.Path
+		switch {
+		case path == "/repos/acme/api":
+			return githubTestsHTTPResponse(request, header, gitHubRepositoryFixture), nil
+		case path == "/repos/acme/api/actions/runs":
+			items := other
+			if strings.HasSuffix(request.URL.Query().Get("created"), deepHi) {
+				items = deep
+			}
+			return githubTestsHTTPResponse(request, header, `{"workflow_runs":[`+strings.Join(items, ",")+`]}`), nil
+		case strings.HasSuffix(path, "/jobs"):
+			jobs[strings.Split(strings.TrimPrefix(path, "/repos/acme/api/actions/runs/"), "/")[0]]++
+			return githubTestsHTTPResponse(request, header, `{"jobs":[]}`), nil
+		case strings.HasSuffix(path, "/artifacts"):
+			return githubTestsHTTPResponse(request, header, `{"artifacts":[]}`), nil
+		}
+		t.Fatalf("unexpected request %s", request.URL.String())
+		return nil, nil
+	}
+}
+
+func lateRerunRunPayload(id int, created, updated *time.Time, started time.Time) string {
+	parts := []string{fmt.Sprintf(`"id":%d`, id), `"name":"CI"`, `"status":"completed"`, `"conclusion":"success"`,
+		`"run_started_at":"` + started.UTC().Format(time.RFC3339) + `"`, `"run_attempt":2`, `"event":"push"`, `"head_sha":"abc"`,
+		`"head_branch":"main"`, fmt.Sprintf(`"html_url":"https://github.com/acme/api/actions/runs/%d"`, id), `"pull_requests":[]`}
+	if created != nil {
+		parts = append(parts, `"created_at":"`+created.UTC().Format(time.RFC3339)+`"`)
+	}
+	if updated != nil {
+		parts = append(parts, `"updated_at":"`+updated.UTC().Format(time.RFC3339)+`"`)
+	}
+	return "{" + strings.Join(parts, ",") + "}"
+}
+
+// lateRerunBothRoutes runs the oracle Collect and the chunked route over the same doer shape and returns, per route,
+// the pipeline row ids and the jobs reads.
+func lateRerunBothRoutes(t *testing.T, claim Claim, deep, other []string) (map[string]map[string]int, map[string]map[string]int) {
+	t.Helper()
+	rows, reads := map[string]map[string]int{"oracle": {}, "chunked": {}}, map[string]map[string]int{"oracle": {}, "chunked": {}}
+	batch, err := GitHubTestsRouteHandler{}.Collect(context.Background(), claim, providerfoundation.Credential{},
+		githubTestsClient(t, fakehttp.Client(lateRerunRouteDoer(t, claim, deep, other, reads["oracle"]))), claim.BeforeAt.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, effect := range batch.Effects {
+		if effect.Destination != "ci_pipeline_runs" {
+			continue
+		}
+		decoded, decodeErr := decodeEffectRows[githubTestsPipelineRow](effect)
+		if decodeErr != nil {
+			t.Fatal(decodeErr)
+		}
+		for _, row := range decoded {
+			rows["oracle"][row.RunID]++
+		}
+	}
+	walk := lateRerunYieldWalk(t, GitHubTestsRouteHandler{}, claim, lateRerunRouteDoer(t, claim, deep, other, reads["chunked"]),
+		func(int, githubTestsChunkCursor) bool { return false })
+	for _, row := range walk.pipelines {
+		rows["chunked"][row.RunID]++
+	}
+	return rows, reads
+}
+
+// A run with no updated_at is never read by the deep range (no late change can be shown), on both routes; the runs
+// range still reads such a run of its lookback part, as before.
+func TestLateRerunRunsRefuseARunWithNoUpdateTime(t *testing.T) {
+	claim := lateRerunMidnightClaim("incremental")
+	deepCreated, rangeCreated := claim.SinceAt.Add(-72*time.Hour), claim.SinceAt.Add(-time.Hour)
+	deep := []string{lateRerunRunPayload(21, &deepCreated, nil, claim.SinceAt.Add(-2*time.Hour))}
+	other := []string{lateRerunRunPayload(22, &rangeCreated, nil, claim.SinceAt.Add(-30*time.Minute))}
+	rows, reads := lateRerunBothRoutes(t, claim, deep, other)
+	for _, route := range []string{"oracle", "chunked"} {
+		if rows[route]["21"] != 0 || reads[route]["21"] != 0 || rows[route]["22"] != 1 || reads[route]["22"] != 1 {
+			t.Errorf("%s: deep run with no updated_at rows=%d jobs reads=%d (want 0, 0); runs-range run with no updated_at rows=%d jobs reads=%d (want 1, 1)",
+				route, rows[route]["21"], reads[route]["21"], rows[route]["22"], reads[route]["22"])
+		}
+	}
+}
+
+// A run created at or after the runs range's floor belongs to the runs range: if a deep listing answers it, the deep
+// range skips it on both routes, so it is read once (one row, one jobs read) and never twice in a batch.
+func TestLateRerunRunsDeepRangeSkipsARunOfTheRunsRange(t *testing.T) {
+	claim := lateRerunMidnightClaim("incremental")
+	created, updated := claim.SinceAt.Add(-5*time.Hour-30*time.Minute), claim.SinceAt.Add(45*time.Minute)
+	run := lateRerunRunPayload(31, &created, &updated, claim.SinceAt.Add(30*time.Minute))
+	rows, reads := lateRerunBothRoutes(t, claim, []string{run}, []string{run})
+	for _, route := range []string{"oracle", "chunked"} {
+		if rows[route]["31"] != 1 || reads[route]["31"] != 1 {
+			t.Errorf("%s: rows=%d jobs reads=%d, want 1 and 1", route, rows[route]["31"], reads[route]["31"])
+		}
+	}
+}

@@ -310,3 +310,44 @@ func TestReadyFinalizerCutByItsBudgetRearmsEachDeliveryOnce(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-14238 M7 pin: the route-command reconcile (cursor != nil) never stops a
+// page early, even under a short deadline with slow items. Its keyset walk
+// pages from the last SELECTED row and ends on a short page, so a stop inside a
+// page would leave the rest 'dispatched' and report success.
+func TestRouteCommandReconcileDoesNotStopAPageAtTheStageDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	h := startFinalizeBackstopHarness(t, ctx)
+	now := time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC)
+	resetMaterializerIntegrationTables(t, ctx, h.admin)
+	generation := backstopRoutes(t, ctx, h.admin) + 1
+	const deliveries = 6
+	seedStaleFinalizeBatch(t, ctx, h, 0, deliveries, "success", now.Add(-24*time.Hour), generation)
+
+	// Each re-arm costs 10 s of a 65 s budget: all 6 fit (5 s left at the
+	// end), but the scheduled pass's rule would stop before item 6 (15 s left,
+	// under 2 x 10 s).
+	tracer := &passCutTracer{counted: rearmReadyFinalizeSQL, counts: map[string]int{}, costs: map[string]time.Duration{
+		rearmReadyFinalizeSQL: 10 * time.Second,
+	}}
+	repair, err := NewTerminalDeliveryRepair(tracedPoolOf(t, ctx, h.queue, tracer), h.coordinator, "river")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, restore := captureSlogRecords(t)
+	defer restore()
+	report, err := repair.ReconcileOtherGenerations(tracer.arm(newPassCutBudget(65*time.Second)), now, "finalize_sync_run")
+	if err != nil {
+		t.Fatalf("ReconcileOtherGenerations = %v", err)
+	}
+	var pending, dispatched int
+	if err := h.admin.QueryRow(ctx, `SELECT count(*) FILTER (WHERE status='pending'), count(*) FILTER (WHERE status='dispatched')
+		FROM public.sync_dispatch_outbox`).Scan(&pending, &dispatched); err != nil {
+		t.Fatal(err)
+	}
+	if report.Rearmed != deliveries || pending != deliveries || dispatched != 0 {
+		t.Fatalf("report=%+v pending=%d dispatched=%d; want all %d re-armed, none skipped by the walk",
+			report, pending, dispatched, deliveries)
+	}
+}

@@ -63,7 +63,7 @@ func describeIdentityMismatch(ctx context.Context, pool postureQuerier, role str
 // the login). It runs on a detached context: the caller's may already be spent by
 // the slow refusing query.
 func identityMismatchForDiagnosis(ctx context.Context, pool *pgxpool.Pool, role string) string {
-	identityCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), postureDiagnoseTimeout)
+	identityCtx, cancel := detachedPostureContext(ctx, postureDiagnoseTimeout)
 	defer cancel()
 	var ok bool
 	if err := pool.QueryRow(identityCtx, "SELECT "+roleacl.IdentityPredicateSQL, role).Scan(&ok); err != nil || ok {

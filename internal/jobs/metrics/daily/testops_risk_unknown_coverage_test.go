@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/finite"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 )
 
@@ -98,4 +99,70 @@ func TestReleaseConfidenceAllFactorsKnownRowUnchanged(t *testing.T) {
 		t.Errorf("all-known row: score=%v factors %v/%v/%v penalties %v/%v json=%s",
 			row.ConfidenceScore, row.PipelineSuccessFactor, row.TestPassFactor, row.CoverageFactor, row.FlakePenalty, row.RegressionPenalty, row.FactorsJSON)
 	}
+}
+
+func coverageBoundaryCounts(field string) map[finite.Reason]uint64 {
+	counts := map[finite.Reason]uint64{}
+	for _, reason := range []finite.Reason{finite.ReasonNaN, finite.ReasonPositiveInf, finite.ReasonNegativeInf, finite.ReasonUndefinedInput} {
+		counts[reason] = finite.Count("testops_release_confidence", field, reason)
+	}
+	return counts
+}
+
+// A non-finite coverage value is unknown and is also one trip of the finite-boundary counter for its field: exactly one,
+// never zero and never one from the unknown check plus one from the JSON writer.
+func TestReleaseConfidenceNonFiniteCoverageCountsOnceAtTheBoundary(t *testing.T) {
+	repo := uuid.MustParse("00000000-0000-4000-8000-0000000000a1")
+	pipe, test := unknownCoverageInputs(repo)
+	classes := []struct {
+		value  float64
+		reason finite.Reason
+	}{
+		{math.NaN(), finite.ReasonNaN}, {math.Inf(1), finite.ReasonPositiveInf}, {math.Inf(-1), finite.ReasonNegativeInf},
+	}
+	for _, field := range []string{"coverage_pct", "coverage_delta_pct"} {
+		for _, class := range classes {
+			cov := coverageAt(repo, 50)
+			if field == "coverage_pct" {
+				cov.LineCoveragePct = &class.value
+			} else {
+				cov.CoverageDeltaPct = &class.value
+			}
+			before, beforeOther := coverageBoundaryCounts(field), coverageBoundaryCounts(otherCoverageField(field))
+			computeReleaseConfidence(repo, unknownCoverageDay(), pipe, test, cov, unknownCoverageDay())
+			after, afterOther := coverageBoundaryCounts(field), coverageBoundaryCounts(otherCoverageField(field))
+			for reason, count := range after {
+				want := before[reason]
+				if reason == class.reason {
+					want++
+				}
+				if count != want {
+					t.Errorf("%s %s: counter[%s] moved %d -> %d, want %d", field, class.reason, reason, before[reason], count, want)
+				}
+				if afterOther[reason] != beforeOther[reason] {
+					t.Errorf("%s %s: counter of %s [%s] moved %d -> %d, want no change", field, class.reason, otherCoverageField(field), reason, beforeOther[reason], afterOther[reason])
+				}
+			}
+		}
+	}
+	finiteCov := coverageAt(repo, 50)
+	minusFive := -5.0
+	finiteCov.CoverageDeltaPct = &minusFive
+	before := [2]map[finite.Reason]uint64{coverageBoundaryCounts("coverage_pct"), coverageBoundaryCounts("coverage_delta_pct")}
+	computeReleaseConfidence(repo, unknownCoverageDay(), pipe, test, finiteCov, unknownCoverageDay())
+	after := [2]map[finite.Reason]uint64{coverageBoundaryCounts("coverage_pct"), coverageBoundaryCounts("coverage_delta_pct")}
+	for i := range before {
+		for reason := range before[i] {
+			if after[i][reason] != before[i][reason] {
+				t.Errorf("finite coverage: counter %d [%s] moved %d -> %d, want no change", i, reason, before[i][reason], after[i][reason])
+			}
+		}
+	}
+}
+
+func otherCoverageField(field string) string {
+	if field == "coverage_pct" {
+		return "coverage_delta_pct"
+	}
+	return "coverage_pct"
 }

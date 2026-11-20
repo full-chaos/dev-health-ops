@@ -57,6 +57,10 @@ import (
 // 0.0` -- see compute_pipeline_stability's source), so it is out of this
 // sweep's scope.
 //
+// Unknown is not 0 and not 100: a non-finite coverage percentage or delta is unknown, so the coverage factor is left out
+// with the other weights renormalized, and an unknown delta adds no regression penalty. The NaN/+Inf/-Inf rows below
+// therefore no longer follow Python's clamp (full credit for NaN/+Inf, a penalty for a -Inf delta).
+//
 // Every expected value below was computed with a live python3 interpreter
 // against the exact CPython operations compute_testops_risk.py performs
 // (the `or 0.0` idiom, max/min for _clamp, `<` for the regression-penalty
@@ -74,23 +78,21 @@ func TestNonFiniteCoverageClassSweep(t *testing.T) {
 	coveragePctCases := []struct {
 		name string
 		pct  float64
-		// wantCovFactor is Python's `0.2 * max(0.0, min(1.0, (pct or 0.0)
-		// /100.0))`. -0.0 goes through `or 0.0` FIRST (this function's own
-		// pyOrZero call), landing on +0.0 before it ever reaches clampUnit
-		// -- clampUnit(0.0/100.0) = 0.0, same end value as before this fix,
-		// but for a different reason (this table exists to pin the reason,
-		// not just the number).
+		// wantCovFactor is 0 for every row: a non-finite percentage is unknown (no coverage factor), and -0.0 goes
+		// through `or 0.0` first, landing on a known +0.0.
 		wantCovFactor float64
+		// wantScore: pipeline 0.4 + tests 0.3 + flake 0.1 = 0.8, divided by 0.8 when coverage is unknown.
+		wantScore float64
 		// wantCoveragePctJSON is round(pct or 0.0, 2) then this file's own
 		// finite-boundary JSON rendering (R73): "null" for a non-finite
 		// value (never Python's own json.dumps "NaN"/"Infinity"/
 		// "-Infinity" tokens), the ordinary rendered literal otherwise.
 		wantCoveragePctJSON string
 	}{
-		{"NaN", math.NaN(), 0.2, "null"},
-		{"+Inf", math.Inf(1), 0.2, "null"},
-		{"-Inf", math.Inf(-1), 0.0, "null"},
-		{"-0.0", math.Copysign(0, -1), 0.0, "0.0"}, // `-0.0 or 0.0` == 0.0 in Python (bool(-0.0) is False)
+		{"NaN", math.NaN(), 0.0, 1.0, "null"},   // unknown: 0.8 / 0.8
+		{"+Inf", math.Inf(1), 0.0, 1.0, "null"}, // unknown
+		{"-Inf", math.Inf(-1), 0.0, 1.0, "null"},
+		{"-0.0", math.Copysign(0, -1), 0.0, 0.8, "0.0"}, // `-0.0 or 0.0` == 0.0 in Python (bool(-0.0) is False): a known 0
 	}
 
 	for _, tc := range coveragePctCases {
@@ -105,17 +107,11 @@ func TestNonFiniteCoverageClassSweep(t *testing.T) {
 			if row.CoverageFactor != tc.wantCovFactor {
 				t.Errorf("CoverageFactor = %v, want %v", row.CoverageFactor, tc.wantCovFactor)
 			}
-			// baseScore = 0.4*1.0 (pipeline) + 0.3*1.0 (test) + covFactor + 0.1*1.0 (flake, flakeRate=0)
-			// = 0.7 + 0.1 + covFactor = 0.8 + covFactor, all finite regardless
-			// of which coveragePct case ran, because clampUnit is a NaN/Inf
-			// sink -- this is the whole point of the class fix: no non-finite
-			// value survives past clampUnit into baseScore/score/ConfidenceScore.
-			wantScore := pyRound(0.8+tc.wantCovFactor, 4)
-			if row.ConfidenceScore != wantScore {
-				t.Errorf("ConfidenceScore = %v, want %v (baseScore must be finite; a non-finite ConfidenceScore here would mean clampUnit stopped sinking non-finite input)", row.ConfidenceScore, wantScore)
+			if row.ConfidenceScore != tc.wantScore {
+				t.Errorf("ConfidenceScore = %v, want %v", row.ConfidenceScore, tc.wantScore)
 			}
 			if math.IsNaN(row.ConfidenceScore) || math.IsInf(row.ConfidenceScore, 0) {
-				t.Errorf("ConfidenceScore is non-finite (%v) for coveragePct=%s -- clampUnit must always saturate to a finite bound", row.ConfidenceScore, tc.name)
+				t.Errorf("ConfidenceScore is non-finite (%v) for coveragePct=%s", row.ConfidenceScore, tc.name)
 			}
 			wantCoveragePctField := `"coverage_pct": ` + tc.wantCoveragePctJSON
 			if !strings.Contains(row.FactorsJSON, wantCoveragePctField) {
@@ -127,12 +123,12 @@ func TestNonFiniteCoverageClassSweep(t *testing.T) {
 	coverageDeltaCases := []struct {
 		name               string
 		delta              float64
-		wantRegressionAdds bool // Python: `if (coverage_delta or 0.0) < -2.0: regression_penalty += 0.05`
+		wantRegressionAdds bool // a known delta below -2.0 adds 0.05; a non-finite delta is unknown and adds nothing
 		wantDeltaJSON      string
 	}{
-		{"NaN", math.NaN(), false, "null"},           // nan < -2.0 is False in both Go and Python
-		{"+Inf", math.Inf(1), false, "null"},         // +inf < -2.0 is False
-		{"-Inf", math.Inf(-1), true, "null"},         // -inf < -2.0 is True
+		{"NaN", math.NaN(), false, "null"},
+		{"+Inf", math.Inf(1), false, "null"},
+		{"-Inf", math.Inf(-1), false, "null"},
 		{"-0.0", math.Copysign(0, -1), false, "0.0"}, // normalized to +0.0 before the comparison; 0.0 < -2.0 is False either way
 	}
 

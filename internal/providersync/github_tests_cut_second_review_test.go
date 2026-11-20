@@ -111,7 +111,9 @@ func TestGitHubTestsCutSecondSameRangeNeverSkips(t *testing.T) {
 			runs = append(runs, target)
 			switch cell {
 			case "page_reanchor":
-				runs = append(runs, run(id-1, at.Add(-time.Second)))
+				// A newer run listed before the target: deleting it moves the target (CHAOS-14316: a deletion after the
+				// last listed run moves nothing, so the resume goes on without a re-read).
+				runs = append(runs, run(7100, at.Add(time.Second)), run(id-1, at.Add(-time.Second)))
 			case "pagination_offset_shift":
 				runs = append(runs, makeListingRuns(7000, 99-preceding, at.Add(time.Second), time.Second)...)
 				runs = append(runs, run(id-1, at.Add(-time.Second)))
@@ -135,10 +137,16 @@ func TestGitHubTestsCutSecondSameRangeNeverSkips(t *testing.T) {
 				}
 				switch cell {
 				case "page_reanchor":
-					if after.Index != preceding+1 {
-						t.Fatalf("%s: index %d, want %d", name, after.Index, preceding+1)
+					if after.Index != preceding+2 {
+						t.Fatalf("%s: index %d, want %d", name, after.Index, preceding+2)
 					}
-					doer.base.runs = []listingRun{target}
+					kept := doer.base.runs[:0:0]
+					for _, listed := range doer.base.runs {
+						if listed.id != 7100 {
+							kept = append(kept, listed)
+						}
+					}
+					doer.base.runs = kept
 				case "pagination_offset_shift":
 					if after.RangeItems != 100 || after.Index != 0 {
 						t.Fatalf("%s: want a page boundary: %+v", name, after)
@@ -301,6 +309,7 @@ func (doer *cutRepeatedReadDoer) Do(request *http.Request) (*http.Response, erro
 // A run read whole and then read again in the same range (same-page duplicate, shifted page, resume re-anchor) with no
 // verdict or an incomplete verdict (empty listing, an additional report's download 404, a redirect with no location) is
 // dropped from the active list in that emission: the revisit reads it as main does. A complete repeated read keeps it.
+// A shifted page and a resume re-anchor are sought again from the cut second instead (CHAOS-14316): see want below.
 func TestGitHubTestsCutSecondRepeatedReadWithALossDropsTheKey(t *testing.T) {
 	type tally struct {
 		lists, verdicts, suites, additional int
@@ -332,6 +341,10 @@ func TestGitHubTestsCutSecondRepeatedReadWithALossDropsTheKey(t *testing.T) {
 				var carried string
 				var peeled, yielded bool
 				walk := walkCutDedup(t, cutDedupClaim(layout.backfill), doer, func(before, after githubTestsChunkCursor) bool {
+					if before.Phase == githubTestsArtifactsPhase && before.RangeHi == cutDedupSecond.Format(time.RFC3339) && !peeled {
+						// A shifted page is sought again from the cut second (CHAOS-14316): that range ends where the peel would.
+						peeled, carried = true, before.CarriedCutKeys
+					}
 					if before.Phase != githubTestsArtifactsPhase || before.RangeHi != "" {
 						return false
 					}
@@ -373,6 +386,17 @@ func TestGitHubTestsCutSecondRepeatedReadWithALossDropsTheKey(t *testing.T) {
 					"unavailable_download": {3, 3, 4, 1, ""},
 					"complete_control":     {2, 2, 2, 0, id},
 				}[secondRead]
+				if shape != "duplicate" {
+					// A page that moved under the resume is sought again from the target's created second (CHAOS-14316): that
+					// search reads the second's runs once more, and it is the last look of this unit at them (no peel follows:
+					// the moved range no longer holds GitHub's cap). A lossy second read stays this unit's last read.
+					want = map[string]tally{
+						"no_source":            {2, 1, 1, 0, ""},
+						"download_404":         {2, 2, 2, 0, ""},
+						"unavailable_download": {2, 2, 2, 0, ""},
+						"complete_control":     {2, 2, 2, 0, ""},
+					}[secondRead]
+				}
 				if got != want {
 					t.Errorf("%s: lists/verdicts/suites/additional reads/carried = %+v, want %+v", name, got, want)
 				}

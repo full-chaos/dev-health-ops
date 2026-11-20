@@ -373,8 +373,9 @@ const githubTestsMaxSkippedArtifactRecords = 5
 // (CHAOS-4588/CHAOS-4591): exclusion volume can be much higher than skip
 // volume on a docker-build-heavy repository, and the sample only needs to be
 // large enough to identify the PATTERN, not every occurrence -- the total
-// count already lives on ExcludedNonReportSuffix/Prefix.
-const githubTestsMaxExcludedArtifactSampleRecords = 5
+// count already lives on ExcludedNonReportSuffix/Prefix. 4 since CHAOS-14316: its fifth record paid for the resume anchor
+// (AnchorID) of an artifacts-phase cursor.
+const githubTestsMaxExcludedArtifactSampleRecords = 4
 
 const (
 	// githubTestsReportMemberComponent is the original vocabulary: one member

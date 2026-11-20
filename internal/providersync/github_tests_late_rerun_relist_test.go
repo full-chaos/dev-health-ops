@@ -198,6 +198,8 @@ func TestGitHubTestsLateRerunDeepStopAdvances(t *testing.T) {
 	}{
 		{"page budget", GitHubTestsRouteHandler{MaxRuns: 100}, append([]listingRun{late}, makeListingRuns(2000, 150, time.Date(2026, 6, 28, 0, 0, 0, 0, time.UTC), time.Minute)...), githubTestsPageBudgetCause},
 		{"saturated second", GitHubTestsRouteHandler{}, append([]listingRun{late}, saturating...), githubTestsListingSaturatedCause},
+		// 1,000 runs fill the first deep range and its 10-page budget exactly; the peeled next range finds the budget spent.
+		{"page budget at a peel", GitHubTestsRouteHandler{MaxRuns: 1000}, append([]listingRun{late}, makeListingRuns(3000, 1000, time.Date(2026, 6, 28, 0, 0, 0, 0, time.UTC), time.Minute)...), githubTestsPageBudgetCause},
 	} {
 		t.Run(cell.name, func(t *testing.T) {
 			fake := newListingFake(t, cell.runs)
@@ -226,7 +228,7 @@ func TestGitHubTestsLateRerunDeepStopAdvances(t *testing.T) {
 			if err := validateGitHubTestsCompletion(claim, walk.final); err != nil {
 				t.Errorf("comparator refused the completion: %v", err)
 			}
-			if cell.cause != githubTestsPageBudgetCause {
+			if cell.name != "page budget" {
 				return
 			}
 			oracleFake := newListingFake(t, cell.runs)

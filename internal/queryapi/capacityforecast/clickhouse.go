@@ -104,9 +104,9 @@ func capacitySource(teamIDs []string, where string, newestDay bool) string {
 	case len(teamIDs) != 1:
 		return "work_item_metrics_daily FINAL"
 	case newestDay:
-		return rowview.ServedTeamPick("work_item_metrics_daily", where) + " AS work_item_metrics_daily"
+		return rowview.ServedTeamPick("work_item_metrics_daily", where, "") + " AS work_item_metrics_daily"
 	default:
-		return rowview.ServedTeamSource("work_item_metrics_daily", where) + " AS work_item_metrics_daily"
+		return rowview.ServedTeamSource("work_item_metrics_daily", where, "") + " AS work_item_metrics_daily"
 	}
 }
 

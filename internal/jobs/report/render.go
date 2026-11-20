@@ -187,7 +187,7 @@ func provenanceID(planID, artifactType, artifactID string) string {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(planID+":"+artifactType+":"+artifactID)).String()
 }
 
-// otherChartsTitle heads the charts no listed section printed; a plan section whose title is this name (case ignored) is renamed so the heading is unique.
+// otherChartsTitle heads the charts no listed section printed; when that heading is printed, a plan section whose shown title is this name (case ignored) is renamed so the heading is unique.
 const otherChartsTitle = "Other Charts"
 
 func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, provenance []ProvenanceRecord) string {
@@ -210,15 +210,15 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 		"",
 	}
 	printed := make([]bool, len(charts))
+	var collidingHeadings []int
 	for _, section := range narratives {
 		if section.sectionType == "summary" {
 			continue
 		}
-		title := section.title
-		if strings.EqualFold(strings.TrimSpace(title), otherChartsTitle) {
-			title = otherChartsTitle + " (plan section)"
+		if strings.EqualFold(trimMarkdownEdge(markdownLineBreaks.Replace(section.title)), otherChartsTitle) {
+			collidingHeadings = append(collidingHeadings, len(lines))
 		}
-		lines = append(lines, "## "+markdownText(title), section.body, "", "### Insights",
+		lines = append(lines, "## "+markdownText(section.title), section.body, "", "### Insights",
 			"No grounded insights for this section.", "", "### Charts")
 		found := false
 		for index, chart := range charts {
@@ -240,6 +240,9 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 		}
 	}
 	if len(unlisted) > 0 {
+		for _, index := range collidingHeadings {
+			lines[index] = "## " + markdownText(otherChartsTitle+" (plan section)")
+		}
 		lines = append(lines, "## "+otherChartsTitle)
 		for _, chart := range unlisted {
 			lines = append(lines, renderChart(chart), "")
@@ -265,7 +268,7 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 				metricName = "n/a"
 			}
 			lines = append(lines, fmt.Sprintf("- **%s:%s** — sources: %s; metrics: %s",
-				markdownText(strings.TrimSpace(record.ArtifactType)), markdownText(strings.TrimSpace(record.ArtifactID)), markdownText(source), markdownText(metricName)))
+				markdownText(trimMarkdownEdge(record.ArtifactType)), markdownText(trimMarkdownEdge(record.ArtifactID)), markdownText(source), markdownText(metricName)))
 		}
 	}
 	scope := formatScope(plan)
@@ -294,6 +297,9 @@ func renderChart(chart ChartResult) string {
 	return strings.Join(lines, "\n") + note
 }
 
+// trimMarkdownEdge drops only ASCII space, tab, CR and LF at the edges: a reader shows NBSP and other Unicode space.
+func trimMarkdownEdge(value string) string { return strings.Trim(value, " \t\r\n") }
+
 var markdownLineBreaks = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
 
 // escapeMarkdown folds a line break to a space and puts a backslash before each character of escapes. A value
@@ -316,7 +322,7 @@ func escapeMarkdown(value, escapes string) string {
 // entity, a heading or a backslash escape gets a backslash. An "_" between two ASCII letters or digits stays plain:
 // CommonMark never reads it as emphasis, and source-table and metric names hold it.
 func markdownText(value string) string {
-	runes := []rune(strings.TrimSpace(markdownLineBreaks.Replace(value)))
+	runes := []rune(trimMarkdownEdge(markdownLineBreaks.Replace(value)))
 	var b strings.Builder
 	for i, r := range runes {
 		if strings.ContainsRune("\\*_`[]<>~&#", r) && !(r == '_' && i > 0 && i < len(runes)-1 && asciiAlnum(runes[i-1]) && asciiAlnum(runes[i+1])) {
@@ -334,7 +340,7 @@ func asciiAlnum(r rune) bool {
 // emphasisLine writes "_label: value_". Surrounding space of the value is dropped: a closing "_" after a space does
 // not close the emphasis and the line would show its underscores.
 func emphasisLine(label, value string) string {
-	if value = strings.TrimSpace(markdownLineBreaks.Replace(value)); value == "" {
+	if value = trimMarkdownEdge(markdownLineBreaks.Replace(value)); value == "" {
 		return "_" + label + ":_"
 	}
 	return "_" + label + ": " + markdownText(value) + "_"
@@ -343,7 +349,7 @@ func emphasisLine(label, value string) string {
 // markdownListStart writes the first text of a list item as one table-cell escaped label, with leading space dropped
 // (four spaces would open a code block).
 func markdownListStart(value string) string {
-	return markdownLineStart(markdownTableCell(strings.TrimSpace(markdownLineBreaks.Replace(value))))
+	return markdownLineStart(markdownTableCell(trimMarkdownEdge(markdownLineBreaks.Replace(value))))
 }
 
 // markdownLineStart keeps escaped text that opens a line from opening a block: a leading "-" or "+" (list, rule) or a

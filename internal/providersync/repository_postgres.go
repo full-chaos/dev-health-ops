@@ -30,6 +30,10 @@ type PostgresRepository struct {
 	// RepositoryIdentities, when set, is the auth outbox a `repos` effect commit
 	// appends its repository identity events to (WORKER_REPO_IDENTITY_OUTBOX).
 	RepositoryIdentities RepositoryIdentityAppender
+	// storeRetrySleep and commitTx are test seams (store_transient.go); nil in
+	// production.
+	storeRetrySleep func(ctx context.Context, next int) error
+	commitTx        func(ctx context.Context, tx pgx.Tx) error
 }
 
 // NewPostgresRepository constructs the production unit repository. metrics is
@@ -209,21 +213,60 @@ func (repository *PostgresRepository) Complete(
 	if err != nil {
 		return ErrInvalidConfiguration
 	}
+	// Normalized once, before the transaction: the clamp logs, and a retried
+	// transaction must not log it again.
+	var watermarks []watermarkWrite
+	if watermark != nil {
+		for _, datasetKey := range datasetKeys {
+			// THE write boundary (CHAOS-3412 C10(c), CHAOS-3427). Every Go
+			// watermark write routes through normalizeWatermarkWrite: routes
+			// that prefer a provider-supplied watermark over claim.BeforeAt
+			// bypass every planner-side clamp otherwise, and the INSERT half
+			// of the upsert has no monotonic gate at all to fall back on.
+			watermarks = append(watermarks, watermarkWrite{datasetKey: datasetKey, value: normalizeWatermarkWrite(
+				*watermark, claim.BeforeAt, completedAt,
+				claim.OrgID, claim.SourceExternalID, datasetKey,
+			)})
+		}
+	}
+	return repository.retryUnitWrite(ctx, claim, "success", completedAt,
+		func() error { return repository.completeTx(ctx, claim, encoded, watermarks, startedAt, completedAt) },
+		func() { repository.wakeDispatch(ctx, claim, completedAt) },
+	)
+}
+
+// watermarkWrite is one normalized watermark upsert of a completion.
+type watermarkWrite struct {
+	datasetKey string
+	value      time.Time
+}
+
+// completeTx is one attempt of Complete's transaction. Every step before
+// COMMIT is a statement of tx; the metric, log and wake after COMMIT run once
+// per committed outcome.
+func (repository *PostgresRepository) completeTx(
+	ctx context.Context, claim Claim, encoded []byte, watermarks []watermarkWrite,
+	startedAt, completedAt time.Time,
+) error {
+	const write = storeWriteComplete
 	tx, err := repository.Pool.Begin(ctx)
 	if err != nil {
-		return ErrInvalidConfiguration
+		return storeErr(write, storeStepBegin, err, ErrInvalidConfiguration)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	command, err := tx.Exec(ctx, completeUnitSQL,
 		claim.ID, claim.Owner, completedAt.UTC(),
 		int(completedAt.Sub(startedAt).Seconds()), encoded,
 	)
-	if err != nil || command.RowsAffected() != 1 {
+	if err != nil {
+		return storeErr(write, storeStepUnitUpdate, err, ErrLeaseLost)
+	}
+	if command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
 	rollupCompleted, rollupFailed, rollupTotal, err := bumpSyncRunRollup(ctx, tx, claim.SyncRunID)
 	if err != nil {
-		return ErrInvalidConfiguration
+		return storeErr(write, storeStepBump, err, ErrInvalidConfiguration)
 	}
 	// CHAOS-4114: stamp the durable executed-proof ledger from the row this
 	// transaction just terminalized, inside the same transaction. It reads
@@ -233,7 +276,7 @@ func (repository *PostgresRepository) Complete(
 	// rather than committing a unit whose proof was silently not recorded:
 	// the gate's whole value is that its evidence matches reality.
 	if err := RecordExecutedProofTerminal(ctx, tx, claim.ID, completedAt); err != nil {
-		return ErrInvalidConfiguration
+		return storeErr(write, storeStepProof, err, ErrInvalidConfiguration)
 	}
 	// The prepared effect payload is recovery state, not a product record.
 	// Delete it in the same transaction that terminalizes the unit so any
@@ -242,13 +285,13 @@ func (repository *PostgresRepository) Complete(
 		ctx, deletePreparedRouteSnapshotSQL,
 		claim.OrgID, claim.ID, claim.GenerationKey(),
 	); err != nil {
-		return ErrInvalidConfiguration
+		return storeErr(write, storeStepSnapshotDelete, err, ErrInvalidConfiguration)
 	}
 	// The chunk tables are additive during rolling migration. Older test and
 	// deployment fixtures may terminalize a legacy unit before 0102 is
 	// installed, so probe the catalog before issuing the cleanup statement.
 	if err := deletePreparedChunkStateTx(ctx, tx, claim); err != nil {
-		return err
+		return storeErr(write, storeStepChunkDelete, err, ErrInvalidConfiguration)
 	}
 	// A terminal success proves the provider capability is back, regardless of
 	// whether this attempt happened to advance a watermark, so this runs
@@ -256,35 +299,24 @@ func (repository *PostgresRepository) Complete(
 	if _, err := tx.Exec(ctx, clearDatasetUnavailableSQL,
 		claim.OrgID, claim.IntegrationID, claim.Dataset,
 	); err != nil {
-		return ErrInvalidConfiguration
+		return storeErr(write, storeStepDatasetClear, err, ErrInvalidConfiguration)
 	}
-	if watermark != nil {
-		for _, datasetKey := range datasetKeys {
-			// THE write boundary (CHAOS-3412 C10(c), CHAOS-3427). Every Go
-			// watermark write routes through normalizeWatermarkWrite: routes
-			// that prefer a provider-supplied watermark over claim.BeforeAt
-			// bypass every planner-side clamp otherwise, and the INSERT half
-			// of the upsert has no monotonic gate at all to fall back on.
-			normalized := normalizeWatermarkWrite(
-				*watermark, claim.BeforeAt, completedAt,
-				claim.OrgID, claim.SourceExternalID, datasetKey,
-			)
-			if _, err := tx.Exec(ctx, upsertWatermarkSQL,
-				uuid.New(), claim.OrgID, claim.SourceExternalID, datasetKey,
-				normalized, completedAt.UTC(),
-			); err != nil {
-				return ErrInvalidConfiguration
-			}
+	for _, watermark := range watermarks {
+		if _, err := tx.Exec(ctx, upsertWatermarkSQL,
+			uuid.New(), claim.OrgID, claim.SourceExternalID, watermark.datasetKey,
+			watermark.value, completedAt.UTC(),
+		); err != nil {
+			return storeErr(write, storeStepWatermark, err, ErrInvalidConfiguration)
 		}
 	}
 	// syncrunrollup.ArmFinalize, not a local statement: this is the seam the
 	// recovery writers (UnreclaimableSweep, LeaseRepair) were missing, so the
 	// SQL now lives beside Bump where every terminal-status writer reaches it.
 	if err := syncrunrollup.ArmFinalize(ctx, tx, claim.SyncRunID, claim.OrgID, completedAt); err != nil {
-		return ErrInvalidConfiguration
+		return storeErr(write, storeStepFinalize, err, ErrInvalidConfiguration)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return ErrInvalidConfiguration
+	if err := repository.commit(ctx, tx); err != nil {
+		return storeErr(write, storeStepCommit, err, ErrInvalidConfiguration)
 	}
 	recordSyncRunRollupBump(ctx, repository.Metrics, claim.SyncRunID, "success", rollupCompleted, rollupFailed, rollupTotal)
 	repository.wakeDispatch(ctx, claim, completedAt)
@@ -313,21 +345,49 @@ func (repository *PostgresRepository) CompleteLinearWorkItemFamily(
 	if err != nil {
 		return ErrInvalidConfiguration
 	}
+	// Normalized once, before the transaction: the clamp logs, and a retried
+	// transaction must not log it again.
+	watermarks := make([]watermarkWrite, 0, len(workitemcontract.FamilyDatasets()))
+	for _, datasetKey := range workitemcontract.FamilyDatasets() {
+		watermarks = append(watermarks, watermarkWrite{datasetKey: datasetKey, value: normalizeWatermarkWrite(
+			result.Watermark, claim.BeforeAt, completedAt,
+			claim.OrgID, claim.SourceExternalID, datasetKey,
+		)})
+	}
+	return repository.retryUnitWrite(ctx, claim, "success", completedAt,
+		func() error {
+			return repository.completeLinearWorkItemFamilyTx(ctx, claim, encoded, watermarks, startedAt, completedAt)
+		},
+		func() { repository.wakeDispatch(ctx, claim, completedAt) },
+	)
+}
+
+// completeLinearWorkItemFamilyTx is one attempt of CompleteLinearWorkItemFamily's
+// transaction. Every step before COMMIT is a statement of tx; the metric, log
+// and wake after COMMIT run once per committed outcome.
+func (repository *PostgresRepository) completeLinearWorkItemFamilyTx(
+	ctx context.Context, claim Claim, encoded []byte, watermarks []watermarkWrite,
+	startedAt, completedAt time.Time,
+) error {
+	const write = storeWriteCompleteLinearFamily
 	tx, err := repository.Pool.Begin(ctx)
 	if err != nil {
-		return ErrInvalidConfiguration
+		return storeErr(write, storeStepBegin, err, ErrInvalidConfiguration)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	command, err := tx.Exec(ctx, completeUnitSQL,
 		claim.ID, claim.Owner, completedAt.UTC(),
 		int(completedAt.Sub(startedAt).Seconds()), encoded,
 	)
-	if err != nil || command.RowsAffected() != 1 {
+	if err != nil {
+		return storeErr(write, storeStepUnitUpdate, err, ErrLeaseLost)
+	}
+	if command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
 	rollupCompleted, rollupFailed, rollupTotal, err := bumpSyncRunRollup(ctx, tx, claim.SyncRunID)
 	if err != nil {
-		return ErrInvalidConfiguration
+		return storeErr(write, storeStepBump, err, ErrInvalidConfiguration)
 	}
 	// CHAOS-4114: stamp the durable executed-proof ledger from the row this
 	// transaction just terminalized, inside the same transaction. It reads
@@ -337,38 +397,34 @@ func (repository *PostgresRepository) CompleteLinearWorkItemFamily(
 	// rather than committing a unit whose proof was silently not recorded:
 	// the gate's whole value is that its evidence matches reality.
 	if err := RecordExecutedProofTerminal(ctx, tx, claim.ID, completedAt); err != nil {
-		return ErrInvalidConfiguration
+		return storeErr(write, storeStepProof, err, ErrInvalidConfiguration)
 	}
 	if _, err := tx.Exec(ctx, deletePreparedRouteSnapshotSQL,
 		claim.OrgID, claim.ID, claim.GenerationKey(),
 	); err != nil {
-		return ErrInvalidConfiguration
+		return storeErr(write, storeStepSnapshotDelete, err, ErrInvalidConfiguration)
 	}
-	for _, datasetKey := range workitemcontract.FamilyDatasets() {
-		normalized := normalizeWatermarkWrite(
-			result.Watermark, claim.BeforeAt, completedAt,
-			claim.OrgID, claim.SourceExternalID, datasetKey,
-		)
+	for _, watermark := range watermarks {
 		if _, err := tx.Exec(ctx, upsertWatermarkSQL,
-			uuid.New(), claim.OrgID, claim.SourceExternalID, datasetKey,
-			normalized, completedAt.UTC(),
+			uuid.New(), claim.OrgID, claim.SourceExternalID, watermark.datasetKey,
+			watermark.value, completedAt.UTC(),
 		); err != nil {
-			return ErrInvalidConfiguration
+			return storeErr(write, storeStepWatermark, err, ErrInvalidConfiguration)
 		}
 		if _, err := tx.Exec(ctx, clearDatasetUnavailableSQL,
-			claim.OrgID, claim.IntegrationID, datasetKey,
+			claim.OrgID, claim.IntegrationID, watermark.datasetKey,
 		); err != nil {
-			return ErrInvalidConfiguration
+			return storeErr(write, storeStepDatasetClear, err, ErrInvalidConfiguration)
 		}
 	}
 	// syncrunrollup.ArmFinalize, not a local statement: this is the seam the
 	// recovery writers (UnreclaimableSweep, LeaseRepair) were missing, so the
 	// SQL now lives beside Bump where every terminal-status writer reaches it.
 	if err := syncrunrollup.ArmFinalize(ctx, tx, claim.SyncRunID, claim.OrgID, completedAt); err != nil {
-		return ErrInvalidConfiguration
+		return storeErr(write, storeStepFinalize, err, ErrInvalidConfiguration)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return ErrInvalidConfiguration
+	if err := repository.commit(ctx, tx); err != nil {
+		return storeErr(write, storeStepCommit, err, ErrInvalidConfiguration)
 	}
 	recordSyncRunRollupBump(ctx, repository.Metrics, claim.SyncRunID, "success", rollupCompleted, rollupFailed, rollupTotal)
 	repository.wakeDispatch(ctx, claim, completedAt)
@@ -391,13 +447,32 @@ func (repository *PostgresRepository) ReleaseForRetry(
 		claim.Validate() != nil || now.IsZero() {
 		return ErrInvalidConfiguration
 	}
-	command, err := repository.Pool.Exec(ctx, releaseForRetrySQL,
-		claim.ID, claim.Owner, now.UTC(),
-	)
-	if err != nil || command.RowsAffected() != 1 {
-		return ErrLeaseLost
+	// One autocommit statement. A connection lost while it ran may have
+	// released the unit; the next try then matches no row and answers
+	// ErrLeaseLost, which the caller already handles as a retryable release.
+	for attempt := 1; ; attempt++ {
+		command, err := repository.Pool.Exec(ctx, releaseForRetrySQL,
+			claim.ID, claim.Owner, now.UTC(),
+		)
+		if err == nil {
+			if command.RowsAffected() != 1 {
+				return ErrLeaseLost
+			}
+			return nil
+		}
+		mapped := storeErr(storeWriteRelease, storeStepUnitUpdate, err, ErrLeaseLost)
+		var transient *StoreTransientError
+		if !errors.As(mapped, &transient) {
+			return mapped
+		}
+		logStoreRetry(ctx, claim, transient, attempt)
+		if attempt >= storeWriteAttempts {
+			return mapped
+		}
+		if waitErr := repository.storeRetryWait(ctx, attempt+1); waitErr != nil {
+			return mapped
+		}
 	}
-	return nil
 }
 
 // DeferForBudgetContention records a healthy request-reservation collision.
@@ -775,11 +850,6 @@ func (repository *PostgresRepository) failTx(
 		startedAt.IsZero() || completedAt.Before(startedAt) {
 		return ErrInvalidConfiguration
 	}
-	tx, err := repository.Pool.Begin(ctx)
-	if err != nil {
-		return ErrInvalidConfiguration
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
 	resultDoc := map[string]any{"error_category": category}
 	if causeClass != "" {
 		if !ValidCauseClass(causeClass) {
@@ -797,52 +867,85 @@ func (repository *PostgresRepository) failTx(
 	if marshalErr != nil {
 		return ErrInvalidConfiguration
 	}
+	return repository.retryUnitWrite(ctx, claim, "failed", completedAt,
+		func() error { return repository.failTxOnce(ctx, claim, category, result, startedAt, completedAt) },
+		func() {
+			repository.wakeDispatch(ctx, claim, completedAt)
+			repository.recordUnitFailed(claim, category)
+		},
+	)
+}
+
+// failTxOnce is one attempt of failTx's transaction. Every step before COMMIT
+// is a statement of tx (stampNeedsAttention's log lines are held until after
+// COMMIT); the metrics, logs and wake after COMMIT run once per committed
+// outcome.
+func (repository *PostgresRepository) failTxOnce(
+	ctx context.Context, claim Claim, category string, result []byte,
+	startedAt, completedAt time.Time,
+) error {
+	const write = storeWriteFail
+	tx, err := repository.Pool.Begin(ctx)
+	if err != nil {
+		return storeErr(write, storeStepBegin, err, ErrInvalidConfiguration)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 	command, err := tx.Exec(ctx, failUnitSQL,
 		claim.ID, claim.Owner, completedAt.UTC(),
 		int(completedAt.Sub(startedAt).Seconds()), category, result,
 	)
-	if err != nil || command.RowsAffected() != 1 {
+	if err != nil {
+		return storeErr(write, storeStepUnitUpdate, err, ErrLeaseLost)
+	}
+	if command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
 	rollupCompleted, rollupFailed, rollupTotal, err := bumpSyncRunRollup(ctx, tx, claim.SyncRunID)
 	if err != nil {
-		return ErrInvalidConfiguration
+		return storeErr(write, storeStepBump, err, ErrInvalidConfiguration)
 	}
 	if category == ProviderDatasetUnavailableCategory {
 		if _, err := tx.Exec(ctx, markDatasetUnavailableSQL,
 			claim.OrgID, claim.IntegrationID, claim.Dataset, category, completedAt.UTC(),
 		); err != nil {
-			return ErrInvalidConfiguration
+			return storeErr(write, storeStepDatasetMark, err, ErrInvalidConfiguration)
 		}
 	}
+	logNeedsAttention := func() {}
 	if claim.Dataset == workItemsCanonicalDataset {
-		stampNeedsAttention(ctx, tx, claim)
+		logNeedsAttention = stampNeedsAttention(ctx, tx, claim)
 	}
 	// Unlike a prepared recovery snapshot, a chunk checkpoint is only ever
 	// resumable by a RUNNING unit of the same generation. Terminalizing the
 	// unit makes its sidecars unreachable, so keeping them would retain
 	// provider payloads that nothing can read and nothing else reclaims.
 	if err := deletePreparedChunkStateTx(ctx, tx, claim); err != nil {
-		return err
+		return storeErr(write, storeStepChunkDelete, err, ErrInvalidConfiguration)
 	}
 	// syncrunrollup.ArmFinalize, not a local statement: this is the seam the
 	// recovery writers (UnreclaimableSweep, LeaseRepair) were missing, so the
 	// SQL now lives beside Bump where every terminal-status writer reaches it.
 	if err := syncrunrollup.ArmFinalize(ctx, tx, claim.SyncRunID, claim.OrgID, completedAt); err != nil {
-		return ErrInvalidConfiguration
+		return storeErr(write, storeStepFinalize, err, ErrInvalidConfiguration)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return ErrInvalidConfiguration
+	if err := repository.commit(ctx, tx); err != nil {
+		return storeErr(write, storeStepCommit, err, ErrInvalidConfiguration)
 	}
+	logNeedsAttention()
 	recordSyncRunRollupBump(ctx, repository.Metrics, claim.SyncRunID, "failed", rollupCompleted, rollupFailed, rollupTotal)
 	repository.wakeDispatch(ctx, claim, completedAt)
+	repository.recordUnitFailed(claim, category)
+	return nil
+}
+
+// recordUnitFailed counts one committed unit failure.
+func (repository *PostgresRepository) recordUnitFailed(claim Claim, category string) {
 	// CHAOS-4078: attribute the failure to whichever alias dataset(s) this
 	// claim actually represents, not just the persisted canonical identity
 	// -- see metricDatasetKeys.
 	for _, datasetKey := range metricDatasetKeys(claim.Dataset, claim.ProcessorFlags) {
 		repository.Metrics.RecordUnitFailed(claim.Provider, datasetKey, category)
 	}
-	return nil
 }
 
 func decodeClaimJSON(raw []byte, target *map[string]bool) error {
@@ -1407,24 +1510,29 @@ const workItemsCanonicalDataset = "work-items"
 // once the source has failed FailureStreakThreshold times in a row with one
 // cause class (CHAOS-8802). The next terminal success clears the marker
 // (clearDatasetUnavailableSQL). It runs in a savepoint and never fails the
-// terminalization: a lost stamp only delays the owner-facing hint.
-func stampNeedsAttention(ctx context.Context, tx pgx.Tx, claim Claim) {
+// terminalization: a lost stamp only delays the owner-facing hint. It returns
+// its log line instead of writing it: the caller writes it after COMMIT, so a
+// retried or rolled-back terminalization logs nothing for this attempt.
+func stampNeedsAttention(ctx context.Context, tx pgx.Tx, claim Claim) func() {
 	savepoint, err := tx.Begin(ctx)
 	if err != nil {
-		slog.Default().Warn("providersync.needs_attention_streak_unavailable",
-			slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
-			slog.String("failure", "savepoint_begin_failed"))
-		return
+		return func() {
+			slog.Default().Warn("providersync.needs_attention_streak_unavailable",
+				slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
+				slog.String("failure", "savepoint_begin_failed"))
+		}
 	}
 	streak, err := sourceFailureStreak(ctx, savepoint, claim)
 	if err != nil || streak.Count < FailureStreakThreshold {
 		_ = savepoint.Rollback(ctx)
 		if err != nil {
-			slog.Default().Warn("providersync.needs_attention_streak_unavailable",
-				slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
-				slog.String("failure", "streak_query_failed"))
+			return func() {
+				slog.Default().Warn("providersync.needs_attention_streak_unavailable",
+					slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
+					slog.String("failure", "streak_query_failed"))
+			}
 		}
-		return
+		return func() {}
 	}
 	// Only the canonical row: the generic Complete clears exactly claim.Dataset,
 	// so a stamp on an alias row would never clear after a success.
@@ -1433,35 +1541,40 @@ func stampNeedsAttention(ctx context.Context, tx pgx.Tx, claim Claim) {
 	)
 	if err != nil {
 		_ = savepoint.Rollback(ctx)
-		slog.Default().Warn("providersync.needs_attention_stamp_failed",
-			slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
-			slog.String("failure", "stamp_failed"))
-		return
+		return func() {
+			slog.Default().Warn("providersync.needs_attention_stamp_failed",
+				slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
+				slog.String("failure", "stamp_failed"))
+		}
 	}
 	if tag.RowsAffected() == 0 {
 		_ = savepoint.Rollback(ctx)
-		slog.Default().Warn("providersync.needs_attention_stamp_no_dataset_row",
+		return func() {
+			slog.Default().Warn("providersync.needs_attention_stamp_no_dataset_row",
+				slog.String("org_id", claim.OrgID),
+				slog.String("integration_id", claim.IntegrationID),
+				slog.String("source_id", claim.SourceID),
+				slog.String("dataset", claim.Dataset),
+				slog.Int("failures_in_a_row", streak.Count))
+		}
+	}
+	if err := savepoint.Commit(ctx); err != nil {
+		return func() {
+			slog.Default().Warn("providersync.needs_attention_stamp_failed",
+				slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
+				slog.String("failure", "commit_failed"))
+		}
+	}
+	return func() {
+		slog.Default().Info("providersync.needs_attention_stamped",
 			slog.String("org_id", claim.OrgID),
 			slog.String("integration_id", claim.IntegrationID),
 			slog.String("source_id", claim.SourceID),
-			slog.String("dataset", claim.Dataset),
-			slog.Int("failures_in_a_row", streak.Count))
-		return
+			slog.String("provider", claim.Provider),
+			slog.String("cause_class", streak.Class),
+			slog.Int("failures_in_a_row", streak.Count),
+			slog.Duration("retry_interval", FailureStreakRetryInterval))
 	}
-	if err := savepoint.Commit(ctx); err != nil {
-		slog.Default().Warn("providersync.needs_attention_stamp_failed",
-			slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
-			slog.String("failure", "commit_failed"))
-		return
-	}
-	slog.Default().Info("providersync.needs_attention_stamped",
-		slog.String("org_id", claim.OrgID),
-		slog.String("integration_id", claim.IntegrationID),
-		slog.String("source_id", claim.SourceID),
-		slog.String("provider", claim.Provider),
-		slog.String("cause_class", streak.Class),
-		slog.Int("failures_in_a_row", streak.Count),
-		slog.Duration("retry_interval", FailureStreakRetryInterval))
 }
 
 // sourceFailureStreak reads the streak of one source from its newest terminal

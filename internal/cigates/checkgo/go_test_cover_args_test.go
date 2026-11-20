@@ -70,11 +70,16 @@ func TestOnlyTheNonRaceTestLegCallsCarryTheCoverFlag(t *testing.T) {
 	}
 	var sites []string
 	for _, l := range strings.Split(string(body), "\n") {
-		if strings.Contains(l, "$(go_test_cover_args") {
+		if strings.Contains(l, `mapfile -t cov < <(go_test_cover_args "$@")`) {
 			sites = append(sites, l)
 			if strings.Contains(l, "-race") {
 				t.Errorf("a race call carries the cover flag: %s", l)
 			}
+		}
+	}
+	for _, l := range strings.Split(string(body), "\n") {
+		if strings.Contains(l, "${cov[@]+") && strings.Contains(l, "-race") {
+			t.Errorf("a race call carries the cover flag: %s", l)
 		}
 	}
 	if len(sites) != 2 {

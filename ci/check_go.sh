@@ -1009,12 +1009,13 @@ foreach ((inputs | ((fromjson? | select(type == "object" and ((.Action | type) =
     .out)'
 go_test_leg() {
   local log="$1" legjson="$2" rc raw problem=0
-  local -a ps fb
+  local -a ps fb cov
   shift 2
+  mapfile -t cov < <(go_test_cover_args "$@")
   command -v jq >/dev/null 2>&1 || die "the test and race legs need jq to read go test -json"
   raw="$(mktemp "${TMPDIR:-/tmp}/dev-health-leg-raw.XXXXXX")" || die "go_test_leg: no temp file for the raw go test -json stream"
   set +e
-  "${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath ${MERGE_GROUP_FRESH:+-count=1} $(go_test_cover_args "$@") -json "$@" 2>&1 \
+  "${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath ${MERGE_GROUP_FRESH:+-count=1} ${cov[@]+"${cov[@]}"} -json "$@" 2>&1 \
     | tee "${raw}" \
     | { jq -nR --unbuffered -rj "${GO_TEST_LEG_JQ}"; jqrc=$?; [ "${jqrc}" -eq 0 ] || cat >/dev/null; exit "${jqrc}"; } \
     | tee -a "${log}"
@@ -1088,8 +1089,10 @@ go_test_json_run() {
 go_test_json_run_t() {
   local timeout="$1" json="$2" log="$3"
   shift 3
+  local -a cov
+  mapfile -t cov < <(go_test_cover_args "$@")
   command -v jq >/dev/null 2>&1 || die "the race-excluded receipts need jq to read go test -json events"
-  "${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath -json -count=1 -timeout "${timeout}" $(go_test_cover_args "$@") "$@" \
+  "${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath -json -count=1 -timeout "${timeout}" ${cov[@]+"${cov[@]}"} "$@" \
     | tee -a "${json}" \
     | jq -nR --unbuffered -rj "${GO_TEST_LEG_JQ}" \
     | tee -a "${log}"

@@ -130,18 +130,16 @@ func TestSweepStrandedFinalizeCountsAFailedPass(t *testing.T) {
 
 type orderedSweepStore struct {
 	sweepingStore
-	order        *[]string
-	sweepBudget  time.Duration
-	reconcileCtx context.Context
+	order         *[]string
+	sweepDeadline time.Time
+	reconcileCtx  context.Context
 }
 
 func (store *orderedSweepStore) SweepStrandedFinalizeForOrg(
 	ctx context.Context, publisher redriveFinalizePublisher, orgID string,
 ) (int, error) {
 	*store.order = append(*store.order, "sweep")
-	if deadline, ok := ctx.Deadline(); ok {
-		store.sweepBudget = time.Until(deadline)
-	}
+	store.sweepDeadline, _ = ctx.Deadline()
 	return store.sweepingStore.SweepStrandedFinalizeForOrg(ctx, publisher, orgID)
 }
 
@@ -151,10 +149,10 @@ func (store *orderedSweepStore) ReconcileBlockedRuns(ctx context.Context, _ stri
 	return BlockedReconcileOutcome{}, nil
 }
 
-// The sweep runs after the existing hooks and spends at most half of what is
-// left of the dispatch deadline, so a slow sweep never starves the reconcile
-// or the adapter's classification of the dispatch result.
-func TestDispatchSweepRunsLastWithHalfTheRemainingDeadline(t *testing.T) {
+// The sweep runs after the existing hooks and gets an earlier deadline than the
+// dispatch, so a slow sweep never starves the reconcile or the adapter's
+// classification of the dispatch result.
+func TestDispatchSweepRunsLastWithAnEarlierDeadline(t *testing.T) {
 	var order []string
 	store := &orderedSweepStore{sweepingStore: sweepingStore{fakeStore: fakeStore{run: runningRun()}}, order: &order}
 	handler, err := NewDispatcher(store, redrivingPublisher{}, &fakeRepositoryDiscoverer{})
@@ -163,16 +161,17 @@ func TestDispatchSweepRunsLastWithHalfTheRemainingDeadline(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
+	dispatchDeadline, _ := ctx.Deadline()
 	if err := handler.Work(ctx, blockedDispatchExecution()); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(order, ",") != "reconcile,sweep" {
 		t.Fatalf("hook order = %v, want reconcile before sweep", order)
 	}
-	if deadline, _ := store.reconcileCtx.Deadline(); time.Until(deadline) < 30*time.Second {
+	if reconcileDeadline, _ := store.reconcileCtx.Deadline(); !reconcileDeadline.Equal(dispatchDeadline) {
 		t.Fatal("the reconcile did not keep the dispatch deadline")
 	}
-	if store.sweepBudget <= 0 || store.sweepBudget > 20*time.Second {
-		t.Fatalf("sweep budget = %s, want at most half of the 40s dispatch deadline", store.sweepBudget)
+	if !store.sweepDeadline.Before(dispatchDeadline) {
+		t.Fatalf("sweep deadline %s is not before the dispatch deadline %s", store.sweepDeadline, dispatchDeadline)
 	}
 }

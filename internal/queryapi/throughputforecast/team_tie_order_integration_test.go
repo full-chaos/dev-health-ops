@@ -13,9 +13,9 @@ import (
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 )
 
-// The one-team form picks a key's version by the order of the org form (workItemNewestOrder): on a computed_at tie of
-// two versions of one key, both forms serve the same version whatever the insert order (CHAOS-14405). Versions go in
-// as separate INSERT statements into a table with merges stopped.
+// The one-team form picks a key's version by the order of the org form (rowview.WorkItemMetricsNewestOrder): on a
+// computed_at tie of two versions of one key, both forms serve the same version whatever the insert order
+// (CHAOS-14405). Versions go in as separate INSERT statements into a table with merges stopped.
 
 type tieRow struct {
 	scope, team, view       string

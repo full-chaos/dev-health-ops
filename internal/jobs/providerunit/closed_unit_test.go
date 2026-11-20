@@ -49,38 +49,43 @@ func runRefusedClaim(t *testing.T, refusal error) (error, []map[string]any) {
 	return err, providerUnitLifecycleRecords(t, output.Bytes())
 }
 
-// A unit an operator cancel closed: the job completes without work and one Info line says which
-// unit and why.
-func TestWorkCompletesAJobWhoseUnitAnOperatorCancelClosed(t *testing.T) {
+// A unit that failed for good (an operator cancel, the feature gate) in a closed run: the job
+// completes without work and one Info line says which unit and why.
+func TestWorkCompletesAJobWhoseUnitFailedForGood(t *testing.T) {
 	t.Parallel()
-	closed := &providersync.UnitClosedError{
-		Category: providersync.OperatorCancelCategory, SyncRunID: "run-1",
-		Provider: "github", Dataset: "commits", Mode: "backfill",
-	}
-	if !errors.Is(closed, providersync.ErrUnitNotClaimable) {
-		t.Fatal("UnitClosedError must still be ErrUnitNotClaimable for callers that check only that")
-	}
-	err, records := runRefusedClaim(t, closed)
-	if err != nil {
-		t.Fatalf("Work() error = %v, want nil: the job completes", err)
-	}
-	if len(records) != 1 {
-		t.Fatalf("records=%#v, want one sync_provider_unit_finished line", records)
-	}
-	for key, want := range map[string]any{
-		"level": "INFO", "msg": "sync_provider_unit_finished", "result": "unit_closed", "closed_by": "cancelled",
-		"sync_run_id": "run-1", "provider": "github", "dataset": "commits", "mode": "backfill",
-		"kind": jobcontract.KindSyncProviderUnit, "queue": "sync_provider", "job_id": float64(7), "attempt": float64(1),
-	} {
-		if records[0][key] != want {
-			t.Errorf("record[%q]=%#v want %#v; record=%#v", key, records[0][key], want, records[0])
-		}
-	}
-	if id, _ := records[0]["sync_unit_id"].(string); id == "" {
-		t.Errorf("record has no sync_unit_id: %#v", records[0])
-	}
-	if _, present := records[0]["error_detail"]; present {
-		t.Errorf("record carries error_detail: %#v", records[0])
+	for _, category := range []string{providersync.OperatorCancelCategory, providersync.FeatureDisabledCategory} {
+		t.Run(category, func(t *testing.T) {
+			t.Parallel()
+			closed := &providersync.UnitClosedError{
+				Category: category, SyncRunID: "run-1",
+				Provider: "github", Dataset: "commits", Mode: "backfill",
+			}
+			if !errors.Is(closed, providersync.ErrUnitNotClaimable) {
+				t.Fatal("UnitClosedError must still be ErrUnitNotClaimable for callers that check only that")
+			}
+			err, records := runRefusedClaim(t, closed)
+			if err != nil {
+				t.Fatalf("Work() error = %v, want nil: the job completes", err)
+			}
+			if len(records) != 1 {
+				t.Fatalf("records=%#v, want one sync_provider_unit_finished line", records)
+			}
+			for key, want := range map[string]any{
+				"level": "INFO", "msg": "sync_provider_unit_finished", "result": "unit_closed", "closed_by": category,
+				"sync_run_id": "run-1", "provider": "github", "dataset": "commits", "mode": "backfill",
+				"kind": jobcontract.KindSyncProviderUnit, "queue": "sync_provider", "job_id": float64(7), "attempt": float64(1),
+			} {
+				if records[0][key] != want {
+					t.Errorf("record[%q]=%#v want %#v; record=%#v", key, records[0][key], want, records[0])
+				}
+			}
+			if id, _ := records[0]["sync_unit_id"].(string); id == "" {
+				t.Errorf("record has no sync_unit_id: %#v", records[0])
+			}
+			if _, present := records[0]["error_detail"]; present {
+				t.Errorf("record carries error_detail: %#v", records[0])
+			}
+		})
 	}
 }
 

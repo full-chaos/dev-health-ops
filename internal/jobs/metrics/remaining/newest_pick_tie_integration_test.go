@@ -538,7 +538,7 @@ func TestRecommendationsLoaderServedOrdersAreTheServedText(t *testing.T) {
 		},
 		"../../../queryapi/aianalytics/loaders.go":           {servedReviewsOrder},
 		"../../../queryapi/home/queries_signals.go":          {strings.TrimSuffix(strings.TrimPrefix(compoundingRiskHash, "cityHash64("), ")")},
-		"../../../queryapi/throughputforecast/clickhouse.go": {"const workItemNewestOrder = rowview.WorkItemMetricsNewestOrder"},
+		"../../../queryapi/throughputforecast/clickhouse.go": {"rowview.ServedTeamSource(\"work_item_metrics_daily\", where, rowview.WorkItemMetricsNewestOrder)"},
 	} {
 		raw, err := os.ReadFile(path)
 		if err != nil {

@@ -98,23 +98,6 @@ func HasTeamRows(table string) bool {
 // teamSourceAlias is the alias of the picked rows inside TeamSource.
 const teamSourceAlias = "team_view"
 
-// WorkItemMetricsNewestOrder is the one version order of work_item_metrics_daily
-// (the largest wins): the newest computed_at, then a hash of the 19 liverow
-// measures, so two versions that share a computed_at give one of them whatever
-// the scan order. Every reader that picks a version of the table by order takes
-// it, so a job and a page pick the same version of a tied key (CHAOS-14355).
-const WorkItemMetricsNewestOrder = `(work_item_metrics_daily.computed_at, cityHash64(tuple(
-    work_item_metrics_daily.items_started, work_item_metrics_daily.items_completed,
-    work_item_metrics_daily.items_started_unassigned, work_item_metrics_daily.items_completed_unassigned,
-    work_item_metrics_daily.wip_count_end_of_day, work_item_metrics_daily.wip_unassigned_end_of_day,
-    work_item_metrics_daily.bug_completed_ratio, work_item_metrics_daily.story_points_completed,
-    work_item_metrics_daily.new_bugs_count, work_item_metrics_daily.new_items_count,
-    work_item_metrics_daily.defect_intro_rate, work_item_metrics_daily.wip_congestion_ratio,
-    work_item_metrics_daily.predictability_score, work_item_metrics_daily.cycle_time_p50_hours,
-    work_item_metrics_daily.cycle_time_p90_hours, work_item_metrics_daily.lead_time_p50_hours,
-    work_item_metrics_daily.lead_time_p90_hours, work_item_metrics_daily.wip_age_p50_hours,
-    work_item_metrics_daily.wip_age_p90_hours)))`
-
 // TeamSource is the FROM source of a reader that answers for one team: one row
 // per key without row_view, (org_id, day, provider, work_scope_id, team_id[,
 // status]), and only live rows. Of the newest row of each view of a key (the
@@ -224,6 +207,23 @@ func orderedNewest(declared teamkeytables.Table, filter, order string) string {
 	return fmt.Sprintf("(SELECT * FROM %[1]s WHERE %[2]s ORDER BY %[3]s DESC LIMIT 1 BY %[4]s) AS %[1]s",
 		table, filter, order, strings.Join(key, ", "))
 }
+
+// WorkItemMetricsNewestOrder is the version order of a work_item_metrics_daily key, for the `order` argument of
+// ServedTeamSource / ServedTeamPick and a reader's own pick: the newest computed_at, then the highest hash of the
+// version's 19 measures, so two versions that share a computed_at serve one of them whatever the insert order. Every
+// served reader of the table that picks a version takes this one order, so the pages serve the same version of a tied
+// key.
+const WorkItemMetricsNewestOrder = `(work_item_metrics_daily.computed_at, cityHash64(tuple(
+    work_item_metrics_daily.items_started, work_item_metrics_daily.items_completed,
+    work_item_metrics_daily.items_started_unassigned, work_item_metrics_daily.items_completed_unassigned,
+    work_item_metrics_daily.wip_count_end_of_day, work_item_metrics_daily.wip_unassigned_end_of_day,
+    work_item_metrics_daily.bug_completed_ratio, work_item_metrics_daily.story_points_completed,
+    work_item_metrics_daily.new_bugs_count, work_item_metrics_daily.new_items_count,
+    work_item_metrics_daily.defect_intro_rate, work_item_metrics_daily.wip_congestion_ratio,
+    work_item_metrics_daily.predictability_score, work_item_metrics_daily.cycle_time_p50_hours,
+    work_item_metrics_daily.cycle_time_p90_hours, work_item_metrics_daily.lead_time_p50_hours,
+    work_item_metrics_daily.lead_time_p90_hours, work_item_metrics_daily.wip_age_p50_hours,
+    work_item_metrics_daily.wip_age_p90_hours)))`
 
 // mustTeamTable panics for a table that holds no team rows.
 func mustTeamTable(table string) teamkeytables.Table {

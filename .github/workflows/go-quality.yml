@@ -531,7 +531,7 @@ jobs:
           GO_TEST_LEG_JSON_DIR: ${{ runner.temp }}/go-test-leg-json
           # CHAOS-13767: cover profiles of the non-race test legs of main pushes only (check_go.sh go_test_cover_args). To turn
           # coverage off, empty this one line: the legs run as before.
-          GO_TEST_COVER_DIR: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(matrix.name, 'test-') && format('{0}/go-cover', runner.temp) || '' }}
+          GO_TEST_COVER_DIR: ''
         # Each stage of the leg prints UTC start/done stamps (`==> stage ...`).
         run: bash ci/check_go.sh ci-leg ${{ matrix.args }}
 

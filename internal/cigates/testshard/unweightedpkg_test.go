@@ -407,12 +407,19 @@ func TestAPackageWithAWarnLineAndALaterFailLineFails(t *testing.T) {
 func TestTheUnweightedGuardReadsSummaryLinesThatCarryACoverageField(t *testing.T) {
 	t.Parallel()
 	pkg, key := unweightedPackage(t, guardShard, shardCount)
+	other := weightedPackage(t, guardShard, shardCount)
 	withCover := func(log string) string {
 		return regexp.MustCompile(`(?m)^(ok  \t[^\t]+\t[^\t\n]+)$`).ReplaceAllString(log, "$1\tcoverage: 12.3% of statements")
 	}
-	errs, err := unweightedGuard(t, nil, guardShard, withCover(coverLog(t, guardShard, shardCount, map[string]string{pkg: "45.000s"})))
+	// With -coverprofile a package WITHOUT test files prints "<TAB>pkg<TAB><TAB>coverage: 0.0% of statements" and no "?" line.
+	noTests := regexp.MustCompile(`(?m)^ok  \t(` + regexp.QuoteMeta(other) + `)\t[^\n]*$`)
+	log := noTests.ReplaceAllString(withCover(coverLog(t, guardShard, shardCount, map[string]string{pkg: "45.000s"})), "\t$1\t\tcoverage: 0.0% of statements")
+	errs, err := unweightedGuard(t, nil, guardShard, log)
 	if err == nil || !strings.Contains(errs, "unweighted-slow-package: "+pkg+" took 45s") || !strings.Contains(errs, "\n"+key+"\t45\n") {
 		t.Errorf("a 45 s package with a coverage field must still fail with its row: err=%v\n%s", err, errs)
+	}
+	if strings.Contains(errs, "no summary line") {
+		t.Errorf("a no-test-files package in its coverage form was not read as a summary line:\n%s", errs)
 	}
 	if n := strings.Count(errs, "unweighted-slow-package:"); n != 1 {
 		t.Errorf("only the slow package may be named (the fast ones carry a coverage field too), got %d:\n%s", n, errs)

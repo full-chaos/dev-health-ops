@@ -282,6 +282,7 @@ type Metrics struct {
 	unitClaimed                    map[string]uint64
 	unitFailed                     map[string]uint64
 	treeWalkNearCeiling            map[string]uint64
+	cursorCutListDropped           map[string]uint64
 	cicdPartialSuccess             map[string]uint64
 	duplicateTestCase              map[string]uint64
 	duplicateTestSuite             map[string]uint64
@@ -348,6 +349,7 @@ func NewMetrics() *Metrics {
 		unitClaimed:                    map[string]uint64{},
 		unitFailed:                     map[string]uint64{},
 		treeWalkNearCeiling:            map[string]uint64{},
+		cursorCutListDropped:           map[string]uint64{},
 		cicdPartialSuccess:             map[string]uint64{},
 		duplicateTestCase:              map[string]uint64{},
 		duplicateTestSuite:             map[string]uint64{},
@@ -1208,6 +1210,21 @@ func (m *Metrics) RecordTreeWalkNearCeiling(limit string) {
 	m.treeWalkNearCeiling[limit]++
 }
 
+// RecordCursorCutListDropped counts ONE chunk cursor emission that dropped a cut list to stay under the cursor byte budget
+// (CHAOS-14315), by the dropped list: "active" or "carried". The cut lists only dedup reads of a peeled range, so a drop
+// costs a repeated read, never a failed chunk.
+func (m *Metrics) RecordCursorCutListDropped(list string) {
+	if m == nil {
+		return
+	}
+	if list != "active" && list != "carried" {
+		list = "other"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cursorCutListDropped[list]++
+}
+
 // RecordAllArtifactsUnreadable counts ONE provider unit that failed because
 // every cicd/tests artifact it observed was unreadable (CHAOS-4185). The
 // condition terminalizes on its first attempt (deterministicTerminalCategory
@@ -2012,6 +2029,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_github_tree_walk_near_ceiling_total",
 		"GitHub tree walks that passed half of a ceiling, by the ceiling (CHAOS-8829).",
 		"limit", m.treeWalkNearCeiling,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_github_tests_cursor_cut_list_dropped_total",
+		"Chunk cursor emissions that dropped a cut list to fit the cursor byte budget, by the dropped list (CHAOS-14315).",
+		"list", m.cursorCutListDropped,
 	); err != nil {
 		return err
 	}

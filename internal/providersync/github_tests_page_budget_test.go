@@ -765,7 +765,9 @@ func TestGitHubTestsChunkRouteWalkBoundInsideTheArtifactsPhase(t *testing.T) {
 	if len(full.Incomplete) != 0 || full.Phase != "done" || fullFinal.Watermark == nil {
 		t.Fatalf("unbounded walk incomplete=%+v phase=%q watermark=%v, want a complete walk", full.Incomplete, full.Phase, fullFinal.Watermark)
 	}
-	if fullChunks != 4 || full.Pipelines != 2 || full.Cases == 0 || full.Cases%2 != 0 {
+	// The fake answers every listing with the same two runs, so the deep range of the claim (it holds a UTC midnight)
+	// lists them once more: two more chunks, no row (neither changed late).
+	if fullChunks != 6 || full.Pipelines != 2 || full.Cases == 0 || full.Cases%2 != 0 {
 		t.Fatalf("premise broken: chunks=%d pipelines=%d cases=%d, want 2 runs in each phase and the same report on both",
 			fullChunks, full.Pipelines, full.Cases)
 	}
@@ -776,8 +778,8 @@ func TestGitHubTestsChunkRouteWalkBoundInsideTheArtifactsPhase(t *testing.T) {
 	if bounded.Cases != full.Cases/2 || bounded.Suites != full.Suites/2 {
 		t.Fatalf("cases=%d suites=%d, want the first run's reports only (%d, %d)", bounded.Cases, bounded.Suites, full.Cases/2, full.Suites/2)
 	}
-	if boundedChunks != 3 {
-		t.Fatalf("chunks=%d, want 2 runs-phase runs and 1 artifacts-phase run", boundedChunks)
+	if boundedChunks != 5 {
+		t.Fatalf("chunks=%d, want 2 runs-phase runs, 2 deep-range runs and 1 artifacts-phase run", boundedChunks)
 	}
 	if githubTestsHasPageBudgetObservation(bounded, githubTestsRunInventoryComponent) ||
 		!githubTestsHasPageBudgetObservation(bounded, githubTestsArtifactInventoryComponent) {

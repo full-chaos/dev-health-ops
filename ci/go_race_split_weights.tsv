@@ -18,6 +18,8 @@
 # TestTheRacePlanRefusesABadApartRowAndWarnsWhenNoLegIsFree (CHAOS-13958): their local -race times, 63.95, 63.96 and 0.05 s, rounded up.
 # internal/cigates/testshard TestTheRacePlanKeepsTheHeavyPackagesApartAndOffTheListedParts, TestTheRacePlanWithoutApartRowsStacksHeavyPackages
 # and TestTheShippedRaceLegsCoverEveryRacePackageOnce (CHAOS-13833, 16 legs): their local -race times, 81.80, 66.40 and 84.60 s, rounded up.
+# internal/cigates/testshard TestNoTestShardHoldsPartsOfTwoApartPackages, TestTheApartRuleKeepsListedPartsOffEachOthersShards and
+# TestTheTestPlanWithoutApartRowsPutsApartPackagesOnOneShard (CHAOS-14334): their local -race times, 4.97, 0.07 and 4.21 s, rounded up.
 # Sorted (LC_ALL=C) by package, then test.
 internal/api/policy	TestACellThatIsOffAsksNothingAndKeepsTheLegacyAnswer	1
 internal/api/policy	TestAClassRowCannotNameTheAcceptAheadReasonButAStarRowCovers	1
@@ -598,6 +600,7 @@ internal/cigates/testshard	TestNoGoCallEnvHoldsTheFreshKnobItself	10
 internal/cigates/testshard	TestNoLegIsFlaggedForTheRetiredPool	1
 internal/cigates/testshard	TestNoRaceSoloPackageIsASecurityPackage	7
 internal/cigates/testshard	TestNoSplitPackageIsPinned	1
+internal/cigates/testshard	TestNoTestShardHoldsPartsOfTwoApartPackages	5
 internal/cigates/testshard	TestOffMergeGroupTheSecurityGuardIsOffAndTheReceiptStillSaysCachedIsNotExecuted	6
 internal/cigates/testshard	TestOnAPullRequestACachedPackageOfAnyListIsReportedOnly	4
 internal/cigates/testshard	TestOnAPullRequestTheLegsKeepTheirArgvAndTheirLogLines	179
@@ -640,6 +643,7 @@ internal/cigates/testshard	TestReportModeStillFailsWhenTheLogCannotProveCoverage
 internal/cigates/testshard	TestTheAllLegsFormFailsOnALegThatOnlyErrexitStops	1
 internal/cigates/testshard	TestTheAllLegsFormNeedsACount	2
 internal/cigates/testshard	TestTheAllLegsFormsPrintEachLegsOwnOutput	143
+internal/cigates/testshard	TestTheApartRuleKeepsListedPartsOffEachOthersShards	1
 internal/cigates/testshard	TestTheAuthSplitWeightsTablesAreClean	1
 internal/cigates/testshard	TestTheAuthSplitWiringPlantedMutantsAreCaught	26
 internal/cigates/testshard	TestTheCensusCallTimeoutComesFromTheCigatesHelper	1
@@ -704,6 +708,7 @@ internal/cigates/testshard	TestTheSuiteCatalogLegRowStatesTheLegCounts	1
 internal/cigates/testshard	TestTheSumOnlySplitChainsTwoPartsOnOneShardAndFailsTheWallModel	1
 internal/cigates/testshard	TestTheTestLegSurvivesAnotherPackagesSummaryInsideALongLine	36
 internal/cigates/testshard	TestTheTestLegTimeoutsComeFromTheCigatesHelper	1
+internal/cigates/testshard	TestTheTestPlanWithoutApartRowsPutsApartPackagesOnOneShard	5
 internal/cigates/testshard	TestTheTestShardsAtTheLegCountHoldEveryRowOnce	12
 internal/cigates/testshard	TestTheTestWeightsTableIsClean	6
 internal/cigates/testshard	TestTheUnweightedGuardFailsClosedWhenItCannotProveCoverage	55

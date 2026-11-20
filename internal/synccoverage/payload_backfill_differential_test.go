@@ -37,18 +37,24 @@ func TestBackfillGroupingDifferentialAboveTheOldBound(t *testing.T) {
 	rng := rand.New(rand.NewPCG(seed, seed^0x51ed270b27f4a7c1))
 	now := time.Date(2026, time.November, 20, 3, 0, 0, 0, time.UTC)
 	base := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
-	counts := runBackfillDifferential(t, seed, 24, func(index int) (payloadInput, bool) {
+	counts := runBackfillDifferential(t, seed, 16, func(index int) (payloadInput, bool) {
 		switch {
-		case index < 20:
+		case index < 8:
 			return chainedUnresolvedInput(rng, now, base), true
-		case index < 22:
+		case index < 10:
 			return chainedResolvedInput(rng, now, base), true
+		case index < 12:
+			return crossTargetInput(rng, now, base, false), true
+		case index < 13:
+			return crossTargetInput(rng, now, base, true), true
+		case index < 14:
+			return distinctTargetsInput(rng, now, base), true
 		default:
 			return disjointResolvedInput(rng, now, base), false
 		}
 	})
-	if counts.onlyNew < 22 || counts.bothRefuse < 2 {
-		t.Fatalf("seed %d: only-new %d (want 22), both-refuse %d (want 2)", seed, counts.onlyNew, counts.bothRefuse)
+	if counts.onlyNew < 14 || counts.bothRefuse < 2 {
+		t.Fatalf("seed %d: only-new %d (want 14), both-refuse %d (want 2)", seed, counts.onlyNew, counts.bothRefuse)
 	}
 }
 
@@ -250,6 +256,50 @@ func chainedResolvedInput(rng *rand.Rand, now, base time.Time) payloadInput {
 			Since: day, Before: day.Add(24*time.Hour - time.Microsecond), SourceIDs: sourceIDs,
 			DatasetKeys: scope.DatasetKeys, RunIDs: []string{fmt.Sprintf("run-%d", index%7)},
 		})
+	}
+	return input
+}
+
+// crossTargetInput is the loader shape where targets overlap: unresolved day ranges over every pair plus each pair's
+// resolved runs on the same days, one of which bridges two ranges. Raw expansion and per-target sums exceed
+// maxBackfillPairs; the per-pair merged ranges do not. With abut, each resolved run starts 1 us after its unresolved
+// range ends (the merge tolerance), so only a merge across targets joins them.
+func crossTargetInput(rng *rand.Rand, now, base time.Time, abut bool) payloadInput {
+	config, scope, sourceIDs := differentialScope(rng, 90+rng.IntN(20), 10)
+	input := payloadInput{Config: config, Scope: scope, ActivePairs: map[string]struct{}{}, Now: now}
+	ranges := 12 + rng.IntN(6)
+	day := func(offset int) time.Time { return base.Add(time.Duration(offset) * 24 * time.Hour) }
+	for index := range ranges {
+		input.Backfills = append(input.Backfills, coverageInterval{Since: day(3 * index), Before: day(3*index + 1).Add(-time.Microsecond),
+			SourceIDs: append([]string(nil), sourceIDs...), RunIDs: []string{fmt.Sprintf("unresolved-%d", index%5)}})
+	}
+	for _, sourceID := range sourceIDs {
+		for _, dataset := range scope.DatasetKeys {
+			bridge := rng.IntN(ranges - 1)
+			for index := range ranges {
+				since, before := day(3*index), day(3*index+1).Add(-time.Microsecond)
+				switch {
+				case abut:
+					since, before = day(3*index+1), day(3*index+2)
+				case index == bridge:
+					before = day(3*index + 4).Add(-time.Microsecond)
+				}
+				input.Backfills = append(input.Backfills, coverageInterval{Since: since, Before: before,
+					SourceIDs: []string{sourceID}, DatasetKeys: []string{dataset}, RunIDs: []string{fmt.Sprintf("run-%d", index%7)}})
+			}
+		}
+	}
+	return input
+}
+
+// distinctTargetsInput gives one pair more backfills than maxBackfillPairs, each under its own target (an extra
+// out-of-scope source); they all merge into one range.
+func distinctTargetsInput(rng *rand.Rand, now, base time.Time) payloadInput {
+	config, scope, sourceIDs := differentialScope(rng, 1, 1)
+	input := payloadInput{Config: config, Scope: scope, ActivePairs: map[string]struct{}{}, Now: now}
+	for index := range maxBackfillPairs + 1 + rng.IntN(20) {
+		input.Backfills = append(input.Backfills, coverageInterval{Since: base, Before: base.Add(24*time.Hour - time.Microsecond),
+			SourceIDs: []string{sourceIDs[0], randomUUID(rng).String()}, RunIDs: []string{fmt.Sprintf("run-%d", index%11)}})
 	}
 	return input
 }

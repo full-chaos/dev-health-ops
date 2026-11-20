@@ -42,9 +42,9 @@ func buildPayload(input payloadInput) (projectionPayload, error) {
 	for _, key := range input.Scope.DatasetKeys {
 		scopeDatasets[key] = struct{}{}
 	}
-	backfillByPair := make(map[string][]coverageInterval)
-	expanded := 0
-	for _, group := range backfillTargetGroups(input.Backfills) {
+	groups := backfillTargetGroups(input.Backfills)
+	groupsByPair := make(map[string][]int)
+	for index, group := range groups {
 		sourceIDs := group.SourceIDs
 		if len(sourceIDs) == 0 {
 			for sourceID := range scopeSourceIDs {
@@ -64,18 +64,35 @@ func buildPayload(input payloadInput) (projectionPayload, error) {
 				if _, ok := scopeDatasets[dataset]; !ok {
 					continue
 				}
-				expanded += len(group.Ranges)
-				if expanded > maxBackfillPairs {
-					return nil, newLimitError("backfill_pair", expanded, maxBackfillPairs)
-				}
 				key := sourceID + "\x00" + dataset
-				for _, interval := range group.Ranges {
-					backfillByPair[key] = append(backfillByPair[key], coverageInterval{
+				groupsByPair[key] = append(groupsByPair[key], index)
+			}
+		}
+	}
+	backfillByPair := make(map[string][]coverageInterval, len(groupsByPair))
+	mergedRanges := 0
+	for _, sourceItem := range input.Scope.Sources {
+		sourceID := sourceItem.ID.String()
+		for _, dataset := range input.Scope.DatasetKeys {
+			key := sourceID + "\x00" + dataset
+			if _, done := backfillByPair[key]; done || len(groupsByPair[key]) == 0 {
+				continue
+			}
+			pairRanges := make([]coverageInterval, 0)
+			for _, index := range groupsByPair[key] {
+				for _, interval := range groups[index].Ranges {
+					pairRanges = append(pairRanges, coverageInterval{
 						Since: interval.Since, Before: interval.Before,
 						SourceIDs: []string{sourceID}, RunIDs: interval.RunIDs,
 					})
 				}
 			}
+			pairRanges = mergeIntervals(pairRanges)
+			mergedRanges += len(pairRanges)
+			if mergedRanges > maxBackfillPairs {
+				return nil, newLimitError("backfill_pair", mergedRanges, maxBackfillPairs)
+			}
+			backfillByPair[key] = pairRanges
 		}
 	}
 
@@ -185,9 +202,9 @@ type backfillTargetGroup struct {
 	Ranges      []coverageInterval
 }
 
-// backfillTargetGroups merges backfills with the same source and dataset target before they expand to pairs, so
-// maxBackfillPairs bounds the merged ranges, not raw backfills x pairs (CHAOS-14233). The later per-pair merge
-// yields the same payload either way.
+// backfillTargetGroups merges backfills with the same source and dataset target once, before buildPayload merges
+// each pair's ranges across targets; maxBackfillPairs bounds those per-pair merged ranges, not raw backfills x
+// pairs (CHAOS-14233). Merging is a union, so the payload is the same either way.
 func backfillTargetGroups(backfills []coverageInterval) []backfillTargetGroup {
 	byTarget := make(map[string]*backfillTargetGroup)
 	keys := make([]string, 0)

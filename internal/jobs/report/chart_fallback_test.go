@@ -214,11 +214,14 @@ func TestPlanSectionTitledOtherChartsKeepsOneFallbackHeading(t *testing.T) {
 		covered := cicdCharts("team")
 		markdown = renderPlan(t, []string{"summary", name, "cicd"}, covered)
 		requireTables(t, markdown, covered)
-		if got := strings.Count(markdown, "\n## Other Charts\n"); got != 0 {
-			t.Errorf("section %q with every chart printed: %d fallback headings, want 0:\n%s", name, got, markdown)
+		if got := strings.Count(strings.ToLower(markdown), "\n## other charts\n"); got != 1 {
+			t.Errorf("section %q with every chart printed: %d Other Charts headings, want only its own:\n%s", name, got, markdown)
 		}
-		if got := strings.Count(markdown, "\n## Other Charts (plan section)\n"); got != 1 {
-			t.Errorf("section %q with every chart printed: its heading count = %d, want 1:\n%s", name, got, markdown)
+		if got := strings.Count(markdown, "\n## "+name+"\n"); got != 1 {
+			t.Errorf("section %q with every chart printed: its heading count = %d, want 1 as written:\n%s", name, got, markdown)
+		}
+		if strings.Contains(markdown, "(plan section)") {
+			t.Errorf("section %q renamed with no fallback printed:\n%s", name, markdown)
 		}
 	}
 }
@@ -262,8 +265,8 @@ func TestPlanSectionTitleShowingAsOtherChartsKeepsOneFallbackHeading(t *testing.
 		covered := cicdCharts("team")
 		markdown = renderPlan(t, []string{"summary", name, "cicd"}, covered)
 		requireTables(t, markdown, covered)
-		if got := strings.Count(markdown, "\n## Other Charts\n") + strings.Count(markdown, "\n## Other Charts ##\n"); got != 0 {
-			t.Errorf("section %q with every chart printed: %d lines show as the fallback heading, want 0:\n%s", name, got, markdown)
+		if got := strings.Count(markdown, "\n## "+name+"\n"); got != 1 || strings.Contains(markdown, "(plan section)") {
+			t.Errorf("section %q with every chart printed: %d headings as written, want 1 and no rename:\n%s", name, got, markdown)
 		}
 	}
 }

@@ -15,8 +15,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
-// measuredWorkItemKey keeps a (day, provider, scope, team) key only when its
-// newest row is a measurement (package liverow). It is in the reads that make
+// measuredWorkItem keeps a (day, provider, scope, team) key only when its
+// picked newest row is a measurement (package liverow). It is in the reads that make
 // a list of days: a day that holds only retraction rows (the keys of a retired
 // team id a caller named) is a day with no data, not a day with a throughput
 // or a WIP of 0. The reads that take each key's newest day (backlog, current
@@ -24,7 +24,67 @@ import (
 // measured keys): a retraction row must stay the newest row
 // of its key there, so that the key gives nothing and not its older backlog,
 // and it adds 0 to a sum and no value to a Nullable mean.
-var measuredWorkItemKey = liverow.NewestPredicate("work_item_metrics_daily", "")
+var measuredWorkItem = liverow.Predicate("work_item_metrics_daily", "newest")
+
+// The newest version of a key is the one with the newest computed_at, then the highest hash of the version's values, so
+// two versions that share a computed_at serve one of them whatever the scan order. Each table has ONE order key, the
+// same columns in the same order as the operating review reads of that table, so the pages serve the same version of a
+// tied key. workItemNewestColumns picks every liverow measure of the table from that one version.
+const workItemNewestOrder = `(work_item_metrics_daily.computed_at, cityHash64(tuple(
+    work_item_metrics_daily.items_started, work_item_metrics_daily.items_completed,
+    work_item_metrics_daily.items_started_unassigned, work_item_metrics_daily.items_completed_unassigned,
+    work_item_metrics_daily.wip_count_end_of_day, work_item_metrics_daily.wip_unassigned_end_of_day,
+    work_item_metrics_daily.bug_completed_ratio, work_item_metrics_daily.story_points_completed,
+    work_item_metrics_daily.new_bugs_count, work_item_metrics_daily.new_items_count,
+    work_item_metrics_daily.defect_intro_rate, work_item_metrics_daily.wip_congestion_ratio,
+    work_item_metrics_daily.predictability_score, work_item_metrics_daily.cycle_time_p50_hours,
+    work_item_metrics_daily.cycle_time_p90_hours, work_item_metrics_daily.lead_time_p50_hours,
+    work_item_metrics_daily.lead_time_p90_hours, work_item_metrics_daily.wip_age_p50_hours,
+    work_item_metrics_daily.wip_age_p90_hours)))`
+
+const workItemNewestColumns = `argMax(tuple(
+                    work_item_metrics_daily.items_started, work_item_metrics_daily.items_completed,
+                    work_item_metrics_daily.items_started_unassigned,
+                    work_item_metrics_daily.items_completed_unassigned,
+                    work_item_metrics_daily.wip_count_end_of_day,
+                    work_item_metrics_daily.wip_unassigned_end_of_day,
+                    work_item_metrics_daily.bug_completed_ratio,
+                    work_item_metrics_daily.story_points_completed, work_item_metrics_daily.new_bugs_count,
+                    work_item_metrics_daily.new_items_count, work_item_metrics_daily.defect_intro_rate,
+                    work_item_metrics_daily.wip_congestion_ratio, work_item_metrics_daily.predictability_score,
+                    work_item_metrics_daily.cycle_time_p50_hours, work_item_metrics_daily.cycle_time_p90_hours,
+                    work_item_metrics_daily.lead_time_p50_hours, work_item_metrics_daily.lead_time_p90_hours,
+                    work_item_metrics_daily.wip_age_p50_hours, work_item_metrics_daily.wip_age_p90_hours
+                ), ` + workItemNewestOrder + `) AS picked,
+                picked.1 AS items_started,
+                picked.2 AS items_completed,
+                picked.3 AS items_started_unassigned,
+                picked.4 AS items_completed_unassigned,
+                picked.5 AS wip_count_end_of_day,
+                picked.6 AS wip_unassigned_end_of_day,
+                picked.7 AS bug_completed_ratio,
+                picked.8 AS story_points_completed,
+                picked.9 AS new_bugs_count,
+                picked.10 AS new_items_count,
+                picked.11 AS defect_intro_rate,
+                picked.12 AS wip_congestion_ratio,
+                picked.13 AS predictability_score,
+                picked.14 AS cycle_time_p50_hours,
+                picked.15 AS cycle_time_p90_hours,
+                picked.16 AS lead_time_p50_hours,
+                picked.17 AS lead_time_p90_hours,
+                picked.18 AS wip_age_p50_hours,
+                picked.19 AS wip_age_p90_hours`
+
+const repoMetricsNewestOrder = `(repo_metrics_daily.computed_at, cityHash64(tuple(
+    repo_metrics_daily.prs_merged, repo_metrics_daily.pr_first_review_p50_hours,
+    repo_metrics_daily.single_owner_file_ratio_30d, repo_metrics_daily.code_ownership_gini,
+    repo_metrics_daily.bus_factor, repo_metrics_daily.revert_rate, repo_metrics_daily.mttr_hours,
+    repo_metrics_daily.retracted)))`
+
+const incidentNewestOrder = `(incident_metrics_daily.computed_at, cityHash64(tuple(
+    incident_metrics_daily.incidents_count, incident_metrics_daily.mttr_p50_hours,
+    incident_metrics_daily.retracted)))`
 
 // QueryClient is the read-only ClickHouse query boundary this package needs --
 // the same single-method shape featureflags.QueryClient, reviewedges.QueryClient
@@ -136,15 +196,15 @@ func loadThroughputHistory(
                 provider,
                 work_scope_id,
                 team_id,
-                argMax(items_completed, computed_at) AS items_completed
+                `+workItemNewestColumns+`
             FROM work_item_metrics_daily
             WHERE %s
             GROUP BY day, provider, work_scope_id, team_id, row_view
-            HAVING %s
-        )
+        ) AS newest
+        WHERE %s
         GROUP BY day
         ORDER BY day
-    `, strings.Join(conditions, " AND "), measuredWorkItemKey)
+    `, strings.Join(conditions, " AND "), measuredWorkItem)
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -207,12 +267,12 @@ func loadWorkItemOverlay(
                         provider,
                         work_scope_id,
                         team_id,
-                        argMax(wip_count_end_of_day, computed_at) AS wip_count_end_of_day
+                        `+workItemNewestColumns+`
                     FROM work_item_metrics_daily
                     WHERE %s
                     GROUP BY day, provider, work_scope_id, team_id, row_view
-                    HAVING %s
-                )
+                ) AS newest
+                WHERE %s
                 GROUP BY day
             )
         ) AS average_part
@@ -224,14 +284,14 @@ func loadWorkItemOverlay(
                     provider,
                     work_scope_id,
                     team_id,
-                    argMax(wip_count_end_of_day, computed_at) AS wip_count_end_of_day
+                    `+workItemNewestColumns+`
                 FROM work_item_metrics_daily
                 WHERE %s
                   AND %s
                 GROUP BY day, provider, work_scope_id, team_id, row_view
             )
         ) AS current_part
-    `, where, measuredWorkItemKey, where, newestrow.PerTeamPredicate("work_item_metrics_daily", where))
+    `, where, measuredWorkItem, where, newestrow.PerTeamPredicate("work_item_metrics_daily", where))
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -290,8 +350,7 @@ func loadStaleWIP(
                 provider,
                 work_scope_id,
                 team_id,
-                (argMax(tuple(wip_age_p50_hours), computed_at)).1 AS wip_age_p50_hours,
-                (argMax(tuple(wip_age_p90_hours), computed_at)).1 AS wip_age_p90_hours
+                `+workItemNewestColumns+`
             FROM work_item_metrics_daily
             WHERE %s
             AND %s
@@ -361,9 +420,14 @@ func loadEstimateCoverage(
                 provider,
                 work_scope_id,
                 team_id,
-                argMax(estimated_count, computed_at) AS estimated_count,
-                argMax(unestimated_count, computed_at) AS unestimated_count,
-                argMax(backlog_size, computed_at) AS backlog_size
+                argMax(
+                    tuple(estimate_coverage_metrics_daily.estimated_count, estimate_coverage_metrics_daily.unestimated_count, estimate_coverage_metrics_daily.backlog_size),
+                    (estimate_coverage_metrics_daily.computed_at, cityHash64(tuple(
+                        estimate_coverage_metrics_daily.estimated_count, estimate_coverage_metrics_daily.unestimated_count, estimate_coverage_metrics_daily.backlog_size)))
+                ) AS picked,
+                picked.1 AS estimated_count,
+                picked.2 AS unestimated_count,
+                picked.3 AS backlog_size
             FROM estimate_coverage_metrics_daily
             WHERE %s
             AND %s
@@ -454,13 +518,18 @@ func loadReviewOverlay(
             SELECT
                 repo_id,
                 day,
-                (argMax(tuple(pr_first_review_p50_hours), computed_at)).1 AS pr_first_review_p50_hours
+                argMax(
+                    tuple(repo_metrics_daily.pr_first_review_p50_hours, repo_metrics_daily.retracted),
+                    ` + repoMetricsNewestOrder + `
+                ) AS picked,
+                picked.1 AS pr_first_review_p50_hours,
+                picked.2 AS retracted
             FROM repo_metrics_daily
             WHERE day >= {start_date:Date} AND org_id = {org_id:String}
             GROUP BY repo_id, day
-            HAVING ` + liverow.NewestPredicate("repo_metrics_daily", "") + `
-        )
+        ) AS newest
         WHERE pr_first_review_p50_hours IS NOT NULL
+          AND ` + liverow.Predicate("repo_metrics_daily", "newest") + `
     `
 	bindings := []clickhouse.Binding{
 		{Name: "start_date", Value: startDate(today, historyWeeks)},
@@ -516,23 +585,22 @@ func loadBacklog(
 	query := fmt.Sprintf(`
         SELECT
             sum(wip_count_end_of_day) AS backlog,
-            countIf(measured) AS measured_keys,
-            countIf(measured AND newest_day < {start_date:Date}) AS stale_keys,
-            minIf(newest_day, measured) AS oldest_day
+            countIf(%[1]s) AS measured_keys,
+            countIf(%[1]s AND newest_day < {start_date:Date}) AS stale_keys,
+            minIf(newest_day, %[1]s) AS oldest_day
         FROM (
             SELECT
                 team_id,
                 work_scope_id,
                 provider,
                 max(day) AS newest_day,
-                argMax(wip_count_end_of_day, computed_at) AS wip_count_end_of_day,
-                %s AS measured
+                `+workItemNewestColumns+`
             FROM work_item_metrics_daily
-            WHERE %s
-            AND %s
+            WHERE %[2]s
+            AND %[3]s
             GROUP BY team_id, work_scope_id, provider, row_view
-        )
-    `, measuredWorkItemKey, newestrow.PerTeamPredicate("work_item_metrics_daily", where), where)
+        ) AS newest
+    `, measuredWorkItem, newestrow.PerTeamPredicate("work_item_metrics_daily", where), where)
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -584,12 +652,17 @@ func loadIncidentOverlay(
             SELECT
                 repo_id,
                 day,
-                argMax(incidents_count, computed_at) AS incidents_count
+                argMax(
+                    tuple(incident_metrics_daily.incidents_count, incident_metrics_daily.retracted),
+                    ` + incidentNewestOrder + `
+                ) AS picked,
+                picked.1 AS incidents_count,
+                picked.2 AS retracted
             FROM incident_metrics_daily
             WHERE day >= {start_date:Date} AND org_id = {org_id:String}
             GROUP BY repo_id, day
-            HAVING ` + liverow.NewestPredicate("incident_metrics_daily", "") + `
-        )
+        ) AS newest
+        WHERE ` + liverow.Predicate("incident_metrics_daily", "newest") + `
     `
 	bindings := []clickhouse.Binding{
 		{Name: "start_date", Value: startDate(today, historyWeeks)},

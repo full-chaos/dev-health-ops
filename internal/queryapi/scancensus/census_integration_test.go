@@ -757,6 +757,15 @@ const nullableIntoPlainSites = `
 //	fetchChangeFailureAgg 78aa9a6d5455 -> 33e78a54a14c
 //	fetchStateDurations 4e40f48a6488 -> dd682a464928
 //	fetchWorkItems 02d2157b4812 -> 6adb8910eb84
+//
+// CHAOS-14355 (Home signals): the compounding-risk read picks ONE version per key, ordered by (computed_at,
+// cityHash64(tuple(values))) in both the day picker and the served rows, and tests liveness with liverow.Predicate on
+// the picked row in an outer WHERE (no per-column HAVING). The select list, the column types and the scan targets of
+// fetchRiskSignals are unchanged (the tuple keeps elements 1..11 at their indexes); the statement text changed and the
+// site stays not-describable. Re-pinned by hand, digest copied from the local TestScanTypeCensus failure output (not
+// computed):
+//
+//	fetchRiskSignals 54de9ad8afd6 -> 06cb489933a0
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|e67003e26fc2|not-describable
@@ -801,7 +810,7 @@ internal/queryapi/home/queries_metrics.go|fetchMetricSeries|*time.Time,**float64
 internal/queryapi/home/queries_metrics.go|fetchMetricValue|*int64,**float64|dc4e9ea6b024|spliced-select-list
 internal/queryapi/home/queries_metrics.go|fetchPRReworkView|[]any|edd1ff81c902|variadic-destinations
 internal/queryapi/home/queries_metrics.go|fetchRateDriverDelta|*string,**float64,**float64|b707a8dcf55e|not-describable
-internal/queryapi/home/queries_signals.go|fetchRiskSignals|*string,*string,**float64,*string,*time.Time,**float64|54de9ad8afd6|not-describable
+internal/queryapi/home/queries_signals.go|fetchRiskSignals|*string,*string,**float64,*string,*time.Time,**float64|06cb489933a0|not-describable
 internal/queryapi/home/queries_sync.go|FetchLatestSuccessfulSyncAt|**time.Time|9dfe899f0474|statement-not-static
 internal/queryapi/home/repolinked.go|readBasis|*string,*string,*uint8|ed45fd9e4470|spliced-select-list
 internal/queryapi/hotspots/hotspots.go|queryHotspotRows|*string,*string,*uint64,*uint32,*uint32,*float64,**float64,*float64|448efde8f6df|not-describable

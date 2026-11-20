@@ -1,0 +1,5 @@
+render A: helm rc=0 docs=6
+render B: helm rc=0 docs=6
+docs A 6 B 6 (all kinds, Secrets as Kind/name only; hook-included: a helm template render); kinds in A: ConfigMap=1, Secret=1, Thing=1, Thing2=1, Thing3=1, ['x']=1
+added []; removed []; changed field rows 0; element rows added 0 removed 0; reordered rows 0; pod-template label/annotation rows 0; postgres sts rows 0
+FULL RENDER DIFF: INFO (no expectation; the floor held)

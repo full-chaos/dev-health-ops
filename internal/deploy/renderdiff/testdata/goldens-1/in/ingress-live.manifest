@@ -1,0 +1,504 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/component: wwogyeqeux
+  name: vgzmebi-rmbzw
+  namespace: vgzmebi-rmbzw
+automountServiceAccountToken: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/component: wwogyeqeux
+  name: lcnbwye-pgjqe-vtphmw-dsjck-xxsvxkj
+  namespace: vgzmebi-rmbzw
+data:
+  Y-IM-Lcbgbjjz-Kfdcjyiourndh-Skglxi: ''
+  K-XG-Nvqhuazi-Skk-Py: ''
+  Q-HQ-Fjajtstx-Bpzy: ''
+  H-WF-Wgltsgim-Gtuhmayve: ''
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/component: wwogyeqeux
+  name: hjxemxk-drlnf-siiyzsngms
+  namespace: vgzmebi-rmbzw
+data:
+  rqlut-myb-bgdrdbn: bjnxbfb-ctodf/lzljsdd-dgpnk-yxabay-ovrtu-fqbkity
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+  name: vgzmebi-rmbzw
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - rbwdyiirkq
+  - sdngtnbid
+  - cmkwr
+  - uqwl
+  - secretv
+  - zejwjdhtbw
+  verbs:
+  - fqao
+  - msmgn
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - oinmmd
+  verbs:
+  - fqao
+  - msmgn
+- apiGroups:
+  - ''
+  resources:
+  - cmkwr
+  verbs:
+  - qck
+- apiGroups:
+  - ''
+  resources:
+  - orhpgqre
+  verbs:
+  - qck
+  - fqao
+  - msmgn
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - sibuocevf
+  verbs:
+  - qck
+  - fqao
+  - msmgn
+- apiGroups:
+  - ''
+  resources:
+  - sknmks
+  verbs:
+  - owvopj
+  - tpugh
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - uvzzwczcx/hyfhqb
+  verbs:
+  - baoihy
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - mpzjjszjyarigz
+  verbs:
+  - qck
+  - fqao
+  - msmgn
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - pccwpngbblutuq
+  verbs:
+  - fqao
+  - msmgn
+  - qck
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+  name: vgzmebi-rmbzw
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vgzmebi-rmbzw
+subjects:
+- kind: ServiceAccount
+  name: vgzmebi-rmbzw
+  namespace: vgzmebi-rmbzw
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/component: wwogyeqeux
+  name: vgzmebi-rmbzw
+  namespace: vgzmebi-rmbzw
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - zejwjdhtbw
+  verbs:
+  - qck
+- apiGroups:
+  - ''
+  resources:
+  - rbwdyiirkq
+  - uqwl
+  - secretv
+  - sdngtnbid
+  verbs:
+  - qck
+  - fqao
+  - msmgn
+- apiGroups:
+  - ''
+  resources:
+  - orhpgqre
+  verbs:
+  - qck
+  - fqao
+  - msmgn
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - sibuocevf
+  verbs:
+  - qck
+  - fqao
+  - msmgn
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - uvzzwczcx/hyfhqb
+  verbs:
+  - baoihy
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - mpzjjszjyarigz
+  verbs:
+  - qck
+  - fqao
+  - msmgn
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - oinmmd
+  resourceNames:
+  - ijtfisp-lzhwe-ekuffj
+  verbs:
+  - qck
+  - baoihy
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - oinmmd
+  verbs:
+  - owvopj
+- apiGroups:
+  - ''
+  resources:
+  - sknmks
+  verbs:
+  - owvopj
+  - tpugh
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - pccwpngbblutuq
+  verbs:
+  - fqao
+  - msmgn
+  - qck
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/component: wwogyeqeux
+  name: vgzmebi-rmbzw
+  namespace: vgzmebi-rmbzw
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: vgzmebi-rmbzw
+subjects:
+- kind: ServiceAccount
+  name: vgzmebi-rmbzw
+  namespace: vgzmebi-rmbzw
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/component: wwogyeqeux
+  name: ordjqmt-wekif-cusjiwirao-jiswynohs
+  namespace: vgzmebi-rmbzw
+spec:
+  type: YsluxfdKF
+  ports:
+  - name: irzoz-dekobij
+    port: 443
+    targetPort: mpvnzvi
+    appProtocol: kygvj
+  selector:
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/component: wwogyeqeux
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations: null
+  labels:
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/component: wwogyeqeux
+  name: hjxemxk-drlnf-siiyzsngms
+  namespace: vgzmebi-rmbzw
+spec:
+  type: YsluxfdKF
+  clusterIP: 73.19.70.26
+  ipFamilyPolicy: UsiqfvEayfb
+  ipFamilies:
+  - QPq5
+  ports:
+  - name: tnzi
+    port: 80
+    protocol: TCP
+    targetPort: tnzi
+    appProtocol: tnzi
+  - name: kygvj
+    port: 443
+    protocol: TCP
+    targetPort: kygvj
+    appProtocol: kygvj
+  selector:
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/component: wwogyeqeux
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/component: wwogyeqeux
+  name: hjxemxk-drlnf-siiyzsngms
+  namespace: vgzmebi-rmbzw
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vgzmebi-rmbzw
+      app.kubernetes.io/instance: vgzmebi-rmbzw
+      app.kubernetes.io/component: wwogyeqeux
+  replicas: 1
+  revisionHistoryLimit: 10
+  minReadySeconds: 0
+  template:
+    metadata:
+      labels:
+        helm.sh/chart: clvubfl-crpwx-8.17.8
+        app.kubernetes.io/name: vgzmebi-rmbzw
+        app.kubernetes.io/instance: vgzmebi-rmbzw
+        app.kubernetes.io/version: 8.28.4
+        app.kubernetes.io/part-of: vgzmebi-rmbzw
+        app.kubernetes.io/managed-by: Nyca
+        app.kubernetes.io/component: wwogyeqeux
+    spec:
+      dnsPolicy: LoczgprYgkne
+      containers:
+      - name: wwogyeqeux
+        image: wiuxqvvz.d8z.jb/czmyknz-jujcs/dmuwewuxmq:t2.43.7@wpd594:c2e9d143f46f305cb6bc413970779d99818d65a3d4762876d6348000614c507e
+        imagePullPolicy: ArHlkBrxiqki
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /ywcl-thputdpy
+        args:
+        - /hlvpg-tiaagtl-tbmkmaowpg
+        - --jyzbsdp-yhnfeym=$(DXC_HXJSUKBDK)/lisdsxr-arxkc-mtnbvfjxnv
+        - --ltonzbrq-ur=clrpsqm-ruiqf-ejlygz
+        - --fsrvgsjgrf-yjxfj=e3o.hj/msfbboe-ehraw
+        - --umpxzmg-tiwhc=krqtb
+        - --vtfovmxdx=$(TSK_ATZGYAPMF)/rltfzco-ifofv-ovvtjznwvj
+        - --uhkzrudvgm-mulbkhq=:9063
+        - --rvoyrxmtfb-vjwrxrt-bglrfvswdzm=/vln/axyfl/ieqrrnwrdxjh/kujb
+        - --rzurtviaat-ktzjrmt-eoo=/avh/aslgf/wopydrdptjbv/key
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 101
+          runAsGroup: 82
+          allowPrivilegeEscalation: false
+          seccompProfile:
+            type: KmidnhpTnnzcbg
+          capabilities:
+            drop:
+            - ZBZ
+            add:
+            - CRC_TFOU_QTUDYMZ
+          readOnlyRootFilesystem: false
+        env:
+        - name: INT_GVFZ
+          valueFrom:
+            fieldRef:
+              fieldPath: gmqobmsb.cjag
+        - name: LIF_TFWUUHPRR
+          valueFrom:
+            fieldRef:
+              fieldPath: nrvilkvr.iptdtbmqa
+        - name: BU_DMUQPIQ
+          value: /cco/aslru/sdl/smovyuduggt.ub
+        livenessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: /arpcaml
+            port: 10254
+            scheme: BGOF
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /arpcaml
+            port: 10254
+            scheme: BGOF
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        ports:
+        - name: tnzi
+          containerPort: 80
+          protocol: TCP
+        - name: kygvj
+          containerPort: 443
+          protocol: TCP
+        - name: mpvnzvi
+          containerPort: 8443
+          protocol: TCP
+        volumeMounts:
+        - name: jfqftne-xajy
+          mountPath: /rkz/yejqp/jbwjabviepyl/
+          readOnly: true
+        resources:
+          requests:
+            cpu: 480p
+            memory: 690Wp
+      nodeSelector:
+        kubernetes.io/os: bampj
+      serviceAccountName: vgzmebi-rmbzw
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 300
+      volumes:
+      - name: jfqftne-xajy
+        secret:
+          secretName: pbnaxgi-lgbce-geosrdziw
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  labels:
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/component: wwogyeqeux
+  name: isgwv
+spec:
+  controller: e3o.hj/msfbboe-ehraw
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  annotations: null
+  labels:
+    helm.sh/chart: clvubfl-crpwx-8.17.8
+    app.kubernetes.io/name: vgzmebi-rmbzw
+    app.kubernetes.io/instance: vgzmebi-rmbzw
+    app.kubernetes.io/version: 8.28.4
+    app.kubernetes.io/part-of: vgzmebi-rmbzw
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/component: ddeghonsz-nylokvj
+  name: pbnaxgi-lgbce-geosrdziw
+webhooks:
+- name: vpuuqmfk.tdtqz.hkjysoq.lrzisydirf.mo
+  matchPolicy: Bowwpgypwn
+  rules:
+  - apiGroups:
+    - networking.k8s.io
+    apiVersions:
+    - n6
+    operations:
+    - AILMGB
+    - JKRHHA
+    resources:
+    - sibuocevf
+  failurePolicy: Qbdljg
+  sideEffects: Vzmg
+  admissionReviewVersions:
+  - n6
+  clientConfig:
+    service:
+      name: ordjqmt-wekif-cusjiwirao-jiswynohs
+      namespace: vgzmebi-rmbzw
+      port: 443
+      path: /yjnosbmoul/d7/xvbtucbib

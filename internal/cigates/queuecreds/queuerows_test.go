@@ -257,6 +257,8 @@ var queueRowReadTable = map[string]queueRowRead{
 		"dedupe_key", roleElsewhere, "", "", "write-proof test support: a DELETE that filters on the key, with no RETURNING and no output, run by tests only"},
 	"internal/testsupport/pgseed/pgseed.go#WorkerJobOutbox": {
 		"args, dedupe_key", roleElsewhere, "", "", "test seeding helper"},
+	"internal/deploy/renderdiff/usage.go#kitUsage": {
+		"args", roleElsewhere, "", "", "kit usage text, not SQL: the prod kit's render-diff docstring, printed byte-for-byte by usage()"},
 }
 
 // Every SQL literal that reads a field of a queue row's JSON arguments or its

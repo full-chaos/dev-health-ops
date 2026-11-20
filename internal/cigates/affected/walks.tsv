@@ -322,6 +322,7 @@ internal/clicredentials	opensites_test.go	cmd	tree	*.go
 internal/clicredentials	opensites_test.go	internal	tree	*.go
 internal/deploy/gitgate	gitgate.go	unexpressed	-	-
 internal/deploy/inputs	hookrender_test.go	unexpressed	-	-
+internal/deploy/renderdiff	golden_test.go	unexpressed	-	-
 internal/deploy/run	census_test.go	unexpressed	-	*.go
 internal/deploy/run	step_test.go	unexpressed	-	-
 internal/egressguard	egressguard_test.go	unexpressed	-	*.go

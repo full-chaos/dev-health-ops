@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc
+spec:
+  emptyl: []
+  emptym: {}
+  extra:
+    a: '1'
+    b: '2'
+  gone: null
+  replicas: 1
+  template:
+    spec:
+      containers:
+      - args:
+        - --dsn
+        - <redacted>
+        - --x
+        env:
+        - name: A
+          value: '1'
+        - name: B
+          value: '2'
+        - name: DB_PASSWORD
+          value: <redacted>
+        - name: SOME_URI
+          value: <redacted>
+        image: r/app@sha256:aaaa
+        name: app
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 9090
+          name: metrics
+          protocol: TCP
+      initContainers:
+      - image: r/i1@sha256:aaaa
+        name: i1
+      - image: r/i2@sha256:aaaa
+        name: i2
+---
+apiVersion: v1
+data:
+  LOG_LEVEL: info
+  REMOVED_KEY: <redacted>
+  URL: <redacted>
+  api_token: <redacted>
+kind: ConfigMap
+metadata:
+  name: cfg
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gone-svc
+spec:
+  ports:
+  - port: 80

@@ -1,0 +1,5 @@
+kind: X
+metadata:
+  name: sm2
+v:
+  a: 1

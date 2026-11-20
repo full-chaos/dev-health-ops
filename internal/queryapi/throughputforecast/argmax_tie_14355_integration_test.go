@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/operatingreview"
 )
 
 // Two versions of one key that share computed_at serve ONE version whatever the scan order. Versions go in as separate
@@ -299,4 +302,117 @@ var noTieWant = map[string]string{
 	"loadBacklog/measured_keys: a key whose newest row retires it is not measured": "size=0 state=NO_ROWS asOf=nil",
 	"loadBacklog/stale_keys: a measured key whose newest day is before the window": "size=10 state=STALE asOf=2026-07-01",
 	"loadBacklog/oldest_day: the oldest newest day of the measured keys":           "size=10 state=MEASURED asOf=2026-08-01",
+}
+
+// On a tie of two versions of one key, the throughput forecast and the operating review serve the SAME version: both
+// order each table by the same hash. The versions also differ in a column the forecast does not read, so a hash of
+// fewer columns would split the two pages. One cell per shared table: work_item_metrics_daily (throughput),
+// repo_metrics_daily (review latency), incident_metrics_daily (incidents).
+func TestArgMaxTieThroughputForecastAndOperatingReviewServeOneVersion14355(t *testing.T) {
+	ctx, conn, client := startThroughputForecastSchema(t)
+	const org = "org-14355-cross"
+	const repo = "14355000-0000-4000-8000-0000000000c1"
+	today := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	const weeks = 4
+	week := graphqldate.New(time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC))
+	exec := func(q string) {
+		t.Helper()
+		if err := conn.Exec(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	reviewMetric := func(key string) float64 {
+		t.Helper()
+		review, err := operatingreview.Resolve(ctx, client, org, nil, week)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, section := range review.Sections {
+			for _, m := range section.Metrics {
+				if m.Key == key {
+					return m.Value
+				}
+			}
+		}
+		t.Fatalf("no operating review metric %s", key)
+		return 0
+	}
+	at := "toDateTime('2026-08-01 12:00:00', 'UTC')"
+	for _, c := range []struct {
+		name, table, metric string
+		version             func(k int, second bool) string
+		forecast            func() float64
+	}{
+		{"work_item_metrics_daily", "work_item_metrics_daily", "throughput",
+			func(k int, second bool) string {
+				completed, points := k, 100+k
+				if second {
+					completed, points = k+50, 200+k
+				}
+				return fmt.Sprintf(`INSERT INTO work_item_metrics_daily (day, provider, work_scope_id, team_id, items_completed, story_points_completed, org_id, computed_at)
+                    SELECT toDate('2026-08-01'), 'github', 'scope-1', 'team-a', %d, %d, '%s', %s`, completed, points, org, at)
+			},
+			func() float64 {
+				h, err := loadThroughputHistory(ctx, client, org, nil, nil, weeks, today)
+				if err != nil || len(h) != 1 {
+					t.Fatalf("history %v %v", h, err)
+				}
+				return float64(h[0])
+			}},
+		{"repo_metrics_daily", "repo_metrics_daily", "review_latency_hours",
+			func(k int, second bool) string {
+				latency, merged := fmt.Sprintf("%d.5", k), 100+k
+				if second {
+					latency, merged = fmt.Sprintf("%d.5", k+50), 200+k
+				}
+				return fmt.Sprintf(`INSERT INTO repo_metrics_daily (repo_id, day, pr_first_review_p50_hours, prs_merged, org_id, computed_at)
+                    SELECT '%s', toDate('2026-08-01'), %s, %d, '%s', %s`, repo, latency, merged, org, at)
+			},
+			func() float64 {
+				v, err := loadReviewOverlay(ctx, client, org, weeks, today)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return v
+			}},
+		{"incident_metrics_daily", "incident_metrics_daily", "incidents_count",
+			func(k int, second bool) string {
+				count, mttr := k, fmt.Sprintf("%d.5", k)
+				if second {
+					count, mttr = k+50, "NULL"
+				}
+				return fmt.Sprintf(`INSERT INTO incident_metrics_daily (repo_id, day, incidents_count, mttr_p50_hours, org_id, computed_at)
+                    SELECT '%s', toDate('2026-08-01'), %d, %s, '%s', %s`, repo, count, mttr, org, at)
+			},
+			func() float64 {
+				v, err := loadIncidentOverlay(ctx, client, org, weeks, today)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var w float64
+				if err := conn.QueryRow(ctx, `SELECT toFloat64(greatest(dateDiff('week', toDate('`+startDate(today, weeks)+`'), today()), 1))`).Scan(&w); err != nil {
+					t.Fatal(err)
+				}
+				return float64(int64(v*w + 0.5))
+			}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			exec(`SYSTEM STOP MERGES ` + c.table)
+			for k := 1; k <= 8; k++ {
+				forecast, review := map[float64]bool{}, map[float64]bool{}
+				for _, order := range [][2]bool{{false, true}, {true, false}} {
+					for range 3 {
+						exec(`TRUNCATE TABLE ` + c.table)
+						exec(c.version(k, order[0]))
+						exec(c.version(k, order[1]))
+						forecast[c.forecast()] = true
+						review[reviewMetric(c.metric)] = true
+					}
+				}
+				if len(forecast) != 1 || len(review) != 1 || fmt.Sprint(forecast) != fmt.Sprint(review) {
+					t.Errorf("pair %d: the forecast served %v, the operating review served %v; want one and the same version", k, forecast, review)
+				}
+			}
+		})
+	}
 }

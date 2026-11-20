@@ -632,6 +632,11 @@ const nullableIntoPlainSites = `
 //
 //	loadFlaky 37c05084ba13 -> 32950ea2e0be
 //
+// CHAOS-14339: MetricLineage takes the org view predicate of work_item_metrics_daily (rowview.OrgPredicate); its statement text
+// changed and the site stays not-describable. Digest copied from the local TestScanTypeCensus failure output (not computed):
+//
+//	coverage.go MetricLineage a3f56be4ccc9 -> c8b773408698
+//
 // testopsrisk.go readDaily is pinned by hand (CHAOS-14009), digest copied from the local TestScanTypeCensus failure output
 // (not computed): dailyQuery now applies the live-row rule (liverow.NewestPredicate in the release and stability HAVING,
 // liverow.Predicate in the FINAL drag WHERE), and the census evaluates every return of those helpers, so the variants that
@@ -722,7 +727,7 @@ internal/queryapi/compoundingrisk/read.go|latestDay|**time.Time|818fa20627a4|not
 internal/queryapi/compoundingrisk/read.go|latestRows|*string,**float64,*string,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,*float64,*float64,*float64,*float64,*float64,*float64,*time.Time|9af7066815e3|not-describable
 internal/queryapi/compoundingrisk/read.go|repoTrend|*time.Time,**float64|e90c541be45a|not-describable
 internal/queryapi/datahealth/connectors.go|Connectors|*string,*string,*[]byte,**time.Time,**bool,**string,*[]byte,**time.Time,**int32,**time.Time,**time.Time,*[]byte,**string|d9838116a756|not-describable
-internal/queryapi/datahealth/coverage.go|MetricLineage|**time.Time,*uint64|a3f56be4ccc9|not-describable
+internal/queryapi/datahealth/coverage.go|MetricLineage|**time.Time,*uint64|c8b773408698|not-describable
 internal/queryapi/datahealth/sourcehealth.go|SourceHealth|*string,**string,*bool,**time.Time,*bool,*string,*[]byte,**time.Time,**bool,*bool,**time.Time,**string,*bool,**time.Time,**time.Time,**string,**string|dabf0d087730|not-describable
 internal/queryapi/drilldown/issues.go|BuildIssuesResponse|*string,*string,*string,**string,**string,**float64,**float64,**time.Time,**time.Time|efc62e04415b|not-describable
 internal/queryapi/drilldown/issues.go|buildBlockedIssuesResponse|*string,*string,**string,**string,*uint64|0df7b140bb0b|not-describable

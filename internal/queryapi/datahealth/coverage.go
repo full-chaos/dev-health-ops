@@ -8,6 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -137,6 +138,15 @@ func measuredRowsOnly(table string) string {
 	return "\n  AND " + liverow.Predicate(table, "")
 }
 
+// lineageRowView keeps the rows of one view of a table that holds row_view: a
+// row count that took every view would count an item day once for each view.
+func lineageRowView(table string) string {
+	if !rowview.Has(table) {
+		return ""
+	}
+	return "\n  AND " + rowview.OrgPredicate(table, "")
+}
+
 // MetricLineage ports compute_metric_lineage: the freshness of the tables a
 // metric is computed from. An unknown metric, or one whose tables all failed
 // to answer, has no lineage. A table that answers with no rows reports the
@@ -150,7 +160,7 @@ func (r *Reader) MetricLineage(ctx context.Context, orgID, metricID string) *mod
 	found := false
 	totalRows := 0
 	for _, table := range entry.tables {
-		statement := "\nSELECT argMax(computed_at, computed_at) AS computed_at, count() AS row_count\nFROM " + lineageSource(table) + "\nWHERE org_id = {org_id:String}" + measuredRowsOnly(table)
+		statement := "\nSELECT argMax(computed_at, computed_at) AS computed_at, count() AS row_count\nFROM " + lineageSource(table) + "\nWHERE org_id = {org_id:String}" + lineageRowView(table) + measuredRowsOnly(table)
 		r.queryRows(ctx, "lineage_"+table, statement, []clickhouse.Binding{{Name: "org_id", Value: orgID}},
 			func(rows clickhouse.RowScanner) error {
 				var computed *time.Time

@@ -18,6 +18,32 @@ import (
 // each doc it renders.
 func chartRender(t *testing.T, release string) []string {
 	t.Helper()
+	out := chartRenderBytes(t, release)
+	var docs []string
+	dec := yaml.NewDecoder(bytes.NewReader(out))
+	for {
+		var d struct {
+			Kind     string `yaml:"kind"`
+			Metadata struct {
+				Name string `yaml:"name"`
+			} `yaml:"metadata"`
+		}
+		if err := dec.Decode(&d); err != nil {
+			break
+		}
+		if d.Kind != "" {
+			docs = append(docs, d.Kind+"/"+d.Metadata.Name)
+		}
+	}
+	if len(docs) < 20 {
+		t.Fatalf("helm template %s rendered %d docs", release, len(docs))
+	}
+	return docs
+}
+
+// chartRenderBytes is the raw client-only `helm template` output.
+func chartRenderBytes(t *testing.T, release string) []byte {
+	t.Helper()
 	helm, err := exec.LookPath("helm")
 	if err != nil {
 		t.Fatal("helm is required: CI installs it for the Go test and race legs (a missing helm fails this cell, it never skips)")
@@ -69,26 +95,7 @@ func chartRender(t *testing.T, release string) []string {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("helm template %s: %v: %.400s", release, err, errOut.String())
 	}
-	var docs []string
-	dec := yaml.NewDecoder(&out)
-	for {
-		var d struct {
-			Kind     string `yaml:"kind"`
-			Metadata struct {
-				Name string `yaml:"name"`
-			} `yaml:"metadata"`
-		}
-		if err := dec.Decode(&d); err != nil {
-			break
-		}
-		if d.Kind != "" {
-			docs = append(docs, d.Kind+"/"+d.Metadata.Name)
-		}
-	}
-	if len(docs) < 20 {
-		t.Fatalf("helm template %s rendered %d docs", release, len(docs))
-	}
-	return docs
+	return out.Bytes()
 }
 
 // (a) on the real producer: under the docs release name (dev-health, no

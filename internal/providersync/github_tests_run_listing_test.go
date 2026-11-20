@@ -28,6 +28,7 @@ type listingRun struct {
 	status     string
 	conclusion string
 	branch     string
+	attempt    int // run_attempt; zero means 1
 }
 
 // listingFake is a GitHub that honours created ranges, branch, paging, the documented cap of 1,000 results for a
@@ -86,9 +87,9 @@ func (run listingRun) json() string {
 	if branch == "" {
 		branch = "main"
 	}
-	return fmt.Sprintf(`{"id":%d,"name":"CI","status":%q,"conclusion":%s,"created_at":%q,"run_started_at":%q,"updated_at":%q,"run_attempt":1,"event":"push","head_sha":"abc","head_branch":%q,"html_url":"https://github.com/acme/api/actions/runs/%d","pull_requests":[]}`,
+	return fmt.Sprintf(`{"id":%d,"name":"CI","status":%q,"conclusion":%s,"created_at":%q,"run_started_at":%q,"updated_at":%q,"run_attempt":%d,"event":"push","head_sha":"abc","head_branch":%q,"html_url":"https://github.com/acme/api/actions/runs/%d","pull_requests":[]}`,
 		run.id, run.status, conclusion, run.created.UTC().Format(time.RFC3339), started.UTC().Format(time.RFC3339),
-		run.updated.UTC().Format(time.RFC3339), branch, run.id)
+		run.updated.UTC().Format(time.RFC3339), max(1, run.attempt), branch, run.id)
 }
 
 func (fake *listingFake) respond(request *http.Request, header http.Header, body string, status int) *http.Response {

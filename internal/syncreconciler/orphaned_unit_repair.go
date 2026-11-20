@@ -234,6 +234,10 @@ type OrphanedUnitRepairResult struct {
 	SkippedRaceLost         int
 
 	RemainingBudget int
+	// Left counts approved candidates whose re-arm this pass did not commit:
+	// the ones after a stop before the stage deadline, or all of them when
+	// the re-arm transaction failed. The next tick surveys them again.
+	Left int
 }
 
 const (
@@ -327,7 +331,7 @@ func (repair *OrphanedUnitRepair) Step(
 
 	candidates, err := repair.survey(ctx, now, limit)
 	if err != nil {
-		repair.logOutcome(ctx, now, result)
+		repair.logOutcome(ctx, now, result, err)
 		return result, err
 	}
 	result.Found = len(candidates)
@@ -350,12 +354,14 @@ func (repair *OrphanedUnitRepair) Step(
 			// unknown one means a row was surveyed under a branch this code
 			// does not know it has. Fail the pass rather than silently drop it
 			// or, worse, act on it.
-			repair.logOutcome(ctx, now, result)
-			return result, fmt.Errorf("orphaned-unit disposition %q: %w", candidate.disposition, ErrUnavailable)
+			err := orphanedUnitStepError{step: "survey_disposition",
+				err: fmt.Errorf("orphaned-unit disposition %q: %w", candidate.disposition, ErrUnavailable)}
+			repair.logOutcome(ctx, now, result, err)
+			return result, err
 		}
 	}
 	if len(approved) == 0 {
-		repair.logOutcome(ctx, now, result)
+		repair.logOutcome(ctx, now, result, nil)
 		return result, nil
 	}
 
@@ -368,12 +374,13 @@ func (repair *OrphanedUnitRepair) Step(
 	// an operator alerts on behind work that did not happen.
 	committed, err := repair.rearm(ctx, now, approved)
 	if err != nil {
-		repair.logOutcome(ctx, now, result)
+		result.Left = len(approved)
+		repair.logOutcome(ctx, now, result, err)
 		return result, err
 	}
 	result.merge(committed)
 	result.RemainingBudget = limit - result.ReArmed
-	repair.logOutcome(ctx, now, result)
+	repair.logOutcome(ctx, now, result, nil)
 	for _, record := range committed.rearms {
 		// Emitted AFTER the commit, for the same reason the counters are merged
 		// after it: a line claiming a re-arm that rolled back is worse than no
@@ -415,6 +422,7 @@ type committedOutcome struct {
 	skippedPrerequisite  int
 	skippedEnvelope      int
 	skippedRaceLost      int
+	left                 int
 	rearms               []rearmRecord
 }
 
@@ -439,6 +447,7 @@ func (result *OrphanedUnitRepairResult) merge(committed committedOutcome) {
 	result.SkippedPrerequisite += committed.skippedPrerequisite
 	result.SkippedEnvelope += committed.skippedEnvelope
 	result.SkippedRaceLost += committed.skippedRaceLost
+	result.Left += committed.left
 }
 
 func (repair *OrphanedUnitRepair) survey(
@@ -495,7 +504,12 @@ func (repair *OrphanedUnitRepair) rearm(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	for _, candidate := range approved {
+	pass := newPassDeadline(ctx)
+	for index, candidate := range approved {
+		if !pass.next() {
+			outcome.left = len(approved) - index
+			break
+		}
 		newKey, err := nextProviderUnitReclaimKey(candidate.dedupeKey, candidate.unitID)
 		if errors.Is(err, ErrReclaimBudgetSpent) {
 			outcome.skippedReclaimBudget++
@@ -616,7 +630,7 @@ func (repair *OrphanedUnitRepair) failed(ctx context.Context, step string, cause
 		"error", detail,
 	)
 	if cause == nil {
-		return fmt.Errorf("orphaned-unit %s: %w", step, ErrUnavailable)
+		return orphanedUnitStepError{step: step, err: fmt.Errorf("orphaned-unit %s: %w", step, ErrUnavailable)}
 	}
 	// BOTH wrapped, deliberately. The pipeline's stageSQLState (pipeline.go)
 	// recovers a stage's SQLSTATE with errors.As over *pgconn.PgError -- so
@@ -625,7 +639,29 @@ func (repair *OrphanedUnitRepair) failed(ctx context.Context, step string, cause
 	// actually alerts on. Wrapping both keeps errors.Is(ErrUnavailable) true
 	// for the caller's continue-safe classification AND leaves the driver error
 	// reachable for the stage counter (r1 finding F5).
-	return fmt.Errorf("orphaned-unit %s: %w: %w", step, ErrUnavailable, cause)
+	return orphanedUnitStepError{step: step, err: fmt.Errorf("orphaned-unit %s: %w: %w", step, ErrUnavailable, cause)}
+}
+
+// orphanedUnitStepError carries the failing step to the pass line; the error
+// text and the wrapped chain are unchanged.
+type orphanedUnitStepError struct {
+	step string
+	err  error
+}
+
+func (failure orphanedUnitStepError) Error() string { return failure.err.Error() }
+
+func (failure orphanedUnitStepError) Unwrap() error { return failure.err }
+
+func orphanedUnitFailedStep(err error) string {
+	var failure orphanedUnitStepError
+	if errors.As(err, &failure) {
+		return failure.step
+	}
+	if err != nil {
+		return "unknown"
+	}
+	return ""
 }
 
 // surveyFailed wraps failed with the evidence a bare
@@ -662,13 +698,16 @@ func causeText(cause error) string {
 }
 
 func (repair *OrphanedUnitRepair) logOutcome(
-	ctx context.Context, now time.Time, result OrphanedUnitRepairResult,
+	ctx context.Context, now time.Time, result OrphanedUnitRepairResult, stepErr error,
 ) {
 	staleSeconds := int64(0)
 	if repair != nil {
 		staleSeconds = int64(repair.staleAge.Seconds())
 	}
 	slog.InfoContext(ctx, "syncreconciler.orphaned_unit_pass",
+		"ran", stepErr == nil,
+		"failed_step", orphanedUnitFailedStep(stepErr),
+		"left", result.Left,
 		"orphaned_units_found", result.Found,
 		"re_armed", result.ReArmed,
 		"delivery_missing", result.DeliveryMissing,

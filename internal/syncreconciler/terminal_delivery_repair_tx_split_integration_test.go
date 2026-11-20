@@ -5,6 +5,7 @@ package syncreconciler
 import (
 	"context"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,7 +149,10 @@ func TestTerminalDeliveryRepairRecoverySurvivesASlowReadyFinalizerLoop(t *testin
 	const exhaustedOutboxID = "00000000-0000-4000-9101-000000000001"
 	seedExhaustedPostSyncCandidate(t, ctx, h, now, exhaustedRunID, exhaustedOutboxID, postSyncGeneration)
 
-	if _, err := h.admin.Exec(ctx, slowFinalizeRearmTriggerSQL); err != nil {
+	// CHAOS-14238: the ready-finalizer pass now stops before its deadline and commits the items it
+	// finished, so many slow items no longer fail it. One item slower than the whole budget still
+	// does (the first item always runs), and that is the failure this invariant needs.
+	if _, err := h.admin.Exec(ctx, strings.Replace(slowFinalizeRearmTriggerSQL, "pg_sleep(0.08)", "pg_sleep(1)", 1)); err != nil {
 		t.Fatal(err)
 	}
 	const readyCandidateCount = 15
@@ -157,14 +161,13 @@ func TestTerminalDeliveryRepairRecoverySurvivesASlowReadyFinalizerLoop(t *testin
 	}
 
 	// The real production stage budget (DefaultStageBudgets, stage_budget.go) -- not an arbitrary
-	// short deadline chosen to force a timeout. 15 candidates x 80ms >= 1.2s of serial per-candidate
-	// write cost against a 750ms budget is exactly CHAOS-6932's shape: the loop's own statement time,
-	// not pool wait, exhausts the stage before Commit runs.
+	// short deadline chosen to force a timeout. A 1s write against a 750ms budget: the loop's own
+	// statement time, not pool wait, exhausts the stage before Commit runs (CHAOS-6932's shape).
 	budget := DefaultStageBudgets()[StageTerminalDeliveryRepair]
 	stepCtx, stepCancel := context.WithTimeout(ctx, budget)
 	defer stepCancel()
 	result, err := h.repair.Step(stepCtx, now, readyCandidateCount+5)
-	t.Logf("Step() under a %s budget with %d ready finalizer candidates at 80ms/write: result=%+v err=%v",
+	t.Logf("Step() under a %s budget with %d ready finalizer candidates at 1s/write: result=%+v err=%v",
 		budget, readyCandidateCount, result, err)
 
 	// r1 P3: this test claims to exercise a shared-budget failure, not merely check that a recovery
@@ -173,7 +176,7 @@ func TestTerminalDeliveryRepairRecoverySurvivesASlowReadyFinalizerLoop(t *testin
 	// below would hold vacuously, for a reason unrelated to CHAOS-6957 at all. Pin the failure itself:
 	// under this exact budget and load, the ready-finalizer half must actually fail.
 	if err == nil {
-		t.Fatalf("Step() succeeded with no error under a %s budget and %d x 80ms serial ready-finalizer "+
+		t.Fatalf("Step() succeeded with no error under a %s budget and %d x 1s serial ready-finalizer "+
 			"writes (result=%+v) -- this test's premise is a shared-budget failure; without one, the "+
 			"status assertion below proves nothing about CHAOS-6957", budget, readyCandidateCount, result)
 	}

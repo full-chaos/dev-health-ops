@@ -428,6 +428,7 @@ var metricsProofCuts = []proofCut{
 	{pkg: "internal/pushlifecyclecli", reason: dhoVerbOff + " (push lifecycle)"},
 	{pkg: "internal/billingcli", reason: dhoVerbOff + " (billing)"},
 	{pkg: "internal/contractcheck", reason: dhoVerbOff + " (contract check)"},
+	{pkg: "internal/deploycli", reason: dhoVerbOff + " (deploy)"},
 	{pkg: "internal/goapicli", reason: dhoVerbOff + " (go-api)"},
 	{pkg: "internal/maintenancecli", reason: dhoVerbOff + " (maintenance)"},
 	{pkg: "internal/metricscli", reason: dhoVerbOff + " (metrics)"},

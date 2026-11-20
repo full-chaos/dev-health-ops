@@ -272,21 +272,44 @@ func TestBackfillWaitGaugeOverTheGroupLimitFoldsIntoOtherOnPostgres(t *testing.T
 				CostClass: "medium", Mode: "backfill", Status: syncRunUnitStatusPlanned, UpdatedAt: &now}
 			pgseed.InsertSyncRunUnit(ctx, t, pool, unit)
 		}
+		// live units of a non-backfill run: two in the first bucket (kept) and two in the last one (folded); medium cap 2
+		other := "00000000-0000-4000-8000-0000000143f5"
+		seedWaitRun(t, ctx, pool, other, "schedule", "incremental", "running", now.Add(-time.Hour))
+		lease, owner := now.Add(10*time.Minute), "worker-14304"
+		for i, provider := range []string{"provider-0000", "provider-0000", "provider-1000", "provider-1000"} {
+			pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{ID: fmt.Sprintf("00000000-0000-4000-8000-%012x", 0x143520000+i), RunID: other, OrgID: waitGaugeOrg,
+				Provider: provider, CostClass: "medium", Mode: "incremental", Status: syncRunUnitStatusRunning, UpdatedAt: &now, LeaseExpiresAt: &lease, LeaseOwner: &owner})
+		}
 		text := waitGaugeText(t, ctx, pool)
 		requireLine(t, text, `sync_dispatch_backfill_wait_read_ok 1`)
 		requireLine(t, text, `sync_dispatch_backfill_wait_units{provider="~other",cost_class="~other",state="planned"} 1`)
-		total := 0
+		requireLine(t, text, `sync_dispatch_backfill_wait_units{provider="~other",cost_class="~other",state="active"} 2`)
+		requireLine(t, text, `sync_dispatch_backfill_wait_held_back_units{provider="~other",cost_class="~other"} 1`)
+		sums := map[string]int{}
 		for _, line := range strings.Split(text, "\n") {
-			if strings.HasPrefix(line, "sync_dispatch_backfill_wait_units{") && strings.Contains(line, `state="planned"`) {
-				var n int
-				if _, err := fmt.Sscanf(line[strings.LastIndex(line, " ")+1:], "%d", &n); err != nil {
-					t.Fatal(err)
-				}
-				total += n
+			var key string
+			switch {
+			case strings.HasPrefix(line, "sync_dispatch_backfill_wait_units{") && strings.Contains(line, `state="planned"`):
+				key = "planned"
+			case strings.HasPrefix(line, "sync_dispatch_backfill_wait_units{") && strings.Contains(line, `state="retrying"`):
+				key = "retrying"
+			case strings.HasPrefix(line, "sync_dispatch_backfill_wait_units{") && strings.Contains(line, `state="active"`):
+				key = "active"
+			case strings.HasPrefix(line, "sync_dispatch_backfill_wait_held_back_units{"):
+				key = "held_back"
+			default:
+				continue
 			}
+			var n int
+			if _, err := fmt.Sscanf(line[strings.LastIndex(line, " ")+1:], "%d", &n); err != nil {
+				t.Fatal(err)
+			}
+			sums[key] += n
 		}
-		if total != 1001 {
-			t.Fatalf("planned units over all series = %d, want 1001", total)
+		for key, want := range map[string]int{"planned": 1001, "retrying": 0, "active": 4, "held_back": 2} {
+			if sums[key] != want {
+				t.Fatalf("%s over all series = %d, want %d (the true total):\n%s", key, sums[key], want, text)
+			}
 		}
 		requireLine(t, text, `sync_dispatch_backfill_wait_truncated_total 1`)
 	})

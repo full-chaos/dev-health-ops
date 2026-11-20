@@ -22,9 +22,9 @@ import (
 const (
 	backfillWaitCachePeriod = 60 * time.Second
 	backfillWaitReadTimeout = 5 * time.Second
-	// backfillWaitRowLimit bounds the groups Q1 returns one by one. The groups past it (the smallest) are folded by the SQL
-	// into one row per status with NULL org, provider and cost class: a real group has none of them NULL (columns NOT NULL),
-	// so the fold cannot collide with a real key. The gauge then carries them under backfillWaitFoldedLabel, keyed by a flag
+	// backfillWaitRowLimit bounds the buckets (org, provider, cost class) reported one by one. The buckets past it (the
+	// smallest) are folded, whole, by the SQL into one row per status with NULL org, provider and cost class: a real group has
+	// none of them NULL (columns NOT NULL), so the fold cannot collide with a real key. The gauge then carries them under backfillWaitFoldedLabel, keyed by a flag
 	// and not by that string, so a provider that carried the same name could not merge into it either.
 	backfillWaitRowLimit = 1000
 	// backfillWaitFoldedLabel is the label value of the folded series. A provider or cost class is a registry slug of
@@ -34,7 +34,7 @@ const (
 
 // backfillWaitOpenSQL is the open-backfill-run unit read. The backfill rule is the one readRunOrder applies
 // (admission_order.go); backfill_wait_gauge_test.go pins the two against each other. Plain SELECT: no row or bucket lock.
-const backfillWaitOpenSQL = `
+const backfillWaitBucketsCTE = `
 WITH grouped AS (
     SELECT unit.org_id, unit.provider, unit.cost_class, unit.status, count(*)::int AS n
     FROM public.sync_runs AS run
@@ -43,14 +43,25 @@ WITH grouped AS (
       AND (run.triggered_by = 'backfill' OR run.mode = 'backfill')
       AND unit.status IN ('planned', 'retrying')
     GROUP BY unit.org_id, unit.provider, unit.cost_class, unit.status
-), ranked AS (
-    SELECT grouped.*, row_number() OVER (ORDER BY n DESC, org_id, provider, cost_class, status) AS rn
+), buckets AS (
+    SELECT org_id, provider, cost_class, sum(n)::int AS total,
+           row_number() OVER (ORDER BY sum(n) DESC, org_id, provider, cost_class) AS rn
     FROM grouped
-)
-SELECT CASE WHEN rn <= $2 THEN org_id END, CASE WHEN rn <= $2 THEN provider END, CASE WHEN rn <= $2 THEN cost_class END,
-       status, sum(n)::int
-FROM ranked
+    GROUP BY org_id, provider, cost_class
+)`
+
+// backfillWaitOpenSQL: the waiting rows. Buckets ranked past $2 (the smallest) fold, whole, into one row per status with
+// NULL org, provider and cost class.
+const backfillWaitOpenSQL = backfillWaitBucketsCTE + `
+SELECT CASE WHEN b.rn <= $2 THEN g.org_id END, CASE WHEN b.rn <= $2 THEN g.provider END, CASE WHEN b.rn <= $2 THEN g.cost_class END,
+       g.status, sum(g.n)::int
+FROM grouped AS g
+JOIN buckets AS b ON b.org_id = g.org_id AND b.provider = g.provider AND b.cost_class = g.cost_class
 GROUP BY 1, 2, 3, 4`
+
+// backfillWaitFoldedBucketsSQL lists the buckets that fold, with their waiting total, in the same snapshot.
+const backfillWaitFoldedBucketsSQL = backfillWaitBucketsCTE + `
+SELECT org_id, provider, cost_class, total FROM buckets WHERE rn > $2`
 
 const backfillWaitOpenRunsSQL = `
 SELECT count(*)::int
@@ -158,9 +169,6 @@ func (s *BackfillWaitSource) read(ctx context.Context, now time.Time) (*backfill
 			sample.planned += n
 		}
 	}
-	if snapshot.truncated {
-		snapshot.series[backfillWaitKey{folded: true}] = folded
-	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -182,6 +190,41 @@ func (s *BackfillWaitSource) read(ctx context.Context, now time.Time) (*backfill
 		sample.active += active
 		sample.heldBack += backfillWaitHeldBack(bucket.costClass, waiting[bucket], active, activeBackfill, now)
 	}
+	if !snapshot.truncated {
+		return snapshot, nil
+	}
+	// The folded buckets: active and held_back come from the same guard funcs, one call per bucket, in the same snapshot. The
+	// work is bounded by the read timeout; a read that cannot finish fails (read_ok 0) and never publishes a partial total.
+	foldedRows, err := tx.Query(ctx, backfillWaitFoldedBucketsSQL, terminal, backfillWaitRowLimit)
+	if err != nil {
+		return nil, err
+	}
+	type foldedBucket struct {
+		bucket dispatchBucket
+		total  int
+	}
+	var foldedBuckets []foldedBucket
+	for foldedRows.Next() {
+		var item foldedBucket
+		if err := foldedRows.Scan(&item.bucket.orgID, &item.bucket.provider, &item.bucket.costClass, &item.total); err != nil {
+			foldedRows.Close()
+			return nil, err
+		}
+		foldedBuckets = append(foldedBuckets, item)
+	}
+	foldedRows.Close()
+	if err := foldedRows.Err(); err != nil {
+		return nil, err
+	}
+	for _, item := range foldedBuckets {
+		active, activeBackfill, err := countActiveBucketUnits(ctx, tx, item.bucket, staleCutoff, now)
+		if err != nil {
+			return nil, err
+		}
+		folded.active += active
+		folded.heldBack += backfillWaitHeldBack(item.bucket.costClass, item.total, active, activeBackfill, now)
+	}
+	snapshot.series[backfillWaitKey{folded: true}] = folded
 	return snapshot, nil
 }
 
@@ -263,9 +306,6 @@ func (s *BackfillWaitSource) WritePrometheus(w io.Writer) error {
 			name string
 			n    int
 		}{{"planned", sample.planned}, {"retrying", sample.retrying}, {"active", sample.active}} {
-			if key.folded && state.name == "active" {
-				continue
-			}
 			if _, err := fmt.Fprintf(w, "sync_dispatch_backfill_wait_units{provider=%q,cost_class=%q,state=%q} %d\n", provider, costClass, state.name, state.n); err != nil {
 				return err
 			}
@@ -275,10 +315,11 @@ func (s *BackfillWaitSource) WritePrometheus(w io.Writer) error {
 		return err
 	}
 	for _, key := range keys {
+		provider, costClass := key.provider, key.costClass
 		if key.folded {
-			continue
+			provider, costClass = backfillWaitFoldedLabel, backfillWaitFoldedLabel
 		}
-		if _, err := fmt.Fprintf(w, "sync_dispatch_backfill_wait_held_back_units{provider=%q,cost_class=%q} %d\n", key.provider, key.costClass, snapshot.series[key].heldBack); err != nil {
+		if _, err := fmt.Fprintf(w, "sync_dispatch_backfill_wait_held_back_units{provider=%q,cost_class=%q} %d\n", provider, costClass, snapshot.series[key].heldBack); err != nil {
 			return err
 		}
 	}

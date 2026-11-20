@@ -9,6 +9,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/aianalytics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 )
 
 // Two versions of one key that share computed_at serve ONE version whatever the scan order. Versions go in as separate
@@ -295,4 +299,56 @@ var noTieWant = map[string]string{
 	"fetchIncidentsAgg":   "{incidentsCount=7 mttrP50Hours=3.5 storedRows=2}",
 	"fetchAIGovernance": "{aiArtifacts=3 declaredArtifacts=3 humanReviewedPrs=3 securityScannedPrs=3 inPolicyArtifacts=3};" +
 		"{aiArtifacts=4 declaredArtifacts=4 humanReviewedPrs=4 securityScannedPrs=4 inPolicyArtifacts=4}",
+}
+
+// On a tie of two ai_impact_metrics_daily versions, the operating review (fetchAIImpact) and the AI analytics impact
+// summary serve the SAME version: both order by the same hash of the version's 27 value columns. The versions also
+// differ in prs_merged, a column only the AI analytics reads, so a hash of fewer columns would split the two pages.
+func TestArgMaxTieOperatingReviewAndAIAnalyticsServeOneVersion14355(t *testing.T) {
+	ctx, conn, client := startOperatingReviewSchema(t)
+	const org = "org-14355-cross"
+	const repo = "14355000-0000-4000-8000-0000000000c1"
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	dr := model.AIDateRangeInput{StartDate: graphqldate.New(start), EndDate: graphqldate.New(start)}
+	version := func(prs, merged int, delta string) string {
+		return fmt.Sprintf(`INSERT INTO ai_impact_metrics_daily (org_id, team_id, repo_id, work_type, day, attribution_bucket,
+            prs_total, prs_merged, ai_assisted_prs, ai_cycle_time_delta_hours, computed_at)
+            SELECT '%s', 'team-a', '%s', 'pull_request', toDate('2026-08-01'), 'ai_assisted', %d, %d, %d, %s,
+            toDateTime64('2026-08-01 12:00:00.000', 3, 'UTC')`, org, repo, prs, merged, prs, delta)
+	}
+	exec := func(q string) {
+		t.Helper()
+		if err := conn.Exec(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	exec(`SYSTEM STOP MERGES ai_impact_metrics_daily`)
+	for k := 1; k <= 8; k++ {
+		versions := [2]string{version(k, 100+k, fmt.Sprintf("%d.5", k)), version(k+50, 200+k, "NULL")}
+		review, analytics := map[float64]bool{}, map[float64]bool{}
+		for _, order := range [][2]int{{0, 1}, {1, 0}} {
+			for range 3 {
+				exec(`TRUNCATE TABLE ai_impact_metrics_daily`)
+				for _, i := range order {
+					exec(versions[i])
+				}
+				rows, err := fetchAIImpact(ctx, client, org, nil, start, start.AddDate(0, 0, 1))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(rows) != 1 {
+					t.Fatalf("pair %d: operating review rows %d", k, len(rows))
+				}
+				review[rows[0].prsTotal] = true
+				summary, err := aianalytics.ImpactSummary(ctx, client, org, dr, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				analytics[summary.TotalPrs] = true
+			}
+		}
+		if len(review) != 1 || len(analytics) != 1 || fmt.Sprint(review) != fmt.Sprint(analytics) {
+			t.Errorf("pair %d: operating review served prs_total %v, AI analytics served %v; want one and the same version", k, review, analytics)
+		}
+	}
 }

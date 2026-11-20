@@ -378,7 +378,7 @@ WHERE org_id = $1 AND sync_config_id = $2 AND before_date >= $3::date`, config.O
 	backfillResolutionMetrics.observe(outcomes)
 	if waiting := outcomes[backfillOutcomeOccurrenceUnplanned] + outcomes[backfillOutcomeUnresolved]; waiting > 0 {
 		slog.WarnContext(ctx, "sync coverage: backfill jobs without a planned run",
-			slog.String("sync_config_id", config.ID.String()),
+			slog.Any("sync_config_id", config.ID),
 			slog.Int(backfillOutcomeOccurrenceUnplanned, outcomes[backfillOutcomeOccurrenceUnplanned]),
 			slog.Int(backfillOutcomeUnresolved, outcomes[backfillOutcomeUnresolved]))
 	}

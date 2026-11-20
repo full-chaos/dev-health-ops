@@ -952,6 +952,22 @@ FROM generate_series($3::int, $4::int) AS g`, discoveryTestOrg, discoveryTestRun
 			t.Fatal(err)
 		}
 	}
+	// CHAOS-14394: an older, never-claimed run of the same bucket with a pending dispatch wake row. The guard's older-run read
+	// then reaches the wake-armed probe on sync_dispatch_outbox as the domain role in every pass below.
+	for _, statement := range []string{
+		`INSERT INTO sync_runs (id,org_id,integration_id,created_at)
+		 VALUES ('00000000-0000-4000-8000-0000000014e1','` + discoveryTestOrg + `','` + discoveryTestIntegration + `', now() - interval '2 hours')`,
+		`INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
+		 VALUES ('00000000-0000-4000-8000-0000000014e3','` + discoveryTestOrg + `','00000000-0000-4000-8000-0000000014e1','github','commits',
+		         '00000000-0000-4000-8000-0000000000ed','planned', now() - interval '2 hours')`,
+		`INSERT INTO sync_dispatch_outbox (id,sync_run_id,org_id,kind,status,available_at,created_at,updated_at)
+		 VALUES ('00000000-0000-4000-8000-0000000014e2','00000000-0000-4000-8000-0000000014e1','` + discoveryTestOrg + `',
+		         'dispatch_sync_run','pending', now() + interval '150 seconds', now(), now())`,
+	} {
+		if _, err := admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("seed older never-claimed run: %v", err)
+		}
+	}
 	for _, step := range []struct {
 		name                    string
 		from, count, candidates int

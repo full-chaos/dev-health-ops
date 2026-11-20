@@ -277,9 +277,10 @@ func TestTestopsMatrixLegExactTotalIsNotCountedTwice(t *testing.T) {
 	near := func(value, target float64) bool { return math.Abs(value-target) < 1e-6 }
 	if got.suites != 6 || got.cases != 6 || got.slots != 5 || got.totalCases != 6 || got.passed != 5 || got.totalSuites != 6 ||
 		!near(got.passRate, 5.0/6) || got.p50 != "1" || got.pooledSamples != 6 || got.pooledCount != 6 ||
-		!near(got.confidence, 0.6) || !near(got.dragHours, 0.75) || !strings.Contains(got.risk, `"riskScore":0.4}`) {
+		// no coverage row: coverage is unknown, base (0.4+0.25+0.05)/0.8 = 0.875, flake penalty 0.1
+		!near(got.confidence, 0.775) || !near(got.dragHours, 0.75) || !strings.Contains(got.risk, `"riskScore":0.22499999999999998}`) {
 		t.Errorf("served numbers %+v, want suites 6, cases 6, slots 5, total_cases 6, passed 5, total_suites 6, pass_rate 5/6, "+
-			"p50 1, 6 pooled samples, confidence 0.6, drag 0.75 h, riskScore 0.4", got)
+			"p50 1, 6 pooled samples, confidence 0.775, drag 0.75 h, riskScore 0.225", got)
 	}
 	// Leg A's mismatch keeps the run partial and the watermark withheld, with or without leg B's total.
 	for name, served := range arms {

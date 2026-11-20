@@ -175,7 +175,7 @@ func (r *run) main(argv []string) int {
 	sa := r.newSide("A", pos[0], rcA)
 	sb := r.newSide("B", pos[1], rcB)
 	for _, s := range []*side{sa, sb} {
-		r.print("render %s: helm rc=%s docs=%d", s.label, pyIntStr(s.rc), s.shown(opts.live))
+		r.print("render %s: helm rc=%s docs=%d", s.label, pyIntStr(s.rc), s.shown())
 	}
 	var names *[2]map[string]bool
 	if opts.names != nil {
@@ -183,7 +183,7 @@ func (r *run) main(argv []string) int {
 	}
 	var reasons []string
 	for _, s := range []*side{sa, sb} {
-		shown := s.shown(opts.live)
+		shown := s.shown()
 		if s.err != "" {
 			reasons = append(reasons, s.err)
 		}
@@ -237,9 +237,12 @@ func (r *run) main(argv []string) int {
 		df.walk(da, db, "")
 		for _, rw := range df.rows {
 			rows = append(rows, rw)
-			if rw.verb == "REORDERED" {
+			switch {
+			case rw.hidden:
+				r.print("%s %s CHANGED %s", k, rw.path, redacted)
+			case rw.verb == "REORDERED":
 				r.print("%s %s REORDERED old=[%s] new=[%s]", k, rw.path, strings.Join(rw.old, ","), strings.Join(rw.new, ","))
-			} else {
+			default:
 				r.print("%s %s %s", k, rw.path, rw.verb)
 			}
 		}
@@ -387,10 +390,9 @@ type side struct {
 	liveCount int
 }
 
-func (s *side) shown(live bool) int {
-	if live {
-		return s.liveCount
-	}
+// shown is the doc count of the render line and the --min-docs floor: every doc, a Secret by Kind/name too, with
+// --live or not (the kit counted only non-Secret docs under --live, so the floor read a smaller set).
+func (s *side) shown() int {
 	return s.count
 }
 

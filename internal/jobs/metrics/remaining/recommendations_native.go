@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 // recommendationsRuleVersion mirrors the reference's default
@@ -148,6 +149,11 @@ type RecommendationsExecutor struct {
 	// documented on afterTeamHook above, for the same reason: how long the
 	// loop takes to finish is not something a test should have to race.
 	beforeWriteHook func()
+
+	// loadProjectOwners replaces the project ownership read of DiscoverTeamIDs
+	// when set. Nil in production; a test sets it to return the read's row-bound
+	// error, which real seed data reaches only past 100,000 rows.
+	loadProjectOwners func(ctx context.Context, orgID string, asOf time.Time) ([]teamattribution.GithubWorkItemDerivationProjectFact, error)
 
 	// observer and logger are optional; the gate tolerates nil for both.
 	observer ReadinessObserver

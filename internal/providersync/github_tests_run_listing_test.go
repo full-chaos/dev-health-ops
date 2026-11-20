@@ -842,6 +842,7 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			c.SaturatedRuns, c.SaturatedArtifacts = true, true
 			c.ActiveCutKeys, c.CarriedCutKeys = githubTestsWidestRunsCutKeys(t), githubTestsWidestRunsCutKeys(t)
 			c.RangeOldestItems = githubTestsSearchResultCap
+			c.AnchorID = githubTestsWidestAnchorID
 		}},
 		{"runs deep range peel", func(c *githubTestsChunkCursor) {
 			c.Phase = githubTestsRunsPhase
@@ -851,12 +852,14 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			c.LateRunsBudget, c.LateRunsSaturated = true, true
 			c.ActiveCutKeys, c.CarriedCutKeys = githubTestsWidestRunsCutKeys(t), githubTestsWidestRunsCutKeys(t)
 			c.RangeOldestItems = githubTestsSearchResultCap
+			c.AnchorID = githubTestsWidestAnchorID
 		}},
 		{"artifacts peel", func(c *githubTestsChunkCursor) {
 			c.Phase = githubTestsArtifactsPhase
 			c.RangeHi, c.RangeOldest, c.RangeItems = "2026-07-20T23:59:59Z", "2026-07-20T00:00:00Z", githubTestsSearchResultCap
 			c.SaturatedRuns, c.SaturatedArtifacts = true, true
 			c.ActiveCutKeys, c.CarriedCutKeys = githubTestsWidestCutKeys(t), githubTestsWidestCutKeys(t)
+			c.AnchorID = githubTestsWidestAnchorID
 		}},
 		{"open phase", func(c *githubTestsChunkCursor) {
 			c.Phase = githubTestsOpenPhase

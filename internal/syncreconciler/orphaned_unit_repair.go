@@ -234,6 +234,10 @@ type OrphanedUnitRepairResult struct {
 	SkippedRaceLost         int
 
 	RemainingBudget int
+	// Left counts approved candidates this pass did not finish: the one a
+	// failure (or the stage deadline) ended and every one after it. Each
+	// re-arm before it is already committed; the next tick surveys the rest.
+	Left int
 }
 
 const (
@@ -327,7 +331,7 @@ func (repair *OrphanedUnitRepair) Step(
 
 	candidates, err := repair.survey(ctx, now, limit)
 	if err != nil {
-		repair.logOutcome(ctx, now, result)
+		repair.logOutcome(ctx, now, result, err)
 		return result, err
 	}
 	result.Found = len(candidates)
@@ -350,37 +354,30 @@ func (repair *OrphanedUnitRepair) Step(
 			// unknown one means a row was surveyed under a branch this code
 			// does not know it has. Fail the pass rather than silently drop it
 			// or, worse, act on it.
-			repair.logOutcome(ctx, now, result)
-			return result, fmt.Errorf("orphaned-unit disposition %q: %w", candidate.disposition, ErrUnavailable)
+			err := orphanedUnitStepError{step: "survey_disposition",
+				err: fmt.Errorf("orphaned-unit disposition %q: %w", candidate.disposition, ErrUnavailable)}
+			repair.logOutcome(ctx, now, result, err)
+			return result, err
 		}
 	}
 	if len(approved) == 0 {
-		repair.logOutcome(ctx, now, result)
+		repair.logOutcome(ctx, now, result, nil)
 		return result, nil
 	}
 
-	// The whole mutating half is ONE transaction, so its counters are merged
-	// only after the commit succeeds. This is the OPPOSITE of what
-	// joboutbox.StrandRepair does, and deliberately so: that repair commits per
-	// shape, so a later failure must never erase an earlier shape's already
-	// durable work. Here a failure means nothing was written at all, and
-	// reporting re_armed > 0 for a rolled-back transaction would put a number
-	// an operator alerts on behind work that did not happen.
+	// Each re-arm commits on its own (rearm), so the counters cover exactly the
+	// committed re-arms, also when the pass then fails: a failure costs only
+	// the candidate it ended, and re_armed never counts a rolled-back insert.
 	committed, err := repair.rearm(ctx, now, approved)
-	if err != nil {
-		repair.logOutcome(ctx, now, result)
-		return result, err
-	}
 	result.merge(committed)
 	result.RemainingBudget = limit - result.ReArmed
-	repair.logOutcome(ctx, now, result)
+	repair.logOutcome(ctx, now, result, err)
 	for _, record := range committed.rearms {
-		// Emitted AFTER the commit, for the same reason the counters are merged
-		// after it: a line claiming a re-arm that rolled back is worse than no
-		// line, because it is the line an operator would trust.
+		// Only committed re-arms are here: a line claiming a re-arm that rolled
+		// back is worse than no line, because it is the line an operator trusts.
 		slog.InfoContext(ctx, "syncreconciler.orphaned_unit_rearmed", rearmLogAttributes(record)...)
 	}
-	return result, nil
+	return result, err
 }
 
 // rearmLogAttributes lists the fields of one re-arm log line. The two dedupe
@@ -415,6 +412,7 @@ type committedOutcome struct {
 	skippedPrerequisite  int
 	skippedEnvelope      int
 	skippedRaceLost      int
+	left                 int
 	rearms               []rearmRecord
 }
 
@@ -439,6 +437,7 @@ func (result *OrphanedUnitRepairResult) merge(committed committedOutcome) {
 	result.SkippedPrerequisite += committed.skippedPrerequisite
 	result.SkippedEnvelope += committed.skippedEnvelope
 	result.SkippedRaceLost += committed.skippedRaceLost
+	result.Left += committed.left
 }
 
 func (repair *OrphanedUnitRepair) survey(
@@ -479,23 +478,33 @@ func (repair *OrphanedUnitRepair) survey(
 	return candidates, nil
 }
 
-// rearm opens ONE domain transaction for the pass. Every per-candidate refusal
-// is decided before any statement runs for that candidate, so a refusal never
-// aborts the transaction and never costs an already-committed sibling its
-// insert; only a genuine database failure ends the pass.
+// rearm commits each re-arm in its own domain transaction (CHAOS-14238): a
+// failure, or the stage deadline, ends the pass inside one candidate and costs
+// only that candidate; every re-arm before it stays committed and the next
+// tick continues with the rest. Refusals write nothing, so they share the open
+// transaction with the next candidate rather than paying for one of their own.
+// Each candidate re-proves itself in its own statements (the unit lock and the
+// (id, dedupe_key, river_job_id) compare-and-set), so no candidate depends on
+// another committing with it. The returned outcome is the committed work, also
+// when err is not nil.
 func (repair *OrphanedUnitRepair) rearm(
 	ctx context.Context,
 	now time.Time,
 	approved []orphanedCandidate,
 ) (committedOutcome, error) {
 	outcome := committedOutcome{}
-	tx, err := repair.beginDomain(ctx)
-	if err != nil || tx == nil {
-		return committedOutcome{}, repair.failed(ctx, "domain_begin", err)
+	var tx pgx.Tx
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	stop := func(index int, err error) (committedOutcome, error) {
+		outcome.left = len(approved) - index
+		return outcome, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
 
-	for _, candidate := range approved {
+	for index, candidate := range approved {
 		newKey, err := nextProviderUnitReclaimKey(candidate.dedupeKey, candidate.unitID)
 		if errors.Is(err, ErrReclaimBudgetSpent) {
 			outcome.skippedReclaimBudget++
@@ -506,6 +515,14 @@ func (repair *OrphanedUnitRepair) rearm(
 			// Counted with the envelope refusals rather than acted on.
 			outcome.skippedEnvelope++
 			continue
+		}
+
+		if tx == nil {
+			opened, err := repair.beginDomain(ctx)
+			if err != nil || opened == nil {
+				return stop(index, repair.failed(ctx, "domain_begin", err))
+			}
+			tx = opened
 		}
 
 		// Lock the unit and re-prove every DOMAIN fact the survey asserted.
@@ -519,7 +536,7 @@ func (repair *OrphanedUnitRepair) rearm(
 			continue
 		}
 		if lockErr != nil {
-			return committedOutcome{}, repair.failed(ctx, "unit_lock", lockErr)
+			return stop(index, repair.failed(ctx, "unit_lock", lockErr))
 		}
 
 		var args string
@@ -536,7 +553,7 @@ func (repair *OrphanedUnitRepair) rearm(
 			continue
 		}
 		if sourceErr != nil {
-			return committedOutcome{}, repair.failed(ctx, "source_read", sourceErr)
+			return stop(index, repair.failed(ctx, "source_read", sourceErr))
 		}
 		if prerequisite != "" {
 			// PublishAfter's durable fence. No provider-unit publisher sets one
@@ -558,13 +575,18 @@ func (repair *OrphanedUnitRepair) rearm(
 			candidate.outboxID, candidate.dedupeKey, candidate.riverJobID,
 		)
 		if err != nil {
-			return committedOutcome{}, repair.failed(ctx, "insert_reclaim", err)
+			return stop(index, repair.failed(ctx, "insert_reclaim", err))
 		}
 		if tag.RowsAffected() != 1 {
 			// ON CONFLICT DO NOTHING, or the SELECT-side CAS stopped matching
 			// between the read above and this statement.
 			outcome.skippedRaceLost++
 			continue
+		}
+		err = tx.Commit(ctx)
+		tx = nil
+		if err != nil {
+			return stop(index, repair.failed(ctx, "domain_commit", err))
 		}
 		outcome.reArmed++
 		if candidate.disposition == dispositionOrphanMissing {
@@ -575,7 +597,7 @@ func (repair *OrphanedUnitRepair) rearm(
 		// The unit id and the key it was re-armed under are the only handles an
 		// operator gets: River's own record of why the delivery died is either
 		// gone or a completion, so there is nothing to correlate against unless
-		// this says so. HELD until the commit -- see Step.
+		// this says so. Recorded only after its commit -- see Step.
 		outcome.rearms = append(outcome.rearms, rearmRecord{
 			unitID:           candidate.unitID,
 			runID:            candidate.runID,
@@ -585,10 +607,6 @@ func (repair *OrphanedUnitRepair) rearm(
 			dedupeKey:        newKey,
 			evidence:         candidate.disposition,
 		})
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return committedOutcome{}, repair.failed(ctx, "domain_commit", err)
 	}
 	return outcome, nil
 }
@@ -616,7 +634,7 @@ func (repair *OrphanedUnitRepair) failed(ctx context.Context, step string, cause
 		"error", detail,
 	)
 	if cause == nil {
-		return fmt.Errorf("orphaned-unit %s: %w", step, ErrUnavailable)
+		return orphanedUnitStepError{step: step, err: fmt.Errorf("orphaned-unit %s: %w", step, ErrUnavailable)}
 	}
 	// BOTH wrapped, deliberately. The pipeline's stageSQLState (pipeline.go)
 	// recovers a stage's SQLSTATE with errors.As over *pgconn.PgError -- so
@@ -625,7 +643,29 @@ func (repair *OrphanedUnitRepair) failed(ctx context.Context, step string, cause
 	// actually alerts on. Wrapping both keeps errors.Is(ErrUnavailable) true
 	// for the caller's continue-safe classification AND leaves the driver error
 	// reachable for the stage counter (r1 finding F5).
-	return fmt.Errorf("orphaned-unit %s: %w: %w", step, ErrUnavailable, cause)
+	return orphanedUnitStepError{step: step, err: fmt.Errorf("orphaned-unit %s: %w: %w", step, ErrUnavailable, cause)}
+}
+
+// orphanedUnitStepError carries the failing step to the pass line; the error
+// text and the wrapped chain are unchanged.
+type orphanedUnitStepError struct {
+	step string
+	err  error
+}
+
+func (failure orphanedUnitStepError) Error() string { return failure.err.Error() }
+
+func (failure orphanedUnitStepError) Unwrap() error { return failure.err }
+
+func orphanedUnitFailedStep(err error) string {
+	var failure orphanedUnitStepError
+	if errors.As(err, &failure) {
+		return failure.step
+	}
+	if err != nil {
+		return "unknown"
+	}
+	return ""
 }
 
 // surveyFailed wraps failed with the evidence a bare
@@ -662,13 +702,16 @@ func causeText(cause error) string {
 }
 
 func (repair *OrphanedUnitRepair) logOutcome(
-	ctx context.Context, now time.Time, result OrphanedUnitRepairResult,
+	ctx context.Context, now time.Time, result OrphanedUnitRepairResult, stepErr error,
 ) {
 	staleSeconds := int64(0)
 	if repair != nil {
 		staleSeconds = int64(repair.staleAge.Seconds())
 	}
 	slog.InfoContext(ctx, "syncreconciler.orphaned_unit_pass",
+		"ran", stepErr == nil,
+		"failed_step", orphanedUnitFailedStep(stepErr),
+		"left", result.Left,
 		"orphaned_units_found", result.Found,
 		"re_armed", result.ReArmed,
 		"delivery_missing", result.DeliveryMissing,

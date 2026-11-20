@@ -1,0 +1,64 @@
+render A: helm rc=0 docs=6
+render B: helm rc=0 docs=6
+ConfigMap/cfg .binaryData.cert.token CHANGED <redacted>
+ConfigMap/cfg .data.API_KEY CHANGED <redacted>
+ConfigMap/cfg .data.DB_DSN CHANGED <redacted>
+ConfigMap/cfg .data.LOG_LEVEL CHANGED
+ConfigMap/cfg .data.monkey CHANGED <redacted>
+Deployment/web .spec.added.deep.er[0] CHANGED
+Deployment/web .spec.added.deep.er[1] CHANGED
+Deployment/web .spec.flag CHANGED
+Deployment/web .spec.gone1 CHANGED
+Deployment/web .spec.gone2 CHANGED
+Deployment/web .spec.gone3 CHANGED
+Deployment/web .spec.nanv CHANGED
+Deployment/web .spec.ratio CHANGED
+Deployment/web .spec.removedempty CHANGED
+Deployment/web .spec.removedmap ELEMENT-REMOVED
+Deployment/web .spec.replicas CHANGED
+Deployment/web .spec.template.metadata.annotations.checksum/config CHANGED
+Deployment/web .spec.template.metadata.labels.v CHANGED
+Deployment/web .spec.template.spec.containers[name=app].args[0] CHANGED <redacted>
+Deployment/web .spec.template.spec.containers[name=app].args[2] CHANGED
+Deployment/web .spec.template.spec.containers[name=app].command[1] CHANGED <redacted>
+Deployment/web .spec.template.spec.containers[name=app].env REORDERED old=[DB_PASSWORD,API_TOKEN,PLAIN,SOME_URI,LINK,X_KEY,NOVALUE] new=[PLAIN,DB_PASSWORD,API_TOKEN,SOME_URI,LINK,X_KEY,NOVALUE]
+Deployment/web .spec.template.spec.containers[name=app].env[name=DB_PASSWORD].value CHANGED <redacted>
+Deployment/web .spec.template.spec.containers[name=app].env[name=LINK].value CHANGED
+Deployment/web .spec.template.spec.containers[name=app].env[name=NOVALUE].valueFrom.secretKeyRef.key CHANGED
+Deployment/web .spec.template.spec.containers[name=app].env[name=PLAIN].value CHANGED
+Deployment/web .spec.template.spec.containers[name=app].env[name=SOME_URI].value CHANGED <redacted>
+Deployment/web .spec.template.spec.containers[name=app].env[name=X_KEY].value CHANGED <redacted>
+Deployment/web .spec.template.spec.containers[name=app].image CHANGED
+Deployment/web .spec.template.spec.containers[name=app].ports[port=9090/TCP] ELEMENT-REMOVED
+Deployment/web .spec.template.spec.containers[name=app].ports[port=9091/TCP] ELEMENT-ADDED
+Deployment/web .spec.template.spec.containers[name=app].volumeMounts[name=data] ELEMENT-ADDED
+Deployment/web .spec.template.spec.initContainers[name=i1] ELEMENT-REMOVED
+Deployment/web .spec.template.spec.volumes[name=data] ELEMENT-ADDED
+Secret/gone-secret REMOVED
+Secret/new-secret ADDED
+Service/svc .spec.ports[port=1/TCP].port CHANGED
+Service/svc .spec.ports[port=80/TCP].targetPort CHANGED
+StatefulSet/dev-health-ops-postgresql .spec.ports REORDERED old=[5432/TCP,5433/UDP] new=[5433/UDP,5432/TCP]
+StatefulSet/dev-health-ops-postgresql .spec.replicas CHANGED
+docs A 6 B 6 (all kinds, Secrets as Kind/name only; hook-included: a helm template render); kinds in A: ConfigMap=1, Deployment=1, Secret=2, Service=1, StatefulSet=1
+added ['Secret/new-secret']; removed ['Secret/gone-secret']; changed field rows 30; element rows added 3 removed 3; reordered rows 2; pod-template label/annotation rows 2; postgres sts rows 2
+unexpected row ConfigMap/cfg .binaryData.cert.token CHANGED
+unexpected row ConfigMap/cfg .data.API_KEY CHANGED
+unexpected row ConfigMap/cfg .data.DB_DSN CHANGED
+unexpected row ConfigMap/cfg .data.monkey CHANGED
+unexpected row Deployment/web .spec.template.spec.containers[name=app].args[0] CHANGED
+unexpected row Deployment/web .spec.template.spec.containers[name=app].command[1] CHANGED
+unexpected row Deployment/web .spec.template.spec.containers[name=app].env[name=DB_PASSWORD].value CHANGED
+unexpected row Deployment/web .spec.template.spec.containers[name=app].env[name=SOME_URI].value CHANGED
+unexpected row Deployment/web .spec.template.spec.containers[name=app].env[name=X_KEY].value CHANGED
+value Deployment/web .spec.added.deep.er[0] <none> -> 1
+value Deployment/web .spec.gone1 None -> []
+value-check FAIL Deployment/web .spec.removedmap (after)
+value Deployment/web .spec.removedmap {'a': 1} -> <none>
+value Deployment/web .spec.replicas 1 -> True
+value Deployment/web .spec.template.spec.containers[name=app].image app:1 -> app:2
+value Deployment/web .spec.template.spec.initContainers[name=i1] None -> None
+value Service/svc .spec.ports[port=1/TCP].port True -> 1
+value-check FAIL StatefulSet/dev-health-ops-postgresql .spec.replicas (after)
+value StatefulSet/dev-health-ops-postgresql .spec.replicas 1 -> 2
+GATE rows-e3.json: HOLD

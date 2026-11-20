@@ -525,6 +525,20 @@ const nullableIntoPlainSites = `
 // scan target or column type changed, and the reason class of each pin is kept.
 // unverifiedSites is `file|func|destinations|digest|reason`; see reasonClass.
 //
+// CHAOS-14376 merge of main (the CHAOS-14355 slice 3 tie-break of the throughput forecast reads): four throughputforecast
+// pins re-pinned by hand, digests copied from the local TestScanTypeCensus output (not computed): loadBacklog,
+// loadStaleWIP, loadThroughputHistory, loadWorkItemOverlay. The newest version is now the argMax of the value tuple by
+// (computed_at, cityHash64(values)) and the measures are its picked.N elements; the scan targets read the same element
+// types as before (UInt32 sums are UInt64, the Date day/min day is *time.Time, avg() is Float64, the Nullable wip ages
+// stay Nullable), so each pin keeps its reason class.
+// CHAOS-14376: six forecast pins added by hand, digests copied from the local TestScanTypeCensus output (not computed):
+// capacityforecast/clickhouse.go (loadBacklog, loadThroughput) and throughputforecast/clickhouse.go (loadBacklog,
+// loadStaleWIP, loadThroughputHistory, loadWorkItemOverlay). Their FROM is now a source chosen at run time (the table, or
+// the served team view of one team), which the census cannot neutralize. Read by hand against the column types: the
+// select lists did not change. day is Date (*time.Time); sum() and countIf() over UInt32 are UInt64 (*uint64); avg() of
+// a UInt32 sum is Float64 (*float64); avg() of the Nullable(Float64) wip ages is Nullable (**float64); minIf() of a
+// Date is Date (*time.Time).
+//
 // aianalytics/scope.go ownerTeams (digest c0b3734eb92d) is not-describable because the census
 // cannot resolve its coalesce() expression; read by hand: owner_repo_id (the coalesce) and
 // owner_team_id are plain String, not Nullable, so the scan into *string is safe.
@@ -766,6 +780,26 @@ const nullableIntoPlainSites = `
 // computed):
 //
 //	fetchRiskSignals 54de9ad8afd6 -> 06cb489933a0
+//
+// CHAOS-14395: the TEAM and REPO flow-matrix templates filter blank team ids with match() instead of an empty-string test. Select lists,
+// column types and scan targets are unchanged; only the statement text moved. Re-pinned by hand, digests copied from the
+// local TestScanTypeCensus failure output (not computed):
+//
+//	queryEdges 5935396ef678 -> 7cdf790f21f3
+//	queryNodes 3dacd49c8128 -> 3c13f441d675
+//
+// CHAOS-14393: the WORK_TYPE nodes and edges templates filter blank types with match() instead of an empty-string test. Select lists,
+// column types and scan targets are unchanged; only the statement text moved. Re-pinned by hand, digests copied from the
+// local TestScanTypeCensus failure output (not computed):
+//
+//	queryEdges 5935396ef678 -> d6369bb81568
+//	queryNodes 3dacd49c8128 -> 92e198fc2e0f
+//
+// With both the CHAOS-14395 and the CHAOS-14393 filters on the same file the pinned digests are (copied from the failing
+// TestScanTypeCensus run at the merged tree):
+//
+//	queryEdges 7cdf790f21f3 -> f32e4fde7205
+//	queryNodes 3c13f441d675 -> 3d7e7d56784d
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|e67003e26fc2|not-describable
@@ -778,14 +812,16 @@ internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|9df0068c57ab
 internal/queryapi/aianalytics/scope.go|ownerTeams|*string,*string|c0b3734eb92d|not-describable
 internal/queryapi/analytics/breakdown.go|executeBreakdownRaw|**string,**float64|7d5055461009|statement-not-static
 internal/queryapi/analytics/catalog.go|executeCatalogValues|*string,*uint64|92f0953d0b7c|statement-not-static
-internal/queryapi/analytics/flowmatrix.go|queryEdges|*string,*string,**string,**string,**float64|5935396ef678|statement-not-static
-internal/queryapi/analytics/flowmatrix.go|queryNodes|*string,**string,**float64|3dacd49c8128|statement-not-static
+internal/queryapi/analytics/flowmatrix.go|queryEdges|*string,*string,**string,**string,**float64|f32e4fde7205|statement-not-static
+internal/queryapi/analytics/flowmatrix.go|queryNodes|*string,**string,**float64|3d7e7d56784d|statement-not-static
 internal/queryapi/analytics/investmentquality.go|executeEvidenceQualityByGroup|*string,*float64,*uint64,*uint64|30049a8da29f|statement-not-static
 internal/queryapi/analytics/investmentquality.go|executeInvestmentQualityStats|*uint64,*uint64,*float64,*float64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64|2219e7f838c7|statement-not-static
 internal/queryapi/analytics/sankeycoverage.go|runSankeyCoverageQuery|*float64,*float64,*float64,*float64,**float64,**float64,**float64,**float64,**float64|7474017a0a07|statement-not-static
 internal/queryapi/analytics/sankeygrouped.go|executeSankeyGrouped|[]any|06df22123891|variadic-destinations
 internal/queryapi/analytics/timeseries.go|ExecuteOrgTimeseries|**time.Time,**float64,**float64|06967e304c8f|statement-not-static
 internal/queryapi/analytics/timeseries.go|ExecuteTimeseries|**time.Time,**string,**float64|d06318794cbb|statement-not-static
+internal/queryapi/capacityforecast/clickhouse.go|loadBacklog|*uint64|26ee34e4be86|not-describable
+internal/queryapi/capacityforecast/clickhouse.go|loadThroughput|*time.Time,*uint64|d73049462fd5|not-describable
 internal/queryapi/cognitiveload/cognitiveload.go|fetchOwnershipCandidates|*string,*string,*uint8,*uint16|e598129679a3|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchFileTimeseries|*time.Time,*string,*string,**uint32,**float64,**uint32,**uint32|69bcb13af3df|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchRepoTimeseries|*time.Time,*string,**uint64,**uint64,**float64,**uint64,**uint64|2d500256c88b|spliced-select-list
@@ -841,6 +877,10 @@ internal/queryapi/sankey/queries.go|fetchExpenseCounts|*float64,*float64,*float6
 internal/queryapi/sankey/queries.go|fetchStateStatusCounts|*string,*float64|d810cfa8eeb7|not-describable
 internal/queryapi/server/mcp_route.go|Scan|[]any|073743d6899c|variadic-destinations
 internal/queryapi/testopsrisk/testopsrisk.go|readDaily|**time.Time,**float64,**float64,**float64,**float64,**float64,**float64,**uint64,**float64|2072b04aaa64|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadBacklog|*uint64,*uint64,*uint64,*time.Time|2d4d80074e2b|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadStaleWIP|**float64,**float64|3dd402e56d1e|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadThroughputHistory|*time.Time,*uint64|a930dc834fd5|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadWorkItemOverlay|*float64,*uint64|740708b6aca9|not-describable
 internal/queryapi/workgraph/edges.go|countMatchingEdges|*uint64|8d8175642fa2|not-describable
 internal/queryapi/workgraph/edges.go|fetchDedupedEdgeRows|*string,*string,*string,*string,*string,*string,*string,*string,*string,*float64,*string|9ec6525b760f|statement-not-static
 internal/queryapi/workgraph/edges.go|queryDependencyEdges|*string,*string,*string,*string,*string,*string,*string,*string,*string,*float64,*string|c998ded583fc|statement-not-static

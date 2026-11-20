@@ -267,7 +267,7 @@ func opportunityBindings(orgID string, repoID string, extra ...clickhouse.Bindin
 	return append(b, extra...)
 }
 
-// The averages read through a tuple as dailyStatement's do.
+// The columns come from one version, picked as dailyStatement picks it (impactNewestOrder).
 func loadImpactRowsForOpportunities(ctx context.Context, client QueryClient, orgID, repoID, teamID string) ([]impactRow, error) {
 	filters := []string{"day >= today() - 30"}
 	bindings := opportunityBindings(orgID, repoID)
@@ -283,14 +283,26 @@ func loadImpactRowsForOpportunities(ctx context.Context, client QueryClient, org
     team_id,
     toString(repo_id) AS repo_id_str,
     attribution_bucket,
-    argMax(prs_total, metrics.computed_at) AS prs_total,
-    (argMax(tuple(reviews_per_pr), metrics.computed_at)).1 AS reviews_per_pr,
-    (argMax(tuple(cycle_time_avg_hours), metrics.computed_at)).1 AS cycle_time_avg_hours,
-    argMax(rework_prs, metrics.computed_at) AS rework_prs,
-    argMax(test_gap_prs, metrics.computed_at) AS test_gap_prs
-FROM ai_impact_metrics_daily AS metrics
-WHERE `+strings.Join(filters, " AND ")+`
-GROUP BY org_id, team_id, repo_id, work_type, day, attribution_bucket
+    newest.1 AS prs_total,
+    newest.2 AS reviews_per_pr,
+    newest.3 AS cycle_time_avg_hours,
+    newest.4 AS rework_prs,
+    newest.5 AS test_gap_prs
+FROM (
+    SELECT
+        org_id,
+        team_id,
+        repo_id,
+        work_type,
+        day,
+        attribution_bucket,
+        argMax(tuple(
+            metrics.prs_total, metrics.reviews_per_pr, metrics.cycle_time_avg_hours, metrics.rework_prs, metrics.test_gap_prs
+        ), `+impactNewestOrder+`) AS newest
+    FROM ai_impact_metrics_daily AS metrics
+    WHERE `+strings.Join(filters, " AND ")+`
+    GROUP BY org_id, team_id, repo_id, work_type, day, attribution_bucket
+)
 ORDER BY org_id, team_id, repo_id, work_type, day, attribution_bucket`, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("aianalytics: opportunity impact query: %w", err)

@@ -65,6 +65,8 @@ var unlabeledWriters = map[string]string{
 	"fixed_scheduler_consecutive_failures":                      noLabelSample,
 	"fixed_scheduler_last_success_age_seconds":                  noLabelSample,
 	"fixed_scheduler_up":                                        noLabelSample,
+	"sync_dispatch_backfill_open_runs":                          noLabelSample,
+	"sync_dispatch_backfill_wait_read_ok":                       noLabelSample,
 	"sync_dispatch_discovery_rearmed_total":                     noLabelSample,
 	"sync_dispatch_exhausted_delivery_recoveries_total":         noLabelSample,
 	"sync_dispatch_observer_celery_due_pending":                 noLabelSample,

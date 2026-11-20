@@ -819,6 +819,14 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 		return nil, err
 	}
 	components = append(components, saturation)
+	// CHAOS-14304: observe-only backfill wait gauge on the one reconciler replica. A failed setup never stops the reconciler (D6465).
+	if domainPool := dependencies.database.DomainPool(); domainPool != nil {
+		if waitGauge, gaugeErr := syncdispatchruntime.NewBackfillWaitSource(domainPool, logger); gaugeErr != nil {
+			logger.Warn("backfill wait gauge not built", "error", gaugeErr)
+		} else if gaugeErr = registry.RegisterMetrics("sync_dispatch_backfill_wait", waitGauge); gaugeErr != nil {
+			logger.Warn("backfill wait gauge not registered", "error", gaugeErr)
+		}
+	}
 	return components, nil
 }
 

@@ -33,10 +33,7 @@ const (
 	StageOrphanedUnitRepair StageName = "orphaned_unit_repair"
 	StageMaterializer       StageName = "materializer"
 	StageKernel             StageName = "kernel"
-	// StageChunkSidecarReclaim (CHAOS-14243) deletes the stored chunk rows of
-	// terminal units in bounded batches (chunk_sidecar_reclaim.go).
-	StageChunkSidecarReclaim StageName = "chunk_sidecar_reclaim"
-	StageObserver            StageName = "observer"
+	StageObserver           StageName = "observer"
 )
 
 // orderedStages is the exhaustive, ordered list of stages MutationPipeline.Step
@@ -55,7 +52,6 @@ var orderedStages = []StageName{
 	StageOrphanedUnitRepair,
 	StageMaterializer,
 	StageKernel,
-	StageChunkSidecarReclaim,
 	StageObserver,
 }
 
@@ -65,9 +61,9 @@ const (
 )
 
 // StageBudgets gives each MutationPipeline stage its own bounded sub-context
-// instead of every stage racing one flat envelope for the whole 9-stage/3-pool
+// instead of every stage racing one flat envelope for the whole 8-stage/3-pool
 // pipeline (CHAOS-4239). A stage that exceeds its own budget fails only
-// itself; it can no longer starve its eight siblings of the time they need.
+// itself; it can no longer starve its seven siblings of the time they need.
 type StageBudgets map[StageName]time.Duration
 
 // DefaultStageBudgets sizes each stage from what it actually does, not from
@@ -95,9 +91,6 @@ type StageBudgets map[StageName]time.Duration
 //   - Kernel: the heaviest stage -- claims on the domain pool, delivers on the
 //     queue pool, and runs the publish closure (a River insert plus a domain
 //     reference read) inline.
-//   - ChunkSidecarReclaim (CHAOS-14243): up to 4 PK-range DELETEs of at most
-//     32 MiB of TOASTed payload each, one transaction per statement; it stops
-//     early when the deadline would not fit another statement.
 //   - Observer: proven 0.079ms against a live database (CHAOS-4239 EXPLAIN);
 //     this budget is almost entirely cold-start headroom.
 //
@@ -115,7 +108,6 @@ func DefaultStageBudgets() StageBudgets {
 		StageOrphanedUnitRepair:     600 * time.Millisecond,
 		StageMaterializer:           600 * time.Millisecond,
 		StageKernel:                 1000 * time.Millisecond,
-		StageChunkSidecarReclaim:    1500 * time.Millisecond,
 		StageObserver:               400 * time.Millisecond,
 	}
 }

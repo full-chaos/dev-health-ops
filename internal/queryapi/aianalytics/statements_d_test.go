@@ -222,14 +222,17 @@ func TestOpportunityLimits_Bounds(t *testing.T) {
 }
 
 // The reads keep the shape the rules rely on: the newest version per key, the
-// minimum days of data and no blank team.
+// minimum days of data, no blank team, and a pull request counted once per
+// cluster (CHAOS-14285).
 func TestDetectorStatements_KeepTheirShape(t *testing.T) {
 	for marker, statements := range map[string][]string{
-		"LIMIT 1 BY org_id, repo_id, day": {flakyStatement, repoFlowStatement},
-		"HAVING data_days >= 5":           {repoFlowStatement, teamFlowStatement},
-		"AND team_id != ''":               {teamFlowStatement},
-		"doc_changes = 0":                 {docDriftStatement},
-		"cases_total >= {min_cases":       {flakyStatement},
+		"LIMIT 1 BY org_id, repo_id, day":    {flakyStatement, repoFlowStatement},
+		"HAVING data_days >= 5":              {repoFlowStatement, teamFlowStatement},
+		"AND team_id != ''":                  {teamFlowStatement},
+		"doc_changes = 0":                    {docDriftStatement},
+		"FROM git_pull_requests AS pr FINAL": {repetitiveStatement, titleToilStatement},
+		"uniqExact(pr.number) AS prs_total":  {repetitiveStatement},
+		"cases_total >= {min_cases":          {flakyStatement},
 	} {
 		for _, st := range statements {
 			if !strings.Contains(st, marker) {

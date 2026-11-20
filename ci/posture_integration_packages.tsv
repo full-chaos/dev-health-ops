@@ -18,4 +18,3 @@ internal/storage/postgres/authschema
 internal/storage/river
 internal/storage/roleprovision
 internal/syncdispatchruntime
-internal/syncreconciler/chunkreclaimrolecell

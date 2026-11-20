@@ -338,6 +338,11 @@ func Execute(ctx context.Context, binary string, tree []Command, env Env) int {
 		}
 		if command.Kind == Group {
 			if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
+				if len(args) > 1 {
+					fmt.Fprintf(env.Stderr, "%s: %s takes no arguments after %s\n", binary, strings.Join(path, " "), args[0])
+					writeHelp(env.Stderr, binary, path, command.Children)
+					return ExitUsage
+				}
 				writeHelp(env.Stdout, binary, path, command.Children)
 				return ExitOK
 			}

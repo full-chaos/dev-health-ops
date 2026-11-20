@@ -112,8 +112,10 @@ type Table struct {
 // RowView is the last sorting-key column of the three aggregate work-item daily
 // tables (migration 141, CHAOS-8863): the view a row counts in. The empty
 // string is a legacy row (every view), 'org' counts each item once in the organization, 'scope'
-// counts each item once in each work scope. A key of the stale-key rule holds it
-// as its last value.
+// counts each item once in each work scope, 'team' counts each item once for
+// each team that owns it (work_item_metrics_daily and
+// work_item_state_durations_daily only). A key of the stale-key rule holds it as
+// its last value.
 var RowView = KeyColumn{"row_view", KeyString}
 
 // The values of row_view. LegacyRowView is the empty string: the implicit
@@ -122,6 +124,7 @@ const (
 	LegacyRowView = ""
 	OrgRowView    = "org"
 	ScopeRowView  = "scope"
+	TeamRowView   = "team"
 )
 
 // The team-keyed daily tables that take the shared rule. All lists them.

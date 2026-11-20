@@ -58,8 +58,8 @@ func TestFileHotspotsFamiliesWriteRealOrgIDAndIsolateTenants(t *testing.T) {
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, hash)`,
 		`CREATE TABLE git_commit_stats (
     repo_id UUID, commit_hash String, file_path String, additions Int32, deletions Int32,
-    org_id String
-) ENGINE = MergeTree ORDER BY (repo_id, commit_hash, file_path)`,
+    org_id String, last_synced DateTime64(3, 'UTC') DEFAULT now64(3)
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, commit_hash, file_path)`,
 		`CREATE TABLE git_pull_requests (
     repo_id UUID, number UInt32, author_email Nullable(String), author_name Nullable(String),
     created_at DateTime, merged_at Nullable(DateTime), first_review_at Nullable(DateTime),

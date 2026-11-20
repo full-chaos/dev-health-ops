@@ -31,6 +31,7 @@ func githubTestsRealisticCursorBase() githubTestsChunkCursor {
 		SkippedArtifactsOverflow: 999999,
 		ExcludedNonReportSuffix:  999999,
 		ExcludedNonReportPrefix:  999999,
+		Relist:                   githubTestsRelistStoppedSaturated,
 	}
 	for component, causes := range githubTestsIncompleteVocabulary {
 		for cause := range causes {

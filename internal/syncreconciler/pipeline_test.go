@@ -117,18 +117,6 @@ func (function pipelineOrphanedUnitRepairFunc) Step(
 // provider-unit backstop. Same reasoning as noopTerminalOutboxClose below:
 // OrphanedUnitRepairStepper is REQUIRED, so every call site needs an answer
 // rather than a silent skip.
-type pipelineChunkSidecarReclaimFunc func(context.Context, time.Time, int) (ChunkSidecarReclaimResult, error)
-
-func (function pipelineChunkSidecarReclaimFunc) Step(ctx context.Context, now time.Time, limit int) (ChunkSidecarReclaimResult, error) {
-	return function(ctx, now, limit)
-}
-
-func noopChunkSidecarReclaim() pipelineChunkSidecarReclaimFunc {
-	return func(context.Context, time.Time, int) (ChunkSidecarReclaimResult, error) {
-		return ChunkSidecarReclaimResult{}, nil
-	}
-}
-
 func noopOrphanedUnitRepair() pipelineOrphanedUnitRepairFunc {
 	return func(context.Context, time.Time, int) (OrphanedUnitRepairResult, error) {
 		return OrphanedUnitRepairResult{}, nil
@@ -195,7 +183,6 @@ func TestMutationPipelineEmitsMaterializerPassEveryPass(t *testing.T) {
 			nil,
 			noopTerminalOutboxClose(),
 			noopOrphanedUnitRepair(),
-			noopChunkSidecarReclaim(),
 			DefaultMutationPipelineConfig(),
 		)
 		if err != nil {
@@ -381,7 +368,6 @@ func TestMutationPipelineRunsCommittedStagesBeforeObservation(t *testing.T) {
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
-		noopChunkSidecarReclaim(),
 		config,
 	)
 	if err != nil {
@@ -438,7 +424,6 @@ func TestMutationPipelineAbortsRemainingMutationStagesWhenRepairFails(t *testing
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
-		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -484,7 +469,6 @@ func TestMutationPipelineRejectsIncompleteComposition(t *testing.T) {
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
-		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("missing repair error = %v", err)
@@ -502,7 +486,6 @@ func TestMutationPipelineRejectsIncompleteComposition(t *testing.T) {
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
-		noopChunkSidecarReclaim(),
 		invalid,
 	); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("invalid config error = %v", err)
@@ -518,26 +501,9 @@ func TestMutationPipelineRejectsIncompleteComposition(t *testing.T) {
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
-		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("missing terminal repair error = %v", err)
-	}
-	if _, err := NewMutationPipeline(
-		validRepair,
-		validTerminalRepair,
-		validMaterializer,
-		validKernel,
-		validObserver,
-		nil,
-		nil,
-		nil,
-		noopTerminalOutboxClose(),
-		noopOrphanedUnitRepair(),
-		nil,
-		DefaultMutationPipelineConfig(),
-	); !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("missing chunk sidecar reclaim error = %v", err)
 	}
 }
 
@@ -624,7 +590,6 @@ func newRecoveryCountingPipeline(
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
-		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	)
 }
@@ -670,7 +635,6 @@ func TestMutationPipelineReportsRecoveriesWhenALaterStageFails(t *testing.T) {
 				nil,
 				noopTerminalOutboxClose(),
 				noopOrphanedUnitRepair(),
-				noopChunkSidecarReclaim(),
 				DefaultMutationPipelineConfig(),
 			)
 			if err != nil {
@@ -728,7 +692,6 @@ func TestMutationPipelineCreditsAnAlreadyCommittedTerminalRecoveryDespiteALaterR
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
-		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {

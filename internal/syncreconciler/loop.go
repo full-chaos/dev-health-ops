@@ -95,7 +95,7 @@ type LoopConfig struct {
 // DefaultLoopConfig's two-second ObservationTimeout suits a Stepper that is
 // genuinely one bounded call, such as Shadow's single indexed read. It is
 // NOT sized for the sync-dispatch mutation pipeline: that Stepper
-// (MutationPipeline) is a 9-stage, 3-pool composition, and CHAOS-4239 found
+// (MutationPipeline) is an 8-stage, 3-pool composition, and CHAOS-4239 found
 // this same comment claiming "one indexed read of at most 101 candidates"
 // years after the pipeline made that description false -- the doc drifted,
 // nothing caught it, and the flat 2s deadline it described kept killing the

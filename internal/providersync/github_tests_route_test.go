@@ -184,8 +184,9 @@ func TestGitHubTestsRouteEmitsSixCompleteEffectsAndStripsRedirectAuth(t *testing
 	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
 		t.Fatalf("watermark=%v", batch.Watermark)
 	}
-	// The claim holds a UTC midnight, so the runs listing is followed by its deep range (one more listing).
-	if len(doer.requests) != 8 || doer.requests[7] != "blob.example/report.zip" {
+	// The claim holds a UTC midnight, so the runs listing and the artifacts listing are each followed by their deep range (two
+	// more listings).
+	if len(doer.requests) != 9 || doer.requests[8] != "blob.example/report.zip" {
 		t.Fatalf("requests=%v", doer.requests)
 	}
 	// cicd and tests delegate to ONE complete-row unit, so this same batch must

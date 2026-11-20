@@ -137,9 +137,10 @@ func (in llmPurposeUpsert) decisionRefusal() *llmRefusal {
 	return decisionProviderRefusal(in.provider, in.purpose, true, in.model, in.baseURL, in.baseURLKey)
 }
 
-// applyLLMPurpose is applyLLMSettings for one purpose override; org is orgID as
-// byoLLMAccessOrg parsed it, the save lock key.
-func (h *handlers) applyLLMPurpose(ctx context.Context, org uuid.UUID, orgID string, in llmPurposeUpsert) (*pyjson.Object, *llmRefusal, error) {
+// applyLLMPurpose is applyLLMSettings for one purpose override, keyed the same
+// way by the parsed org id.
+func (h *handlers) applyLLMPurpose(ctx context.Context, org uuid.UUID, in llmPurposeUpsert) (*pyjson.Object, *llmRefusal, error) {
+	orgID := org.String()
 	if refusal := in.decisionRefusal(); refusal != nil {
 		return nil, refusal, nil
 	}

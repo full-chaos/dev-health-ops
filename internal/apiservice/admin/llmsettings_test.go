@@ -86,7 +86,7 @@ func TestApplyLLMSettingsRefusesABYOProviderWithoutAModel(t *testing.T) {
 			storedPurposeKey:   func(context.Context, string, llmorgsettings.Purpose) (string, error) { return "", nil },
 			storedScopeBaseURL: func(context.Context, string, llmorgsettings.Purpose) (string, error) { return "", nil },
 		}
-		out, refusal, err := h.applyLLMSettings(context.Background(), uuid.Nil, "org", in)
+		out, refusal, err := h.applyLLMSettings(context.Background(), uuid.Nil, in)
 		if err != nil || out != nil || refusal == nil || refusal.status != 400 {
 			t.Fatalf("%s: out=%v refusal=%v err=%v", name, out, refusal, err)
 		}
@@ -128,7 +128,7 @@ func TestApplyLLMSettingsChecksTheBaseURLBeforeTheModel(t *testing.T) {
 		storedPurposeKey:   func(context.Context, string, llmorgsettings.Purpose) (string, error) { return "", nil },
 		storedScopeBaseURL: func(context.Context, string, llmorgsettings.Purpose) (string, error) { return "", nil },
 	}
-	_, refusal, err := h.applyLLMSettings(context.Background(), uuid.Nil, "org", llmUpsert{provider: "openai", baseURL: strPtr("http://x.invalid"), requireModel: true})
+	_, refusal, err := h.applyLLMSettings(context.Background(), uuid.Nil, llmUpsert{provider: "openai", baseURL: strPtr("http://x.invalid"), requireModel: true})
 	if err != nil || refusal == nil || refusal.status != 400 || refusal.message() != "bad host" {
 		t.Fatalf("refusal=%v err=%v", refusal, err)
 	}

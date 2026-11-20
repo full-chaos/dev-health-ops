@@ -851,7 +851,7 @@ func (o Operator) SetLLMSettings(ctx context.Context, orgID string, in LLMSettin
 	org, refusal, err := h.byoLLMAccessOrg(ctx, orgID, false)
 	if refusal == nil && err == nil {
 		var out *pyjson.Object
-		out, refusal, err = h.applyLLMSettings(ctx, org, orgID, llmUpsert{provider: provider, model: in.Model, apiKey: in.APIKey, baseURL: in.BaseURL, requireModel: true})
+		out, refusal, err = h.applyLLMSettings(ctx, org, llmUpsert{provider: provider, model: in.Model, apiKey: in.APIKey, baseURL: in.BaseURL, requireModel: true})
 		if refusal == nil && err == nil {
 			return llmSettingsDocument(out), nil
 		}

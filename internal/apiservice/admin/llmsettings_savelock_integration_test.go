@@ -95,10 +95,10 @@ func TestLLMSettingsSaveGivesTheSessionLockTimeoutBack(t *testing.T) {
 		}
 	}
 	var inDefault, inPurpose string
-	if _, refusal, err := h.applyLLMSettings(ctx, org, org.String(), llmUpsert{provider: "openai", model: strPtr("m"), requireModel: true, inTx: read(&inDefault)}); err != nil || refusal != nil {
+	if _, refusal, err := h.applyLLMSettings(ctx, org, llmUpsert{provider: "openai", model: strPtr("m"), requireModel: true, inTx: read(&inDefault)}); err != nil || refusal != nil {
 		t.Fatalf("default save: refusal=%v err=%v", refusal, err)
 	}
-	if _, refusal, err := h.applyLLMPurpose(ctx, org, org.String(), llmPurposeUpsert{purpose: llmorgsettings.PurposeExplain, provider: "openai", model: "m", inTx: read(&inPurpose)}); err != nil || refusal != nil {
+	if _, refusal, err := h.applyLLMPurpose(ctx, org, llmPurposeUpsert{purpose: llmorgsettings.PurposeExplain, provider: "openai", model: "m", inTx: read(&inPurpose)}); err != nil || refusal != nil {
 		t.Fatalf("purpose save: refusal=%v err=%v", refusal, err)
 	}
 	t.Logf("server default lock_timeout %sms; session %s; inside the save after the lock: default %s, purpose %s", serverDefault, sessionLockTimeout, inDefault, inPurpose)
@@ -130,7 +130,7 @@ func TestLLMSettingsBudgetSaveAndAdmitNeverDeadlock(t *testing.T) {
 		return ""
 	}
 	save := func(limit int64) error {
-		_, refusal, err := h.applyLLMSettings(ctx, org, org.String(), llmUpsert{provider: "openai", model: strPtr("m"), budgetLimitMu: big.NewInt(limit), requireModel: true})
+		_, refusal, err := h.applyLLMSettings(ctx, org, llmUpsert{provider: "openai", model: strPtr("m"), budgetLimitMu: big.NewInt(limit), requireModel: true})
 		if refusal != nil {
 			return fmt.Errorf("refused: %v", refusal.detail)
 		}
@@ -243,7 +243,7 @@ func TestLLMSettingsOperatorAliasSaveWaitsOnTheCanonicalSave(t *testing.T) {
 	h := saveLockHandlers(pool)
 	operator := Operator{Pool: pool}
 	canonicalSave := func() error {
-		_, refusal, err := h.applyLLMSettings(ctx, org, org.String(), llmUpsert{provider: "openai", model: strPtr("m"), baseURL: strPtr("https://8.8.8.8/v1"), requireModel: true})
+		_, refusal, err := h.applyLLMSettings(ctx, org, llmUpsert{provider: "openai", model: strPtr("m"), baseURL: strPtr("https://8.8.8.8/v1"), requireModel: true})
 		if refusal != nil {
 			return fmt.Errorf("refused: %v", refusal.detail)
 		}
@@ -331,6 +331,37 @@ func TestLLMSettingsOperatorAliasSaveWaitsOnTheCanonicalSave(t *testing.T) {
 		}
 		if !answered {
 			t.Logf("%q: the alias save waited on the canonical save's lock, then both finished", alias)
+		}
+	}
+}
+
+// An operator save that spells the org id another way writes the rows of the
+// canonical id: after each of the 3 forms there is exactly one model row, under
+// the canonical id, holding that save's model, and the canonical read finds it.
+func TestLLMSettingsOperatorAliasSaveWritesTheCanonicalRows(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	pool, org := saveLockPool(t, ctx)
+	h := saveLockHandlers(pool)
+	operator := Operator{Pool: pool}
+	canonical := org.String()
+	for i, alias := range []string{strings.ToUpper(canonical), strings.ReplaceAll(canonical, "-", ""), "{" + canonical + "}"} {
+		model := fmt.Sprintf("m-%d", i)
+		if _, err := operator.SetLLMSettings(ctx, alias, LLMSettingsInput{Provider: "openai", Model: strPtr(model)}, LLMSettingsConfig{}); err != nil {
+			t.Fatalf("%q: operator save: %v", alias, err)
+		}
+		var rows, canonicalRows int
+		if err := pool.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE org_id = $1) FROM settings WHERE category = 'llm' AND key = 'model' AND lower(replace(trim(org_id, '{}'), '-', '')) = replace($1, '-', '')`, canonical).Scan(&rows, &canonicalRows); err != nil {
+			t.Fatal(err)
+		}
+		out, err := h.llmSettingsResponse(ctx, pool, canonical)
+		if err != nil {
+			t.Fatalf("%q: canonical read: %v", alias, err)
+		}
+		got, _ := out.Get("model")
+		t.Logf("%q: model rows for any spelling of the org %d, under the canonical id %d; canonical read model %v", alias, rows, canonicalRows, got)
+		if rows != 1 || canonicalRows != 1 || fmt.Sprint(got) != model {
+			t.Errorf("%q: %d model rows (%d canonical), canonical read %v; want exactly one canonical row holding %q", alias, rows, canonicalRows, got, model)
 		}
 	}
 }

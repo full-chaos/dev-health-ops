@@ -437,7 +437,7 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		upsert := put.purposeUpsert(purpose)
 		upsert.inTx = h.categorizeOptInStep(r, orgID, categorizeBYO)
-		out, refusal, err := h.applyLLMPurpose(ctx, org, orgID, upsert)
+		out, refusal, err := h.applyLLMPurpose(ctx, org, upsert)
 		if err != nil {
 			if h.writeUndecryptable(ctx, w, "write llm purpose override", err) {
 				return
@@ -463,7 +463,7 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 			"message", "BYO LLM budget changes are unavailable while impersonating")
 		return
 	}
-	out, refusal, err := h.applyLLMSettings(ctx, org, orgID, llmUpsert{
+	out, refusal, err := h.applyLLMSettings(ctx, org, llmUpsert{
 		provider: *provider, model: model, apiKey: apiKey, baseURL: baseURL,
 		concurrency: concurrency, budgetLimitMu: budgetLimitMu, requireModel: true,
 		inTx: h.categorizeOptInStep(r, orgID, categorizeBYO),
@@ -513,9 +513,11 @@ func byoProviderNeedsModel(in llmUpsert) bool {
 // applyLLMSettings is llm_settings.py's upsert_llm_settings over settings.py's:
 // the base URL is checked, then every write and the budget limit share one
 // transaction that a refusal or a failed response rolls back. The route and the
-// operator verb both run it. org is orgID as byoLLMAccessOrg parsed it: the save
-// lock is keyed by it, so every spelling of one org id takes one lock.
-func (h *handlers) applyLLMSettings(ctx context.Context, org uuid.UUID, orgID string, in llmUpsert) (*pyjson.Object, *llmRefusal, error) {
+// operator verb both run it. org is the org id as byoLLMAccessOrg parsed it: the
+// save lock and every row read and written are keyed by its canonical text, so
+// every spelling of one org id takes one lock and writes one set of rows.
+func (h *handlers) applyLLMSettings(ctx context.Context, org uuid.UUID, in llmUpsert) (*pyjson.Object, *llmRefusal, error) {
+	orgID := org.String()
 	if refusal := decisionProviderRefusal(in.provider, "", false, "", nil, false); refusal != nil {
 		return nil, refusal, nil
 	}

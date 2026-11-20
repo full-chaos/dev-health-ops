@@ -310,7 +310,7 @@ func TestApplyLLMSettingsRefusesAKeyInTheBaseURLBeforeResolution(t *testing.T) {
 	} {
 		spy := &resolverSpy{}
 		h := newKeyGuardHandlers(spy, tc.stored)
-		out, refusal, err := h.applyLLMSettings(context.Background(), uuid.Nil, "org", tc.in)
+		out, refusal, err := h.applyLLMSettings(context.Background(), uuid.Nil, tc.in)
 		if err != nil || out != nil || refusal == nil || refusal.status != 400 || spy.calls != 0 {
 			t.Fatalf("%s: out=%v refusal=%v err=%v resolver calls=%d", name, out, refusal, err, spy.calls)
 		}

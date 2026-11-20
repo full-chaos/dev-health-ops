@@ -109,7 +109,7 @@ func TestLLMSettingsSaveTakesTheOrgSaveLockFirst(t *testing.T) {
 		tx := &saveLockTx{}
 		h := baseURLHandlers(&resolverSpy{valid: true}, "", "")
 		h.store.Pool = &saveLockDB{tx: tx}
-		refusal, reached, err := keysetWriteAs(h, scope, org, org.String(), strPtr("sk-fresh-"+"0123456789"), strPtr(readerCleanURL))
+		refusal, reached, err := keysetWriteAs(h, scope, org, strPtr("sk-fresh-"+"0123456789"), strPtr(readerCleanURL))
 		if err != nil || refusal != nil || !reached {
 			t.Fatalf("%s: refusal=%v reached write=%v err=%v", scopeName(scope), refusal, reached, err)
 		}
@@ -139,7 +139,7 @@ func TestLLMSettingsSaveLockKeyIsTheCanonicalOrgID(t *testing.T) {
 			tx := &saveLockTx{}
 			h := baseURLHandlers(&resolverSpy{valid: true}, "", "")
 			h.store.Pool = &saveLockDB{tx: tx}
-			if refusal, reached, err := keysetWriteAs(h, scope, org, alias, strPtr("sk-fresh-"+"0123456789"), strPtr(readerCleanURL)); err != nil || refusal != nil || !reached {
+			if refusal, reached, err := keysetWriteAs(h, scope, org, strPtr("sk-fresh-"+"0123456789"), strPtr(readerCleanURL)); err != nil || refusal != nil || !reached {
 				t.Fatalf("%s %q: refusal=%v reached write=%v err=%v", scopeName(scope), alias, refusal, reached, err)
 			}
 			if got := tx.args[2]; len(got) != 1 || got[0] != "llm-settings-save:"+canonical {

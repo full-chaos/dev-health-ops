@@ -787,6 +787,19 @@ const nullableIntoPlainSites = `
 //
 //	queryEdges 5935396ef678 -> 7cdf790f21f3
 //	queryNodes 3dacd49c8128 -> 3c13f441d675
+//
+// CHAOS-14393: the WORK_TYPE nodes and edges templates filter blank types with match() instead of an empty-string test. Select lists,
+// column types and scan targets are unchanged; only the statement text moved. Re-pinned by hand, digests copied from the
+// local TestScanTypeCensus failure output (not computed):
+//
+//	queryEdges 5935396ef678 -> d6369bb81568
+//	queryNodes 3dacd49c8128 -> 92e198fc2e0f
+//
+// With both the CHAOS-14395 and the CHAOS-14393 filters on the same file the pinned digests are (copied from the failing
+// TestScanTypeCensus run at the merged tree):
+//
+//	queryEdges 7cdf790f21f3 -> f32e4fde7205
+//	queryNodes 3c13f441d675 -> 3d7e7d56784d
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|e67003e26fc2|not-describable
@@ -799,8 +812,8 @@ internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|9df0068c57ab
 internal/queryapi/aianalytics/scope.go|ownerTeams|*string,*string|c0b3734eb92d|not-describable
 internal/queryapi/analytics/breakdown.go|executeBreakdownRaw|**string,**float64|7d5055461009|statement-not-static
 internal/queryapi/analytics/catalog.go|executeCatalogValues|*string,*uint64|92f0953d0b7c|statement-not-static
-internal/queryapi/analytics/flowmatrix.go|queryEdges|*string,*string,**string,**string,**float64|7cdf790f21f3|statement-not-static
-internal/queryapi/analytics/flowmatrix.go|queryNodes|*string,**string,**float64|3c13f441d675|statement-not-static
+internal/queryapi/analytics/flowmatrix.go|queryEdges|*string,*string,**string,**string,**float64|f32e4fde7205|statement-not-static
+internal/queryapi/analytics/flowmatrix.go|queryNodes|*string,**string,**float64|3d7e7d56784d|statement-not-static
 internal/queryapi/analytics/investmentquality.go|executeEvidenceQualityByGroup|*string,*float64,*uint64,*uint64|30049a8da29f|statement-not-static
 internal/queryapi/analytics/investmentquality.go|executeInvestmentQualityStats|*uint64,*uint64,*float64,*float64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64|2219e7f838c7|statement-not-static
 internal/queryapi/analytics/sankeycoverage.go|runSankeyCoverageQuery|*float64,*float64,*float64,*float64,**float64,**float64,**float64,**float64,**float64|7474017a0a07|statement-not-static

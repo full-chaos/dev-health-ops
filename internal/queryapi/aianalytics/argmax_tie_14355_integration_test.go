@@ -20,9 +20,9 @@ import (
 // statements (same-key rows of ONE block collapse under ReplacingMergeTree) into a table with merges stopped.
 // CHAOS-14355.
 
-// tieServed runs both insert orders of the versions (3 times each) on a truncated table and returns the distinct
+// versionsServed runs both insert orders of the versions (3 times each) on a truncated table and returns the distinct
 // served values.
-func tieServed(t *testing.T, ctx context.Context, conn chdriver.Conn, table, columns string, versions [2]string, read func() string) []string {
+func versionsServed(t *testing.T, ctx context.Context, conn chdriver.Conn, table, columns string, versions [2]string, read func() string) []string {
 	t.Helper()
 	exec(t, ctx, conn, `SYSTEM STOP MERGES %s`, table)
 	seen := map[string]bool{}
@@ -141,8 +141,8 @@ func TestArgMaxTieImpact14355(t *testing.T) {
 
 	t.Run("tie serves one version in both reads", func(t *testing.T) {
 		cols, versions := pair(map[string]string{"prs_total": "1", "reviews_per_pr": "1.5"}, map[string]string{"prs_total": "2", "reviews_per_pr": "NULL"}, at, at)
-		requireOne(t, "loaders.go dailyStatement", tieServed(t, ctx, conn, table, cols, versions, readDaily))
-		requireOne(t, "ai_opportunities.go loadImpactRowsForOpportunities", tieServed(t, ctx, conn, table, cols, versions, readOpportunity))
+		requireOne(t, "loaders.go dailyStatement", versionsServed(t, ctx, conn, table, cols, versions, readDaily))
+		requireOne(t, "ai_opportunities.go loadImpactRowsForOpportunities", versionsServed(t, ctx, conn, table, cols, versions, readOpportunity))
 	})
 
 	t.Run("on a tie dailyStatement and the opportunity read serve the same version", func(t *testing.T) {
@@ -151,14 +151,14 @@ func TestArgMaxTieImpact14355(t *testing.T) {
 				map[string]string{"prs_total": fmt.Sprint(k), "prs_merged": fmt.Sprint(100 + k), "reviews_per_pr": fmt.Sprintf("%d.5", k)},
 				map[string]string{"prs_total": fmt.Sprint(k + 50), "prs_merged": fmt.Sprint(200 + k), "reviews_per_pr": "NULL"},
 				at, at)
-			d := tieServed(t, ctx, conn, table, cols, versions, func() string {
+			d := versionsServed(t, ctx, conn, table, cols, versions, func() string {
 				rows := daily()
 				if len(rows) != 1 {
 					t.Fatalf("daily rows %d", len(rows))
 				}
 				return fmt.Sprintf("prs=%v reviews=%s", rows[0].PrsTotal, fp(rows[0].ReviewsPerPr))
 			})
-			o := tieServed(t, ctx, conn, table, cols, versions, readOpportunity)
+			o := versionsServed(t, ctx, conn, table, cols, versions, readOpportunity)
 			if len(d) != 1 || len(o) != 1 || d[0] != o[0] {
 				t.Errorf("pair %d: dailyStatement served %v, the opportunity read served %v; want one and the same version", k, d, o)
 			}
@@ -171,7 +171,7 @@ func TestArgMaxTieImpact14355(t *testing.T) {
 			ones[c], twos[c] = "1", "2"
 		}
 		cols, versions := pair(ones, twos, at, at)
-		served := tieServed(t, ctx, conn, table, cols, versions, func() string {
+		served := versionsServed(t, ctx, conn, table, cols, versions, func() string {
 			rows := daily()
 			if len(rows) != 1 {
 				t.Fatalf("daily rows %d", len(rows))
@@ -184,7 +184,7 @@ func TestArgMaxTieImpact14355(t *testing.T) {
 			}
 		}
 		requireOne(t, "every column", served)
-		requireOne(t, "opportunity read, every column", tieServed(t, ctx, conn, table, cols, versions, readOpportunity))
+		requireOne(t, "opportunity read, every column", versionsServed(t, ctx, conn, table, cols, versions, readOpportunity))
 	})
 
 	t.Run("each column is read from its own place in the tuple", func(t *testing.T) {
@@ -195,7 +195,7 @@ func TestArgMaxTieImpact14355(t *testing.T) {
 			want = append(want, fmt.Sprint(i+1))
 		}
 		cols, versions := pair(distinct, distinct, at, at)
-		requireServed(t, "column order", tieServed(t, ctx, conn, table, cols, versions, func() string {
+		requireServed(t, "column order", versionsServed(t, ctx, conn, table, cols, versions, func() string {
 			rows := daily()
 			if len(rows) != 1 {
 				t.Fatalf("daily rows %d", len(rows))
@@ -207,18 +207,18 @@ func TestArgMaxTieImpact14355(t *testing.T) {
 	t.Run("a newer computed_at wins over the tiebreak", func(t *testing.T) {
 		for _, c := range []struct{ older, newer string }{{"1", "2"}, {"2", "1"}} {
 			cols, versions := pair(map[string]string{"prs_total": c.older, "reviews_per_pr": "1.5"}, map[string]string{"prs_total": c.newer, "reviews_per_pr": "2.5"}, at, newer)
-			requireServed(t, "dailyStatement older "+c.older+" newer "+c.newer, tieServed(t, ctx, conn, table, cols, versions, readDaily), "prs="+c.newer+" merged=0 reviews=2.5")
-			requireServed(t, "opportunity read older "+c.older+" newer "+c.newer, tieServed(t, ctx, conn, table, cols, versions, readOpportunity), "prs="+c.newer+" reviews=2.5")
+			requireServed(t, "dailyStatement older "+c.older+" newer "+c.newer, versionsServed(t, ctx, conn, table, cols, versions, readDaily), "prs="+c.newer+" merged=0 reviews=2.5")
+			requireServed(t, "opportunity read older "+c.older+" newer "+c.newer, versionsServed(t, ctx, conn, table, cols, versions, readOpportunity), "prs="+c.newer+" reviews=2.5")
 		}
 	})
 
 	t.Run("a NULL of the newest version stays NULL", func(t *testing.T) {
 		cols, versions := pair(map[string]string{"prs_total": "1", "reviews_per_pr": "1.5"}, map[string]string{"prs_total": "1", "reviews_per_pr": "NULL"}, at, newer)
-		requireServed(t, "dailyStatement older 1.5 newer NULL", tieServed(t, ctx, conn, table, cols, versions, readDaily), "prs=1 merged=0 reviews=NULL")
-		requireServed(t, "opportunity read older 1.5 newer NULL", tieServed(t, ctx, conn, table, cols, versions, readOpportunity), "prs=1 reviews=NULL")
+		requireServed(t, "dailyStatement older 1.5 newer NULL", versionsServed(t, ctx, conn, table, cols, versions, readDaily), "prs=1 merged=0 reviews=NULL")
+		requireServed(t, "opportunity read older 1.5 newer NULL", versionsServed(t, ctx, conn, table, cols, versions, readOpportunity), "prs=1 reviews=NULL")
 		cols, versions = pair(map[string]string{"prs_total": "1", "reviews_per_pr": "NULL"}, map[string]string{"prs_total": "1", "reviews_per_pr": "1.5"}, at, newer)
-		requireServed(t, "dailyStatement older NULL newer 1.5", tieServed(t, ctx, conn, table, cols, versions, readDaily), "prs=1 merged=0 reviews=1.5")
-		requireServed(t, "opportunity read older NULL newer 1.5", tieServed(t, ctx, conn, table, cols, versions, readOpportunity), "prs=1 reviews=1.5")
+		requireServed(t, "dailyStatement older NULL newer 1.5", versionsServed(t, ctx, conn, table, cols, versions, readDaily), "prs=1 merged=0 reviews=1.5")
+		requireServed(t, "opportunity read older NULL newer 1.5", versionsServed(t, ctx, conn, table, cols, versions, readOpportunity), "prs=1 reviews=1.5")
 	})
 }
 
@@ -261,11 +261,11 @@ func TestArgMaxTieGovernanceCoverage14355(t *testing.T) {
 	}
 
 	t.Run("tie serves one version", func(t *testing.T) {
-		requireOne(t, "governance.go coverageStatement", tieServed(t, ctx, conn, table, cols, [2]string{v(at, [5]int{4, 1, 0, 0, 0}), v(at, [5]int{4, 3, 0, 0, 0})}, read))
+		requireOne(t, "governance.go coverageStatement", versionsServed(t, ctx, conn, table, cols, [2]string{v(at, [5]int{4, 1, 0, 0, 0}), v(at, [5]int{4, 3, 0, 0, 0})}, read))
 	})
 
 	t.Run("every count comes from one version", func(t *testing.T) {
-		served := tieServed(t, ctx, conn, table, cols, [2]string{v(at, [5]int{1, 1, 1, 1, 1}), v(at, [5]int{2, 2, 2, 2, 2})}, read)
+		served := versionsServed(t, ctx, conn, table, cols, [2]string{v(at, [5]int{1, 1, 1, 1, 1}), v(at, [5]int{2, 2, 2, 2, 2})}, read)
 		for _, s := range served {
 			if s != "1,1,1,1,1" && s != "2,2,2,2,2" {
 				t.Errorf("served a mixed row: %s", s)
@@ -276,7 +276,7 @@ func TestArgMaxTieGovernanceCoverage14355(t *testing.T) {
 
 	t.Run("a tie of two live versions keeps the key", func(t *testing.T) {
 		// A pick per column could take ai from the second and declared from the first: all zeros, a retraction row.
-		served := tieServed(t, ctx, conn, table, cols, [2]string{v(at, [5]int{1, 0, 0, 0, 0}), v(at, [5]int{0, 1, 0, 0, 0})}, read)
+		served := versionsServed(t, ctx, conn, table, cols, [2]string{v(at, [5]int{1, 0, 0, 0, 0}), v(at, [5]int{0, 1, 0, 0, 0})}, read)
 		requireOne(t, "two live versions", served)
 		for _, s := range served {
 			if s != "1,0,0,0,0" && s != "0,1,0,0,0" {
@@ -286,7 +286,7 @@ func TestArgMaxTieGovernanceCoverage14355(t *testing.T) {
 	})
 
 	t.Run("a tie of a live version and a row of zeros: liveness and counts from one version", func(t *testing.T) {
-		served := tieServed(t, ctx, conn, table, cols, [2]string{v(at, [5]int{4, 1, 0, 0, 0}), v(at, [5]int{0, 0, 0, 0, 0})}, read)
+		served := versionsServed(t, ctx, conn, table, cols, [2]string{v(at, [5]int{4, 1, 0, 0, 0}), v(at, [5]int{0, 0, 0, 0, 0})}, read)
 		requireOne(t, "live + zeros", served)
 		for _, s := range served {
 			if s != "" && s != "4,1,0,0,0" {
@@ -296,9 +296,9 @@ func TestArgMaxTieGovernanceCoverage14355(t *testing.T) {
 	})
 
 	t.Run("a newer computed_at wins over the tiebreak", func(t *testing.T) {
-		requireServed(t, "older 1 newer 3", tieServed(t, ctx, conn, table, cols, [2]string{v(at, [5]int{4, 1, 0, 0, 0}), v(newer, [5]int{4, 3, 0, 0, 0})}, read), "4,3,0,0,0")
-		requireServed(t, "older 3 newer 1", tieServed(t, ctx, conn, table, cols, [2]string{v(at, [5]int{4, 3, 0, 0, 0}), v(newer, [5]int{4, 1, 0, 0, 0})}, read), "4,1,0,0,0")
-		requireServed(t, "newer row of zeros retires the key", tieServed(t, ctx, conn, table, cols, [2]string{v(at, [5]int{4, 3, 0, 0, 0}), v(newer, [5]int{0, 0, 0, 0, 0})}, read), "")
+		requireServed(t, "older 1 newer 3", versionsServed(t, ctx, conn, table, cols, [2]string{v(at, [5]int{4, 1, 0, 0, 0}), v(newer, [5]int{4, 3, 0, 0, 0})}, read), "4,3,0,0,0")
+		requireServed(t, "older 3 newer 1", versionsServed(t, ctx, conn, table, cols, [2]string{v(at, [5]int{4, 3, 0, 0, 0}), v(newer, [5]int{4, 1, 0, 0, 0})}, read), "4,1,0,0,0")
+		requireServed(t, "newer row of zeros retires the key", versionsServed(t, ctx, conn, table, cols, [2]string{v(at, [5]int{4, 3, 0, 0, 0}), v(newer, [5]int{0, 0, 0, 0, 0})}, read), "")
 	})
 
 	t.Run("no tie: rows as main serves them", func(t *testing.T) {
@@ -370,11 +370,11 @@ func TestArgMaxTieReviewerConcentration14355(t *testing.T) {
 	both := func(alice string) string { return alice + " UNION ALL " + v("bob@x", 5, 0, at) }
 
 	t.Run("tie serves one version", func(t *testing.T) {
-		requireOne(t, "loaders.go concentrationStatement", tieServed(t, ctx, conn, table, cols, [2]string{both(v("alice@x", 1, 0, at)), both(v("alice@x", 9, 0, at))}, read))
+		requireOne(t, "loaders.go concentrationStatement", versionsServed(t, ctx, conn, table, cols, [2]string{both(v("alice@x", 1, 0, at)), both(v("alice@x", 9, 0, at))}, read))
 	})
 
 	t.Run("a tie of a measurement and a retraction row: liveness and count from one version", func(t *testing.T) {
-		served := tieServed(t, ctx, conn, table, cols, [2]string{both(v("alice@x", 5, 0, at)), both(v("alice@x", 0, 1, at))}, read)
+		served := versionsServed(t, ctx, conn, table, cols, [2]string{both(v("alice@x", 5, 0, at)), both(v("alice@x", 0, 1, at))}, read)
 		requireOne(t, "measurement + retraction", served)
 		for _, s := range served {
 			// alice counted with 5 (gini 0 over 2) or left out (gini 0 over 1); never counted with the retraction's 0.
@@ -385,9 +385,9 @@ func TestArgMaxTieReviewerConcentration14355(t *testing.T) {
 	})
 
 	t.Run("a newer computed_at wins over the tiebreak", func(t *testing.T) {
-		requireServed(t, "older 1 newer 9", tieServed(t, ctx, conn, table, cols, [2]string{both(v("alice@x", 1, 0, at)), both(v("alice@x", 9, 0, newer))}, read), "gini=0.1428571428571428 reviewers=2")
-		requireServed(t, "older 9 newer 1", tieServed(t, ctx, conn, table, cols, [2]string{both(v("alice@x", 9, 0, at)), both(v("alice@x", 1, 0, newer))}, read), "gini=0.33333333333333326 reviewers=2")
-		requireServed(t, "newer retraction row retires alice", tieServed(t, ctx, conn, table, cols, [2]string{both(v("alice@x", 9, 0, at)), both(v("alice@x", 0, 1, newer))}, read), "gini=0 reviewers=1")
+		requireServed(t, "older 1 newer 9", versionsServed(t, ctx, conn, table, cols, [2]string{both(v("alice@x", 1, 0, at)), both(v("alice@x", 9, 0, newer))}, read), "gini=0.1428571428571428 reviewers=2")
+		requireServed(t, "older 9 newer 1", versionsServed(t, ctx, conn, table, cols, [2]string{both(v("alice@x", 9, 0, at)), both(v("alice@x", 1, 0, newer))}, read), "gini=0.33333333333333326 reviewers=2")
+		requireServed(t, "newer retraction row retires alice", versionsServed(t, ctx, conn, table, cols, [2]string{both(v("alice@x", 9, 0, at)), both(v("alice@x", 0, 1, newer))}, read), "gini=0 reviewers=1")
 	})
 
 	t.Run("no tie: the value main serves", func(t *testing.T) {
@@ -435,13 +435,13 @@ func TestArgMaxTieHotspotOverlap14355(t *testing.T) {
 		return strings.Join(parts, ";")
 	}
 	served := func(risk string) string { return "ai_assisted touching=1 risk=" + risk }
-	requireOne(t, "loaders_b.go hotspotOverlapTail same day", tieServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 5, at), v("2026-08-01", 7, at)}, read))
-	requireServed(t, "two days, one computed_at: newer day (7)", tieServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 5, at), v("2026-08-02", 7, at)}, read), served("7"))
-	requireServed(t, "two days, one computed_at: newer day (5)", tieServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 7, at), v("2026-08-02", 5, at)}, read), served("5"))
-	requireServed(t, "newer computed_at beats newer day (5)", tieServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 5, newer), v("2026-08-02", 7, at)}, read), served("5"))
-	requireServed(t, "newer computed_at beats newer day (7)", tieServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 7, newer), v("2026-08-02", 5, at)}, read), served("7"))
-	requireServed(t, "same day, newer computed_at (5)", tieServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 7, at), v("2026-08-01", 5, newer)}, read), served("5"))
-	requireServed(t, "same day, newer computed_at (7)", tieServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 5, at), v("2026-08-01", 7, newer)}, read), served("7"))
+	requireOne(t, "loaders_b.go hotspotOverlapTail same day", versionsServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 5, at), v("2026-08-01", 7, at)}, read))
+	requireServed(t, "two days, one computed_at: newer day (7)", versionsServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 5, at), v("2026-08-02", 7, at)}, read), served("7"))
+	requireServed(t, "two days, one computed_at: newer day (5)", versionsServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 7, at), v("2026-08-02", 5, at)}, read), served("5"))
+	requireServed(t, "newer computed_at beats newer day (5)", versionsServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 5, newer), v("2026-08-02", 7, at)}, read), served("5"))
+	requireServed(t, "newer computed_at beats newer day (7)", versionsServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 7, newer), v("2026-08-02", 5, at)}, read), served("7"))
+	requireServed(t, "same day, newer computed_at (5)", versionsServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 7, at), v("2026-08-01", 5, newer)}, read), served("5"))
+	requireServed(t, "same day, newer computed_at (7)", versionsServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 5, at), v("2026-08-01", 7, newer)}, read), served("7"))
 }
 
 func TestArgMaxTieComplexityOverlap14355(t *testing.T) {
@@ -469,11 +469,11 @@ func TestArgMaxTieComplexityOverlap14355(t *testing.T) {
 		return strings.Join(parts, ";")
 	}
 	const high, low = "ai_assisted touching=1", "ai_assisted touching=0"
-	requireOne(t, "loaders_b.go complexityOverlapTail same day", tieServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 2, at), v("2026-08-01", 0, at)}, read))
-	requireServed(t, "two days, one computed_at: newer day (0)", tieServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 2, at), v("2026-08-02", 0, at)}, read), low)
-	requireServed(t, "two days, one computed_at: newer day (2)", tieServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 0, at), v("2026-08-02", 2, at)}, read), high)
-	requireServed(t, "newer computed_at beats newer day (2)", tieServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 2, newer), v("2026-08-02", 0, at)}, read), high)
-	requireServed(t, "newer computed_at beats newer day (0)", tieServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 0, newer), v("2026-08-02", 2, at)}, read), low)
-	requireServed(t, "same day, newer computed_at (0)", tieServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 2, at), v("2026-08-01", 0, newer)}, read), low)
-	requireServed(t, "same day, newer computed_at (2)", tieServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 0, at), v("2026-08-01", 2, newer)}, read), high)
+	requireOne(t, "loaders_b.go complexityOverlapTail same day", versionsServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 2, at), v("2026-08-01", 0, at)}, read))
+	requireServed(t, "two days, one computed_at: newer day (0)", versionsServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 2, at), v("2026-08-02", 0, at)}, read), low)
+	requireServed(t, "two days, one computed_at: newer day (2)", versionsServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 0, at), v("2026-08-02", 2, at)}, read), high)
+	requireServed(t, "newer computed_at beats newer day (2)", versionsServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 2, newer), v("2026-08-02", 0, at)}, read), high)
+	requireServed(t, "newer computed_at beats newer day (0)", versionsServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 0, newer), v("2026-08-02", 2, at)}, read), low)
+	requireServed(t, "same day, newer computed_at (0)", versionsServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 2, at), v("2026-08-01", 0, newer)}, read), low)
+	requireServed(t, "same day, newer computed_at (2)", versionsServed(t, ctx, conn, table, cols, [2]string{v("2026-08-01", 0, at), v("2026-08-01", 2, newer)}, read), high)
 }

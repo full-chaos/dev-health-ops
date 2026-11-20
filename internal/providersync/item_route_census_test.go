@@ -19,7 +19,7 @@ var itemDecoderExceptions = map[string]string{
 // TestItemDecoderFailuresCarryTheRoute: a providersync function whose first parameter is `raw json.RawMessage` and that returns the bare
 // providerfoundation.ErrNormalizationInvalid is an item decoder. The page walker has dropped the response by the time it
 // runs, so every call site must return its error through RouteFailure (or ResponseFailure) naming the route that served
-// the page.
+// the page. A syntactic guard over direct assignment call sites and one wrapper level (CHAOS-14292).
 func TestItemDecoderFailuresCarryTheRoute(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")
@@ -227,7 +227,8 @@ var inlineDecodeExceptions = map[string]string{
 
 // TestInlineItemDecodesAreListed: an inline decode (json.Unmarshal or a Decoder's Decode in an if statement) whose branch returns the
 // bare ErrNormalizationInvalid names no route, and TestItemDecoderFailuresCarryTheRoute cannot see it. Outside an item decoder each
-// such function is moved into an item decoder or listed in inlineDecodeExceptions with its reason.
+// such function is moved into an item decoder or listed in inlineDecodeExceptions with its reason. A syntactic guard over the
+// if-init decode form and the named exceptions only: other source forms are not pinned (CHAOS-14292).
 func TestInlineItemDecodesAreListed(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")

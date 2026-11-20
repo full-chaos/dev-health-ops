@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -412,11 +413,9 @@ func (handler GitHubTestsRouteHandler) Collect(
 	requests, pages := 1+runListPages+artifactListPages, runListPages+artifactListPages
 	policyCache := map[string]githubTestsPolicy{}
 	for _, raw := range runItems {
-		var run gitHubWorkflowRunPayload
-		decoder := json.NewDecoder(strings.NewReader(string(raw)))
-		decoder.UseNumber()
-		if decoder.Decode(&run) != nil {
-			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+		run, err := decodeGitHubWorkflowRun(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
 		if !include || !githubTestsRunWanted(run, pipeline, claim) {
@@ -444,11 +443,9 @@ func (handler GitHubTestsRouteHandler) Collect(
 		}
 		runJobs := make([]githubTestsJobRow, 0, len(jobPage.Items))
 		for _, jobRaw := range jobPage.Items {
-			var job githubTestsJobPayload
-			decoder := json.NewDecoder(strings.NewReader(string(jobRaw)))
-			decoder.UseNumber()
-			if decoder.Decode(&job) != nil {
-				return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+			job, err := decodeGitHubTestsJob(jobRaw)
+			if err != nil {
+				return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubRunJobsRoute, providerfoundation.ReasonBodyDecode, err)
 			}
 			row, ok := normalizeGitHubTestsJob(claim, repoID, pipeline.RunID, pipeline.RetryCount, job, normalizedAt)
 			if ok {
@@ -476,11 +473,9 @@ func (handler GitHubTestsRouteHandler) Collect(
 		)...)
 	}
 	for _, raw := range artifactRunItems {
-		var run gitHubWorkflowRunPayload
-		decoder := json.NewDecoder(strings.NewReader(string(raw)))
-		decoder.UseNumber()
-		if decoder.Decode(&run) != nil {
-			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+		run, err := decodeGitHubWorkflowRun(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
 		if !include || !githubTestsRunReadable(run) || githubTestsReportRunOutsideWindow(pipeline, claim) {
@@ -504,10 +499,11 @@ func (handler GitHubTestsRouteHandler) Collect(
 		// here rather than treating the refusal as intended behavior.
 		artifacts := make([]githubTestsArtifactPayload, 0, len(artPage.Items))
 		for _, artifactRaw := range artPage.Items {
-			var artifact githubTestsArtifactPayload
-			decoder := json.NewDecoder(strings.NewReader(string(artifactRaw)))
-			decoder.UseNumber()
-			if decoder.Decode(&artifact) != nil || artifact.ID == "" {
+			artifact, err := decodeGitHubTestsArtifact(artifactRaw)
+			if err != nil {
+				return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubRunArtifactsRoute, providerfoundation.ReasonBodyDecode, err)
+			}
+			if artifact.ID == "" {
 				return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 			}
 			if selected, _ := githubTestsArtifactSelectionSeam(artifact.Name); !selected {
@@ -1156,3 +1152,33 @@ func logGitHubTestsRangeOutcome(artifactID string, size, capBytes int64, outcome
 }
 
 var _ CompleteRouteHandler = GitHubTestsRouteHandler{}
+
+func decodeGitHubWorkflowRun(raw json.RawMessage) (gitHubWorkflowRunPayload, error) {
+	var run gitHubWorkflowRunPayload
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&run) != nil {
+		return run, providerfoundation.ErrNormalizationInvalid
+	}
+	return run, nil
+}
+
+func decodeGitHubTestsJob(raw json.RawMessage) (githubTestsJobPayload, error) {
+	var job githubTestsJobPayload
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&job) != nil {
+		return job, providerfoundation.ErrNormalizationInvalid
+	}
+	return job, nil
+}
+
+func decodeGitHubTestsArtifact(raw json.RawMessage) (githubTestsArtifactPayload, error) {
+	var artifact githubTestsArtifactPayload
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&artifact) != nil {
+		return artifact, providerfoundation.ErrNormalizationInvalid
+	}
+	return artifact, nil
+}

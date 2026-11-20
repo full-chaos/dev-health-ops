@@ -86,10 +86,14 @@ func ReadWorkItemText(
 
 	var out []WorkItemText
 	for rows.Next() {
-		var r WorkItemText
-		if err := rows.Scan(&r.WorkItemID, &r.Title, &r.Description); err != nil {
+		var (
+			r           WorkItemText
+			description *string
+		)
+		if err := rows.Scan(&r.WorkItemID, &r.Title, &description); err != nil {
 			return nil, logReadErr(ctx, "scan work_items row", organizationID, err)
 		}
+		r.Description = derefString(description)
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {

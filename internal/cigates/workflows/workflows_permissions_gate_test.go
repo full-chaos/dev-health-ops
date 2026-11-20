@@ -59,6 +59,7 @@ var jobPermAllowlist = map[jobKey]jobPermRow{
 	{"codeql-analysis.yml", "cancel-stacked-queue-children"}:      {map[string]string{"actions": "write", "contents": "read"}, "cancels the runs stacked on a red queue entry"},
 	{"docker-images.yml", "cancel-stacked-queue-children"}:        {map[string]string{"actions": "write", "contents": "read"}, "cancels the runs stacked on a red queue entry"},
 	{"go-auth-service.yml", "auth-cancel-stacked-queue-children"}: {map[string]string{"actions": "write", "contents": "read"}, "cancels the runs stacked on a red queue entry"},
+	{"go-auth-service.yml", "auth-race-integration"}:              {map[string]string{"contents": "read", "packages": "read"}, "pre-pulls the test images from ghcr"},
 	{"go-quality.yml", "cancel-stacked-queue-children"}:           {map[string]string{"actions": "write", "contents": "read"}, "cancels the runs stacked on a red queue entry"},
 	{"governance.yml", "governance"}:                              {map[string]string{"contents": "read", "pull-requests": "read"}, "reads pull requests for the governance gate"},
 	{"pr-title.yml", "pr-title"}:                                  {map[string]string{"contents": "read", "pull-requests": "read"}, "reads the queued pull request title by REST on merge_group"},
@@ -84,7 +85,7 @@ var jobPermAllowlist = map[jobKey]jobPermRow{
 // gone, has its own block or no longer inherits is refused.
 var wildcardJobs = map[string][]string{
 	"freeze-provider-worlds.yml":   {"freeze"},
-	"go-quality.yml":               {"go-quality-leg", "go-quality"},
+	"go-quality.yml":               {"go-quality-leg", "go-quality", "go-quality-coverage"},
 	"go-workers-compose-proof.yml": {"go-workers-compose-proof"},
 	"go.yml":                       {"go-arm64-numeric-parity", "go-storage-integration-shard", "go-golden-drift", "go-container-build", "go-container-smoke", "go-container-security", "go-container-reproducibility", "go-auth-compose-proof", "go-auth-web-proxy-proof", "graphql-wire-parity", "go-queue-gate"},
 	"venue-oracles-changed.yml":    {"venue-oracles-changed"},

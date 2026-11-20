@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -588,7 +589,7 @@ func gitHubFilesInventoryCached(
 	if treeCapExceeded {
 		slog.Warn(
 			"github files tree response exceeded the shared object cap; falling back to non-recursive walk",
-			"repository", fullName, "route", githubTreeRoute,
+			"repository", logging.ProviderText(fullName), "route", githubTreeRoute,
 			"cap_bytes", tooLarge.CapBytes, "content_length", tooLarge.ContentLength,
 		)
 	} else if treeErr != nil {
@@ -651,7 +652,7 @@ func continueGitHubFilesTraversal(err error, repository string) error {
 	if errors.As(err, &providerErr) && providerErr.Class == providerfoundation.ErrorRateLimited {
 		return err
 	}
-	slog.Error("github files traversal failed", "repository", repository, "inventory_status", "failed", "error", err)
+	slog.Error("github files traversal failed", "repository", logging.ProviderText(repository), "inventory_status", "failed", "error", err)
 	return fmt.Errorf("%w: %w", ErrGitHubFilesTraversalFailed, err)
 }
 
@@ -708,7 +709,7 @@ func gitHubFilesFinalBatch(claim Claim, fullName string, cursor githubFilesChunk
 		}
 	}
 	slog.Info(
-		"github files inventory", "repository", fullName, "entries", cursor.Rows,
+		"github files inventory", "repository", logging.ProviderText(fullName), "entries", cursor.Rows,
 		"subtree_walk", cursor.Walked, "inventory_status", inventoryStatus,
 		"chunks", cursor.Chunks, "with_contents", cursor.Contents, "contents_oversize", cursor.Oversize,
 		"contents_unavailable", cursor.Unavailable,

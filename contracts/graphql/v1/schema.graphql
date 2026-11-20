@@ -1881,12 +1881,12 @@ type RepoCoverageBaseline {
   """The repository's full name in the org's catalogue. Null = the catalogue holds no name; never the id."""
   repoName: String
   """
-  Mean line coverage, in percent (0 to 100), over the days of the 30 that hold a value. Null = fewer than 7 such days (``lineDays``): then there is no baseline. Never 0 for "none", never the current value.
+  Line coverage, in percent (0 to 100), pooled over the counted days of the 30: covered lines over total lines. A counted day stores both line counts and more than 0 lines; a day with a percent but no line counts is in neither sum. Null = fewer than 7 counted days (``lineDays``): then there is no baseline. Never 0 for "none", never the current value.
   """
   lineBaselinePct: Float
-  """Days of the 30 that hold a line coverage value."""
+  """Counted days of the 30: days that store both line counts and more than 0 lines."""
   lineDays: Int!
-  """Mean branch coverage, in percent; the same rules as ``lineBaselinePct``."""
+  """Mean branch coverage, in percent, over the days of the 30 that hold a value. Null = fewer than 7 such days (``branchDays``). Never 0 for "none", never the current value."""
   branchBaselinePct: Float
   """Days of the 30 that hold a branch coverage value."""
   branchDays: Int!
@@ -2049,12 +2049,12 @@ type SavedReportType {
 
 type ScopeCoverageBaseline {
   """
-  Mean, in percent (0 to 100), of the scope's line coverage of each day that holds a value, over the 30 days. Null = fewer than 7 such days (``lineDays``): then there is no baseline. Never 0 for "none", never the current value.
+  Line coverage of the scope, in percent (0 to 100): one ratio, covered lines over total lines of every counted repository day of the scope in the 30 days. A counted repository day stores both line counts and more than 0 lines; one with a percent but no line counts is in neither sum. Null = fewer than 7 days with a counted repository day (``lineDays``): then there is no baseline. Never 0 for "none", never the current value.
   """
   lineBaselinePct: Float
-  """Days of the 30 on which at least one repository of the scope holds a line coverage value."""
+  """Days of the 30 on which at least one repository of the scope has a counted day."""
   lineDays: Int!
-  """Mean branch coverage, in percent; the same rules as ``lineBaselinePct``."""
+  """Mean, in percent, of the scope's branch coverage of each day that holds a value (the mean over its repositories), over the 30 days. Null = fewer than 7 such days (``branchDays``). Never 0 for "none", never the current value."""
   branchBaselinePct: Float
   """Days of the 30 on which at least one repository of the scope holds a branch coverage value."""
   branchDays: Int!
@@ -2283,6 +2283,22 @@ type TestOpsTestCaseCounts {
   total: Int!
 }
 
+"""
+Report completeness of the runs behind the window's case counts, summed over its measured repository days (a run with counted suites on two days counts on each). A run is partial when a counted attempt, or its newest attempt, has a completeness row that names a lost report; unmarked when such an attempt has no completeness row (for example a provider that writes none); else complete. A repository day stored before these counts is not measured: it adds nothing to the sums and is counted in unmeasuredDays, never read as complete.
+"""
+type TestOpsReportCompleteness {
+  """Count of runs with a counted test suite, summed over the measured repository days."""
+  reportRuns: Int!
+  """Count of runs, of reportRuns, read as partial: a report was lost, so some of their cases are not counted."""
+  partialRuns: Int!
+  """Count of runs, of reportRuns, with no completeness mark: not known to be complete."""
+  unmarkedRuns: Int!
+  """
+  Count of repository days of the window with no completeness record: missing, not zero and not healthy. Such a day adds nothing to the three run counts.
+  """
+  unmeasuredDays: Int!
+}
+
 type TestOpsTestWindowResult {
   sinceDate: Date!
   untilDate: Date!
@@ -2300,6 +2316,10 @@ type TestOpsTestWindowResult {
   flakeRatePct: Float
   "Why the answer is empty, one value for the whole answer, set by the server and never derived by a client (CHAOS-9098). team_owns_no_repository: ``teamIds`` selects teams that together own no repository (team_repo_ownership, as of now). Null when ``teamIds`` is not set, and when the selected teams own one or more repositories, also when the window has no rows."
   filterEmptyReason: String
+  """
+  Report completeness of the runs behind ``cases``: partial and unmarked runs, and the repository days not measured.
+  """
+  reportCompleteness: TestOpsReportCompleteness!
 }
 
 type TestOpsRiskBreakdownItem {
@@ -2386,6 +2406,8 @@ type ThroughputForecast {
   backlogState: ThroughputBacklogState!
   "The oldest of the newest work-item days that backlogSize is read from. Null when backlogState is NO_ROWS or SUPPLIED."
   backlogAsOfDay: Date
+  "Why the backlog read is not a healthy measurement: the backlogState value (STALE or NO_ROWS) when the read is stale or found no work-item row; null when backlogState is MEASURED or SUPPLIED."
+  degradedReason: String
   historyWeeks: Int!
   p50Weeks: Int
   p75Weeks: Int

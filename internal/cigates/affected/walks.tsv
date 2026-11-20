@@ -129,6 +129,10 @@ internal/auth/contracts/tokencorpus	workload_test.go	contracts/auth/v1/golden/wo
 internal/auth/contracts/tokencorpus	workload_test.go	contracts/auth/v1/golden/workload-token	tree	*
 internal/auth/contracts/tokencorpus	workload_test.go	contracts/auth/v1/golden/workload-token/vectors	dir	*
 internal/auth/httpapi	accesslog_census_test.go	internal/auth	tree	*.go
+internal/auth/httpapi	query_census_test.go	internal/api	tree	*
+internal/auth/httpapi	query_census_test.go	internal/apiservice	tree	*
+internal/auth/httpapi	query_census_test.go	internal/auth	tree	*
+internal/auth/httpapi	query_census_test.go	internal/queryapi	tree	*
 internal/auth/identity	adminusers_touch_test.go	internal/auth/platformrole	dir	*
 internal/auth/identity	externalkey_test.go	internal/auth/identity	dir	*
 internal/auth/identity	joinmembership_state_test.go	internal	tree	*
@@ -234,7 +238,6 @@ internal/cigates/frozengoldens	reads_guard_test.go	internal/cigates/frozengolden
 internal/cigates/integrationshards	integration_sharding_test.go	unexpressed	-	-
 internal/cigates/integrationshards	support_test.go	unexpressed	-	-
 internal/cigates/livee2e	smtpsink_test.go	unexpressed	-	-
-internal/cigates/livee2e/ssoseed	served_census_test.go	docker	dir	*
 internal/cigates/membershipreads	membershipreads.go	unexpressed	-	*.go
 internal/cigates/nopython	tests_python_test.go	ci/requirements-*.txt	dir	*
 internal/cigates/outboundtransport	outboundtransport_test.go	.	tree	*.go
@@ -317,6 +320,7 @@ internal/cigates/workflows	workflows_venue_shards_test.go	ci/venue_oracle_weight
 internal/cigates/workflows	workflows_venue_shards_test.go	unexpressed	-	-
 internal/clicredentials	opensites_test.go	cmd	tree	*.go
 internal/clicredentials	opensites_test.go	internal	tree	*.go
+internal/deploy/inputs	hookrender_test.go	unexpressed	-	-
 internal/egressguard	egressguard_test.go	unexpressed	-	*.go
 internal/faultproxy	noship_test.go	.	tree	*
 internal/fixturescli	dropped_columns_census_test.go	internal/chmigrate/archive/sql	dir	*
@@ -382,6 +386,7 @@ internal/jobs/metrics/complexity/lizardcc	ruby_parity_test.go	internal/jobs/metr
 internal/jobs/metrics/complexity/lizardcc	typescript_parity_test.go	internal/jobs/metrics/complexity/lizardcc/testdata/corpus_js_ts	dir	*
 internal/jobs/metrics/complexity/lizardcc	vue_parity_test.go	internal/jobs/metrics/complexity/lizardcc/testdata/corpus_vue	dir	*
 internal/jobs/metrics/complexity/pycc	cc_parity_test.go	internal/jobs/metrics/complexity/pycc/testdata/corpus	dir	*
+internal/jobs/metrics/daily	pooled_samples_cap_census_test.go	internal/jobs/metrics/daily	dir	*
 internal/jobs/metrics/daily	stale_team_keys_census_test.go	cmd	tree	*.go
 internal/jobs/metrics/daily	stale_team_keys_census_test.go	internal	tree	*.go
 internal/jobs/metrics/daily	stale_team_keys_census_test.go	internal/jobs/metrics/daily	dir	*
@@ -394,6 +399,7 @@ internal/jobs/metrics/prrework	readers_census_test.go	internal/queryapi/explain	
 internal/jobs/metrics/prrework	readers_census_test.go	internal/queryapi/operatingreview	dir	*
 internal/jobs/metrics/remaining	capacity_schema_contract_pin_test.go	unexpressed	-	-
 internal/jobs/metrics/remaining	executor_clock_ast_test.go	internal/jobs/metrics/remaining	dir	*
+internal/jobs/metrics/remaining	recommendations_gini_team_scope_test.go	internal/jobs/metrics/remaining	dir	*
 internal/jobs/operational	billingemail_test.go	internal/jobs/operational/testdata/billing_email	dir	*
 internal/jobs/operational	venue_golden_address_test.go	internal/jobs/operational/testdata/golden	dir	*
 internal/jobs/report	stored_test_pass_rate_readers_census_test.go	.	tree	*.go
@@ -444,7 +450,6 @@ internal/providersync	client_ledger_census_test.go	internal/providersync	dir	*
 internal/providersync	github_repo_identity_census_test.go	internal/providersync	dir	*
 internal/providersync	gitlab_repo_identity_census_test.go	internal/providersync	dir	*
 internal/providersync	ingested_at_writer_enumeration_test.go	internal	tree	*
-internal/providersync	item_route_census_test.go	internal/providersync	dir	*
 internal/providersync	jira_search_endpoint_guard_test.go	internal/providersync	dir	*
 internal/providersync	log_sites_redaction_test.go	internal/providersync	dir	*
 internal/providersync	oracle_golden_inventory_test.go	internal/providersync	dir	*
@@ -465,6 +470,8 @@ internal/providersync	team_absence_test.go	internal/providersync	dir	*
 internal/providersync	team_id_carry_seam_test.go	cmd	tree	*.go
 internal/providersync	team_id_carry_seam_test.go	internal	tree	*.go
 internal/providersync	team_membership_first_seen_test.go	.	tree	*.go
+internal/providersync	team_repo_ownership_evidence_census_test.go	cmd	tree	*.go
+internal/providersync	team_repo_ownership_evidence_census_test.go	internal	tree	*.go
 internal/providersync	watermark_write_boundary_test.go	internal/providersync	dir	*
 internal/pythonparity	errorsanitize_callers_test.go	unexpressed	-	*.go
 internal/pythonparity	goldenpayload_registry_test.go	internal/pythonparity	dir	*
@@ -499,6 +506,8 @@ internal/queryapi/investmentexplain	resolve_model_name_golden_test.go	internal/q
 internal/queryapi/pepgate	census_test.go	internal/queryapi/pepgate	dir	*
 internal/queryapi/rowview	census_test.go	cmd	tree	*.go
 internal/queryapi/rowview	census_test.go	internal	tree	*.go
+internal/queryapi/rowview	team_census_test.go	cmd	tree	*.go
+internal/queryapi/rowview	team_census_test.go	internal	tree	*.go
 internal/queryapi/server	build_routes_integration_test.go	unexpressed	-	-
 internal/queryapi/server	direct_env_reads_test.go	unexpressed	-	*.go
 internal/queryapi/server	edge_users_test.go	unexpressed	-	-
@@ -532,8 +541,11 @@ internal/schedulerservice	readiness_timeout_test.go	internal/schedulerservice	di
 internal/shadowvenue	requestsites_test.go	unexpressed	-	-
 internal/signingkey	keygen.go	unexpressed	-	-
 internal/signingkey	keygen_state_test.go	unexpressed	-	-
+internal/storage/clickhouse	batch_options_census_test.go	.	tree	*
+internal/storage/clickhouse/latestrow	latestrow_census_test.go	.	tree	*.go
 internal/storage/clickhouse/liverow	census_test.go	cmd	tree	*.go
 internal/storage/clickhouse/liverow	census_test.go	internal	tree	*.go
+internal/storage/clickhouse/liverow	gitversion_inventory_test.go	internal	tree	*.go
 internal/storage/postgres	api_authorization_platform_roles_test.go	internal/api	tree	*
 internal/storage/postgres	api_authorization_platform_roles_test.go	internal/apiservice	tree	*
 internal/storage/postgres	api_authorization_platform_roles_test.go	internal/pgmigrate/sql	dir	*
@@ -551,6 +563,7 @@ internal/storage/postgres/aclguard	public_audit_grant_census_test.go	internal/st
 internal/storage/postgres/aclguard	sso_provider_write_grant_census_test.go	internal/storage/postgres/authschema	dir	*
 internal/storage/postgres/authschema	sprintf_sql_guard_test.go	internal/storage/postgres/authschema	dir	*
 internal/storedversion	writers_test.go	.	tree	*.go
+internal/storedversion	writers_test.go	internal/providersync	dir	*
 internal/streamhandlers	stored_version_invariant_test.go	internal/streamhandlers	dir	*
 internal/streamrunnerservice	readiness_timeout_test.go	internal/streamrunnerservice	dir	*
 internal/synccli	print_sites_test.go	internal/synccli	dir	*
@@ -568,6 +581,7 @@ internal/teamactive	roster_census_test.go	unexpressed	-	*.go
 internal/teamattribution	is_primary_census_test.go	.	tree	*.go
 internal/teamattribution	is_primary_census_test.go	internal	tree	*.go
 internal/teamattribution	is_primary_census_test.go	unexpressed	-	-
+internal/teamattribution	linked_issue_donor_census_test.go	.	tree	*.go
 internal/teamcreated	census_test.go	cmd	tree	*
 internal/teamcreated	census_test.go	internal	tree	*
 internal/teamprovider	census_test.go	cmd	tree	*
@@ -575,6 +589,7 @@ internal/teamprovider	census_test.go	internal	tree	*
 internal/testsupport/chschema	contract1_squash_integration_test.go	internal/chmigrate/archive/sql	dir	*
 internal/testsupport/chschema	contract_test.go	internal/testsupport/chschema	dir	*
 internal/testsupport/chschema	contract_test.go	unexpressed	-	-
+internal/testsupport/chschema	handbuilt_census_test.go	.	tree	*
 internal/testsupport/containers	close_remote_test.go	.	tree	*_test.go
 internal/testsupport/gitmaintcensus	census_test.go	.	tree	*.go
 internal/testsupport/idpstub	boundary_test.go	.	tree	*.go
@@ -599,3 +614,4 @@ internal/workerservice	dependencies_test.go	unexpressed	-	-
 internal/workerservice	reports_test.go	unexpressed	-	-
 internal/workerservice	venue_golden_address_test.go	unexpressed	-	-
 internal/workerservice	writer_metrics_registration_test.go	unexpressed	-	-
+tools/lcovmerge	main.go	unexpressed	-	-

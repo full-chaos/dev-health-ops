@@ -191,9 +191,13 @@ func authViolations(t *testing.T, root string) []string {
 	}
 
 	gateCode := shellCode(asString(gateSteps[0]["run"]))
-	for _, race := range []struct{ job, pair, env, run string }{
-		{"auth-race", `"auth-race=${RACE}"`, "RACE", `bash ci/check_go.sh auth race-leg "${{ matrix.leg }}" 3`},
-		{"auth-race-integration", `"auth-race-integration=${RACE_INTEGRATION}"`, "RACE_INTEGRATION", `bash ci/check_go.sh auth race-integration-leg "${{ matrix.leg }}" 4`},
+	for _, race := range []struct {
+		job, pair, env, run string
+		pre                 []string
+	}{
+		{"auth-race", `"auth-race=${RACE}"`, "RACE", `bash ci/check_go.sh auth race-leg "${{ matrix.leg }}" 3`, nil},
+		// CHAOS-13779: the pre-pull warms the test images before the leg starts Testcontainers.
+		{"auth-race-integration", `"auth-race-integration=${RACE_INTEGRATION}"`, "RACE_INTEGRATION", `bash ci/check_go.sh auth race-integration-leg "${{ matrix.leg }}" 4`, []string{"bash " + prepullCommand}},
 	} {
 		if !strings.Contains(gateCode, race.pair) || asString(asMap(gate["env"])[race.env]) != "${{ needs."+race.job+".result }}" {
 			out = append(out, fmt.Sprintf("auth-gate must check the %s result in its pair loop: a failed or skipped %s must fail a relevant change", race.job, race.job))
@@ -207,8 +211,8 @@ func authViolations(t *testing.T, root string) []string {
 				runs = append(runs, r)
 			}
 		}
-		if !reflect.DeepEqual(runs, []string{race.run}) {
-			out = append(out, fmt.Sprintf("%s must run exactly `%s`, got %v: each race leg has a job of its own", race.job, race.run, runs))
+		if want := append(append([]string{}, race.pre...), race.run); !reflect.DeepEqual(runs, want) {
+			out = append(out, fmt.Sprintf("%s must run exactly %q, got %v: each race leg has a job of its own", race.job, want, runs))
 		}
 	}
 	for _, s := range stepsOf(jobs["auth-test"]) {
@@ -319,7 +323,7 @@ func TestAuthServiceWorkflowPlantedDefects(t *testing.T) {
 		{"trigger gains a path filter", []mutation{{wf, "pull_request:", "pull_request:\n    paths: ['internal/auth/**']"}}, []string{"paths filter"}},
 		{"registry gains a target with no fuzz job", []mutation{{cg, "AUTH_FUZZ_TARGETS=(\n", "AUTH_FUZZ_TARGETS=(\n  \"./internal/auth/x FuzzPlanted\"\n"}}, []string{"differs from the AUTH_FUZZ_TARGETS registry", "FuzzPlanted"}},
 		{"gate stops failing on a skipped job", []mutation{{wf, `[ "${pair#*=}" = "success" ]`, `[ "${pair#*=}" != "failure" ]`}}, []string{"failed, cancelled OR skipped"}},
-		{"gate job drops its always()", []mutation{{wf, "if: always()", "if: success()"}}, []string{"always()"}},
+		{"gate job drops its always()", []mutation{{wf, "  auth-gate:\n    if: always()", "  auth-gate:\n    if: success()"}}, []string{"always()"}},
 		{"the auth race step echoes the command instead of running it", []mutation{{wf, "run: bash ci/check_go.sh auth race-leg \"${{ matrix.leg }}\" 3\n", "run: 'echo \"run: bash ci/check_go.sh auth race-leg\"'\n"}}, []string{"no longer calls auth stage \"race-leg\""}},
 		{"an auth gate job runs on a condition that is always false", []mutation{{wf, "    if: needs.auth-changes.outputs.relevant == 'true'\n", "    if: false && needs.auth-changes.outputs.relevant == 'true'\n"}}, []string{"if must be exactly"}},
 		{"the gate's success check is only echoed", []mutation{{wf, `[ "${pair#*=}" = "success" ] ||`, `echo '[ "${pair#*=}" = "success" ] ||'; true ||`}}, []string{"failed, cancelled OR skipped"}},

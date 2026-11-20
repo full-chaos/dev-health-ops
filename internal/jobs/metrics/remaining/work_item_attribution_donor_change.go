@@ -2,6 +2,7 @@ package remaining
 
 import (
 	"context"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -64,11 +65,36 @@ func (executor *WorkItemAttributionExecutor) loadDonorChangedDependents(
 	if err != nil {
 		return nil, err
 	}
+	kindIDs := make(map[string]struct{}, len(idSet))
+	for id := range idSet {
+		kindIDs[id] = struct{}{}
+	}
+	for _, row := range rows {
+		if recorded, _ := recordedDonorOf(row); recorded != "" {
+			kindIDs[recorded] = struct{}{}
+		}
+	}
+	kinds, err := executor.loadDonorKinds(ctx, orgID, sortedWorkItemAttributionKeys(kindIDs))
+	if err != nil {
+		return nil, err
+	}
 	inactive, err := teamactive.LoadInactive(ctx, executor.conn, orgID)
 	if err != nil {
 		return nil, stepcause.Failure(stepcause.LoadInactiveTeamsDonorChange, err)
 	}
-	return donorChangedDependents(edges, keyIndex, rows, inactive), nil
+	linkTiers, err := LoadWorkItemLinkTiers(ctx, executor.conn, orgID, edges)
+	if err != nil {
+		return nil, err
+	}
+	refused := map[string]int{}
+	owed := donorChangedDependents(edges, keyIndex, rows, kinds, inactive, refused, linkTiers)
+	if len(refused) > 0 {
+		slog.Default().InfoContext(ctx, "work_item_attribution.linked_issue_donor_refused",
+			"org_id", orgID, "pr_kind", refused[teamattribution.LinkedIssueDonorRefusedPullKind],
+			"empty_type", refused[teamattribution.LinkedIssueDonorRefusedEmptyType],
+			"unknown", refused[teamattribution.LinkedIssueDonorRefusedUnknown])
+	}
+	return owed, nil
 }
 
 // donorChangedDependents returns, sorted, each item that inherits through an
@@ -78,20 +104,29 @@ func (executor *WorkItemAttributionExecutor) loadDonorChangedDependents(
 // linked_issue row, or the provenance linked_issue row of the same snapshot). The donor it
 // would copy is the cascade's winner (BuildLinkedIssueIndexFromRows): of its
 // donors whose newest primary row has a team of its own (an own source) that
-// is active, the lowest target id, then relationship, with that row's team. An
+// is active, those of the best link tier (SelectLinkedIssueEdges), the lowest
+// target id, then relationship, with that row's team. An
 // item whose own primary row has a team of its own (an own source: native
 // team, project or repository ownership) outranks linked_issue, so a donor
 // never gives it its primary row. A donor recomputed
 // with the same team triggers nothing, and a rederive makes the item newer than
 // its donors, so a trigger never repeats for the same donor row.
+//
+// The donor must be an issue (teamattribution.LinkedIssueDonorRefusal): a refused donor gives no team and does
+// not advance the staleness signal, and an item whose stored snapshot records a refused donor is owed a
+// rederive whatever the timestamps and its own primary source. refused, when not nil, receives the count by
+// reason of the distinct refused donors the items evaluated. An item that no edge links any more is not seen.
 func donorChangedDependents(
 	edges []teamattribution.GithubWorkItemDerivationDependencyEdge,
 	keyIndex map[string]string,
 	rows map[string]workItemAttributionNewestPrimary,
+	kinds map[string]teamattribution.GithubWorkItemDerivationSubject,
 	inactive teamactive.Inactive,
+	refused map[string]int,
+	linkTiers map[teamattribution.LinkPair]string,
 ) []string {
-	type donor struct{ target, relationship string }
-	donors := map[string][]donor{}
+	donors := map[string][]teamattribution.LinkedIssueEdge{}
+	unresolved := map[string][]string{}
 	for _, edge := range teamattribution.LatestGitHubWorkItemDerivationDependencies(edges) {
 		if !teamattribution.GithubWorkItemDerivationInheritableRelationships[edge.RelationshipType] {
 			continue
@@ -100,50 +135,110 @@ func donorChangedDependents(
 		if key, ok := strings.CutPrefix(target, "extkey:"); ok {
 			target = keyIndex[strings.ToUpper(strings.TrimSpace(key))]
 		}
-		if target == "" || target == edge.SourceWorkItemID {
+		if target == "" {
+			// A key no item resolves to (or two items hold) is a donor that is not known.
+			unresolved[edge.SourceWorkItemID] = append(unresolved[edge.SourceWorkItemID], edge.TargetWorkItemID)
+			if _, ok := donors[edge.SourceWorkItemID]; !ok {
+				donors[edge.SourceWorkItemID] = nil
+			}
 			continue
 		}
-		donors[edge.SourceWorkItemID] = append(donors[edge.SourceWorkItemID], donor{target, edge.RelationshipType})
+		if target == edge.SourceWorkItemID {
+			continue
+		}
+		donors[edge.SourceWorkItemID] = append(donors[edge.SourceWorkItemID], teamattribution.LinkedIssueEdge{Target: target, Relationship: edge.RelationshipType})
 	}
 	var owed []string
+	refusedBy := map[string]string{}
+	refuse := func(target, reason string) {
+		if refused != nil {
+			refusedBy[target] = reason
+		}
+	}
 	for item, linked := range donors {
 		own, ok := rows[item]
-		if !ok || teamattribution.IsLinkedIssueDonorSource(own.Source) {
+		if !ok {
 			continue
 		}
-		sort.Slice(linked, func(left, right int) bool {
-			if linked[left].target != linked[right].target {
-				return linked[left].target < linked[right].target
+		recordedDonor, recordedTeam := recordedDonorOf(own)
+		// A stored link whose recorded donor is no longer an issue is repaired, whatever the timestamps and
+		// whatever the item's own primary source: the row the item holds names a donor the cascade refuses.
+		// The recorded donor is history, not a current edge: it is not counted below.
+		repair := false
+		if recordedDonor != "" {
+			kind, known := kinds[recordedDonor]
+			repair = teamattribution.LinkedIssueDonorRefusal(kind, known) != ""
+		}
+		// The counts are of the current edges: each distinct donor target once (by its resolved id), the key
+		// no item resolves to by its own text. An item with a native team of its own evaluates none.
+		if own.Source != "native_team" {
+			for _, raw := range unresolved[item] {
+				refuse(raw, teamattribution.LinkedIssueDonorRefusedUnknown)
 			}
-			return linked[left].relationship < linked[right].relationship
-		})
+			for _, candidate := range linked {
+				kind, known := kinds[candidate.Target]
+				if reason := teamattribution.LinkedIssueDonorRefusal(kind, known); reason != "" {
+					refuse(candidate.Target, reason)
+				}
+			}
+		}
+		if repair {
+			owed = append(owed, item)
+			continue
+		}
+		if teamattribution.IsLinkedIssueDonorSource(own.Source) {
+			continue
+		}
 		changed, wantDonor, wantTeam := false, "", ""
 		for _, candidate := range linked {
-			row, ok := rows[candidate.target]
-			if !ok {
+			// A refused donor is no donor: it neither gives a team nor advances the staleness signal.
+			kind, known := kinds[candidate.Target]
+			if teamattribution.LinkedIssueDonorRefusal(kind, known) != "" {
 				continue
 			}
-			changed = changed || row.ComputedAt.After(own.ComputedAt)
-			if wantDonor == "" && row.TeamID != "" && teamattribution.IsLinkedIssueDonorSource(row.Source) && !inactive.Has(row.TeamID) {
-				wantDonor, wantTeam = candidate.target, row.TeamID
+			if row, ok := rows[candidate.Target]; ok {
+				changed = changed || row.ComputedAt.After(own.ComputedAt)
+			}
+		}
+		// Tier presence is read over EVERY edge, a refused donor included (a pull request with a native
+		// link takes nothing lower); a refused donor is then dropped inside the best tier.
+		for _, candidate := range teamattribution.SelectLinkedIssueEdges(item, linked, linkTiers) {
+			kind, known := kinds[candidate.Target]
+			if teamattribution.LinkedIssueDonorRefusal(kind, known) != "" {
+				continue
+			}
+			row, ok := rows[candidate.Target]
+			if !ok || row.TeamID == "" || !teamattribution.IsLinkedIssueDonorSource(row.Source) {
+				continue
+			}
+			if wantDonor == "" && !inactive.Has(row.TeamID) {
+				wantDonor, wantTeam = candidate.Target, row.TeamID
 			}
 		}
 		if !changed {
 			continue
 		}
-		recordedDonor, recordedTeam := "", ""
-		switch {
-		case own.Source == "linked_issue":
-			recordedDonor, recordedTeam = linkedIssueEvidenceDonor(own.Evidence), own.TeamID
-		case own.LinkedEvidence != "" && own.LinkedComputedAt.Equal(own.ComputedAt):
-			recordedDonor, recordedTeam = linkedIssueEvidenceDonor(own.LinkedEvidence), own.LinkedTeamID
-		}
 		if wantDonor != recordedDonor || wantTeam != recordedTeam {
 			owed = append(owed, item)
 		}
 	}
+	for _, reason := range refusedBy {
+		refused[reason]++
+	}
 	sort.Strings(owed)
 	return owed
+}
+
+// recordedDonorOf is the donor, and its team, that the item's newest snapshot records: its primary linked_issue
+// row, or the provenance linked_issue row of the same snapshot.
+func recordedDonorOf(own workItemAttributionNewestPrimary) (string, string) {
+	switch {
+	case own.Source == "linked_issue":
+		return linkedIssueEvidenceDonor(own.Evidence), own.TeamID
+	case own.LinkedEvidence != "" && own.LinkedComputedAt.Equal(own.ComputedAt):
+		return linkedIssueEvidenceDonor(own.LinkedEvidence), own.LinkedTeamID
+	}
+	return "", ""
 }
 
 // linkedIssueEvidenceDonor is the donor id a linked_issue row's evidence names:
@@ -215,6 +310,38 @@ WHERE org_id = ?`, orgID)
 		edges = append(edges, edge)
 	}
 	return edges, stepcause.Failure(stepcause.IterateWorkItemDependenciesDonorChange, rows.Err())
+}
+
+// loadDonorKinds reads the provider and Type of each item of ids (work_items), one statement per bounded
+// chunk: the donor of a linked_issue row must be an issue (teamattribution.LinkedIssueDonorRefusal). An id
+// with no work_items row is absent from the result.
+func (executor *WorkItemAttributionExecutor) loadDonorKinds(
+	ctx context.Context, orgID string, ids []string,
+) (map[string]teamattribution.GithubWorkItemDerivationSubject, error) {
+	result := map[string]teamattribution.GithubWorkItemDerivationSubject{}
+	for _, chunk := range chunkStringsByRenderedBytes(ids, workItemAttributionMaxArrayBytes) {
+		rows, err := executor.conn.Query(ctx, `
+SELECT work_item_id, toString(provider), toString(ifNull(type, ''))
+FROM work_items FINAL
+WHERE org_id = ? AND has(?, work_item_id)`, orgID, chunk)
+		if err != nil {
+			return nil, stepcause.Failure(stepcause.QueryDonorKindsDonorChange, err)
+		}
+		for rows.Next() {
+			var subject teamattribution.GithubWorkItemDerivationSubject
+			if err := rows.Scan(&subject.WorkItemID, &subject.Provider, &subject.Type); err != nil {
+				_ = rows.Close()
+				return nil, stepcause.Failure(stepcause.ScanDonorKindDonorChange, err)
+			}
+			result[subject.WorkItemID] = subject
+		}
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return nil, stepcause.Failure(stepcause.IterateDonorKindsDonorChange, err)
+		}
+	}
+	return result, nil
 }
 
 // loadNewestPrimaryRows reads the newest primary row of each item of ids, and

@@ -95,6 +95,8 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 	dayEnd := dayStart.AddDate(0, 0, 1)
 	windowStart := dayStart.AddDate(0, 0, -(repoUserCommitWindowDays - 1))
 
+	// The instant of the first read, taken before it: the version of a repo_metrics_daily row that retires a key (below).
+	snapshot := executor.nowUTC().UTC().Truncate(time.Second)
 	commits, prs, reviews, err := executor.loader.LoadGitRows(ctx, run.OrganizationID, repoIDs, dayStart, dayEnd)
 	if err != nil {
 		return 0, err
@@ -109,6 +111,7 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 	}
 
 	mttrByRepo := repouser.MTTRByRepo(dayStart, bugItems)
+	repairHoursByRepo := repouser.RepairHoursByRepo(dayStart, bugItems)
 	reworkByRepo := make(map[uuid.UUID]float64, len(repoIDs))
 	singleOwnerByRepo := make(map[uuid.UUID]float64, len(repoIDs))
 	busFactorByRepo := make(map[uuid.UUID]int, len(repoIDs))
@@ -164,6 +167,15 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 		mttrByRepo, reworkByRepo, singleOwnerByRepo, busFactorByRepo, giniByRepo,
 	)
 	repouser.ApplyChangeFailure(&result, dayStart, changeFailure, storedChangeFailure, computedAt)
+	for i := range result.RepoMetrics {
+		row := &result.RepoMetrics[i]
+		row.BugRepairHoursSamples = repairHoursByRepo[row.RepoID]
+		if !pooledSamplesFit(ctx, "repo_user_commit", run.OrganizationID, row.RepoID.String(), dayStart,
+			max(len(row.PRSizeLOCSamples), len(row.BugRepairHoursSamples))) {
+			row.PRSizeLOCSamples, row.BugRepairHoursSamples = nil, nil
+			row.PooledSamplesOverCap = true
+		}
+	}
 	// The rework ratio counts reviewed pull requests only, and only of a
 	// provider that can store a changes-requested review. That capability is
 	// the provider layer's declaration, asked for each repository's provider;
@@ -225,6 +237,19 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 	total := repoRows + userRows + commitRows + changeFailureRows + superseded
 	if err != nil {
 		return wrapRepoUserCommitPartialWrite(total, fmt.Errorf("retract stale user_metrics_daily keys: %w", err))
+	}
+	// A repository of this partition whose stored repo_metrics_daily row of the day is live and that has no commit and no
+	// pull request on the day now gets a row that retires the key, at the instant of the first read: the day then reads as
+	// absent, never 0. A repository with no stored row gets nothing; only the partition's own repositories.
+	producedRepos := make([]staleKey, 0, len(result.RepoMetrics))
+	for _, row := range result.RepoMetrics {
+		producedRepos = append(producedRepos, staleKey{row.RepoID.String()})
+	}
+	retired, err := supersedeStaleTeamKeys(ctx, executor.conn, teamkeytables.RepoMetricsDaily, run.OrganizationID, dayStart,
+		newStaleKeyScope(repositories...), producedRepos, snapshot)
+	total += retired
+	if err != nil {
+		return wrapRepoUserCommitPartialWrite(total, fmt.Errorf("retire stale repo_metrics_daily days: %w", err))
 	}
 	return total, nil
 }

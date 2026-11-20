@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // IncidentMetricsDailyRecord is one incident_metrics_daily row -- the Go
@@ -20,6 +21,8 @@ type IncidentMetricsDailyRecord struct {
 	IncidentsCount uint32
 	MTTRP50Hours   *float64
 	MTTRP90Hours   *float64
+	// RepairHoursSamples are the samples of the two percentiles, stored with the row for the pooled report charts.
+	RepairHoursSamples []float64
 }
 
 // IncidentExecutor is the NATIVE implementation of the incident
@@ -128,15 +131,26 @@ func (executor *IncidentExecutor) ComputeFamily(
 	}
 
 	records := computeIncidentMetricsDaily(dayStart, incidents)
-	if len(records) == 0 {
-		return 0, nil
-	}
-
 	written, err := WriteIncidentMetricsDaily(ctx, executor.conn, run.OrganizationID, records, computedAt)
 	if err != nil {
 		return 0, err
 	}
-	return written, nil
+	// A repository of this partition whose stored row of the day is live and that has no record now (its incidents are
+	// gone, or its service mapping expired) gets a row that retires the key (stale_team_keys.go): the day then reads as
+	// absent, never 0. A repository with no stored row gets nothing, and only the partition's own repositories are in
+	// scope. The marker carries computedAt, taken before the read: a newer run's measured row stays the live row.
+	produced := make([]staleKey, 0, len(records))
+	for _, record := range records {
+		produced = append(produced, staleKey{record.RepoID.String()})
+	}
+	// The table is snapshot-stamped (stale_team_keys.go): the marker carries computedAt, taken before the read, and a key
+	// whose stored row is not older than it (a newer run wrote it) gets no marker.
+	retired, err := supersedeStaleTeamKeys(ctx, executor.conn, teamkeytables.IncidentMetricsDaily, run.OrganizationID,
+		dayStart, newStaleKeyScope(repositoryScopeTuples(repoIDs)...), produced, computedAt)
+	if err != nil {
+		return written + retired, fmt.Errorf("retire stale incident_metrics_daily days: %w", err)
+	}
+	return written + retired, nil
 }
 
 // computeIncidentMetricsDaily ports compute_incident_metrics_daily
@@ -200,6 +214,7 @@ func computeIncidentMetricsDaily(day time.Time, incidents []IncidentRow) []Incid
 			record.MTTRP50Hours = &p50
 			record.MTTRP90Hours = &p90
 		}
+		record.RepairHoursSamples = append([]float64{}, b.mttrHours...)
 		records = append(records, record)
 	}
 	return records

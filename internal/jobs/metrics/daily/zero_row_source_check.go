@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/cicd"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // SourceDataChecker flags families whose upstream source data exists for a
@@ -171,16 +172,26 @@ func (checker *ClickHouseSourceDataChecker) ZeroRowFamilies(
 	}
 	orgID, day, repositoryIDs := snapshot.orgID, snapshot.day, snapshot.repositoryIDs
 	output := func(table string) (bool, error) {
+		if liverow.Registered(table) {
+			// A repository-day whose NEWEST row retires the day is no output, also when an older live row is stored
+			// under it.
+			return checker.exists(ctx, `
+SELECT 1 FROM `+table+`
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
+GROUP BY repo_id
+HAVING `+liverow.NewestPredicate(table, "")+`
+LIMIT 1`, orgID, day, repositoryIDs)
+		}
 		return checker.exists(ctx, `
 SELECT 1 FROM `+table+`
 WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
 LIMIT 1`, orgID, day, repositoryIDs)
 	}
-	cicdOutput, err := output("cicd_metrics_daily")
+	cicdOutput, err := checker.exists(ctx, cicdLiveOutputSQL, orgID, day, repositoryIDs)
 	if err != nil {
 		return nil, err
 	}
-	deployOutput, err := output("deploy_metrics_daily")
+	deployOutput, err := checker.exists(ctx, liveOutputSQL("deploy_metrics_daily"), orgID, day, repositoryIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +219,7 @@ LIMIT 1`, orgID, day, repositoryIDs)
 	testopsMissingOutput := (testopsEitherSource && (!releaseConfidenceOutput || !qualityDragOutput)) ||
 		(snapshot.testopsCompletedPipeline && !pipelineStabilityOutput)
 
-	incidentOutput, err := output("incident_metrics_daily")
+	incidentOutput, err := checker.exists(ctx, liveOutputSQL("incident_metrics_daily"), orgID, day, repositoryIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -228,6 +239,20 @@ LIMIT 1`, orgID, day, repositoryIDs)
 	}
 	return flagged, nil
 }
+
+// liveOutputSQL is the output of a family in the scope: a repository-day of table whose NEWEST row is live. A retired
+// repository-day (newest row retracted = 1) is no output, also when an older live row is stored under it.
+func liveOutputSQL(table string) string {
+	return `
+SELECT 1 FROM ` + table + `
+WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND day = {day:Date}
+GROUP BY repo_id
+HAVING ` + liverow.NewestPredicate(table, "") + `
+LIMIT 1`
+}
+
+// cicdLiveOutputSQL is the cicd output of the scope (liveOutputSQL).
+var cicdLiveOutputSQL = liveOutputSQL("cicd_metrics_daily")
 
 func (checker *ClickHouseSourceDataChecker) exists(
 	ctx context.Context, query string, orgID string, day string, repositoryIDs []uuid.UUID, extra ...any,

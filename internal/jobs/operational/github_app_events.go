@@ -171,8 +171,13 @@ WHERE org_id = $2 AND provider = 'github' AND name = 'github-app'`, now, *orgID)
 		return err
 	}
 	if action == "deleted" && orgID != nil && *orgID != "" {
-		slog.InfoContext(ctx, "github app installation deleted: credential deactivated",
-			"installation_id", installationID, "rows_deactivated", deactivated)
+		if deactivated == 0 {
+			slog.InfoContext(ctx, "github app installation deleted: no github-app credential matched, nothing deactivated",
+				"installation_id", installationID)
+		} else {
+			slog.InfoContext(ctx, "github app installation deleted: credential deactivated",
+				"installation_id", installationID, "rows_deactivated", deactivated)
+		}
 	}
 	return nil
 }

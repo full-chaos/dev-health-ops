@@ -412,7 +412,7 @@ func collectJiraWorkItemIssues(
 			IsLast        *bool             `json:"isLast"`
 			NextPageToken string            `json:"nextPageToken"`
 		}
-		if err := jiraFetchObject(budgetAccount(ctx, "jira_jql"), client, http.MethodGet, "/rest/api/3/search/jql", "/rest/api/3/search/jql?"+query.Encode(), nil, &page); err != nil {
+		if err := jiraFetchObject(budgetAccount(ctx, "jira_jql"), client, http.MethodGet, jiraSearchJQLRoute, "/rest/api/3/search/jql?"+query.Encode(), nil, &page); err != nil {
 			client.Metrics.RecordJiraSearchPage("request_failed")
 			return nil, pages + 1, err
 		}
@@ -424,7 +424,11 @@ func collectJiraWorkItemIssues(
 		pageRows := 0
 		for _, raw := range page.Issues {
 			var issue map[string]any
-			if err := decodeJiraJSON(raw, &issue); err != nil || issue == nil {
+			if err := decodeJiraJSON(raw, &issue); err != nil {
+				client.Metrics.RecordJiraSearchPage("invalid_response")
+				return nil, pages + 1, providerfoundation.RouteFailure(jiraSearchJQLRoute, providerfoundation.ReasonBodyDecode, err)
+			}
+			if issue == nil {
 				client.Metrics.RecordJiraSearchPage("invalid_response")
 				return nil, pages + 1, providerfoundation.ErrNormalizationInvalid
 			}
@@ -475,7 +479,7 @@ func collectJiraIssueComments(
 			Comments []json.RawMessage `json:"comments"`
 			IsLast   *bool             `json:"isLast"`
 		}
-		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/issue/{issue}/comment", "/rest/api/3/issue/"+url.PathEscape(issueKey)+"/comment?"+query.Encode(), nil, &page); err != nil {
+		if err := jiraFetchObject(ctx, client, http.MethodGet, jiraIssueCommentRoute, "/rest/api/3/issue/"+url.PathEscape(issueKey)+"/comment?"+query.Encode(), nil, &page); err != nil {
 			return nil, pages + 1, err
 		}
 		if page.Comments == nil {
@@ -486,7 +490,10 @@ func collectJiraIssueComments(
 				return comments, pages + 1, nil
 			}
 			var comment map[string]any
-			if err := decodeJiraJSON(raw, &comment); err != nil || comment == nil {
+			if err := decodeJiraJSON(raw, &comment); err != nil {
+				return nil, pages + 1, providerfoundation.RouteFailure(jiraIssueCommentRoute, providerfoundation.ReasonBodyDecode, err)
+			}
+			if comment == nil {
 				return nil, pages + 1, providerfoundation.ErrNormalizationInvalid
 			}
 			comments = append(comments, comment)
@@ -759,5 +766,5 @@ func (sample *jiraCommentPermanentSample) add(err error) {
 func (sample jiraCommentPermanentSample) log(claim Claim) {
 	slog.Warn("providersync.jira.comments_read_permanent",
 		"org_id", claim.OrgID, "unit_id", claim.ID, "skipped_issues", sample.Count,
-		"first_class", sample.Class, "first_status", sample.Status, "first_reason", sample.Reason)
+		"first_class", sample.Class, "first_status", sample.Status, "first_reason", logging.ProviderText(sample.Reason))
 }

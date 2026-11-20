@@ -51,11 +51,11 @@ func TestPagerDutyServicesEffectsUseMigratedClickHouseForReplayTombstonesTenantA
 	if err != nil {
 		t.Fatal(err)
 	}
-	mappingA, err := pagerDutyServiceMappingFromReference(serviceA, pagerDutyServiceRepositoryReference{Provider: "github", FullName: "full-chaos/payments"}, pagerDutyMappingMetadata, initialAt, "")
+	mappingA, err := pagerDutyServiceMappingFromReference(serviceA, pagerDutyServiceRepositoryReference{Provider: "github", FullName: "full-chaos/payments"}, pagerDutyMappingMetadata, initialAt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	mappingB, err := pagerDutyServiceMappingFromReference(serviceB, pagerDutyServiceRepositoryReference{Provider: "github", FullName: "full-chaos/support"}, pagerDutyMappingMetadata, initialAt, "")
+	mappingB, err := pagerDutyServiceMappingFromReference(serviceB, pagerDutyServiceRepositoryReference{Provider: "github", FullName: "full-chaos/support"}, pagerDutyMappingMetadata, initialAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestPagerDutyServicesEffectsUseMigratedClickHouseForReplayTombstonesTenantA
 	if err != nil {
 		t.Fatal(err)
 	}
-	mappingAUpdated, err := pagerDutyServiceMappingFromReference(serviceAUpdated, pagerDutyServiceRepositoryReference{Provider: "github", FullName: "full-chaos/payments"}, pagerDutyMappingMetadata, updatedAt, "")
+	mappingAUpdated, err := pagerDutyServiceMappingFromReference(serviceAUpdated, pagerDutyServiceRepositoryReference{Provider: "github", FullName: "full-chaos/payments"}, pagerDutyMappingMetadata, updatedAt)
 	if err != nil {
 		t.Fatal(err)
 	}

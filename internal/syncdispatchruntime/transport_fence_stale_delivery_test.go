@@ -378,6 +378,10 @@ func (s *fenceServer) serve(connection net.Conn) error {
 				s.commit()
 				s.trace = append(s.trace, "commit")
 				fenceCommand(backend, "COMMIT")
+			case strings.HasPrefix(sql, "savepoint "):
+				fenceCommand(backend, "SAVEPOINT")
+			case strings.HasPrefix(sql, "release savepoint "):
+				fenceCommand(backend, "RELEASE")
 			default:
 				handled, fenceErr := s.fenceQuery(backend, sql)
 				if fenceErr != nil {

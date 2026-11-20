@@ -1272,16 +1272,18 @@ func seedTeamProjectOwnershipGeneration(
 	}
 }
 
+// seedWorkItem inserts a work_items row of type "issue": a donor must be an issue
+// (teamattribution.LinkedIssueDonorRefusal). seedWorkItemOfType sets another type.
 func seedWorkItem(
 	t *testing.T, ctx context.Context, conn driver.Conn,
 	orgID, workItemID, provider string, repoID uuid.UUID, projectID string, now time.Time,
 ) {
 	t.Helper()
-	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, project_id, org_id, last_synced)`)
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, org_id, last_synced)`)
 	if err != nil {
 		t.Fatalf("prepare work_items batch: %v", err)
 	}
-	if err := batch.Append(repoID, workItemID, provider, projectID, orgID, now); err != nil {
+	if err := batch.Append(repoID, workItemID, provider, "issue", projectID, orgID, now); err != nil {
 		t.Fatalf("append work_items row: %v", err)
 	}
 	if err := batch.Send(); err != nil {
@@ -1308,7 +1310,7 @@ func seedWorkItemOfType(
 	}
 }
 
-// seedWorkItemWithNativeTeamKey inserts a work_items row carrying
+// seedWorkItemWithNativeTeamKey inserts a work_items row of type "issue" carrying
 // native_team_key (migration 050, Linear only) -- seedWorkItem leaves it at
 // ClickHouse's column default (”) for the providers that never set it.
 func seedWorkItemWithNativeTeamKey(
@@ -1316,11 +1318,11 @@ func seedWorkItemWithNativeTeamKey(
 	orgID, workItemID, provider string, repoID uuid.UUID, projectID, nativeTeamKey string, now time.Time,
 ) {
 	t.Helper()
-	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, project_id, native_team_key, org_id, last_synced)`)
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, native_team_key, org_id, last_synced)`)
 	if err != nil {
 		t.Fatalf("prepare work_items batch: %v", err)
 	}
-	if err := batch.Append(repoID, workItemID, provider, projectID, nativeTeamKey, orgID, now); err != nil {
+	if err := batch.Append(repoID, workItemID, provider, "issue", projectID, nativeTeamKey, orgID, now); err != nil {
 		t.Fatalf("append work_items row: %v", err)
 	}
 	if err := batch.Send(); err != nil {

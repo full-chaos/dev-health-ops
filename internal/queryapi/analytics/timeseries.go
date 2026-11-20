@@ -94,12 +94,21 @@ func dedupFromMeasureSource(table string) (source string, alias string) {
 	if !ok {
 		return table, table
 	}
-	return fmt.Sprintf(`(
+	newest := fmt.Sprintf(`(
             SELECT *
             FROM %s
             ORDER BY computed_at DESC
             LIMIT 1 BY %s
-        ) AS %s`, table, joinColumns(key), table), table
+        ) AS %s`, table, joinColumns(key), table)
+	if !liverow.Registered(table) {
+		return newest, table
+	}
+	// A key whose newest row retires it (package liverow) holds no measurement: the day reads as absent, never as a
+	// sample of 0. The rule runs on the row LIMIT 1 BY kept; a filter before it would serve the older row.
+	return fmt.Sprintf(`(
+        SELECT * FROM %s
+        WHERE %s
+    ) AS %s`, newest, liverow.Predicate(table, ""), table), table
 }
 
 func joinColumns(cols []string) string {
@@ -219,6 +228,8 @@ func CompileTimeseries(req TimeseriesRequest, orgID string, timeoutSeconds int, 
 	}
 	owner := newTestopsOwner(orgID, req.Measure, []Dimension{req.Dimension}, useInvestment, filters)
 	dimCol = owner.column(req.Dimension, dimCol)
+	dimOut := keyProjection(req.Dimension, useInvestment, dimCol)
+	dimGroup := groupRef("dimension_value", dimOut, dimCol)
 
 	fc, err := translateFilters(orgID, filters, useInvestment, owner.filterColumns(req.Measure, useInvestment))
 	if err != nil {
@@ -279,10 +290,10 @@ FROM %s
 WHERE %s
   AND %s.org_id = {org_id:String}
 %s
-GROUP BY bucket, dimension_value
-ORDER BY bucket ASC, value DESC, dimension_value ASC
+GROUP BY bucket, %s
+ORDER BY bucket ASC, value DESC, %s ASC
 %s
-`, dateTruncUnit(req.Interval), dateCol, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, statementSettings(source, timeoutSeconds))
+`, dateTruncUnit(req.Interval), dateCol, dimOut, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, dimGroup, dimGroup, statementSettings(source, timeoutSeconds))
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
@@ -302,6 +313,14 @@ ORDER BY bucket ASC, value DESC, dimension_value ASC
 // buckets appended in row-arrival order (the SQL's own `ORDER BY bucket
 // ASC` already sorts them; Python does not re-sort after grouping,
 // neither does this).
+//
+// The REPO series keyed "" is the unassigned group: the work items with no
+// repository, which work_item_completion_daily stores with a NULL repo_id
+// (workitemengine). It is ONE series whose buckets sum those rows; it is not
+// left out, because no other field of the answer would show that share. A
+// repository's key is its UUID text, never "", so the group cannot merge
+// with a repository. "" names the unassigned repository on the investment
+// path too (dbColumn).
 //
 // The value column is scanned into *float64, not float64 -- CHAOS-4657
 // (chris 2026-08-31 04:18, Option B), the SAME shape and SAME product
@@ -362,11 +381,19 @@ func ExecuteTimeseries(ctx context.Context, client QueryClient, q compiledQuery,
 		// no Scan method, so it is not an sql.Scanner and the native
 		// Date.ScanRow rejects it outright -- every non-empty result
 		// failed. Precedent: reviewedges.go:152.
-		var bucketDay time.Time
-		var dimValue string
+		var bucketValue *time.Time
+		var dimValueValue *string
 		var value *float64 // nullable scan destination -- see this func's doc comment (CHAOS-4657)
-		if scanErr := rows.Scan(&bucketDay, &dimValue, &value); scanErr != nil {
+		if scanErr := rows.Scan(&bucketValue, &dimValueValue, &value); scanErr != nil {
 			return nil, fmt.Errorf("scan: %w", scanErr)
+		}
+		var bucketDay time.Time
+		if bucketValue != nil {
+			bucketDay = *bucketValue
+		}
+		var dimValue string
+		if dimValueValue != nil {
+			dimValue = *dimValueValue
 		}
 		bucket := graphqldate.New(bucketDay)
 		if _, seen := buckets[dimValue]; !seen {
@@ -517,10 +544,14 @@ func ExecuteOrgTimeseries(ctx context.Context, client QueryClient, q compiledQue
 
 	buckets := []model.TimeseriesBucket{}
 	for rows.Next() {
-		var bucketDay time.Time
+		var bucketValue *time.Time
 		var num, den *float64
-		if scanErr := rows.Scan(&bucketDay, &num, &den); scanErr != nil {
+		if scanErr := rows.Scan(&bucketValue, &num, &den); scanErr != nil {
 			return model.TimeseriesResult{}, fmt.Errorf("scan: %w", scanErr)
+		}
+		var bucketDay time.Time
+		if bucketValue != nil {
+			bucketDay = *bucketValue
 		}
 		var value *float64
 		switch {

@@ -192,6 +192,12 @@ type RepoMetric struct {
 	// that was not measured is stored as NULL (unknown), never as 0.
 	RevertRate *float64
 	ComputedAt time.Time
+	// PRSizeLOCSamples and BugRepairHoursSamples are the samples of PRSizeP50LOC/PRSizeP90LOC and MTTRHours, stored
+	// with the row for the pooled report charts.
+	PRSizeLOCSamples      []float64
+	BugRepairHoursSamples []float64
+	// PooledSamplesOverCap marks a row whose samples are over the daily cap: it stores none (pooled_samples_stored 2).
+	PooledSamplesOverCap bool
 }
 
 // UserMetric mirrors dev_health_ops.metrics.schemas.UserMetricsDailyRecord,

@@ -83,8 +83,9 @@ type pagerDutyServiceRow struct {
 // pagerDutyServiceRepositoryMappingRow is the typed counterpart of
 // ServiceRepositoryMapping. Its SourceEntityType is the mapping source enum
 // value (admin_configuration, pagerduty_service_metadata,
-// compass_service_catalog, or bounded_service_repository_heuristic), not the
-// service source type. This preserves the Python producer's provenance
+// compass_service_catalog), not the
+// service source type. Legacy rows of source bounded_service_repository_heuristic
+// may still be stored and are read by readers; no producer writes them. This preserves the Python producer's provenance
 // ownership and lets the sink reconcile each source independently.
 type pagerDutyServiceRepositoryMappingRow struct {
 	OrgID                  string     `json:"org_id"`
@@ -190,7 +191,7 @@ func (handler PagerDutyServicesRouteHandler) Collect(
 	counted.Doer = pagerDutyServicesCountingDoer{delegate: client.Doer, attempts: &requests}
 	pages, err := providerfoundation.CollectPagerDutyOffsetPages(
 		ctx, &counted, providerfoundation.PagerDutyOffsetOptions{
-			Path: "/services", Route: "/services", DataKey: "services", PerPage: perPage, MaxPages: maxPages,
+			Path: "/services", Route: pagerDutyServicesRoute, DataKey: "services", PerPage: perPage, MaxPages: maxPages,
 		},
 	)
 	if err != nil {
@@ -203,18 +204,18 @@ func (handler PagerDutyServicesRouteHandler) Collect(
 	mappings := make([]pagerDutyServiceRepositoryMappingRow, 0)
 	inputs := pagerDutyServiceRepositoryMappingInputsFromOptions(claim.DatasetOptions)
 	for _, raw := range pages.Items {
-		var payload pagerDutyServicePayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+		payload, err := decodePagerDutyServiceItem(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(pagerDutyServicesRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		service, err := normalizePagerDutyService(claim, providerInstance, payload, normalizedAt)
 		if err != nil {
 			return CompleteRouteBatch{}, err
 		}
 		services = append(services, service)
-		var metadata map[string]any
-		if err := json.Unmarshal(raw, &metadata); err != nil || metadata == nil {
-			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+		metadata, err := decodePagerDutyServiceMetadataItem(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(pagerDutyServicesRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		serviceMappings, err := pagerDutyServiceMappings(
 			service, metadata, normalizedAt, inputs,
@@ -403,43 +404,24 @@ func pagerDutyCanonicalOperationalID(orgID, provider, instance, family, external
 type pagerDutyServiceMappingSource string
 
 const (
-	pagerDutyMappingAdmin     pagerDutyServiceMappingSource = "admin_configuration"
-	pagerDutyMappingMetadata  pagerDutyServiceMappingSource = "pagerduty_service_metadata"
-	pagerDutyMappingCompass   pagerDutyServiceMappingSource = "compass_service_catalog"
-	pagerDutyMappingHeuristic pagerDutyServiceMappingSource = "bounded_service_repository_heuristic"
+	pagerDutyMappingAdmin    pagerDutyServiceMappingSource = "admin_configuration"
+	pagerDutyMappingMetadata pagerDutyServiceMappingSource = "pagerduty_service_metadata"
+	pagerDutyMappingCompass  pagerDutyServiceMappingSource = "compass_service_catalog"
 )
 
-func (source pagerDutyServiceMappingSource) confidence() float64 {
-	switch source {
-	case pagerDutyMappingAdmin:
-		return 1
-	case pagerDutyMappingMetadata:
-		return 0.95
-	case pagerDutyMappingCompass:
-		return 0.9
-	default:
-		return 0.4
-	}
+type pagerDutyMappingSourceRule struct {
+	confidence float64
+	ruleID     string
+}
+
+var pagerDutyMappingSourceRules = map[pagerDutyServiceMappingSource]pagerDutyMappingSourceRule{
+	pagerDutyMappingAdmin:    {confidence: 1, ruleID: "service_repository_mapping.admin.v1"},
+	pagerDutyMappingMetadata: {confidence: 0.95, ruleID: "pagerduty.service_metadata.repository_url_or_key.v1"},
+	pagerDutyMappingCompass:  {confidence: 0.9, ruleID: "compass.service_repository_relationship.v1"},
 }
 
 func (source pagerDutyServiceMappingSource) mappingKind() string {
-	if source == pagerDutyMappingHeuristic {
-		return string(source)
-	}
 	return string(source) + "_exact"
-}
-
-func (source pagerDutyServiceMappingSource) ruleID() string {
-	switch source {
-	case pagerDutyMappingAdmin:
-		return "service_repository_mapping.admin.v1"
-	case pagerDutyMappingMetadata:
-		return "pagerduty.service_metadata.repository_url_or_key.v1"
-	case pagerDutyMappingCompass:
-		return "compass.service_repository_relationship.v1"
-	default:
-		return "pagerduty.service_repository.bounded_name_match.v1"
-	}
 }
 
 type pagerDutyServiceRepositoryReference struct {
@@ -506,21 +488,21 @@ func pagerDutyServiceMappings(
 	references := pagerDutyMetadataRepositoryReferences(metadata)
 	values := make([]pagerDutyServiceRepositoryMappingRow, 0, len(references))
 	for _, reference := range references {
-		row, err := pagerDutyServiceMappingFromReference(service, reference, pagerDutyMappingMetadata, observedAt, "")
+		row, err := pagerDutyServiceMappingFromReference(service, reference, pagerDutyMappingMetadata, observedAt)
 		if err != nil {
 			return nil, err
 		}
 		values = append(values, row)
 	}
 	for _, reference := range inputs.Admin[service.ExternalID] {
-		row, err := pagerDutyServiceMappingFromReference(service, reference, pagerDutyMappingAdmin, observedAt, "")
+		row, err := pagerDutyServiceMappingFromReference(service, reference, pagerDutyMappingAdmin, observedAt)
 		if err != nil {
 			return nil, err
 		}
 		values = append(values, row)
 	}
 	for _, reference := range inputs.Compass[service.ExternalID] {
-		row, err := pagerDutyServiceMappingFromReference(service, reference, pagerDutyMappingCompass, observedAt, "")
+		row, err := pagerDutyServiceMappingFromReference(service, reference, pagerDutyMappingCompass, observedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -581,14 +563,14 @@ func pagerDutyServiceMappingFromReference(
 	reference pagerDutyServiceRepositoryReference,
 	source pagerDutyServiceMappingSource,
 	observedAt time.Time,
-	ruleIDOverride string,
 ) (pagerDutyServiceRepositoryMappingRow, error) {
-	ruleID := source.ruleID()
-	if ruleIDOverride != "" {
-		ruleID = ruleIDOverride
+	rule, known := pagerDutyMappingSourceRules[source]
+	if !known {
+		return pagerDutyServiceRepositoryMappingRow{}, providerfoundation.ErrNormalizationInvalid
 	}
+	ruleID, confidence := rule.ruleID, rule.confidence
 	fullName, provider := reference.FullName, reference.Provider
-	mappingKind, provenance, confidence := source.mappingKind(), string(source), source.confidence()
+	mappingKind, provenance := source.mappingKind(), string(source)
 	sourceEventID := "pagerduty_sync"
 	row := pagerDutyServiceRepositoryMappingRow{
 		OrgID: service.OrgID, Provider: service.Provider, ProviderInstanceID: service.ProviderInstanceID,
@@ -688,3 +670,22 @@ func fillPagerDutyServiceMappingOrdering(row *pagerDutyServiceRepositoryMappingR
 }
 
 var _ CompleteRouteHandler = PagerDutyServicesRouteHandler{}
+
+// pagerDutyServicesRoute is the route template of the /services list.
+const pagerDutyServicesRoute = "/services"
+
+func decodePagerDutyServiceItem(raw json.RawMessage) (pagerDutyServicePayload, error) {
+	var payload pagerDutyServicePayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
+}
+
+func decodePagerDutyServiceMetadataItem(raw json.RawMessage) (map[string]any, error) {
+	var metadata map[string]any
+	if err := json.Unmarshal(raw, &metadata); err != nil || metadata == nil {
+		return nil, providerfoundation.ErrNormalizationInvalid
+	}
+	return metadata, nil
+}

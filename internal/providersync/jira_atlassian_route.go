@@ -818,7 +818,7 @@ func collectJiraAtlassianChangelogChunk(ctx context.Context, client *providerfou
 			} `json:"issueChangeLogs"`
 			NextPageToken *string `json:"nextPageToken"`
 		}
-		if err := jiraFetchObject(ctx, client, http.MethodPost, "/rest/api/3/changelog/bulkfetch", "/rest/api/3/changelog/bulkfetch", bytes.NewReader(body), &page); err != nil {
+		if err := jiraFetchObject(ctx, client, http.MethodPost, jiraChangelogBulkRoute, "/rest/api/3/changelog/bulkfetch", bytes.NewReader(body), &page); err != nil {
 			return nil, pages + 1, err
 		}
 		if page.IssueChangeLogs == nil {
@@ -831,7 +831,7 @@ func collectJiraAtlassianChangelogChunk(ctx context.Context, client *providerfou
 			for _, raw := range entry.ChangeHistories {
 				var value any
 				if err := decodeJiraJSON(raw, &value); err != nil {
-					return nil, pages + 1, err
+					return nil, pages + 1, providerfoundation.RouteFailure(jiraChangelogBulkRoute, providerfoundation.ReasonBodyDecode, err)
 				}
 				histories[entry.IssueID] = append(histories[entry.IssueID], value)
 			}
@@ -972,7 +972,7 @@ func collectJiraBoardSprints(ctx context.Context, client *providerfoundation.HTT
 			Values []json.RawMessage `json:"values"`
 			IsLast *bool             `json:"isLast"`
 		}
-		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/agile/1.0/board/{board}/sprint", "/rest/agile/1.0/board/"+strconv.FormatInt(boardID, 10)+"/sprint?"+query.Encode(), nil, &page); err != nil {
+		if err := jiraFetchObject(ctx, client, http.MethodGet, jiraBoardSprintRoute, "/rest/agile/1.0/board/"+strconv.FormatInt(boardID, 10)+"/sprint?"+query.Encode(), nil, &page); err != nil {
 			return nil, requests + 1, err
 		}
 		requests++
@@ -982,7 +982,7 @@ func collectJiraBoardSprints(ctx context.Context, client *providerfoundation.HTT
 		for _, raw := range page.Values {
 			var value map[string]any
 			if err := decodeJiraJSON(raw, &value); err != nil {
-				return nil, requests, err
+				return nil, requests, providerfoundation.RouteFailure(jiraBoardSprintRoute, providerfoundation.ReasonBodyDecode, err)
 			}
 			sprints = append(sprints, value)
 		}
@@ -1027,7 +1027,7 @@ func collectJiraAtlassianWorklogs(ctx context.Context, client, graphqlClient *pr
 			Worklogs []json.RawMessage `json:"worklogs"`
 			Total    *int              `json:"total"`
 		}
-		if err := jiraFetchObject(budgetAccount(ctx, "jira_worklogs"), client, http.MethodGet, "/rest/api/3/issue/{issue}/worklog", "/rest/api/3/issue/"+url.PathEscape(issueKey)+"/worklog?"+query.Encode(), nil, &page); err != nil {
+		if err := jiraFetchObject(budgetAccount(ctx, "jira_worklogs"), client, http.MethodGet, jiraIssueWorklogRoute, "/rest/api/3/issue/"+url.PathEscape(issueKey)+"/worklog?"+query.Encode(), nil, &page); err != nil {
 			observation.RESTRequests = requests + 1
 			return nil, graphqlRequests + requests + 1, observation, err
 		}
@@ -1039,7 +1039,7 @@ func collectJiraAtlassianWorklogs(ctx context.Context, client, graphqlClient *pr
 		for _, raw := range page.Worklogs {
 			var value map[string]any
 			if err := decodeJiraJSON(raw, &value); err != nil {
-				return nil, graphqlRequests + requests, observation, err
+				return nil, graphqlRequests + requests, observation, providerfoundation.RouteFailure(jiraIssueWorklogRoute, providerfoundation.ReasonBodyDecode, err)
 			}
 			values = append(values, value)
 		}
@@ -1146,11 +1146,11 @@ func recordJiraDevStatusTypeOutcome(client *providerfoundation.HTTPClient, claim
 	if outcome.Err != nil {
 		errorClass, errorType := logging.ErrorClass(outcome.Err), logging.ErrorType(outcome.Err) // never the error text (CHAOS-7933)
 		slog.Warn("providersync.jira.dev_status_type_failed",
-			"org_id", claim.OrgID, "unit_id", claim.ID, "issue", issue, "application_type", outcome.ApplicationType,
+			"org_id", claim.OrgID, "unit_id", claim.ID, "issue", logging.ProviderText(issue), "application_type", outcome.ApplicationType,
 			"outcome", outcome.Outcome, "pull_requests", outcome.PullRequests, "error_class", errorClass, "error_type", errorType)
 		return
 	}
 	slog.Info("providersync.jira.dev_status_type",
-		"org_id", claim.OrgID, "unit_id", claim.ID, "issue", issue, "application_type", outcome.ApplicationType,
+		"org_id", claim.OrgID, "unit_id", claim.ID, "issue", logging.ProviderText(issue), "application_type", outcome.ApplicationType,
 		"outcome", outcome.Outcome, "pull_requests", outcome.PullRequests)
 }

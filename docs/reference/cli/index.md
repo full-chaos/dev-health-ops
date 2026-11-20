@@ -959,6 +959,17 @@ unchanged.
   every attempt, or the materialize refused) ends `failed`, and no command moves a
   `failed` run back. Compute that day again with a rerun tag: it starts a new run, the
   failed run stays `failed`, and the day marker certifies the new run when it succeeds.
+- A daily run whose finalize failed on its last attempt (every partition succeeded) also
+  ends `failed`, with the blocked reason `finalize_failed` (`metrics daily-blocked`), and
+  no command moves it back. Compute that day again with a rerun tag. The failed run stays
+  `failed`; its blocked marker clears at the next nightly reconcile once a later run of
+  the same day covers it: the later run succeeded and computes the whole organization, or
+  its succeeded partitions hold every repository of the failed run. Recompute window: a
+  later run that an operator reopened (a `finalize-redrive` or `partition-recompute` of a
+  succeeded run) still covers while it recomputes. Its `pending` and `running` partitions
+  count, a `failed_permanent` one does not, and if the reopened run ends `finalize_failed`
+  the next reconcile marks both runs again. An older success, a narrower `--repo-id` run, a
+  run that never succeeded and a `no_repositories` run do not cover.
 - The audit row holds the principal, the action, the organization, `--reason` and
   `--correlation-id`, and no tag. Pass the tag in `--correlation-id` as well
   (for example `--correlation-id chaos-NNNN-fix-1`), so the audit row names the rerun.
@@ -1028,11 +1039,11 @@ output, and claim expiration alone is not evidence retry is safe —
 actual review, and this bulk path must not quietly bypass that by
 auto-authorizing every ambiguous row with a generic hardcoded string. State
 what you actually checked — e.g. the redriven families' zero-row counters,
-or a fresh ClickHouse readback confirming no output landed yet. This matters
-most for families whose readers do not `argMax`/dedup by `computed_at` (e.g.
-`file_hotspots`/`file_metrics_daily`, which `SUM`s raw rows) — a needless
-retry there silently inflates scores rather than landing a harmless
-duplicate.
+or a fresh ClickHouse readback confirming no output landed yet. A redrive or
+retry of a family such as `file_hotspots` (tables `file_metrics_daily` and
+`file_hotspot_daily`, ReplacingMergeTree on the row key) stores new values that
+replace the earlier ones for that key: the newest row (by `computed_at`) wins and
+nothing is added to the old values. Readers dedup before they sum.
 
 Scoped to one organization and an inclusive UTC calendar-day range, in two
 steps that MUST run in this order (codex review, round 1: publishing a

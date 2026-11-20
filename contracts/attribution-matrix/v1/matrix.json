@@ -82,6 +82,12 @@
     {
       "provider": "github",
       "entity": "pull_requests",
+      "check": "pull_request_admin_key_never_outranks_its_repository_owner",
+      "state": "pass"
+    },
+    {
+      "provider": "github",
+      "entity": "pull_requests",
       "check": "pull_request_inherits_only_from_a_linked_issue",
       "state": "pass"
     },
@@ -481,6 +487,24 @@
       "entity": "issues",
       "check": "every_active_owner_takes_the_item",
       "rule": "Every Linear issue belongs to a Linear team, and the item's own native team wins over the co-owners of its project (team-attribution.md 0.4d, D5206): no Linear item takes the co-owners of a project."
+    },
+    {
+      "provider": "gitlab",
+      "entity": "pull_requests",
+      "check": "pull_request_admin_key_never_outranks_its_repository_owner",
+      "rule": "No gitlab world holds an admin team whose project key names a pull or merge request's project: the defect needs one, and only the github world has an admin team."
+    },
+    {
+      "provider": "jira",
+      "entity": "pull_requests",
+      "check": "pull_request_admin_key_never_outranks_its_repository_owner",
+      "rule": "No jira world holds an admin team whose project key names a pull or merge request's project: the defect needs one, and only the github world has an admin team."
+    },
+    {
+      "provider": "linear",
+      "entity": "pull_requests",
+      "check": "pull_request_admin_key_never_outranks_its_repository_owner",
+      "rule": "No linear world holds an admin team whose project key names a pull or merge request's project: the defect needs one, and only the github world has an admin team."
     }
   ]
 }

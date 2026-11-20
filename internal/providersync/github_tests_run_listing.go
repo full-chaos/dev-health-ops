@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"io"
 	"log/slog"
 	"net/http"
@@ -39,7 +40,7 @@ const (
 	// created earlier is still listed by the runs phase, so a run that finishes
 	// or is rerun soon after its creation is refreshed. Older open runs are
 	// re-read by id (the open phase).
-	githubTestsRefreshLookbackDefault = 6 * time.Hour
+	githubTestsRefreshLookbackDefault = testops.OpenRunRefreshLookback
 	// The open phase re-reads at most githubTestsOpenRunCapSteady runs a unit,
 	// and githubTestsOpenRunCapBacklog while more than
 	// githubTestsOpenRunBacklogThreshold open rows older than the lookback wait.
@@ -142,6 +143,78 @@ func githubTestsRunsRangeHi(claim Claim, peeledHi string) string {
 		return "*"
 	}
 	return claim.BeforeAt.UTC().Format(time.RFC3339)
+}
+
+// The claim that holds a UTC midnight lists the runs once more in a deep range
+// (the late re-run relist): runs created up to the late lookback before the
+// runs range, so a run re-run after it left the refresh lookback gets its new
+// attempt once a day. The deep range has its own page budget.
+const (
+	githubTestsLateRerunLookbackDefault = 7 * 24 * time.Hour
+	githubTestsLateRerunMaxPages        = 1000
+)
+
+// githubTestsHoldsMidnight reports whether an incremental claim with both
+// edges holds a UTC midnight M with since < M <= before. Contiguous claims
+// hold each midnight once; a retry or a held claim keeps its window, so it
+// holds the same midnight again.
+func githubTestsHoldsMidnight(claim Claim) bool {
+	if claim.Mode != "incremental" || claim.SinceAt == nil || claim.BeforeAt == nil {
+		return false
+	}
+	midnight := claim.SinceAt.UTC().Truncate(24 * time.Hour).Add(24 * time.Hour)
+	return !midnight.After(claim.BeforeAt.UTC())
+}
+
+// githubTestsLateRerunFloor is the oldest last-updated time the deep range
+// reads: the window start minus the window width, at least one day. Two deep
+// claims are at most one day plus one width apart, so their spans meet.
+func githubTestsLateRerunFloor(claim Claim) time.Time {
+	since := claim.SinceAt.UTC()
+	return since.Add(-max(24*time.Hour, claim.BeforeAt.UTC().Sub(since)))
+}
+
+// githubTestsLateRerunRunsQuery is the created range of one deep listing:
+// from the start of the floor's day minus the late lookback to one second
+// before the runs range, so no run is listed by both ranges of one claim.
+// Both ends are times, like the runs range (the artifacts listing starts at a
+// date).
+func githubTestsLateRerunRunsQuery(claim Claim, lookback, late time.Duration, peeledHi string) url.Values {
+	hi := peeledHi
+	if hi == "" {
+		hi = claim.SinceAt.UTC().Add(-lookback - time.Second).Format(time.RFC3339)
+	}
+	lo := githubTestsLateRerunFloor(claim).Add(-late).Truncate(24 * time.Hour).Format(time.RFC3339)
+	return url.Values{"per_page": {"100"}, "created": {lo + ".." + hi}}
+}
+
+// githubTestsLateRerunWanted is the keep rule of the deep range: the run
+// changed at or after the floor, and at least the refresh lookback after its
+// creation. A run that last changed sooner was read in its final state by the
+// runs range of the claim that holds that change. A run with no creation time
+// (GitHub cannot list it by created) or no last-updated time (no late change
+// can be shown) is refused; the runs range's own rule for such a run is
+// unchanged.
+func githubTestsLateRerunWanted(run gitHubWorkflowRunPayload, claim Claim, lookback time.Duration) bool {
+	created, updated := parseGitHubWorkflowTime(run.CreatedAt), parseGitHubWorkflowTime(run.UpdatedAt)
+	if created == nil || updated == nil {
+		return false
+	}
+	return !updated.UTC().Before(githubTestsLateRerunFloor(claim)) && !updated.UTC().Before(created.UTC().Add(lookback))
+}
+
+// githubTestsRunsInterval is the created interval of the runs phase's runs range (deep false) or deep range, equal to
+// their queries: runs [since - lookback, before + 1 s), deep [date(floor - late), since - lookback). A claim that lists no
+// deep range has an unbounded interval: its admission and peel are main's.
+func githubTestsRunsInterval(claim Claim, deep bool, lookback, late time.Duration) githubTestsCreatedInterval {
+	if !githubTestsHoldsMidnight(claim) {
+		return githubTestsCreatedInterval{}
+	}
+	floor := claim.SinceAt.UTC().Add(-lookback).Truncate(time.Second)
+	if deep {
+		return githubTestsCreatedInterval{lo: githubTestsLateRerunFloor(claim).Add(-late).Truncate(24 * time.Hour), hi: floor, deep: true}
+	}
+	return githubTestsCreatedInterval{lo: floor, hi: claim.BeforeAt.UTC().Truncate(time.Second).Add(time.Second)}
 }
 
 // githubTestsRunsQuery is the created range of one runs-phase listing.
@@ -351,6 +424,44 @@ func (handler GitHubTestsRouteHandler) refreshLookback() time.Duration {
 	return githubTestsRefreshLookbackDefault
 }
 
+func (handler GitHubTestsRouteHandler) lateRerunLookback() time.Duration {
+	if handler.LateRerunLookback > 0 {
+		return handler.LateRerunLookback
+	}
+	return githubTestsLateRerunLookbackDefault
+}
+
+func (handler GitHubTestsRouteHandler) lateRerunMaxPages() int {
+	if handler.LateRerunMaxPages > 0 {
+		return handler.LateRerunMaxPages
+	}
+	return githubTestsLateRerunMaxPages
+}
+
+// recordGitHubTestsLateRerunRunsStop records that the deep range of the runs
+// phase ended before its end (page budget, walk bound or a saturated second),
+// as a cursor flag the result turns into its late_rerun_runs observation. The pair
+// advances the watermark: re-runs older than the stop keep their stored row,
+// and reports_complete stays false, so coverage shows the gap.
+func recordGitHubTestsLateRerunRunsStop(
+	cursor githubTestsChunkCursor, client *providerfoundation.HTTPClient, claim Claim, cause string, pages int,
+) githubTestsChunkCursor {
+	if cause == githubTestsListingSaturatedCause {
+		cursor.LateRunsSaturated = true
+	} else {
+		cursor.LateRunsBudget = true
+	}
+	if client != nil {
+		client.Metrics.RecordInventoryPageCap(claim.Provider, claim.Dataset)
+	}
+	slog.Warn(
+		"late re-run relist of the runs stopped before its end; older re-runs keep their stored row",
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+		"repository", logging.ProviderText(cursor.Repo), "component", githubTestsLateRerunRunsComponent, "cause", cause, "pages", pages,
+	)
+	return cursor
+}
+
 // recordGitHubTestsSaturated records a listing range that cannot be walked
 // past GitHub's cap of results: more runs share one second than the cap allows.
 // The cursor keeps one flag per phase; githubTestsFinalMetadataBatch turns the
@@ -370,7 +481,7 @@ func recordGitHubTestsSaturated(
 	slog.Warn(
 		"provider listing saturated: the created range cannot be walked past the result cap",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", cursor.Repo, "phase", phase, "component", component, "range_hi", rangeHi, "items", items,
+		"repository", logging.ProviderText(cursor.Repo), "phase", phase, "component", component, "range_hi", rangeHi, "items", items,
 	)
 	return cursor
 }
@@ -384,6 +495,18 @@ func githubTestsSaturatedObservations(cursor githubTestsChunkCursor) []GitHubTes
 	}
 	if cursor.SaturatedArtifacts {
 		out = append(out, GitHubTestsIncomplete{Component: githubTestsArtifactInventorySaturatedComponent, Cause: githubTestsListingSaturatedCause, Count: 1})
+	}
+	if cursor.LateRunsBudget {
+		out = append(out, GitHubTestsIncomplete{Component: githubTestsLateRerunRunsComponent, Cause: githubTestsPageBudgetCause, Count: 1})
+	}
+	if cursor.LateRunsSaturated {
+		out = append(out, GitHubTestsIncomplete{Component: githubTestsLateRerunRunsComponent, Cause: githubTestsListingSaturatedCause, Count: 1})
+	}
+	switch cursor.Relist {
+	case githubTestsRelistStoppedBudget:
+		out = append(out, GitHubTestsIncomplete{Component: githubTestsLateRerunReportsComponent, Cause: githubTestsPageBudgetCause, Count: 1})
+	case githubTestsRelistStoppedSaturated:
+		out = append(out, GitHubTestsIncomplete{Component: githubTestsLateRerunReportsComponent, Cause: githubTestsListingSaturatedCause, Count: 1})
 	}
 	return out
 }
@@ -427,6 +550,17 @@ func collectGitHubTestsRunsPeeled(
 	ctx context.Context, client *providerfoundation.HTTPClient, root string, pageBudget int,
 	queryFor func(peeledHi string) url.Values,
 ) (items []json.RawMessage, pages int, over bool, err error) {
+	return collectGitHubTestsRunsPeeledBy(ctx, client, root, pageBudget, queryFor, githubTestsPeel, nil)
+}
+
+// collectGitHubTestsRunsPeeledBy is collectGitHubTestsRunsPeeled with the peel rule given (an artifacts-phase range peels
+// inside its created interval). A non-nil admit keeps a listed run only when it admits the run's created time under the
+// ceiling of the response that supplied it (the chunked route's rule); a refused run is not kept and not marked seen.
+func collectGitHubTestsRunsPeeledBy(
+	ctx context.Context, client *providerfoundation.HTTPClient, root string, pageBudget int,
+	queryFor func(peeledHi string) url.Values, peel func(items int, oldest, rangeHi string) (string, bool, bool),
+	admit func(created *time.Time, rangeHi string) bool,
+) (items []json.RawMessage, pages int, over bool, err error) {
 	seen := map[string]struct{}{}
 	hi := ""
 	for {
@@ -440,12 +574,15 @@ func collectGitHubTestsRunsPeeled(
 		pages += page.Pages
 		oldest, count := "", 0
 		for _, raw := range page.Items {
-			var run gitHubWorkflowRunPayload
-			if json.Unmarshal(raw, &run) != nil {
-				return nil, pages, false, providerfoundation.ErrNormalizationInvalid
+			run, err := decodeGitHubWorkflowRunListItem(raw)
+			if err != nil {
+				return nil, pages, false, providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 			}
 			count++
 			oldest = githubTestsOlderCreated(oldest, parseGitHubWorkflowTime(run.CreatedAt))
+			if admit != nil && !admit(parseGitHubWorkflowTime(run.CreatedAt), hi) {
+				continue
+			}
 			if _, duplicate := seen[run.ID.String()]; !duplicate {
 				seen[run.ID.String()] = struct{}{}
 				items = append(items, raw)
@@ -454,7 +591,7 @@ func collectGitHubTestsRunsPeeled(
 		if page.PageBudgetExhausted {
 			return items, pages, true, nil
 		}
-		nextHi, saturated, stuck := githubTestsPeel(count, oldest, hi)
+		nextHi, saturated, stuck := peel(count, oldest, hi)
 		switch {
 		case !saturated:
 			return items, pages, false, nil
@@ -500,4 +637,12 @@ func (observer *githubTestsRateObserver) belowFloor() (bool, int64) {
 		return true, -1
 	}
 	return observer.remaining < observer.floor(), observer.remaining
+}
+
+func decodeGitHubWorkflowRunListItem(raw json.RawMessage) (gitHubWorkflowRunPayload, error) {
+	var run gitHubWorkflowRunPayload
+	if json.Unmarshal(raw, &run) != nil {
+		return run, providerfoundation.ErrNormalizationInvalid
+	}
+	return run, nil
 }

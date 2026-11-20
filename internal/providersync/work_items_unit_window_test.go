@@ -56,7 +56,7 @@ func workItemsWindowRoutes() []workItemsWindowRoute {
 				}
 				return (GitHubWorkItemsRouteHandler{
 					Projects:                      GitHubProjectV2Fetcher{},
-					ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{},
+					ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}, StoredTransitions: githubProjectV2NoStoredTransitions{},
 				}).Collect(
 					context.Background(), claim,
 					providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},

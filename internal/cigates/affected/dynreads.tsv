@@ -133,11 +133,11 @@ internal/auth/contracts	workload_token_goldens_test.go
 internal/auth/contracts/provisioning	vocabulary_test.go
 internal/auth/contracts/tokencorpus	corpus.go
 internal/auth/contracts/tokencorpus	service_account_test.go
+internal/auth/httpapi	query_census_test.go
 internal/auth/httpapi	transport_error_contract_test.go
 internal/auth/identity	externalkey_test.go
 internal/auth/identity	placeholder_copies_test.go
 internal/auth/identity	sp_callsite_ast_test.go
-internal/auth/identity/oidc	oauth_denial_stages_test.go
 internal/auth/keyrotation	rotation_integration_test.go
 internal/auth/keystore	keystore_test.go
 internal/auth/keystore	open_unix.go
@@ -219,11 +219,13 @@ internal/cigates/chartgates	overlay_parallel_test.go
 internal/cigates/chartgates	overlay_test.go
 internal/cigates/chartgates	worker_secret_env_scan_test.go
 internal/cigates/chconstructor	chconstructor_test.go
+internal/cigates/chdatetime	scan_test.go
 internal/cigates/checkgo	auth_race_budget_test.go
 internal/cigates/checkgo	check_go_script_test.go
 internal/cigates/checkgo	ci_leg_warm_all_test.go
 internal/cigates/checkgo	ci_script_helpers_test.go
 internal/cigates/checkgo	discovery_tree_test.go
+internal/cigates/checkgo	go_test_cover_args_test.go
 internal/cigates/checkgo	go_test_leg_json_test.go
 internal/cigates/checkgo	integration_leg_json_test.go
 internal/cigates/checkgo	race_solo_load_test.go
@@ -289,11 +291,9 @@ internal/cigates/integrationshards	shard_run_tee_bound_test.go
 internal/cigates/integrationshards	shard_start_order_test.go
 internal/cigates/integrationshards	side_effect_hooks_test.go
 internal/cigates/livee2e	cli.go
-internal/cigates/livee2e	mintlicense.go
-internal/cigates/livee2e	mintlicense_test.go
+internal/cigates/livee2e	gitlab_nopython_test.go
 internal/cigates/livee2e	smtpsink.go
 internal/cigates/livee2e	smtpsink_test.go
-internal/cigates/livee2e	ssoseedverb.go
 internal/cigates/livee2e	tokenreview.go
 internal/cigates/livee2e	tokenreview_cli_test.go
 internal/cigates/membershipreads	membershipreads.go
@@ -389,6 +389,9 @@ internal/cigates/workflows	workflows_path_filters_test.go
 internal/cigates/workflows	workflows_venue_always_runs_test.go
 internal/cigates/workflows	workflows_venue_main_alert_test.go
 internal/clicredentials	opensites_test.go
+internal/deploy/inputs	hookrender_test.go
+internal/deploy/selfpin	selfpin.go
+internal/deploy/selfpin	selfpin_test.go
 internal/deploymentcontract	manifest.go
 internal/egressguard	egressguard_test.go
 internal/fixturescli	dropped_columns_census_test.go
@@ -437,6 +440,7 @@ internal/gqlgenguard	testsupport_test.go
 internal/httpguard	origin_census_test.go
 internal/httpguard	redirect_sites_test.go
 internal/identityalias	resolver.go
+internal/ingressplanes	compose_bigboy_clickhouse_probe_test.go
 internal/ingressplanes	compose_bigboy_system_logs_test.go
 internal/ingressplanes	compose_stack_test.go
 internal/ingressplanes	compose_system_logs_test.go
@@ -479,6 +483,7 @@ internal/jobs/metrics/prrework	readers_census_test.go
 internal/jobs/metrics/remaining	capacity_native_test.go
 internal/jobs/metrics/remaining	capacity_schema_contract_pin_test.go
 internal/jobs/metrics/remaining	membership_golden_test.go
+internal/jobs/metrics/remaining	recommendations_gini_team_scope_test.go
 internal/jobs/metrics/remaining	recorded_paths_test.go
 internal/jobs/report	chart_fallback_test.go
 internal/jobs/report	cicd_pooled_test.go
@@ -520,7 +525,6 @@ internal/providerfoundation	clients.go
 internal/providerfoundation	wire_sites_census_test.go
 internal/providersync	client_ledger_census_test.go
 internal/providersync	gitlab_pr_commit_links_integration_test.go
-internal/providersync	item_route_census_test.go
 internal/providersync	jira_search_endpoint_guard_test.go
 internal/providersync	log_sites_redaction_test.go
 internal/providersync	oracle_compare_test.go
@@ -535,6 +539,7 @@ internal/providersync	snapshot_walk_end_rule_test.go
 internal/providersync	status_mapping.go
 internal/providersync	team_id_carry_seam_test.go
 internal/providersync	team_membership_first_seen_test.go
+internal/providersync	team_repo_ownership_evidence_census_test.go
 internal/providersync	watermark_write_boundary_test.go
 internal/pushcli	validate.go
 internal/pythonparity	errorsanitize_callers_test.go
@@ -565,6 +570,7 @@ internal/queryapi/principal	verifier.go
 internal/queryapi/quadrant	identity.go
 internal/queryapi/recommendations	goldens_frozen_python_oracle_test.go
 internal/queryapi/rowview	census_test.go
+internal/queryapi/rowview	team_census_test.go
 internal/queryapi/scancensus	census_test.go
 internal/queryapi/server	build_routes_integration_test.go
 internal/queryapi/server	capacity_completion_distribution_test.go
@@ -611,6 +617,7 @@ internal/queryapi/server	query_route_name_fields_legacy_test.go
 internal/queryapi/server	query_route_operating_review_no_data_test.go
 internal/queryapi/server	query_route_review_edges_names_test.go
 internal/queryapi/server	query_route_testops_filteremptyreason_documents_test.go
+internal/queryapi/server	query_route_testops_report_completeness_documents_test.go
 internal/queryapi/server	query_route_testops_risk_partial_documents_test.go
 internal/queryapi/server	query_route_testops_scope_documents_test.go
 internal/queryapi/server	query_route_wire_capture_test.go
@@ -648,7 +655,10 @@ internal/signingkey	jwks_key_test.go
 internal/signingkey	keygen.go
 internal/signingkey	keygen_state_test.go
 internal/signingkey	keygen_test.go
+internal/storage/clickhouse	batch_options_census_test.go
+internal/storage/clickhouse	batchctx_test.go
 internal/storage/clickhouse	worker_posture_test.go
+internal/storage/clickhouse/latestrow	latestrow_census_test.go
 internal/storage/clickhouse/liverow	census_test.go
 internal/storage/postgres	api_authorization_platform_roles_test.go
 internal/storage/postgres	domain_users_read_test.go
@@ -669,12 +679,14 @@ internal/syncrunrollup	arm_finalize_test.go
 internal/syncrunrollup	cross_package_registry_test.go
 internal/teamactive	roster_census_test.go
 internal/teamattribution	is_primary_census_test.go
+internal/teamattribution	linked_issue_donor_census_test.go
 internal/teamcreated	census_test.go
 internal/teamprovider	census_test.go
 internal/testsupport/authrows	golden_test.go
 internal/testsupport/authrows	responses_test.go
 internal/testsupport/bigboydir	bigboydir.go
 internal/testsupport/chschema	contract_test.go
+internal/testsupport/chschema	handbuilt_census_test.go
 internal/testsupport/gitmaintcensus	census_test.go
 internal/testsupport/goldenscan	tree.go
 internal/testsupport/goldenscan	vectors_test.go
@@ -743,3 +755,4 @@ internal/workerservice	venue_golden_address_test.go
 internal/workerservice	work_items_sync_raw_only_acceptance_integration_test.go
 internal/workerservice	workgraph_test.go
 internal/workerservice	writer_metrics_registration_test.go
+tools/lcovmerge	main.go

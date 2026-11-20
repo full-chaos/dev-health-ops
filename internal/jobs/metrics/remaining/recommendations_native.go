@@ -58,10 +58,10 @@ var recommendationsTableRequirements = map[string][]string{
 	// from the deprecated ratio column: the check names the columns the read
 	// uses, so a database that does not hold them yet is refused here and not
 	// at the first read.
-	"repo_metrics_daily": {
+	"repo_metrics_daily": withLiveRowColumns("repo_metrics_daily",
 		"repo_id", "day", "org_id", "pr_cycle_p75_hours", "computed_at",
 		prrework.ColumnMerged, prrework.ColumnReviewed, prrework.ColumnRework, prrework.ColumnNoSignal,
-	},
+	),
 	"user_metrics_daily": withLiveRowColumns("user_metrics_daily",
 		"repo_id", "day", "author_email", "team_id", "org_id", "reviews_given", "computed_at",
 	),
@@ -320,7 +320,7 @@ func (executor *RecommendationsExecutor) ComputeTeam(
 	// Both bounds derived ONCE from the caller's instant. Deriving them per
 	// rule would let a run straddle UTC midnight and emit two window_ends,
 	// which the argMax reader treats as two separate states.
-	windowEnd := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	windowEnd := recommendationsWindowEnd(now)
 	windowStart := windowEnd.AddDate(0, 0, -windowDays)
 
 	snapshot, err := executor.loader.LoadTeamMetricsWindow(ctx, teamID, orgID, windowStart, windowEnd)
@@ -328,6 +328,12 @@ func (executor *RecommendationsExecutor) ComputeTeam(
 		return nil, err
 	}
 	return EvaluateState(snapshot, now, ruleVersion)
+}
+
+// recommendationsWindowEnd is the end of the evaluation window for `now`: its
+// UTC day start. Team discovery reads repository owners at the same instant.
+func recommendationsWindowEnd(now time.Time) time.Time {
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 }
 
 // newClickHouseOnlyExecutor builds an executor with NO Postgres pool, for tests

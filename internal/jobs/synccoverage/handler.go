@@ -21,7 +21,8 @@ type Projector interface {
 // Handler executes one scheduled bounded refresh. Individual configuration
 // failures are collected by the projector so one tenant cannot prevent the
 // other selected configurations from rebuilding; the aggregate attempt still
-// fails retryably so a partial sweep is never reported as success.
+// fails so a partial sweep is never reported as success: retryably, unless every
+// failure is deterministic (a retry would fail the same way), then permanently.
 type Handler struct {
 	projector Projector
 	logger    *slog.Logger
@@ -57,11 +58,29 @@ func (handler *Handler) Work(
 			handler.logger.WarnContext(ctx, "sync_coverage_refresh.config_failed",
 				slog.String("org_id", failure.OrgID),
 				slog.String("config_id", failure.ConfigID.String()),
-				slog.String("cause_class", coverage.FailureClass(failure.Err)))
+				slog.String("cause_class", coverage.FailureClass(failure.Err)),
+				slog.String("cause_detail", coverage.FailureDetail(failure.Err)))
 		}
-		return jobruntime.Retryable(jobruntime.WithSafeCauseText(
+		failed := jobruntime.WithSafeCauseText(
 			errors.New("one or more sync coverage projections failed"),
-			fmt.Sprintf("sync coverage refresh: failed=%d refreshed=%d", max(result.Failed, len(result.Failures)), result.Refreshed)))
+			fmt.Sprintf("sync coverage refresh: failed=%d refreshed=%d", max(result.Failed, len(result.Failures)), result.Refreshed))
+		if allDeterministic(result) {
+			return jobruntime.Permanent(failed)
+		}
+		return jobruntime.Retryable(failed)
 	}
 	return nil
+}
+
+// allDeterministic is true only when every failed configuration is accounted for and none can pass on a retry.
+func allDeterministic(result coverage.RefreshResult) bool {
+	if len(result.Failures) == 0 || result.Failed > len(result.Failures) {
+		return false
+	}
+	for _, failure := range result.Failures {
+		if !coverage.IsDeterministicFailure(failure.Err) {
+			return false
+		}
+	}
+	return true
 }

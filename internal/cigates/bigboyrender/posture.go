@@ -102,7 +102,9 @@ var (
 	// retiredList is a RetiredTables literal of quoted table names; any other form is unreadable.
 	retiredList = regexp.MustCompile(`RetiredTables[` + pySpace + `]*:[` + pySpace + `]*\[\]string\{([^}]*)\}`)
 	retiredItem = regexp.MustCompile(`"([` + pyWord + `]+)"`)
-	columnRow   = regexp.MustCompile(`\{[` + pySpace + `]*"([` + pyWord + `]+)"[` + pySpace + `]*,[` + pySpace + `]*"([` + pyWord + `]+)"[` + pySpace + `]*,[` + pySpace + `]*"(SELECT|INSERT|UPDATE|REFERENCES)"[` + pySpace + `]*\}`)
+	// retiredUpdateList is a RetiredTableUpdates literal of quoted table names; any other form is unreadable.
+	retiredUpdateList = regexp.MustCompile(`RetiredTableUpdates[` + pySpace + `]*:[` + pySpace + `]*\[\]string\{([^}]*)\}`)
+	columnRow         = regexp.MustCompile(`\{[` + pySpace + `]*"([` + pyWord + `]+)"[` + pySpace + `]*,[` + pySpace + `]*"([` + pyWord + `]+)"[` + pySpace + `]*,[` + pySpace + `]*"(SELECT|INSERT|UPDATE|REFERENCES)"[` + pySpace + `]*\}`)
 )
 
 // keyedFields is the keys of re.finditer(r"\b(\w+)\s*:(?!=)", s): a word run that starts at a word boundary, optional
@@ -176,6 +178,7 @@ func loadPostureSource(src, fn string) (posture, bool) {
 	// it must fail rather than vanish from the delta.
 	functionLists := functionList.FindAllStringSubmatch(body, -1)
 	retiredLists := retiredList.FindAllStringSubmatch(body, -1)
+	retiredUpdateLists := retiredUpdateList.FindAllStringSubmatch(body, -1)
 	for _, key := range keyedFields(body) {
 		switch key {
 		case "RequiredTables", "ColumnScoped":
@@ -189,6 +192,12 @@ func loadPostureSource(src, fn string) (posture, bool) {
 			if len(retiredLists) != 1 {
 				return posture{}, false
 			}
+		case "RetiredTableUpdates":
+			// Grants nothing either: the row keeps its UPDATE flag, granted exactly as before (readiness accepts it
+			// held or absent). The list must be a literal of names that are rows here and declare UPDATE.
+			if len(retiredUpdateLists) != 1 {
+				return posture{}, false
+			}
 		default:
 			return posture{}, false
 		}
@@ -197,6 +206,18 @@ func loadPostureSource(src, fn string) (posture, bool) {
 		rest := list[1]
 		for _, m := range retiredItem.FindAllStringSubmatch(list[1], -1) {
 			if p.tables[m[1]] == nil {
+				return posture{}, false
+			}
+			rest = strings.Replace(rest, m[0], "", 1)
+		}
+		if strings.Trim(rest, ", \t\n") != "" {
+			return posture{}, false
+		}
+	}
+	for _, list := range retiredUpdateLists {
+		rest := list[1]
+		for _, m := range retiredItem.FindAllStringSubmatch(list[1], -1) {
+			if p.tables[m[1]] == nil || !p.tables[m[1]]["UPDATE"] {
 				return posture{}, false
 			}
 			rest = strings.Replace(rest, m[0], "", 1)

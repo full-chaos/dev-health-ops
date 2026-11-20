@@ -21,7 +21,7 @@ import (
 // 1218-1223); the canceled exclusion is deploymentstatus.Classify's, which the
 // compute applies as well. The zero-row source check reads this same text.
 var deploySource = `
-FROM deployments
+FROM deployments FINAL
 WHERE org_id = {org_id:String}
   AND deployed_at >= {start:DateTime64(3, 'UTC')} AND deployed_at < {end:DateTime64(3, 'UTC')}
   AND repo_id IN {repo_ids:Array(UUID)}
@@ -39,9 +39,10 @@ func deploySourceArgs(organizationID string, repoIDs []uuid.UUID, start, end tim
 
 // LoadDeployments ports load_cicd_data's deploy_query through deploySource --
 // see DeployExecutor's doc comment (deploy_native_executor.go) for why this
-// deliberately omits FINAL and filters on deployed_at alone rather than the
+// filters on deployed_at alone rather than the
 // four-way coalesce a DIFFERENT family's (DORA's) loader uses on the same
-// table. Only the columns compute_deploy_metrics_daily actually reads
+// table. It reads FINAL, so a re-synced deployment counts once, in its current
+// version, before ClickHouse merges the parts. Only the columns compute_deploy_metrics_daily actually reads
 // (compute_deployments.py:53-104) are selected -- deployment_id,
 // environment, pull_request_number etc. are part of DeploymentRow but never
 // read by this family's compute function.
@@ -119,7 +120,8 @@ func WriteDeployMetricsDaily(
 	}
 	batch, err := conn.PrepareBatch(ctx, `INSERT INTO deploy_metrics_daily (
 		repo_id, day, deployments_count, failed_deployments_count,
-		deploy_time_p50_hours, lead_time_p50_hours, computed_at, org_id
+		deploy_time_p50_hours, lead_time_p50_hours, computed_at, org_id,
+		pooled_deploy_hours, pooled_samples_stored
 	)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare deploy_metrics_daily batch: %w", err)
@@ -129,6 +131,11 @@ func WriteDeployMetricsDaily(
 		if err != nil {
 			return 0, fmt.Errorf("%w: deploy metric repo_id %q: %v", ErrInvalidState, row.RepoID, err)
 		}
+		samples := row.DeployHoursSamples
+		fit := pooledSamplesFit(ctx, "deploy", organizationID, row.RepoID, row.Day, len(samples))
+		if !fit {
+			samples = nil
+		}
 		if err := batch.Append(
 			// deployments_count/failed_deployments_count are per-(repo, day)
 			// tallies incremented once per deployment row with no LIMIT --
@@ -136,6 +143,7 @@ func WriteDeployMetricsDaily(
 			// they keep a direct conversion.
 			repoID, row.Day, uint32(row.DeploymentsCount), uint32(row.FailedDeploymentsCount),
 			row.DeployTimeP50Hours, row.LeadTimeP50Hours, row.ComputedAt.UTC(), organizationID,
+			float64Samples(samples), pooledMarker(fit),
 		); err != nil {
 			return 0, fmt.Errorf("append deploy_metrics_daily row: %w", err)
 		}

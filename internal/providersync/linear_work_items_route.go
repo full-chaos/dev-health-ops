@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -567,7 +568,7 @@ func linearNestedPageLimit() int { return linearNestedHardMaxPages }
 // wraps ErrPaginationCapExceeded so the unit fails permanently and loudly.
 func linearNestedBoundExceeded(owner, field string, pages, items int) error {
 	slog.Error("providersync.linear.nested_connection_bound_exceeded",
-		"owner", owner, "field", field, "pages", pages, "items", items,
+		"owner", logging.ProviderText(owner), "field", field, "pages", pages, "items", items,
 		"max_pages", linearNestedHardMaxPages)
 	return fmt.Errorf(
 		"%w: linear %s of %s still had a next page after %d pages (%d items, max %d pages)",
@@ -697,9 +698,11 @@ func collectLinearTeams(
 	teams := make([]linearTeamPayload, 0, len(page.Items))
 	seen := make(map[string]struct{}, len(page.Items))
 	for _, raw := range page.Items {
-		var team linearTeamPayload
-		if err := json.Unmarshal(raw, &team); err != nil ||
-			strings.TrimSpace(team.ID) == "" || strings.TrimSpace(team.Key) == "" {
+		team, err := decodeLinearTeamItem(raw)
+		if err != nil {
+			return nil, page.Pages, providerfoundation.RouteFailure(graphQLRoute, providerfoundation.ReasonBodyDecode, err)
+		}
+		if strings.TrimSpace(team.ID) == "" || strings.TrimSpace(team.Key) == "" {
 			return nil, page.Pages, providerfoundation.ErrNormalizationInvalid
 		}
 		if _, duplicate := seen[team.Key]; duplicate {
@@ -750,9 +753,9 @@ func collectLinearTeam(
 		return linearTeamPayload{}, page.Pages, ErrPaginationCapExceeded
 	}
 	for _, raw := range page.Items {
-		var team linearTeamPayload
-		if err := json.Unmarshal(raw, &team); err != nil {
-			return linearTeamPayload{}, page.Pages, providerfoundation.ErrNormalizationInvalid
+		team, err := decodeLinearTeamItem(raw)
+		if err != nil {
+			return linearTeamPayload{}, page.Pages, providerfoundation.RouteFailure(graphQLRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		if team.Key == teamKey || team.Name == teamKey {
 			return team, page.Pages, nil
@@ -785,9 +788,9 @@ func collectLinearCycles(
 	}
 	cycles := make([]linearCyclePayload, 0, len(page.Items))
 	for _, raw := range page.Items {
-		var cycle linearCyclePayload
-		if err := json.Unmarshal(raw, &cycle); err != nil {
-			return nil, page.Pages, providerfoundation.ErrNormalizationInvalid
+		cycle, err := decodeLinearCycleItem(raw)
+		if err != nil {
+			return nil, page.Pages, providerfoundation.RouteFailure(graphQLRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		cycles = append(cycles, cycle)
 	}
@@ -820,9 +823,9 @@ func collectLinearIssueLabels(
 	}
 	items := make([]linearLabelPayload, 0, len(page.Items)+embeddedItems)
 	for _, raw := range page.Items {
-		var item linearLabelPayload
-		if err := json.Unmarshal(raw, &item); err != nil {
-			return nil, embeddedPages + page.Pages, providerfoundation.ErrNormalizationInvalid
+		item, err := decodeLinearLabelItem(raw)
+		if err != nil {
+			return nil, embeddedPages + page.Pages, providerfoundation.RouteFailure(graphQLRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		items = append(items, item)
 	}
@@ -854,9 +857,9 @@ func collectLinearIssueAttachments(
 	}
 	items := make([]linearAttachmentPayload, 0, len(page.Items)+embeddedItems)
 	for _, raw := range page.Items {
-		var item linearAttachmentPayload
-		if err := json.Unmarshal(raw, &item); err != nil {
-			return nil, embeddedPages + page.Pages, providerfoundation.ErrNormalizationInvalid
+		item, err := decodeLinearAttachmentItem(raw)
+		if err != nil {
+			return nil, embeddedPages + page.Pages, providerfoundation.RouteFailure(graphQLRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		items = append(items, item)
 	}
@@ -889,9 +892,9 @@ func collectLinearIssueHistory(
 	}
 	items := make([]linearHistoryEntry, 0, len(page.Items)+embeddedItems)
 	for _, raw := range page.Items {
-		var item linearHistoryEntry
-		if err := json.Unmarshal(raw, &item); err != nil {
-			return nil, embeddedPages + page.Pages, providerfoundation.ErrNormalizationInvalid
+		item, err := decodeLinearHistoryItem(raw)
+		if err != nil {
+			return nil, embeddedPages + page.Pages, providerfoundation.RouteFailure(graphQLRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		items = append(items, item)
 	}
@@ -924,9 +927,9 @@ func collectLinearIssueComments(
 	}
 	comments := make([]linearCommentPayload, 0, len(page.Items)+embeddedItems)
 	for _, raw := range page.Items {
-		var comment linearCommentPayload
-		if err := json.Unmarshal(raw, &comment); err != nil {
-			return nil, embeddedPages + page.Pages, providerfoundation.ErrNormalizationInvalid
+		comment, err := decodeLinearCommentItem(raw)
+		if err != nil {
+			return nil, embeddedPages + page.Pages, providerfoundation.RouteFailure(graphQLRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		comments = append(comments, comment)
 	}
@@ -965,9 +968,9 @@ func collectLinearIssueRelations(
 	}
 	items := make([]linearRelationPayload, 0, len(page.Items)+embeddedItems)
 	for _, raw := range page.Items {
-		var item linearRelationPayload
-		if err := json.Unmarshal(raw, &item); err != nil {
-			return nil, embeddedPages + page.Pages, providerfoundation.ErrNormalizationInvalid
+		item, err := decodeLinearRelationItem(raw)
+		if err != nil {
+			return nil, embeddedPages + page.Pages, providerfoundation.RouteFailure(graphQLRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		items = append(items, item)
 	}
@@ -1094,7 +1097,7 @@ func normalizeLinearDependencies(
 	for _, attachment := range payload.Attachments.Nodes {
 		source, rejected := linearAttachmentSource(attachment)
 		if rejected {
-			slog.Warn("providersync.linear.attachment_gitlab_reference_rejected", "org_id", claim.OrgID, "issue", workItemID)
+			slog.Warn("providersync.linear.attachment_gitlab_reference_rejected", "org_id", claim.OrgID, "issue", logging.ProviderText(workItemID))
 			continue
 		}
 		if source != "" {
@@ -1139,10 +1142,10 @@ func normalizeLinearReopens(
 		if entry.FromState == nil || entry.ToState == nil {
 			continue
 		}
-		fromType := strings.ToLower(entry.FromState.Type)
-		toType := strings.ToLower(entry.ToState.Type)
-		if (fromType != "completed" && fromType != "canceled" && fromType != "cancelled") ||
-			(toType != "backlog" && toType != "unstarted" && toType != "started") {
+		fromType := strings.ToLower(strings.TrimSpace(entry.FromState.Type))
+		toType := strings.ToLower(strings.TrimSpace(entry.ToState.Type))
+		if (fromType != "completed" && fromType != "canceled" && fromType != "cancelled" && fromType != "duplicate") ||
+			(toType != "triage" && toType != "backlog" && toType != "unstarted" && toType != "started") {
 			continue
 		}
 		occurred := parseLinearTime(entry.CreatedAt)
@@ -1386,9 +1389,9 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 		}
 		pagesSeen += page.Pages
 		for _, raw := range page.Items {
-			var payload linearWorkItemPayload
-			if decoderErr := json.Unmarshal(raw, &payload); decoderErr != nil {
-				return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+			payload, decoderErr := decodeLinearIssueItem(raw)
+			if decoderErr != nil {
+				return CompleteRouteBatch{}, providerfoundation.RouteFailure(graphQLRoute, providerfoundation.ReasonBodyDecode, decoderErr)
 			}
 			if payload.ArchivedAt != nil {
 				continue
@@ -1988,7 +1991,7 @@ func linearIdentity(identity linearIdentityPayload) string {
 
 func linearStatus(stateType string) string {
 	switch strings.ToLower(strings.TrimSpace(stateType)) {
-	case "backlog":
+	case "triage", "backlog":
 		return "backlog"
 	case "unstarted":
 		return "todo"
@@ -1996,7 +1999,7 @@ func linearStatus(stateType string) string {
 		return "in_progress"
 	case "completed":
 		return "done"
-	case "canceled", "cancelled":
+	case "canceled", "cancelled", "duplicate":
 		return "canceled"
 	default:
 		return "unknown"
@@ -2101,4 +2104,68 @@ func (s linearIssueSource) ParentID() workItemRef {
 
 func (s linearIssueSource) EpicID() workItemRef {
 	return declaredWorkItemException(linearIssueSourceKind, workItemFieldEpicID)
+}
+
+func decodeLinearTeamItem(raw json.RawMessage) (linearTeamPayload, error) {
+	var item linearTeamPayload
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return item, providerfoundation.ErrNormalizationInvalid
+	}
+	return item, nil
+}
+
+func decodeLinearCycleItem(raw json.RawMessage) (linearCyclePayload, error) {
+	var item linearCyclePayload
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return item, providerfoundation.ErrNormalizationInvalid
+	}
+	return item, nil
+}
+
+func decodeLinearLabelItem(raw json.RawMessage) (linearLabelPayload, error) {
+	var item linearLabelPayload
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return item, providerfoundation.ErrNormalizationInvalid
+	}
+	return item, nil
+}
+
+func decodeLinearAttachmentItem(raw json.RawMessage) (linearAttachmentPayload, error) {
+	var item linearAttachmentPayload
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return item, providerfoundation.ErrNormalizationInvalid
+	}
+	return item, nil
+}
+
+func decodeLinearHistoryItem(raw json.RawMessage) (linearHistoryEntry, error) {
+	var item linearHistoryEntry
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return item, providerfoundation.ErrNormalizationInvalid
+	}
+	return item, nil
+}
+
+func decodeLinearRelationItem(raw json.RawMessage) (linearRelationPayload, error) {
+	var item linearRelationPayload
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return item, providerfoundation.ErrNormalizationInvalid
+	}
+	return item, nil
+}
+
+func decodeLinearCommentItem(raw json.RawMessage) (linearCommentPayload, error) {
+	var item linearCommentPayload
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return item, providerfoundation.ErrNormalizationInvalid
+	}
+	return item, nil
+}
+
+func decodeLinearIssueItem(raw json.RawMessage) (linearWorkItemPayload, error) {
+	var item linearWorkItemPayload
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return item, providerfoundation.ErrNormalizationInvalid
+	}
+	return item, nil
 }

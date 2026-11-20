@@ -76,7 +76,7 @@ func newQMPlane(t *testing.T, env map[string]string, documents ...string) *qmPla
 	}, graphQLEdgeDeps{auth: auth, maxBytes: defaultGraphQLMaxQueryBytes})
 	handler, internal, mcp, gate := gatedListenerHandlers(knobs(env), mux, internalMux, mcpMux)
 	plane := &Plane{Handler: handler, InternalHandler: internal, MCPHandler: mcp}
-	_, internalListener := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil, nil)
+	_, internalListener := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil)
 	mcpListener := MCPListener("127.0.0.1:0", plane, nil)
 	if internalListener == nil || mcpListener == nil {
 		t.Fatal("expected the internal and MCP listeners")

@@ -200,7 +200,7 @@ func TestRelationStartedAtLinear(t *testing.T) {
 func TestRelationStartedAtGitHubIsNullBecauseItsRelationsAreText(t *testing.T) {
 	claim := Claim{Unit: Unit{OrgID: "org-1"}}
 	synced := matrixTime(t, "2026-10-12T12:00:00Z")
-	rows, err := extractGitHubWorkItemDependencies(claim, "ghpr:o/r#1", "o/r", "This is blocked by #2", "", nil, synced)
+	rows, err := extractGitHubWorkItemDependencies(claim, "ghpr:o/r#1", "o/r", "This is blocked by #2", "", nil, githubIssueCommentRoute, synced)
 	if err != nil {
 		t.Fatal(err)
 	}

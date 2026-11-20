@@ -796,6 +796,8 @@ func samePipelineMetric(a, b testops.PipelineMetric) bool {
 	return a.RepoID == b.RepoID && a.OrgID == b.OrgID &&
 		a.PipelinesCount == b.PipelinesCount && a.SuccessCount == b.SuccessCount &&
 		a.FailureCount == b.FailureCount && a.CancelledCount == b.CancelledCount &&
+		a.SkippedCount == b.SkippedCount && a.UnfinishedCount == b.UnfinishedCount &&
+		a.OtherCount == b.OtherCount && a.UnfinishedStaleCount == b.UnfinishedStaleCount &&
 		sameFloat(a.SuccessRate, b.SuccessRate) && sameFloat(a.FailureRate, b.FailureRate) &&
 		sameFloat(a.CancelRate, b.CancelRate) && sameFloat(a.RerunRate, b.RerunRate) &&
 		sameFloatPtr(a.MedianDurationSeconds, b.MedianDurationSeconds) &&
@@ -823,6 +825,7 @@ func sameCoverageMetric(a, b testops.CoverageMetric) bool {
 		sameFloatPtr(a.LineCoveragePct, b.LineCoveragePct) &&
 		sameFloatPtr(a.BranchCoveragePct, b.BranchCoveragePct) &&
 		sameUintPtr(a.LinesTotal, b.LinesTotal) && sameUintPtr(a.LinesCovered, b.LinesCovered) &&
+		sameUintPtr(a.BranchesTotal, b.BranchesTotal) && sameUintPtr(a.BranchesCovered, b.BranchesCovered) &&
 		sameFloatPtr(a.CoverageDeltaPct, b.CoverageDeltaPct) &&
 		a.UncoveredFilesCount == b.UncoveredFilesCount &&
 		a.CoverageRegressionCount == b.CoverageRegressionCount &&

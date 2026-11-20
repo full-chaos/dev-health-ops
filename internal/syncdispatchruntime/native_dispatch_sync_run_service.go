@@ -226,7 +226,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	// below actually succeeds.
 	ctx = withRollupBumpTally(ctx)
 	ctx = withPostCommitLogs(ctx)
-	fence := &transportFence{args: args, kind: outboxKindDispatchSyncRun, unavailable: ErrDispatchSyncRunUnavailable}
+	fence := &transportFence{args: args, kind: outboxKindDispatchSyncRun, unavailable: ErrDispatchSyncRunUnavailable, logger: service.logger}
 
 	// The outbox-relay route-generation fence every native service already
 	// starts with (finalizeWorker/referenceDiscoveryWorker's own first
@@ -355,7 +355,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		for _, id := range decision.cappedUnitIDs {
 			cappedIDs[id] = true
 		}
-		service.logger.Info(ctx, synclog.MsgDispatchSyncRunConcurrencyCapped, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyCappedCount, len(cappedIDs)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(decision.reasonCode)))
+		logConcurrencyCapped(ctx, service.logger, run.id, len(cappedIDs), decision)
 	}
 
 	// --- BudgetGuard dry-run telemetry (side effect only; return discarded,

@@ -11,7 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
-// The scope rows of the fake client: line_mean, line_days, branch_mean, branch_days.
+// The scope rows of the fake client: line_value, line_days, branch_mean, branch_days.
 
 // The rule of the per-repository baseline holds for the scope: fewer than seven
 // days with a value is no baseline, and "no baseline" is null, never 0 and never
@@ -115,23 +115,27 @@ func TestResolveScope_ReadsTheSameRowsAsThePerRepositoryBaseline(t *testing.T) {
 	}
 }
 
-// The value of a day is the mean over the repositories; the baseline is the mean
-// over the days. The text pins the three levels and their order; the values are
-// pinned on a real ClickHouse (scope_integration_test.go).
-func TestScopeStatement_IsTheMeanOfTheDayValuesNotOfTheRepositories(t *testing.T) {
+// Line coverage of the scope is one ratio over every counted repo-day, its days
+// the days with a counted repo-day; branch coverage is the mean over the days of
+// the day means. The text pins the three levels and their order; the values are
+// pinned on a real ClickHouse (scope_integration_test.go,
+// coverage_pooled_line_integration_test.go).
+func TestScopeStatement_PoolsLinesAndAveragesTheBranchDays(t *testing.T) {
 	client := &fakeClient{}
 	if _, err := ResolveScope(context.Background(), client, "org-1", endDay(), Scope{}); err != nil {
 		t.Fatal(err)
 	}
 	statement := client.statement
 	order := []string{
-		"avg(d.day_line_pct) AS line_mean",
-		"countIf(d.day_line_pct IS NOT NULL) AS line_days",
+		"100 * sum(d.day_covered) / nullIf(sum(d.day_total), 0) AS line_value",
+		"countIf(d.day_counted > 0) AS line_days",
 		"avg(d.day_branch_pct) AS branch_mean",
 		"countIf(d.day_branch_pct IS NOT NULL) AS branch_days",
-		"avg(b.line_pct) AS day_line_pct",
+		"sumIf(b.day_lines_covered, b.line_counted) AS day_covered",
+		"sumIf(b.day_lines_total, b.line_counted) AS day_total",
+		"countIf(b.line_counted) AS day_counted",
 		"avg(b.branch_pct) AS day_branch_pct",
-		"(argMax(tuple(line_coverage_pct), computed_at)).1 AS line_pct",
+		"argMax(tuple(lines_covered, lines_total), computed_at) AS day_lines",
 		"(argMax(tuple(branch_coverage_pct), computed_at)).1 AS branch_pct",
 		"GROUP BY repo_id, day",
 		"GROUP BY b.day",

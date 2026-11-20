@@ -156,12 +156,11 @@ func capabilityGitHubRows(
 				"__typename": "ProjectV2ItemFieldNumberValue", "number": *item.points,
 				"field": map[string]string{"name": "Estimate"},
 			}}},
-			"changes": map[string]any{"nodes": []any{}},
 		}
 		if err := json.Unmarshal(capabilityJSON(t, board), &payload); err != nil {
 			t.Fatal(err)
 		}
-		row, _, kept, err := normalizeGitHubProjectV2Item(claim, payload, "ghprojv2:acme/1", nil, normalizedAt)
+		row, kept, err := normalizeGitHubProjectV2Item(claim, payload, "ghprojv2:acme/1", nil, normalizedAt)
 		if err != nil || !kept {
 			t.Fatalf("github board item %d: kept=%v err=%v", item.number, kept, err)
 		}
@@ -194,7 +193,7 @@ func capabilityGitLabRows(
 		if err := json.Unmarshal(capabilityJSON(t, issue), &payload); err != nil {
 			t.Fatal(err)
 		}
-		row, _, err := normalizeGitLabIssueWorkItem(claim, "acme/api", "acme/api", "org:gitlab:1", repoID, payload, nil, mapping, nil, normalizedAt)
+		row, _, err := normalizeGitLabIssueWorkItem(claim, "acme/api", "acme/api", "org:gitlab:1", repoID, payload, nil, nil, mapping, nil, normalizedAt)
 		if err != nil {
 			t.Fatalf("gitlab issue %d: %v", item.number, err)
 		}

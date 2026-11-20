@@ -587,6 +587,12 @@ func produceWorld(t *testing.T, world providerWorld) FrozenWorld {
 		if before[name] != "0" {
 			t.Fatalf("table %s held %s rows before the run: a world is dumped from an empty table only", name, before[name])
 		}
+		if rule, ok := viewFilledAfterTheCapture[name]; ok && rule.TableRule != "" {
+			if problems := viewFilledTableProblems(t, ch.httpDSN, name, rule); len(problems) > 0 {
+				t.Fatalf("a table of aggregate states is not frozen; it is held to its rule:\n  %s", strings.Join(problems, "\n  "))
+			}
+			continue
+		}
 		table := withoutProducerServerStamped(t, ch.httpDSN, dumpWorldTable(t, ch.httpDSN, name))
 		frozen.Tables = append(frozen.Tables, WorldTable{FrozenTable: table, Derived: derived[name]})
 	}

@@ -40,6 +40,8 @@ FILENAME == ARGV[1] {
   next
 }
 $1 ~ /^(ok|FAIL|\?)[ ]*$/ && NF >= 3 { nsummary++; seen[$2] = 1 }
+# CHAOS-13767: with -coverprofile a package WITHOUT test files prints "<TAB>pkg<TAB><TAB>coverage: 0.0% of statements", no "?" line.
+$1 == "" && $2 != "" && $4 ~ /^coverage:/ { nsummary++; seen[$2] = 1 }
 $1 ~ /^(ok|FAIL)[ ]*$/ && ($2 in key) && $3 ~ /^[0-9]+(\.[0-9]+)?s$/ {
   sec = substr($3, 1, length($3) - 1) + 0
   if (sec >= thresh + 0 && !(key[$2] in w) && !($2 in named)) {

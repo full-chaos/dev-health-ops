@@ -66,7 +66,7 @@ func TestADonorRowChangeRederivesOnlyTheItemsItChanges(t *testing.T) {
 			map[string]workItemAttributionNewestPrimary{"P": unassigned(before), "D": own("team-b", after)}, nil, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := donorChangedDependents(tc.edges, tc.keys, tc.rows, tc.inactive)
+			got := donorChangedDependents(tc.edges, tc.keys, tc.rows, issueKindsOf(tc.rows), tc.inactive, nil, nil)
 			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
 				t.Errorf("owed %v, want %v", got, tc.want)
 			}
@@ -84,6 +84,16 @@ func TestTheKeyIndexDropsAKeyTwoItemsHold(t *testing.T) {
 	if fmt.Sprint(index) != "map[OPS-2:jira:OPS-2]" {
 		t.Errorf("index %v, want only OPS-2", index)
 	}
+}
+
+// issueKindsOf gives every item of rows the kind of an issue (jira task), the shape these cells ran with
+// before the donor of a linked_issue row had to be an issue (CHAOS-14013).
+func issueKindsOf(rows map[string]workItemAttributionNewestPrimary) map[string]teamattribution.GithubWorkItemDerivationSubject {
+	kinds := make(map[string]teamattribution.GithubWorkItemDerivationSubject, len(rows))
+	for id := range rows {
+		kinds[id] = teamattribution.GithubWorkItemDerivationSubject{WorkItemID: id, Provider: "jira", Type: "task"}
+	}
+	return kinds
 }
 
 // A PR linked to an issue whose stored primary row was repo_ownership: once the issue is recomputed (its row is now unassigned and
@@ -107,7 +117,7 @@ func TestAPullRequestOfAnIssueThatLostItsRepoOwnershipRowIsOwedARederive(t *test
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rows := map[string]workItemAttributionNewestPrimary{"ghpr:a/b#7": prRow, "gh:a/b#9": tc.issue}
-			got := donorChangedDependents(edges, map[string]string{}, rows, teamactive.Inactive{})
+			got := donorChangedDependents(edges, map[string]string{}, rows, issueKindsOf(rows), teamactive.Inactive{}, nil, nil)
 			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
 				t.Fatalf("owed %v, want %v", got, tc.want)
 			}

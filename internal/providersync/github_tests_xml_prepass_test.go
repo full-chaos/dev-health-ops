@@ -103,7 +103,7 @@ func TestGitHubTestsSeventhSkippedArtifactOnlyCountsAndOverflows(t *testing.T) {
 	for i := 0; i < githubTestsMaxSkippedArtifactRecords+1; i++ {
 		records, overflow, causeOverflow, causeCount = appendGitHubTestsSkippedArtifact(
 			records, overflow, causeOverflow, causeCount,
-			GitHubTestsSkippedArtifact{RunID: "1", ArtifactID: "2", Cause: githubTestsUnsafeDoctypeCause},
+			GitHubTestsSkippedArtifact{RunID: "1", ArtifactID: fmt.Sprint(i + 2), Cause: githubTestsUnsafeDoctypeCause},
 		)
 	}
 	if githubTestsMaxSkippedArtifactRecords != 5 || len(records) != githubTestsMaxSkippedArtifactRecords || overflow != 1 ||

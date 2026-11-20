@@ -25,7 +25,6 @@ internal/api/oauthprovider	environment_proxy_test.go	unexpressed
 internal/api/policy	principalonce_test.go	unexpressed
 internal/api/policy	store_integration_test.go	unexpressed
 internal/api/restcore	environment_proxy_test.go	unexpressed
-internal/api/sso	environment_proxy_test.go	unexpressed
 internal/api/teamsidentity	environment_proxy_test.go	unexpressed
 internal/apiservice	environment_proxy_test.go	unexpressed
 internal/atlassianteams	environment_proxy_test.go	unexpressed
@@ -74,7 +73,9 @@ internal/cigates/chartgates	overlay_test.go	unexpressed
 internal/cigates/chartgates	worker_secret_env_scan_test.go	**/cmd/...
 internal/cigates/chartgates	worker_secret_env_scan_test.go	**/internal/...
 internal/cigates/chartgates	worker_secret_env_scan_test.go	unexpressed
+internal/cigates/chdatetime	scan_test.go	unexpressed
 internal/cigates/checkgo	ci_script_helpers_test.go	unexpressed
+internal/cigates/checkgo	go_test_cover_args_test.go	unexpressed
 internal/cigates/checkgo	go_test_leg_json_test.go	unexpressed
 internal/cigates/checkgo	integration_leg_json_test.go	unexpressed
 internal/cigates/checkgo	race_solo_test.go	unexpressed
@@ -100,13 +101,7 @@ internal/cigates/integrationshards	ci_script_helpers_test.go	unexpressed
 internal/cigates/integrationshards	free_run_test.go	unexpressed
 internal/cigates/integrationshards	shard_run_tee_bound_test.go	unexpressed
 internal/cigates/integrationshards	shard_run_term_test.go	unexpressed
-internal/cigates/livee2e	mintlicense_test.go	cmd/...
-internal/cigates/livee2e	mintlicense_test.go	cmd/cigate
-internal/cigates/livee2e	mintlicense_test.go	unexpressed
 internal/cigates/livee2e	smtpsink_test.go	unexpressed
-internal/cigates/livee2e	ssoseedverb_test.go	cmd/...
-internal/cigates/livee2e	ssoseedverb_test.go	unexpressed
-internal/cigates/livee2e/ssoseed	served_census_test.go	...
 internal/cigates/metricsproof	proof_test.go	unexpressed
 internal/cigates/nopython	trackedfiles_test.go	unexpressed
 internal/cigates/outboundtransport	outboundtransport_test.go	unexpressed
@@ -175,6 +170,7 @@ internal/cigates/workflows	chart_started_selector_test.go	unexpressed
 internal/cigates/workflows	ci_script_helpers_test.go	unexpressed
 internal/cigates/workflows	docs_only_step_test.go	unexpressed
 internal/cigates/workflows	go_api_tools_build_inputs_test.go	unexpressed
+internal/cigates/workflows	go_junit_report_artifact_test.go	unexpressed
 internal/cigates/workflows	go_quality_leg_selection_test.go	unexpressed
 internal/cigates/workflows	go_quality_legs_shape_test.go	unexpressed
 internal/cigates/workflows	go_workers_compose_proof_test.go	unexpressed
@@ -200,6 +196,7 @@ internal/cigates/workflows	workflows_path_filters_test.go	unexpressed
 internal/cigates/workflows	workflows_wire_parity_test.go	unexpressed
 internal/cli	flagparse_census_test.go	cmd/dho
 internal/cli	flagparse_census_test.go	unexpressed
+internal/deploy/inputs	hookrender_test.go	unexpressed
 internal/fixturescli	provider_worlds_producer_integration_test.go	unexpressed
 internal/fixturescli	synthetic_integration_test.go	cmd/dho
 internal/goapiproof	legclient_pin_test.go	unexpressed
@@ -234,6 +231,7 @@ internal/platform/shell	stop_bound_test.go	unexpressed
 internal/platform/tracing	environment_proxy_test.go	unexpressed
 internal/providerfoundation	environment_proxy_test.go	unexpressed
 internal/providersync	census_load_test.go	unexpressed
+internal/providersync	item_route_ssa_test.go	unexpressed
 internal/providersync	project_id_test.go	unexpressed
 internal/providersync	route_census_runtime_test.go	unexpressed
 internal/providersync	work_item_row_base_census_test.go	unexpressed
@@ -254,6 +252,8 @@ internal/storage/clickhouse	open_proxy_test.go	unexpressed
 internal/storage/clickhouse	param_types_census_test.go	cmd/...
 internal/storage/clickhouse	param_types_census_test.go	internal/...
 internal/storage/clickhouse	param_types_census_test.go	unexpressed
+internal/storage/clickhouse/latestrow	latestrow_census_test.go	...
+internal/storage/clickhouse/latestrow	latestrow_census_test.go	unexpressed
 internal/storage/postgres	api_authorization_integration_test.go	unexpressed
 internal/storage/postgres	openers_test.go	unexpressed
 internal/storage/postgres	provision_script_integration_test.go	unexpressed

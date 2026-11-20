@@ -387,6 +387,13 @@ var mcpParityOverrides = map[string]map[string]string{
 		"valid_from": "CAST(now() - toIntervalDay(60) AS DateTime64(3, 'UTC'))",
 		"valid_to":   "CAST(NULL AS Nullable(DateTime64(3, 'UTC')))",
 	},
+	// retracted is the marker that retires a day (CHAOS-14008, CHAOS-14148): a generated 1 would retire every generated row, so
+	// the table reads as empty. Every generated row is a measurement, as every row the daily writers compute (they never name
+	// the column; only their marker row stores 1, with no measure).
+	"testops_coverage_metrics_daily": {"retracted": "toUInt8(0)"},
+	"testops_pipeline_metrics_daily": {"retracted": "toUInt8(0)"},
+	"incident_metrics_daily":         {"retracted": "toUInt8(0)"},
+	"repo_metrics_daily":             {"retracted": "toUInt8(0)"},
 	"compounding_risk_daily": {
 		"scope":    "CAST(if(entity = 0, 'repo', 'team') AS Enum8('repo' = 1, 'team' = 2))",
 		"scope_id": "if(entity = 0, '%REPO%', arrayElement(%TEAMS%, entity + 1))",
@@ -464,7 +471,7 @@ func mcpParityStartPlane(t *testing.T, ctx context.Context, venue *venueoracle.V
 	}
 	t.Cleanup(plane.Close)
 	_, loopback, _ := net.ParseCIDR("127.0.0.1/32")
-	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil, []*net.IPNet{loopback})
+	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, []*net.IPNet{loopback})
 	mcp := MCPListener("127.0.0.1:0", plane, []*net.IPNet{loopback})
 	for _, listener := range []*Listener{public, internal, mcp} {
 		if listener == nil {

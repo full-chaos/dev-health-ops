@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -316,11 +317,9 @@ func fetchGitHubDeploymentsPage[T any](ctx context.Context, client *providerfoun
 	}
 	items := make([]T, 0, len(page.Items))
 	for _, raw := range page.Items {
-		var item T
-		decoder := json.NewDecoder(strings.NewReader(string(raw)))
-		decoder.UseNumber()
-		if decoder.Decode(&item) != nil {
-			return nil, 0, false, providerfoundation.ErrNormalizationInvalid
+		item, err := decodeGitHubDeploymentsItem[T](raw)
+		if err != nil {
+			return nil, 0, false, providerfoundation.RouteFailure(route, providerfoundation.ReasonBodyDecode, err)
 		}
 		items = append(items, item)
 	}
@@ -476,7 +475,7 @@ func recordNonFiniteReleaseRefConfidence(client *providerfoundation.HTTPClient, 
 	slog.Info(
 		"non-finite release_ref_confidence stored as the unreadable-value rule",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", repository, "count", count,
+		"repository", logging.ProviderText(repository), "count", count,
 	)
 }
 
@@ -564,3 +563,13 @@ func (row deploymentRow) validate(claim Claim) error {
 }
 
 var _ CompleteRouteHandler = GitHubDeploymentsRouteHandler{}
+
+func decodeGitHubDeploymentsItem[T any](raw json.RawMessage) (T, error) {
+	var item T
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&item) != nil {
+		return item, providerfoundation.ErrNormalizationInvalid
+	}
+	return item, nil
+}

@@ -7,6 +7,7 @@ internal/identityalias	resolver.go	internal/clicredentials
 internal/identityalias	resolver.go	internal/fixturescli
 internal/identityalias	resolver.go	internal/identityalias
 internal/identityalias	resolver.go	internal/jobrescue
+internal/identityalias	resolver.go	internal/jobs/metrics/daily
 internal/identityalias	resolver.go	internal/providersync
 internal/identityalias	resolver.go	internal/queryapi/server
 internal/identityalias	resolver.go	internal/reconcilerservice

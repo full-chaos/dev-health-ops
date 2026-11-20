@@ -325,6 +325,13 @@ func TestExternalClickHouseRowsMatchPythonGoldenOracle(t *testing.T) {
 				t.Fatal(err)
 			}
 			table, columns := externalQueryContract(query)
+			if table == "work_item_transitions" {
+				var problem string
+				columns, values, problem = withoutTransitionProviderAfterThePythonFreeze(columns, values, source.System)
+				if problem != "" {
+					t.Fatal(problem)
+				}
+			}
 			columns = slices.DeleteFunc(columns, func(column string) bool {
 				return slices.Contains(externalUnreferencedColumns[table], column)
 			})

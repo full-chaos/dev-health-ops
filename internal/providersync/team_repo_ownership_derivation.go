@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/linktier"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 	"sort"
 	"strconv"
@@ -47,13 +48,14 @@ import (
 //       - only INHERITANCE-SAFE relationship types transfer a team
 //         (relates_to, relates, duplicates, external_issue_key); blocking
 //         links (blocks/blocked_by/is_blocked_by) routinely span teams and
-//         are never a donor edge (teamRepoOwnershipInheritableRelationshipTypes);
+//         are never a donor edge (the cascade's one list,
+//         teamattribution.GithubWorkItemDerivationInheritableRelationships);
 //       - per (source, target) pair, only the LATEST edge (by last_synced)
 //         counts -- a relationship-type flip supersedes the stale row
 //         instead of leaving an old inheritable edge alive alongside the
-//         new one; ties break on the lexicographically smaller
-//         relationship_type (deterministically prefers the safer blocking
-//         type over inheriting);
+//         new one; on an equal last_synced an inheritable type wins, then
+//         the lower relationship_type -- the cascade's own rule, one
+//         function (teamattribution.LatestDependencyEdgeWins);
 //       - a cross-provider `extkey:KEY` target (emitted by PR parsers for a
 //         Linear/Jira issue key mentioned in a PR body/branch name) is
 //         resolved against a Linear/Jira work-item-key index; a key that
@@ -108,6 +110,11 @@ type TeamRepoOwnershipProjectLink struct {
 	TeamID      string
 	IsPrimary   bool
 	Specificity uint16
+	// StoredProjectID is the project_id the row is stored under, when the
+	// loader moved ProjectID (a GitLab path link remapped to its catalog id);
+	// empty means ProjectID. The evidence key of the link uses it, so a held
+	// check finds the stored row.
+	StoredProjectID string
 }
 
 // teamRepoOwnershipProjectRef identifies a team_project_ownership row's
@@ -375,19 +382,6 @@ func teamRepoOwnershipResolutionArmPriority(arm string) int {
 // (CHAOS-4537), so the row is vestigial from this reader's point of view; it
 // is still written (CHAOS-4458 part (b)).
 
-// teamRepoOwnershipInheritableRelationshipTypes mirrors
-// compute_work_items.py's _INHERITABLE_RELATIONSHIP_TYPES verbatim: only
-// edges that mean "this item does (or duplicates) the work of the linked
-// issue" are sound to inherit a team through. A blocking relationship
-// (blocks/blocked_by/is_blocked_by) connects items that are frequently
-// owned by DIFFERENT teams, so it must never drive attribution.
-var teamRepoOwnershipInheritableRelationshipTypes = map[string]bool{
-	"relates_to":         true,
-	"relates":            true,
-	"duplicates":         true,
-	"external_issue_key": true,
-}
-
 // teamRepoOwnershipLinkCounts is one team's link count per link tier on one
 // repo, indexed by linktier.Rank: native, explicit_text, heuristic, and
 // at rank 0 any other recorded provenance (counted, never dropped, and never
@@ -448,6 +442,13 @@ type teamRepoOwnershipDerivation struct {
 	// requests whose text key was not used because they have a native link.
 	TextKeyCandidates        int
 	TextKeysSkippedForNative int
+	// DonorsRefused counts, by teamattribution.LinkedIssueDonorRefusal reason,
+	// the distinct (source, donor) edges whose donor is not an issue.
+	DonorsRefused map[string]int
+	// Evidence is, for every claim the run derived (a co-owner the share floor
+	// dropped included), the keys of the input rows of every chain that gave
+	// it a link (CHAOS-9349): the store the absence proof of a later run reads.
+	Evidence map[teamRepoOwnershipClaimRef]map[teamRepoOwnershipEvidenceKey]struct{}
 }
 
 // isTextKeyTarget reports whether a dependency target is a key parsed from
@@ -533,7 +534,9 @@ func deriveTeamRepoOwnership(
 		byID[item.WorkItemID] = item
 	}
 
-	donorTeamID := buildDonorTeamIDResolver(byID, dependencyEdges, projectToTeam, knownLinearTeamKeys)
+	teamEvidence := teamRepoOwnershipTeamEvidence(projectLinks, projectToTeam)
+	donorsRefused := map[string]int{}
+	donorTeamID := buildDonorTeamIDResolver(byID, dependencyEdges, projectToTeam, knownLinearTeamKeys, donorsRefused, teamEvidence)
 	// A key parsed from pull request text is a fallback only (chris,
 	// 2026-10-15): the native resolver walks every donor edge except text
 	// keys, and the full resolver is asked only when the native one finds no
@@ -545,7 +548,7 @@ func deriveTeamRepoOwnership(
 			nativeEdges = append(nativeEdges, edge)
 		}
 	}
-	nativeDonorTeamID := buildDonorTeamIDResolver(byID, nativeEdges, projectToTeam, knownLinearTeamKeys)
+	nativeDonorTeamID := buildDonorTeamIDResolver(byID, nativeEdges, projectToTeam, knownLinearTeamKeys, nil, teamEvidence)
 	nativeLinkedPRs := map[[2]string]bool{}
 	for _, link := range issuePRLinks {
 		if link.Provenance == linktier.Native {
@@ -556,9 +559,18 @@ func deriveTeamRepoOwnership(
 	tallies := map[string]map[string]teamRepoOwnershipLinkCounts{}
 	repoArm := map[string]map[string]string{}
 	earliest := map[string]map[string]time.Time{}
-	assign := func(repoID, teamID, arm string, rank int, at time.Time) {
+	evidence := map[teamRepoOwnershipClaimRef]map[teamRepoOwnershipEvidenceKey]struct{}{}
+	assign := func(repoID string, chain teamRepoOwnershipChain, rank int, at time.Time, link ...teamRepoOwnershipEvidenceKey) {
+		teamID, arm := chain.teamID, chain.arm
 		if repoID == "" || teamID == "" {
 			return
+		}
+		claim := teamRepoOwnershipClaimRef{TeamID: teamID, RepoID: repoID}
+		if evidence[claim] == nil {
+			evidence[claim] = map[teamRepoOwnershipEvidenceKey]struct{}{}
+		}
+		for _, key := range append(link, chain.evidence...) {
+			evidence[claim][key] = struct{}{}
 		}
 		if tallies[repoID] == nil {
 			tallies[repoID] = map[string]teamRepoOwnershipLinkCounts{}
@@ -591,12 +603,13 @@ func deriveTeamRepoOwnership(
 		if item.RepoID == "" || !teamRepoOwnershipChangeRequestTypes[item.Type] {
 			continue
 		}
-		if teamID, arm := nativeDonorTeamID(item.WorkItemID); teamID != "" {
-			assign(item.RepoID, teamID, arm, linktier.Rank(linktier.Native), item.CreatedAt)
+		self := teamRepoOwnershipWorkItemEvidence(item)
+		if chain := nativeDonorTeamID(item.WorkItemID); chain.teamID != "" {
+			assign(item.RepoID, chain, linktier.Rank(linktier.Native), item.CreatedAt, self)
 			continue
 		}
-		teamID, arm := donorTeamID(item.WorkItemID)
-		if teamID == "" {
+		chain := donorTeamID(item.WorkItemID)
+		if chain.teamID == "" {
 			continue
 		}
 		if nativeLinkedPRs[[2]string{item.RepoID, changeRequestNumber(item.WorkItemID)}] {
@@ -604,7 +617,7 @@ func deriveTeamRepoOwnership(
 			continue
 		}
 		result.TextKeyCandidates++
-		assign(item.RepoID, teamID, arm, linktier.Rank(linktier.ExplicitText), item.CreatedAt)
+		assign(item.RepoID, chain, linktier.Rank(linktier.ExplicitText), item.CreatedAt, self)
 	}
 
 	// PR inheritance: work_graph_issue_pr's OWN repo_id, resolved via the
@@ -616,13 +629,17 @@ func deriveTeamRepoOwnership(
 			continue
 		}
 		rank := linktier.Rank(link.Provenance)
-		if teamID, arm := nativeDonorTeamID(link.WorkItemID); teamID != "" {
-			assign(link.RepoID, teamID, arm, rank, link.EvidenceAt)
+		row := []teamRepoOwnershipEvidenceKey{teamRepoOwnershipIssuePREvidence(link)}
+		if item, ok := byID[link.WorkItemID]; ok {
+			row = append(row, teamRepoOwnershipWorkItemEvidence(item))
+		}
+		if chain := nativeDonorTeamID(link.WorkItemID); chain.teamID != "" {
+			assign(link.RepoID, chain, rank, link.EvidenceAt, row...)
 			continue
 		}
-		if teamID, arm := donorTeamID(link.WorkItemID); teamID != "" {
+		if chain := donorTeamID(link.WorkItemID); chain.teamID != "" {
 			result.TextKeyCandidates++
-			assign(link.RepoID, teamID, arm, min(rank, linktier.Rank(linktier.ExplicitText)), link.EvidenceAt)
+			assign(link.RepoID, chain, min(rank, linktier.Rank(linktier.ExplicitText)), link.EvidenceAt, row...)
 		}
 	}
 
@@ -693,6 +710,10 @@ func deriveTeamRepoOwnership(
 		}
 		return a.TeamID < b.TeamID
 	})
+	if len(donorsRefused) > 0 {
+		result.DonorsRefused = donorsRefused
+	}
+	result.Evidence = evidence
 	return result
 }
 
@@ -843,7 +864,9 @@ func buildDonorTeamIDResolver(
 	edges []TeamRepoOwnershipDependencyEdge,
 	projectToTeam map[teamRepoOwnershipProjectRef]string,
 	knownLinearTeamKeys map[string]string,
-) func(workItemID string) (string, string) {
+	refused map[string]int,
+	teamEvidence func(item TeamRepoOwnershipWorkItem, teamID, arm string) []teamRepoOwnershipEvidenceKey,
+) func(workItemID string) teamRepoOwnershipChain {
 	keyIndex := buildIssueKeyIndex(byID)
 
 	type pair struct{ source, target string }
@@ -851,9 +874,7 @@ func buildDonorTeamIDResolver(
 	for _, edge := range edges {
 		key := pair{edge.SourceWorkItemID, edge.TargetWorkItemID}
 		current, ok := latestEdge[key]
-		if !ok ||
-			edge.LastSynced.After(current.LastSynced) ||
-			(edge.LastSynced.Equal(current.LastSynced) && edge.RelationshipType < current.RelationshipType) {
+		if !ok || teamattribution.LatestDependencyEdgeWins(edge.LastSynced, edge.RelationshipType, current.LastSynced, current.RelationshipType) {
 			latestEdge[key] = edge
 		}
 	}
@@ -861,6 +882,10 @@ func buildDonorTeamIDResolver(
 	type resolvedTeam struct {
 		teamID string
 		arm    string
+		// edge is the stored key of the latest inheritable edge to the target
+		// (its raw target, an extkey text included); donor is the target's row.
+		edge  teamRepoOwnershipEvidenceKey
+		donor TeamRepoOwnershipWorkItem
 	}
 
 	// Only a donor that ITSELF already resolves to a team is a valid
@@ -876,24 +901,43 @@ func buildDonorTeamIDResolver(
 	// issue donating through its native_team_key) is still a valid candidate.
 	candidateTargets := map[string][]string{}
 	targetTeam := map[string]resolvedTeam{}
+	refusedEdges := map[pair]string{}
 	for _, edge := range latestEdge {
-		if !teamRepoOwnershipInheritableRelationshipTypes[edge.RelationshipType] {
+		if !teamattribution.GithubWorkItemDerivationInheritableRelationships[edge.RelationshipType] {
 			continue
 		}
 		target := canonicalDependencyTarget(edge.TargetWorkItemID, keyIndex)
 		if target == "" {
+			// A key no single item holds (missing or ambiguous) names no donor:
+			// counted as unknown once per (source, raw target).
+			refusedEdges[pair{edge.SourceWorkItemID, edge.TargetWorkItemID}] = teamattribution.LinkedIssueDonorRefusedUnknown
 			continue
 		}
-		donor, ok := byID[target]
-		if !ok {
+		// The donor must be an issue (the linked_issue donor rule of the
+		// cascade), decided before the tie-break so a refused donor never
+		// shadows an issue donor.
+		donor, known := byID[target]
+		if reason := teamattribution.LinkedIssueDonorRefusal(teamattribution.GithubWorkItemDerivationSubject{
+			WorkItemID: target, Provider: donor.Provider, Type: donor.Type,
+		}, known); reason != "" {
+			refusedEdges[pair{edge.SourceWorkItemID, target}] = reason
 			continue
 		}
 		teamID, arm, resolves := resolveWorkItemTeamID(donor, projectToTeam, knownLinearTeamKeys)
 		if !resolves {
 			continue
 		}
-		targetTeam[target] = resolvedTeam{teamID: teamID, arm: arm}
+		edgeKey := teamRepoOwnershipDependencyEvidence(edge)
+		if held, ok := targetTeam[edge.SourceWorkItemID+"\x00"+target]; !ok || edgeKey.Key < held.edge.Key {
+			targetTeam[edge.SourceWorkItemID+"\x00"+target] = resolvedTeam{teamID: teamID, arm: arm, edge: edgeKey, donor: donor}
+		}
 		candidateTargets[edge.SourceWorkItemID] = append(candidateTargets[edge.SourceWorkItemID], target)
+	}
+
+	if refused != nil {
+		for _, reason := range refusedEdges {
+			refused[reason]++
+		}
 	}
 
 	// Deterministic tie-break: the lexicographically smallest canonical
@@ -901,19 +945,30 @@ func buildDonorTeamIDResolver(
 	donorTeamBySource := make(map[string]resolvedTeam, len(candidateTargets))
 	for source, targets := range candidateTargets {
 		sort.Strings(targets)
-		donorTeamBySource[source] = targetTeam[targets[0]]
+		donorTeamBySource[source] = targetTeam[source+"\x00"+targets[0]]
 	}
 
-	return func(workItemID string) (string, string) {
+	// The chain's evidence is the rows of the CHOSEN chain only: the item's own
+	// team input, or the chosen donor's edge, row and team input. A refused
+	// donor is never chosen, so it records no key (CHAOS-9349 on CHAOS-14082).
+	inputs := func(item TeamRepoOwnershipWorkItem, teamID, arm string) []teamRepoOwnershipEvidenceKey {
+		if teamEvidence == nil {
+			return nil
+		}
+		return teamEvidence(item, teamID, arm)
+	}
+	return func(workItemID string) teamRepoOwnershipChain {
 		if item, ok := byID[workItemID]; ok {
 			if teamID, arm, resolves := resolveWorkItemTeamID(item, projectToTeam, knownLinearTeamKeys); resolves {
-				return teamID, arm
+				return teamRepoOwnershipChain{teamID: teamID, arm: arm, evidence: inputs(item, teamID, arm)}
 			}
 		}
 		if entry, ok := donorTeamBySource[workItemID]; ok {
-			return entry.teamID, entry.arm
+			evidence := append([]teamRepoOwnershipEvidenceKey{entry.edge, teamRepoOwnershipWorkItemEvidence(entry.donor)},
+				inputs(entry.donor, entry.teamID, entry.arm)...)
+			return teamRepoOwnershipChain{teamID: entry.teamID, arm: entry.arm, evidence: evidence}
 		}
-		return "", ""
+		return teamRepoOwnershipChain{}
 	}
 }
 

@@ -29,7 +29,8 @@ func TestQueryAPIPostureCheckFailsClosedOnAnUnreadableSessionsFlag(t *testing.T)
 	getenv := func(k string) string {
 		return map[string]string{"QUERY_API_DATABASE_ROLE": "devhealth_query_api", "AUTH_PROXY_SESSIONS": "maybe"}[k]
 	}
-	check := queryAPIPostureCheck(getenv, nil)
+	check, stop := queryAPIPostureCheck(getenv, nil)
+	defer stop()
 	if check == nil {
 		t.Fatal("a named role must be checked")
 	}

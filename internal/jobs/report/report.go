@@ -67,6 +67,13 @@ type Plan struct {
 	ConfidenceThreshold string
 	CreatedAt           time.Time
 	OrganizationID      string
+	// UnchartedMetrics are the requested labels no chart of the report covers, each with the reason the reader sees.
+	UnchartedMetrics []UnchartedMetric
+}
+
+type UnchartedMetric struct {
+	Label  string
+	Reason string
 }
 
 type ChartSpec struct {
@@ -95,6 +102,10 @@ type ChartResult struct {
 	Title       string
 	SourceTable string
 	Unit        string
+	// NotApplicable is the reason a chart has no value at all (no query ran); Note names a part of the metric the chart
+	// leaves out.
+	NotApplicable string
+	Note          string
 }
 
 type ProvenanceRecord struct {

@@ -13,7 +13,8 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
-var rosterReadBack = regexp.MustCompile(`^SELECT manual_members FROM teams FINAL WHERE org_id = \{org_id:String\} AND id = \{team_id:String\}$`)
+// rosterReadBack is teamReadBackQuery (a literal: a package-level call is a test-binary side effect to the shard planner).
+var rosterReadBack = regexp.MustCompile(`^SELECT id, team_uuid, .+, deleted_at IS NOT NULL FROM teams FINAL WHERE org_id = \{org_id:String\} AND id = \{team_id:String\}$`)
 
 // staleCarryConn writes, before every roster read-back of writer a, a newer
 // version of the team that carries the roster [x] (a writer that read the

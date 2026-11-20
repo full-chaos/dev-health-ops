@@ -144,8 +144,19 @@ func readStaleKeyRuleStored(
 	}
 	query := "SELECT toFloat64(sum(" + strings.Join(sum, " + ") + ")), toUInt64(sum(" + strings.Join(nulls, " + ") +
 		")), toUInt64(sum(" + strings.Join(rest, " + ") + ")) FROM " + table.Table + " FINAL WHERE " + where
-	if err := conn.QueryRow(ctx, query, args...).Scan(&stored.measureSum, &stored.nullMeasures, &stored.nonDefaultRest); err != nil {
+	var measureSum *float64
+	var nullMeasures, nonDefaultRest *uint64
+	if err := conn.QueryRow(ctx, query, args...).Scan(&measureSum, &nullMeasures, &nonDefaultRest); err != nil {
 		t.Fatalf("read the newest row of a %s key: %v", table.Table, err)
+	}
+	if measureSum != nil {
+		stored.measureSum = *measureSum
+	}
+	if nullMeasures != nil {
+		stored.nullMeasures = *nullMeasures
+	}
+	if nonDefaultRest != nil {
+		stored.nonDefaultRest = *nonDefaultRest
 	}
 	return stored
 }
@@ -393,6 +404,10 @@ func TestARowOfZerosIsStrictlyNewerThanTheRowItSupersedes(t *testing.T) {
 	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
 	stored := staleKeyRuleDay.Add(30 * time.Hour)
 	for _, table := range StaleTeamKeyTables() {
+		// The check counts both versions of a key: a background merge of the ReplacingMergeTree folds them into the newest one.
+		if err := conn.Exec(ctx, "SYSTEM STOP MERGES "+table.Table); err != nil {
+			t.Fatalf("stop merges of %s: %v", table.Table, err)
+		}
 		for _, testCase := range []struct {
 			name, team string
 			clock      time.Time
@@ -401,6 +416,9 @@ func TestARowOfZerosIsStrictlyNewerThanTheRowItSupersedes(t *testing.T) {
 			// with no scope column too.
 			{"the clock is the computed_at of the old row", "platform-equal", stored},
 			{"the clock is one hour behind the old row", "platform-behind", stored.Add(-time.Hour)},
+			// A snapshot-stamped table keeps the guarantee here: a snapshot AFTER the stored row writes exactly one row of
+			// zeros, strictly newer than the row it supersedes. It loses only the two cases above, which its rule skips on purpose.
+			{"the clock is one hour ahead of the old row", "platform-ahead", stored.Add(time.Hour)},
 		} {
 			name, clock := testCase.name, testCase.clock
 			t.Run(table.Table+"/"+name, func(t *testing.T) {
@@ -413,6 +431,20 @@ func TestARowOfZerosIsStrictlyNewerThanTheRowItSupersedes(t *testing.T) {
 					scope = staleKeyScope{table.ScopeTuple(key): {}}
 				}
 				written, err := supersedeStaleTeamKeys(ctx, conn, table, staleKeyRuleOrg, staleKeyRuleDay, scope, nil, clock)
+				if _, snapshotStamped := staleKeySnapshot(table, clock); snapshotStamped {
+					// A snapshot-stamped table (testops_test_metrics_daily) writes its marker at the run's snapshot, never above a
+					// stored row: a snapshot that is equal to or behind the stored row retires nothing (the newest snapshot wins),
+					// and a snapshot after it writes exactly one row of zeros, checked below to be strictly newer.
+					if !clock.After(stored) {
+						if err != nil || written != 0 {
+							t.Fatalf("a snapshot not after the stored row wrote %d row(s) (err %v), want none", written, err)
+						}
+						return
+					}
+					if err != nil || written != 1 {
+						t.Fatalf("a snapshot after the stored row wrote %d row(s) (err %v), want exactly one row of zeros", written, err)
+					}
+				}
 				if err != nil || written < 1 {
 					t.Fatalf("the rule wrote %d row(s) (err %v), want the row of zeros of the key", written, err)
 				}

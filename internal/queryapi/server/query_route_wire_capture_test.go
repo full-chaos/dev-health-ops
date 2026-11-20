@@ -271,6 +271,7 @@ func TestRegisteredCapturedDocuments_MatchCapturedWireFixtures(t *testing.T) {
 		{"testdata/wire_capture/testopsjobfailures_v1_captured.graphql", registeredTestopsJobFailuresV1Document},
 		{"testdata/wire_capture/testopstestwindow_captured.graphql", registeredTestopsTestWindowDocument},
 		{"testdata/wire_capture/testopstestwindow_v1_captured.graphql", registeredTestopsTestWindowV1Document},
+		{"testdata/wire_capture/testopstestwindow_v2_captured.graphql", registeredTestopsTestWindowV2Document},
 		{"testdata/wire_capture/coveragebaselines_captured.graphql", registeredCoverageBaselinesDocument},
 		{"testdata/wire_capture/coveragescopebaseline_captured.graphql", registeredCoverageScopeBaselineDocument},
 		{"testdata/wire_capture/coveragescopebaseline_v1_captured.graphql", registeredCoverageScopeBaselineV1Document},

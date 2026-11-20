@@ -26,6 +26,8 @@ type githubTestsReportWindowDoer struct {
 	omitUpdatedAt bool
 	status        string
 	createdAt     string
+	startedAt     string
+	filterCreated bool
 	requests      []string
 	runQueries    []string
 }
@@ -48,12 +50,20 @@ func (doer *githubTestsReportWindowDoer) Do(request *http.Request) (*http.Respon
 		if created == "" {
 			created = "2026-07-22T10:00:00Z"
 		}
+		started := doer.startedAt
+		if started == "" {
+			started = "2026-07-22T10:01:00Z"
+		}
+		if doer.filterCreated && !githubTestsCreatedInRange(doer.t, request.URL.Query().Get("created"), created) {
+			body = `{"workflow_runs":[]}`
+			break
+		}
 		updated := `,"updated_at":"` + doer.updatedAt + `"`
 		if doer.omitUpdatedAt {
 			updated = ""
 		}
 		body = `{"workflow_runs":[{"id":9001,"name":"CI","status":"` + runStatus + `","conclusion":"success",` +
-			`"created_at":"` + created + `","run_started_at":"2026-07-22T10:01:00Z"` + updated +
+			`"created_at":"` + created + `","run_started_at":"` + started + `"` + updated +
 			`,"run_attempt":1,"event":"push","head_sha":"abc","head_branch":"main",` +
 			`"html_url":"https://github.com/acme/api/actions/runs/9001","pull_requests":[]}]}`
 	case "/repos/acme/api/actions/runs/9001/jobs":
@@ -178,16 +188,16 @@ func TestGitHubTestsReportPhaseNeverSkipsARunWithoutAnUpdatedAt(t *testing.T) {
 	}
 }
 
-// A backfill claim carries no SinceAt. It must filter nothing, or the first
-// sync of a repository would collect no reports at all.
-func TestGitHubTestsReportPhaseFiltersNothingWithoutASinceBound(t *testing.T) {
+// A claim with no SinceAt (an open start) must filter nothing on that edge. A
+// backfill unit always carries both edges (its planner chunks since..before).
+func TestGitHubTestsReportPhaseFiltersNothingForAnOpenStartClaim(t *testing.T) {
 	t.Parallel()
 	claim := nativeTestClaim("github", "tests")
 	claim.SinceAt = nil
 	doer := githubTestsReportWindowDoerFor(t, "2020-01-01T00:00:00Z")
 	if _, cases := collectGitHubTestsReportRows(t, doer, claim,
 		time.Date(2026, 7, 22, 13, 5, 0, 0, time.UTC)); cases == 0 {
-		t.Fatalf("backfill claim projected no cases: %v", doer.requests)
+		t.Fatalf("open-start claim projected no cases: %v", doer.requests)
 	}
 }
 

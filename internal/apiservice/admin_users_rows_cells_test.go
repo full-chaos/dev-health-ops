@@ -369,7 +369,8 @@ func TestAdminUsersRowsCellCompareSeesAPlantedMismatch(t *testing.T) {
 }
 
 // D6833: with the admin cell on, a platform admin with a live go-api impersonation row is refused the four
-// /admin/users writes (403, before any decision point call), a narrowing pm lists in the read-only impersonation flaw;
+// /admin/users writes (403 after the row's role question only, whose allow is still the session refusal: one platform
+// admin.users question, the org-less token has no organization to ask), a narrowing pm lists in the read-only impersonation flaw;
 // with the cell off the writes reach the handler as on main. Its reads keep the legacy answer on and off: a read is
 // never refused.
 func TestAdminUsersRowsImpersonationWritesAreRefusedAndReadsKeepTheLegacyAnswer(t *testing.T) {
@@ -399,8 +400,12 @@ func TestAdminUsersRowsImpersonationWritesAreRefusedAndReadsKeepTheLegacyAnswer(
 			} else if on.status != http.StatusForbidden || on.body != impersonationBody {
 				t.Errorf("%s %s write: on %d %q, want 403 %s", server.name, key, on.status, on.body, impersonationBody)
 			}
-			if calls := pdp.calls(); len(calls) != 0 {
-				t.Errorf("%s %s: %d decision point calls, want 0", server.name, key, len(calls))
+			wantCalls := 0
+			if !usersRead(key) {
+				wantCalls = 1
+			}
+			if calls := pdp.calls(); len(calls) != wantCalls || (wantCalls == 1 && (calls[0].Action != "admin.users" || calls[0].ResourceType != "platform")) {
+				t.Errorf("%s %s: decision point calls %+v, want %d (the admin.users platform question on a write)", server.name, key, calls, wantCalls)
 			}
 		}
 	}

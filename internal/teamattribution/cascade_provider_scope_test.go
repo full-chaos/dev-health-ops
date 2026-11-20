@@ -690,8 +690,9 @@ func TestALinkedIssueKeepsTheDonorsTeamIdentity(t *testing.T) {
 							{Provider: donorProvider, TeamID: "ENG", ProjectID: donorProject, IsPrimary: 1, Specificity: 80, Priority: 10},
 						},
 					})
-					donor := GithubWorkItemDerivationSubject{WorkItemID: donorProvider + ":ENG-42", Provider: donorProvider, ProjectID: &donorProject, OrgID: "org"}
+					donor := GithubWorkItemDerivationSubject{WorkItemID: donorProvider + ":ENG-42", Provider: donorProvider, ProjectID: &donorProject, Type: "issue", OrgID: "org"}
 					dependent := GithubWorkItemDerivationSubject{WorkItemID: itemProvider + ":item-7", Provider: itemProvider, Type: pullRequestType(itemProvider), OrgID: "org"}
+					derived.LinkTiers = map[LinkPair]string{{PullRequest: dependent.WorkItemID, Issue: donor.WorkItemID}: "native"}
 					linked, _, _ := derived.BuildLinkedIssueIndex(itemProvider,
 						map[string]GithubWorkItemDerivationSubject{donor.WorkItemID: donor, dependent.WorkItemID: dependent},
 						[]GithubWorkItemDerivationDependencyEdge{{SourceWorkItemID: dependent.WorkItemID, TargetWorkItemID: donor.WorkItemID, RelationshipType: "relates_to"}},

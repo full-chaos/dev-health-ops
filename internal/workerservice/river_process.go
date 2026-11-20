@@ -264,6 +264,11 @@ func riverWorkerClientConfig(
 		Schema:              cfg.RiverDatabaseSchema,
 		SoftStopTimeout:     softStop,
 		Workers:             workers,
+		// Zero (an unloaded config) leaves River's own default for that field.
+		CompletedJobRetentionPeriod: cfg.CompletedJobRetention,
+		CancelledJobRetentionPeriod: cfg.CancelledJobRetention,
+		DiscardedJobRetentionPeriod: cfg.DiscardedJobRetention,
+		JobCleanerTimeout:           cfg.RiverJobCleanerTimeout,
 		// otelriver emits the baseline river.work span (kind, queue, status) for
 		// every claimed job, picking up the global tracer provider tracing.Init
 		// installs at process start (a no-op TracerProvider when tracing is

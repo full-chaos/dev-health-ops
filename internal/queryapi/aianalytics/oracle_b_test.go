@@ -119,8 +119,19 @@ func (f *fixtureClientB) Query(ctx context.Context, st string, b []clickhouse.Bi
 		return &scriptedRows{rows: rows}, nil
 	case strings.Contains(st, "repo_id_str, number, kind, work_type"):
 		f.record(st, b)
+		// The work type is a predicate of the statement (on the candidates, before the page): the script keeps the
+		// rows the bound work_type selects.
+		workType := ""
+		for _, bd := range b {
+			if bd.Name == "work_type" {
+				workType = bd.Value.(string)
+			}
+		}
 		var rows [][]any
 		for _, m := range c.Prs {
+			if workType != "" && m["work_type"].(string) != workType {
+				continue
+			}
 			var title, merged any
 			if v, ok := m["title"]; ok && v != nil {
 				title = v.(string)

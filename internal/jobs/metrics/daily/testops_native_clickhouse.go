@@ -180,7 +180,7 @@ func loadNativeTestopsPipelineRuns(
 ) error {
 	rows, err := conn.Query(ctx, `
 SELECT status, queued_at, started_at, finished_at, duration_seconds, queue_seconds,
-       retry_count, team_id, service_id, org_id, run_id`+testopsPipelineRunsSource+`
+       retry_count, team_id, service_id, org_id, run_id, last_synced`+testopsPipelineRunsSource+`
 ORDER BY run_id`,
 		testopsSourceArgs(orgID, []uuid.UUID{repoID}, start, end)...)
 	if err != nil {
@@ -194,7 +194,7 @@ ORDER BY run_id`,
 		if err := rows.Scan(
 			&row.Status, &row.QueuedAt, &row.StartedAt, &row.FinishedAt,
 			&row.DurationSeconds, &row.QueueSeconds, &row.RetryCount,
-			&row.TeamID, &row.ServiceID, &row.OrgID, &runID,
+			&row.TeamID, &row.ServiceID, &row.OrgID, &runID, &row.LastSynced,
 		); err != nil {
 			return fmt.Errorf("scan native testops pipeline run: %w", err)
 		}
@@ -511,7 +511,7 @@ func loadNativeTestopsLatestCoverage(
 	}
 	rows, err := conn.Query(ctx, `
 SELECT c.run_id, c.snapshot_id, c.lines_total, c.lines_covered,
-       c.line_coverage_pct, c.branch_coverage_pct, c.team_id, c.service_id, c.org_id
+       c.line_coverage_pct, c.branch_coverage_pct, c.branches_total, c.branches_covered, c.team_id, c.service_id, c.org_id
 FROM coverage_snapshots AS c FINAL
 INNER JOIN ci_pipeline_runs AS p FINAL
   ON (p.repo_id = c.repo_id) AND (p.run_id = c.run_id) AND (p.org_id = c.org_id)
@@ -530,7 +530,7 @@ LIMIT 1`, args...)
 		row := testops.CoverageSnapshotRow{RepoID: repoID}
 		if err := rows.Scan(
 			&row.RunID, &row.SnapshotID, &row.LinesTotal, &row.LinesCovered,
-			&row.LineCoveragePct, &row.BranchCoveragePct, &row.TeamID, &row.ServiceID, &row.OrgID,
+			&row.LineCoveragePct, &row.BranchCoveragePct, &row.BranchesTotal, &row.BranchesCovered, &row.TeamID, &row.ServiceID, &row.OrgID,
 		); err != nil {
 			return nil, fmt.Errorf("scan native testops coverage snapshot: %w", err)
 		}
@@ -567,11 +567,19 @@ func writeTestopsPipelineMetrics(
 		repo_id, day, pipelines_count, success_count, failure_count, cancelled_count,
 		success_rate, failure_rate, cancel_rate, rerun_rate,
 		median_duration_seconds, p95_duration_seconds, avg_queue_seconds, p95_queue_seconds,
-		team_id, service_id, org_id, computed_at)`)
+		team_id, service_id, org_id, computed_at,
+		skipped_count, unfinished_count, other_count, unfinished_stale_count,
+		pooled_service_ids, pooled_durations, pooled_queues, pooled_samples_stored)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare testops_pipeline_metrics_daily batch: %w", err)
 	}
 	for _, metric := range metrics {
+		samples := metric.PooledSamples
+		fit := pooledSamplesFit(ctx, "testops_pipeline", organizationID, metric.RepoID.String(), day, len(samples))
+		if !fit {
+			samples = nil
+		}
+		services, durations, queues := pooledSampleColumns(samples)
 		if err := batch.Append(
 			metric.RepoID, chDate(day),
 			// pipelines_count/success_count/failure_count/cancelled_count
@@ -584,6 +592,9 @@ func writeTestopsPipelineMetrics(
 			metric.MedianDurationSeconds, metric.P95DurationSeconds,
 			metric.AvgQueueSeconds, metric.P95QueueSeconds,
 			metric.TeamID, metric.ServiceID, organizationID, computedAt.UTC(),
+			uint32PtrOf(metric.SkippedCount), uint32PtrOf(metric.UnfinishedCount),
+			uint32PtrOf(metric.OtherCount), uint32PtrOf(metric.UnfinishedStaleCount),
+			services, durations, queues, pooledMarker(fit),
 		); err != nil {
 			return 0, fmt.Errorf("append testops_pipeline_metrics_daily row: %w", err)
 		}
@@ -629,7 +640,10 @@ func writeTestopsTestMetrics(
 		repo_id, day, total_cases, passed_count, failed_count, skipped_count, quarantined_count,
 		pass_rate, failure_rate, flake_rate, retry_dependency_rate, total_suites,
 		suite_duration_p50_seconds, suite_duration_p95_seconds, failure_recurrence_score,
-		team_id, service_id, org_id, computed_at, flake_cases, distinct_cases)`)
+		team_id, service_id, org_id, computed_at, flake_cases, distinct_cases,
+		pooled_service_ids, pooled_durations, pooled_samples_stored,
+		report_runs, partial_report_runs, unmarked_report_runs,
+		recurrent_failed_names, distinct_failed_names)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare testops_test_metrics_daily batch: %w", err)
 	}
@@ -640,6 +654,16 @@ func writeTestopsTestMetrics(
 		// day is unknown. A NULL pair would blank the whole org day instead.
 		flakeCases, distinctCases := uint32PtrOf(metric.FlakeCases), uint32PtrOf(metric.DistinctCases)
 		flakeRate, retryDependencyRate, failureRecurrence := measuredCaseRates(metric)
+		samples := metric.PooledSamples
+		fit := pooledSamplesFit(ctx, "testops_test", organizationID, metric.RepoID.String(), day, len(samples))
+		if !fit {
+			samples = nil
+		}
+		services, durations, _ := pooledSampleColumns(samples)
+		var reportRuns, partialReportRuns, unmarkedReportRuns *uint32
+		if counts := metric.ReportRuns; counts != nil {
+			reportRuns, partialReportRuns, unmarkedReportRuns = uint32PtrOf(counts.Runs), uint32PtrOf(counts.Partial), uint32PtrOf(counts.Unmarked)
+		}
 		if err := batch.Append(
 			metric.RepoID, chDate(day),
 			// total_cases/passed_count/failed_count/skipped_count/
@@ -657,6 +681,12 @@ func writeTestopsTestMetrics(
 			// the columns existed reads NULL, a row written now carries both counts
 			// (CHAOS-9737), so the org series can sum them.
 			flakeCases, distinctCases,
+			services, durations, pooledMarker(fit),
+			// report_runs/partial_report_runs/unmarked_report_runs: NULL only for a record whose completeness was not read.
+			reportRuns, partialReportRuns, unmarkedReportRuns,
+			// The two counts of failure_recurrence_score, on every row (0/0 on a day with no failed name): a report
+			// window pools them. A row written before the columns existed reads NULL and is in neither sum.
+			uint32PtrOf(metric.RecurrentFailedNames), uint32PtrOf(metric.DistinctFailedNames),
 		); err != nil {
 			return 0, fmt.Errorf("append testops_test_metrics_daily row: %w", err)
 		}
@@ -685,7 +715,7 @@ func writeTestopsCoverageMetrics(
 	batch, err := conn.PrepareBatch(ctx, `INSERT INTO testops_coverage_metrics_daily (
 		repo_id, day, line_coverage_pct, branch_coverage_pct, lines_total, lines_covered,
 		coverage_delta_pct, uncovered_files_count, coverage_regression_count,
-		team_id, service_id, org_id, computed_at)`)
+		team_id, service_id, org_id, computed_at, branches_total, branches_covered)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare testops_coverage_metrics_daily batch: %w", err)
 	}
@@ -699,6 +729,7 @@ func writeTestopsCoverageMetrics(
 			// input) -- a constant conversion, never negative or unbounded.
 			uint32(metric.UncoveredFilesCount), uint32(metric.CoverageRegressionCount),
 			metric.TeamID, metric.ServiceID, organizationID, computedAt.UTC(),
+			metric.BranchesTotal, metric.BranchesCovered,
 		); err != nil {
 			return 0, fmt.Errorf("append testops_coverage_metrics_daily row: %w", err)
 		}

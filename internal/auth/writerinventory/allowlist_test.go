@@ -26,14 +26,6 @@ var Allowlist = []Entry{
 	{File: "internal/api/session/store.go", Func: "touchLastLogin", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/api/session/store.go", Func: "updateAttempt", Table: "public.login_attempts", Verb: "UPDATE"},
 	{File: "internal/api/session/verify.go", Func: "revokeAllForUser", Table: "public.refresh_tokens", Verb: "UPDATE"},
-	{File: "internal/api/sso/login.go", Func: "handlers.finishSSOLogin", Table: "public.sso_providers", Verb: "UPDATE"},
-	{File: "internal/api/sso/login.go", Func: "handlers.recordSSOFailure", Table: "public.sso_providers", Verb: "UPDATE"},
-	{File: "internal/api/sso/oauth.go", Func: "handlers.oauthProvisionUser", Table: "public.users", Verb: "UPDATE"},
-	{File: "internal/api/sso/providers.go", Func: "handlers.setStatus", Table: "public.sso_providers", Verb: "UPDATE"},
-	{File: "internal/api/sso/provision.go", Func: "handlers.createAccountAndMembership", Table: "public.memberships", Verb: "INSERT"},
-	{File: "internal/api/sso/provision.go", Func: "handlers.createAccountAndMembership", Table: "public.users", Verb: "INSERT"},
-	{File: "internal/api/sso/provision.go", Func: "handlers.membershipOrJoin", Table: "public.memberships", Verb: "INSERT"},
-	{File: "internal/api/sso/provision.go", Func: "handlers.provisionOrGetUser", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/invites.go", Func: "handlers.createInvite", Table: "public.org_invites", Verb: "INSERT"},
 	// CHAOS-13531 acp ruling Q2: a real org delete sets is_active false before the acr revoke, so acr refuses the
 	// organization's credentials at once.
@@ -300,8 +292,6 @@ var Allowlist = []Entry{
 	{File: "internal/auth/session/store.go", Func: "Store.rotate", Table: "auth.refresh_credentials", Verb: "INSERT"},
 	{File: "internal/auth/session/store.go", Func: "Store.rotate", Table: "auth.refresh_credentials", Verb: "UPDATE"},
 	{File: "internal/auth/session/store.go", Func: "Store.rotate", Table: "auth.sessions", Verb: "UPDATE"},
-	// live-e2e job-local seed; in no served binary (go list -deps census, f942ad6f3c9868d7f7a7555184d4852d4661ada9f0dd3ae265138737b2772f50); deleted when 13636 PR2 lands (P-8)
-	{File: "internal/cigates/livee2e/ssoseed/ssoseed.go", Func: "Insert", Table: "public.sso_providers", Verb: "INSERT"},
 	{File: "internal/maintenancecli/maintenance.go", Func: "CleanupExpiredTokens", Table: "public.refresh_tokens", Verb: "DELETE"},
 	{File: "internal/testsupport/authplane/authplane.go", Func: "Start", Table: "auth.principals", Verb: "INSERT"},          // test support: the venue auth plane's go-api workload principal, the issue route's audit actor
 	{File: "internal/testsupport/authplane/authorize.go", Func: "StartAuthorize", Table: "auth.principals", Verb: "INSERT"}, // test support: the venue decision point's go-api caller workload, the authorize routes' audit actor

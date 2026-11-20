@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
@@ -19,9 +21,10 @@ const (
 
 func readerHandlers(spy *resolverSpy) *handlers {
 	return &handlers{
-		validateURL:      spy.validate,
-		storedKey:        func(context.Context, string) (string, error) { return readerStoredKey, nil },
-		storedPurposeKey: func(context.Context, string, llmorgsettings.Purpose) (string, error) { return readerPurposeKey, nil },
+		validateURL:        spy.validate,
+		storedKey:          func(context.Context, string) (string, error) { return readerStoredKey, nil },
+		storedPurposeKey:   func(context.Context, string, llmorgsettings.Purpose) (string, error) { return readerPurposeKey, nil },
+		storedScopeBaseURL: func(context.Context, string, llmorgsettings.Purpose) (string, error) { return "", nil },
 	}
 }
 
@@ -43,7 +46,7 @@ func TestApplyLLMPurposeRefusesAKeyInTheBaseURLBeforeResolution(t *testing.T) {
 		},
 	} {
 		spy := &resolverSpy{valid: true}
-		out, refusal, err := readerHandlers(spy).applyLLMPurpose(context.Background(), "org", tc)
+		out, refusal, err := readerHandlers(spy).applyLLMPurpose(context.Background(), uuid.Nil, tc)
 		if err != nil || out != nil || refusal == nil || refusal.status != 400 || spy.calls != 0 {
 			t.Fatalf("%s: out=%v refusal=%v err=%v resolver calls=%d", name, out, refusal, err, spy.calls)
 		}
@@ -54,11 +57,11 @@ func TestReadinessURLValidRefusesAKeyBeforeResolution(t *testing.T) {
 	spy := &resolverSpy{valid: true}
 	h := readerHandlers(spy)
 	keyed := readinessBYOConfig{provider: "anthropic", apiKey: secrets.NewHidden(readerStoredKey), baseURL: "https://" + readerStoredKey + ".example.invalid"}
-	if valid, err := h.readinessURLValid(context.Background(), keyed); err != nil || valid || spy.calls != 0 {
+	if valid, err := h.readinessURLValid(context.Background(), "org", keyed); err != nil || valid || spy.calls != 0 {
 		t.Fatalf("keyed: valid=%v err=%v resolver calls=%d", valid, err, spy.calls)
 	}
 	clean := readinessBYOConfig{provider: "anthropic", apiKey: secrets.NewHidden(readerStoredKey), baseURL: readerCleanURL}
-	if valid, err := h.readinessURLValid(context.Background(), clean); err != nil || !valid || spy.calls != 1 {
+	if valid, err := h.readinessURLValid(context.Background(), "org", clean); err != nil || !valid || spy.calls != 1 {
 		t.Fatalf("clean: valid=%v err=%v resolver calls=%d", valid, err, spy.calls)
 	}
 }
@@ -66,10 +69,10 @@ func TestReadinessURLValidRefusesAKeyBeforeResolution(t *testing.T) {
 func TestSpendUsabilityRefusesAKeyBeforeResolution(t *testing.T) {
 	spy := &resolverSpy{valid: true}
 	h := readerHandlers(spy)
-	if ok, err := h.byoConfigUsable(context.Background(), "openai", readerStoredKey, "https://p.example.invalid/"+readerStoredKey); err != nil || ok || spy.calls != 0 {
+	if ok, err := h.byoConfigUsable(context.Background(), "org", "openai", readerStoredKey, "https://p.example.invalid/"+readerStoredKey); err != nil || ok || spy.calls != 0 {
 		t.Fatalf("keyed: ok=%v err=%v resolver calls=%d", ok, err, spy.calls)
 	}
-	if ok, err := h.byoConfigUsable(context.Background(), "openai", readerStoredKey, readerCleanURL); err != nil || !ok || spy.calls != 1 {
+	if ok, err := h.byoConfigUsable(context.Background(), "org", "openai", readerStoredKey, readerCleanURL); err != nil || !ok || spy.calls != 1 {
 		t.Fatalf("clean: ok=%v err=%v resolver calls=%d", ok, err, spy.calls)
 	}
 }
@@ -78,7 +81,7 @@ func TestSpendUsabilityRefusesAKeyBeforeResolution(t *testing.T) {
 func TestPurposeKeyRefusalCarriesNoKeyOrURLText(t *testing.T) {
 	spy := &resolverSpy{valid: true}
 	badURL := "https://" + readerStoredKey + ".example.invalid/v1"
-	_, refusal, err := readerHandlers(spy).applyLLMPurpose(context.Background(), "org", llmPurposeUpsert{
+	_, refusal, err := readerHandlers(spy).applyLLMPurpose(context.Background(), uuid.Nil, llmPurposeUpsert{
 		purpose: llmorgsettings.PurposeInvestigate, provider: "openai", model: "m", baseURL: &badURL,
 	})
 	if err != nil || refusal == nil {

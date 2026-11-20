@@ -47,10 +47,11 @@ func TestMetricSeriesGiveRetractionRowsNoWeight(t *testing.T) {
 	control := read(retractionseed.ControlOrg)
 
 	// The control series, from the seed: four teams, six days. The defect
-	// intro rate of the teams is 0.125, 0.25, 0.375 and 0.5 on every day, so
-	// the organization mean is 0.3125. The cycle time is 8, 16, 24 and 32
+	// intro rate is new bugs over new items: the teams make 1, 2, 1 and 2 new
+	// bugs of 4 new items on every day, so 0.25, 0.5, 0.25 and 0.5, and the
+	// organization is 6 of 16, 0.375. The cycle time is 8, 16, 24 and 32
 	// hours, mean 20.
-	wantTeams := map[string]float64{"jira:ENG": 0.125, "github:platform": 0.25, "gitlab:ops": 0.375, "linear:core": 0.5}
+	wantTeams := map[string]float64{"jira:ENG": 0.25, "github:platform": 0.5, "gitlab:ops": 0.25, "linear:core": 0.5}
 	teamSeries := control["defect_intro_rate/"+ScopeTeam]
 	if len(teamSeries) != len(wantTeams) {
 		t.Fatalf("control defect_intro_rate team series = %v, want the four keyed teams", teamSeries)
@@ -66,7 +67,7 @@ func TestMetricSeriesGiveRetractionRowsNoWeight(t *testing.T) {
 			}
 		}
 	}
-	for key, want := range map[string]float64{"defect_intro_rate/" + ScopeGlobal: 0.3125, "cycle_time_hours/" + ScopeGlobal: 20} {
+	for key, want := range map[string]float64{"defect_intro_rate/" + ScopeGlobal: 0.375, "cycle_time_hours/" + ScopeGlobal: 20} {
 		points := control[key]["global"]
 		if len(points) != 6 {
 			t.Fatalf("control %s = %+v, want six days", key, control[key])

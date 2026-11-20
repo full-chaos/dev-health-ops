@@ -26,12 +26,30 @@ func githubTestsCommitReportWindowPass(
 	doer providerfoundation.HTTPDoer, orgID string, since, before, normalizedAt time.Time,
 ) int {
 	t.Helper()
+	return githubTestsCommitReportWindowPassMode(t, ctx, sink, doer, orgID, "incremental", since, before, normalizedAt)
+}
+
+func githubTestsCommitReportWindowPassMode(
+	t *testing.T, ctx context.Context, sink GitHubTestsClickHouseEffects,
+	doer providerfoundation.HTTPDoer, orgID, mode string, since, before, normalizedAt time.Time,
+) int {
+	t.Helper()
 	claim := nativeTestClaim("github", "tests")
+	claim.Mode = mode
 	claim.OrgID = orgID
 	claim.ID = uuid.NewString()
 	claim.SyncRunID = uuid.NewString()
 	claim.SinceAt, claim.BeforeAt = &since, &before
+	return githubTestsCommitReportWindowPassClaim(t, ctx, sink, doer, claim, normalizedAt)
+}
 
+// githubTestsCommitReportWindowPassClaim is githubTestsCommitReportWindowPassMode
+// for a claim the caller built.
+func githubTestsCommitReportWindowPassClaim(
+	t *testing.T, ctx context.Context, sink GitHubTestsClickHouseEffects,
+	doer providerfoundation.HTTPDoer, claim Claim, normalizedAt time.Time,
+) int {
+	t.Helper()
 	order := make([]string, 0, 6)
 	rowsByDestination := map[string][]json.RawMessage{}
 	recoveryByDestination := map[string]EffectRecoveryPolicy{}

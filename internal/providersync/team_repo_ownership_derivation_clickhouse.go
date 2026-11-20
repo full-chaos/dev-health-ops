@@ -134,6 +134,12 @@ type TeamRepoOwnershipDerivationStats struct {
 	// native issue link.
 	TextKeyCandidates        int
 	TextKeysSkippedForNative int
+	// DonorsRefused counts, by reason (pr_kind, empty_type, unknown), the distinct (source, donor) edges whose donor the
+	// run did not use because it is not an issue (teamattribution.LinkedIssueDonorRefusal).
+	DonorsRefused map[string]int
+	// RetractedWithoutEvidence is how many rows the run closed or voided whose claim has no recorded input evidence
+	// (written before the store, CHAOS-9349): they close on the kind guard alone (reason no_recorded_evidence).
+	RetractedWithoutEvidence int
 }
 
 // Derive is DeriveWithStats without the stats (the form the integration tests and the older callers use).
@@ -225,7 +231,7 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	// catalog before trusting it -- see TeamRepoOwnershipKnownTeam's doc
 	// comment. Loaded here (before the guard below, not after) because that
 	// guard now needs to know whether a Linear-native signal exists.
-	knownTeams, err := loadTeamRepoOwnershipKnownTeams(ctx, service.Conn, orgID)
+	knownTeams, linearTeamIDs, err := loadTeamRepoOwnershipTeamCatalog(ctx, service.Conn, orgID)
 	if err != nil {
 		return 0, 0, false, nil, err
 	}
@@ -264,6 +270,14 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 			"skipped_for_native_link", derivation.TextKeysSkippedForNative)
 	}
 
+	stats.DonorsRefused = derivation.DonorsRefused
+	if len(derivation.DonorsRefused) > 0 {
+		slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.donor_refused",
+			"org_id", orgID, "pr_kind", derivation.DonorsRefused[teamattribution.LinkedIssueDonorRefusedPullKind],
+			"empty_type", derivation.DonorsRefused[teamattribution.LinkedIssueDonorRefusedEmptyType],
+			"unknown", derivation.DonorsRefused[teamattribution.LinkedIssueDonorRefusedUnknown])
+	}
+
 	activeRows, err := loadTeamRepoOwnershipActiveInferredRows(ctx, service.Conn, orgID)
 	if err != nil {
 		return 0, 0, true, nil, err
@@ -279,13 +293,25 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	// with no resolvable Linear team key cannot reconfirm a row of the
 	// linear_team_key arm. The guard (team_repo_ownership_retraction_guard.go)
 	// keeps every retraction whose kinds are not all proven, and reports it.
-	linkHistory, err := loadTeamRepoOwnershipTeamLinkProviders(ctx, service.Conn, orgID)
+	linkKeys, linkHistory, err := loadTeamRepoOwnershipLinkKeys(ctx, service.Conn, orgID)
 	if err != nil {
 		return 0, 0, true, nil, err
 	}
 	guard := newTeamRepoOwnershipRetractionGuard(projectLinks, linkHistory, workItems, knownTeams)
+	// CHAOS-9349: the guard proves the run read the kind's inputs; the
+	// recorded evidence proves that every input row of a claim the run does
+	// not derive is in the run, so a missing row holds the close.
+	recorded, err := loadTeamRepoOwnershipEvidence(ctx, service.Conn, orgID)
+	if err != nil {
+		return 0, 0, true, nil, err
+	}
+	evidence := newTeamRepoOwnershipEvidence(recorded,
+		newTeamRepoOwnershipEvidenceHeld(workItems, dependencyEdges, issuePRLinks, linkKeys, linearTeamIDs))
 	retractions := diffTeamRepoOwnershipRetractions(activeRows, derived, repos)
 	toRetract, held, heldKinds := guard.retain(retractions)
+	toRetract, heldByEvidence, heldEvidence := evidence.retain(toRetract)
+	held += heldByEvidence
+	heldKinds = append(heldKinds, heldEvidence...)
 	// Each claim's evidence is settled (set aside when it is in the future of
 	// the run or older than the end of the claim's last retraction; a main
 	// owner's moved to the end of another team's main tenure), then the start
@@ -314,6 +340,9 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	// never has two main rows, nor loses the main row it had: it waits for a run
 	// that proves them all.
 	keptRoleCloses, heldRoles, heldRoleKinds := guard.retain(roleCloses)
+	keptRoleCloses, heldRolesByEvidence, heldRoleEvidence := evidence.retain(keptRoleCloses)
+	heldRoles += heldRolesByEvidence
+	heldRoleKinds = append(heldRoleKinds, heldRoleEvidence...)
 	heldRepos := teamRepoOwnershipReposOf(withoutRows(retractions, toRetract), withoutRows(roleCloses, keptRoleCloses))
 	derived, toRetract, keptRoleCloses, repoHeld := withoutHeldRoleChanges(derived, roleChanged, toRetract, keptRoleCloses, heldRepos, repos)
 	if repoHeld > 0 {
@@ -333,7 +362,9 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 			return 0, 0, true, nil, err
 		}
 		earlier, _ := splitFloorDroppedRows(closed, derivation.DroppedBelowShareFloor)
-		voids = append(voids, earlier...)
+		// A floor void is a close: the closed rows of a dropped co-owner are
+		// voided only under the proof of its open rows (CHAOS-9349 (b)).
+		voids = append(voids, provenFloorVoids(earlier, activeRows, toRetract, guard, evidence)...)
 	}
 	if len(closes) > 0 {
 		retracted, err = retractTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, closes)
@@ -358,6 +389,20 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 		slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.role_changed", "org_id", orgID, "rows", changed)
 	}
 	activeRows = withoutRows(activeRows, keptRoleCloses)
+
+	if withoutRecord := evidence.withoutRecord(closes, voids, keptRoleCloses); withoutRecord > 0 {
+		stats.RetractedWithoutEvidence = withoutRecord
+		slog.Default().InfoContext(ctx, TeamRepoOwnershipRetractedWithoutEvidenceLog,
+			"org_id", orgID, "rows", withoutRecord, "reason", TeamRepoOwnershipNoRecordedEvidence)
+	}
+	closedClaims := map[InferredRepoOwnershipClaim]struct{}{}
+	for _, row := range append(append([]teamRepoOwnershipActiveRow(nil), closes...), voids...) {
+		closedClaims[inferredClaimOf(row)] = struct{}{}
+	}
+	if err := writeTeamRepoOwnershipEvidence(ctx, service.Conn, orgID, now,
+		evidence.upkeep(teamRepoOwnershipDerivedEvidence(derivation.Evidence, repos), closedClaims)); err != nil {
+		return 0, retracted, true, nil, err
+	}
 
 	stats.Derived = len(derived)
 	stats.Ties = derivation.Ties
@@ -1058,6 +1103,7 @@ GROUP BY o.provider, o.project_id, o.team_id`,
 			return nil, err
 		}
 		link.IsPrimary = isPrimary == 1
+		link.StoredProjectID = link.ProjectID
 		out = append(out, link)
 	}
 	if err := rows.Err(); err != nil {
@@ -1117,32 +1163,6 @@ func remapLegacyGitLabProjectLinks(
 		slog.Default().Log(ctx, level, "gitlab_legacy_ownership_links_remapped", "org_id", orgID, "remapped", remapped, "ambiguous_dropped", dropped)
 	}
 	return out, nil
-}
-
-// loadTeamRepoOwnershipTeamLinkProviders reads every (provider, team) pair a
-// team_project_ownership row of the org names, open or closed: the providers
-// whose links can have derived a row of the team (the retraction guard).
-func loadTeamRepoOwnershipTeamLinkProviders(
-	ctx context.Context, conn driver.Conn, orgID string,
-) ([]TeamRepoOwnershipTeamLinkProvider, error) {
-	rows, err := conn.Query(ctx, `
-SELECT DISTINCT provider, team_id
-FROM team_project_ownership
-WHERE org_id = ? AND team_id != ''`,
-		orgID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []TeamRepoOwnershipTeamLinkProvider
-	for rows.Next() {
-		var link TeamRepoOwnershipTeamLinkProvider
-		if err := rows.Scan(&link.Provider, &link.TeamID); err != nil {
-			return nil, err
-		}
-		out = append(out, link)
-	}
-	return out, rows.Err()
 }
 
 func loadTeamRepoOwnershipRepos(
@@ -1263,6 +1283,16 @@ func anchorGitLabOwnershipWorkItems(
 func loadTeamRepoOwnershipKnownTeams(
 	ctx context.Context, conn driver.Conn, orgID string,
 ) ([]TeamRepoOwnershipKnownTeam, error) {
+	known, _, err := loadTeamRepoOwnershipTeamCatalog(ctx, conn, orgID)
+	return known, err
+}
+
+// loadTeamRepoOwnershipTeamCatalog is loadTeamRepoOwnershipKnownTeams plus the
+// id of every Linear team row, active or not: the Linear team keys a run holds
+// (CHAOS-9349; an inactive team is a changed row, not a missing one).
+func loadTeamRepoOwnershipTeamCatalog(
+	ctx context.Context, conn driver.Conn, orgID string,
+) ([]TeamRepoOwnershipKnownTeam, []string, error) {
 	rows, err := conn.Query(ctx, `
 SELECT provider, id, argMax(is_active, (updated_at, last_synced, is_active)) AS is_active,
        ifNull((argMax(tuple(native_team_key), (updated_at, last_synced, ifNull(native_team_key, '')))).1, '') AS native_team_key
@@ -1271,21 +1301,23 @@ WHERE org_id = ? AND provider = 'linear'
 GROUP BY provider, id`,
 		orgID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
 	var out []TeamRepoOwnershipKnownTeam
+	var ids []string
 	for rows.Next() {
 		var provider, id, nativeTeamKey string
 		var isActive uint8
 		if err := rows.Scan(&provider, &id, &isActive, &nativeTeamKey); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+		ids = append(ids, id)
 		if isActive != 0 {
 			out = append(out, TeamRepoOwnershipKnownTeam{Provider: provider, ID: id, NativeTeamKey: nativeTeamKey})
 		}
 	}
-	return out, rows.Err()
+	return out, ids, rows.Err()
 }
 
 func loadTeamRepoOwnershipDependencyEdges(

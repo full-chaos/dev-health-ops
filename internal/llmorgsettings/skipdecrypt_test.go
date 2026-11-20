@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -140,22 +141,58 @@ func TestSkipDecryptKeepsTheUnboundMarkOfASkippedKey(t *testing.T) {
 	}
 }
 
-// The base_url leak-check set is the default, investigate and explain api_keys
-// for every store purpose; a categorize api_key never enters it.
-func TestLeakCheckSetPerStorePurposeNeverHoldsTheCategorizeKey(t *testing.T) {
-	const defaultKey, investigateKey, explainKey, categorizeKey = "sk-default", "sk-investigate", "sk-explain", "sk-categorize"
+// The pin of CHAOS-10323 as CHAOS-14232 narrowed it: a non-categorize store's
+// leak-check set holds the categorize key ONLY when that store serves a
+// non-empty base_url. The key stays sealed at load (no decrypt); with no served
+// base_url it is never opened; with one it is opened once and a url that
+// carries it is refused. The categorize store checks its own key as the served
+// one and never opens a sealed key. The loaded set (keysForLeakChecks) is the
+// default, investigate and explain keys for every store.
+func TestLeakCheckHoldsTheCategorizeKeyOnlyForAServedBaseURL(t *testing.T) {
+	const defaultKey, investigateKey, explainKey, categorizeKey = "sk-default", "sk-investigate", "sk-explain", "sk-categorize-0123456789"
+	const sealed = "categorize-ciphertext"
+	opens := 0
+	previous := openSealedKey
+	openSealedKey = func(_ providerfoundation.FernetDecryptor, value string) ([]byte, error) {
+		opens++
+		if value != sealed {
+			t.Fatalf("opened %q, want the sealed categorize row", value)
+		}
+		return []byte(categorizeKey), nil
+	}
+	t.Cleanup(func() { openSealedKey = previous })
 	want := []string{defaultKey, explainKey, investigateKey}
-	for _, purpose := range []Purpose{"", PurposeInvestigate, PurposeExplain, PurposeCategorize} {
-		settings, _ := loadCountingDecryptFailures(t, purpose, []skipRow{
+	for _, purpose := range everyStore {
+		settings, failures := loadCountingDecryptFailures(t, purpose, []skipRow{
 			{keyAPIKey, defaultKey, false, skipAt},
 			{PurposeKey(PurposeInvestigate, keyAPIKey), investigateKey, false, skipAt},
 			{PurposeKey(PurposeExplain, keyAPIKey), explainKey, false, skipAt},
-			{PurposeKey(PurposeCategorize, keyAPIKey), categorizeKey, false, skipAt},
+			{PurposeKey(PurposeCategorize, keyAPIKey), sealed, true, skipAt},
 		})
 		got := keysForLeakChecks(settings)
 		sort.Strings(got)
 		if !reflect.DeepEqual(got, want) {
-			t.Errorf("purpose=%q: leak-check set = %v, want %v", purpose, got, want)
+			t.Errorf("purpose=%q: loaded leak-check set = %v, want %v", purpose, got, want)
+		}
+		store := Store{purpose: purpose}
+		opens = 0
+		if store.storedKeyInBaseURL(settings, "") || opens != 0 {
+			t.Errorf("purpose=%q: no served base_url: opens=%d, want 0 and no hit", purpose, opens)
+		}
+		carrying := "https://p.example.invalid/v1?k=" + categorizeKey
+		hit := store.storedKeyInBaseURL(settings, carrying)
+		if purpose == PurposeCategorize {
+			if hit || opens != 0 || failures != 1 {
+				t.Errorf("categorize store: hit=%v opens=%d decrypt failures=%d, want no sealed-key path (own key is the served one)", hit, opens, failures)
+			}
+			continue
+		}
+		if !hit || opens != 1 || failures != 0 {
+			t.Errorf("purpose=%q: served url carrying the categorize key: hit=%v opens=%d decrypt failures=%d, want hit, 1 open, 0 failures", purpose, hit, opens, failures)
+		}
+		opens = 0
+		if store.storedKeyInBaseURL(settings, "https://p.example.invalid/v1") || opens != 1 {
+			t.Errorf("purpose=%q: clean served url: opens=%d, want 1 and no hit", purpose, opens)
 		}
 	}
 }

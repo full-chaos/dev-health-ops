@@ -55,8 +55,8 @@ func TestAuthProxySAMLForwardOffAnswersConfigMissingAndNeverReachesAuthService(t
 		}
 		seen[call.aggregate]++
 	}
-	if seen[AuthSAML] != 3 || seen[AuthOIDC] != 2 {
-		t.Fatalf("proxyCalls cover SAML %d and OIDC %d routes, want 3 and 2", seen[AuthSAML], seen[AuthOIDC])
+	if seen[AuthSAML] != 3 || seen[AuthOIDC] != 5 {
+		t.Fatalf("proxyCalls cover SAML %d and OIDC %d routes, want 3 and 5", seen[AuthSAML], seen[AuthOIDC])
 	}
 	for _, request := range stub.requests() {
 		if strings.Contains(request.path, "/saml/") {

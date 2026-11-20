@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/storedversion"
 )
 
 type gitHubDeploymentsDoer struct{ requests []string }
@@ -185,7 +186,33 @@ func TestDeploymentReadbackRejectsEachPersistedFieldMismatch(t *testing.T) {
 		{name: "release confidence", mutate: func(row *deploymentRow) { row.ReleaseRefConfidence = 0.5 }, found: true, want: EffectConflict},
 		{name: "last synced zero", mutate: func(row *deploymentRow) { row.LastSynced = time.Time{} }, found: true, want: EffectAbsent},
 		{name: "last synced older", mutate: func(row *deploymentRow) { row.LastSynced = now.Add(-time.Millisecond) }, found: true, want: EffectAbsent},
-		{name: "last synced newer", mutate: func(row *deploymentRow) { row.LastSynced = now.Add(time.Millisecond) }, found: true, want: EffectConflict},
+		{name: "last synced newer past the repair window", mutate: func(row *deploymentRow) {
+			row.LastSynced = now.Add(storedversion.RepairVersionWindow + time.Millisecond)
+		}, found: true, want: EffectConflict},
+		{name: "own repair at the window edge", mutate: func(row *deploymentRow) { row.LastSynced = now.Add(storedversion.RepairVersionWindow) }, found: true, want: EffectExact},
+		{
+			name: "own repair fills a null merge with its pull request pair",
+			expected: func() deploymentRow {
+				row := base
+				row.MergedAt, row.PullRequestNumber, row.PullRequestTier = nil, nil, ""
+				return row
+			},
+			mutate: func(row *deploymentRow) {
+				row.LastSynced = now.Add(time.Millisecond)
+				row.MergedAt, row.PullRequestNumber, row.PullRequestTier = base.MergedAt, base.PullRequestNumber, base.PullRequestTier
+			},
+			found: true, want: EffectExact,
+		},
+		{name: "repair window does not excuse another merge", mutate: func(row *deploymentRow) {
+			row.LastSynced = now.Add(time.Millisecond)
+			other := base.MergedAt.Add(time.Hour)
+			row.MergedAt = &other
+		}, found: true, want: EffectConflict},
+		{name: "repair window does not excuse another status", mutate: func(row *deploymentRow) {
+			row.LastSynced = now.Add(time.Millisecond)
+			other := "failure"
+			row.Status = &other
+		}, found: true, want: EffectConflict},
 		{name: "not found", mutate: func(*deploymentRow) {}, found: false, want: EffectAbsent},
 	}
 	for _, test := range tests {

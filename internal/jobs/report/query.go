@@ -17,6 +17,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 )
 
 type ReportDefinition struct {
@@ -59,7 +61,11 @@ WHERE report.id = $1::uuid AND run.id = $2::uuid
 	if err != nil {
 		return ReportDefinition{}, fmt.Errorf("load saved report: %w", ErrDependencyUnavailable)
 	}
-	return decodeReportDefinition(input.ReportID, organizationID, planJSON, parametersJSON, loader.now().UTC())
+	definition, err := decodeReportDefinition(input.ReportID, organizationID, planJSON, parametersJSON, loader.now().UTC())
+	if err == nil {
+		warnUnknownConfidence(ctx, definition.Plan.PlanID, definition.Plan.ConfidenceThreshold)
+	}
+	return definition, err
 }
 
 type wirePlan struct {
@@ -94,15 +100,63 @@ type wireChartSpec struct {
 	OrganizationID string   `json:"org_id"`
 }
 
+// confidenceLevels are the confidence thresholds a plan names. A stored plan with another value still runs and the
+// footer shows it as stored (escaped); warnUnknownConfidence only tells an operator.
+var confidenceLevels = map[string]bool{"direct_fact": true, "inferred": true, "hypothesis": true}
+
+const unknownConfidenceCounterName = "dev_health_report_plan_unknown_confidence_total"
+
+var unknownConfidenceCounter = func() metric.Int64Counter {
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/jobs/report").Int64Counter(
+		unknownConfidenceCounterName,
+		metric.WithDescription("Report runs whose stored plan names a confidence level outside the known set."))
+	if err != nil {
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(unknownConfidenceCounterName)
+	}
+	return counter
+}()
+
+const unchartedStoredSpecCounterName = "dev_health_report_plan_uncharted_stored_spec_total"
+
+var unchartedStoredSpecCounter = func() metric.Int64Counter {
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/jobs/report").Int64Counter(
+		unchartedStoredSpecCounterName,
+		metric.WithDescription("Stored chart specs dropped at decode because their metric is not a registry key."))
+	if err != nil {
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(unchartedStoredSpecCounterName)
+	}
+	return counter
+}()
+
+// warnUnchartedStoredSpec logs one WARN (plan id and the reason, never the metric name) and counts a stored chart spec
+// whose metric is not an exact registry key. The run goes on and the report lists the name as uncharted.
+func warnUnchartedStoredSpec(planID string) {
+	slog.Warn("stored chart spec dropped", "plan_id", planID, "reason", unchartedNoMetric)
+	unchartedStoredSpecCounter.Add(context.Background(), 1)
+}
+
+// warnUnknownConfidence logs one WARN (plan id, never the value) and counts a stored plan whose confidence level is unknown.
+func warnUnknownConfidence(ctx context.Context, planID, level string) {
+	if confidenceLevels[level] {
+		return
+	}
+	slog.WarnContext(ctx, "unknown confidence level", "plan_id", planID)
+	unknownConfidenceCounter.Add(ctx, 1)
+}
+
 func decodeReportDefinition(
 	reportID, organizationID string,
 	planJSON, parametersJSON []byte,
 	now time.Time,
 ) (ReportDefinition, error) {
 	var plan wirePlan
+	var uncharted []UnchartedMetric
 	if len(planJSON) > 0 && string(planJSON) != "null" && string(planJSON) != "{}" {
 		if err := json.Unmarshal(planJSON, &plan); err != nil {
 			return ReportDefinition{}, fmt.Errorf("decode report plan: %w", ErrContractMismatch)
+		}
+		if len(plan.ChartSpecs) == 0 {
+			uncharted = savedPlanUncharted(plan)
 		}
 	} else {
 		var parameters map[string]any
@@ -112,7 +166,7 @@ func decodeReportDefinition(
 			}
 		}
 		plan = defaultWirePlan(reportID, organizationID, parameters, now)
-		plan.ChartSpecs = defaultChartSpecs(plan)
+		plan.ChartSpecs, uncharted = defaultChartSpecs(plan)
 	}
 	if plan.PlanID == "" || plan.ReportType == "" {
 		return ReportDefinition{}, ErrContractMismatch
@@ -138,9 +192,14 @@ func decodeReportDefinition(
 		TimeRangeEnd: plan.TimeRangeEnd, ComparisonPeriod: plan.ComparisonPeriod,
 		Sections: append([]string(nil), plan.Sections...), RequestedMetrics: append([]string(nil), plan.RequestedMetrics...),
 		ConfidenceThreshold: plan.ConfidenceThreshold, CreatedAt: createdAt, OrganizationID: plan.OrganizationID,
+		UnchartedMetrics: uncharted,
 	}}
 	if result.Plan.ConfidenceThreshold == "" {
 		result.Plan.ConfidenceThreshold = "direct_fact"
+	}
+	named := map[string]bool{}
+	for _, entry := range uncharted {
+		named[entry.Label] = true
 	}
 	for _, chart := range plan.ChartSpecs {
 		groupBy, title := "", ""
@@ -159,6 +218,14 @@ func decodeReportDefinition(
 		if chart.OrganizationID != organizationID {
 			return ReportDefinition{}, ErrContractMismatch
 		}
+		if _, registered := supportedMetrics[chart.Metric]; !registered {
+			warnUnchartedStoredSpec(chart.PlanID)
+			if strings.TrimSpace(chart.Metric) != "" && !named[chart.Metric] {
+				named[chart.Metric] = true
+				result.Plan.UnchartedMetrics = append(result.Plan.UnchartedMetrics, UnchartedMetric{Label: chart.Metric, Reason: unchartedNoMetric})
+			}
+			continue
+		}
 		result.Charts = append(result.Charts, ChartSpec{
 			ChartID: chart.ChartID, PlanID: chart.PlanID, ChartType: chart.ChartType, Metric: chart.Metric,
 			GroupBy: groupBy, FilterTeams: append([]string(nil), chart.FilterTeams...),
@@ -168,6 +235,14 @@ func decodeReportDefinition(
 	}
 	return result, nil
 }
+
+const (
+	reportTypeWeeklyHealth  = "weekly_health"
+	reportTypeMonthlyReview = "monthly_review"
+)
+
+// builtinReportTypes holds every report type the product builds (defaultWirePlan); only these keys show title-cased.
+var builtinReportTypes = map[string]struct{}{reportTypeWeeklyHealth: {}, reportTypeMonthlyReview: {}}
 
 func defaultWirePlan(reportID, organizationID string, parameters map[string]any, now time.Time) wirePlan {
 	days := 7
@@ -181,9 +256,9 @@ func defaultWirePlan(reportID, organizationID string, parameters map[string]any,
 	}
 	end := now.Format(time.DateOnly)
 	start := now.AddDate(0, 0, -days).Format(time.DateOnly)
-	reportType, comparison := "weekly_health", "prior_week"
+	reportType, comparison := reportTypeWeeklyHealth, "prior_week"
 	if days > 7 {
-		reportType, comparison = "monthly_review", "prior_month"
+		reportType, comparison = reportTypeMonthlyReview, "prior_month"
 	}
 	plan := wirePlan{
 		PlanID: "auto-" + reportID, ReportType: reportType, Audience: "team_lead",
@@ -301,8 +376,8 @@ type metricDefinition struct {
 	rule string
 	// pooled is set by withPooledChart, never by the registry: the metric is taken over the raw samples of its runs.
 	pooled *pooledChart
-	// ownersAsOf is set by withRepositoryOwners, never by the registry: the instant the team of a stored row of a table
-	// with no team column is read at (the owner of its repository).
+	// ownersAsOf is set by withRepositoryOwners, never by the registry: the instant the team of a stored row of a
+	// repository-owned table is read at (the owner of its repository).
 	ownersAsOf *time.Time
 }
 
@@ -447,6 +522,19 @@ func (adapter *ClickHouseQueryAdapter) executeChart(ctx context.Context, spec Ch
 	}
 	asOf := adapter.asOf()
 	definition = withRepositoryOwners(withPooledChart(withChartRule(definition), asOf), asOf)
+	result := ChartResult{
+		Spec: spec, Title: spec.Title, SourceTable: definition.SourceTable, Unit: definition.Unit,
+	}
+	if result.Title == "" {
+		result.Title = definition.DisplayName
+	}
+	if rule, ok := teamWorkItemRuleOf(spec, definition); ok {
+		if rule.whole {
+			result.NotApplicable = rule.reason
+			return result, nil
+		}
+		result.Note = rule.reason
+	}
 	statement, parameters, err := buildChartQuery(spec, definition)
 	if err != nil {
 		return ChartResult{}, err
@@ -457,12 +545,6 @@ func (adapter *ClickHouseQueryAdapter) executeChart(ctx context.Context, spec Ch
 		return ChartResult{}, fmt.Errorf("query report chart: %w", ErrDependencyUnavailable)
 	}
 	defer rows.Close()
-	result := ChartResult{
-		Spec: spec, Title: spec.Title, SourceTable: definition.SourceTable, Unit: definition.Unit,
-	}
-	if result.Title == "" {
-		result.Title = definition.DisplayName
-	}
 	for rows.Next() {
 		var group *string
 		var y *float64
@@ -476,9 +558,15 @@ func (adapter *ClickHouseQueryAdapter) executeChart(ctx context.Context, spec Ch
 				return ChartResult{}, fmt.Errorf("scan report chart: %w", ErrDependencyUnavailable)
 			}
 			x = instant.Format(time.DateOnly)
-		} else if err := rows.Scan(&x, &group, &y); err != nil {
-			logChartFailure(ctx, spec, definition, "scan", err)
-			return ChartResult{}, fmt.Errorf("scan report chart: %w", ErrDependencyUnavailable)
+		} else {
+			var xValue *string
+			if err := rows.Scan(&xValue, &group, &y); err != nil {
+				logChartFailure(ctx, spec, definition, "scan", err)
+				return ChartResult{}, fmt.Errorf("scan report chart: %w", ErrDependencyUnavailable)
+			}
+			if xValue != nil {
+				x = *xValue
+			}
 		}
 		if y == nil {
 			continue
@@ -563,7 +651,7 @@ func buildChartWhere(spec ChartSpec, definition metricDefinition) (string, []any
 		parameters = append(parameters, named...)
 	}
 	if len(spec.FilterRepos) > 0 && definition.hasDimension("repo") {
-		clauses = append(clauses, "repo_id IN {filter_repos:Array(String)}")
+		clauses = append(clauses, "toString(repo_id) IN {filter_repos:Array(String)}")
 		parameters = append(parameters, clickhouse.Named("filter_repos", spec.FilterRepos))
 	}
 	return strings.Join(clauses, " AND\n        "), parameters, nil
@@ -708,6 +796,11 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 		xExpression, xType, temporal = "toDate("+day+")", "Date", true
 	}
 	yExpression := fmt.Sprintf("avg(%s)", spec.Metric)
+	if definition.ownersAsOf != nil {
+		// avg() of no row is NaN, which a total (no GROUP BY) would draw as a point; a team that owns no repository and
+		// a window with no row have no value. The mean keys of user_metrics_daily reach this.
+		yExpression = fmt.Sprintf("avgOrNull(%s)", spec.Metric)
+	}
 	if strings.HasSuffix(spec.Metric, "_count") || definition.Unit == "count" {
 		// sum() of an unsigned integer column is UInt64 in ClickHouse and the
 		// chart read scans y into a float64, which the driver refuses. Cast

@@ -39,6 +39,7 @@ var jobLoginCensus = map[jobKey]loginCount{
 	{"go-quality.yml", "go-quality-leg"}:                         {1, 1},
 	{"go-workers-compose-proof.yml", "go-workers-compose-proof"}: {1, 0},
 	{"go.yml", "go-storage-integration-shard"}:                   {1, 1},
+	{"go-auth-service.yml", "auth-race-integration"}:             {1, 1},
 	{"go.yml", "go-golden-drift"}:                                {1, 0},
 	{"go.yml", "go-auth-compose-proof"}:                          {1, 1},
 	{"go.yml", "go-auth-web-proxy-proof"}:                        {1, 1},

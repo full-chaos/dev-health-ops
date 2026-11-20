@@ -41,8 +41,6 @@ var providerGuards = []string{"RefuseInvalidProviderID", "refuseUnusableSubject"
 var UsersGuardRows = []UsersGuardRow{
 	{File: "internal/api/session/social.go", Func: "handlers.createSocialUser", Verb: "INSERT",
 		GuardFile: "internal/api/session/social.go", GuardFunc: "handlers.createSocialUser", Guards: providerGuards},
-	{File: "internal/api/sso/provision.go", Func: "handlers.createAccountAndMembership", Verb: "INSERT",
-		GuardFile: "internal/api/sso/provision.go", GuardFunc: "handlers.createAccountAndMembership", Guards: providerGuards},
 	{File: "internal/apiservice/admin/userstore.go", Func: "pgStore.insertUser", Verb: "INSERT",
 		GuardFile: "internal/apiservice/admin/users.go", GuardFunc: "handlers.createUser", Guards: providerGuards, Then: "insertUserWithMembership"},
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminCreate", Verb: "INSERT",

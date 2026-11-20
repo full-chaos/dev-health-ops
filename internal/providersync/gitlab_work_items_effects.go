@@ -334,7 +334,11 @@ func (adapter GitLabWorkItemTransitionsClickHouseAdapter) WriteGitLabWorkItemEff
 		return ErrInvalidConfiguration
 	}
 	for _, row := range rows {
-		if row.Provider != "gitlab" || row.OrgID != identity.OrgID {
+		if row.OrgID != identity.OrgID {
+			return ErrInvalidConfiguration
+		}
+		if row.Provider != "gitlab" {
+			logWorkItemTransitionProviderRefused(ctx, row.OrgID, row.Provider, row.WorkItemID)
 			return ErrInvalidConfiguration
 		}
 	}
@@ -349,7 +353,11 @@ func (adapter GitLabWorkItemTransitionsClickHouseAdapter) InspectGitLabWorkItemE
 		return EffectConflict, ErrInvalidConfiguration
 	}
 	for _, row := range rows {
-		if row.Provider != "gitlab" || row.OrgID != identity.OrgID {
+		if row.OrgID != identity.OrgID {
+			return EffectConflict, ErrInvalidConfiguration
+		}
+		if row.Provider != "gitlab" {
+			logWorkItemTransitionProviderRefused(ctx, row.OrgID, row.Provider, row.WorkItemID)
 			return EffectConflict, ErrInvalidConfiguration
 		}
 	}

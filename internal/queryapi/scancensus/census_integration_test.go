@@ -632,6 +632,11 @@ const nullableIntoPlainSites = `
 //
 //	loadFlaky 37c05084ba13 -> 32950ea2e0be
 //
+// CHAOS-14339: MetricLineage counts the org view of work_item_metrics_daily (countIf of rowview.OrgPredicate); its statement text
+// changed and the site stays not-describable. Digest copied from the local TestScanTypeCensus failure output (not computed):
+//
+//	coverage.go MetricLineage a3f56be4ccc9 -> bb9897d55705
+//
 // testopsrisk.go readDaily is pinned by hand (CHAOS-14009), digest copied from the local TestScanTypeCensus failure output
 // (not computed): dailyQuery now applies the live-row rule (liverow.NewestPredicate in the release and stability HAVING,
 // liverow.Predicate in the FINAL drag WHERE), and the census evaluates every return of those helpers, so the variants that
@@ -713,12 +718,21 @@ const nullableIntoPlainSites = `
 //	loadClusters (title toil) 3306241167e7 -> 70a278016bab
 //	loadDocDrift 018c6639543c -> cb6682629840
 //	loadFlaky c0315233e3ef -> 965f0e7bc997
+//
+// CHAOS-14286: flakyStatement orders the newest-row pick by computed_at DESC, cityHash64(tuple(*)) DESC (a total order for
+// two versions of one day in one second). The selected columns, their types and the scan targets are unchanged; the file's
+// SQL digest moved for every site. Re-pinned by hand, digests copied from the local TestScanTypeCensus failure output (not computed):
+//
+//	loadClusters (repetitive) 70a278016bab -> 87d2d1cf0eaf
+//	loadClusters (title toil) 70a278016bab -> 87d2d1cf0eaf
+//	loadDocDrift cb6682629840 -> 598c61985afe
+//	loadFlaky 965f0e7bc997 -> 2673b9f034d0
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|70a278016bab|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|70a278016bab|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|cb6682629840|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|965f0e7bc997|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|87d2d1cf0eaf|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|87d2d1cf0eaf|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|598c61985afe|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|2673b9f034d0|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadRepoFlowRows|*string,*uint64,**float64,**float64,**float64,**float64|39a7e63ddf0e|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*uint64,**float64,**float64,**float64|2653b84e5b21|not-describable
 internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|ffbc61d0410c|spliced-select-list
@@ -740,7 +754,7 @@ internal/queryapi/compoundingrisk/read.go|latestDay|**time.Time|818fa20627a4|not
 internal/queryapi/compoundingrisk/read.go|latestRows|*string,**float64,*string,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,*float64,*float64,*float64,*float64,*float64,*float64,*time.Time|9af7066815e3|not-describable
 internal/queryapi/compoundingrisk/read.go|repoTrend|*time.Time,**float64|e90c541be45a|not-describable
 internal/queryapi/datahealth/connectors.go|Connectors|*string,*string,*[]byte,**time.Time,**bool,**string,*[]byte,**time.Time,**int32,**time.Time,**time.Time,*[]byte,**string|d9838116a756|not-describable
-internal/queryapi/datahealth/coverage.go|MetricLineage|**time.Time,*uint64|a3f56be4ccc9|not-describable
+internal/queryapi/datahealth/coverage.go|MetricLineage|**time.Time,*uint64|bb9897d55705|not-describable
 internal/queryapi/datahealth/sourcehealth.go|SourceHealth|*string,**string,*bool,**time.Time,*bool,*string,*[]byte,**time.Time,**bool,*bool,**time.Time,**string,*bool,**time.Time,**time.Time,**string,**string|dabf0d087730|not-describable
 internal/queryapi/drilldown/issues.go|BuildIssuesResponse|*string,*string,*string,**string,**string,**float64,**float64,**time.Time,**time.Time|efc62e04415b|not-describable
 internal/queryapi/drilldown/issues.go|buildBlockedIssuesResponse|*string,*string,**string,**string,*uint64|0df7b140bb0b|not-describable

@@ -202,30 +202,30 @@ func checkDevHealth(in *Inputs) error {
 	dh.ExpectNewestRev, _ = strconv.Atoi(v["EXPECT_NEWEST_REV"])
 
 	if pf, set := v["PGFILTER"]; set && pf != "yes" {
-		return notBuilt(in.line("PGFILTER"), "PGFILTER=no (the one escape needs DSSTEP=yes + PGFILTER_OFF_REASON)")
+		return notBuilt(ClassKitKey, "PGFILTER", in.line("PGFILTER"), "PGFILTER=no (the one escape needs DSSTEP=yes + PGFILTER_OFF_REASON)")
 	}
 	if dh.RollbackRev != dh.ExpStartRev {
-		return refuse(in.line("ROLLBACK_REV"), "ROLLBACK_REV must equal EXP_START_REV: the rollback target is the revision before the step")
+		return refuse(ClassRevRule, "ROLLBACK_REV", in.line("ROLLBACK_REV"), "ROLLBACK_REV must equal EXP_START_REV: the rollback target is the revision before the step")
 	}
 	want := dh.ExpStartRev + 1
 	if fr, set := v["FAILED_REVS"]; set {
 		for i, s := range strings.Split(fr, ",") {
 			n, _ := strconv.Atoi(s)
 			if n != dh.ExpStartRev+i+1 {
-				return refuse(in.line("FAILED_REVS"), "FAILED_REVS must be EXP_START_REV + 1 .. EXP_START_REV + n in order")
+				return refuse(ClassRevRule, "FAILED_REVS", in.line("FAILED_REVS"), "FAILED_REVS must be EXP_START_REV + 1 .. EXP_START_REV + n in order")
 			}
 			dh.FailedRevs = append(dh.FailedRevs, n)
 		}
 		want += len(dh.FailedRevs)
 	}
 	if dh.ExpectNewestRev != want {
-		return refuse(in.line("EXPECT_NEWEST_REV"), "EXPECT_NEWEST_REV must be EXP_START_REV + the failed rows + 1 (%d): the roll makes exactly one revision", want)
+		return refuse(ClassRevRule, "EXPECT_NEWEST_REV", in.line("EXPECT_NEWEST_REV"), "EXPECT_NEWEST_REV must be EXP_START_REV + the failed rows + 1 (%d): the roll makes exactly one revision", want)
 	}
 	if dh.SvcSHA == dh.RollbackSHA {
-		return refuse(in.line("SVC_SHA"), "SVC_SHA equals ROLLBACK_SHA")
+		return refuse(ClassShaRule, "SVC_SHA", in.line("SVC_SHA"), "SVC_SHA equals ROLLBACK_SHA")
 	}
 	if dh.RollbackRev < PGFloorRev {
-		return refuse(in.line("ROLLBACK_REV"), "ROLLBACK_REV is below %d (a rollback past it re-creates the chart Secret)", PGFloorRev)
+		return refuse(ClassRevRule, "ROLLBACK_REV", in.line("ROLLBACK_REV"), "ROLLBACK_REV is below %d (a rollback past it re-creates the chart Secret)", PGFloorRev)
 	}
 
 	pairs := map[[2]string]bool{}
@@ -238,13 +238,13 @@ func checkDevHealth(in *Inputs) error {
 		_, name, _ := strings.Cut(r.Doc, "/")
 		switch {
 		case r.Old == "<secret>" || r.New == "<empty>":
-			return notBuilt(r.Line, "an IMGROW <secret> / <empty> row")
+			return notBuilt(ClassKitKey, "IMGROW", r.Line, "an IMGROW <secret> / <empty> row")
 		case hookDoc(name):
-			return notBuilt(r.Line, "an IMGROW row on a migrate, data or grant hook Job doc")
+			return notBuilt(ClassHookRow, "IMGROW", r.Line, "an IMGROW row on a migrate, data or grant hook Job doc")
 		case authDoc(name):
-			return notBuilt(r.Line, "an IMGROW row on an auth doc (restore-fence, GRANTWIDEN)")
+			return notBuilt(ClassAuthRow, "IMGROW", r.Line, "an IMGROW row on an auth doc (restore-fence, GRANTWIDEN)")
 		case strings.HasPrefix(r.Doc, "StatefulSet/"):
-			return notBuilt(r.Line, "an IMGROW row on a StatefulSet (DSSTEP)")
+			return notBuilt(ClassKitKey, "IMGROW", r.Line, "an IMGROW row on a StatefulSet (DSSTEP)")
 		}
 		if strings.HasPrefix(r.Doc, "Deployment/") && podImagePath.MatchString(r.Path) && hexDigest.MatchString(r.Old) && hexDigest.MatchString(r.New) {
 			pair = [2]string{r.Old, r.New}
@@ -258,25 +258,25 @@ func checkDevHealth(in *Inputs) error {
 	}
 	switch len(pairs) {
 	case 0:
-		return notBuilt(in.line("IMGROW"), "no Deployment .image digest pair (the norolls, config-only and ADDCONT forms)")
+		return notBuilt(ClassKitKey, "IMGROW", in.line("IMGROW"), "no Deployment .image digest pair (the norolls, config-only and ADDCONT forms)")
 	case 1:
 	default:
-		return refuse(pairLines[1], "this Deployment .image row and the one on line %d carry two digest pairs (D6415: one service per roll)", pairLines[0])
+		return refuse(ClassDigestRule, "IMGROW", pairLines[1], "this Deployment .image row and the one on line %d carry two digest pairs (D6415: one service per roll)", pairLines[0])
 	}
 	dh.ImgOld, dh.ImgNew = pair[0], pair[1]
 	if dh.ImgOld == dh.ImgNew || strings.HasPrefix(dh.ImgOld, dh.ImgNew) || strings.HasPrefix(dh.ImgNew, dh.ImgOld) {
-		return refuse(pairLine[pair], "the old and new digest prefixes are not two different hex prefixes")
+		return refuse(ClassDigestRule, "IMGROW", pairLine[pair], "the old and new digest prefixes are not two different hex prefixes")
 	}
 	for _, r := range dh.Rows {
 		if strings.HasSuffix(r.Path, ".image") && (r.Old != dh.ImgOld || r.New != dh.ImgNew) {
-			return refuse(r.Line, "this .image row is not the one digest pair of the step (line %d; D6415: one service per roll)", pairLine[pair])
+			return refuse(ClassDigestRule, "IMGROW", r.Line, "this .image row is not the one digest pair of the step (line %d; D6415: one service per roll)", pairLine[pair])
 		}
 	}
 	if o, set := v["IMG_OLD"]; set && o != dh.ImgOld {
-		return refuse(in.line("IMG_OLD"), "IMG_OLD differs from the Deployment .image rows")
+		return refuse(ClassDigestRule, "IMG_OLD", in.line("IMG_OLD"), "IMG_OLD differs from the Deployment .image rows")
 	}
 	if n, set := v["IMG_NEW"]; set && n != dh.ImgNew {
-		return refuse(in.line("IMG_NEW"), "IMG_NEW differs from the Deployment .image rows")
+		return refuse(ClassDigestRule, "IMG_NEW", in.line("IMG_NEW"), "IMG_NEW differs from the Deployment .image rows")
 	}
 	in.DevHealth = dh
 	return nil

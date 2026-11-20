@@ -19,7 +19,8 @@ import (
 // What it checks: the TEXT of each non-test file, per file. A file is a reader when it contains the name of one of
 // the two tables and is a reader in readerRoles or is listed in teamReaderRoles, when it contains the direct spelling
 // "rowview.OrgPredicate(" or "rowview.ScopePredicate(" and no table name of the view column, or when it contains
-// "rowview.TeamSource(" or "rowview.TeamPick(". The form of a file must match whether it contains one of those two.
+// "rowview.TeamSource(", "rowview.TeamPick(", "rowview.ServedTeamSource(" or "rowview.ServedTeamPick(". The form of a
+// file must match whether it contains one of those four.
 //
 // NOT pinned (the census does not bind Go references; ticket 14348 does): a helper call through a renamed or dot
 // import of rowview; a helper stored as a func value and called later; a registry read of a team table in a file that
@@ -29,7 +30,8 @@ import (
 //
 // Forms:
 //
-//	team            answers for one team, or one row per team: takes TeamSource or TeamPick;
+//	team            answers for one team, or one row per team: takes TeamSource or TeamPick (jobs), ServedTeamSource or
+//	                ServedTeamPick (served readers);
 //	team-pending    ruled to the team form, still on the org form (CHAOS-10664 ops-2a and ops-2b);
 //	org             organization-wide, or kept on the org form by ruling (team quadrants share-weighted);
 //	scope           reads one work scope: ScopePredicate;
@@ -46,7 +48,7 @@ var teamReaderRoles = map[string]struct{ form, why string }{
 	"internal/orgactivity/chread/chread.go":                                {"view-invariant", "count() > 0 and max(computed_at) of an organization"},
 	"internal/queryapi/aggflame/clickhouse.go":                             {"team-pending", "the one-team read takes the team form (ops-2a)"},
 	"internal/queryapi/aianalytics/flow_opportunities.go":                  {"team-pending", "the one-team read and the per-team rows take the team form (ops-2a)"},
-	"internal/queryapi/capacityforecast/clickhouse.go":                     {"team-pending", "one team takes the team form (ops-2a); several teams are a team set (L2d)"},
+	"internal/queryapi/capacityforecast/clickhouse.go":                     {"team", "one team reads the served team view (ServedTeamSource, ServedTeamPick for the backlog); no team and a team set keep the org view (L2d)"},
 	"internal/queryapi/datahealth/coverage.go":                             {"org", "the row count of an organization's table: takes the org view in its own ticket (14339)"},
 	"internal/queryapi/explain/metricconfig.go":                            {"team-pending", "one team and the contributor and driver rows per team take the team form (ops-2a)"},
 	"internal/queryapi/explain/metrics.go":                                 {"team-pending", "one team and the contributor and driver rows per team take the team form (ops-2a)"},
@@ -56,7 +58,7 @@ var teamReaderRoles = map[string]struct{ form, why string }{
 	"internal/queryapi/operatingreview/operatingreview.go":                 {"team-pending", "one team takes the team form (ops-2a); several teams are a team set (L2d)"},
 	"internal/queryapi/quadrant/quadrant.go":                               {"org", "team quadrants stay share-weighted (ruling on 10664 Q4); the repository axis reads the scope view"},
 	"internal/queryapi/sankey/queries.go":                                  {"team-pending", "one team takes the team form (ops-2a); several teams are a team set (L2d)"},
-	"internal/queryapi/throughputforecast/clickhouse.go":                   {"team-pending", "one team takes the team form (ops-2a); several teams are a team set (L2d)"},
+	"internal/queryapi/throughputforecast/clickhouse.go":                   {"team", "one team reads the served team view (ServedTeamSource, ServedTeamPick for the newest-day reads); no team and a team set keep the org view (L2d)"},
 }
 
 var teamForms = map[string]bool{
@@ -150,7 +152,8 @@ func scanTeamCensusFiles(t *testing.T) map[string]teamCensusFile {
 				file.namesViewTable = file.namesViewTable || strings.Contains(text, table)
 			}
 			file.callsPredicate = strings.Contains(text, "rowview.OrgPredicate(") || strings.Contains(text, "rowview.ScopePredicate(")
-			file.callsTeam = strings.Contains(text, "rowview.TeamSource(") || strings.Contains(text, "rowview.TeamPick(")
+			file.callsTeam = strings.Contains(text, "rowview.TeamSource(") || strings.Contains(text, "rowview.TeamPick(") ||
+				strings.Contains(text, "rowview.ServedTeamSource(") || strings.Contains(text, "rowview.ServedTeamPick(")
 			if file != (teamCensusFile{}) {
 				relative, _ := filepath.Rel(root, path)
 				files[filepath.ToSlash(relative)] = file

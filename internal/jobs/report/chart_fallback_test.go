@@ -223,11 +223,11 @@ func TestPlanSectionTitledOtherChartsKeepsOneFallbackHeading(t *testing.T) {
 	}
 }
 
-// A Markdown reader drops the closing hashes of a heading: a plan section whose title shows as "Other Charts" must not
-// make a second heading of that name.
+// A plan section whose title shows as "Other Charts" must not make a second heading of that name. A "#" suffix is
+// escaped, so it is part of the title and such a section keeps its name (TestOtherChartsCollisionIsExactName).
 func TestPlanSectionTitleShowingAsOtherChartsKeepsOneFallbackHeading(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"Other Charts ##", "other charts  #  ", "OTHER CHARTS", "Other Charts", "Other Charts ###"} {
+	for _, name := range []string{"OTHER CHARTS", "Other Charts"} {
 		unlisted := cicdCharts("team")
 		markdown := renderPlan(t, []string{"summary", name}, unlisted)
 		requireTables(t, markdown, unlisted)

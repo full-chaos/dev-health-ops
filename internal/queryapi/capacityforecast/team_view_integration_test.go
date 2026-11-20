@@ -4,6 +4,8 @@ package capacityforecast
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -11,6 +13,7 @@ import (
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -93,6 +96,66 @@ func capacityReads(ctx context.Context, t *testing.T, client QueryClient, org st
 	return fmt.Sprintf("throughput=%v backlog=%d", history, backlog)
 }
 
+// capacityServed is the served forecast of a team selection, in two parts, because the resolver draws a fresh random
+// seed per request (randomSeed, crypto/rand; no injection point without a product change):
+//   - the served fields of ResolveForecast that do not depend on the seed: teamId, workScopeId, backlogSize,
+//     targetItems, targetDate, computedAt, throughputMean, throughputStddev, historyDays, insufficientHistory,
+//     highVariance. The random ones are forecastId (a uuid), p50/p85/p95 Date, Days and Items, and
+//     completionDistribution (the Monte Carlo draws);
+//   - the WHOLE served forecast with a fixed seed: the same reads (through selectedTeams), the same request the resolver
+//     builds and the same mapper (numerical.ForecastCapacity, forecastToModel) with seed 7 and forecastId blanked, as
+//     the sha256 digest of its JSON.
+func capacityServed(ctx context.Context, t *testing.T, client QueryClient, org string, teams ...string) string {
+	t.Helper()
+	now := capacityTeamViewToday()
+	target := 5
+	input := &model.CapacityForecastInput{TeamIds: teams, HistoryDays: 10, Simulations: 500, TargetItems: &target}
+	resolved, err := ResolveForecast(ctx, client, org, input, now)
+	if err != nil {
+		t.Fatalf("%v resolve: %v", teams, err)
+	}
+	fields := "resolved=nil"
+	if resolved != nil {
+		label := func(v *string) string {
+			if v == nil {
+				return "nil"
+			}
+			return *v
+		}
+		fields = fmt.Sprintf("team=%s scope=%s backlog=%d target=%d targetDate=%v computedAt=%s mean=%g stddev=%g historyDays=%d insufficient=%v highVariance=%v",
+			label(resolved.TeamID), label(resolved.WorkScopeID), resolved.BacklogSize, *resolved.TargetItems, resolved.TargetDate,
+			resolved.ComputedAt, resolved.ThroughputMean, resolved.ThroughputStddev, resolved.HistoryDays,
+			resolved.InsufficientHistory, resolved.HighVariance)
+	}
+	teamIDs, teamID := selectedTeams(input)
+	history, err := loadThroughput(ctx, client, org, teamIDs, nil, input.HistoryDays, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) == 0 {
+		return fields + " seeded=no-history"
+	}
+	backlog, err := loadBacklog(ctx, client, org, teamIDs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := numerical.ForecastCapacity(numerical.ForecastRequest{
+		History:     numerical.Throughput{DailyThroughputs: history, DaysOfHistory: len(history)},
+		TargetItems: &target, BacklogSize: backlog, Simulations: input.Simulations, Seed: 7,
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seeded := forecastToModel(now, teamID, nil, backlog, target, nil, result)
+	seeded.ForecastID = ""
+	served, err := json.Marshal(seeded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(served)
+	return fmt.Sprintf("%s seeded=%x", fields, digest[:6])
+}
+
 func wantCapacityReads(t *testing.T, what, got, want string) {
 	t.Helper()
 	if got != want {
@@ -118,7 +181,17 @@ func TestCapacityTeamReadsAreANoOpOnTodaysData(t *testing.T) {
 	wantCapacityReads(t, "no team", capacityReads(ctx, t, client, org), "throughput=[2 4] backlog=3")
 	wantCapacityReads(t, "teams P and C", capacityReads(ctx, t, client, org, "P", "C"), "throughput=[2 4] backlog=3")
 	wantCapacityReads(t, "team C (no row)", capacityReads(ctx, t, client, org, "C"), "throughput=[] backlog=0")
+	// Every served column of the forecast, pinned from main (2026-11-20, before the team view): see capacityServed.
+	wantCapacityReads(t, "served forecast, team P", capacityServed(ctx, t, client, org, "P"), capacityMainServedTeamP)
+	wantCapacityReads(t, "served forecast, no team", capacityServed(ctx, t, client, org), capacityMainServedNoTeam)
+	wantCapacityReads(t, "served forecast, teams P and C", capacityServed(ctx, t, client, org, "P", "C"), capacityMainServedTeamsPC)
 }
+
+const (
+	capacityMainServedTeamP   = "team=P scope=nil backlog=3 target=5 targetDate=<nil> computedAt=2026-10-20T00:00:00+00:00 mean=3 stddev=1 historyDays=2 insufficient=true highVariance=false seeded=48b57c3e5615"
+	capacityMainServedNoTeam  = "team=nil scope=nil backlog=3 target=5 targetDate=<nil> computedAt=2026-10-20T00:00:00+00:00 mean=3 stddev=1 historyDays=2 insufficient=true highVariance=false seeded=3332a0d4e567"
+	capacityMainServedTeamsPC = capacityMainServedNoTeam
+)
 
 // (2) A team row wins where one exists, for one team; a team set keeps the org view (L2d).
 func TestCapacityTeamReadsTakeTheTeamRow(t *testing.T) {

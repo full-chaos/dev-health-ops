@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,9 +129,14 @@ func (r teamViewReads) String() string {
 		r.BacklogAsOf, r.ForecastTeamID, digest[:6])
 }
 
+// wantTeamViewReads compares the served fields of got with want. A want that carries " forecast=<digest>" is an answer
+// pinned from main (the cell says "same as main"): the digest of the whole served forecast is then compared too. A want
+// computed from the seeded rows by hand carries the fields only.
 func wantTeamViewReads(t *testing.T, what string, got teamViewReads, want string) {
 	t.Helper()
-	if got.String() != want {
+	gotFields, gotDigest, _ := strings.Cut(got.String(), " forecast=")
+	wantFields, wantDigest, pinned := strings.Cut(want, " forecast=")
+	if gotFields != wantFields || (pinned && gotDigest != wantDigest) {
 		t.Errorf("%s:\n got  %s\n want %s", what, got.String(), want)
 	}
 }
@@ -247,14 +253,21 @@ func TestThroughputTeamReadsRecordTheLiveLegacyBesideLiveOrgDivergence(t *testin
 	t.Logf("DIVERGENCE (recorded, not a want) no team (org form): %s", readTeamView(ctx, t, client, org))
 }
 
-// The answers, pinned. main* are the answers of the org form at main (2026-11-20, before the team view), so the no-op
-// cell compares head with main field by field (the forecast digest covers every served field).
+// The answers. main*, live*, empty* and retired* are pinned from main (2026-11-20, before the team view; the org form
+// reads the same rows there), so those cells compare head with main field by field, and the forecast digest covers
+// every served field. team* are computed by hand from the seeded rows (fields only, no digest).
 const (
-	mainAnswerTeamP    = "history=[2 4] currentWIP=3 averageWIP=2 stale=12/24 backlog=3 MEASURED asOf=2026-10-19 team=\"P\" forecast=82dd2e1f2a03"
-	mainAnswerNoTeam   = "history=[2 4] currentWIP=3 averageWIP=2 stale=12/24 backlog=3 MEASURED asOf=2026-10-19 team=\"\" forecast=fa90e9bd55be"
-	mainAnswerTeamsPC  = mainAnswerNoTeam
-	teamAnswerTeamP    = "history=[2 9] currentWIP=6 averageWIP=3.5 stale=14/28 backlog=6 MEASURED asOf=2026-10-19 team=\"P\" forecast=882342d1ec8f"
-	teamAnswerTeamC    = "history=[3] currentWIP=2 averageWIP=2 stale=30/60 backlog=2 MEASURED asOf=2026-10-19 team=\"C\" forecast=26766aec8708"
+	mainAnswerTeamP   = "history=[2 4] currentWIP=3 averageWIP=2 stale=12/24 backlog=3 MEASURED asOf=2026-10-19 team=\"P\" forecast=82dd2e1f2a03"
+	mainAnswerNoTeam  = "history=[2 4] currentWIP=3 averageWIP=2 stale=12/24 backlog=3 MEASURED asOf=2026-10-19 team=\"\" forecast=fa90e9bd55be"
+	mainAnswerTeamsPC = mainAnswerNoTeam
+	// Team P, by hand from the seeded rows (today 2026-10-20, window 4 weeks): one key (jira, S, P). The older day
+	// (10-18) is legacy only: completed 2, WIP 1. The newer day (10-19) reads its team row: completed 9, WIP 6, ages
+	// 14/28. history = [2, 9]; current WIP = the newest day's WIP = 6; average WIP = (1 + 6) / 2 = 3.5; stale ages =
+	// the newest day's ages = 14/28; backlog = 6 on the newest day 10-19, inside the window: MEASURED.
+	teamAnswerTeamP = "history=[2 9] currentWIP=6 averageWIP=3.5 stale=14/28 backlog=6 MEASURED asOf=2026-10-19 team=\"P\""
+	// Team C, by hand: one key (jira, S, C), the newer day's team row only: completed 3, WIP 2, ages 30/60. history =
+	// [3]; current WIP = 2; average WIP = 2 / 1 = 2; stale 30/60; backlog 2 on 10-19: MEASURED.
+	teamAnswerTeamC    = "history=[3] currentWIP=2 averageWIP=2 stale=30/60 backlog=2 MEASURED asOf=2026-10-19 team=\"C\""
 	teamAnswerTeamsPC  = mainAnswerNoTeam
 	liveAnswerTeamP    = mainAnswerTeamP
 	emptyAnswerTeamC   = "history=[] currentWIP=0 averageWIP=NaN stale=nil/nil backlog=0 NO_ROWS asOf= team=\"C\" forecast=db85152c4184"

@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -405,6 +406,22 @@ func knownRate(value float64, unknown bool) *float64 {
 	return &rounded
 }
 
+func knownCoverage(value *float64) *float64 {
+	if value == nil || math.IsNaN(*value) || math.IsInf(*value, 0) {
+		return nil
+	}
+	known := pythonparity.OrZero(*value)
+	return &known
+}
+
+func roundedCoverage(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	rounded := pyRound(*value, 2)
+	return &rounded
+}
+
 func flakeHoursOrUnknown(hours float64, unknown bool) *float64 {
 	if unknown {
 		return nil
@@ -424,8 +441,6 @@ func flakeHoursOrUnknown(hours float64, unknown bool) *float64 {
 // here (min(1.0, nan) keeps its first arg 1.0 since `nan < 1.0` is false;
 // max(0.0, 1.0) then keeps 1.0 since `1.0 > 0.0` is true):
 // `max(0.0, min(1.0, float('nan'))) == 1.0`.
-// coverage_snapshots.line_coverage_pct is an unconstrained Nullable(Float64)
-// and reaches this function via coveragePct/100.0, making NaN a real input.
 func clampUnit(value float64) float64 {
 	return pythonparity.Max2(0.0, pythonparity.Min2(1.0, value))
 }
@@ -571,7 +586,6 @@ func computeReleaseConfidence(
 	// A test row that measured no case (DistinctCases == 0) leaves the flake and recurrence factors unknown:
 	// they add nothing to the score and are null in factors_json, never read as a healthy 0.
 	flakeUnknown := test != nil && test.DistinctCases == 0
-	var coveragePct, coverageDelta float64
 	// The pipeline success rate and the test pass rate are the repository's summed counts over their
 	// denominators (completed runs, success plus failure, for the pipeline: cancelled, skipped and running runs are
 	// out; skipped cases are not in the pass-rate denominator); a zero denominator is absent
@@ -587,28 +601,35 @@ func computeReleaseConfidence(
 			failureRecurrence = test.FailureRecurrence
 		}
 	}
-	if cov != nil && cov.LineCoveragePct != nil {
-		coveragePct = pythonparity.OrZero(*cov.LineCoveragePct)
-	}
-	if cov != nil && cov.CoverageDeltaPct != nil {
-		coverageDelta = pythonparity.OrZero(*cov.CoverageDeltaPct)
+	// Coverage with no snapshot, a NULL or a non-finite percentage is unknown: the coverage factor is left out and the
+	// other weights are renormalized (a measured 0% keeps its weight). An unknown delta is no regression penalty.
+	var coveragePct, coverageDelta *float64
+	if cov != nil {
+		coveragePct = knownCoverage(cov.LineCoveragePct)
+		coverageDelta = knownCoverage(cov.CoverageDeltaPct)
 	}
 
 	pipelineFactor := 0.4 * valueOrZero(successRate)
 	testFactor := 0.3 * valueOrZero(passRate)
-	covFactor := 0.2 * clampUnit(coveragePct/100.0)
+	covFactor := 0.0
+	if coveragePct != nil {
+		covFactor = 0.2 * clampUnit(*coveragePct/100.0)
+	}
 	flakeFactor := 0.1 * (1.0 - flakeRate)
 	if flakeUnknown {
 		flakeFactor = 0
 	}
 	baseScore := pipelineFactor + testFactor + covFactor + flakeFactor
+	if coveragePct == nil {
+		baseScore = (pipelineFactor + testFactor + flakeFactor) / 0.8
+	}
 
 	flakePenalty := 0.0
 	if flakeRate > 0.05 {
 		flakePenalty = 0.1
 	}
 	regressionPenalty := 0.0
-	if coverageDelta < -2.0 {
+	if coverageDelta != nil && *coverageDelta < -2.0 {
 		regressionPenalty += 0.05
 	}
 	if failureRecurrence > 0.3 {
@@ -619,10 +640,10 @@ func computeReleaseConfidence(
 	factors := factorsJSON("testops_release_confidence", []factorsJSONField{
 		ffRate("pipeline_success_rate", roundedRate(successRate)),
 		ffRate("test_pass_rate", roundedRate(passRate)),
-		ff("coverage_pct", pyRound(coveragePct, 2)),
+		ffRate("coverage_pct", roundedCoverage(coveragePct)),
 		ffRate("flake_rate", knownRate(flakeRate, flakeUnknown)),
 		ffRate("failure_recurrence", knownRate(failureRecurrence, flakeUnknown)),
-		ff("coverage_delta_pct", pyRound(coverageDelta, 2)),
+		ffRate("coverage_delta_pct", roundedCoverage(coverageDelta)),
 		ff("base_score", pyRound(baseScore, 4)),
 		ff("flake_penalty", pyRound(flakePenalty, 4)),
 		ff("regression_penalty", pyRound(regressionPenalty, 4)),

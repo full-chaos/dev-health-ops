@@ -39,16 +39,17 @@ func TestReleaseConfidenceUnmeasuredDayLeavesFlakeFactorsOut(t *testing.T) {
 	if measured == nil || unmeasured == nil {
 		t.Fatal("nil row")
 	}
-	// measured: base 0.4+0.225+0.1*(1-0.25)=0.7; flake penalty 0.1, recurrence 0.5>0.3 adds 0.1 -> 0.5
-	if !approx(measured.ConfidenceScore, 0.5) || !approx(measured.FlakePenalty, 0.1) || !approx(measured.RegressionPenalty, 0.1) {
+	// No coverage row: coverage is unknown, so every base below is divided by 0.8.
+	// measured: base (0.4+0.225+0.1*(1-0.25))/0.8=0.875; flake penalty 0.1, recurrence 0.5>0.3 adds 0.1 -> 0.675
+	if !approx(measured.ConfidenceScore, 0.675) || !approx(measured.FlakePenalty, 0.1) || !approx(measured.RegressionPenalty, 0.1) {
 		t.Errorf("measured day: score=%v flake_penalty=%v regression=%v", measured.ConfidenceScore, measured.FlakePenalty, measured.RegressionPenalty)
 	}
 	if !strings.Contains(measured.FactorsJSON, `"flake_rate": 0.25`) {
 		t.Errorf("measured factors: %s", measured.FactorsJSON)
 	}
-	// unmeasured: flake term left out (adds 0), no penalties: 0.4+0.225 = 0.625, never 0.725
-	if !approx(unmeasured.ConfidenceScore, 0.625) || unmeasured.FlakePenalty != 0 || unmeasured.RegressionPenalty != 0 {
-		t.Errorf("unmeasured day: score=%v flake_penalty=%v regression=%v want 0.625/0/0", unmeasured.ConfidenceScore, unmeasured.FlakePenalty, unmeasured.RegressionPenalty)
+	// unmeasured: flake term left out (adds 0), no penalties: (0.4+0.225)/0.8 = 0.78125 -> 0.7812, never 0.725/0.8
+	if !approx(unmeasured.ConfidenceScore, 0.7812) || unmeasured.FlakePenalty != 0 || unmeasured.RegressionPenalty != 0 {
+		t.Errorf("unmeasured day: score=%v flake_penalty=%v regression=%v want 0.7812/0/0", unmeasured.ConfidenceScore, unmeasured.FlakePenalty, unmeasured.RegressionPenalty)
 	}
 	for _, want := range []string{`"flake_rate": null`, `"failure_recurrence": null`} {
 		if !strings.Contains(unmeasured.FactorsJSON, want) {
@@ -67,7 +68,7 @@ func TestReleaseConfidenceAllUnmeasuredHasNoFlakeFactor(t *testing.T) {
 	if strings.Contains(row.FactorsJSON, `"flake_rate": 0`) || !strings.Contains(row.FactorsJSON, `"flake_rate": null`) {
 		t.Errorf("factors: %s", row.FactorsJSON)
 	}
-	if !strings.Contains(row.FactorsJSON, `"base_score": 0.625`) {
+	if !strings.Contains(row.FactorsJSON, `"base_score": 0.7812`) {
 		t.Errorf("base_score must carry no flake credit: %s", row.FactorsJSON)
 	}
 }
@@ -77,7 +78,8 @@ func TestReleaseConfidenceMeasuredZeroFlakeKeepsCredit(t *testing.T) {
 	repo := uuid.New()
 	test := &testops.TestMetric{RepoID: repo, TotalCases: 4, PassedCount: 3, FailedCount: 1, DistinctCases: 4, OrgID: "org"}
 	row := computeReleaseConfidence(repo, day, unmeasuredPipe(repo), test, nil, day)
-	if row == nil || !approx(row.ConfidenceScore, 0.725) || !strings.Contains(row.FactorsJSON, `"flake_rate": 0.0`) {
+	// (0.4+0.225+0.1)/0.8 (coverage unknown) = 0.90625 -> 0.9062
+	if row == nil || !approx(row.ConfidenceScore, 0.9062) || !strings.Contains(row.FactorsJSON, `"flake_rate": 0.0`) {
 		t.Errorf("a measured 0 keeps its credit: %+v", row)
 	}
 }
@@ -86,8 +88,8 @@ func TestReleaseConfidenceNoTestRowUnchanged(t *testing.T) {
 	day := time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
 	repo := uuid.New()
 	row := computeReleaseConfidence(repo, day, unmeasuredPipe(repo), nil, nil, day)
-	if row == nil || !approx(row.ConfidenceScore, 0.5) || !strings.Contains(row.FactorsJSON, `"flake_rate": 0.0`) {
-		t.Errorf("test==nil must stay as on main (0.4+0.1): %+v", row)
+	if row == nil || !approx(row.ConfidenceScore, 0.625) || !strings.Contains(row.FactorsJSON, `"flake_rate": 0.0`) {
+		t.Errorf("test==nil keeps its flake credit ((0.4+0.1)/0.8, coverage unknown): %+v", row)
 	}
 }
 

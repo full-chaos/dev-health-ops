@@ -106,8 +106,9 @@ func TestTestopsRiskTestsUnknownAgainstRealClickHouse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const naFactors = `{"pipeline_success_rate": 1.0, "test_pass_rate": null, "coverage_pct": 0.0, "flake_rate": 0.0, "failure_recurrence": 0.0, "coverage_delta_pct": 0.0, "base_score": 0.5, "flake_penalty": 0.0, "regression_penalty": 0.0}`
-	const unknownFactors = `{"pipeline_success_rate": 1.0, "test_pass_rate": null, "coverage_pct": 0.0, "flake_rate": null, "failure_recurrence": null, "coverage_delta_pct": 0.0, "base_score": 0.4, "flake_penalty": 0.0, "regression_penalty": 0.0}`
+	// No coverage row: coverage is unknown, so each base is divided by 0.8 ((0.4+0.1)/0.8 and 0.4/0.8).
+	const naFactors = `{"pipeline_success_rate": 1.0, "test_pass_rate": null, "coverage_pct": null, "flake_rate": 0.0, "failure_recurrence": 0.0, "coverage_delta_pct": null, "base_score": 0.625, "flake_penalty": 0.0, "regression_penalty": 0.0}`
+	const unknownFactors = `{"pipeline_success_rate": 1.0, "test_pass_rate": null, "coverage_pct": null, "flake_rate": null, "failure_recurrence": null, "coverage_delta_pct": null, "base_score": 0.5, "flake_penalty": 0.0, "regression_penalty": 0.0}`
 	cells := []struct {
 		name    string
 		unknown bool
@@ -126,9 +127,9 @@ func TestTestopsRiskTestsUnknownAgainstRealClickHouse(t *testing.T) {
 		if err := conn.QueryRow(ctx, `SELECT drag_hours, flake_investigation_hours FROM testops_quality_drag WHERE org_id = ? AND repo_id = toUUID(?)`, orgID, repo).Scan(&drag, &flakeHours); err != nil {
 			t.Fatalf("%s: %v", cell.name, err)
 		}
-		wantScore, wantFactors := 0.5, naFactors
+		wantScore, wantFactors := 0.625, naFactors
 		if cell.unknown {
-			wantScore, wantFactors = 0.4, unknownFactors
+			wantScore, wantFactors = 0.5, unknownFactors
 		}
 		if score != wantScore || factors != wantFactors {
 			t.Errorf("%s release confidence: score=%v factors=%s, want %v %s", cell.name, score, factors, wantScore, wantFactors)

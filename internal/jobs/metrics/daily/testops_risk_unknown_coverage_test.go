@@ -11,13 +11,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 )
 
-var unknownCoverageDay = time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
-
 func unknownCoverageInputs(repo uuid.UUID) (*testops.PipelineMetric, *testops.TestMetric) {
 	pipe := &testops.PipelineMetric{RepoID: repo, SuccessRate: 1.0, SuccessCount: 1, OrgID: "org"}
 	test := &testops.TestMetric{RepoID: repo, PassRate: 0.9, PassedCount: 9, FailedCount: 1, DistinctCases: 1, OrgID: "org"}
 	return pipe, test
 }
+
+func unknownCoverageDay() time.Time { return time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC) }
 
 func coverageAt(repo uuid.UUID, pct float64) *testops.CoverageMetric {
 	return &testops.CoverageMetric{RepoID: repo, LineCoveragePct: &pct, OrgID: "org"}
@@ -38,7 +38,7 @@ func TestReleaseConfidenceUnknownCoverageIsLeftOutAndRenormalized(t *testing.T) 
 		{"no snapshot", nil, 0.9625},
 	}
 	for _, cell := range cells {
-		row := computeReleaseConfidence(repo, unknownCoverageDay, pipe, test, cell.cov, unknownCoverageDay)
+		row := computeReleaseConfidence(repo, unknownCoverageDay(), pipe, test, cell.cov, unknownCoverageDay())
 		if row.ConfidenceScore != cell.wantScore || row.CoverageFactor != 0 {
 			t.Errorf("%s: score=%v coverage_factor=%v, want %v and 0", cell.name, row.ConfidenceScore, row.CoverageFactor, cell.wantScore)
 		}
@@ -48,8 +48,8 @@ func TestReleaseConfidenceUnknownCoverageIsLeftOutAndRenormalized(t *testing.T) 
 func TestReleaseConfidenceNaNCoverageIsUnknown(t *testing.T) {
 	repo := uuid.MustParse("00000000-0000-4000-8000-0000000000a1")
 	pipe, test := unknownCoverageInputs(repo)
-	nan := computeReleaseConfidence(repo, unknownCoverageDay, pipe, test, coverageAt(repo, math.NaN()), unknownCoverageDay)
-	null := computeReleaseConfidence(repo, unknownCoverageDay, pipe, test, &testops.CoverageMetric{RepoID: repo, OrgID: "org"}, unknownCoverageDay)
+	nan := computeReleaseConfidence(repo, unknownCoverageDay(), pipe, test, coverageAt(repo, math.NaN()), unknownCoverageDay())
+	null := computeReleaseConfidence(repo, unknownCoverageDay(), pipe, test, &testops.CoverageMetric{RepoID: repo, OrgID: "org"}, unknownCoverageDay())
 	if nan.ConfidenceScore != null.ConfidenceScore || nan.CoverageFactor != 0 {
 		t.Errorf("NaN coverage: score=%v coverage_factor=%v, want the NULL-coverage score %v and 0", nan.ConfidenceScore, nan.CoverageFactor, null.ConfidenceScore)
 	}
@@ -76,7 +76,7 @@ func TestReleaseConfidenceFactorsJSONUnknownCoverageIsNull(t *testing.T) {
 		{"0% after a drop of 5", drop, `"coverage_pct": 0.0`, `"coverage_delta_pct": -5.0`},
 	}
 	for _, cell := range cells {
-		row := computeReleaseConfidence(repo, unknownCoverageDay, pipe, test, cell.cov, unknownCoverageDay)
+		row := computeReleaseConfidence(repo, unknownCoverageDay(), pipe, test, cell.cov, unknownCoverageDay())
 		if !strings.Contains(row.FactorsJSON, cell.wantPct) || !strings.Contains(row.FactorsJSON, cell.wantDelta) {
 			t.Errorf("%s: factors_json %s, want %s and %s", cell.name, row.FactorsJSON, cell.wantPct, cell.wantDelta)
 		}
@@ -91,7 +91,7 @@ func TestReleaseConfidenceAllFactorsKnownRowUnchanged(t *testing.T) {
 	cov := coverageAt(repo, 80)
 	minusFive := -5.0
 	cov.CoverageDeltaPct = &minusFive
-	row := computeReleaseConfidence(repo, unknownCoverageDay, pipe, test, cov, unknownCoverageDay)
+	row := computeReleaseConfidence(repo, unknownCoverageDay(), pipe, test, cov, unknownCoverageDay())
 	const wantFactors = `{"pipeline_success_rate": 0.75, "test_pass_rate": 0.9, "coverage_pct": 80.0, "flake_rate": 0.1, "failure_recurrence": 0.5, "coverage_delta_pct": -5.0, "base_score": 0.82, "flake_penalty": 0.1, "regression_penalty": 0.15}`
 	if row.ConfidenceScore != 0.57 || row.PipelineSuccessFactor != 0.3 || row.TestPassFactor != 0.27 || row.CoverageFactor != 0.16 ||
 		row.FlakePenalty != 0.1 || row.RegressionPenalty != 0.15 || row.FactorsJSON != wantFactors {

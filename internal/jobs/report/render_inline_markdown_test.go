@@ -289,3 +289,32 @@ func TestAutolinkEscapeKeepsOrdinaryTextAndEscapesEveryAt(t *testing.T) {
 		}
 	}
 }
+
+// A custom report type and a custom section name are title-cased, then escaped: a URL, a www host or an address in
+// them shows as text (the heading reads title-case(value), and no autolink character is left bare).
+func TestCustomNamesNeverAutolink(t *testing.T) {
+	for value, want := range map[string]string{
+		"https://example.com": `Https\://example.com`, "HTTPS://EXAMPLE.COM": `Https\://example.com`, "www.example.com": `Www\.example.com`,
+		"a@b.co": `A\@b.co`, "see www.x.co now": `See Www\.x.co Now`, "ftp://a.b": `Ftp\://a.b`, "mailto:a@b.co": `Mailto:a\@b.co`,
+	} {
+		for site, fragment := range map[string]string{"report type": "\n# " + want + " Report — ", "section": "\n## " + want + "\n"} {
+			var set func(*Plan, *ChartResult, string)
+			for _, s := range inlineSites() {
+				if s.name == site {
+					set = s.set
+				}
+			}
+			markdown := "\n" + renderInline(t, set, value)
+			if !strings.Contains(markdown, fragment) {
+				t.Errorf("%s %q: %q missing in:\n%s", site, value, fragment, markdown)
+			}
+			doc := goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser().Parse(text.NewReader([]byte(markdown)))
+			_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+				if entering && (n.Kind() == ast.KindAutoLink || n.Kind() == ast.KindLink) {
+					t.Errorf("%s %q renders a link:\n%s", site, value, markdown)
+				}
+				return ast.WalkContinue, nil
+			})
+		}
+	}
+}

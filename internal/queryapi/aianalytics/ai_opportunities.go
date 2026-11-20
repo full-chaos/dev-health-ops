@@ -2,6 +2,7 @@ package aianalytics
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -105,6 +106,17 @@ type opportunity struct {
 	why    string
 	score  float64
 	refs   []string
+	// idKey, when set, is the secondary part of the stable id in place of the team. It is hash input only and is
+	// never served, logged or returned in an error: a repetitive-change key holds the cluster's author.
+	idKey string
+}
+
+// repetitiveClusterKey is the id key of one repetitive-change cluster: its whole GROUP BY key past the repository.
+// A repository has one cluster per author, work type and title prefix, so the repository alone does not tell two
+// of them apart (CHAOS-14266). JSON keeps the three parts apart whatever characters they hold.
+func repetitiveClusterKey(prefix, author, workType string) string {
+	key, _ := json.Marshal([]string{prefix, author, workType})
+	return string(key)
 }
 
 func newOpportunity(kind model.AIOpportunityKind, repoID string, teamID *string, title, why string, score float64, refs []string) opportunity {
@@ -219,13 +231,16 @@ func (o opportunity) project(repoName, teamName *string) model.AIOpportunity {
 		}
 		drill = append(drill, model.AIWorkGraphDrilldownRef{RootType: "pr", RootID: prrootid.Format(repo, number), Label: "PR " + number})
 	}
-	team := ""
+	secondary := ""
 	if o.teamID != nil {
-		team = *o.teamID
+		secondary = *o.teamID
+	}
+	if o.idKey != "" {
+		secondary = o.idKey
 	}
 	repo := o.repoID
 	return model.AIOpportunity{
-		OpportunityID:       stableOpportunityID(opportunityKinds[o.kind], o.repoID, team),
+		OpportunityID:       stableOpportunityID(opportunityKinds[o.kind], o.repoID, secondary),
 		Kind:                o.kind,
 		RepoID:              &repo,
 		TeamID:              o.teamID,
@@ -297,10 +312,12 @@ GROUP BY org_id, team_id, repo_id, work_type, day, attribution_bucket`, bindings
 
 // clusterRow is one grouped row of a cluster read.
 type clusterRow struct {
-	RepoID string
-	Count  int64
-	Prefix string
-	Refs   []string
+	RepoID   string
+	Count    int64
+	Prefix   string
+	Refs     []string
+	Author   string
+	WorkType string
 }
 
 func loadClusters(ctx context.Context, client QueryClient, statement string, bindings []clickhouse.Binding, withPrefix bool) ([]clusterRow, error) {
@@ -316,7 +333,7 @@ func loadClusters(ctx context.Context, client QueryClient, statement string, bin
 			n uint64
 		)
 		if withPrefix {
-			if err := rs.Scan(&r.RepoID, &r.Prefix, &n, &r.Refs); err != nil {
+			if err := rs.Scan(&r.RepoID, &r.Prefix, &n, &r.Refs, &r.Author, &r.WorkType); err != nil {
 				return nil, fmt.Errorf("aianalytics: opportunity cluster scan: %w", err)
 			}
 		} else if err := rs.Scan(&r.RepoID, &n, &r.Refs); err != nil {
@@ -342,7 +359,9 @@ const repetitiveStatement = `SELECT
     toString(pr.repo_id) AS repo_id,
     lower(arrayStringConcat(arraySlice(splitByChar(' ', coalesce(pr.title, '')), 1, 3), ' ')) AS title_prefix,
     count() AS prs_total,
-    groupArray(concat('git_pull_requests:', toString(pr.repo_id), ':', toString(pr.number))) AS pr_refs
+    groupArray(concat('git_pull_requests:', toString(pr.repo_id), ':', toString(pr.number))) AS pr_refs,
+    coalesce(pr.author_email, pr.author_name, '') AS cluster_author,
+    coalesce(nullIf(wi.type, ''), 'pull_request') AS cluster_work_type
 FROM git_pull_requests AS pr
 LEFT JOIN work_graph_issue_pr AS link
     ON link.repo_id = pr.repo_id AND link.pr_number = pr.number
@@ -643,10 +662,12 @@ func workflowOpportunities(ctx context.Context, client QueryClient, orgID, repoI
 		if !ok {
 			continue
 		}
-		out = append(out, newOpportunity(model.AIOpportunityKindRepetitiveChange, repo, nil,
+		o := newOpportunity(model.AIOpportunityKindRepetitiveChange, repo, nil,
 			"Repetitive AI change pattern in "+repo,
 			strconv.FormatInt(r.Count, 10)+" AI-assisted PRs shared the title prefix '"+prefix+"' with the same author/work type over the last 30 days.",
-			scoreDelta(float64(r.Count)/float64(repetitiveClusterMinPRs), 1.0), refs))
+			scoreDelta(float64(r.Count)/float64(repetitiveClusterMinPRs), 1.0), refs)
+		o.idKey = repetitiveClusterKey(r.Prefix, r.Author, r.WorkType)
+		out = append(out, o)
 	}
 
 	for _, rule := range titlePatternRules {

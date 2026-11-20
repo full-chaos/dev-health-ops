@@ -16,11 +16,15 @@ import (
 //     the only skip source and nothing in the revisit writes it. An overflowed active list carries nothing, so the whole
 //     revisit reads as main.
 //
-// Each list costs at most 8 + 52 bytes of the cursor.
+// Each list costs at most 8 + 52 bytes of the cursor in the artifacts phase, whose worst-case cursor has no more room, and
+// 8 + 896 bytes in the runs phase, whose cursor carries no artifacts fields (CHAOS-14321): a cut second of a busy repo holds
+// tens of runs, so 52 bytes (four 11-digit keys) dropped every one of them. githubTestsFitCursor drops a list that does not
+// fit the cursor budget.
 const (
-	githubTestsMaxCutKeysBytes = 52
-	githubTestsCutKeysOverflow = "-"
-	githubTestsCutRunsConflict = "github_tests_cut_runs"
+	githubTestsMaxCutKeysBytes     = 52
+	githubTestsMaxRunsCutKeysBytes = 896
+	githubTestsCutKeysOverflow     = "-"
+	githubTestsCutRunsConflict     = "github_tests_cut_runs"
 )
 
 // githubTestsCutRunKey is the created second and the (id, attempt) key of one listed run: "<id>" for attempt 1,
@@ -42,6 +46,14 @@ func githubTestsCutRunKey(run gitHubWorkflowRunPayload) (int64, string) {
 		return created.UTC().Unix(), id
 	}
 	return created.UTC().Unix(), id + "." + attempt
+}
+
+// githubTestsCutKeysCap is the byte cap of each cut list of a cursor in phase.
+func githubTestsCutKeysCap(phase string) int {
+	if phase == githubTestsRunsPhase {
+		return githubTestsMaxRunsCutKeysBytes
+	}
+	return githubTestsMaxCutKeysBytes
 }
 
 // githubTestsCutRunDigits is a positive decimal of at most width digits with no leading zero.
@@ -89,11 +101,12 @@ func githubTestsSkipCutRun(cursor githubTestsChunkCursor, second int64, key stri
 // second RangeOldest: only those runs can be listed again by the next range.
 func githubTestsRecordCutRun(cursor githubTestsChunkCursor, second int64, key string) githubTestsChunkCursor {
 	oldest, ok := githubTestsCutSecond(cursor.RangeOldest)
+	limit := githubTestsCutKeysCap(cursor.Phase)
 	switch {
 	case !ok || key == "" || second != oldest:
 	case cursor.ActiveCutKeys == githubTestsCutKeysOverflow || githubTestsCutKeysHave(cursor.ActiveCutKeys, key):
-	case cursor.ActiveCutKeys == "" && len(key) > githubTestsMaxCutKeysBytes,
-		cursor.ActiveCutKeys != "" && len(cursor.ActiveCutKeys)+1+len(key) > githubTestsMaxCutKeysBytes:
+	case cursor.ActiveCutKeys == "" && len(key) > limit,
+		cursor.ActiveCutKeys != "" && len(cursor.ActiveCutKeys)+1+len(key) > limit:
 		cursor.ActiveCutKeys = githubTestsCutKeysOverflow
 	case cursor.ActiveCutKeys == "":
 		cursor.ActiveCutKeys = key
@@ -136,16 +149,17 @@ func githubTestsClearCutKeys(cursor githubTestsChunkCursor) githubTestsChunkCurs
 
 // githubTestsCutKeysValid is the shape this code writes: an active list only with RangeOldest set (and the overflow mark
 // allowed), a carried list only with RangeHi set (never the overflow mark), each of distinct well-formed keys within the
-// byte cap.
+// byte cap of the cursor's phase.
 func githubTestsCutKeysValid(cursor githubTestsChunkCursor) bool {
-	if cursor.ActiveCutKeys != "" && (cursor.RangeOldest == "" || cursor.ActiveCutKeys != githubTestsCutKeysOverflow && !githubTestsCutKeyListValid(cursor.ActiveCutKeys)) {
+	limit := githubTestsCutKeysCap(cursor.Phase)
+	if cursor.ActiveCutKeys != "" && (cursor.RangeOldest == "" || cursor.ActiveCutKeys != githubTestsCutKeysOverflow && !githubTestsCutKeyListValid(cursor.ActiveCutKeys, limit)) {
 		return false
 	}
-	return cursor.CarriedCutKeys == "" || cursor.RangeHi != "" && githubTestsCutKeyListValid(cursor.CarriedCutKeys)
+	return cursor.CarriedCutKeys == "" || cursor.RangeHi != "" && githubTestsCutKeyListValid(cursor.CarriedCutKeys, limit)
 }
 
-func githubTestsCutKeyListValid(keys string) bool {
-	if len(keys) > githubTestsMaxCutKeysBytes {
+func githubTestsCutKeyListValid(keys string, limit int) bool {
+	if len(keys) > limit {
 		return false
 	}
 	seen := map[string]struct{}{}
@@ -164,7 +178,7 @@ func githubTestsCutKeyListValid(keys string) bool {
 
 // githubTestsFitCursor drops cut lists from a cursor that is over maxChunkCursorBytes (CHAOS-14315): the active list first
 // (empty: the revisit then skips only the runs a later write lists again, each read whole, so it is sound), then the carried
-// list. The lists only dedup reads of a peeled
+// list, then the runs-phase count of runs at the oldest second. The lists only dedup reads of a peeled
 // range; the continuation URL and every other field stay. A cursor that does not fit even then is returned unchanged,
 // so the encode fails as it always did. The result depends only on the cursor, so a before cursor equal to the previous
 // after cursor degrades to the same bytes.
@@ -184,6 +198,12 @@ func githubTestsFitCursor(cursor githubTestsChunkCursor) (githubTestsChunkCursor
 	if !fits(fitted) && fitted.CarriedCutKeys != "" {
 		fitted.CarriedCutKeys = ""
 		dropped = append(dropped, "carried")
+	}
+	// The count of runs at the oldest second only proves a saturated second early; without it the range takes the
+	// confirmation listing (CHAOS-14321).
+	if !fits(fitted) && fitted.RangeOldestItems != 0 {
+		fitted.RangeOldestItems = 0
+		dropped = append(dropped, "oldest_count")
 	}
 	if !fits(fitted) {
 		return cursor, nil

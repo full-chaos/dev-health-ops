@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -110,5 +111,18 @@ func (db *countingWaitDB) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error
 func TestNewBackfillWaitSourceNeedsADatabase(t *testing.T) {
 	if _, err := NewBackfillWaitSource(nil, nil); err == nil {
 		t.Fatal("a nil database must be refused")
+	}
+}
+
+// readBucketActive drops buckets with no live unit; this must hold for the gauge to stay true: a free bucket holds back nothing,
+// for every cost class and every clamp of SYNC_UNIT_CONCURRENCY_PER_BUCKET.
+func TestBackfillWaitFreeBucketHoldsBackNothingForEveryClassAndClamp(t *testing.T) {
+	for clamp := 1; clamp <= 8; clamp++ {
+		t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", strconv.Itoa(clamp))
+		for _, costClass := range []string{"light", "medium", "heavy", "unknown-class"} {
+			if got := backfillWaitHeldBack(costClass, 60, 0, 0, admissionNow); got != 0 {
+				t.Errorf("clamp %d, class %s: a free bucket holds back %d, want 0", clamp, costClass, got)
+			}
+		}
 	}
 }

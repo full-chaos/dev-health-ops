@@ -309,8 +309,8 @@ type bucketActive struct {
 	activeBackfill int
 }
 
-// readBucketActive returns the active counts of every waiting bucket with its rank. A bucket with no live unit has no row:
-// its active counts are 0 and its held_back is 0 (a free bucket holds nothing back).
+// readBucketActive returns the active counts of every waiting bucket with its rank. A bucket with no live unit has no row: its
+// active counts and held_back are 0 (TestBackfillWaitFreeBucketHoldsBackNothingForEveryClassAndClamp pins that this loses nothing).
 func readBucketActive(ctx context.Context, tx pgx.Tx, terminal []string, limit int, staleCutoff, now time.Time) ([]bucketActive, error) {
 	rows, err := tx.Query(ctx, backfillWaitActiveSQL,
 		terminal, limit, true,

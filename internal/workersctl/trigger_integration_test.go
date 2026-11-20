@@ -5,16 +5,21 @@ package workersctl
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboperator"
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -386,5 +391,260 @@ func TestInvestmentManualTriggerReportsDuplicateAndRerunTagEnqueues(t *testing.T
 	}
 	if got := countRows(t, ctx, pool, "worker_job_outbox"); got != 2 {
 		t.Fatalf("outbox after rerun tag=%d, want 2", got)
+	}
+}
+
+func runMembershipTriggerBackstop(t *testing.T, ctx context.Context, runtime *operatorRuntime) (int, map[string]any, string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(ctx, runtime, []string{
+		"remaining", "trigger-backstop", "--family", "membership_backfill",
+		"--org", validTriggerOrg, "--review-evidence", "testing",
+		"--reason", "operator_test", "--correlation-id", "corr-1",
+	}, &stdout, &stderr)
+	result := map[string]any{}
+	if stdout.Len() > 0 {
+		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+			t.Fatalf("decode stdout %q: %v", stdout.String(), err)
+		}
+	}
+	return code, result, stderr.String()
+}
+
+func countMembershipTriggerRows(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (runs, builds int) {
+	t.Helper()
+	if err := pool.QueryRow(ctx,
+		"SELECT count(*) FROM remaining_metric_runs WHERE family = 'membership_backfill'",
+	).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	return runs, countRows(t, ctx, pool, "work_graph_execution_requests")
+}
+
+// TestTriggerBackstopMembershipChainsTheGraphBuildLikeTheNightlySchedule:
+// the manual membership run is fenced behind a work-graph build written in
+// the same transaction, and a repeat of the same request reuses both.
+func TestTriggerBackstopMembershipChainsTheGraphBuildLikeTheNightlySchedule(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	runtime := triggerIntegrationRuntime(t, ctx, commandAuthorizer{})
+	pool := runtime.pools.Domain
+
+	code, result, stderr := runMembershipTriggerBackstop(t, ctx, runtime)
+	if code != 0 || result["status"] != "started" {
+		t.Fatalf("first trigger: code=%d result=%v stderr=%q", code, result, stderr)
+	}
+	yesterday := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -1).Format("2006-01-02")
+	if want := "manual-trigger:membership_backfill:" + validTriggerOrg + ":" + yesterday; result["generation"] != want {
+		t.Fatalf("generation = %v, want %s", result["generation"], want)
+	}
+	if runs, builds := countMembershipTriggerRows(t, ctx, pool); runs != 1 || builds != 1 {
+		t.Fatalf("runs=%d builds=%d, want 1/1", runs, builds)
+	}
+	var buildID, fence string
+	if err := pool.QueryRow(ctx, "SELECT id::text FROM work_graph_execution_requests").Scan(&buildID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx,
+		"SELECT coalesce(prerequisite_completion_key, '') FROM worker_job_outbox WHERE job_kind = $1",
+		"metrics.remaining.membership_backfill",
+	).Scan(&fence); err != nil {
+		t.Fatal(err)
+	}
+	if fence != "work_graph_execution_request:"+buildID {
+		t.Fatalf("membership partition fence = %q, want work_graph_execution_request:%s", fence, buildID)
+	}
+
+	code, result, stderr = runMembershipTriggerBackstop(t, ctx, runtime)
+	if code != 0 || result["status"] != "already_ran" {
+		t.Fatalf("repeat trigger: code=%d result=%v stderr=%q", code, result, stderr)
+	}
+	if runs, builds := countMembershipTriggerRows(t, ctx, pool); runs != 1 || builds != 1 {
+		t.Fatalf("after repeat runs=%d builds=%d, want 1/1", runs, builds)
+	}
+}
+
+// TestTriggerBackstopMembershipSecondTriggerForACoveredDayIsRefused: once the
+// day's membership run succeeded with rows, a second trigger for that day is
+// refused and writes neither a run nor a graph build.
+func TestTriggerBackstopMembershipSecondTriggerForACoveredDayIsRefused(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	runtime := triggerIntegrationRuntime(t, ctx, commandAuthorizer{})
+	pool := runtime.pools.Domain
+
+	code, result, stderr := runMembershipTriggerBackstop(t, ctx, runtime)
+	if code != 0 || result["status"] != "started" {
+		t.Fatalf("first trigger: code=%d result=%v stderr=%q", code, result, stderr)
+	}
+	store, err := remaining.NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	partitionID, _ := result["partition_id"].(string)
+	claim, err := store.ClaimPartition(ctx, partitionID)
+	if err != nil || claim == nil {
+		t.Fatalf("claim %q: claim=%v err=%v", partitionID, claim, err)
+	}
+	if err := store.CompletePartition(ctx, *claim, "compatibility_execution:"+partitionID+":rows_written=5"); err != nil {
+		t.Fatal(err)
+	}
+
+	code, result, stderr = runMembershipTriggerBackstop(t, ctx, runtime)
+	if code != 0 || result["status"] != "already_covered" {
+		t.Fatalf("second trigger for a covered day: code=%d result=%v stderr=%q", code, result, stderr)
+	}
+	if runs, builds := countMembershipTriggerRows(t, ctx, pool); runs != 1 || builds != 1 {
+		t.Fatalf("after second trigger runs=%d builds=%d, want 1/1", runs, builds)
+	}
+}
+
+// TestTriggerBackstopMembershipRefusesWhileAScheduledRunForTheDayIsInFlight:
+// a pending nightly-shaped run labelled with the same day, whose graph build
+// has completed (its fence exists, so the partition is deliverable), blocks
+// the manual trigger as in_progress.
+func TestTriggerBackstopMembershipRefusesWhileAScheduledRunForTheDayIsInFlight(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	runtime := triggerIntegrationRuntime(t, ctx, commandAuthorizer{})
+	pool := runtime.pools.Domain
+
+	store, err := remaining.NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	yesterday := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -1).Format("2006-01-02")
+	publisher, err := remaining.NewPostgresPublisher(pool, runtime.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buildKey := "work_graph_execution_request:" + uuid.NewSHA1(uuid.NameSpaceOID, []byte("nightly-build-"+yesterday)).String()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := joboutbox.MarkCompletionTx(ctx, tx, buildKey); err != nil {
+		t.Fatal(err)
+	}
+	scheduled, err := store.StartRunTx(ctx, tx, remaining.StartRunRequest{
+		OrganizationID:            validTriggerOrg,
+		Family:                    "membership_backfill",
+		Generation:                "fixed-schedule:membership_backfill_daily_fanout:" + yesterday + "T10:30:00Z",
+		ScopeKey:                  yesterday,
+		Scopes:                    []json.RawMessage{json.RawMessage(`{"version":1,"repo_ids":[]}`)},
+		PrerequisiteCompletionKey: buildKey,
+	}, publisher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	code, result, stderr := runMembershipTriggerBackstop(t, ctx, runtime)
+	if code != 0 || result["status"] != "in_progress" || result["run_id"] != scheduled.ID {
+		t.Fatalf("trigger beside an in-flight scheduled run: code=%d result=%v stderr=%q", code, result, stderr)
+	}
+	if runs, builds := countMembershipTriggerRows(t, ctx, pool); runs != 1 || builds != 0 {
+		t.Fatalf("runs=%d builds=%d, want 1/0", runs, builds)
+	}
+}
+
+func TestTriggerBackstopMembershipRequiresOperateScope(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	runtime := triggerIntegrationRuntime(t, ctx, commandAuthorizer{err: joboperator.ErrAuthorization})
+
+	code, _, stderr := runMembershipTriggerBackstop(t, ctx, runtime)
+	if code != 1 || !strings.Contains(stderr, "unauthorized") {
+		t.Fatalf("expected unauthorized, got code=%d stderr=%q", code, stderr)
+	}
+	if runs, builds := countMembershipTriggerRows(t, ctx, runtime.pools.Domain); runs != 0 || builds != 0 {
+		t.Fatalf("runs=%d builds=%d, want 0/0", runs, builds)
+	}
+}
+
+// TestTriggerBackstopPrintsTheGenerationOfTheRunItStarted: for each
+// trigger-backstop path, a fresh run prints the request generation, and a
+// :retry-1 run (started after the first run was canceled) prints its own
+// generation, the one stored on the run.
+func TestTriggerBackstopPrintsTheGenerationOfTheRunItStarted(t *testing.T) {
+	cases := []struct {
+		family string
+		extra  []string
+	}{
+		{family: "work_item_attribution"},
+		{family: "capacity", extra: []string{"--all-teams"}},
+		{family: "recommendations", extra: []string{"--all-teams"}},
+		{family: "membership_backfill"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.family, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			runtime := triggerIntegrationRuntime(t, ctx, commandAuthorizer{})
+			pool := runtime.pools.Domain
+			trigger := func() map[string]any {
+				t.Helper()
+				var stdout, stderr bytes.Buffer
+				code := dispatchMetrics(ctx, runtime, append([]string{
+					"remaining", "trigger-backstop", "--family", tc.family,
+					"--org", validTriggerOrg, "--review-evidence", "testing",
+					"--reason", "operator_test", "--correlation-id", "corr-1",
+				}, tc.extra...), &stdout, &stderr)
+				result := map[string]any{}
+				if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || code != 0 {
+					t.Fatalf("trigger: code=%d stdout=%q stderr=%q err=%v", code, stdout.String(), stderr.String(), err)
+				}
+				return result
+			}
+			storedGeneration := func(runID any) string {
+				t.Helper()
+				var generation string
+				if err := pool.QueryRow(ctx, "SELECT generation FROM remaining_metric_runs WHERE id = $1::uuid", runID).Scan(&generation); err != nil {
+					t.Fatal(err)
+				}
+				return generation
+			}
+
+			first := trigger()
+			base, _ := first["generation"].(string)
+			if first["status"] != "started" || !strings.HasPrefix(base, "manual-trigger:"+tc.family+":") || storedGeneration(first["run_id"]) != base {
+				t.Fatalf("fresh run printed %v (stored %q)", first, storedGeneration(first["run_id"]))
+			}
+			store, err := remaining.NewPostgresStore(pool)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.CancelRun(ctx, first["run_id"].(string)); err != nil {
+				t.Fatal(err)
+			}
+
+			retry := trigger()
+			if retry["status"] != "started" || retry["run_id"] == first["run_id"] {
+				t.Fatalf("retry trigger: %v", retry)
+			}
+			if want := base + ":retry-1"; retry["generation"] != want || storedGeneration(retry["run_id"]) != want {
+				t.Fatalf("retry run printed generation %v, stored %q, want %q", retry["generation"], storedGeneration(retry["run_id"]), want)
+			}
+			if tc.family == "membership_backfill" {
+				var fence string
+				if err := pool.QueryRow(ctx, `
+SELECT coalesce(outbox.prerequisite_completion_key, '')
+FROM worker_job_outbox AS outbox
+WHERE outbox.dedupe_key = 'remaining:partition:' || $1::text`, retry["partition_id"]).Scan(&fence); err != nil {
+					t.Fatal(err)
+				}
+				var buildGeneration string
+				if err := pool.QueryRow(ctx,
+					"SELECT correlation_id FROM work_graph_execution_requests WHERE 'work_graph_execution_request:' || id::text = $1", fence,
+				).Scan(&buildGeneration); err != nil {
+					t.Fatalf("graph build behind the retry partition (fence %q): %v", fence, err)
+				}
+				if buildGeneration != retry["generation"] {
+					t.Fatalf("retry partition waits on the build of %q, printed generation %v", buildGeneration, retry["generation"])
+				}
+			}
+		})
 	}
 }

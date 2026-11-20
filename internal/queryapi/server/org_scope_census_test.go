@@ -99,10 +99,6 @@ var orgScopeReadsScopedElsewhere = map[string]orgScopeElsewhere{
 		"one eventWhere clause, the org_id predicate first, is the WHERE of both statements",
 		[]orgScopeSite{{"internal/queryapi/featureflags/events.go", "eventWhere", "org_id = {org_id:String}"}},
 	},
-	"internal/queryapi/throughputforecast/clickhouse.go:loadWorkItemOverlay": {
-		"one scopeFilter WHERE is spliced into both reads and the newest-row predicate",
-		[]orgScopeSite{{"internal/queryapi/throughputforecast/clickhouse.go", "scopeFilter", "org_id = {org_id:String}"}},
-	},
 }
 
 // orgScopeTeamViewCallers is the scope of the team view helpers (CHAOS-14353). LIMIT: no served (queryapi) caller may

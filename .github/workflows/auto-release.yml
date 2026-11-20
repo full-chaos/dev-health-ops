@@ -72,3 +72,119 @@ jobs:
           tag_name: ${{ steps.version.outputs.new_tag }}
           generate_release_notes: true
           prerelease: true
+
+  # The dho release asset (CHAOS-11788). Two jobs in this file, never `uses:` of another workflow: a release made with
+  # GITHUB_TOKEN does not fire `on: release`, and the image/login/cache guards refuse a local reusable workflow.
+  # dho-release-asset.yml runs the same build step on pull requests; the cell in
+  # internal/cigates/workflows/dho_release_asset_test.go pins the two build step texts equal.
+  dho-build:
+    needs: tag-and-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check the tag shape
+        env:
+          TAG: ${{ needs.tag-and-release.outputs.new_tag }}
+        run: |
+          set -euo pipefail
+          [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+\.[0-9]+)?$ ]] || { echo "::error::the tag is not vMAJOR.MINOR.PATCH[-suffix.N]"; exit 1; }
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ needs.tag-and-release.outputs.new_tag }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Check the tree can build dho
+        run: |
+          set -euo pipefail
+          for f in go.mod cmd/dho/main.go internal/platform/version/version.go; do
+            [ -f "${f}" ] || { echo "::error::${f} is missing at this commit: it cannot build dho"; exit 1; }
+          done
+          grep -Eq '^[[:space:]]+Commit[[:space:]]+= ' internal/platform/version/version.go || { echo "::error::version.Commit is missing"; exit 1; }
+
+      - name: Build dho linux arm64 and prove the stamp
+        env:
+          TAG: ${{ needs.tag-and-release.outputs.new_tag }}
+        run: |
+          set -euo pipefail
+          VP=github.com/full-chaos/dev-health-ops/internal/platform/version
+          COMMIT="$(git rev-parse HEAD)"
+          [[ "${COMMIT}" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the commit is not 40 hex"; exit 1; }
+          if [ -n "${TAG}" ]; then VERSION="${TAG}"; else VERSION="pr-${COMMIT:0:12}"; fi
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          BUILD_TIME="$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ)"
+          export CGO_ENABLED=0 GOFLAGS=-mod=readonly SOURCE_DATE_EPOCH
+          build() {
+            GOOS=linux GOARCH="$1" go build -buildvcs=false -trimpath \
+              -ldflags="-s -w -buildid= -X ${VP}.Version=${VERSION} -X ${VP}.Commit=${COMMIT} -X ${VP}.BuildTime=${BUILD_TIME}" \
+              -o "$2" ./cmd/dho
+            touch -d "@${SOURCE_DATE_EPOCH}" "$2"
+          }
+          mkdir -p dist twin
+          build arm64 dist/dho-linux-arm64
+          build arm64 twin/dho-linux-arm64-again
+          cmp dist/dho-linux-arm64 twin/dho-linux-arm64-again
+          build amd64 twin/dho-linux-amd64
+          (cd dist && sha256sum dho-linux-arm64 > dho-linux-arm64.sha256 && sha256sum -c dho-linux-arm64.sha256)
+          # go version -m does not record -ldflags here, so the arm64 stamp is checked in the bytes
+          [ "$(go version -m dist/dho-linux-arm64 | grep -c -F -e "-trimpath=true")" = 1 ]
+          grep -a -q -F -e "${COMMIT}" dist/dho-linux-arm64
+          twin/dho-linux-amd64 version | jq -e --arg c "${COMMIT}" '.commit == $c and .commit != "unknown"'
+          echo "commit=${COMMIT}"
+          cat dist/dho-linux-arm64.sha256
+
+      - name: Upload the asset files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: dho-linux-arm64
+          path: |
+            dist/dho-linux-arm64
+            dist/dho-linux-arm64.sha256
+          retention-days: 7
+          if-no-files-found: error
+
+  dho-publish:
+    needs: [tag-and-release, dho-build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download the asset files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: dho-linux-arm64
+          path: dist
+
+      - name: Verify the bytes
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -c dho-linux-arm64.sha256
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/dho-linux-arm64
+
+      - name: Upload the release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.tag-and-release.outputs.new_tag }}
+        run: |
+          set -euo pipefail
+          [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+\.[0-9]+)?$ ]] || { echo "::error::the tag is not vMAJOR.MINOR.PATCH[-suffix.N]"; exit 1; }
+          gh release upload "${TAG}" dist/dho-linux-arm64 dist/dho-linux-arm64.sha256

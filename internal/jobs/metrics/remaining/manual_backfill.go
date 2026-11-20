@@ -64,7 +64,8 @@ func unsupportedManualBackfillFamilyError() error {
 // remaining-metrics families (families.json) but their scopes are not
 // day-keyed (capacity needs a GenerationSeed; recommendations/
 // membership_backfill scope by window/repo set, not a calendar day), so a
-// "--day" backfill has no well-defined meaning for them.
+// "--day" backfill has no well-defined meaning for them; all three are
+// reachable through `metrics remaining trigger-backstop` instead.
 //
 // work_item_attribution (CHAOS-5016) is deliberately NOT listed here even
 // though manualBackfillDayScope (below) supports it: `start`'s readback_hint
@@ -109,9 +110,13 @@ var ManualBackfillDayScopedFamilies = []string{"complexity", "dora", "release_im
 // carries no day-window at all -- day is still the ScopeKey/dedup label for
 // them (see startManualTriggerRun's own doc comment), never a compute
 // window, exactly like work_item_attribution.
+//
+// membership_backfill reaches it through StartManualMembershipTriggerRun: its
+// run is fenced behind a work-graph build the caller writes in the same
+// transaction, as the nightly membership_backfill_daily_fanout binding does.
 var ManualBackstopTriggerFamilies = []string{
 	"work_item_attribution", "complexity", "dora", "release_impact",
-	"capacity", "recommendations",
+	"capacity", "recommendations", "membership_backfill",
 }
 
 // manualBackfillDayScope builds a day-scoped family's default partition
@@ -189,6 +194,18 @@ func manualRecommendationsTriggerScope(teamID *string, window int) (json.RawMess
 	return json.Marshal(payload)
 }
 
+// manualMembershipTriggerScope is the membership_backfill_daily_fanout
+// binding's scope (producers.go): an empty repository list is the
+// whole-organization projection.
+func manualMembershipTriggerScope() (json.RawMessage, error) {
+	return json.Marshal(map[string]any{"version": 1, "repo_ids": []string{}})
+}
+
+// ManualTriggerPrerequisite writes, in the trigger's own transaction, the
+// work a manual run must wait for, and returns that work's completion key.
+// generation is the generation the run is about to be inserted under.
+type ManualTriggerPrerequisite func(ctx context.Context, tx pgx.Tx, generation string) (completionKey string, err error)
+
 // manualTriggerGenerationSeedNamespace derives a manual capacity trigger's
 // Monte Carlo seed. producers.go's own deterministicGenerationSeed hashes an
 // Occurrence's Key, which does not exist for a manual call -- this hashes the
@@ -242,6 +259,27 @@ func (store *PostgresStore) StartManualRecommendationsTriggerRun(
 		return ManualBackfillOutcome{}, err
 	}
 	return store.startManualTriggerRun(ctx, "recommendations", organizationID, day, generation, scope, nil, publisher)
+}
+
+// StartManualMembershipTriggerRun starts an operator-triggered membership
+// projection. The membership executor has no readiness gate of its own
+// (membership_native.go ComputePartition): it relies on the partition being
+// fenced behind the organization's work-graph build. graphBuild writes that
+// build and is required.
+func (store *PostgresStore) StartManualMembershipTriggerRun(
+	ctx context.Context,
+	organizationID, day, generation string,
+	graphBuild ManualTriggerPrerequisite,
+	publisher PartitionPublisher,
+) (ManualBackfillOutcome, error) {
+	if graphBuild == nil {
+		return ManualBackfillOutcome{}, ErrInvalidState
+	}
+	scope, err := manualMembershipTriggerScope()
+	if err != nil {
+		return ManualBackfillOutcome{}, err
+	}
+	return store.startManualTriggerRunAfter(ctx, "membership_backfill", organizationID, day, generation, scope, nil, graphBuild, publisher)
 }
 
 // ManualBackfillOutcome reports what StartManualBackfillRun did for one day.
@@ -331,6 +369,22 @@ func (store *PostgresStore) startManualTriggerRun(
 	family, organizationID, day, generation string,
 	scope json.RawMessage,
 	generationSeed *int64,
+	publisher PartitionPublisher,
+) (ManualBackfillOutcome, error) {
+	return store.startManualTriggerRunAfter(ctx, family, organizationID, day, generation, scope, generationSeed, nil, publisher)
+}
+
+// startManualTriggerRunAfter is startManualTriggerRun with an optional
+// prerequisite. It runs once per attempted generation, before that attempt's
+// insert, so a ":retry-N" run waits on its own prerequisite; for a request
+// already in flight it rewrites the identical prerequisite, which its writer
+// treats as idempotent.
+func (store *PostgresStore) startManualTriggerRunAfter(
+	ctx context.Context,
+	family, organizationID, day, generation string,
+	scope json.RawMessage,
+	generationSeed *int64,
+	prerequisite ManualTriggerPrerequisite,
 	publisher PartitionPublisher,
 ) (ManualBackfillOutcome, error) {
 	if !store.valid() {
@@ -433,6 +487,13 @@ func (store *PostgresStore) startManualTriggerRun(
 	var run Run
 	var created, exhausted bool
 	for attempt := 0; ; attempt++ {
+		if prerequisite != nil {
+			completionKey, err := prerequisite(ctx, tx, attemptRequest.Generation)
+			if err != nil {
+				return ManualBackfillOutcome{}, err
+			}
+			attemptRequest.PrerequisiteCompletionKey = completionKey
+		}
 		run, created, err = store.insertRun(ctx, tx, attemptRequest, publisher)
 		if err != nil {
 			return ManualBackfillOutcome{}, err

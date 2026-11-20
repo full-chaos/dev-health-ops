@@ -3,6 +3,7 @@ package syncreconciler
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -14,12 +15,15 @@ import (
 
 func freeTickLock(context.Context) (func(), bool, error) { return func() {}, true, nil }
 
+// CHAOS-14380 (C4): one statement fits the 1500 ms stage budget on a slow
+// server: 64 rows (about 3.4 MiB at prod's 55.8 KB per row) and 4 MiB, never
+// below one 2 MiB row.
 func TestDefaultChunkSidecarReclaimConfigPinsTheBounds(t *testing.T) {
 	t.Parallel()
 	got := DefaultChunkSidecarReclaimConfig()
 	want := ChunkSidecarReclaimConfig{
-		RowsPerStatement:  256,
-		BytesPerStatement: 32 << 20,
+		RowsPerStatement:  64,
+		BytesPerStatement: 4 << 20,
 		BytesPerMinute:    256 << 20,
 		StatementsPerTick: 4,
 	}
@@ -166,8 +170,8 @@ func TestChunkSidecarReclaimConfigCannotRaiseTheBounds(t *testing.T) {
 	t.Parallel()
 	begin := func(context.Context) (pgx.Tx, error) { return nil, errors.New("unused") }
 	for name, mutate := range map[string]func(*ChunkSidecarReclaimConfig){
-		"257 rows":            func(config *ChunkSidecarReclaimConfig) { config.RowsPerStatement = 257 },
-		"33 MiB statement":    func(config *ChunkSidecarReclaimConfig) { config.BytesPerStatement = 33 << 20 },
+		"65 rows":             func(config *ChunkSidecarReclaimConfig) { config.RowsPerStatement = 65 },
+		"5 MiB statement":     func(config *ChunkSidecarReclaimConfig) { config.BytesPerStatement = 5 << 20 },
 		"258 MiB per minute":  func(config *ChunkSidecarReclaimConfig) { config.BytesPerMinute = 258 << 20 },
 		"5 statements a tick": func(config *ChunkSidecarReclaimConfig) { config.StatementsPerTick = 5 },
 	} {
@@ -316,5 +320,164 @@ func TestMutationPipelineCountsChunkSidecarReclaimLockSkips(t *testing.T) {
 	}
 	if !strings.Contains(rendered.String(), "\nsync_reconciler_chunk_sidecar_reclaim_lock_skipped_total 2\n") {
 		t.Fatalf("lock-skip counter not rendered as 2:\n%s", rendered.String())
+	}
+}
+
+// CHAOS-14380 cell (C3): the reclaim yields a tick in which an earlier stage
+// used at least 3/4 of its budget (a budget-spent failure always does), and
+// logs the yield on its own line while it has work. A fast failure of an
+// earlier stage does not yield (TestMutationPipelineRunsChunkSidecarReclaimWhenEarlierStagesAbort).
+func TestMutationPipelineChunkSidecarReclaimYieldsToAPressuredTick(t *testing.T) {
+	const materializerBudget = 40 * time.Millisecond
+	for name, testCase := range map[string]struct {
+		materializer func(context.Context) error
+		wantCalls    int
+		wantYield    bool
+	}{
+		"every earlier stage fast": {func(context.Context) error { return nil }, 2, false},
+		"materializer used 3/4 of its budget": {func(context.Context) error {
+			time.Sleep(materializerBudget * 3 / 4)
+			return nil
+		}, 1, true},
+		"materializer spent its budget": {func(ctx context.Context) error {
+			<-ctx.Done()
+			return reclaimError(ctx, ErrUnavailable)
+		}, 1, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pressured := false
+			reclaimCalls := 0
+			config := DefaultMutationPipelineConfig()
+			config.StageBudgets[StageMaterializer] = materializerBudget
+			pipeline, err := NewMutationPipeline(
+				pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) { return LeaseRepairResult{}, nil }),
+				pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
+					return TerminalDeliveryRepairResult{}, nil
+				}),
+				pipelineMaterializerFunc(func(ctx context.Context, _ time.Time, _ time.Time, _ int) (MaterializerResult, error) {
+					if !pressured {
+						return MaterializerResult{}, nil
+					}
+					return MaterializerResult{}, testCase.materializer(ctx)
+				}),
+				pipelineKernelFunc(func(context.Context, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+					return KernelResult{}, nil
+				}),
+				pipelineObserverFunc(func(context.Context, time.Time, int) (Observation, error) { return Observation{}, nil }),
+				nil, nil, nil,
+				noopTerminalOutboxClose(),
+				noopOrphanedUnitRepair(),
+				pipelineChunkSidecarReclaimFunc(func(context.Context, time.Time, int) (ChunkSidecarReclaimResult, error) {
+					reclaimCalls++
+					return ChunkSidecarReclaimResult{Statements: 1, RemainingUnits: 1}, nil
+				}),
+				config,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var logs strings.Builder
+			original := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+			defer slog.SetDefault(original)
+			for tick := range 2 {
+				pressured = tick == 1
+				if _, err := pipeline.Step(context.Background(), time.Now(), 10); err != nil {
+					t.Fatalf("tick %d: %v", tick, err)
+				}
+			}
+			slog.SetDefault(original)
+			if reclaimCalls != testCase.wantCalls {
+				t.Errorf("reclaim ran %d times in 2 ticks, want %d", reclaimCalls, testCase.wantCalls)
+			}
+			yieldLine := `"msg":"syncreconciler.chunk_sidecar_reclaim","yielded":true,"stage":"materializer"`
+			if got := strings.Contains(logs.String(), yieldLine); got != testCase.wantYield {
+				t.Errorf("yield line logged = %t, want %t: %s", got, testCase.wantYield, logs.String())
+			}
+		})
+	}
+}
+
+type floorCountingReclaim struct {
+	steps, floors int
+}
+
+func (reclaim *floorCountingReclaim) Step(context.Context, time.Time, int) (ChunkSidecarReclaimResult, error) {
+	reclaim.steps++
+	return ChunkSidecarReclaimResult{Statements: 1, RemainingUnits: 1}, nil
+}
+
+func (reclaim *floorCountingReclaim) StepAtFloor(context.Context, time.Time, int) (ChunkSidecarReclaimResult, error) {
+	reclaim.floors++
+	return ChunkSidecarReclaimResult{Statements: 1, RemainingUnits: 1}, nil
+}
+
+// CHAOS-14380 cell (C5): under an earlier stage that is slow every tick, the
+// reclaim yields 10 ticks in a row, runs once at the floor size on tick 11,
+// and the streak starts again; the yield line carries the streak.
+func TestMutationPipelineChunkSidecarReclaimRunsAtTheFloorAfterTenYields(t *testing.T) {
+	const materializerBudget = 40 * time.Millisecond
+	slow := false
+	reclaim := &floorCountingReclaim{}
+	config := DefaultMutationPipelineConfig()
+	config.StageBudgets[StageMaterializer] = materializerBudget
+	pipeline, err := NewMutationPipeline(
+		pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) { return LeaseRepairResult{}, nil }),
+		pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
+			return TerminalDeliveryRepairResult{}, nil
+		}),
+		pipelineMaterializerFunc(func(context.Context, time.Time, time.Time, int) (MaterializerResult, error) {
+			if slow {
+				time.Sleep(materializerBudget * 3 / 4)
+			}
+			return MaterializerResult{}, nil
+		}),
+		pipelineKernelFunc(func(context.Context, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+			return KernelResult{}, nil
+		}),
+		pipelineObserverFunc(func(context.Context, time.Time, int) (Observation, error) { return Observation{}, nil }),
+		nil, nil, nil,
+		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
+		reclaim,
+		config,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs strings.Builder
+	original := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	defer slog.SetDefault(original)
+	step := func(tick int) {
+		t.Helper()
+		if _, err := pipeline.Step(context.Background(), time.Now(), 10); err != nil {
+			t.Fatalf("tick %d: %v", tick, err)
+		}
+	}
+	step(0)
+	slow = true
+	for tick := 1; tick <= 10; tick++ {
+		step(tick)
+	}
+	if reclaim.steps != 1 || reclaim.floors != 0 {
+		t.Fatalf("after 1 fast and 10 slow ticks: %d steps, %d floor runs; want 1 step (the fast tick) and no floor run", reclaim.steps, reclaim.floors)
+	}
+	step(11)
+	if reclaim.steps != 1 || reclaim.floors != 1 {
+		t.Fatalf("tick 11 after 10 yields: %d steps, %d floor runs; want one floor run", reclaim.steps, reclaim.floors)
+	}
+	step(12)
+	if reclaim.steps != 1 || reclaim.floors != 1 {
+		t.Fatalf("tick 12: %d steps, %d floor runs; want a yield again (the streak restarted)", reclaim.steps, reclaim.floors)
+	}
+	slog.SetDefault(original)
+	for _, want := range []string{`"yielded":true,"stage":"materializer","yield_streak":10}`, `"yielded":true,"stage":"materializer","yield_streak":1}`} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("no yield line with %s: %s", want, logs.String())
+		}
+	}
+	if strings.Contains(logs.String(), `"yield_streak":11`) {
+		t.Errorf("the streak passed the cap: %s", logs.String())
 	}
 }

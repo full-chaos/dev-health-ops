@@ -1,0 +1,5 @@
+Deployment/web
+ ConfigMap/cfg 
+Secret/creds
+Secret/new-secret
+

@@ -272,3 +272,67 @@ func TestLateRerunRunsIntervalKeepsANilCreatedRunOfTheRunsRange(t *testing.T) {
 		}
 	}
 }
+
+// A run that a peeled (narrowed) response supplies first, created above that response's ceiling, is not read: the oracle
+// admits each listed run under the ceiling of the response that supplied it, as the chunked route does, for both ranges of
+// a midnight claim. A run inside the ceiling (at it, below it, or the same first-seen run at the ceiling) is read once. A
+// claim with no deep range keeps main's oracle admission (the first-seen run is read there).
+func TestLateRerunRunsOracleAdmitsUnderTheSupplyingResponseCeiling(t *testing.T) {
+	midnight, regular, deep := lateRerunRunsIntervalClaim()
+	m := *midnight.BeforeAt
+	noDeep := lateRerunClaim(m.Add(-2*time.Hour), m.Add(-time.Hour))
+	for _, cell := range []struct {
+		name, first string
+		claim       Claim
+		cut         time.Time
+		bounded     bool
+	}{
+		{"runs range", regular, midnight, midnight.SinceAt.Add(-5 * time.Hour), true},
+		{"deep range", deep, midnight, m.AddDate(0, 0, -5).Add(10 * time.Hour), true},
+		{"runs range, no deep range", githubTestsRunsQuery(noDeep, githubTestsRefreshLookbackDefault, "").Get("created"), noDeep, noDeep.SinceAt.Add(-5 * time.Hour), false},
+	} {
+		for _, firstSeen := range []time.Duration{time.Second, 0} {
+			for _, route := range []string{"chunked", "oracle"} {
+				label := "first seen above the ceiling"
+				if firstSeen == 0 {
+					label = "first seen at the ceiling"
+				}
+				t.Run(cell.name+"/"+label+"/"+route, func(t *testing.T) {
+					lo, _, _ := strings.Cut(cell.first, "..")
+					peeled := lo + ".." + cell.cut.Format(time.RFC3339)
+					probe := func(id int, created time.Time) listingRun {
+						return listingRun{id: id, created: created, startedAt: cell.claim.SinceAt.Add(time.Minute), updated: cell.claim.SinceAt.Add(2 * time.Minute),
+							status: "completed", conclusion: "success", attempt: 2}
+					}
+					first, at, below := probe(9001, cell.cut.Add(firstSeen)), probe(1, cell.cut), probe(9003, cell.cut.Add(-time.Second))
+					fake := newListingFake(t, append(makeListingRuns(100, 1000, cell.cut, time.Second), at, below))
+					served := 0
+					doer := &lateRerunR2Doer{listingFake: fake, report: -1, extra: func(created string) *listingRun {
+						if created == peeled {
+							served++
+							return &first
+						}
+						return nil
+					}}
+					rows, _, _ := lateRerunRunsIntervalRead(t, route, cell.claim, doer)
+					if served != 1 {
+						t.Fatalf("peeled query served %d times, want 1", served)
+					}
+					wantFirst := 1
+					if firstSeen > 0 && (cell.bounded || route == "chunked") {
+						wantFirst = 0
+					}
+					for _, want := range []struct {
+						run  listingRun
+						want int
+					}{{first, wantFirst}, {at, 1}, {below, 1}} {
+						if fake.jobGets[want.run.id] != want.want || rows[fmt.Sprint(want.run.id)] != want.want {
+							t.Errorf("run %d created %s: jobs reads=%d rows=%d, want %d and %d", want.run.id, want.run.created.Format(time.RFC3339),
+								fake.jobGets[want.run.id], rows[fmt.Sprint(want.run.id)], want.want, want.want)
+						}
+					}
+				})
+			}
+		}
+	}
+}

@@ -1,9 +1,11 @@
 package latestrow_test
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -13,20 +15,20 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/tools/go/packages"
+
 	golatestrow "github.com/full-chaos/dev-health-go/latestrow"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/latestrow"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
-// The ops census of the latest-row key is a static guard over the non-test Go
-// files of the ops module tree (nested modules, vendor, testdata and dot
-// directories excluded). It checks three things: the ops key and renders are
-// the dev-health-go ones; no string literal names an insert-order virtual
-// column (_part, _part_offset, ...) as a whole identifier; and the selectors
-// spelled <latestrow import name>.<func>, per selector and per enclosing
-// declaration, match the named list below. It reads spelling, not Go
-// bindings: a shadowed name, a dot import, an unqualified call inside this
-// package or a function value called more than once is not counted.
+// The ops census of the latest-row key checks three things: the ops key and
+// renders are the dev-health-go ones; no string literal names an insert-order
+// virtual column (_part, _part_offset, ...) as a whole identifier (a spelling
+// scan of the non-test files of the module tree, nested modules, vendor,
+// testdata and dot directories excluded); and the calls to latestrow funcs and
+// the uses of its OrderKey const, bound by go/types (latestrowCalls), match
+// the named list below.
 
 var latestrowImports = map[string]bool{
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/latestrow": true,
@@ -34,8 +36,8 @@ var latestrowImports = map[string]bool{
 }
 
 // latestrowSites are the calls to latestrow in non-test files, as
-// "file:declaration:function" -> count: 30 calls in 10 declarations, plus the
-// forwards in latestrow.go itself.
+// "file:declaration:name" -> count: 30 calls in 10 declarations, plus the
+// 3 forwards and the OrderKey const in latestrow.go itself.
 var latestrowSites = map[string]int{
 	"internal/jobs/investment/chquery/entities.go:Reader.FetchExistingInvestmentKeys:ArgMax":          5,
 	"internal/jobs/investment/chquery/entities.go:Reader.FetchExistingInvestmentKeys:ArgMaxKeepNull":  1,
@@ -229,36 +231,141 @@ func TestNoSiteBuildsItsOwnKey(t *testing.T) {
 	}
 }
 
-func TestLatestrowCallSitesAreNamed(t *testing.T) {
-	found := map[string]int{}
-	for _, f := range moduleFiles(t) {
-		local := map[string]bool{}
-		for _, imp := range f.file.Imports {
-			path, err := strconv.Unquote(imp.Path.Value)
-			if err != nil || !latestrowImports[path] {
-				continue
-			}
-			name := filepath.Base(path)
-			if imp.Name != nil {
-				name = imp.Name.Name
-			}
-			local[name] = true
+// latestrowCalls binds the census to go/types. It type-checks the packages of
+// the module at dir that import a latestrow package (and the latestrow package
+// itself), in the default build and in the integration build, and counts the
+// ast.CallExpr whose callee resolves (types.Info.Uses) to a func of a package
+// in paths, per "file:declaration:function". Any other use of such a func (a
+// store into a variable, an argument, a method value) is returned as
+// uncounted: a call through a stored func value is not resolved, so the store
+// itself must fail. A const of such a package (OrderKey) is counted as a
+// reference, not a call, under the same key form. Not checked: _test.go
+// files, build tags other than the default and integration, nested modules
+// (Go's ./... excludes them, as it does testdata and dot directories),
+// reflection.
+func latestrowCalls(dir string, paths map[string]bool) (found map[string]int, uncounted []string, err error) {
+	dir, err = filepath.EvalSymlinks(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	found = map[string]int{}
+	seen := map[string]bool{}
+	for _, flags := range [][]string{nil, {"-tags=integration"}} {
+		env := append(os.Environ(), "GOWORK=off")
+		listed, err := packages.Load(&packages.Config{
+			Mode: packages.NeedName | packages.NeedImports, Dir: dir, Env: env, BuildFlags: flags,
+		}, "./...")
+		if err != nil {
+			return nil, nil, err
 		}
-		if len(local) == 0 {
+		var patterns []string
+		for _, pkg := range listed {
+			use := paths[pkg.PkgPath]
+			for imp := range pkg.Imports {
+				use = use || paths[imp]
+			}
+			if use {
+				patterns = append(patterns, pkg.PkgPath)
+			}
+		}
+		if len(patterns) == 0 {
 			continue
 		}
-		for _, decl := range f.file.Decls {
-			ast.Inspect(decl, func(n ast.Node) bool {
-				sel, ok := n.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-				if id, ok := sel.X.(*ast.Ident); ok && local[id.Name] {
-					found[f.rel+":"+declName(decl, sel)+":"+sel.Sel.Name]++
-				}
-				return true
-			})
+		typed, err := packages.Load(&packages.Config{
+			Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
+			Dir:  dir, Env: env, BuildFlags: flags,
+		}, patterns...)
+		if err != nil {
+			return nil, nil, err
 		}
+		for _, pkg := range typed {
+			if len(pkg.Errors) > 0 {
+				return nil, nil, fmt.Errorf("%s: %v", pkg.PkgPath, pkg.Errors[0])
+			}
+			for _, file := range pkg.Syntax {
+				pos := pkg.Fset.Position(file.Pos())
+				rel, err := filepath.Rel(dir, pos.Filename)
+				if err != nil {
+					return nil, nil, err
+				}
+				rel = filepath.ToSlash(rel)
+				resolve := func(id *ast.Ident) types.Object {
+					obj := pkg.TypesInfo.Uses[id]
+					switch obj.(type) {
+					case *types.Func, *types.Const:
+						if obj.Pkg() != nil && paths[obj.Pkg().Path()] {
+							return obj
+						}
+					}
+					return nil
+				}
+				counted := map[*ast.Ident]bool{}
+				for _, decl := range file.Decls {
+					ast.Inspect(decl, func(n ast.Node) bool {
+						call, ok := n.(*ast.CallExpr)
+						if !ok {
+							return true
+						}
+						var id *ast.Ident
+						switch f := ast.Unparen(call.Fun).(type) {
+						case *ast.Ident:
+							id = f
+						case *ast.SelectorExpr:
+							id = f.Sel
+						}
+						if id == nil {
+							return true
+						}
+						if fn, ok := resolve(id).(*types.Func); ok {
+							counted[id] = true
+							at := fmt.Sprintf("%s:%d", rel, pkg.Fset.Position(id.Pos()).Offset)
+							if !seen[at] {
+								seen[at] = true
+								found[rel+":"+declName(decl, call)+":"+fn.Name()]++
+							}
+						}
+						return true
+					})
+					ast.Inspect(decl, func(n ast.Node) bool {
+						id, ok := n.(*ast.Ident)
+						if !ok || counted[id] {
+							return true
+						}
+						if fn := resolve(id); fn != nil {
+							at := fmt.Sprintf("%s:%d", rel, pkg.Fset.Position(id.Pos()).Offset)
+							if _, isConst := fn.(*types.Const); isConst {
+								if !seen[at] {
+									seen[at] = true
+									found[rel+":"+declName(decl, id)+":"+fn.Name()]++
+								}
+								return true
+							}
+							if !seen[at] {
+								seen[at] = true
+								uncounted = append(uncounted, fmt.Sprintf("%s:%d:%s", rel, pkg.Fset.Position(id.Pos()).Line, fn.Name()))
+							}
+						}
+						return true
+					})
+				}
+			}
+		}
+	}
+	sort.Strings(uncounted)
+	return found, uncounted, nil
+}
+
+func TestLatestrowCallSitesAreNamed(t *testing.T) {
+	root, err := moduleroot.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, uncounted, err := latestrowCalls(root, latestrowImports)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range uncounted {
+		t.Errorf("latestrow func used but not called at %s: call it where it is named, do not store or pass it", u)
 	}
 	keys := map[string]bool{}
 	for k := range found {

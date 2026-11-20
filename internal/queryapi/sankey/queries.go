@@ -220,7 +220,7 @@ type expenseCountsRow struct {
 func fetchExpenseCounts(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string, oneTeam bool) ([]expenseCountsRow, error) {
 	source, view := "work_item_metrics_daily FINAL", "\n          AND "+rowview.OrgPredicate("work_item_metrics_daily", "")
 	if oneTeam {
-		source, view = rowview.ServedTeamSource("work_item_metrics_daily", servedTeamWhere(scopeFilterSQL))+" AS work_item_metrics_daily", ""
+		source, view = rowview.ServedTeamSource("work_item_metrics_daily", servedTeamWhere(scopeFilterSQL), "")+" AS work_item_metrics_daily", ""
 	}
 	query := fmt.Sprintf(`
         SELECT
@@ -351,7 +351,7 @@ type stateStatusCountRow struct {
 func fetchStateStatusCounts(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string, oneTeam bool) ([]stateStatusCountRow, error) {
 	source, view := "work_item_state_durations_daily FINAL", "\n          AND "+rowview.OrgPredicate("work_item_state_durations_daily", "")
 	if oneTeam {
-		source, view = rowview.ServedTeamSource("work_item_state_durations_daily", servedTeamWhere(scopeFilterSQL))+" AS work_item_state_durations_daily", ""
+		source, view = rowview.ServedTeamSource("work_item_state_durations_daily", servedTeamWhere(scopeFilterSQL), "")+" AS work_item_state_durations_daily", ""
 	}
 	query := fmt.Sprintf(`
         SELECT

@@ -520,7 +520,7 @@ func (sink TestOpsClickHouseEffects) InspectEffect(ctx context.Context, claim Cl
 		if err != nil {
 			return EffectConflict, err
 		}
-		return inspectGitHubTestsRows(rows, func(expected githubTestsPipelineRow) (githubTestsPipelineRow, bool, error) {
+		return inspectTestOpsRowsByLastSynced(rows, func(expected githubTestsPipelineRow) (githubTestsPipelineRow, bool, error) {
 			actual := githubTestsPipelineRow{}
 			if err := validateTestOpsProvider(claim, expected.Provider); err != nil {
 				return actual, false, err
@@ -533,7 +533,7 @@ func (sink TestOpsClickHouseEffects) InspectEffect(ctx context.Context, claim Cl
 		if err != nil {
 			return EffectConflict, err
 		}
-		return inspectGitHubTestsRows(rows, func(expected githubTestsJobRow) (githubTestsJobRow, bool, error) {
+		return inspectTestOpsRowsByLastSynced(rows, func(expected githubTestsJobRow) (githubTestsJobRow, bool, error) {
 			actual := githubTestsJobRow{}
 			found, err := queryGitHubTestsRow(ctx, sink.Conn, `SELECT org_id,repo_id,run_id,job_id,job_name,stage,status,started_at,finished_at,duration_seconds,runner_type,retry_attempt,last_synced FROM ci_job_runs FINAL WHERE org_id=? AND repo_id=? AND run_id=? AND job_id=?`, []any{expected.OrgID, expected.RepoID, expected.RunID, expected.JobID}, &actual.OrgID, &actual.RepoID, &actual.RunID, &actual.JobID, &actual.JobName, &actual.Stage, &actual.Status, &actual.StartedAt, &actual.FinishedAt, &actual.DurationSeconds, &actual.RunnerType, &actual.RetryAttempt, &actual.LastSynced)
 			return actual, found, err
@@ -543,7 +543,7 @@ func (sink TestOpsClickHouseEffects) InspectEffect(ctx context.Context, claim Cl
 		if err != nil {
 			return EffectConflict, err
 		}
-		return inspectGitHubTestsRows(rows, func(expected githubTestsAcceptanceRow) (githubTestsAcceptanceRow, bool, error) {
+		return inspectTestOpsRowsByLastSynced(rows, func(expected githubTestsAcceptanceRow) (githubTestsAcceptanceRow, bool, error) {
 			actual := githubTestsAcceptanceRow{}
 			if err := validateTestOpsProvider(claim, expected.Provider); err != nil {
 				return actual, false, err
@@ -556,7 +556,7 @@ func (sink TestOpsClickHouseEffects) InspectEffect(ctx context.Context, claim Cl
 		if err != nil {
 			return EffectConflict, err
 		}
-		return inspectGitHubTestsRows(rows, func(expected testSuiteResultRow) (testSuiteResultRow, bool, error) {
+		return inspectTestOpsRowsByLastSynced(rows, func(expected testSuiteResultRow) (testSuiteResultRow, bool, error) {
 			actual := testSuiteResultRow{}
 			found, err := queryGitHubTestsRow(ctx, sink.Conn, `SELECT org_id,repo_id,run_id,suite_id,suite_name,framework,environment,toInt64(total_count),toInt64(passed_count),toInt64(failed_count),toInt64(skipped_count),toInt64(error_count),toInt64(quarantined_count),toInt64(retried_count),duration_seconds,started_at,finished_at,team_id,service_id,last_synced,toString(report_slot),toInt64(run_attempt),legacy_suite_ids FROM test_suite_results FINAL WHERE org_id=? AND repo_id=? AND run_id=? AND suite_id=?`, []any{expected.OrgID, expected.RepoID, expected.RunID, expected.SuiteID}, &actual.OrgID, &actual.RepoID, &actual.RunID, &actual.SuiteID, &actual.SuiteName, &actual.Framework, &actual.Environment, &actual.TotalCount, &actual.PassedCount, &actual.FailedCount, &actual.SkippedCount, &actual.ErrorCount, &actual.QuarantinedCount, &actual.RetriedCount, &actual.DurationSeconds, &actual.StartedAt, &actual.FinishedAt, &actual.TeamID, &actual.ServiceID, &actual.LastSynced, &actual.ReportSlot, &actual.RunAttempt, &actual.LegacySuiteIDs)
 			return actual, found, err
@@ -566,7 +566,7 @@ func (sink TestOpsClickHouseEffects) InspectEffect(ctx context.Context, claim Cl
 		if err != nil {
 			return EffectConflict, err
 		}
-		return inspectGitHubTestsRows(rows, func(expected testCaseResultRow) (testCaseResultRow, bool, error) {
+		return inspectTestOpsRowsByLastSynced(rows, func(expected testCaseResultRow) (testCaseResultRow, bool, error) {
 			actual := testCaseResultRow{}
 			found, err := queryGitHubTestsRow(ctx, sink.Conn, `SELECT org_id,repo_id,run_id,suite_id,case_id,case_name,class_name,status,duration_seconds,toInt64(retry_attempt),failure_message,failure_type,stack_trace,is_quarantined != 0,last_synced FROM test_case_results FINAL WHERE org_id=? AND repo_id=? AND run_id=? AND suite_id=? AND case_id=?`, []any{expected.OrgID, expected.RepoID, expected.RunID, expected.SuiteID, expected.CaseID}, &actual.OrgID, &actual.RepoID, &actual.RunID, &actual.SuiteID, &actual.CaseID, &actual.CaseName, &actual.ClassName, &actual.Status, &actual.DurationSeconds, &actual.RetryAttempt, &actual.FailureMessage, &actual.FailureType, &actual.StackTrace, &actual.IsQuarantined, &actual.LastSynced)
 			return actual, found, err
@@ -576,7 +576,7 @@ func (sink TestOpsClickHouseEffects) InspectEffect(ctx context.Context, claim Cl
 		if err != nil {
 			return EffectConflict, err
 		}
-		return inspectGitHubTestsRows(rows, func(expected coverageSnapshotRow) (coverageSnapshotRow, bool, error) {
+		return inspectTestOpsRowsByLastSynced(rows, func(expected coverageSnapshotRow) (coverageSnapshotRow, bool, error) {
 			actual := coverageSnapshotRow{}
 			found, err := queryGitHubTestsRow(ctx, sink.Conn, `SELECT org_id,repo_id,run_id,snapshot_id,report_format,CAST(lines_total,'Nullable(Int64)'),CAST(lines_covered,'Nullable(Int64)'),line_coverage_pct,CAST(branches_total,'Nullable(Int64)'),CAST(branches_covered,'Nullable(Int64)'),branch_coverage_pct,CAST(functions_total,'Nullable(Int64)'),CAST(functions_covered,'Nullable(Int64)'),commit_hash,branch,CAST(pr_number,'Nullable(Int64)'),team_id,service_id,last_synced,toString(report_slot),toInt64(run_attempt),legacy_snapshot_ids FROM coverage_snapshots FINAL WHERE org_id=? AND repo_id=? AND run_id=? AND snapshot_id=?`, []any{expected.OrgID, expected.RepoID, expected.RunID, expected.SnapshotID}, &actual.OrgID, &actual.RepoID, &actual.RunID, &actual.SnapshotID, &actual.ReportFormat, &actual.LinesTotal, &actual.LinesCovered, &actual.LineCoveragePct, &actual.BranchesTotal, &actual.BranchesCovered, &actual.BranchCoveragePct, &actual.FunctionsTotal, &actual.FunctionsCovered, &actual.CommitHash, &actual.Branch, &actual.PRNumber, &actual.TeamID, &actual.ServiceID, &actual.LastSynced, &actual.ReportSlot, &actual.RunAttempt, &actual.LegacySnapshotIDs)
 			return actual, found, err
@@ -661,6 +661,69 @@ func queryGitHubTestsRow(ctx context.Context, conn driver.Conn, query string, ar
 	}
 	return true, rows.Err()
 }
+
+// testOpsLastSyncedRow is a row of the six TestOps tables whose ReplacingMergeTree version is last_synced. A unit stamps every
+// row with its normalizedAt, which the durable chunk sidecar fixes for every attempt, so a replay writes the same version.
+type testOpsLastSyncedRow interface {
+	githubTestsPipelineRow | githubTestsJobRow | githubTestsAcceptanceRow | testSuiteResultRow | testCaseResultRow | coverageSnapshotRow
+}
+
+func testOpsRowLastSynced(row any) time.Time {
+	switch typed := row.(type) {
+	case githubTestsPipelineRow:
+		return typed.LastSynced
+	case githubTestsJobRow:
+		return typed.LastSynced
+	case githubTestsAcceptanceRow:
+		return typed.LastSynced
+	case testSuiteResultRow:
+		return typed.LastSynced
+	case testCaseResultRow:
+		return typed.LastSynced
+	case coverageSnapshotRow:
+		return typed.LastSynced
+	}
+	return time.Time{}
+}
+
+// inspectTestOpsRowsByLastSynced decides each key by the stored version (CHAOS-14412), as inspectTestOpsRunReportCompleteness
+// does by verdict_version, then the batch. A stored OLDER version means the batch never landed (a re-sync over an earlier sync):
+// absent. A stored NEWER version outranks the batch row, which FINAL can never return: settled. Only the SAME version compares
+// the row, and a difference is a conflict. Any conflicting key makes the batch a conflict; else any absent key makes it absent
+// (a replay of the batch is safe: it writes the same version again); else it is exact.
+func inspectTestOpsRowsByLastSynced[T testOpsLastSyncedRow](expected []T, load func(T) (T, bool, error)) (EffectInspection, error) {
+	if len(expected) == 0 {
+		return EffectAbsent, nil
+	}
+	absent := false
+	for _, want := range expected {
+		actual, found, err := load(want)
+		if err != nil {
+			return EffectConflict, err
+		}
+		if !found {
+			absent = true
+			continue
+		}
+		stored, batch := testOpsRowLastSynced(actual), testOpsRowLastSynced(want)
+		switch {
+		case stored.Before(batch):
+			absent = true
+		case stored.After(batch):
+		default:
+			wantJSON, _ := json.Marshal(want)
+			actualJSON, _ := json.Marshal(actual)
+			if string(wantJSON) != string(actualJSON) {
+				return EffectConflict, nil
+			}
+		}
+	}
+	if absent {
+		return EffectAbsent, nil
+	}
+	return EffectExact, nil
+}
+
 func inspectGitHubTestsRows[T any](expected []T, load func(T) (T, bool, error)) (EffectInspection, error) {
 	if len(expected) == 0 {
 		return EffectAbsent, nil

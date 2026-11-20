@@ -16,10 +16,11 @@ import (
 	chstorage "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 )
 
-// TestDemoWorldEveryWorkUnitPassesTheEvidenceGate loads the demo world as `fixtures generate` does and runs
-// the production investment materializer over it: no work unit may fall to the evidence gate (too few
-// characters, or no text source), or the demo organization's investment answers are the flat fallback.
-func TestDemoWorldEveryWorkUnitPassesTheEvidenceGate(t *testing.T) {
+// TestDemoWorldOnlyTheTerseStoriesFallToTheEvidenceGate loads the demo world as `fixtures generate` does and
+// runs the production investment materializer over it: only the work units of the terse stories (no
+// description, demoStory.Terse) fall to the evidence gate (too few characters, or no text source); every
+// other unit reaches the categorizer, or the demo organization's investment answers are the flat fallback.
+func TestDemoWorldOnlyTheTerseStoriesFallToTheEvidenceGate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	ch := startClickHouse(t)
@@ -64,7 +65,15 @@ func TestDemoWorldEveryWorkUnitPassesTheEvidenceGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	written := 0
+	terse := 0
+	for _, team := range demoTeams {
+		for _, story := range team.Stories {
+			if story.Terse {
+				terse++
+			}
+		}
+	}
+	written, gated := 0, 0
 	for rows.Next() {
 		var status string
 		var count uint64
@@ -73,14 +82,17 @@ func TestDemoWorldEveryWorkUnitPassesTheEvidenceGate(t *testing.T) {
 		}
 		written += int(count)
 		if status == categorize.StatusInsufficientChars || status == categorize.StatusNoTextSources {
-			t.Errorf("%d work unit(s) fell to the evidence gate (%s): their text is too short for the categorizer", count, status)
+			gated += int(count)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if written == 0 || stats.LLMCalls < stats.Components {
-		t.Errorf("components %d, investment rows %d, categorizer calls %d: every unit must reach the categorizer", stats.Components, written, stats.LLMCalls)
+	if terse == 0 || gated != terse {
+		t.Errorf("%d work unit(s) fell to the evidence gate, want exactly the %d terse stories' units", gated, terse)
+	}
+	if written == 0 || stats.LLMCalls < stats.Components-terse {
+		t.Errorf("components %d, investment rows %d, categorizer calls %d: every unit but the terse stories' must reach the categorizer", stats.Components, written, stats.LLMCalls)
 	}
 	t.Logf("components %d, investment rows %d, categorizer calls %d", stats.Components, written, stats.LLMCalls)
 }

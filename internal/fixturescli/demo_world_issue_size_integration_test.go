@@ -36,8 +36,8 @@ var demoWorldIssueSizeGolden = map[string]issueSizeSummary{
 	"github": {Units: 14, SizedUnits: 0, SizeSum: 0},
 	"gitlab": {Units: 41, SizedUnits: 25, SizeSum: 88},
 	"jira":   {Units: 52, SizedUnits: 24, SizeSum: 93},
-	"linear": {Units: 45, SizedUnits: 31, SizeSum: 114},
-	"none":   {Units: 8, SizedUnits: 0, SizeSum: 0},
+	"linear": {Units: 46, SizedUnits: 31, SizeSum: 114},
+	"none":   {Units: 7, SizedUnits: 0, SizeSum: 0},
 }
 
 // TestDemoWorldIssueSizeIsTheSumOfTheUnitIssuesStoryPoints runs the real materializer over the demo world

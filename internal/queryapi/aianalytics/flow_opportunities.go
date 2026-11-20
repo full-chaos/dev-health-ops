@@ -265,7 +265,7 @@ LIMIT 500`
 var (
 	teamFlowStatement    = teamFlowStatementFrom("work_item_metrics_daily FINAL", "\n  AND "+rowview.OrgPredicate("work_item_metrics_daily", ""))
 	oneTeamFlowStatement = teamFlowStatementFrom(rowview.ServedTeamSource("work_item_metrics_daily",
-		"day >= today() - {window_days:UInt32} AND team_id = {team_id:String}")+" AS work_item_metrics_daily", "")
+		"day >= today() - {window_days:UInt32} AND team_id = {team_id:String}", "")+" AS work_item_metrics_daily", "")
 )
 
 func teamFlowStatementFrom(source, view string) string {

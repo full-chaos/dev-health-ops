@@ -844,13 +844,23 @@ const nullableIntoPlainSites = `
 // (logs/ops2a2-d2-scan-1.log a918098a3514), not computed:
 //
 //	queries_metrics.go fetchMetricDriverDelta 5dc97fbe04a7 -> d0ccbc5bb0ed
+//
+// CHAOS-14379 merge of main (CHAOS-14405: rowview.ServedTeamSource takes the version order): the one-team calls pass
+// the order (sankey, flow, home, explain, aggflame ""; operatingreview its own version order). Select lists, column
+// types and scan targets are unchanged; the file SQL digest moved. Re-pinned by hand from the failing local
+// TestScanTypeCensus run (logs/ops2a2-o-scan-1.log c05255b89b03), not computed:
+//
+//	flow_opportunities.go loadTeamFlowRows 35f61e5aa3ff -> fd4698b2bdd9
+//	queries_metrics.go fetchBlockedHours 192873704868 -> ccb3ecc2e76c
+//	queries.go fetchExpenseCounts beafb805c7a1 -> e965eeadaf1b
+//	queries.go fetchStateStatusCounts ee523b48a4d1 -> 0ef755127f61
 const unverifiedSites = `
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|e67003e26fc2|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|e67003e26fc2|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|3c8b7092e723|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|9c8219b2ccb8|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadRepoFlowRows|*string,*uint64,**float64,**float64,**float64,**float64|78e2918e5b07|not-describable
-internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*uint64,**float64,**float64,**float64|35f61e5aa3ff|not-describable
+internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*uint64,**float64,**float64,**float64|fd4698b2bdd9|not-describable
 internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|9df0068c57ab|spliced-select-list
 internal/queryapi/aianalytics/scope.go|ownerTeams|*string,*string|c0b3734eb92d|not-describable
 internal/queryapi/analytics/breakdown.go|executeBreakdownRaw|**string,**float64|7d5055461009|statement-not-static
@@ -882,7 +892,7 @@ internal/queryapi/explain/metrics.go|fetchMetricDriverDelta|*string,**float64,*u
 internal/queryapi/explain/metrics.go|fetchMetricValue|**float64,*uint64|aff9d26238c0|spliced-select-list
 internal/queryapi/explain/repositories.go|fetchWorkItemProviders|*string|cc6f1e4e4f8c|not-describable
 internal/queryapi/home/queries_metric_drivers_batch.go|fetchMetricDriversBatch|*string,*string|61d29f14b0f2|not-describable
-internal/queryapi/home/queries_metrics.go|fetchBlockedHours|*time.Time,*float64|192873704868|not-describable
+internal/queryapi/home/queries_metrics.go|fetchBlockedHours|*time.Time,*float64|ccb3ecc2e76c|not-describable
 internal/queryapi/home/queries_metrics.go|fetchChangeFailureView|[]any|fb135e9cbe2e|variadic-destinations
 internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|d0ccbc5bb0ed|not-describable
 internal/queryapi/home/queries_metrics.go|fetchMetricSeries|*time.Time,**float64|c8e2b0f2634a|spliced-select-list
@@ -914,8 +924,8 @@ internal/queryapi/reports/writer.go|clone|*string,**string,**string,**string,**s
 internal/queryapi/reports/writer.go|trigger|*bool|a8202561e27c|statement-not-static
 internal/queryapi/reports/writer.go|update|*string,*string,*string,**string,**time.Time,*time.Time|02fbaf29d245|statement-not-static
 internal/queryapi/routeswitch/class_decision_switch.go|Enabled|*string|7a40513e2fab|not-describable
-internal/queryapi/sankey/queries.go|fetchExpenseCounts|*float64,*float64,*float64|beafb805c7a1|not-describable
-internal/queryapi/sankey/queries.go|fetchStateStatusCounts|*string,*float64|ee523b48a4d1|not-describable
+internal/queryapi/sankey/queries.go|fetchExpenseCounts|*float64,*float64,*float64|e965eeadaf1b|not-describable
+internal/queryapi/sankey/queries.go|fetchStateStatusCounts|*string,*float64|0ef755127f61|not-describable
 internal/queryapi/server/mcp_route.go|Scan|[]any|073743d6899c|variadic-destinations
 internal/queryapi/testopsrisk/testopsrisk.go|readDaily|**time.Time,**float64,**float64,**float64,**float64,**float64,**float64,**uint64,**float64|2072b04aaa64|not-describable
 internal/queryapi/throughputforecast/clickhouse.go|loadBacklog|*uint64,*uint64,*uint64,*time.Time|2d4d80074e2b|not-describable

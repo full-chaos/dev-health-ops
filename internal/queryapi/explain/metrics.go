@@ -173,9 +173,9 @@ func metricFromClause(table, column, scopeFilterSQL, startParam, endParam string
 func teamViewSource(table, where string) (source string, ok bool) {
 	switch table {
 	case "work_item_metrics_daily":
-		return rowview.ServedTeamSource("work_item_metrics_daily", where) + " AS work_item_metrics_daily", true
+		return rowview.ServedTeamSource("work_item_metrics_daily", where, "") + " AS work_item_metrics_daily", true
 	case "work_item_state_durations_daily":
-		return rowview.ServedTeamSource("work_item_state_durations_daily", where) + " AS work_item_state_durations_daily", true
+		return rowview.ServedTeamSource("work_item_state_durations_daily", where, "") + " AS work_item_state_durations_daily", true
 	}
 	return "", false
 }

@@ -107,7 +107,7 @@ func fetchCycleBreakdown(ctx context.Context, client QueryClient, orgID string, 
 	// that row. No team reads the org view.
 	source, view := "work_item_state_durations_daily", "\n              AND "+rowview.OrgPredicate("work_item_state_durations_daily", "")
 	if teamID != "" {
-		source, view = rowview.ServedTeamSource("work_item_state_durations_daily", "day >= {start_day:Date} AND day < {end_day:Date}"+filter)+" AS work_item_state_durations_daily", ""
+		source, view = rowview.ServedTeamSource("work_item_state_durations_daily", "day >= {start_day:Date} AND day < {end_day:Date}"+filter, "")+" AS work_item_state_durations_daily", ""
 	}
 
 	query := `

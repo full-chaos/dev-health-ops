@@ -63,6 +63,7 @@ var verbGates = map[string]verbGate{
 	"dispatch:queues":               viaDelegate(),
 	"dispatch:routes":               viaDelegate(),
 	"dispatch:sync-dispatch-outbox": viaDelegate(),
+	"dispatch:sync-runs":            viaDelegate(),
 	"dispatch:workgraph":            viaDelegate(),
 
 	"dispatchExternalRecompute:replay": viaDirect("external-recompute replay"),
@@ -115,6 +116,8 @@ var verbGates = map[string]verbGate{
 	"dispatchRoutes:resume": viaService("routes", "resume", "--reason", "operator_test", "--correlation-id", "corr-1", "post_sync"),
 
 	"dispatchSyncDispatchOutbox:close-backlog": viaDirect("sync-dispatch-outbox close-backlog"),
+
+	"dispatchSyncRuns:cancel": viaDirect("sync-runs cancel"),
 
 	"dispatchWorkgraph:list-ambiguous":   viaRead("workgraph", "list-ambiguous"),
 	"dispatchWorkgraph:list-undelivered": viaRead("workgraph", "list-undelivered"),

@@ -265,3 +265,36 @@ func TestOperatingReviewTeamViewDivergence(t *testing.T) {
 	t.Logf("DIVERGENCE (recorded, not a want) one team P: %s", one)
 	t.Logf("DIVERGENCE (recorded, not a want) no team (org form): %s", all)
 }
+
+// A computed_at tie (CHAOS-14405 order): two versions of one org key share computed_at. The one-team form picks the
+// version by the org form's own order (workItemsVersionOrder, stateDurationsVersionOrder), so it serves the version
+// the org form serves, in either insert order (merges stopped).
+func TestOperatingReviewTeamViewTieFollowsTheOrgFormOrder(t *testing.T) {
+	ctx, admin, client := startOperatingReviewSchema(t)
+	// Merges stopped: a merge keeps the last inserted row of a tie and so would decide the version for both forms.
+	for _, table := range []string{"work_item_metrics_daily", "work_item_state_durations_daily"} {
+		if err := admin.Exec(ctx, "SYSTEM STOP MERGES "+table); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t1, t2, _ := orTVVersions()
+	versionA := orTVRow{2, "P", "org", t2, 4, 3, 40, 400, 5, 50}
+	versionB := orTVRow{2, "P", "org", t2, 9, 6, 90, 900, 9, 90}
+	legacy := orTVRow{1, "P", "", t1, 2, 1, 10, 100, 3, 20}
+	values := func(fields string) string { return fields[strings.Index(fields, " ")+1:] }
+	var served []string
+	for i, rows := range [][]orTVRow{{legacy, versionA, versionB}, {legacy, versionB, versionA}} {
+		org := fmt.Sprintf("org-14379-or-tie-%d", i)
+		seedOrTV(ctx, t, admin, org, rows)
+		oneTeam, _, _ := orTVServed(ctx, t, client, org, nil, "P")
+		orgForm, _, _ := orTVServed(ctx, t, client, org, nil, "P", "Q")
+		if values(oneTeam) != values(orgForm) {
+			t.Errorf("insert order %d: one team %s, org form %s: the tie serves another version", i, oneTeam, orgForm)
+		}
+		served = append(served, values(oneTeam))
+	}
+	if served[0] != served[1] {
+		t.Errorf("the tie depends on the insert order: %s vs %s", served[0], served[1])
+	}
+	t.Logf("tie served: %s", served[0])
+}

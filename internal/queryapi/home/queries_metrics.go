@@ -92,9 +92,9 @@ func metricFromClause(table, column, scopeFilter, startParam, endParam string, o
 func teamViewSource(table, where string) (source string, ok bool) {
 	switch table {
 	case "work_item_metrics_daily":
-		return rowview.ServedTeamSource("work_item_metrics_daily", where) + " AS work_item_metrics_daily", true
+		return rowview.ServedTeamSource("work_item_metrics_daily", where, "") + " AS work_item_metrics_daily", true
 	case "work_item_state_durations_daily":
-		return rowview.ServedTeamSource("work_item_state_durations_daily", where) + " AS work_item_state_durations_daily", true
+		return rowview.ServedTeamSource("work_item_state_durations_daily", where, "") + " AS work_item_state_durations_daily", true
 	}
 	return "", false
 }
@@ -350,7 +350,7 @@ func fetchBlockedHours(ctx context.Context, client QueryClient, startDay, endDay
 	source, view := "work_item_state_durations_daily", "\n              AND "+rowview.OrgPredicate("work_item_state_durations_daily", "")
 	if oneTeam {
 		source, view = rowview.ServedTeamSource("work_item_state_durations_daily",
-			"day >= {start_day:Date} AND day < {end_day:Date} AND status = 'blocked'"+scopeFilter)+" AS work_item_state_durations_daily", ""
+			"day >= {start_day:Date} AND day < {end_day:Date} AND status = 'blocked'"+scopeFilter, "")+" AS work_item_state_durations_daily", ""
 	}
 	query := fmt.Sprintf(`
         SELECT

@@ -121,7 +121,7 @@ func (repository *PostgresRepository) Claim(ctx context.Context, request ClaimRe
 		&backfillNextBefore,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Claim{}, ErrUnitNotClaimable
+		return Claim{}, repository.classifyUnclaimable(ctx, request)
 	}
 	if err != nil {
 		return Claim{}, ErrInvalidConfiguration
@@ -148,6 +148,19 @@ func (repository *PostgresRepository) Claim(ctx context.Context, request ClaimRe
 		repository.Metrics.RecordUnitClaimed(claim.Provider, datasetKey)
 	}
 	return claim, nil
+}
+
+// classifyUnclaimable tells a unit an operator cancel closed apart from one that is not claimable
+// for now, after claimUnitSQL returned no row. Every other answer, a failed read included, stays
+// ErrUnitNotClaimable (the caller retries).
+func (repository *PostgresRepository) classifyUnclaimable(ctx context.Context, request ClaimRequest) error {
+	closed := &UnitClosedError{Category: OperatorCancelCategory}
+	if err := repository.Pool.QueryRow(ctx, closedUnitSQL, request.UnitID, request.OrgID, OperatorCancelCategory).Scan(
+		&closed.SyncRunID, &closed.Provider, &closed.Dataset, &closed.Mode,
+	); err != nil {
+		return ErrUnitNotClaimable
+	}
+	return closed
 }
 
 // decodeClaimDocuments decodes the four JSON documents that ride along with a
@@ -987,6 +1000,20 @@ LEFT JOIN LATERAL (
       AND sibling.mode = 'backfill'
       AND sibling.since_at = claimed.before_at
 ) AS next_chunk ON true`
+
+// closedUnitSQL finds the unit an operator cancel closed: failed with the cancel category, in a
+// terminal run, both of the job's organization. failed is final (every write that re-arms a unit
+// needs status running, planned or retrying), so a row here stays true.
+const closedUnitSQL = `
+SELECT unit.sync_run_id::text, unit.provider, unit.dataset_key, unit.mode
+FROM public.sync_run_units AS unit
+JOIN public.sync_runs AS run
+  ON run.id = unit.sync_run_id AND run.org_id = unit.org_id
+WHERE unit.id = $1::uuid
+  AND unit.org_id = $2
+  AND unit.status = 'failed'
+  AND unit.result->>'error_category' = $3
+  AND run.status IN ('success', 'partial_failed', 'failed')`
 
 const assertLeaseSQL = `
 SELECT EXISTS (

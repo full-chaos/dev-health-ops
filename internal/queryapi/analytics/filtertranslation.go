@@ -220,7 +220,11 @@ func translateFilters(orgID string, filters *model.FilterInput, useInvestment bo
 				"scope.level=developer filtering requires an investment query; "+
 					"pass useInvestment=true or remove the developer scope.")
 		default:
-			clause := translateScopeFilter(filters.Scope.Level, filters.Scope.Ids, cols.Team, cols.Repo, cols.Author)
+			scopeIDs := filters.Scope.Ids
+			if !useInvestment && filters.Scope.Level == model.ScopeLevelInputTeam {
+				scopeIDs = storedTeamIDs(scopeIDs)
+			}
+			clause := translateScopeFilter(filters.Scope.Level, scopeIDs, cols.Team, cols.Repo, cols.Author)
 			if useInvestment && filters.Scope.Level == model.ScopeLevelInputRepo {
 			}
 			sql += clause.sql

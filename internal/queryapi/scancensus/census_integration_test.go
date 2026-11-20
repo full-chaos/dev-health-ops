@@ -685,6 +685,14 @@ const nullableIntoPlainSites = `
 //	loadClusters (title toil) 6782179e5bab -> 02e42d9124bc
 //	loadDocDrift 9d9f4e10b7aa -> 74e03d28cf3f
 //	loadFlaky e2c82e8e8355 -> 7740a9c9e213
+//
+// CHAOS-14281 (health TEAM key projection): the SELECT names the empty team "unassigned" and GROUP BY / ORDER BY keep the
+// stored column; scan targets are unchanged in type (a String key, a Float64 value). Re-pinned by hand, digests copied
+// from the local TestScanTypeCensus failure output (not computed):
+//
+//	executeBreakdownRaw e6927e7d3bab -> 7d5055461009
+//	ExecuteOrgTimeseries 7a0e4208d61e -> 06967e304c8f
+//	ExecuteTimeseries 5ed46b8e987a -> d06318794cbb
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*string,*uint32|02e42d9124bc|not-describable
@@ -695,7 +703,7 @@ internal/queryapi/aianalytics/flow_opportunities.go|loadRepoFlowRows|*string,*ui
 internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*uint64,**float64,**float64,**float64|2653b84e5b21|not-describable
 internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|ffbc61d0410c|spliced-select-list
 internal/queryapi/aianalytics/scope.go|ownerTeams|*string,*string|c0b3734eb92d|not-describable
-internal/queryapi/analytics/breakdown.go|executeBreakdownRaw|**string,**float64|e6927e7d3bab|statement-not-static
+internal/queryapi/analytics/breakdown.go|executeBreakdownRaw|**string,**float64|7d5055461009|statement-not-static
 internal/queryapi/analytics/catalog.go|executeCatalogValues|*string,*uint64|92f0953d0b7c|statement-not-static
 internal/queryapi/analytics/flowmatrix.go|queryEdges|*string,*string,**string,**string,**float64|5935396ef678|statement-not-static
 internal/queryapi/analytics/flowmatrix.go|queryNodes|*string,**string,**float64|3dacd49c8128|statement-not-static
@@ -703,8 +711,8 @@ internal/queryapi/analytics/investmentquality.go|executeEvidenceQualityByGroup|*
 internal/queryapi/analytics/investmentquality.go|executeInvestmentQualityStats|*uint64,*uint64,*float64,*float64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64|2219e7f838c7|statement-not-static
 internal/queryapi/analytics/sankeycoverage.go|runSankeyCoverageQuery|*float64,*float64,*float64,*float64,**float64,**float64,**float64,**float64,**float64|7474017a0a07|statement-not-static
 internal/queryapi/analytics/sankeygrouped.go|executeSankeyGrouped|[]any|06df22123891|variadic-destinations
-internal/queryapi/analytics/timeseries.go|ExecuteOrgTimeseries|**time.Time,**float64,**float64|7a0e4208d61e|statement-not-static
-internal/queryapi/analytics/timeseries.go|ExecuteTimeseries|**time.Time,**string,**float64|5ed46b8e987a|statement-not-static
+internal/queryapi/analytics/timeseries.go|ExecuteOrgTimeseries|**time.Time,**float64,**float64|06967e304c8f|statement-not-static
+internal/queryapi/analytics/timeseries.go|ExecuteTimeseries|**time.Time,**string,**float64|d06318794cbb|statement-not-static
 internal/queryapi/cognitiveload/cognitiveload.go|fetchOwnershipCandidates|*string,*string,*uint8,*uint16|e598129679a3|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchFileTimeseries|*time.Time,*string,*string,**uint32,**float64,**uint32,**uint32|69bcb13af3df|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchRepoTimeseries|*time.Time,*string,**uint64,**uint64,**float64,**uint64,**uint64|2d500256c88b|spliced-select-list

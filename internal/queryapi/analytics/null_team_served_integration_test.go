@@ -231,3 +231,155 @@ func TestEmptyTeamIsTheUnassignedTeamInTheCycleTimeBreakdown(t *testing.T) {
 	}
 	checkGroups(t, "cycle time breakdown", got, map[string]float64{"team-a": 2, "unassigned": 2})
 }
+
+// A tie at a cut keeps the group the stored key keeps: the empty team sorts before "gh:payments" as its stored key,
+// whatever name it is served under.
+func TestEmptyTeamTieAtTheCutKeepsTheStoredKeyOrder(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+	const org, otherOrg = "org-14281-tie", "org-14281-tie-other"
+	conn, client := startEmptyTeamFixture(t, ctx, org, otherOrg)
+	const repoA = "11111111-1111-4111-8111-111111111111"
+	const computed = "2026-01-06 00:00:00"
+	// startEmptyTeamFixture seeded team-a 5 and the empty team 7; replace the tie by new rows in a second window.
+	seedWorkItemCompletionGeneration(t, ctx, conn, org, "2026-02-05", repoA, "gh:payments", computed, 1)
+	seedWorkItemCompletionGeneration(t, ctx, conn, org, "2026-02-05", repoA, "", computed, 1)
+	seedWorkItemCompletionGeneration(t, ctx, conn, otherOrg, "2026-02-05", repoA, "gh:payments", computed, 50)
+	dates := &model.DateRangeInput{StartDate: mustGraphQLDate("2026-02-01"), EndDate: mustGraphQLDate("2026-02-08")}
+	health := false
+	result, err := Resolve(ctx, client, org, model.AnalyticsRequestInput{
+		UseInvestment: &health,
+		Timeseries: []model.TimeseriesRequestInput{{
+			Dimension: model.DimensionInputTeam, Measure: model.MeasureInputCount, Interval: model.BucketIntervalInputDay, DateRange: dates,
+		}},
+		Breakdowns: []model.BreakdownRequestInput{{
+			Dimension: model.DimensionInputTeam, Measure: model.MeasureInputCount, DateRange: dates, TopN: 1,
+		}},
+		Sankey: &model.SankeyRequestInput{
+			Path:    []model.DimensionInput{model.DimensionInputTeam, model.DimensionInputRepo},
+			Measure: model.MeasureInputCount, DateRange: dates, MaxNodes: 2, MaxEdges: 1, UseInvestment: &health,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	var seriesOrder []string
+	for _, s := range result.Timeseries {
+		seriesOrder = append(seriesOrder, s.DimensionValue)
+	}
+	if len(seriesOrder) != 2 || seriesOrder[0] != "unassigned" || seriesOrder[1] != "gh:payments" {
+		t.Errorf("timeseries order = %v, want [unassigned gh:payments] (the stored key order of base)", seriesOrder)
+	}
+	if len(result.Breakdowns) != 1 || len(result.Breakdowns[0].Items) != 1 || result.Breakdowns[0].Items[0].Key != "unassigned" {
+		t.Errorf("breakdown topN 1 = %+v, want the group base keeps: unassigned", result.Breakdowns)
+	}
+	if result.Sankey == nil {
+		t.Fatal("sankey is nil")
+	}
+	for _, node := range result.Sankey.Nodes {
+		if node.Dimension == "TEAM" && node.ID != "TEAM:unassigned" {
+			t.Errorf("sankey TEAM node at the cut = %q, want TEAM:unassigned", node.ID)
+		}
+	}
+	for _, edge := range result.Sankey.Edges {
+		if edge.Source != "TEAM:unassigned" {
+			t.Errorf("sankey edge at the cut = %s>%s, want source TEAM:unassigned", edge.Source, edge.Target)
+		}
+	}
+}
+
+// A scope on "unassigned" selects the rows with the empty team, and the sankey coverage scopes on the same rows as the
+// chart: the scope ["gh:payments","unassigned"] and the stored form ["gh:payments",""] give one coverage.
+func TestEmptyTeamScopeAndCoverageSelectTheStoredRows(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+	const org, otherOrg = "org-14281-scope", "org-14281-scope-other"
+	conn, client := startEmptyTeamFixture(t, ctx, org, otherOrg)
+	const repoA = "11111111-1111-4111-8111-111111111111"
+	seedWorkItemCompletionGeneration(t, ctx, conn, org, "2026-01-05", repoA, "gh:payments", "2026-01-06 00:00:00", 9)
+	dates := &model.DateRangeInput{StartDate: mustGraphQLDate("2026-01-01"), EndDate: mustGraphQLDate("2026-01-08")}
+	health := false
+	run := func(ids []string) *model.AnalyticsResult {
+		result, err := Resolve(ctx, client, org, model.AnalyticsRequestInput{
+			UseInvestment: &health,
+			Filters:       &model.FilterInput{Scope: &model.ScopeFilterInput{Level: model.ScopeLevelInputTeam, Ids: ids}},
+			Breakdowns: []model.BreakdownRequestInput{{
+				Dimension: model.DimensionInputTeam, Measure: model.MeasureInputCount, DateRange: dates, TopN: 10,
+			}},
+			Sankey: &model.SankeyRequestInput{
+				Path:    []model.DimensionInput{model.DimensionInputTeam, model.DimensionInputRepo},
+				Measure: model.MeasureInputCount, DateRange: dates, MaxNodes: 16, MaxEdges: 100, UseInvestment: &health,
+			},
+		})
+		if err != nil {
+			t.Fatalf("Resolve %v: %v", ids, err)
+		}
+		return result
+	}
+	only := run([]string{"unassigned"})
+	got := map[string]float64{}
+	for _, item := range only.Breakdowns[0].Items {
+		got[item.Key] = *item.Value
+	}
+	checkGroups(t, "breakdown scoped to unassigned", got, map[string]float64{"unassigned": 7})
+
+	byName := run([]string{"gh:payments", "unassigned"})
+	byStored := run([]string{"gh:payments", ""})
+	if byName.Sankey == nil || byName.Sankey.Coverage == nil || byStored.Sankey == nil || byStored.Sankey.Coverage == nil {
+		t.Fatal("sankey coverage is nil")
+	}
+	if byName.Sankey.Coverage.TeamCoverage != byStored.Sankey.Coverage.TeamCoverage {
+		t.Errorf("team coverage by name = %v, by stored key = %v, want equal", byName.Sankey.Coverage.TeamCoverage, byStored.Sankey.Coverage.TeamCoverage)
+	}
+	chart := map[string]float64{}
+	for _, node := range byName.Sankey.Nodes {
+		if node.Dimension == "TEAM" {
+			chart[node.ID] = *node.Value
+		}
+	}
+	checkGroups(t, "sankey TEAM nodes in scope", chart, map[string]float64{"TEAM:gh:payments": 9, "TEAM:unassigned": 7})
+	t.Logf("team coverage %v", byName.Sankey.Coverage.TeamCoverage)
+}
+
+// The per-dimension sankey keeps the stored key at its node and edge cuts, as the grouped statement does.
+func TestEmptyTeamTieAtTheCutInThePerDimensionSankey(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+	const org, otherOrg = "org-14281-tie-oracle", "org-14281-tie-oracle-other"
+	conn, client := startEmptyTeamFixture(t, ctx, org, otherOrg)
+	const repoA = "11111111-1111-4111-8111-111111111111"
+	const computed = "2026-01-06 00:00:00"
+	seedWorkItemCompletionGeneration(t, ctx, conn, org, "2026-02-05", repoA, "gh:payments", computed, 1)
+	seedWorkItemCompletionGeneration(t, ctx, conn, org, "2026-02-05", repoA, "", computed, 1)
+	seedWorkItemCompletionGeneration(t, ctx, conn, otherOrg, "2026-02-05", repoA, "gh:payments", computed, 50)
+	for _, path := range [][]Dimension{{DimensionTeam, DimensionRepo}, {DimensionRepo, DimensionTeam}} {
+		nodesQuery, edgesQueries, err := CompileSankey(SankeyRequest{
+			Path: path, Measure: MeasureCount,
+			StartDate: mustGraphQLDate("2026-02-01"), EndDate: mustGraphQLDate("2026-02-08"), MaxNodes: 2, MaxEdges: 1,
+		}, org, 120, false, nil)
+		if err != nil {
+			t.Fatalf("CompileSankey %v: %v", path, err)
+		}
+		nodes, edges, err := ExecuteSankeyQueries(ctx, client, []compiledQuery{nodesQuery}, edgesQueries)
+		if err != nil {
+			t.Fatalf("ExecuteSankeyQueries %v: %v", path, err)
+		}
+		for _, n := range nodes {
+			if n.Dimension == "TEAM" && n.ID != "TEAM:unassigned" {
+				t.Errorf("path %v: TEAM node at the cut = %q, want TEAM:unassigned", path, n.ID)
+			}
+		}
+		for _, e := range edges {
+			team := e.Source
+			if path[0] == DimensionRepo {
+				team = e.Target
+			}
+			if team != "TEAM:unassigned" {
+				t.Errorf("path %v: edge at the cut = %s>%s, want the TEAM:unassigned endpoint", path, e.Source, e.Target)
+			}
+		}
+		if len(nodes) == 0 || len(edges) == 0 {
+			t.Errorf("path %v: nodes %d edges %d, want both", path, len(nodes), len(edges))
+		}
+	}
+}

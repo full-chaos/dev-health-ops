@@ -1042,6 +1042,11 @@ func githubTestsNeedsPageEnd(cursor githubTestsChunkCursor) bool {
 		(cursor.Phase == githubTestsRunsPhase || cursor.Phase == githubTestsArtifactsPhase)
 }
 
+// githubTestsListingKey names the listing a cursor walks: the runs range, the deep range, the artifacts range or the relist.
+func githubTestsListingKey(cursor githubTestsChunkCursor) string {
+	return cursor.Phase + "/" + strconv.FormatBool(cursor.LateRuns) + "/" + strconv.Itoa(cursor.Relist)
+}
+
 // githubTestsPreviousPageURL is the URL of the page before a GitHub Link page URL: the same URL with its page number one
 // lower. "" when the URL carries no page number above 1 (that page cannot be named; the caller treats the anchor as
 // unchecked).
@@ -1566,22 +1571,23 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	policyCache := map[string]githubTestsPolicy{}
 	// Resume state of this invocation (CHAOS-14316). firstPage: only the invocation's first page resumes from the cursor.
 	// reseekFree: the first page of a re-seek search re-reads runs already charged, so it is free like a re-entry.
-	// walkCredit/windowCredit: the records of runs created in the re-seek's second (creditSecond) are not charged to the
-	// walk record bound: they are, for the most part, runs read again.
+	// walkCredit/windowCredit: the records of runs created in the re-seek's second (creditSecond), read by the listing that
+	// re-sought (creditListing), are not charged to the walk record bound: they are, for the most part, runs read again.
+	// Another listing earns no credit (its report rows of that second are first reads); credit already earned stays.
 	firstPage, reseekFree := true, false
-	walkCredit, windowCredit, creditSecond := 0, 0, int64(-1)
+	walkCredit, windowCredit, creditSecond, creditListing := 0, 0, int64(-1), ""
 	walkBoundHit := func() bool { return githubTestsWalkRecords(cursor)-walkCredit >= maxWalkRecords }
 	windowBoundHit := func() bool { return githubTestsWindowRecords(cursor)-windowCredit >= maxWalkRecords }
 	reseek := func(c githubTestsChunkCursor) githubTestsChunkCursor {
 		c = githubTestsReseek(c)
-		reseekFree, creditSecond = true, -1
+		reseekFree, creditSecond, creditListing = true, -1, githubTestsListingKey(c)
 		if second, ok := githubTestsCutSecond(c.RangeHi); ok && c.NextURL == "" {
 			creditSecond = second
 		}
 		return c
 	}
 	creditRecords := func(second int64, records int, deep bool) {
-		if creditSecond < 0 || second != creditSecond || records <= 0 {
+		if creditSecond < 0 || second != creditSecond || records <= 0 || githubTestsListingKey(cursor) != creditListing {
 			return
 		}
 		walkCredit += records
@@ -1611,6 +1617,22 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			end.lastRun = githubTestsListedRunID(collection.Items[len(collection.Items)-1])
 		}
 		return end, nil
+	}
+	// movedAtSpentBudget checks the anchor of a page-end resume whose page allowance is already spent, before the budget
+	// stop is recorded: the next page would not be fetched, so its visitor never checks the page before it. A moved
+	// listing is sought again (its first page is free); an unmoved one stops at the budget as before. Only the
+	// invocation's first listing call can carry a resume cursor.
+	movedAtSpentBudget := func(phase string) (bool, error) {
+		if !firstPage || !githubTestsNeedsPageEnd(cursor) {
+			return false, nil
+		}
+		pageEnd, err := resumePageEnd(providerfoundation.PageVisit{CursorBefore: cursor.NextURL})
+		if err != nil {
+			return false, err
+		}
+		_, action := githubTestsResumeStart(cursor, providerfoundation.PageVisit{CursorBefore: cursor.NextURL}, true, pageEnd, client, claim, phase)
+		firstPage = false
+		return action == githubTestsResumeReseek, nil
 	}
 	emitCursor := func(before, after githubTestsChunkCursor, batch CompleteRouteBatch, final bool) error {
 		before, _ = githubTestsFitCursor(before)
@@ -1935,6 +1957,16 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			if budgetErr != nil && !exhausted {
 				return budgetErr
 			}
+			if exhausted {
+				moved, movedErr := movedAtSpentBudget(githubTestsRunsPhase)
+				if movedErr != nil {
+					return movedErr
+				}
+				if moved {
+					cursor = reseek(cursor)
+					continue
+				}
+			}
 			if !exhausted {
 				pageOptions := providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Route: githubRunsRoute,
 					Query: githubTestsLateRerunRunsQuery(claim, lookback, lateLookback, cursor.RangeHi), DataKey: "workflow_runs",
@@ -1964,6 +1996,14 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		allowance, budgetErr := githubTestsListingAllowance(
 			(maxRuns+nativePerPage-1)/nativePerPage, cursor.RunPages, cursor.NextURL != "" && cursor.Index > 0 || reseekFree)
 		if errors.Is(budgetErr, ErrPaginationCapExceeded) {
+			moved, movedErr := movedAtSpentBudget(githubTestsRunsPhase)
+			if movedErr != nil {
+				return movedErr
+			}
+			if moved {
+				cursor = reseek(cursor)
+				continue
+			}
 			cursor = recordGitHubTestsInventoryTruncation(
 				cursor, client, claim, githubTestsRunInventoryComponent, cursor.RunPages)
 			break
@@ -2800,6 +2840,18 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		if cursor.Relist == githubTestsRelistWalking {
 			// The deep range: its own budget, under the shared listing allowance (charged on entering a page).
 			allowance, budgetErr = githubTestsListingAllowance(lateMaxPages, cursor.ArtifactPages, cursor.NextURL != "" && cursor.Index > 0 || reseekFree)
+		}
+		if errors.Is(budgetErr, ErrPaginationCapExceeded) {
+			moved, movedErr := movedAtSpentBudget(githubTestsArtifactsPhase)
+			if movedErr != nil {
+				return movedErr
+			}
+			if moved {
+				// A re-seek reads runs again: the totality counters become unknown, as in the visitor.
+				cursor.ArchivesSeen, cursor.ArchivesUnreadable = nil, nil
+				cursor = reseek(cursor)
+				continue
+			}
 		}
 		if errors.Is(budgetErr, ErrPaginationCapExceeded) && cursor.Relist == githubTestsRelistWalking {
 			cursor = recordGitHubTestsRelistStop(cursor, client, claim, githubTestsPageBudgetCause, cursor.RangeHi, cursor.RangeItems)

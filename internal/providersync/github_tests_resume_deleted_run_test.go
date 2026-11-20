@@ -1,12 +1,15 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,7 +28,16 @@ func resumeDeletionWalk(
 	yieldAt func(after githubTestsChunkCursor) bool, mutate func(after githubTestsChunkCursor), rewrite func(string) string,
 ) listingWalk {
 	t.Helper()
-	client := githubTestsClient(t, fakehttp.Client(fake))
+	return resumeDeletionWalkDoer(t, handler, claim, fake, yieldAt, mutate, rewrite)
+}
+
+// resumeDeletionWalkDoer is resumeDeletionWalk over any fake GitHub.
+func resumeDeletionWalkDoer(
+	t *testing.T, handler GitHubTestsRouteHandler, claim Claim, doer providerfoundation.HTTPDoer,
+	yieldAt func(after githubTestsChunkCursor) bool, mutate func(after githubTestsChunkCursor), rewrite func(string) string,
+) listingWalk {
+	t.Helper()
+	client := githubTestsClient(t, fakehttp.Client(doer))
 	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	walk := listingWalk{}
 	resume := ""
@@ -587,4 +599,212 @@ func TestGitHubTestsResumePageEndCursorAfterALongLinkFitsAndCompletes(t *testing
 			t.Logf("%s: link_bytes=%d overhead=%d", phase, linkBytes, overhead)
 		})
 	}
+}
+
+// resumeReportsDoer serves every run of a listingFake with one JUnit report artifact.
+type resumeReportsDoer struct {
+	fake    *listingFake
+	archive []byte
+}
+
+func (doer resumeReportsDoer) Do(request *http.Request) (*http.Response, error) {
+	path := request.URL.Path
+	header := http.Header{"Content-Type": {"application/json"}}
+	switch {
+	case strings.HasPrefix(path, "/repos/acme/api/actions/runs/") && strings.HasSuffix(path, "/artifacts"):
+		if _, err := doer.fake.Do(request); err != nil {
+			return nil, err
+		}
+		id := strings.Split(path, "/")[6]
+		return doer.fake.respond(request, header, fmt.Sprintf(`{"artifacts":[{"id":%s,"name":"junit","size_in_bytes":%d,"archive_download_url":"https://api.github.com/repos/acme/api/actions/artifacts/%s/zip"}]}`, id, len(doer.archive), id), 200), nil
+	case strings.HasPrefix(path, "/repos/acme/api/actions/artifacts/") && strings.HasSuffix(path, "/zip"):
+		return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(bytes.NewReader(doer.archive)), Request: request}, nil
+	}
+	return doer.fake.Do(request)
+}
+
+// acp r2 close path (a): a page-end resume whose page allowance is already spent checks its anchor on the page before it
+// first; on a move it seeks the listing again with the free first page, so the walk reads every survivor an uninterrupted
+// walk of the survivors reads under the same budget.
+func TestGitHubTestsResumePageEndAtASpentBudgetChecksTheAnchor(t *testing.T) {
+	window := listingClaim(listingSince, listingSince.Add(6*time.Hour))
+	deep := lateRerunMidnightClaim("incremental")
+	for _, listing := range []struct {
+		name      string
+		claim     Claim
+		runs      []listingRun
+		artifacts bool
+		in        func(githubTestsChunkCursor) bool
+		handler   GitHubTestsRouteHandler
+	}{
+		{"runs", window, makeListingRuns(1, 250, listingSince.Add(time.Minute), time.Minute), false,
+			func(c githubTestsChunkCursor) bool { return c.Phase == githubTestsRunsPhase && !c.LateRuns }, GitHubTestsRouteHandler{MaxRuns: 200}},
+		{"deep", deep, lateRerunRuns(1, 250, deep.SinceAt.UTC()), false,
+			func(c githubTestsChunkCursor) bool { return c.Phase == githubTestsRunsPhase && c.LateRuns }, GitHubTestsRouteHandler{LateRerunMaxPages: 2}},
+		{"artifacts", window, makeListingRuns(1, 250, listingSince.Add(time.Minute), time.Minute), true,
+			func(c githubTestsChunkCursor) bool { return c.Phase == githubTestsArtifactsPhase && c.Relist == 0 }, GitHubTestsRouteHandler{MaxRuns: 200}},
+	} {
+		t.Run(listing.name, func(t *testing.T) {
+			reads := func(f *listingFake) map[int]int {
+				if listing.artifacts {
+					return f.artifactGets
+				}
+				return f.jobGets
+			}
+			fake := newListingFake(t, slices.Clone(listing.runs))
+			walk := resumeDeletionWalk(t, listing.handler, listing.claim, fake, func(c githubTestsChunkCursor) bool {
+				return listing.in(c) && c.RangeItems == 200 && c.Index == 0
+			}, func(githubTestsChunkCursor) {
+				consumed := resumeDeletionConsumed(reads(fake))
+				sort.Ints(consumed)
+				resumeDeletionDelete(fake, consumed[len(consumed)-61:]...)
+			}, nil)
+			survivors := newListingFake(t, fake.runs)
+			fresh := walkListing(t, listing.handler, listing.claim, survivors, 0)
+			var unread []int
+			for id := range reads(survivors) {
+				if reads(fake)[id] == 0 {
+					unread = append(unread, id)
+				}
+			}
+			sort.Ints(unread)
+			t.Logf("unread=%d fresh_reads=%d watermark=%v fresh_watermark=%v", len(unread), len(reads(survivors)), walk.final.Watermark != nil, fresh.final.Watermark != nil)
+			if len(unread) != 0 || !listing.artifacts && (walk.final.Watermark != nil) != (fresh.final.Watermark != nil) {
+				t.Errorf("a page-end resume at a spent budget: unread survivors=%v watermark=%v; the uninterrupted walk of the survivors read them (watermark=%v)",
+					unread, walk.final.Watermark != nil, fresh.final.Watermark != nil)
+			}
+		})
+	}
+}
+
+// acp r2 close path (new): the re-seek's record credit belongs to the listing that re-sought. A runs or deep listing that
+// re-reads a run of its re-seek second gives the next listing no credit: that listing's report rows of the second are first
+// reads and are charged, so it stops at the record bound where the uninterrupted walk stops.
+func TestGitHubTestsResumeReseekCreditStaysInItsListing(t *testing.T) {
+	archive := githubTestsZip(t, map[string]string{"junit.xml": githubTestsJUnitFixture})
+	for _, cell := range []struct {
+		name   string
+		deep   bool
+		offset time.Duration
+		cap    int
+	}{
+		{"runs_to_artifacts", false, 0, 26},
+		{"deep_runs_to_artifacts", true, -12 * time.Hour, 15},
+		{"deep_runs_to_relist", true, 0, 15},
+	} {
+		t.Run(cell.name, func(t *testing.T) {
+			claim := listingClaim(listingSince, listingSince.Add(6*time.Hour))
+			runs := makeListingRuns(1, 12, listingSince.Add(time.Minute), time.Second)
+			if cell.deep {
+				claim = lateRerunMidnightClaim("incremental")
+				since := claim.SinceAt.UTC()
+				runs = lateRerunRuns(1, 12, since)
+				for index := range runs {
+					runs[index].created = since.Add(-72*time.Hour + time.Duration(index)*time.Second)
+					if cell.offset != 0 {
+						runs[index].created = since.Add(cell.offset + time.Duration(index)*time.Second)
+					}
+				}
+			}
+			in := func(c githubTestsChunkCursor) bool { return c.Phase == githubTestsRunsPhase && c.LateRuns == cell.deep }
+			handler := GitHubTestsRouteHandler{MaxWalkRecords: cell.cap}
+			fake := newListingFake(t, runs)
+			resumeDeletionWalkDoer(t, handler, claim, resumeReportsDoer{fake, archive}, func(c githubTestsChunkCursor) bool {
+				return in(c) && c.RangeItems == 6
+			}, func(githubTestsChunkCursor) { resumeDeletionDelete(fake, 12) }, nil)
+			fresh := newListingFake(t, fake.runs)
+			client := githubTestsClient(t, fakehttp.Client(resumeReportsDoer{fresh, archive}))
+			if err := handler.CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client,
+				time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "", func(ChunkRouteEmission) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("cap=%d anchor_jobs=%d anchor_report_reads=%d run6_reports=%d fresh_run7_reports=%d fresh_run6_reports=%d",
+				cell.cap, fake.jobGets[7], fake.artifactGets[7], fake.artifactGets[6], fresh.artifactGets[7], fresh.artifactGets[6])
+			if fake.jobGets[7] != 2 || fake.artifactGets[7] != 1 || fresh.artifactGets[7] != 1 || fresh.artifactGets[6] != 0 {
+				t.Fatal("premise: the re-read run's first report read must sit at the record bound's edge")
+			}
+			if fake.artifactGets[6] != 0 {
+				t.Errorf("run 6's reports were read past the record bound on credit earned by the %s listing", map[bool]string{false: "runs", true: "deep"}[cell.deep])
+			}
+		})
+	}
+}
+
+// RESIDUAL (acp r2 close path (b), not closed here, follow-up ticket): the re-seek's free first page covers one page of
+// its boundary second. A boundary second that spans more pages costs the page budget again, so a walk at the budget edge
+// reads fewer runs than an uninterrupted walk. This cell RECORDS the current skip count; it is not a want.
+func TestGitHubTestsResumeResidualMultiPageBoundarySecond(t *testing.T) {
+	claim := listingClaim(listingSince, listingSince.Add(6*time.Hour))
+	runs := makeListingRuns(1, 250, listingSince.Add(time.Hour), time.Second)
+	for index := range 150 { // ids 1..150 share one second: the second spans pages 2 and 3
+		runs[index].created, runs[index].updated = listingSince.Add(30*time.Minute), listingSince.Add(31*time.Minute)
+	}
+	handler := GitHubTestsRouteHandler{MaxRuns: 200}
+	fake := newListingFake(t, runs)
+	resumeDeletionWalk(t, handler, claim, fake, func(c githubTestsChunkCursor) bool {
+		return c.Phase == githubTestsRunsPhase && c.RangeItems == 150
+	}, func(githubTestsChunkCursor) { resumeDeletionDelete(fake, 250) }, nil)
+	survivors := newListingFake(t, fake.runs)
+	walkListing(t, handler, claim, survivors, 0)
+	skipped := 0
+	for id := range survivors.jobGets {
+		if fake.jobGets[id] == 0 {
+			skipped++
+		}
+	}
+	t.Logf("RESIDUAL multi-page boundary second: survivors an uninterrupted walk of the survivors reads and the resumed walk does not = %d", skipped)
+}
+
+// RESIDUAL (acp r2 close path (c), not closed here, follow-up ticket): the re-seek's record credit lives in memory. A
+// worker yield inside the re-seek's second loses it, and the re-read runs after the yield count against the record bound.
+// This cell RECORDS the current skip count; it is not a want.
+func TestGitHubTestsResumeResidualRecordCreditAcrossYields(t *testing.T) {
+	claim := listingClaim(listingSince, listingSince.Add(6*time.Hour))
+	runs := makeListingRuns(1, 250, listingSince.Add(time.Minute), time.Minute)
+	for index := range runs { // five runs share each second
+		runs[index].created = listingSince.Add(time.Minute + time.Duration(index/5)*time.Second)
+		runs[index].updated = runs[index].created.Add(time.Minute)
+	}
+	handler := GitHubTestsRouteHandler{MaxWalkRecords: 230}
+	original := newListingFake(t, slices.Clone(runs))
+	walkListing(t, handler, claim, original, 0)
+	fake := newListingFake(t, runs)
+	client := githubTestsClient(t, fakehttp.Client(fake))
+	resume, phaseYields := "", 0
+	stop := errors.New("yield")
+	for pass := 0; pass < 100; pass++ {
+		final := false
+		err := handler.CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client,
+			time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), resume, func(emission ChunkRouteEmission) error {
+				resume = emission.CursorAfter
+				if emission.Final {
+					final = true
+					return nil
+				}
+				after, _ := decodeGitHubTestsChunkCursor(emission.CursorAfter)
+				switch {
+				case phaseYields == 0 && after.Phase == githubTestsRunsPhase && after.RangeItems == 52:
+					phaseYields = 1
+					resumeDeletionDelete(fake, 250)
+					return stop
+				case phaseYields == 1 && after.Phase == githubTestsRunsPhase:
+					phaseYields = 2 // one re-read run of the re-seek second, then a worker yield
+					return stop
+				}
+				return nil
+			})
+		if final {
+			break
+		}
+		if !errors.Is(err, stop) {
+			t.Fatal(err)
+		}
+	}
+	skipped := 0
+	for id := range original.jobGets {
+		if id != 250 && fake.jobGets[id] == 0 {
+			skipped++
+		}
+	}
+	t.Logf("RESIDUAL record credit across yields: runs the uninterrupted walk reads and the resumed walk does not = %d", skipped)
 }

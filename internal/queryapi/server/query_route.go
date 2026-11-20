@@ -3242,8 +3242,8 @@ const registeredInvestmentBreakdownDocument = `query InvestmentBreakdown($orgId:
 // TEAM or REPO, exactly one id), so each needs its own name and therefore its own digest. Neither has a legacy text:
 // no client ever sent the V1 text under these names.
 //
-// Since CHAOS-12999 each also selects evidenceQualityStats.sizedUnitCount; the text before it is kept as a V1 legacy
-// document (below) so acr's pinned digest keeps working. Nothing else differs. The analytics resolver already applies the batch scope: TEAM weights each repository by the
+// Since CHAOS-12999 each also selects evidenceQualityStats.sizedUnitCount; the text before it is retired (a request
+// with it gets 404 UNREGISTERED_DOCUMENT). Nothing else differs. The analytics resolver already applies the batch scope: TEAM weights each repository by the
 // team's owner share (teamscope.RepoShare), REPO filters on repo_id. These documents add no resolver, schema, scope or
 // class-gate behaviour: the root is `analytics`, so the MCP class row is mcp:analytics, as for investmentBreakdown.
 //
@@ -3276,33 +3276,6 @@ const registeredInvestmentBreakdownTeamDocument = `query InvestmentBreakdownTeam
   }
 }`
 
-// registeredInvestmentBreakdownTeamV1Document is the InvestmentBreakdownTeam text before CHAOS-12999 (no sizedUnitCount). acr pinned
-// it by digest, so it stays accepted under the same operation until acr has refreshed its catalogue.
-const registeredInvestmentBreakdownTeamV1Document = `query InvestmentBreakdownTeam($orgId: String!, $batch: AnalyticsRequestInput!) {
-  analytics(orgId: $orgId, batch: $batch) {
-    breakdowns {
-      dimension
-      measure
-      items {
-        key
-        value
-        __typename
-      }
-      __typename
-    }
-    evidenceQualityDistribution
-    evidenceQualityStats {
-      mean
-      stddev
-      total
-      bandCounts
-      uncategorizedCount
-      __typename
-    }
-    __typename
-  }
-}`
-
 // registeredInvestmentBreakdownRepositoryDocument: see registeredInvestmentBreakdownTeamDocument above.
 const registeredInvestmentBreakdownRepositoryDocument = `query InvestmentBreakdownRepository($orgId: String!, $batch: AnalyticsRequestInput!) {
   analytics(orgId: $orgId, batch: $batch) {
@@ -3324,33 +3297,6 @@ const registeredInvestmentBreakdownRepositoryDocument = `query InvestmentBreakdo
       bandCounts
       uncategorizedCount
       sizedUnitCount
-      __typename
-    }
-    __typename
-  }
-}`
-
-// registeredInvestmentBreakdownRepositoryV1Document is the InvestmentBreakdownRepository text before CHAOS-12999 (no sizedUnitCount). acr pinned
-// it by digest, so it stays accepted under the same operation until acr has refreshed its catalogue.
-const registeredInvestmentBreakdownRepositoryV1Document = `query InvestmentBreakdownRepository($orgId: String!, $batch: AnalyticsRequestInput!) {
-  analytics(orgId: $orgId, batch: $batch) {
-    breakdowns {
-      dimension
-      measure
-      items {
-        key
-        value
-        __typename
-      }
-      __typename
-    }
-    evidenceQualityDistribution
-    evidenceQualityStats {
-      mean
-      stddev
-      total
-      bandCounts
-      uncategorizedCount
       __typename
     }
     __typename
@@ -3385,34 +3331,6 @@ const registeredTeamWorkItemBreakdownDocument = `query TeamWorkItemBreakdown($or
       bandCounts
       uncategorizedCount
       sizedUnitCount
-      __typename
-    }
-    __typename
-  }
-}`
-
-// registeredTeamWorkItemBreakdownV1Document is the TeamWorkItemBreakdown text before it selected sizedUnitCount (as
-// registered by CHAOS-13017 and sent by web's TEAM_WORK_ITEM_BREAKDOWN_QUERY). It stays accepted under the same
-// operation until every client sends the current text.
-const registeredTeamWorkItemBreakdownV1Document = `query TeamWorkItemBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) {
-  analytics(orgId: $orgId, batch: $batch) {
-    breakdowns {
-      dimension
-      measure
-      items {
-        key
-        value
-        __typename
-      }
-      __typename
-    }
-    evidenceQualityDistribution
-    evidenceQualityStats {
-      mean
-      stddev
-      total
-      bandCounts
-      uncategorizedCount
       __typename
     }
     __typename
@@ -7569,32 +7487,29 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 // digestByOperation. The literal below is cmd/registrydump's second parse target: keep its exact shape
 // (`"<operation>": {digestHex(<constIdent>), ...}`). Empty = every operation accepts one text.
 var legacyDigestsByOperation = map[string][]string{
-	"testOpsPipeline":               {digestHex(registeredTestOpsPipelineV1Document), digestHex(registeredTestOpsPipelineV2Document)},
-	"testOpsCoverage":               {digestHex(registeredTestOpsCoverageV1Document), digestHex(registeredTestOpsCoverageV2Document)},
-	"testopsJobFailures":            {digestHex(registeredTestopsJobFailuresV1Document)},
-	"testopsTestWindow":             {digestHex(registeredTestopsTestWindowV1Document), digestHex(registeredTestopsTestWindowV2Document)},
-	"testopsRisk":                   {digestHex(registeredTestopsRiskV1Document), digestHex(registeredTestopsRiskV2Document)},
-	"dataHealthIdentity":            {digestHex(registeredDataHealthIdentityV1Document)},
-	"aiGovernanceSummary":           {digestHex(registeredAiGovernanceSummaryV1Document)},
-	"aiAttributionOverview":         {digestHex(registeredAiAttributionOverviewV1Document)},
-	"aiAttributedPrs":               {digestHex(registeredAiAttributedPrsV1Document)},
-	"aiImpactSummary":               {digestHex(registeredAiImpactSummaryV1Document)},
-	"aiOpportunities":               {digestHex(registeredAiOpportunitiesV1Document)},
-	"aiWorkflowDrilldown":           {digestHex(registeredAiWorkflowDrilldownV1Document)},
-	"capacityForecast":              {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
-	"compoundingRisk":               {digestHex(registeredCompoundingRiskV1Document)},
-	"coverageScopeBaseline":         {digestHex(registeredCoverageScopeBaselineV1Document)},
-	"hotspots":                      {digestHex(registeredHotspotsV1Document)},
-	"home":                          {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document), digestHex(registeredHomeV5Document), digestHex(registeredHomeV6Document), digestHex(registeredHomeV7Document), digestHex(registeredHomeV8Document), digestHex(registeredHomeV9Document), digestHex(registeredHomeV10Document), digestHex(registeredHomeV11Document), digestHex(registeredHomeV12Document), digestHex(registeredHomeV13Document)},
-	"improveOpportunities":          {digestHex(registeredImproveOpportunitiesV1Document), digestHex(registeredImproveOpportunitiesV2Document)},
-	"operatingReview":               {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document), digestHex(registeredOperatingReviewV3Document), digestHex(registeredOperatingReviewV4Document), digestHex(registeredOperatingReviewV5Document), digestHex(registeredOperatingReviewV6Document)},
-	"reviewEdges":                   {digestHex(registeredReviewEdgesV1Document)},
-	"investmentFull":                {digestHex(registeredInvestmentFullV1Document)},
-	"investmentBreakdown":           {digestHex(registeredInvestmentBreakdownV1Document)},
-	"investmentBreakdownTeam":       {digestHex(registeredInvestmentBreakdownTeamV1Document)},
-	"investmentBreakdownRepository": {digestHex(registeredInvestmentBreakdownRepositoryV1Document)},
-	"teamWorkItemBreakdown":         {digestHex(registeredTeamWorkItemBreakdownV1Document)},
-	"throughputForecast":            {digestHex(registeredThroughputForecastV1Document), digestHex(registeredThroughputForecastV2Document)},
+	"testOpsPipeline":       {digestHex(registeredTestOpsPipelineV1Document), digestHex(registeredTestOpsPipelineV2Document)},
+	"testOpsCoverage":       {digestHex(registeredTestOpsCoverageV1Document), digestHex(registeredTestOpsCoverageV2Document)},
+	"testopsJobFailures":    {digestHex(registeredTestopsJobFailuresV1Document)},
+	"testopsTestWindow":     {digestHex(registeredTestopsTestWindowV1Document), digestHex(registeredTestopsTestWindowV2Document)},
+	"testopsRisk":           {digestHex(registeredTestopsRiskV1Document), digestHex(registeredTestopsRiskV2Document)},
+	"dataHealthIdentity":    {digestHex(registeredDataHealthIdentityV1Document)},
+	"aiGovernanceSummary":   {digestHex(registeredAiGovernanceSummaryV1Document)},
+	"aiAttributionOverview": {digestHex(registeredAiAttributionOverviewV1Document)},
+	"aiAttributedPrs":       {digestHex(registeredAiAttributedPrsV1Document)},
+	"aiImpactSummary":       {digestHex(registeredAiImpactSummaryV1Document)},
+	"aiOpportunities":       {digestHex(registeredAiOpportunitiesV1Document)},
+	"aiWorkflowDrilldown":   {digestHex(registeredAiWorkflowDrilldownV1Document)},
+	"capacityForecast":      {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
+	"compoundingRisk":       {digestHex(registeredCompoundingRiskV1Document)},
+	"coverageScopeBaseline": {digestHex(registeredCoverageScopeBaselineV1Document)},
+	"hotspots":              {digestHex(registeredHotspotsV1Document)},
+	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document), digestHex(registeredHomeV5Document), digestHex(registeredHomeV6Document), digestHex(registeredHomeV7Document), digestHex(registeredHomeV8Document), digestHex(registeredHomeV9Document), digestHex(registeredHomeV10Document), digestHex(registeredHomeV11Document), digestHex(registeredHomeV12Document), digestHex(registeredHomeV13Document)},
+	"improveOpportunities":  {digestHex(registeredImproveOpportunitiesV1Document), digestHex(registeredImproveOpportunitiesV2Document)},
+	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document), digestHex(registeredOperatingReviewV3Document), digestHex(registeredOperatingReviewV4Document), digestHex(registeredOperatingReviewV5Document), digestHex(registeredOperatingReviewV6Document)},
+	"reviewEdges":           {digestHex(registeredReviewEdgesV1Document)},
+	"investmentFull":        {digestHex(registeredInvestmentFullV1Document)},
+	"investmentBreakdown":   {digestHex(registeredInvestmentBreakdownV1Document)},
+	"throughputForecast":    {digestHex(registeredThroughputForecastV1Document), digestHex(registeredThroughputForecastV2Document)},
 }
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's

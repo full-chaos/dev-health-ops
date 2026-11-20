@@ -144,8 +144,19 @@ func readStaleKeyRuleStored(
 	}
 	query := "SELECT toFloat64(sum(" + strings.Join(sum, " + ") + ")), toUInt64(sum(" + strings.Join(nulls, " + ") +
 		")), toUInt64(sum(" + strings.Join(rest, " + ") + ")) FROM " + table.Table + " FINAL WHERE " + where
-	if err := conn.QueryRow(ctx, query, args...).Scan(&stored.measureSum, &stored.nullMeasures, &stored.nonDefaultRest); err != nil {
+	var measureSum *float64
+	var nullMeasures, nonDefaultRest *uint64
+	if err := conn.QueryRow(ctx, query, args...).Scan(&measureSum, &nullMeasures, &nonDefaultRest); err != nil {
 		t.Fatalf("read the newest row of a %s key: %v", table.Table, err)
+	}
+	if measureSum != nil {
+		stored.measureSum = *measureSum
+	}
+	if nullMeasures != nil {
+		stored.nullMeasures = *nullMeasures
+	}
+	if nonDefaultRest != nil {
+		stored.nonDefaultRest = *nonDefaultRest
 	}
 	return stored
 }

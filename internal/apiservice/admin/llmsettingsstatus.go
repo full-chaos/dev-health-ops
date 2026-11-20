@@ -123,7 +123,7 @@ func (h *handlers) evaluateOrgLLMStatus(ctx context.Context, orgID string) (orgL
 	baseURL := strOrEmpty(baseURLValue)
 	hash := baseURLHash(baseURL)
 
-	credentialsReason, err := llmorgsettings.CheckCredentials(ctx, providerName, apiKey, baseURL)
+	credentialsReason, err := h.statusCredentials(ctx, orgID, providerName, apiKey, baseURL)
 	if err != nil {
 		return orgLLMStatusEvaluation{}, err
 	}
@@ -134,6 +134,20 @@ func (h *handlers) evaluateOrgLLMStatus(ctx context.Context, orgID string) (orgL
 		return orgLLMStatusEvaluation{Configured: true, ReasonCode: llmStatusReasonInvalidBaseURL, ProviderName: providerName, BaseURLHash: hash}, nil
 	}
 	return orgLLMStatusEvaluation{Configured: true, Active: true, ReasonCode: llmStatusReasonActive, ProviderName: providerName, BaseURLHash: hash}, nil
+}
+
+// statusCredentials is the credentials half of the status evaluation: a base
+// url that carries any stored key of the org is invalid before any lookup.
+func (h *handlers) statusCredentials(ctx context.Context, orgID, provider, apiKey, baseURL string) (llmorgsettings.ConfigReason, error) {
+	stored, err := h.readerLeakKeys(ctx, orgID, baseURL)
+	if err != nil {
+		return "", err
+	}
+	keyInBaseURL := false
+	for _, key := range stored {
+		keyInBaseURL = keyInBaseURL || llmorgsettings.BaseURLCarriesKey(baseURL, key)
+	}
+	return llmorgsettings.CheckStoredCredentials(ctx, provider, apiKey, baseURL, keyInBaseURL)
 }
 
 // latestOrgByoBaseURLFallbackAt is credentials.py's

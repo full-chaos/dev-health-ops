@@ -1089,7 +1089,8 @@ func queryNodes(ctx context.Context, client QueryClient, q compiledQuery) ([]mod
 
 	var out []model.SankeyNode
 	for rows.Next() {
-		var dimension, nodeID string
+		var dimension string
+		var nodeIDValue *string
 		// *float64, not float64 -- see this function's doc comment
 		// (CHAOS-4701). Every value expression is still coerced to
 		// Float64 in SQL (toFloat64) so ONE scan type serves both the
@@ -1100,8 +1101,12 @@ func queryNodes(ctx context.Context, client QueryClient, q compiledQuery) ([]mod
 		// this query. The native driver errors rather than converting
 		// between UInt64 and Float64.
 		var value *float64
-		if scanErr := rows.Scan(&dimension, &nodeID, &value); scanErr != nil {
+		if scanErr := rows.Scan(&dimension, &nodeIDValue, &value); scanErr != nil {
 			return nil, fmt.Errorf("scan: %w", scanErr)
+		}
+		var nodeID string
+		if nodeIDValue != nil {
+			nodeID = *nodeIDValue
 		}
 		// Mirrors _execute_sankey_inner's node id shape exactly:
 		// f"{dim}:{node_id}" (analytics.py:297), label = node_id
@@ -1130,10 +1135,18 @@ func queryEdges(ctx context.Context, client QueryClient, q compiledQuery) ([]mod
 
 	var out []model.SankeyEdge
 	for rows.Next() {
-		var sourceDim, targetDim, source, target string
+		var sourceDim, targetDim string
+		var sourceValue, targetValue *string
 		var value *float64 // *float64, not float64 -- see queryNodes's doc comment (CHAOS-4701)
-		if scanErr := rows.Scan(&sourceDim, &targetDim, &source, &target, &value); scanErr != nil {
+		if scanErr := rows.Scan(&sourceDim, &targetDim, &sourceValue, &targetValue, &value); scanErr != nil {
 			return nil, fmt.Errorf("scan: %w", scanErr)
+		}
+		var source, target string
+		if sourceValue != nil {
+			source = *sourceValue
+		}
+		if targetValue != nil {
+			target = *targetValue
 		}
 		// Mirrors _execute_sankey_inner's edge shape exactly:
 		// source=f"{source_dim}:{source}", target=f"{target_dim}:{target}"

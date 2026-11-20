@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -186,7 +187,7 @@ func (s Store) OrgConfig(ctx context.Context, orgID string) (OrgConfig, bool, er
 		PromptCache: promptCacheOptIn(raw, provider),
 		Version:     version,
 
-		KeyInBaseURL: storedKeyInBaseURL(raw, settings[keyBaseURL]),
+		KeyInBaseURL: s.storedKeyInBaseURL(raw, settings[keyBaseURL]),
 	}, true, nil
 }
 
@@ -197,8 +198,9 @@ WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`
 }
 
 // storedKeyInBaseURL is whether baseURL carries any api key stored for the org,
-// the default row's or a purpose override's.
-func storedKeyInBaseURL(raw orgSettings, baseURL string) bool {
+// the default row's or a purpose override's (categorize included for a store
+// that does not serve it).
+func (s Store) storedKeyInBaseURL(raw orgSettings, baseURL string) bool {
 	if baseURL == "" {
 		return false
 	}
@@ -207,7 +209,42 @@ func storedKeyInBaseURL(raw orgSettings, baseURL string) bool {
 			return true
 		}
 	}
-	return false
+	return s.categorizeKeyInBaseURL(raw, baseURL)
+}
+
+// categorizeKeyInBaseURL is the categorize api_key half of storedKeyInBaseURL
+// for a store other than the categorize store. Such a store keeps that key
+// sealed (skipsDecrypt): it is opened only here, only for a non-empty served
+// baseURL, and its plaintext never leaves this frame. A sealed key that cannot
+// be opened refuses the url (fail closed); the categorize store, which serves
+// the key, counts its decrypt failures itself.
+func (s Store) categorizeKeyInBaseURL(raw orgSettings, baseURL string) bool {
+	if s.purpose == PurposeCategorize {
+		return false
+	}
+	if BaseURLCarriesKey(baseURL, raw[PurposeKey(PurposeCategorize, keyAPIKey)]) {
+		return true
+	}
+	sealed := raw[sealedCategorizeKey]
+	if sealed == "" {
+		return false
+	}
+	plain, err := openSealedKey(s.Decryptor, sealed)
+	if err != nil {
+		return true
+	}
+	defer clear(plain)
+	return BaseURLCarriesKey(baseURL, string(plain))
+}
+
+// sealedCategorizeKey is the reserved entry that holds, in a non-categorize
+// store's loaded settings, the categorize api_key row as stored (ciphertext);
+// no stored key starts with a NUL byte.
+const sealedCategorizeKey = "\x00sealed:purpose:categorize:api_key"
+
+// openSealedKey decrypts a sealed key; a test swaps it to count the opens.
+var openSealedKey = func(decryptor providerfoundation.FernetDecryptor, sealed string) ([]byte, error) {
+	return decryptor.Decrypt(secrets.NewValue(sealed))
 }
 
 // versionRow is one stored BYO row as the version digest reads it.

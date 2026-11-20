@@ -394,6 +394,7 @@ func TestTheRaceLegRunsEachPartAloneByItsAnchoredNames(t *testing.T) {
 		`-v splits="${GO_RACE_SPLITS}" -v tests="${GO_RACE_SPLIT_WEIGHTS}" -v rserial="${GO_RACE_SERIAL_WEIGHTING}" -v rk="${GO_RACE_BATCH_OVERLAP}" -v apart="$(if [ "${module_dir}" = "." ]; then printf '%s' "${GO_RACE_APART}"; fi)" -v rcap="$(if [ "${module_dir}" = "." ]; then race_leg_weight_cap "${count}"; else printf '0\n'; fi)" -f "${ROOT}/ci/go_race_shard.awk"`,
 		`-run "^($(printf '%s\n' "${names}" | paste -sd'|' -))\$" "${pkg}"`,
 		`-f "${GO_RACE_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_race_unweighted_slow.awk}" "${partjson}"`,
+		`-v failthresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_FAIL_SECONDS:-45}" -v summary="${GITHUB_STEP_SUMMARY:-}" -v rowprefix="${key}"$'\t' -v rowunit=s`,
 	} {
 		if strings.Count(src, want) != 1 {
 			t.Errorf("ci/check_go.sh must hold exactly once: %s", want)
@@ -422,7 +423,7 @@ func shellFunc(src, name string) (string, bool) {
 	return src[i+1 : i+1+j], true
 }
 
-// A top-level test of 30 s or more with no row fails its race part, as the providersync slice's guard does.
+// CHAOS-14277: a top-level test of 45 s or more with no row fails its race part; 30 s up to 45 s warns (rc 0) with the exact split-table row.
 func TestASlowTestWithNoRowFailsItsRacePart(t *testing.T) {
 	t.Parallel()
 	root := repoRoot(t)
@@ -435,19 +436,31 @@ func TestASlowTestWithNoRowFailsItsRacePart(t *testing.T) {
 		return fmt.Sprintf(`{"Action":"run","Package":"p","Test":%q}`+"\n"+`{"Action":"pass","Package":"p","Test":%q,"Elapsed":%g}`+"\n", test, test, secs)
 	}
 	for _, c := range []struct {
-		name, events string
-		want         int
+		name, events, row string
+		failthresh        string
+		want              int
 	}{
-		{"a measured test of 40 s", ev("TestMeasured", 40), 0},
-		{"an unmeasured test of 29 s", ev("TestNew", 29), 0},
-		{"an unmeasured test of 31 s", ev("TestNew", 31), 1},
+		{"a measured test of 50 s", ev("TestMeasured", 50), "", "45", 0},
+		{"an unmeasured test of 29.9 s", ev("TestNew", 29.9), "", "45", 0},
+		{"an unmeasured test of 30 s", ev("TestNew", 30), "internal/x\tTestNew\t30", "45", 0},
+		{"an unmeasured test of 30.7 s", ev("TestNew", 30.7), "internal/x\tTestNew\t31", "45", 0},
+		{"an unmeasured test of 44.99 s", ev("TestNew", 44.99), "internal/x\tTestNew\t45", "45", 0},
+		{"an unmeasured test of 45 s", ev("TestNew", 45), "", "45", 1},
+		{"a bad fail threshold", ev("TestNew", 1), "", "20", 2},
 	} {
 		f := filepath.Join(dir, strings.ReplaceAll(c.name, " ", "_")+".json")
 		if err := os.WriteFile(f, []byte(c.events), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		cmd := exec.Command("awk", "-v", "weights="+weights, "-v", "thresh=30", "-v", "label=race split", "-f",
-			filepath.Join(root, "ci", "go_race_unweighted_slow.awk"), f)
+		sum := filepath.Join(dir, strings.ReplaceAll(c.name, " ", "_")+".md")
+		awkFile := filepath.Join(root, "ci", "go_race_unweighted_slow.awk")
+		if env := os.Getenv("GO_RACE_UNWEIGHTED_SLOW_AWK"); env != "" {
+			awkFile = env
+		}
+		cmd := exec.Command("awk", "-v", "weights="+weights, "-v", "thresh=30", "-v", "failthresh="+c.failthresh, "-v", "summary="+sum,
+			"-v", "rowprefix=internal/x\t", "-v", "rowunit=s", "-v", "label=race split", "-f", awkFile, f)
+		var se strings.Builder
+		cmd.Stderr = &se
 		err := cmd.Run()
 		code := 0
 		if ee, ok := err.(*exec.ExitError); ok {
@@ -456,7 +469,13 @@ func TestASlowTestWithNoRowFailsItsRacePart(t *testing.T) {
 			t.Fatal(err)
 		}
 		if code != c.want {
-			t.Errorf("%s: the guard exited %d, want %d", c.name, code, c.want)
+			t.Errorf("%s: the guard exited %d, want %d: %s", c.name, code, c.want, se.String())
+		}
+		if c.row != "" {
+			b, _ := os.ReadFile(sum)
+			if !strings.Contains(se.String(), "::warning::unweighted-slow-warning: TestNew") || !strings.Contains(se.String(), "\n"+c.row+"\n") || !strings.Contains(string(b), "add this row:\n"+c.row+"\n") {
+				t.Errorf("%s: warning or exact row %q missing\nstderr: %s\nsummary: %s", c.name, c.row, se.String(), b)
+			}
 		}
 	}
 }

@@ -1572,11 +1572,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				return errGitHubTestsWalkBound
 			}
 			before := cursor
-			var run gitHubWorkflowRunPayload
-			decoder := json.NewDecoder(strings.NewReader(string(page.Items[index])))
-			decoder.UseNumber()
-			if decoder.Decode(&run) != nil {
-				return providerfoundation.ErrNormalizationInvalid
+			run, err := decodeGitHubWorkflowRun(page.Items[index])
+			if err != nil {
+				return providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 			}
 			pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
 			cursor.RangeItems++
@@ -1890,11 +1888,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					return errGitHubTestsWalkBound
 				}
 				before := cursor
-				var run gitHubWorkflowRunPayload
-				decoder := json.NewDecoder(strings.NewReader(string(page.Items[index])))
-				decoder.UseNumber()
-				if decoder.Decode(&run) != nil {
-					return providerfoundation.ErrNormalizationInvalid
+				run, err := decodeGitHubWorkflowRun(page.Items[index])
+				if err != nil {
+					return providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 				}
 				pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
 				cursor.RangeItems++
@@ -1930,10 +1926,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					// cap ahead of a real report artifact in the same run.
 					artifactItems := make([]githubTestsArtifactPayload, 0, len(artPage.Items))
 					for _, artifactRaw := range artPage.Items {
-						var artifact githubTestsArtifactPayload
-						decoder := json.NewDecoder(strings.NewReader(string(artifactRaw)))
-						decoder.UseNumber()
-						if decoder.Decode(&artifact) != nil || artifact.ID == "" {
+						artifact, err := decodeGitHubTestsArtifact(artifactRaw)
+						if err != nil {
+							return providerfoundation.RouteFailure(githubRunArtifactsRoute, providerfoundation.ReasonBodyDecode, err)
+						}
+						if artifact.ID == "" {
 							return providerfoundation.ErrNormalizationInvalid
 						}
 						if selected, reason := githubTestsArtifactSelectionSeam(artifact.Name); !selected {

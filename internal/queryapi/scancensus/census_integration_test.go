@@ -419,18 +419,18 @@ func TestScanTypeCensusRejectsAUInt64IntoFloat64(t *testing.T) {
 }
 
 // TestScanTypeCensusProbesNullForANullableColumn pins what the real driver
-// does with a NULL: it scans into a plain destination without an error and
-// leaves the destination untouched. That is why the census reports a Nullable column
-// scanned into a plain destination (Verdict.NullablePlain) instead of failing a
-// probe, and why a driver that starts to refuse a NULL there must turn this red.
+// does with a NULL: since clickhouse-go v2.50 it refuses a NULL in a plain
+// destination with an error and leaves the destination untouched, and it sets a
+// pointer destination to nil. That is why nullableIntoPlainSites stays empty (a
+// Nullable column scanned into a plain destination fails the read), and why a
+// driver that goes back to a silent NULL-to-zero must turn this red.
 func TestScanTypeCensusProbesNullForANullableColumn(t *testing.T) {
 	ctx, conn := openCensusConn(t)
-	if err := scannable(ctx, conn, "Nullable(Float64)", "*float64", true); err != nil {
-		t.Fatalf("the driver now refuses a NULL in a plain destination (%v): a plain-destination pin is no longer a silent NULL-to-zero, revisit nullableIntoPlainSites", err)
+	if err := scannable(ctx, conn, "Nullable(Float64)", "*float64", true); err == nil {
+		t.Fatal("the driver scanned a NULL into a plain destination without an error: a Nullable column into a plain destination is a silent NULL-to-zero again, revisit nullableIntoPlainSites")
 	}
-	// A NULL leaves a plain destination untouched (the zero value for a fresh variable, the
-	// PREVIOUS row's value for one a loop reuses) and sets a pointer destination to nil, for
-	// every type a pinned or scanned column has.
+	// A NULL into a plain destination is an error that leaves it untouched, and it sets a
+	// pointer destination to nil, for every type a pinned or scanned column has.
 	sentinel := map[string]any{
 		"float64": 42.5, "string": "kept", "uint64": uint64(7), "int64": int64(7), "uint8": uint8(7),
 		"bool": true, "time.Time": time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC),
@@ -456,10 +456,11 @@ func TestScanTypeCensusProbesNullForANullableColumn(t *testing.T) {
 			if err != nil || !rows.Next() {
 				t.Fatalf("NULL probe of %s: %v", c.chType, err)
 			}
-			if err := rows.Scan(dest.Interface()); err != nil {
-				t.Fatalf("scan NULL of %s into %s: %v", c.chType, dest.Type(), err)
-			}
+			err = rows.Scan(dest.Interface())
 			rows.Close()
+			if wantErr := dest == plain; (err != nil) != wantErr {
+				t.Fatalf("scan NULL of %s into %s: err = %v, want an error = %v", c.chType, dest.Type(), err, wantErr)
+			}
 		}
 		if got := plain.Elem().Interface(); got != sentinel[c.goType] {
 			t.Errorf("NULL of %s over a plain %s changed it to %v, want it untouched", c.chType, c.goType, got)
@@ -474,6 +475,7 @@ func TestScanTypeCensusProbesNullForANullableColumn(t *testing.T) {
 	if err := scannable(ctx, conn, "Float64", "*float64", true); err == nil {
 		t.Fatal("a NULL probe of a non-Nullable type must be refused, not pass")
 	}
+	// A Nullable column into a plain destination is now also a NULL-probe mismatch: the read fails.
 	for _, c := range []struct {
 		dest, chType string
 		want         []string
@@ -485,8 +487,12 @@ func TestScanTypeCensusProbesNullForANullableColumn(t *testing.T) {
 	} {
 		statement := []string{"SELECT status, CAST(NULL AS " + c.chType + ") AS n FROM work_item_state_durations_daily GROUP BY status"}
 		verdict := Classify(ctx, conn, []Site{{File: "planted.go", Func: "planted", Dests: []string{"*string", c.dest}, Statements: statement}})[0]
-		if verdict.Unresolved != "" || len(verdict.Mismatches) != 0 {
+		wantMismatch := c.want != nil
+		if verdict.Unresolved != "" || (len(verdict.Mismatches) != 0) != wantMismatch {
 			t.Fatalf("%s: unexpected verdict %+v", c.dest, verdict)
+		}
+		if wantMismatch && (len(verdict.Mismatches) != 1 || !strings.Contains(verdict.Mismatches[0], "column 2:") || !strings.Contains(verdict.Mismatches[0], "converting NULL")) {
+			t.Fatalf("%s: want one NULL-probe mismatch on column 2, got %v", c.dest, verdict.Mismatches)
 		}
 		if !reflect.DeepEqual(verdict.NullablePlain, c.want) {
 			t.Errorf("%s: NullablePlain = %v, want %v", c.dest, verdict.NullablePlain, c.want)
@@ -550,6 +556,20 @@ const nullableIntoPlainSites = `
 //	loadDocDrift 1b7d64b044ee -> ed7df227e4af
 //	loadFlaky a06340e42973 -> 28265e8c788f
 //
+// ai_opportunities.go re-pinned by hand again (CHAOS-14256), digests copied from the local TestScanTypeCensus failure output
+// (not computed): loadDocDrift and loadFlaky now build their opportunity with the unclamped score (scoreDeltaRaw), and the
+// impact read gains an ORDER BY over its group key. The SQL and the scan targets of both sites are unchanged
+// (*string,*uint64,*uint64 and *string,*uint64,**float64; flake_share stays Nullable(Float64) into **float64):
+//
+//	loadDocDrift ce3024a41da9 -> f049a4598b46
+//	loadFlaky 32950ea2e0be -> be2a35ea7bc8
+//
+// loadClusters re-pinned by hand (CHAOS-14256, r1), digest copied from the local TestScanTypeCensus failure output (not
+// computed): the body now sorts each cluster's pull request refs (sortPRRefs) after the scan. The SQL and the scan
+// targets (*string,*string,*uint64,*[]string and *string,*uint64,*[]string) are unchanged:
+//
+//	loadClusters f62124ab26af -> 0dcb9c7aceb8
+//
 // timeseries.go ExecuteOrgTimeseries re-pinned by hand, digest copied from the local TestScanTypeCensus failure output
 // (not computed): the org series of the pooled TestOps measures (PIPELINE_DURATION_P95, TEST_SUITE_DURATION_P95,
 // PIPELINE_QUEUE_TIME) take the bucket value unscaled when the sample count is above 0. The statement and the scan
@@ -604,26 +624,30 @@ const nullableIntoPlainSites = `
 //
 //	ExecuteOrgTimeseries 1e3ee3af097b -> 6637e944ff79
 //	ExecuteTimeseries f2eec06b6811 -> 8842c256cd1a
+//
+// CHAOS-14218: six pins re-pinned for the nillable scan destinations clickhouse-go v2.51 needs (breakdown, flow-matrix nodes and
+// edges, both timeseries reads, quadrant metric rows); the statements are unchanged, digests copied from the hosted
+// TestScanTypeCensus failure output (job 135986472250), not computed.
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|f62124ab26af|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|f62124ab26af|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|ce3024a41da9|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|32950ea2e0be|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|0dcb9c7aceb8|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|0dcb9c7aceb8|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|f049a4598b46|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|be2a35ea7bc8|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadRepoFlowRows|*string,*uint64,**float64,**float64,**float64,**float64|39a7e63ddf0e|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*uint64,**float64,**float64,**float64|2653b84e5b21|not-describable
 internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|ffbc61d0410c|spliced-select-list
 internal/queryapi/aianalytics/scope.go|ownerTeams|*string,*string|c0b3734eb92d|not-describable
-internal/queryapi/analytics/breakdown.go|executeBreakdownRaw|*string,**float64|c64156aa3194|statement-not-static
+internal/queryapi/analytics/breakdown.go|executeBreakdownRaw|**string,**float64|e6927e7d3bab|statement-not-static
 internal/queryapi/analytics/catalog.go|executeCatalogValues|*string,*uint64|92f0953d0b7c|statement-not-static
-internal/queryapi/analytics/flowmatrix.go|queryEdges|*string,*string,*string,*string,**float64|ea97c3bc5ae8|statement-not-static
-internal/queryapi/analytics/flowmatrix.go|queryNodes|*string,*string,**float64|c4146cbf078b|statement-not-static
+internal/queryapi/analytics/flowmatrix.go|queryEdges|*string,*string,**string,**string,**float64|5935396ef678|statement-not-static
+internal/queryapi/analytics/flowmatrix.go|queryNodes|*string,**string,**float64|3dacd49c8128|statement-not-static
 internal/queryapi/analytics/investmentquality.go|executeEvidenceQualityByGroup|*string,*float64,*uint64,*uint64|30049a8da29f|statement-not-static
 internal/queryapi/analytics/investmentquality.go|executeInvestmentQualityStats|*uint64,*uint64,*float64,*float64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64|2219e7f838c7|statement-not-static
 internal/queryapi/analytics/sankeycoverage.go|runSankeyCoverageQuery|*float64,*float64,*float64,*float64,**float64,**float64,**float64,**float64,**float64|7474017a0a07|statement-not-static
 internal/queryapi/analytics/sankeygrouped.go|executeSankeyGrouped|[]any|02426fb74c03|variadic-destinations
-internal/queryapi/analytics/timeseries.go|ExecuteOrgTimeseries|*time.Time,**float64,**float64|6637e944ff79|statement-not-static
-internal/queryapi/analytics/timeseries.go|ExecuteTimeseries|*time.Time,*string,**float64|8842c256cd1a|statement-not-static
+internal/queryapi/analytics/timeseries.go|ExecuteOrgTimeseries|**time.Time,**float64,**float64|7a0e4208d61e|statement-not-static
+internal/queryapi/analytics/timeseries.go|ExecuteTimeseries|**time.Time,**string,**float64|5ed46b8e987a|statement-not-static
 internal/queryapi/cognitiveload/cognitiveload.go|fetchOwnershipCandidates|*string,*string,*uint8,*uint16|e598129679a3|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchFileTimeseries|*time.Time,*string,*string,**uint32,**float64,**uint32,**uint32|69bcb13af3df|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchRepoTimeseries|*time.Time,*string,**uint64,**uint64,**float64,**uint64,**uint64|2d500256c88b|spliced-select-list
@@ -667,7 +691,7 @@ internal/queryapi/people/search.go|BuildSearchResponse|*string,*time.Time|afd45e
 internal/queryapi/people/summary.go|fetchPersonCollaboration|*string,*string,*float64|be7c30414391|not-describable
 internal/queryapi/pooledmttr/pooledmttr.go|scorecard|*string,**string,**float64|3a0c54cda9e6|spliced-select-list
 internal/queryapi/producttelemetry/platform.go|LoadOrgNames|*string,*string,*string|64c4ca805d17|not-describable
-internal/queryapi/quadrant/quadrant.go|scanMetricRows|*time.Time,*string,*string,*float64|433c0a3205e2|statement-not-static
+internal/queryapi/quadrant/quadrant.go|scanMetricRows|**time.Time,**string,**string,**float64|261210b712cd|statement-not-static
 internal/queryapi/reports/reports.go|scanCount|*int64|8d2d39db7d2b|not-describable
 internal/queryapi/reports/reports.go|scanReportRun|*string,*string,*string,**time.Time,**time.Time,**float64,**string,**string,**string,**string,*string,*time.Time|0121a67bb651|not-describable
 internal/queryapi/reports/reports.go|scanSavedReport|*string,*string,*string,**string,**string,*bool,**string,**string,**string,*bool,**time.Time,**string,*time.Time,*time.Time,**string|835998e4481b|not-describable

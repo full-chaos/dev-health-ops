@@ -6591,7 +6591,12 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 
 	// One posture check per process: it proves the role in the background from here
 	// on, and both the combined check and the per-class probes read its last answer.
-	posture := queryAPIPostureCheck(getenv, pgPool)
+	posture, stopPosture := queryAPIPostureCheck(getenv, pgPool)
+	// closeRoute stops the posture check (its running execution ends and logs) before the pool it runs on closes.
+	closeRoute := func() {
+		stopPosture()
+		pgPool.Close()
+	}
 	// CHAOS-7831: ONE class-row switch for the MCP listener and the named-operation route (:8091), so a root's class row is one decision.
 	classSwitch := newClassRowSwitch(pgPool)
 	// CHAOS-6263 PR (a): /query's edge-access-token carrier, built once
@@ -6604,12 +6609,12 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	// JWKS check in buildQueryRoute.
 	edgeAuth, edgeStore, err := buildQueryEdgeAuthenticatorFromEnv(getenv, pgPool)
 	if err != nil {
-		pgPool.Close()
+		closeRoute()
 		return queryRouteHandlers{}, nil, nil, fmt.Errorf("query-api: edge authenticator: %w", err)
 	}
 	handler, proofHandler, proofWriteHandler, registryHandler, err := newQueryHandlerWithEdge(analytics.PinInvestmentMembershipScope(chClient), pgPool, verifier, schemaDigest, getenv, edgeAuth, edgeStore, classSwitch)
 	if err != nil {
-		pgPool.Close()
+		closeRoute()
 		return queryRouteHandlers{}, nil, nil, err
 	}
 	// CHAOS-7085/CHAOS-7091: the MCP caller class gets its OWN ClickHouse
@@ -6617,7 +6622,7 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	// its OWN routing rows (one class row per allowlisted root field).
 	mcpClient, err := newMCPClickHouseClient(cfg.ClickHouseURI)
 	if err != nil {
-		pgPool.Close()
+		closeRoute()
 		return queryRouteHandlers{}, nil, nil, fmt.Errorf("query-api: build the MCP caller-class ClickHouse client: %w", err)
 	}
 	mcpHandler := newMCPHandler(mcpClient, pgPool, classSwitch, getenv)
@@ -6635,7 +6640,7 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	handlers.RegistryPool = pgPool
 	// Set outside the literal for the same reason (the literal's shape is pinned): the class-gated alias of the serving handler.
 	handlers.RunOperation = markClassGated(handler)
-	cleanup := func() { pgPool.Close() }
+	cleanup := closeRoute
 	// CHAOS-6803/CHAOS-6804: a deployment that names query-api's role
 	// (QUERY_API_DATABASE_ROLE) is not ready until the pool logs in AS that role
 	// and the role holds exactly the query-api manifest the migration leg
@@ -6737,7 +6742,8 @@ func readinessProbes(chClient readinessPinger, pgPool readinessPinger, verifier 
 // queryAPIPostureCheck returns the readiness check for query-api's Postgres role
 // posture, or nil when the deployment names no query-api role
 // (QUERY_API_DATABASE_ROLE unset or blank): such a deployment has not opted in
-// and is checked for nothing extra.
+// and is checked for nothing extra. The second result stops the background
+// check; the owner calls it before it closes pgPool.
 //
 // The whole-catalog posture query takes 1.4-1.9 s on the production catalog
 // (CHAOS-6765), longer than the kubelet's 2 s probe timeout, and the readiness
@@ -6746,7 +6752,7 @@ func readinessProbes(chClient readinessPinger, pgPool readinessPinger, verifier 
 // the role in the BACKGROUND at construction (process start, before readiness
 // can flip: an unproven role is not ready) and /readyz reads the last answer
 // without waiting (CachedPostureCheck.CheckNoWait).
-func queryAPIPostureCheck(getenv getenvFunc, pgPool *pgxpool.Pool) func(context.Context) error {
+func queryAPIPostureCheck(getenv getenvFunc, pgPool *pgxpool.Pool) (func(context.Context) error, func()) {
 	return queryAPIPostureCheckWith(getenv, pgPool, postgresstore.PostureCheckOptions{})
 }
 
@@ -6758,22 +6764,22 @@ func queryAPIPostureCheck(getenv getenvFunc, pgPool *pgxpool.Pool) func(context.
 // no-wait read).
 func queryAPIPostureCheckWith(
 	getenv getenvFunc, pgPool *pgxpool.Pool, options postgresstore.PostureCheckOptions,
-) func(context.Context) error {
+) (func(context.Context) error, func()) {
 	role := strings.TrimSpace(getenv("QUERY_API_DATABASE_ROLE"))
 	if role == "" {
-		return nil
+		return nil, func() {}
 	}
 	options.Logger = slog.Default()
 	sessions, err := queryAPISessionRead(getenv)
 	if err != nil {
 		// An unreadable flag or schema must never weaken the proof: not ready.
-		return func(context.Context) error { return err }
+		return func(context.Context) error { return err }, func() {}
 	}
 	cached := postgresstore.NewCachedQueryAPIPostureCheckWithSessions(
 		pgPool, role, queryAPIRiverSchema(getenv), sessions, options,
 	)
 	cached.Warm()
-	return func(context.Context) error { return cached.CheckNoWait() }
+	return func(context.Context) error { return cached.CheckNoWait() }, cached.Close
 }
 
 // queryAPISessionRead is the auth read the role must hold while auth-service

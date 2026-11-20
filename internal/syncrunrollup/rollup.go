@@ -117,7 +117,9 @@ func Bump(
 // ones, since neither side is a compare-and-swap -- whichever commits last
 // wins outright.
 //
-// NO KEY: a reservation insert's FK FOR KEY SHARE on this run must pass; FOR UPDATE deadlocked cross-bucket writers.
+// NO KEY: any child-FK insert (units, bucket reservations) takes FOR KEY SHARE on this run and now passes LockRun;
+// FOR UPDATE deadlocked cross-bucket writers. No production path inserts a unit into a committed run: the run and its
+// units are inserted in one transaction (internal/scheduler/sync/materializer.go:2474-2496).
 func LockRun(ctx context.Context, tx pgx.Tx, syncRunID string) error {
 	var locked int
 	return tx.QueryRow(ctx, `SELECT 1 FROM public.sync_runs WHERE id = $1 FOR NO KEY UPDATE`, syncRunID).Scan(&locked)

@@ -85,7 +85,7 @@ func TestEveryFileThatNamesAViewTableIsInTheReaderAllowlist(t *testing.T) {
 // predicate or the group column fails here; the golden statements in the reader packages hold the SQL text.
 var viewReaders = map[string][]string{
 	"internal/jobs/metrics/remaining/capacity_native_clickhouse.go":        {"rowview.OrgPredicate("},
-	"internal/jobs/metrics/remaining/recommendations_loader.go":            {"rowview.OrgPredicate(", "GROUP BY day, provider, work_scope_id, row_view"},
+	"internal/jobs/metrics/remaining/recommendations_loader.go":            {"rowview.TeamSource("},
 	"internal/jobs/metrics/remaining/recommendations_native_clickhouse.go": {"rowview.OrgPredicate("},
 	"internal/jobs/metrics/daily/benchmarking/clickhouse.go":               {"rowview.OrgPredicate(", `"row_view"`},
 	"internal/queryapi/capacityforecast/clickhouse.go":                     {"rowview.OrgPredicate("},

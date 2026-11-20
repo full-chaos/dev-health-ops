@@ -290,6 +290,9 @@ WHERE run.org_id = $1 AND run.integration_id = $2
 	return pairs, nil
 }
 
+// loadBackfillRanges reads the config's backfill jobs that this projection can use and counts them per projection
+// read: a config with no enabled scope source reads no job, and a job whose before_date is older than the history
+// cutoff is not read; neither is counted nor warned about.
 func loadBackfillRanges(ctx context.Context, tx pgx.Tx, config syncConfig, scope effectiveScope, truncatedBefore time.Time) ([]coverageInterval, error) {
 	if len(scope.Sources) == 0 {
 		return nil, nil

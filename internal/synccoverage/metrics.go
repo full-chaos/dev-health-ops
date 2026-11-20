@@ -182,9 +182,10 @@ var backfillResolutionOutcomes = []string{
 	backfillOutcomeOccurrence, backfillOutcomeOccurrenceUnplanned, backfillOutcomeSyncRun, backfillOutcomeUnresolved,
 }
 
-// BackfillResolutionMetrics counts backfill jobs by how a coverage build resolved them to a run (CHAOS-14298).
-// occurrence_unplanned (no run planned for an admin backfill's occurrence) and unresolved (no run marker at all)
-// are the jobs coverage cannot read units for.
+// BackfillResolutionMetrics counts, per projection read, the backfill jobs a coverage build read, by how it resolved
+// them to a run (CHAOS-14298). Jobs the build does not read (no enabled scope source, before the history cutoff) are
+// not counted. occurrence_unplanned (no run planned for an admin backfill's occurrence) and unresolved (no run marker
+// at all) are the read jobs coverage cannot read units for.
 type BackfillResolutionMetrics struct {
 	mu       sync.Mutex
 	outcomes map[string]uint64

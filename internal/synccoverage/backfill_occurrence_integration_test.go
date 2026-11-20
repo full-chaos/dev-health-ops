@@ -3,8 +3,10 @@
 package synccoverage
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -273,3 +275,63 @@ func TestProjectorReadsAnAdminBackfillThroughItsRun(t *testing.T) {
 		}
 	})
 }
+
+// TestProjectorCountsOnlyTheBackfillJobsItReads pins the counter's contract: it counts per projection read. Jobs of a
+// config with no enabled scope source, and jobs whose dates end before the history cutoff, are not read, so they are
+// not counted and raise no WARN.
+func TestProjectorCountsOnlyTheBackfillJobsItReads(t *testing.T) {
+	ctx, pool := startBackfillCoveragePostgres(t)
+	now := time.Date(2026, time.August, 12, 8, 0, 0, 0, time.UTC)
+	projector, err := NewProjector(pool, WithClock(func() time.Time { return now }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	cutoff := now.AddDate(0, 0, -HistoryLookbackDays)
+	for _, test := range []struct {
+		name          string
+		disableSource bool
+		since, before time.Time
+	}{
+		{"no enabled scope source", true, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)},
+		{"dates before the history cutoff", false, cutoff.AddDate(0, 0, -30), cutoff.AddDate(0, 0, -2)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resetProjectorTables(t, ctx, pool)
+			fixture := seedProjectorFixture(t, ctx, pool, "org-uncounted-"+strings.ReplaceAll(test.name, " ", "-"), now)
+			if test.disableSource {
+				if _, err := pool.Exec(ctx, `UPDATE integration_sources SET is_enabled = FALSE WHERE id = $1`, fixture.SourceID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, task := range []*string{nil, ptrString("occurrence:sha256:" + strings.Repeat("c", 64))} {
+				if _, err := pool.Exec(ctx, `INSERT INTO backfill_jobs (id,org_id,sync_config_id,celery_task_id,status,since_date,before_date) VALUES ($1,$2,$3,$4,'pending',$5::date,$6::date)`,
+					uuid.New(), fixture.OrgID, fixture.ConfigID, task, test.since, test.before); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := map[string]uint64{}
+			for _, outcome := range backfillResolutionOutcomes {
+				before[outcome] = backfillResolutionMetrics.outcomeCount(outcome)
+			}
+			logs.Reset()
+			if _, err := projector.Rebuild(ctx, fixture.OrgID, fixture.ConfigID); err != nil {
+				t.Fatal(err)
+			}
+			for _, outcome := range backfillResolutionOutcomes {
+				if got := backfillResolutionMetrics.outcomeCount(outcome) - before[outcome]; got != 0 {
+					t.Errorf("%s counted %d, want 0 (the build does not read these jobs)", outcome, got)
+				}
+			}
+			if strings.Contains(logs.String(), "backfill jobs without a planned run") {
+				t.Errorf("WARN raised for jobs the build does not read:\n%s", logs.String())
+			}
+		})
+	}
+}
+
+func ptrString(value string) *string { return &value }

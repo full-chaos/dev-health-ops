@@ -909,6 +909,7 @@ LIMIT {max_edges:UInt32}
 // verified by running that mutant, not by inspection. See
 // flowMatrixWorkTypeEnrichedSelect's doc comment for the full result and
 // for what is still NOT measured (the cost number).
+// A WORK_TYPE key must hold a char that is not whitespace: the match() class is the ECMA-262 "White Space" and "Line Terminators" set (what JS trim removes), not just ''.
 const flowMatrixWorkTypeNodesTemplate = `
 SELECT
     'WORK_TYPE' AS dimension,
@@ -920,7 +921,7 @@ WHERE wct.day >= {start_date:Date} AND wct.day < {end_date:Date}
   AND wct.completed_at IS NOT NULL
   AND wct.org_id = {org_id:String}
   AND wi.org_id = {org_id:String}
-  AND wi.type IS NOT NULL AND wi.type != ''
+  AND wi.type IS NOT NULL AND match(wi.type, '[^\\s\\x{0B}\\p{Z}\\x{FEFF}]')
 GROUP BY node_id
 ORDER BY value DESC, node_id ASC
 LIMIT {limit_per_dim:UInt32}
@@ -934,6 +935,7 @@ LIMIT {limit_per_dim:UInt32}
 // correction: "fixing the template" without fixing the CTE would leave
 // the CTE (and its OTHER consumers, if any existed) still exposed --
 // there are none here, but the fix belongs at the CTE regardless.
+// A WORK_TYPE key must hold a char that is not whitespace: the match() class is the ECMA-262 "White Space" and "Line Terminators" set (what JS trim removes), not just ''.
 const flowMatrixWorkTypeEdgesTemplate = `
 SELECT
     'WORK_TYPE' AS source_dimension,
@@ -948,8 +950,8 @@ INNER JOIN (` + flowMatrixWorkTypeEnrichedSelect + `) AS b
   AND a.org_id = b.org_id
 WHERE a.repo_id IS NOT NULL
   AND b.repo_id IS NOT NULL
-  AND a.work_item_type IS NOT NULL AND a.work_item_type != ''
-  AND b.work_item_type IS NOT NULL AND b.work_item_type != ''
+  AND a.work_item_type IS NOT NULL AND match(a.work_item_type, '[^\\s\\x{0B}\\p{Z}\\x{FEFF}]')
+  AND b.work_item_type IS NOT NULL AND match(b.work_item_type, '[^\\s\\x{0B}\\p{Z}\\x{FEFF}]')
   AND a.work_item_type != b.work_item_type
 GROUP BY source, target
 ORDER BY value DESC, source ASC, target ASC

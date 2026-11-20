@@ -198,13 +198,16 @@ func (handler GitLabFilesRouteHandler) Collect(
 	}
 	paths := make([]string, 0, len(tree.Items))
 	for _, raw := range tree.Items {
-		var object map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &object); err != nil || object == nil {
+		object, err := gitLabFilesDecodeTreeObject(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, gitLabFilesTraversalError(providerfoundation.RouteFailure(gitlabTreeRoute, providerfoundation.ReasonBodyDecode, err))
+		}
+		if object == nil {
 			return CompleteRouteBatch{}, gitLabFilesTraversalError(providerfoundation.ErrNormalizationInvalid)
 		}
-		var item gitLabTreePayload
-		if err := json.Unmarshal(raw, &item); err != nil {
-			return CompleteRouteBatch{}, gitLabFilesTraversalError(providerfoundation.ErrNormalizationInvalid)
+		item, err := gitLabFilesDecodeTreeItem(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, gitLabFilesTraversalError(providerfoundation.RouteFailure(gitlabTreeRoute, providerfoundation.ReasonBodyDecode, err))
 		}
 		if item.Type == "blob" && item.Path != "" {
 			paths = append(paths, item.Path)
@@ -570,4 +573,20 @@ func decodeGitLabCommitRef(raw json.RawMessage) (gitLabCommitRefPayload, error) 
 		return commit, providerfoundation.ErrNormalizationInvalid
 	}
 	return commit, nil
+}
+
+func gitLabFilesDecodeTreeObject(raw json.RawMessage) (map[string]json.RawMessage, error) {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(raw, &object) != nil {
+		return nil, providerfoundation.ErrNormalizationInvalid
+	}
+	return object, nil
+}
+
+func gitLabFilesDecodeTreeItem(raw json.RawMessage) (gitLabTreePayload, error) {
+	var item gitLabTreePayload
+	if json.Unmarshal(raw, &item) != nil {
+		return item, providerfoundation.ErrNormalizationInvalid
+	}
+	return item, nil
 }

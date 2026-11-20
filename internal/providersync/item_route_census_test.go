@@ -128,6 +128,14 @@ func returnsBareNormalizationInvalid(body *ast.BlockStmt) bool {
 				if isNormalizationInvalid(result) {
 					found = true
 				}
+				// A wrapper call that passes the sentinel on (return wrap(ErrNormalizationInvalid)) names no route either.
+				if call, isCall := result.(*ast.CallExpr); isCall {
+					for _, arg := range call.Args {
+						if isNormalizationInvalid(arg) {
+							found = true
+						}
+					}
+				}
 			}
 		}
 		return true
@@ -186,6 +194,12 @@ func blockReturnsRouted(body *ast.BlockStmt, errName string) bool {
 	call, ok := ret.Results[len(ret.Results)-1].(*ast.CallExpr)
 	if !ok {
 		return false
+	}
+	// One wrapper level is allowed (return wrap(RouteFailure(route, reason, err))): the wrapper keeps the cause chain.
+	if inner, wrapped := call.Args, len(call.Args) == 1; wrapped {
+		if innerCall, isCall := inner[0].(*ast.CallExpr); isCall {
+			call = innerCall
+		}
 	}
 	selector, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok || (selector.Sel.Name != "RouteFailure" && selector.Sel.Name != "ResponseFailure") || len(call.Args) != 3 {

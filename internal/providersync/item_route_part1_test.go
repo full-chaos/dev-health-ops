@@ -117,3 +117,43 @@ func TestAMalformedRunBodyStaysTheBareSentinelForTheOpenRunSkip(t *testing.T) {
 		t.Fatalf("fetchGitHubTestsRun(malformed) = %v; want the bare ErrNormalizationInvalid", err)
 	}
 }
+
+// A tree item fails inside the traversal wrapper: it still names the tree route (round 1 class: a decode failure passed to a wrapper).
+type malformedTreeDoer struct{ next providerfoundation.HTTPDoer }
+
+func (doer malformedTreeDoer) Do(request *http.Request) (*http.Response, error) {
+	if strings.HasSuffix(request.URL.Path, "/repository/tree") {
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`[[]]`)), Request: request,
+		}, nil
+	}
+	return doer.next.Do(request)
+}
+
+func TestGitLabFilesTreeItemFailureNamesTheTreeRoute(t *testing.T) {
+	t.Parallel()
+	files := gitLabFilesFixtureDoer(t)
+	files.commits = gitLabFilesResponse{body: `[{"id":"0123456789abcdef"}]`}
+	client := gitLabRepositoryClient(t, malformedTreeDoer{next: files}, "https://gitlab.example")
+	_, err := (GitLabFilesRouteHandler{}).Collect(
+		context.Background(), nativeTestClaim("gitlab", "files"), providerfoundation.Credential{},
+		client, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+	)
+	requireItemRouteFailure(t, err, gitlabTreeRoute)
+}
+
+func TestGitLabBlameTreeItemFailureNamesTheTreeRoute(t *testing.T) {
+	t.Parallel()
+	var paths, requests []string
+	client := gitLabRepositoryClient(t, malformedTreeDoer{next: &gitLabBlameDoer{
+		t: t, fileCount: 4, paths: &paths, requests: &requests,
+	}}, "https://gitlab.example")
+	_, err := (GitLabBlameRouteHandler{
+		Coverage: staticGitLabBlameCoverage{paths: []string{"src/file-000.go"}}, MaxFiles: 2,
+	}).Collect(
+		context.Background(), nativeTestClaim("gitlab", "blame"), providerfoundation.Credential{},
+		client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
+	)
+	requireItemRouteFailure(t, err, gitlabTreeRoute)
+}

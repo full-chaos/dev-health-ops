@@ -187,7 +187,7 @@ FROM (
         coalesce(nullIf(wi.type, ''), 'pull_request') AS work_type,
         pr.title AS title,
         pr.merged_at AS merged_at
-    FROM git_pull_requests AS pr
+    FROM git_pull_requests AS pr FINAL
     INNER JOIN work_graph_issue_pr AS link
         ON link.repo_id = pr.repo_id AND link.pr_number = pr.number
         AND link.org_id = {org_id:String}
@@ -212,7 +212,7 @@ FROM (
         'pull_request' AS work_type,
         pr.title AS title,
         pr.merged_at AS merged_at
-    FROM git_pull_requests AS pr
+    FROM git_pull_requests AS pr FINAL
     INNER JOIN ai_attribution_resolved AS attr
         ON attr.subject_type = 'pull_request'
         AND attr.repo_id = pr.repo_id

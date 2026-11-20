@@ -178,21 +178,12 @@ FROM public.sync_run_units WHERE id = $1::uuid`, unitID).Scan(
 		return Context{}, err
 	}
 
-	var (
-		integrationCredentialID *string
-		integrationProvider     string
-		integrationConfigText   *string
-	)
-	err = loader.DB.QueryRow(ctx, `
-SELECT id::text, provider, credential_id::text, config::text
-FROM public.integrations WHERE id = $1::uuid AND org_id = $2`, integrationID, orgID).Scan(
-		&integrationID, &integrationProvider, &integrationCredentialID, &integrationConfigText)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Context{}, bootstrapError("integration not found for unit")
-	}
+	integration, err := loader.integration(ctx, integrationID, orgID)
 	if err != nil {
 		return Context{}, err
 	}
+	integrationID = integration.id
+	integrationCredentialID, integrationProvider, integrationConfigText := integration.credentialID, integration.provider, integration.configText
 
 	var (
 		sourceProvider, sourceExternalID string
@@ -233,22 +224,12 @@ LIMIT 1`, orgID, integrationID, datasetKey).Scan(&datasetRows, &datasetOptionsTe
 		}
 	}
 
-	var (
-		runFound                                   = true
-		authSource, runCredentialID, runWitnessPtr *string
-	)
-	err = loader.DB.QueryRow(ctx, `
-SELECT auth_source, credential_id::text, credential_fingerprint
-FROM public.sync_runs WHERE id = $1::uuid AND org_id = $2`, runID, orgID).Scan(&authSource, &runCredentialID, &runWitnessPtr)
-	if errors.Is(err, pgx.ErrNoRows) {
-		runFound = false
-	} else if err != nil {
+	run, err := loader.runAuth(ctx, runID, orgID)
+	if err != nil {
 		return Context{}, err
 	}
 
-	credentialID, mapping, err := loader.resolveRunAuth(ctx, credentials, runAuth{
-		found: runFound, authSource: authSource, credentialID: runCredentialID, witness: runWitnessPtr,
-	}, orgID, integrationID, integrationCredentialID, provider)
+	credentialID, mapping, err := loader.resolveRunAuth(ctx, credentials, run, orgID, integrationID, integrationCredentialID, provider)
 	if err != nil {
 		return Context{}, err
 	}
@@ -288,6 +269,43 @@ func decodeColumn(text *string) (any, error) {
 		return nil, nil
 	}
 	return decodeJSON([]byte(*text))
+}
+
+// integrationRecord is the unit's integrations row as load reads it.
+type integrationRecord struct {
+	id, provider             string
+	credentialID, configText *string
+}
+
+// integration reads the unit's integration (load's read, which the pass pre-step shares).
+func (loader Loader) integration(ctx context.Context, integrationID, orgID string) (integrationRecord, error) {
+	var record integrationRecord
+	err := loader.DB.QueryRow(ctx, `
+SELECT id::text, provider, credential_id::text, config::text
+FROM public.integrations WHERE id = $1::uuid AND org_id = $2`, integrationID, orgID).Scan(
+		&record.id, &record.provider, &record.credentialID, &record.configText)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return integrationRecord{}, bootstrapError("integration not found for unit")
+	}
+	if err != nil {
+		return integrationRecord{}, err
+	}
+	return record, nil
+}
+
+// runAuth reads the run's credential stamp (load's read, which the pass pre-step shares); a missing run is found false.
+func (loader Loader) runAuth(ctx context.Context, runID, orgID string) (runAuth, error) {
+	run := runAuth{found: true}
+	err := loader.DB.QueryRow(ctx, `
+SELECT auth_source, credential_id::text, credential_fingerprint
+FROM public.sync_runs WHERE id = $1::uuid AND org_id = $2`, runID, orgID).Scan(&run.authSource, &run.credentialID, &run.witness)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return runAuth{found: false}, nil
+	}
+	if err != nil {
+		return runAuth{}, err
+	}
+	return run, nil
 }
 
 type runAuth struct {

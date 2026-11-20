@@ -560,6 +560,7 @@ internal/storedversion	writers_test.go	.	tree	*.go
 internal/storedversion	writers_test.go	internal/providersync	dir	*
 internal/streamhandlers	stored_version_invariant_test.go	internal/streamhandlers	dir	*
 internal/streamrunnerservice	readiness_timeout_test.go	internal/streamrunnerservice	dir	*
+internal/syncbucket	lockscope_census_test.go	unexpressed	-	-
 internal/synccli	print_sites_test.go	internal/synccli	dir	*
 internal/synccli	walk_order_integration_test.go	unexpressed	-	-
 internal/syncdispatchruntime	claim_id_chunks_test.go	internal/syncdispatchruntime	dir	*

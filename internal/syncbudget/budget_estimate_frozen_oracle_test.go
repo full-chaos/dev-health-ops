@@ -334,7 +334,7 @@ func TestBudgetEstimatorMatchesFrozenPython(t *testing.T) {
 			// No hydrator and no doer: every case here is decided before
 			// either would run, so reaching one is itself a divergence.
 			loader := Loader{Getenv: func(name string) string { return env[name] }}
-			goErr := loader.hydratePagerDutyOnce(context.Background(), "org", "credential", descriptor.(*object))
+			_, goErr := loader.hydratePagerDutyOnce(context.Background(), "org", "credential", descriptor.(*object), pagerDutyStep{})
 			if errors.Is(goErr, ErrLoaderUnavailable) {
 				t.Errorf("case %d %s: Go reached a hydrator Python never called", index, oracleCase.Input.Descriptor)
 				continue

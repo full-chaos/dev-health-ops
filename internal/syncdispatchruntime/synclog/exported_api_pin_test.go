@@ -188,6 +188,7 @@ var exportedAPI = []string{
 	"var synclog.MsgDispatchGuardBucketDecision synclog.Msg",
 	"var synclog.MsgDispatchSyncRunBlockedOnReferenceDiscovery synclog.Msg",
 	"var synclog.MsgDispatchSyncRunBudgetEstimateUnitFailed synclog.Msg",
+	"var synclog.MsgDispatchSyncRunBudgetHydrationSkippedUnderLock synclog.Msg",
 	"var synclog.MsgDispatchSyncRunBudgetEstimatesPersisted synclog.Msg",
 	"var synclog.MsgDispatchSyncRunBudgetGuardActiveConsumptionFanout synclog.Msg",
 	"var synclog.MsgDispatchSyncRunBudgetGuardActiveEstimateFailed synclog.Msg",

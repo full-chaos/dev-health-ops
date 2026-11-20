@@ -346,6 +346,10 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		})
 	}
 
+	// --- acp lock-1 (CHAOS-14250): hydrate the pass's PagerDuty credentials BEFORE the bucket locks; from here on
+	// every budget estimate of this pass runs on ctx, which keeps it off the network (it reads the pass record) ---
+	ctx = preHydratePass(ctx, tx, service.bridge, run.id, service.nowUTC())
+
 	// --- DispatchGuard: authorize this pass ---
 	decision, err := authorizeRun(ctx, tx, service.logger, run.orgID, run.id, now)
 	if err != nil {

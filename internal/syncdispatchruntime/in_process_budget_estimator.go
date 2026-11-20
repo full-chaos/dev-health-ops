@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -21,6 +22,15 @@ import (
 type InProcessBudgetEstimator struct {
 	loader syncbudget.Loader
 	logger *synclog.Logger
+	// now is the clock of a pass's hydration record (PreHydratePass); nil is time.Now.
+	now func() time.Time
+}
+
+func (estimator *InProcessBudgetEstimator) clock() time.Time {
+	if estimator.now == nil {
+		return time.Now()
+	}
+	return estimator.now()
 }
 
 // BudgetEstimatorDependencies are what the in-process estimator reads.

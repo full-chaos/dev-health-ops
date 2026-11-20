@@ -34,6 +34,7 @@ var (
 	MsgSyncTriggerRefusedUnnamedCaller                   = Msg{"sync_trigger.refused_unnamed_caller"}
 	MsgDispatchGuardBucketDecision                       = Msg{"dispatch_guard.bucket_decision"}
 	MsgDispatchSyncRunBudgetEstimateUnitFailed           = Msg{"dispatch_sync_run.budget_estimate_unit_failed"}
+	MsgDispatchSyncRunBudgetHydrationSkippedUnderLock    = Msg{"dispatch_sync_run.budget_hydration_skipped_under_lock"}
 	MsgDispatchSyncRunLockBusyRequeued                   = Msg{"dispatch_sync_run.lock_busy_requeued"}
 	MsgDispatchSyncRunMissing                            = Msg{"dispatch_sync_run.missing"}
 	MsgDispatchSyncRunDeliveryNotCurrent                 = Msg{"dispatch_sync_run.delivery_not_current"}

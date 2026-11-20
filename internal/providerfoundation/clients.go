@@ -318,6 +318,17 @@ func (a *PagerDutyClientCredentialsAuth) Apply(request *http.Request) error {
 	return nil
 }
 
+// ReusableUntil is the instant from which Apply exchanges for a new token instead of reusing the one it holds (the
+// token's expiry less a minute); the zero time before the first exchange.
+func (a *PagerDutyClientCredentialsAuth) ReusableUntil() time.Time {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.token.Configured() {
+		return time.Time{}
+	}
+	return a.expiresAt.Add(-time.Minute)
+}
+
 func (a *PagerDutyClientCredentialsAuth) accessToken(ctx context.Context) (secrets.Value, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

@@ -65,8 +65,8 @@ func (ctx passCutContext) Err() error {
 }
 
 // passCutTracer charges the cost of every per-item statement (matched by its
-// text) to the budget when it returns, and counts the statement named by
-// counted per first argument.
+// text) to the budget when it returns, and counts each successful run of the
+// statement named by counted per first argument.
 type passCutTracer struct {
 	mu      sync.Mutex
 	budget  *passCutBudget
@@ -81,7 +81,7 @@ func (tracer *passCutTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d
 	tracer.mu.Lock()
 	defer tracer.mu.Unlock()
 	if data.SQL == tracer.counted && len(data.Args) > 0 {
-		tracer.counts[fmt.Sprint(data.Args[0])]++
+		ctx = context.WithValue(ctx, passCutCountKey{}, fmt.Sprint(data.Args[0]))
 	}
 	if cost, charged := tracer.costs[data.SQL]; charged && tracer.budget != nil {
 		return context.WithValue(ctx, passCutCostKey{}, cost)
@@ -89,10 +89,15 @@ func (tracer *passCutTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d
 	return ctx
 }
 
+type passCutCountKey struct{}
+
 func (tracer *passCutTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
 	cost, charged := ctx.Value(passCutCostKey{}).(time.Duration)
 	tracer.mu.Lock()
 	budget := tracer.budget
+	if key, counted := ctx.Value(passCutCountKey{}).(string); counted && data.Err == nil {
+		tracer.counts[key]++
+	}
 	tracer.mu.Unlock()
 	if charged && budget != nil && data.Err == nil {
 		budget.spend(cost)
@@ -150,10 +155,10 @@ func seedExtraOrphan(t *testing.T, ctx context.Context, h *orphanHarness, now ti
 	return unitID
 }
 
-// CHAOS-14238 acp cell 1: a re-arm pass whose stage budget runs short after
-// item k commits items 1..k, the next tick continues from k+1, and no unit is
-// re-armed twice. Before the fix the pass ran on into the deadline and rolled
-// back every finished re-arm, so the same cut made no progress on any tick.
+// CHAOS-14238 acp cell 1: when the stage deadline is reached inside item k of
+// a re-arm pass, items 1..k-1 stay committed (each in its own transaction),
+// the next tick continues from k, and no unit is re-armed twice. On main the
+// pass rolled back every finished re-arm, so the same cut made no progress.
 func TestOrphanedUnitRearmCutByItsBudgetCommitsTheFinishedPrefix(t *testing.T) {
 	captured, restore := captureSlogRecords(t)
 	defer restore()
@@ -167,9 +172,9 @@ func TestOrphanedUnitRearmCutByItsBudgetCommitsTheFinishedPrefix(t *testing.T) {
 		units = append(units, seedExtraOrphan(t, ctx, h, now, index))
 	}
 
-	// Each item is three statements of 10 s/3 each; 45 s of budget lets
-	// item 4 start with 15 s left, which is under 2 x 10 s: the pass must stop
-	// after 3 items and commit them.
+	// Each item is three statements of 10 s/3 each and is committed on its
+	// own. 45 s of budget: items 1-4 commit, the deadline is reached inside
+	// item 5, which rolls back alone.
 	tracer := &passCutTracer{counted: insertReclaimRowSQL, counts: map[string]int{}, costs: map[string]time.Duration{
 		lockOrphanedUnitSQL:      10 * time.Second / 3,
 		readOrphanedSourceRowSQL: 10 * time.Second / 3,
@@ -181,23 +186,23 @@ func TestOrphanedUnitRearmCutByItsBudgetCommitsTheFinishedPrefix(t *testing.T) {
 	}
 
 	first, err := repair.Step(tracer.arm(newPassCutBudget(45*time.Second)), now, 10)
-	if err != nil {
-		t.Fatalf("tick 1: Step = %v, want the finished prefix committed", err)
+	if err == nil {
+		t.Fatal("tick 1: Step = nil, want the deadline inside item 5 reported")
 	}
-	if first.Found != 6 || first.ReArmed != 3 {
-		t.Fatalf("tick 1: found=%d re_armed=%d, want found=6 re_armed=3", first.Found, first.ReArmed)
+	if first.Found != 6 || first.ReArmed != 4 {
+		t.Fatalf("tick 1: found=%d re_armed=%d err=%v, want found=6 re_armed=4 (items 1-4 committed)", first.Found, first.ReArmed, err)
 	}
 	line, found := findSlogRecord(*captured, "syncreconciler.orphaned_unit_pass")
-	if !found || line["left"] != int64(3) || line["ran"] != true || line["failed_step"] != "" {
-		t.Fatalf("tick 1 pass line = %v, want left=3 ran=true failed_step=\"\"", line)
+	if !found || line["left"] != int64(2) || line["ran"] != false || line["failed_step"] != "insert_reclaim" {
+		t.Fatalf("tick 1 pass line = %v, want left=2 ran=false failed_step=insert_reclaim", line)
 	}
 
 	second, err := repair.Step(tracer.arm(newPassCutBudget(45*time.Second)), now.Add(time.Second), 10)
 	if err != nil {
 		t.Fatalf("tick 2: Step = %v", err)
 	}
-	if second.Found != 3 || second.ReArmed != 3 {
-		t.Fatalf("tick 2: found=%d re_armed=%d, want the 3 left over, all re-armed", second.Found, second.ReArmed)
+	if second.Found != 2 || second.ReArmed != 2 {
+		t.Fatalf("tick 2: found=%d re_armed=%d, want the 2 left over, all re-armed", second.Found, second.ReArmed)
 	}
 	third, err := repair.Step(tracer.arm(newPassCutBudget(45*time.Second)), now.Add(2*time.Second), 10)
 	if err != nil || third.Found != 0 {

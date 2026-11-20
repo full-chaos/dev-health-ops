@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -308,7 +309,22 @@ func escapeMarkdown(value, escapes string) string {
 		}
 		b.WriteRune(r)
 	}
-	return b.String()
+	return breakAutolinks(b.String())
+}
+
+// autolinkSchemes and autolinkWWW match the GFM literal autolinks (a scheme and "://", "www."); every "@" is escaped
+// without guessing what an e-mail address looks like.
+var (
+	autolinkSchemes = regexp.MustCompile(`(?i)(https?|ftp)://`)
+	autolinkWWW     = regexp.MustCompile(`(?i)www\.`)
+)
+
+// breakAutolinks puts a backslash before the character that lets a reader link a URL, a www host or an address. It runs
+// on text that is already escaped, so a value's own backslash is doubled first and never pairs with this one.
+func breakAutolinks(escaped string) string {
+	escaped = autolinkSchemes.ReplaceAllString(escaped, `$1\://`)
+	escaped = autolinkWWW.ReplaceAllStringFunc(escaped, func(m string) string { return m[:3] + `\.` })
+	return strings.ReplaceAll(escaped, "@", `\@`)
 }
 
 // markdownText writes free text into a heading, note or list line, edge space dropped (a reader drops it there and a
@@ -324,7 +340,7 @@ func markdownText(value string) string {
 		}
 		b.WriteRune(r)
 	}
-	return b.String()
+	return breakAutolinks(b.String())
 }
 
 func asciiAlnum(r rune) bool {

@@ -150,10 +150,12 @@ func TestRenderFreeTextShowsAsWritten(t *testing.T) {
 		"~~gone~~", "~x~", "&amp;", "&#35;", "&copy;", `a\*b`, `\`, `end\`, "# h", "## Provenance", "- a", "+ a", "1. a", "> q", "=== ", "---", "***",
 		"a_b_c", "snake_case_name", "_a", "a_", "a _ b", "a\nb", "a\r\nb", "a\rb", "x\n## Provenance\ny", " lead", "trail ", "|", "a | b",
 		"```", "~~~", "    code", "\ttab",
+		"https://example.com", "HTTPS://EXAMPLE.COM", "http://a.b/c", "ftp://a.b", "www.example.com", "WWW.EXAMPLE.COM", "a@b.co", "mailto:a@b.co",
+		"see https://x.co now", "a @ b", "@handle", "50% @ noon", "user@host", "x@", "https://", "www.", "a.b@c",
 	}
 	rng := rand.New(rand.NewSource(14274))
 	alphabet := []string{"\\", "`", "*", "_", "[", "]", "(", ")", "<", ">", "!", "|", "~", "&", "#", "-", "+", "=", ".", "/", ";", `"`, "'",
-		"a", "b", "x", "1", "2", " ", "\t", "\n", "\r", "&amp;", "<b>", "[a](b)", "![i](u)", "~~", "***", "`x`", "## Provenance", "_x_", "1. "}
+		"a", "b", "x", "1", "2", " ", "\t", "\n", "\r", "&amp;", "<b>", "[a](b)", "![i](u)", "~~", "***", "`x`", "## Provenance", "_x_", "1. ", "https://x.co", "HTTP://X.CO", "www.x.co", "WWW.X.CO", "ftp://x.co", "a@b.co", "mailto:", "@", ":", "/", "w", ".co"}
 	for len(values) < 1600 {
 		var b strings.Builder
 		for n := 1 + rng.Intn(10); n > 0; n-- {
@@ -267,6 +269,23 @@ func TestOtherChartsCollisionIgnoresEdgeSpace(t *testing.T) {
 		}
 		if n := strings.Count(markdown, "\n## Other Charts\n"); n != 1 {
 			t.Errorf("title %q: %d plain Other Charts headings, want 1 (the fallback):\n%s", title, n, markdown)
+		}
+	}
+}
+
+// A value that only looks like a URL, a host or an address (no GFM autolink would form) shows unchanged: the autolink
+// escape does not turn ordinary text into noise, and every "@" is escaped without guessing what an address looks like.
+func TestAutolinkEscapeKeepsOrdinaryTextAndEscapesEveryAt(t *testing.T) {
+	for value, want := range map[string]string{
+		"http": "http", "www": "www", "a.b": "a.b", "x://": "x://", "a:b": "a:b", "https:/x": "https:/x", "user at b.co": "user at b.co",
+		"w.w.w.x": "w.w.w.x", "https://x.co": `https\://x.co`, "HTTP://X.CO": `HTTP\://X.CO`, "ftp://a.b": `ftp\://a.b`,
+		"www.x.co": `www\.x.co`, "WWW.x": `WWW\.x`, "a@b.co": `a\@b.co`, "a @ b": `a \@ b`, "@": `\@`, `www\.x`: `www\\.x`, `\@`: `\\\@`,
+	} {
+		if got := markdownText(value); got != want {
+			t.Errorf("markdownText(%q) = %q, want %q", value, got, want)
+		}
+		if got := markdownTableCell(value); got != strings.ReplaceAll(want, "|", `\|`) {
+			t.Errorf("markdownTableCell(%q) = %q, want %q", value, got, want)
 		}
 	}
 }

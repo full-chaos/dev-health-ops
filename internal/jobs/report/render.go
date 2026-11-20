@@ -193,7 +193,7 @@ const otherChartsTitle = "Other Charts"
 func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, provenance []ProvenanceRecord) string {
 	window := "unspecified window"
 	if plan.TimeRangeStart != "" && plan.TimeRangeEnd != "" {
-		window = plan.TimeRangeStart + " → " + plan.TimeRangeEnd
+		window = markdownHeadingText(plan.TimeRangeStart) + " → " + markdownHeadingText(plan.TimeRangeEnd)
 	}
 	summary := "Available evidence appears limited for this summary."
 	for _, section := range narratives {
@@ -203,7 +203,7 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 		}
 	}
 	lines := []string{
-		"# " + titleCase(plan.ReportType) + " Report — " + window,
+		"# " + markdownHeadingText(titleCase(plan.ReportType)) + " Report — " + window,
 		"",
 		"## Summary",
 		summary,
@@ -218,7 +218,7 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 		if strings.EqualFold(strings.TrimRight(title, "# "), otherChartsTitle) {
 			title = otherChartsTitle + " (plan section)"
 		}
-		lines = append(lines, "## "+title, section.body, "", "### Insights",
+		lines = append(lines, "## "+markdownHeadingText(title), section.body, "", "### Insights",
 			"No grounded insights for this section.", "", "### Charts")
 		found := false
 		for index, chart := range charts {
@@ -245,6 +245,13 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 			lines = append(lines, renderChart(chart), "")
 		}
 	}
+	if len(plan.UnchartedMetrics) > 0 {
+		lines = append(lines, "## Requested Metrics Without a Chart")
+		for _, metric := range plan.UnchartedMetrics {
+			lines = append(lines, "- "+markdownTableCell(metric.Label)+": "+markdownHeadingText(metric.Reason))
+		}
+		lines = append(lines, "")
+	}
 	lines = append(lines, "## Provenance", "")
 	if len(provenance) == 0 {
 		lines = append(lines, "No provenance records available.")
@@ -258,28 +265,28 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 				metricName = "n/a"
 			}
 			lines = append(lines, fmt.Sprintf("- **%s:%s** — sources: %s; metrics: %s",
-				record.ArtifactType, record.ArtifactID, source, metricName))
+				markdownHeadingText(record.ArtifactType), markdownHeadingText(record.ArtifactID), markdownHeadingText(source), markdownHeadingText(metricName)))
 		}
 	}
 	scope := formatScope(plan)
 	generated := strings.TrimSuffix(plan.CreatedAt.UTC().Format(time.RFC3339), "Z") + "+00:00"
 	lines = append(lines, "", "---",
-		fmt.Sprintf("Generated at %s | Confidence: %s | Scope: %s", generated, plan.ConfidenceThreshold, scope))
+		fmt.Sprintf("Generated at %s | Confidence: %s | Scope: %s", generated, markdownHeadingText(plan.ConfidenceThreshold), scope))
 	return strings.TrimSpace(strings.Join(lines, "\n")) + "\n"
 }
 
 func renderChart(chart ChartResult) string {
 	if chart.NotApplicable != "" {
-		return "#### " + chart.Title + "\n\n_Not applicable: " + chart.NotApplicable + "_"
+		return "#### " + markdownHeadingText(chart.Title) + "\n\n_Not applicable: " + markdownHeadingText(chart.NotApplicable) + "_"
 	}
 	note := ""
 	if chart.Note != "" {
-		note = "\n\n_Note: " + chart.Note + "_"
+		note = "\n\n_Note: " + markdownHeadingText(chart.Note) + "_"
 	}
 	if len(chart.DataPoints) == 0 {
-		return "#### " + chart.Title + "\n\n_No data returned for this chart._" + note
+		return "#### " + markdownHeadingText(chart.Title) + "\n\n_No data returned for this chart._" + note
 	}
-	lines := []string{"#### " + chart.Title, "", "| x | y | group |", "| --- | ---: | --- |"}
+	lines := []string{"#### " + markdownHeadingText(chart.Title), "", "| x | y | group |", "| --- | ---: | --- |"}
 	for _, point := range chart.DataPoints {
 		lines = append(lines, fmt.Sprintf("| %s | %s | %s |",
 			markdownTableCell(point.X), strconv.FormatFloat(point.Y, 'f', -1, 64), markdownTableCell(point.Group)))
@@ -287,16 +294,16 @@ func renderChart(chart ChartResult) string {
 	return strings.Join(lines, "\n") + note
 }
 
-var markdownCellLineBreaks = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
+var markdownLineBreaks = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
 
-// markdownTableCell writes a label as one table cell that reads as the label:
-// a line break becomes a space, and each character that splits a cell or
-// starts inline Markdown gets a backslash escape.
-func markdownTableCell(value string) string {
-	value = markdownCellLineBreaks.Replace(value)
+// escapeMarkdown folds a line break to a space and puts a backslash before each character of escapes. A value
+// cannot start a block, a heading or a provenance split (a backslash and "#" are always in the set); inline Markdown
+// inside a value may render.
+func escapeMarkdown(value, escapes string) string {
+	value = markdownLineBreaks.Replace(value)
 	var b strings.Builder
 	for _, r := range value {
-		if strings.ContainsRune("\\|*_`[]<>~&", r) {
+		if strings.ContainsRune(escapes, r) {
 			b.WriteByte('\\')
 		}
 		b.WriteRune(r)
@@ -304,16 +311,23 @@ func markdownTableCell(value string) string {
 	return b.String()
 }
 
+// markdownHeadingText writes free text into a heading, note or list line.
+func markdownHeadingText(value string) string { return escapeMarkdown(value, "\\#") }
+
+// markdownTableCell writes a label as one table cell that reads as the label: each character that splits a cell,
+// starts inline Markdown or starts a heading gets a backslash escape.
+func markdownTableCell(value string) string { return escapeMarkdown(value, "\\|*_`[]<>~&#") }
+
 func formatScope(plan Plan) string {
 	parts := make([]string, 0, 3)
 	if len(plan.ScopeTeams) > 0 {
-		parts = append(parts, "teams="+strings.Join(plan.ScopeTeams, ", "))
+		parts = append(parts, "teams="+markdownHeadingText(strings.Join(plan.ScopeTeams, ", ")))
 	}
 	if len(plan.ScopeRepos) > 0 {
-		parts = append(parts, "repos="+strings.Join(plan.ScopeRepos, ", "))
+		parts = append(parts, "repos="+markdownHeadingText(strings.Join(plan.ScopeRepos, ", ")))
 	}
 	if len(plan.ScopeServices) > 0 {
-		parts = append(parts, "services="+strings.Join(plan.ScopeServices, ", "))
+		parts = append(parts, "services="+markdownHeadingText(strings.Join(plan.ScopeServices, ", ")))
 	}
 	if len(parts) == 0 {
 		return "global"

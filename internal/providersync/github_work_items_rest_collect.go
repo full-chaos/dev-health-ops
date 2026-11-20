@@ -144,6 +144,14 @@ type githubWorkItemsRESTListIssue struct {
 	PullRequest json.RawMessage `json:"pull_request"`
 }
 
+func decodeGitHubWorkItemsListIssue(raw json.RawMessage) (githubWorkItemsRESTListIssue, error) {
+	var listed githubWorkItemsRESTListIssue
+	if json.Unmarshal(raw, &listed) != nil {
+		return listed, providerfoundation.ErrNormalizationInvalid
+	}
+	return listed, nil
+}
+
 type githubWorkItemsRESTCountingDoer struct {
 	delegate providerfoundation.HTTPDoer
 	requests *int
@@ -336,8 +344,11 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 		return ErrPaginationCapExceeded
 	}
 	for _, raw := range issues {
-		var listed githubWorkItemsRESTListIssue
-		if json.Unmarshal(raw, &listed) != nil || listed.Number < 1 {
+		listed, err := decodeGitHubWorkItemsListIssue(raw)
+		if err != nil {
+			return providerfoundation.RouteFailure(githubIssuesRoute, providerfoundation.ReasonBodyDecode, err)
+		}
+		if listed.Number < 1 {
 			return providerfoundation.ErrNormalizationInvalid
 		}
 		if len(listed.PullRequest) != 0 && string(listed.PullRequest) != "null" {
@@ -448,9 +459,11 @@ func (collector GitHubWorkItemsRESTCollector) collectPullRequests(
 		); err != nil {
 			return err
 		}
-		var pull githubPullRequestWorkItemPayload
-		if json.Unmarshal(raw, &pull) != nil || pull.Number != number ||
-			strings.TrimSpace(pull.Title) == "" {
+		pull, err := decodeGitHubPullRequestWorkItem(raw)
+		if err != nil {
+			return providerfoundation.RouteFailure(githubPullRoute, providerfoundation.ReasonBodyDecode, err)
+		}
+		if pull.Number != number || strings.TrimSpace(pull.Title) == "" {
 			return providerfoundation.ErrNormalizationInvalid
 		}
 		createdAt := parseGitHubWorkItemTime(pull.CreatedAt)
@@ -732,8 +745,11 @@ func (collector GitHubWorkItemsRESTCollector) listIssuesByUpdate(
 		}
 		var lastUpdated *time.Time
 		for _, raw := range collected.Items {
-			var listed githubWorkItemsRESTListIssue
-			if json.Unmarshal(raw, &listed) != nil || listed.Number < 1 {
+			listed, err := decodeGitHubWorkItemsListIssue(raw)
+			if err != nil {
+				return issues, pages, tieGroups, stoppedAtWindowEnd, false, providerfoundation.RouteFailure(githubIssuesRoute, providerfoundation.ReasonBodyDecode, err)
+			}
+			if listed.Number < 1 {
 				return issues, pages, tieGroups, stoppedAtWindowEnd, false, providerfoundation.ErrNormalizationInvalid
 			}
 			if position, seen := index[listed.Number]; seen {

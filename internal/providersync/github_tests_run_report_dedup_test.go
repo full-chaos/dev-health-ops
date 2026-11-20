@@ -503,7 +503,39 @@ func assertLossKeptAsMismatch(t *testing.T, cell lossCell, artifacts []rowsArtif
 	}
 }
 
-// Exact-copy branch: the higher id equals the lower on identity, outcome and timing but holds data the lower does not.
+// markedCopy walks two copies and returns the id marked aggregate_mismatch; it fails unless exactly one is marked.
+func markedCopy(t *testing.T, first, second rowsArtifact) string {
+	t.Helper()
+	walk, _, _ := rowsWalk(t, 1, first, second)
+	causes := markerCauses(walk)
+	if len(causes) != 1 {
+		t.Fatalf("markers %v, want exactly one copy marked", causes)
+	}
+	for id, cause := range causes {
+		if cause == githubTestsAggregateMismatchCause {
+			return id
+		}
+	}
+	t.Fatalf("markers %v, want one aggregate_mismatch", causes)
+	return ""
+}
+
+// markedCopyByContent returns the id of the copy marked aggregate_mismatch, and fails unless the same copy CONTENT is marked when
+// the two ids are swapped: a copy family's representative is chosen by content, not by id (CHAOS-14045).
+func markedCopyByContent(t *testing.T, first, second rowsArtifact) string {
+	t.Helper()
+	marked := markedCopy(t, first, second)
+	swappedFirst, swappedSecond := first, second
+	swappedFirst.id, swappedSecond.id = second.id, first.id
+	if swapped := markedCopy(t, swappedFirst, swappedSecond); (marked == first.id) != (swapped == swappedFirst.id) {
+		t.Fatalf("marked %s, then %s with the ids swapped: the upload order chose the reported copy", marked, swapped)
+	}
+	return marked
+}
+
+// Exact-copy branch: the higher id equals the lower on identity, outcome and timing but holds data the lower does not. A copy that
+// differs in a stored field is kept with the other and the copy whose content sorts after is reported, whatever its id; a copy
+// that holds coverage rows is the representative, so the plain copy, which holds nothing it does not, is dropped in either order.
 func TestGitHubTestsRunReportsKeepACopyThatHoldsMoreData(t *testing.T) {
 	base := withDurations(part("c", 3, 90), "0.1")
 	for index := range base {
@@ -519,11 +551,20 @@ func TestGitHubTestsRunReportsKeepACopyThatHoldsMoreData(t *testing.T) {
 			}
 			low := rowsArtifact{id: "93", size: 10, body: body}
 			high := rowsArtifact{id: "94", size: 20, body: copied, extra: cell.extra}
-			wantRows := 2 * rowsOfSuites(base)
 			if cell.extra != nil {
-				wantRows++
+				for _, swap := range []bool{false, true} {
+					plain, covered := low, high
+					if swap {
+						plain.id, covered.id = covered.id, plain.id
+					}
+					assertGroupDecision(t, []rowsArtifact{plain, covered}, map[string]string{plain.id: githubTestsAggregateOfPartsCause})
+				}
+				if rows := rowsWalkCommitted(t, low, high); !cell.holds(rows) {
+					t.Fatalf("%s: the committed rows (%d suites, %d cases, %d coverage) lack the distinct data", cell.name, len(rows.suites), len(rows.cases), len(rows.coverage))
+				}
+				return
 			}
-			assertLossKeptAsMismatch(t, cell, []rowsArtifact{low, high}, wantRows, high.id)
+			assertLossKeptAsMismatch(t, cell, []rowsArtifact{low, high}, 2*rowsOfSuites(base), markedCopyByContent(t, low, high))
 		})
 	}
 }

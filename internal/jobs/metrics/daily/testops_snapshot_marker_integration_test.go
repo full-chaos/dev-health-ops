@@ -3,7 +3,7 @@
 package daily
 
 // The marker that retires a testops_test_metrics_daily (repository, day) carries the snapshot instant of the run that wrote it,
-// never a version raised above a stored row. Two runs of one repository-day can overlap (distinct generations are distinct
+// minus one second, never a version raised above a stored row. Two runs of one repository-day can overlap (distinct generations are distinct
 // runs and nothing serialises their execution), so the newest snapshot must win: an older run that finishes late retires
 // nothing a newer snapshot wrote, and an equal snapshot is a no-op. Real ClickHouse; merges are stopped so a count of stored
 // rows is the rows written.
@@ -93,7 +93,7 @@ func TestAnOlderRunFinishingLateNeverRetiresANewerSnapshotsRow(t *testing.T) {
 	}
 }
 
-// R2: an equal snapshot is a no-op; a stored row older than the snapshot is retired at exactly the snapshot (the control).
+// R2: an equal snapshot is a no-op; a stored row older than the snapshot is retired one second below the snapshot (the control).
 func TestAMarkerCarriesTheSnapshotInstantAndAnEqualSnapshotIsANoOp(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -108,14 +108,14 @@ func TestAMarkerCarriesTheSnapshotInstantAndAnEqualSnapshotIsANoOp(t *testing.T)
 		t.Fatalf("an equal snapshot wrote a marker: %+v, want a no-op", got)
 	}
 	got := snapshotRead(t, ctx, conn, older)
-	if got.markers != 1 || got.retracted != 1 || !got.newest.Equal(snapshotAt(10)) {
-		t.Fatalf("an older stored row was not retired at the snapshot: %+v, want a marker at %s", got, snapshotAt(10))
+	if got.markers != 1 || got.retracted != 1 || !got.newest.Equal(snapshotAt(9)) {
+		t.Fatalf("an older stored row was not retired below the snapshot: %+v, want a marker at %s", got, snapshotAt(9))
 	}
 }
 
 // R3: the finalizer of a whole-organization run. A repository that returns writes a newer live row after the finalizer's
 // live read (inside the membership read); the finalizer's marker must not outrank it. The control retires a row older than the
-// finalizer's snapshot at exactly that snapshot, and an equal snapshot is a no-op.
+// finalizer's snapshot one second below that snapshot, and an equal snapshot is a no-op.
 func TestTheOrganizationFinalizerNeverRetiresARowANewerSnapshotWrote(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -133,7 +133,7 @@ func TestTheOrganizationFinalizerNeverRetiresARowANewerSnapshotWrote(t *testing.
 	if got := snapshotRead(t, ctx, conn, returned); got.retracted != 0 || !got.newest.Equal(snapshotAt(20)) {
 		t.Fatalf("the finalizer retired a row a newer snapshot wrote: %+v, want the live row at %s newest", got, snapshotAt(20))
 	}
-	if got := snapshotRead(t, ctx, conn, gone); got.markers != 1 || got.retracted != 1 || !got.newest.Equal(snapshotAt(10)) {
+	if got := snapshotRead(t, ctx, conn, gone); got.markers != 1 || got.retracted != 1 || !got.newest.Equal(snapshotAt(9)) {
 		t.Fatalf("a gone repository was not retired at the finalizer's snapshot: %+v", got)
 	}
 	if got := snapshotRead(t, ctx, conn, equal); got.markers != 0 || got.retracted != 0 {

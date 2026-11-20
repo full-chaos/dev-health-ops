@@ -449,7 +449,6 @@ internal/providersync	client_ledger_census_test.go	internal/providersync	dir	*
 internal/providersync	github_repo_identity_census_test.go	internal/providersync	dir	*
 internal/providersync	gitlab_repo_identity_census_test.go	internal/providersync	dir	*
 internal/providersync	ingested_at_writer_enumeration_test.go	internal	tree	*
-internal/providersync	item_route_census_test.go	internal/providersync	dir	*
 internal/providersync	jira_search_endpoint_guard_test.go	internal/providersync	dir	*
 internal/providersync	log_sites_redaction_test.go	internal/providersync	dir	*
 internal/providersync	oracle_golden_inventory_test.go	internal/providersync	dir	*
@@ -470,6 +469,8 @@ internal/providersync	team_absence_test.go	internal/providersync	dir	*
 internal/providersync	team_id_carry_seam_test.go	cmd	tree	*.go
 internal/providersync	team_id_carry_seam_test.go	internal	tree	*.go
 internal/providersync	team_membership_first_seen_test.go	.	tree	*.go
+internal/providersync	team_repo_ownership_evidence_census_test.go	cmd	tree	*.go
+internal/providersync	team_repo_ownership_evidence_census_test.go	internal	tree	*.go
 internal/providersync	watermark_write_boundary_test.go	internal/providersync	dir	*
 internal/pythonparity	errorsanitize_callers_test.go	unexpressed	-	*.go
 internal/pythonparity	goldenpayload_registry_test.go	internal/pythonparity	dir	*

@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -330,6 +331,8 @@ type GitHubTestsRouteHandler struct {
 	// RefreshLookback is how far before the window the runs phase lists; zero
 	// keeps githubTestsRefreshLookbackDefault.
 	RefreshLookback time.Duration
+	// MaxWalkRecords lowers githubTestsMaxWalkRecords when positive; zero keeps it.
+	MaxWalkRecords int
 }
 
 func (handler GitHubTestsRouteHandler) Collect(
@@ -410,11 +413,9 @@ func (handler GitHubTestsRouteHandler) Collect(
 	requests, pages := 1+runListPages+artifactListPages, runListPages+artifactListPages
 	policyCache := map[string]githubTestsPolicy{}
 	for _, raw := range runItems {
-		var run gitHubWorkflowRunPayload
-		decoder := json.NewDecoder(strings.NewReader(string(raw)))
-		decoder.UseNumber()
-		if decoder.Decode(&run) != nil {
-			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+		run, err := decodeGitHubWorkflowRun(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
 		if !include || !githubTestsRunWanted(run, pipeline, claim) {
@@ -442,11 +443,9 @@ func (handler GitHubTestsRouteHandler) Collect(
 		}
 		runJobs := make([]githubTestsJobRow, 0, len(jobPage.Items))
 		for _, jobRaw := range jobPage.Items {
-			var job githubTestsJobPayload
-			decoder := json.NewDecoder(strings.NewReader(string(jobRaw)))
-			decoder.UseNumber()
-			if decoder.Decode(&job) != nil {
-				return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+			job, err := decodeGitHubTestsJob(jobRaw)
+			if err != nil {
+				return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubRunJobsRoute, providerfoundation.ReasonBodyDecode, err)
 			}
 			row, ok := normalizeGitHubTestsJob(claim, repoID, pipeline.RunID, pipeline.RetryCount, job, normalizedAt)
 			if ok {
@@ -474,11 +473,9 @@ func (handler GitHubTestsRouteHandler) Collect(
 		)...)
 	}
 	for _, raw := range artifactRunItems {
-		var run gitHubWorkflowRunPayload
-		decoder := json.NewDecoder(strings.NewReader(string(raw)))
-		decoder.UseNumber()
-		if decoder.Decode(&run) != nil {
-			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+		run, err := decodeGitHubWorkflowRun(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
 		if !include || !githubTestsRunReadable(run) || githubTestsReportRunOutsideWindow(pipeline, claim) {
@@ -502,10 +499,11 @@ func (handler GitHubTestsRouteHandler) Collect(
 		// here rather than treating the refusal as intended behavior.
 		artifacts := make([]githubTestsArtifactPayload, 0, len(artPage.Items))
 		for _, artifactRaw := range artPage.Items {
-			var artifact githubTestsArtifactPayload
-			decoder := json.NewDecoder(strings.NewReader(string(artifactRaw)))
-			decoder.UseNumber()
-			if decoder.Decode(&artifact) != nil || artifact.ID == "" {
+			artifact, err := decodeGitHubTestsArtifact(artifactRaw)
+			if err != nil {
+				return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubRunArtifactsRoute, providerfoundation.ReasonBodyDecode, err)
+			}
+			if artifact.ID == "" {
 				return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 			}
 			if selected, _ := githubTestsArtifactSelectionSeam(artifact.Name); !selected {
@@ -749,8 +747,19 @@ func githubTestsArtifactRunQuery(claim Claim) url.Values {
 // the claim's own cadence (the only figure this route actually knows) rather
 // than a fixed duration picked from a small sample.
 //
-// Both bounds fail open: a claim missing either edge (a backfill, or a still
-// -open forward claim) filters nothing on that edge, and a run with no
+// A backfill unit takes one look. Its chunks run in unit-id order, not time
+// order, so the next chunk's look is no later look; it only read the previous
+// chunk's reports again. It reads a run whose last-updated time is at or after
+// since and either before its before, or later but created before the next
+// chunk's listing floor (the next chunk cannot list that run), or later and
+// the chunk is the backfill's last. The next chunk is the real one the claim
+// carries (BackfillNext, CHAOS-14222); a claim without it guesses a next chunk
+// of its own width. So each run is read by one chunk: the one its last-updated
+// time falls in, or the last chunk that lists it. The last chunk's set stays
+// bounded by its listing: runs created from its floor to its before.
+//
+// The claim edges fail open: a claim missing either edge (an open-start or a
+// still-open claim) filters nothing on that edge, and a run with no
 // last-updated time is never excluded -- a run we cannot date is a run we
 // must not silently drop.
 func githubTestsReportRunOutsideWindow(pipeline githubTestsPipelineRow, claim Claim) bool {
@@ -765,7 +774,32 @@ func githubTestsReportRunOutsideWindow(pipeline githubTestsPipelineRow, claim Cl
 	if width <= 0 {
 		return false
 	}
-	return pipeline.FinishedAt.UTC().Before(since.Add(-width))
+	finished := pipeline.FinishedAt.UTC()
+	if claim.Mode == "backfill" {
+		return finished.Before(since) || !githubTestsBackfillReadsLaterRun(pipeline, claim, finished)
+	}
+	return finished.Before(since.Add(-width))
+}
+
+func githubTestsBackfillReadsLaterRun(pipeline githubTestsPipelineRow, claim Claim, finished time.Time) bool {
+	before := claim.BeforeAt.UTC()
+	if finished.Before(before) || pipeline.QueuedAt == nil {
+		return true
+	}
+	next := claim
+	nextBefore := before.Add(before.Sub(claim.SinceAt.UTC()))
+	if claim.BackfillNext != nil {
+		if claim.BackfillNext.BeforeAt == nil {
+			return true
+		}
+		nextBefore = claim.BackfillNext.BeforeAt.UTC()
+	}
+	next.SinceAt, next.BeforeAt = &before, &nextBefore
+	nextFloor, err := time.Parse(time.DateOnly, githubTestsArtifactRunsCreatedFrom(next))
+	if err != nil {
+		return true
+	}
+	return pipeline.QueuedAt.UTC().Before(nextFloor)
 }
 
 // githubTestsRunReadable: a run's report artifacts are read only once the run
@@ -1118,3 +1152,33 @@ func logGitHubTestsRangeOutcome(artifactID string, size, capBytes int64, outcome
 }
 
 var _ CompleteRouteHandler = GitHubTestsRouteHandler{}
+
+func decodeGitHubWorkflowRun(raw json.RawMessage) (gitHubWorkflowRunPayload, error) {
+	var run gitHubWorkflowRunPayload
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&run) != nil {
+		return run, providerfoundation.ErrNormalizationInvalid
+	}
+	return run, nil
+}
+
+func decodeGitHubTestsJob(raw json.RawMessage) (githubTestsJobPayload, error) {
+	var job githubTestsJobPayload
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&job) != nil {
+		return job, providerfoundation.ErrNormalizationInvalid
+	}
+	return job, nil
+}
+
+func decodeGitHubTestsArtifact(raw json.RawMessage) (githubTestsArtifactPayload, error) {
+	var artifact githubTestsArtifactPayload
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&artifact) != nil {
+		return artifact, providerfoundation.ErrNormalizationInvalid
+	}
+	return artifact, nil
+}

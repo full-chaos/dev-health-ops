@@ -57,7 +57,7 @@ func splitRow(row string) []string {
 func TestRenderChartEscapesLabelCells(t *testing.T) {
 	labels := []string{
 		"billing | checkout", "line one\nline two", "a\r\nb", "*old*", "_old_", "`code`",
-		"[link](https://example.invalid)", "<b>bold</b>", `back\slash`, `a\*b`, "~~gone~~", "a & b", "plain-label/path.1",
+		"[link](https://example.invalid)", "<b>bold</b>", `back\slash`, `a\*b`, "~~gone~~", "a & b", "a # b", "## Provenance", "### Provenance", "plain-label/path.1",
 	}
 	for _, label := range labels {
 		t.Run(label, func(t *testing.T) {
@@ -82,7 +82,7 @@ func TestRenderChartEscapesLabelCells(t *testing.T) {
 						j++
 						continue
 					}
-					if strings.IndexByte("*_`[]<>~&", cell[j]) >= 0 {
+					if strings.IndexByte("*_`[]<>~&#", cell[j]) >= 0 {
 						t.Errorf("cell %d %q has an unescaped %q", i, cell, cell[j])
 					}
 				}

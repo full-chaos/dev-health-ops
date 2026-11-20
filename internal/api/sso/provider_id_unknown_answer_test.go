@@ -14,21 +14,19 @@ import (
 )
 
 // signInRoute is one of the three sign-in routes that read a provider id from the path, with a body that passes its
-// checks, a body that fails them (empty for the GET), and the route's own unknown-id answer.
+// checks and a body that fails them (empty for the GET).
 type signInRoute struct {
-	name, method, pattern, verb, goodBody, badBody, notFound string
+	name, method, pattern, verb, goodBody, badBody string
 }
 
 var signInRoutes = []signInRoute{
-	{"oauth callback", http.MethodPost, "/api/v1/auth/oauth/{first}/{second}", "callback", `{"code":"c","state":"s"}`, `{}`,
-		`{"detail":"OAuth provider not found"}`},
-	{"oidc authorize", http.MethodPost, "/api/v1/auth/oidc/{provider_id}/authorize", "authorize", `{}`, `{"use_pkce":"sometimes"}`,
-		`{"detail":"SSO provider not found"}`},
+	{"oauth callback", http.MethodPost, "/api/v1/auth/oauth/{first}/{second}", "callback", `{"code":"c","state":"s"}`, `{}`},
+	{"oidc authorize", http.MethodPost, "/api/v1/auth/oidc/{provider_id}/authorize", "authorize", `{}`, `{"use_pkce":"sometimes"}`},
 	{"oidc callback", http.MethodPost, "/api/v1/auth/oidc/{provider_id}/callback", "callback", `{"code":"c","state":"s"}`,
-		`{"code_verifier":1}`, `{"detail":"SSO provider not found"}`},
+		`{"code_verifier":1}`},
 }
 
-// serve sends id to the mounted route with the real sign-in handlers on. The pool is zero: a request that reaches the
+// serve sends id to the mounted route with sign-in configured and no forward. The pool is zero: a request that reaches the
 // database panics.
 func (route signInRoute) serve(t *testing.T, id, body string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -59,30 +57,21 @@ func (route signInRoute) serve(t *testing.T, id, body string) *httptest.Response
 	return recorder
 }
 
-// reachesDatabase reports whether the request went on to the (zero) pool.
-func (route signInRoute) reachesDatabase(t *testing.T, id string) bool {
-	t.Helper()
-	reached := false
-	func() {
-		defer func() { reached = recover() != nil }()
-		route.serve(t, id, route.goodBody)
-	}()
-	return reached
-}
-
 const knownProviderID = "00000000-0000-4000-8000-000000000001"
 
-// A provider id uuid.UUID() refuses answers the route's own unknown-id answer, byte for byte, and the database is never
-// reached.
-func TestSignInRoutesAnswerAMalformedProviderIDAsUnknown(t *testing.T) {
+// With the OIDC forward off, every provider id (malformed, or a form uuid.UUID() takes) answers 503 config_missing naming
+// AUTH_PROXY_OIDC, and the database is never reached (a zero pool would panic): go-api has no own OIDC or OAuth sign-in
+// (CHAOS-14131).
+func TestSignInRoutesWithTheForwardOffAnswerConfigMissingForAnyProviderID(t *testing.T) {
+	want := httptest.NewRecorder()
+	policy.WriteConfigMissing(want, "AUTH_PROXY_OIDC")
 	for _, route := range signInRoutes {
-		for _, id := range []string{"not-a-uuid", "providers", "00000000-0000-4000-8000-00000000000g"} {
+		for _, id := range []string{"not-a-uuid", "providers", "00000000-0000-4000-8000-00000000000g", knownProviderID,
+			"{" + knownProviderID + "}", "urn:uuid:" + knownProviderID, strings.ReplaceAll(knownProviderID, "-", "")} {
 			t.Run(route.name+"/"+id, func(t *testing.T) {
 				recorder := route.serve(t, id, route.goodBody)
-				if recorder.Code != http.StatusNotFound || recorder.Body.String() != route.notFound ||
-					recorder.Header().Get("Content-Type") != "application/json" {
-					t.Fatalf("got %d %q %s, want 404 application/json %s", recorder.Code,
-						recorder.Header().Get("Content-Type"), recorder.Body.String(), route.notFound)
+				if recorder.Code != want.Code || recorder.Body.String() != want.Body.String() {
+					t.Fatalf("got %d %s, want %d %s", recorder.Code, recorder.Body.String(), want.Code, want.Body.String())
 				}
 			})
 		}
@@ -105,19 +94,5 @@ func TestSignInRoutesCheckTheBodyBeforeAMalformedProviderID(t *testing.T) {
 					malformed.Body.String(), valid.Code, valid.Header(), valid.Body.String())
 			}
 		})
-	}
-}
-
-// A valid provider id, and each form uuid.UUID() also takes, goes on to the database (control).
-func TestSignInRoutesGoOnWithAValidProviderID(t *testing.T) {
-	for _, route := range signInRoutes {
-		for _, id := range []string{knownProviderID, "{" + knownProviderID + "}", "urn:uuid:" + knownProviderID,
-			strings.ReplaceAll(knownProviderID, "-", "")} {
-			t.Run(route.name+"/"+id, func(t *testing.T) {
-				if !route.reachesDatabase(t, id) {
-					t.Fatal("refused a provider id uuid.UUID() takes before the database")
-				}
-			})
-		}
 	}
 }

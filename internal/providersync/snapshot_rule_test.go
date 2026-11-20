@@ -240,12 +240,19 @@ func TestEveryFactKindClosesOnlyOnItsOwnProofAndItsOwnRows(t *testing.T) {
 	runSingleKindCase(t, teams)
 
 	for name := range snapshotKindCensus {
+		if _, outside := snapshotKindsOutsideTheRule[name]; outside {
+			if covered[name] {
+				t.Errorf("the fact kind %q is driven through the rule and named outside it", name)
+			}
+			continue
+		}
 		if !covered[name] {
 			t.Errorf("the fact kind %q is in the census and not in this matrix: every kind is driven through the rule", name)
 		}
 	}
-	if len(covered) != len(snapshotKindCensus) {
-		t.Errorf("the matrix covers %d kinds and the census names %d", len(covered), len(snapshotKindCensus))
+	if len(covered)+len(snapshotKindsOutsideTheRule) != len(snapshotKindCensus) {
+		t.Errorf("the matrix covers %d kinds, %d are outside the rule, and the census names %d",
+			len(covered), len(snapshotKindsOutsideTheRule), len(snapshotKindCensus))
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -40,7 +41,7 @@ func purposeParam(w http.ResponseWriter, raw string, present bool) (purpose llmo
 
 // llmPurposeObject is one override as the API reports it, the api_key masked;
 // nil when the purpose has no override.
-func (h *handlers) llmPurposeObject(ctx context.Context, db pgExecer, orgID string, purpose llmorgsettings.Purpose) (*pyjson.Object, error) {
+func (h *handlers) llmPurposeObject(ctx context.Context, db pgExecer, orgID string, purpose llmorgsettings.Purpose, maskKeys []string) (*pyjson.Object, error) {
 	values := map[string]*string{}
 	var unreadable []string
 	for _, field := range llmorgsettings.Fields {
@@ -71,17 +72,17 @@ func (h *handlers) llmPurposeObject(ctx context.Context, db pgExecer, orgID stri
 		}
 	}
 	if values["base_url"] != nil {
-		out.Set("base_url", *values["base_url"])
+		setMaskedBaseURL(out, *values["base_url"], maskKeys)
 	}
 	return out, nil
 }
 
 // llmPurposesObject maps each purpose with an override to it; nil when none.
-func (h *handlers) llmPurposesObject(ctx context.Context, db pgExecer, orgID string) (*pyjson.Object, error) {
+func (h *handlers) llmPurposesObject(ctx context.Context, db pgExecer, orgID string, maskKeys []string) (*pyjson.Object, error) {
 	var out *pyjson.Object
 	var unreadable []string
 	for _, purpose := range llmorgsettings.Purposes {
-		item, err := h.llmPurposeObject(ctx, db, orgID, purpose)
+		item, err := h.llmPurposeObject(ctx, db, orgID, purpose, maskKeys)
 		if collectUndecryptable(err, &unreadable) {
 			continue
 		}
@@ -107,7 +108,12 @@ func (h *handlers) getLLMPurpose(w http.ResponseWriter, r *http.Request, orgID s
 	if !h.requireBYOLLMAccess(ctx, w, orgID, false) {
 		return
 	}
-	out, err := h.llmPurposeObject(ctx, h.store.Pool, orgID, purpose)
+	maskKeys, err := h.llmMaskKeys(ctx, h.store.Pool, orgID)
+	if err != nil {
+		h.byoReadFailed(ctx, w, "read llm purpose override", err)
+		return
+	}
+	out, err := h.llmPurposeObject(ctx, h.store.Pool, orgID, purpose, maskKeys)
 	if err != nil {
 		h.byoReadFailed(ctx, w, "read llm purpose override", err)
 		return
@@ -136,41 +142,28 @@ func (in llmPurposeUpsert) decisionRefusal() *llmRefusal {
 	return decisionProviderRefusal(in.provider, in.purpose, true, in.model, in.baseURL, in.baseURLKey)
 }
 
-func (h *handlers) applyLLMPurpose(ctx context.Context, orgID string, in llmPurposeUpsert) (*pyjson.Object, *llmRefusal, error) {
+// applyLLMPurpose is applyLLMSettings for one purpose override, keyed the same
+// way by the parsed org id.
+func (h *handlers) applyLLMPurpose(ctx context.Context, org uuid.UUID, in llmPurposeUpsert) (*pyjson.Object, *llmRefusal, error) {
+	orgID := org.String()
 	if refusal := in.decisionRefusal(); refusal != nil {
 		return nil, refusal, nil
 	}
+	origBaseURL := in.baseURL
+	sentBaseURL, refused, err := h.resolveBaseURL(ctx, nil, orgID, in.purpose, in.baseURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	if refused {
+		return nil, maskedBaseURLRefusal(), nil
+	}
+	in.baseURL = sentBaseURL
 	baseURLText := ""
 	if in.baseURL != nil {
 		baseURLText = *in.baseURL
 	}
-	var keys []string
-	if in.apiKey != nil {
-		keys = append(keys, *in.apiKey)
-	}
-	if baseURLText != "" {
-		stored, err := readableStoredKey(h.storedLLMKey(ctx, orgID))
-		if err != nil {
-			return nil, nil, &llmStepError{"read stored llm key", err}
-		}
-		storedPurpose, err := readableStoredKey(h.storedPurposeAPIKey(ctx, orgID, in.purpose))
-		if err != nil {
-			return nil, nil, &llmStepError{"read stored llm purpose key", err}
-		}
-		keys = append(keys, stored, storedPurpose)
-	}
-	valid, reason, keyHit, splitErr := h.checkBaseURL(ctx, baseURLText, keys...)
-	if keyHit {
-		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", llmorgsettings.BaseURLKeyRefusal), nil
-	}
-	if splitErr != nil {
-		return nil, nil, &llmStepError{"validate base url", splitErr}
-	}
-	if !valid {
-		if reason == "" {
-			reason = "Invalid LLM base_url"
-		}
-		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", reason), nil
+	if refusal, err := h.saveKeyRefusal(ctx, h.store.Pool, orgID, in.purpose, in.apiKey, in.baseURL, true); refusal != nil || err != nil {
+		return nil, refusal, err
 	}
 	tx, err := h.store.Pool.Begin(ctx)
 	if err != nil {
@@ -182,6 +175,27 @@ func (h *handlers) applyLLMPurpose(ctx context.Context, orgID string, in llmPurp
 			_ = tx.Rollback(context.WithoutCancel(ctx))
 		}
 	}()
+	// Under the org's save lock the key checks run again on the transaction: a
+	// save of another scope that passed its checks before this one committed is
+	// seen here, so two saves never each store a url carrying the other's key.
+	if refusal, err := h.lockLLMSettingsSave(ctx, tx, org, in.purpose); refusal != nil || err != nil {
+		return nil, refusal, err
+	}
+	inTx, refused, err := h.resolveBaseURL(ctx, tx, orgID, in.purpose, origBaseURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	if refused || !sameBaseURL(inTx, in.baseURL) {
+		return nil, maskedBaseURLRefusal(), nil
+	}
+	// From here the save checks and writes the base_url as read under the lock.
+	in.baseURL, baseURLText = inTx, ""
+	if inTx != nil {
+		baseURLText = *inTx
+	}
+	if refusal, err := h.saveKeyRefusal(ctx, tx, orgID, in.purpose, in.apiKey, in.baseURL, false); refusal != nil || err != nil {
+		return nil, refusal, err
+	}
 	set := func(field string, value *string, encrypt bool, description string) error {
 		_, err := h.upsertSetting(ctx, tx, orgID, llmCategory, llmorgsettings.PurposeKey(in.purpose, field), value, encrypt, &description)
 		return err
@@ -220,7 +234,11 @@ func (h *handlers) applyLLMPurpose(ctx context.Context, orgID string, in llmPurp
 			return nil, nil, &llmStepError{"write categorize opt-in", err}
 		}
 	}
-	out, err := h.llmPurposeObject(ctx, tx, orgID, in.purpose)
+	maskKeys, err := h.llmMaskKeys(ctx, tx, orgID)
+	if err != nil {
+		return nil, nil, &llmStepError{"build llm purpose response", err}
+	}
+	out, err := h.llmPurposeObject(ctx, tx, orgID, in.purpose, maskKeys)
 	if err != nil {
 		return nil, nil, &llmStepError{"build llm purpose response", err}
 	}
@@ -231,12 +249,13 @@ func (h *handlers) applyLLMPurpose(ctx context.Context, orgID string, in llmPurp
 	return out, nil, nil
 }
 
-// storedPurposeAPIKey is the decrypted api_key of one purpose override, "" when it has none.
-func (h *handlers) storedPurposeAPIKey(ctx context.Context, orgID string, purpose llmorgsettings.Purpose) (string, error) {
+// storedPurposeAPIKeyOn is the decrypted api_key of one purpose override over
+// db, "" when it has none.
+func (h *handlers) storedPurposeAPIKeyOn(ctx context.Context, db pgExecer, orgID string, purpose llmorgsettings.Purpose) (string, error) {
 	if h.storedPurposeKey != nil {
 		return h.storedPurposeKey(ctx, orgID, purpose)
 	}
-	key, err := h.scopeKey(ctx, h.store.Pool, orgID, purpose, false, true)
+	key, err := h.scopeKey(ctx, db, orgID, purpose, false, true)
 	return key.ForChecks(), err
 }
 

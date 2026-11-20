@@ -138,7 +138,6 @@ internal/auth/httpapi	transport_error_contract_test.go
 internal/auth/identity	externalkey_test.go
 internal/auth/identity	placeholder_copies_test.go
 internal/auth/identity	sp_callsite_ast_test.go
-internal/auth/identity/oidc	oauth_denial_stages_test.go
 internal/auth/keyrotation	rotation_integration_test.go
 internal/auth/keystore	keystore_test.go
 internal/auth/keystore	open_unix.go
@@ -437,6 +436,7 @@ internal/gqlgenguard	testsupport_test.go
 internal/httpguard	origin_census_test.go
 internal/httpguard	redirect_sites_test.go
 internal/identityalias	resolver.go
+internal/ingressplanes	compose_bigboy_clickhouse_probe_test.go
 internal/ingressplanes	compose_bigboy_system_logs_test.go
 internal/ingressplanes	compose_stack_test.go
 internal/ingressplanes	compose_system_logs_test.go
@@ -521,7 +521,6 @@ internal/providerfoundation	clients.go
 internal/providerfoundation	wire_sites_census_test.go
 internal/providersync	client_ledger_census_test.go
 internal/providersync	gitlab_pr_commit_links_integration_test.go
-internal/providersync	item_route_census_test.go
 internal/providersync	jira_search_endpoint_guard_test.go
 internal/providersync	log_sites_redaction_test.go
 internal/providersync	oracle_compare_test.go
@@ -536,6 +535,7 @@ internal/providersync	snapshot_walk_end_rule_test.go
 internal/providersync	status_mapping.go
 internal/providersync	team_id_carry_seam_test.go
 internal/providersync	team_membership_first_seen_test.go
+internal/providersync	team_repo_ownership_evidence_census_test.go
 internal/providersync	watermark_write_boundary_test.go
 internal/pushcli	validate.go
 internal/pythonparity	errorsanitize_callers_test.go
@@ -612,6 +612,7 @@ internal/queryapi/server	query_route_name_fields_legacy_test.go
 internal/queryapi/server	query_route_operating_review_no_data_test.go
 internal/queryapi/server	query_route_review_edges_names_test.go
 internal/queryapi/server	query_route_testops_filteremptyreason_documents_test.go
+internal/queryapi/server	query_route_testops_report_completeness_documents_test.go
 internal/queryapi/server	query_route_testops_risk_partial_documents_test.go
 internal/queryapi/server	query_route_testops_scope_documents_test.go
 internal/queryapi/server	query_route_wire_capture_test.go
@@ -649,6 +650,7 @@ internal/signingkey	jwks_key_test.go
 internal/signingkey	keygen.go
 internal/signingkey	keygen_state_test.go
 internal/signingkey	keygen_test.go
+internal/storage/clickhouse	batchctx_test.go
 internal/storage/clickhouse	worker_posture_test.go
 internal/storage/clickhouse/liverow	census_test.go
 internal/storage/postgres	api_authorization_platform_roles_test.go

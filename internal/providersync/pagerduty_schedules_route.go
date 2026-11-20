@@ -136,7 +136,7 @@ func (handler PagerDutySchedulesRouteHandler) Collect(
 	counted.Doer = pagerDutySchedulesCountingDoer{delegate: client.Doer, attempts: &requests}
 	pages, err := providerfoundation.CollectPagerDutyOffsetPages(
 		ctx, &counted, providerfoundation.PagerDutyOffsetOptions{
-			Path: "/schedules", Route: "/schedules", DataKey: "schedules", PerPage: perPage, MaxPages: maxPages,
+			Path: "/schedules", Route: pagerDutySchedulesRoute, DataKey: "schedules", PerPage: perPage, MaxPages: maxPages,
 		},
 	)
 	if err != nil {
@@ -147,9 +147,9 @@ func (handler PagerDutySchedulesRouteHandler) Collect(
 	}
 	rows := make([]pagerDutyScheduleRow, 0, len(pages.Items))
 	for _, raw := range pages.Items {
-		var payload pagerDutySchedulePayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+		payload, err := decodePagerDutyScheduleItem(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(pagerDutySchedulesRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		row, err := normalizePagerDutySchedule(claim, providerInstance, payload, normalizedAt)
 		if err != nil {
@@ -290,3 +290,14 @@ func pagerDutyScheduleTombstone(
 }
 
 var _ CompleteRouteHandler = PagerDutySchedulesRouteHandler{}
+
+// pagerDutySchedulesRoute is the route template of the /schedules list.
+const pagerDutySchedulesRoute = "/schedules"
+
+func decodePagerDutyScheduleItem(raw json.RawMessage) (pagerDutySchedulePayload, error) {
+	var payload pagerDutySchedulePayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
+}

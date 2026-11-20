@@ -87,6 +87,7 @@ type Unit struct {
 	Mode                  string
 	SinceAt               *time.Time
 	BeforeAt              *time.Time
+	BackfillNext          *BackfillNextWindow
 	ProcessorFlags        map[string]bool
 	DatasetOptions        map[string]any
 	Result                map[string]any
@@ -145,6 +146,14 @@ func (unit Unit) TenantScope() providerfoundation.TenantScope {
 		IntegrationID: unit.IntegrationID,
 		CredentialID:  unit.CredentialID,
 	}
+}
+
+// BackfillNextWindow is the planner's next chunk of a backfill unit, read from
+// the sibling unit row at claim time: [unit before_at, BeforeAt). BeforeAt nil =
+// the unit is the last chunk. A nil *BackfillNextWindow on a Unit = tiling not
+// known (in-process runs, old claims): the read rule keeps its same-width guess.
+type BackfillNextWindow struct {
+	BeforeAt *time.Time
 }
 
 type Claim struct {

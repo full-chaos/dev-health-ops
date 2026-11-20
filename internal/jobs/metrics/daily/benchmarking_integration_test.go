@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/benchmarking"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -40,6 +41,18 @@ var benchmarkingSchema = []string{
     id UUID, org_id String, repo String, settings String, provider String,
     last_synced DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
+}
+
+// benchmarkingInputTables are the tables the live input read of the family
+// counts; a missing one fails the run, where a missing table of a series read
+// is only a swallowed fetch failure.
+func benchmarkingInputTables(t *testing.T) []string {
+	t.Helper()
+	tables, err := benchmarking.InputTables(benchmarking.DefaultBenchmarkMetrics, benchmarking.DefaultCorrelationPairs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tables
 }
 
 // TestBenchmarkingFinalizeRunsOnlyAfterEveryPartitionSucceeded is CHAOS-5194's
@@ -85,7 +98,7 @@ func TestBenchmarkingFinalizeRunsOnlyAfterEveryPartitionSucceeded(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	chschema.CreateTables(ctx, t, conn, append([]string{"testops_pipeline_metrics_daily"}, benchmarkingWriteOrder...)...)
+	chschema.CreateTables(ctx, t, conn, append(benchmarkingInputTables(t), benchmarkingWriteOrder...)...)
 
 	repos := seedBenchmarkingOrg(t, ctx, conn)
 	run := benchmarkingRun("run-race", repos)
@@ -330,7 +343,7 @@ func TestBenchmarkingPartialWriteIsReportedWithItsTrueRowCount(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	chschema.CreateTables(ctx, t, conn, append([]string{"testops_pipeline_metrics_daily"}, benchmarkingWriteOrder...)...)
+	chschema.CreateTables(ctx, t, conn, append(benchmarkingInputTables(t), benchmarkingWriteOrder...)...)
 
 	repos := seedBenchmarkingOrg(t, ctx, conn)
 	// All-succeeded fake Store: this test's job is the partial-write/

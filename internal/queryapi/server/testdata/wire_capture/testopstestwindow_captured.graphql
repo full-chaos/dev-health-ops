@@ -20,6 +20,13 @@ query TestOpsTestWindow($orgId: String!, $input: TestOpsTestWindowInput!) {
     failureRatePct
     flakeRatePct
     filterEmptyReason
+    reportCompleteness {
+      reportRuns
+      partialRuns
+      unmarkedRuns
+      unmeasuredDays
+      __typename
+    }
     __typename
   }
 }

@@ -466,11 +466,16 @@
   },
   {
     "operation": "testopsTestWindow",
-    "digest": "614e1da8cdd06f40b68d5c57011462c5b3a8c2dbffa465ed95bc98d782389354"
+    "digest": "2f4f9cac166ce3fac54b9eb4eca7aa6f1b279a2ff5b240d9a0310c360dad9f2d"
   },
   {
     "operation": "testopsTestWindow",
     "digest": "80397810a4c9c1aa724b0a1828ec6cfa2235fd9ad4b320124149dd68a623faa0",
+    "legacy": true
+  },
+  {
+    "operation": "testopsTestWindow",
+    "digest": "614e1da8cdd06f40b68d5c57011462c5b3a8c2dbffa465ed95bc98d782389354",
     "legacy": true
   },
   {

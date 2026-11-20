@@ -12,6 +12,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 	"github.com/full-chaos/dev-health-ops/internal/ownershipwindow"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
@@ -40,9 +41,9 @@ var metricDefinitions = map[string]MetricDefinition{
 	"pass_rate":                 pooledRate(testMetric(""), "passed_count", executedCases),
 	"flake_rate":                pooledRate(testMetric(""), measuredCases("flake_cases", "flake_rate", "flake_cases"), measuredCases("flake_cases", "flake_rate", "distinct_cases")),
 	"retry_dependency_rate":     pooledRate(testMetric(""), measuredCases("distinct_cases", "retry_dependency_rate", "retry_dependency_rate * distinct_cases"), measuredCases("distinct_cases", "retry_dependency_rate", "distinct_cases")),
-	"failure_recurrence_score":  testMetric("failure_recurrence_score"),
+	"failure_recurrence_score":  pooledRate(testMetric(""), recurrenceCounted("recurrent_failed_names"), recurrenceCounted("distinct_failed_names")),
 	"line_coverage_pct":         pooledRate(coverageMetric(""), "if("+coveredLines+", 100 * lines_covered, NULL)", "if("+coveredLines+", lines_total, NULL)"),
-	"branch_coverage_pct":       coverageMetric("branch_coverage_pct"),
+	"branch_coverage_pct":       pooledRate(coverageMetric(""), "if("+coveredBranches+", 100 * branches_covered, NULL)", "if("+coveredBranches+", branches_total, NULL)"),
 	"coverage_delta_pct":        coverageMetric("coverage_delta_pct"),
 	"coverage_regression_count": coverageMetric("coverage_regression_count"),
 	"cycle_time_hours": {
@@ -53,14 +54,15 @@ var metricDefinitions = map[string]MetricDefinition{
 		// Each item once in the organization (CHAOS-8863): legacy rows and the org view.
 		ExtraFilters: []string{rowview.OrgPredicate("work_item_metrics_daily", "")},
 	},
-	"defect_intro_rate": {
+	// The stored rate is new_bugs_count / new_items_count, 0 when there is no new item, and is not read. A row with no
+	// new item adds 0 to both sums, so a point with none has no value, never 0.
+	"defect_intro_rate": pooledRate(MetricDefinition{
 		Table:             "work_item_metrics_daily",
-		ValueColumn:       "defect_intro_rate",
 		ScopeSupport:      map[string]bool{ScopeTeam: true, ScopeGlobal: true},
 		InnerGroupColumns: []string{"team_id", "work_scope_id", "provider", "row_view"},
 		// Each item once in the organization (CHAOS-8863): legacy rows and the org view.
 		ExtraFilters: []string{rowview.OrgPredicate("work_item_metrics_daily", "")},
-	},
+	}, "new_bugs_count", "new_items_count"),
 	"deployment_frequency": {
 		Table:             "dora_metrics_daily",
 		ValueColumn:       "value",
@@ -119,6 +121,13 @@ func measuredCases(count, rate, expression string) string {
 	return "if(" + rate + " IS NULL OR distinct_cases IS NULL OR " + count + " IS NULL, NULL, " + expression + ")"
 }
 
+// recurrenceCounted is a count of failure_recurrence_score on a repo-day that carries both counts, NULL on any other
+// (a row stored before the counts existed): such a repo-day is in neither sum. A point whose distinct failed names sum
+// to 0 has no failed test and no value, never 0.
+func recurrenceCounted(column string) string {
+	return "if(" + testops.TestFailureRecurrenceMeasuredSQL + ", " + column + ", NULL)"
+}
+
 func testMetric(column string) MetricDefinition {
 	return MetricDefinition{
 		Table: "testops_test_metrics_daily", ValueColumn: column,
@@ -129,9 +138,12 @@ func testMetric(column string) MetricDefinition {
 // coveredLines is a repo-day whose stored line counts measure a coverage: both counts set and lines_total above 0 (the
 // rule of the query-api line coverage). Any other repo-day (a NULL count, a stored pct with no counts, no lines) is in
 // neither sum, so a point made only of such repo-days has no value, never 0. The stored line_coverage_pct is not read.
-// branch_coverage_pct has no stored counts, so it stays the mean of the repo-day percentages, as do coverage_delta_pct
-// (a difference of two percentages) and coverage_regression_count (a count).
+// coverage_delta_pct (a difference of two percentages) and coverage_regression_count (a count) stay the mean.
 const coveredLines = "lines_covered IS NOT NULL AND lines_total IS NOT NULL AND lines_total > 0"
+
+// coveredBranches is the same rule over the stored branch counts. A row stored before the counts existed reads NULL and
+// is in neither sum; the stored branch_coverage_pct is not read.
+const coveredBranches = "branches_covered IS NOT NULL AND branches_total IS NOT NULL AND branches_total > 0"
 
 func coverageMetric(column string) MetricDefinition {
 	return MetricDefinition{
@@ -355,6 +367,64 @@ ORDER BY scope_key, day`, outerValue, inner, outerWhere)
 		return nil, err
 	}
 	return result, nil
+}
+
+// LiveInputKeys counts, per table of InputTables(metrics, pairs), the
+// organization's (repo_id, day) keys over [InputWindowStart(asOfDay), asOfDay]
+// whose newest row is live by the rule FetchMetricSeriesByScope applies. Every
+// table is in the result, 0 when it holds no such key. A failed read is an
+// error, never 0.
+func (loader *ClickHouseLoader) LiveInputKeys(
+	ctx context.Context, asOfDay time.Time, metrics [][2]string, pairs [][3]string,
+) (map[string]uint64, error) {
+	if loader == nil || loader.conn == nil {
+		return nil, fmt.Errorf("benchmarking: loader unavailable")
+	}
+	tables, err := InputTables(metrics, pairs)
+	if err != nil {
+		return nil, err
+	}
+	arms := make([]string, 0, len(tables))
+	for _, table := range tables {
+		arms = append(arms, fmt.Sprintf(`
+    SELECT '%s' AS input_table
+    FROM %s
+    WHERE day >= {start_day:Date} AND day <= {end_day:Date} AND org_id = {org_id:String}
+    GROUP BY org_id, day, repo_id%s`, table, table, liveRowHaving(table)))
+	}
+	query := `
+SELECT input_table, count() AS live_keys
+FROM (` + strings.Join(arms, "\n    UNION ALL") + `
+)
+GROUP BY input_table
+ORDER BY input_table`
+	rows, err := loader.conn.Query(ctx, query,
+		clickhouse.Named("start_day", InputWindowStart(asOfDay).Format(clickHouseDateLayout)),
+		clickhouse.Named("end_day", asOfDay.Format(clickHouseDateLayout)),
+		clickhouse.Named("org_id", loader.orgID),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("benchmarking: read the live input keys: %w", err)
+	}
+	defer rows.Close()
+	live := make(map[string]uint64, len(tables))
+	for _, table := range tables {
+		live[table] = 0
+	}
+	for rows.Next() {
+		var (
+			table string
+			keys  uint64
+		)
+		if err := rows.Scan(&table, &keys); err != nil {
+			return nil, fmt.Errorf("benchmarking: scan the live input keys: %w", err)
+		}
+		live[table] = keys
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("benchmarking: read the live input keys: %w", err)
+	}
+	return live, nil
 }
 
 // ownersJoin is the statement of a TestOps team series: the newest value of each (org, repository, day) key, then

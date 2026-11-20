@@ -98,6 +98,9 @@ func (s Store) loadRawSettingsFrom(ctx context.Context, q rowQuerier, orgID stri
 		}
 		resolved := *value
 		if isEncrypted && s.skipsDecrypt(key) {
+			if key == PurposeKey(PurposeCategorize, keyAPIKey) {
+				settings[sealedCategorizeKey] = resolved
+			}
 			continue
 		}
 		if isEncrypted {
@@ -126,8 +129,8 @@ func (s Store) loadRawSettingsFrom(ctx context.Context, q rowQuerier, orgID stri
 
 // skipsDecrypt is whether an encrypted row is left undecrypted: a categorize
 // override row read by a store that is not the categorize store. No reader of
-// such a store reads it (project, keysForLeakChecks), so decrypting it only
-// touches a key class the store never serves.
+// such a store serves it (project), so it stays sealed; the api_key row is kept
+// as ciphertext under sealedCategorizeKey for the base_url leak check alone.
 func (s Store) skipsDecrypt(key string) bool {
 	return s.purpose != PurposeCategorize && strings.HasPrefix(key, PurposeKey(PurposeCategorize, ""))
 }
@@ -163,7 +166,7 @@ func (s Store) loadGatedSettings(ctx context.Context, orgID string) (orgSettings
 	if turnedOff {
 		return orgSettings{}, nil
 	}
-	return markKeyInBaseURL(gated, project(gated, s.purpose)), nil
+	return s.markKeyInBaseURL(gated, project(gated, s.purpose)), nil
 }
 
 // keyInBaseURLMark is the reserved entry markKeyInBaseURL adds to the projected
@@ -173,8 +176,8 @@ const keyInBaseURLMark = "\x00key_in_base_url"
 // markKeyInBaseURL flags projected settings whose base_url carries any api key
 // the org stores (the default row's or a purpose override's), including a key
 // the projection dropped; the readers below refuse such a url before a lookup.
-func markKeyInBaseURL(stored, projected orgSettings) orgSettings {
-	if projected != nil && storedKeyInBaseURL(stored, projected[keyBaseURL]) {
+func (s Store) markKeyInBaseURL(stored, projected orgSettings) orgSettings {
+	if projected != nil && s.storedKeyInBaseURL(stored, projected[keyBaseURL]) {
 		projected[keyInBaseURLMark] = "1"
 	}
 	return projected

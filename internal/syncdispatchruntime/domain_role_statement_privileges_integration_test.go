@@ -3,8 +3,10 @@
 package syncdispatchruntime
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/url"
 	"strings"
 	"sync"
@@ -19,6 +21,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 )
 
 // Every native sync-dispatch service in this package is constructed with
@@ -884,6 +888,23 @@ CREATE TABLE public.provider_rate_limit_observations (
 // backfill_jobs/job_runs UPDATEs via observeTerminalSyncRun -- family 3's
 // own reach into those two tables, distinct from family 1's Finalize call
 // site the CHAOS-4209 suite above already proved).
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func TestNativeDispatchSyncRunExecutesEntirelyAsTheDomainRole(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -906,10 +927,16 @@ func TestNativeDispatchSyncRunExecutesEntirelyAsTheDomainRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewNativeDispatchSyncRunService(domain, nil, &fakeBudgetEstimator{}, producer, registry)
+	var logs lockedBuffer
+	service, err := NewNativeDispatchSyncRunService(domain, synclog.New(slog.New(slog.NewJSONHandler(&logs, nil))), &fakeBudgetEstimator{}, producer, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if out := logs.String(); strings.Contains(out, "redispatch_backoff_read_failed") {
+			t.Errorf("the re-arm back-off read failed (test DDL out of step with sync_run_units?):\n%s", out)
+		}
+	})
 
 	// Arm 1: a routable unit reaches claim, the real worker_job_outbox
 	// INSERT, and the run's status flip to DISPATCHING.
@@ -1004,6 +1031,17 @@ FROM generate_series($3::int, $4::int) AS g`, discoveryTestOrg, discoveryTestRun
 		if planned == 0 || planned >= step.candidates {
 			t.Fatalf("%s: %d units still planned of %d candidates; the first pass should have claimed a few and left the rest", step.name, planned, step.candidates)
 		}
+	}
+
+	// Arm 3b: the bucket is still full, so this pass claims nothing and re-arms; the re-arm reads sync_run_units.created_at
+	// as the domain role (CHAOS-11294).
+	markOutboxDispatched()
+	if err := service.Dispatch(ctx, dispatchTestArgsLegacy()); err != nil {
+		t.Fatalf("Dispatch (full bucket): %v", err)
+	}
+	denials.assertNone(t, "NativeDispatchSyncRunService re-arm back-off read")
+	if !strings.Contains(logs.String(), "dispatch_sync_run.noop") {
+		t.Fatalf("the full-bucket pass did not reach the re-arm path:\n%s", logs.String())
 	}
 
 	// Arm 2, same venue: a feature-gated unit, with the feature disabled by
@@ -1239,7 +1277,7 @@ CREATE TABLE sync_run_units (
  integration_id uuid NOT NULL DEFAULT '00000000-0000-4000-8000-000000000010',
  since_at timestamptz NULL, before_at timestamptz NULL,
  available_at timestamptz NULL, error text NULL, result json NULL, lease_owner text NULL, lease_expires_at timestamptz NULL,
- last_heartbeat_at timestamptz NULL, updated_at timestamptz NOT NULL DEFAULT now(),
+ last_heartbeat_at timestamptz NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
  rate_limit_deferrals int NOT NULL DEFAULT 0, rate_limit_first_seen_at timestamptz NULL,
  budget_deferrals int NOT NULL DEFAULT 0, budget_first_deferred_at timestamptz NULL,
  first_blocked_at timestamptz NULL, last_retry_reason text NULL, processor_flags json NULL

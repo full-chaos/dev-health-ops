@@ -457,6 +457,25 @@ Two in-archive member skips are recorded the same way: `compression_ratio`
 `report_member` causes that advance the watermark, so the run reads
 `reports_complete=false` instead of complete.
 
+**Skip counts are counts of skipped looks, not of distinct artifacts.** The sample holds one marker per (run, artifact,
+cause); a second member of the same artifact with the same cause, or a second read of the same artifact, adds to the count
+but not to the sample. A walk that reads a run again inside one unit (a re-anchored page, or the inclusive boundary second
+of a peeled range) does not count a deterministic skip again while its marker is still in the sample: `artifact_expired`,
+`artifact_oversized`, `unreadable_archive` and the member causes (`malformed`, `unreadable`, `unsafe_doctype`,
+`compression_ratio`, `archive_entry_cap`). The run's completeness row still carries the loss. These cases still count
+again, by design:
+
+- `artifact_unavailable` is counted per failed look: a later look can read the artifact, so a replay is new information.
+- A replay after the sample is full cannot be told apart from a new artifact and counts again (an over-count, never an
+  under-count).
+- A forward unit looks at a run in its own window and in the next one, and the route counts each attempt, so
+  `dev_health_provider_artifact_skipped_total` reads higher than the number of distinct artifacts. Only its rise above
+  zero is meaningful (the `ProviderArtifactSkipsSustained` alert reads only that).
+- Run-level observations (`per_run_cap`, `per_run_page_budget`, `aggregate_of_parts`, `aggregate_mismatch`) count each
+  read of the run, and `reports_skipped` sums them with the rest.
+
+None of these change the watermark, `reports_complete`, the run's verdict or the partial-success reason.
+
 The GitLab route shares that archive parse but fails on any other member skip, so it takes these two out and records them
 as its own chunked truncation component `report_member_dropped` (coverage_complete is false; the component advances the
 watermark). The same string is a `dev_health_provider_artifact_skipped_total{reason}` label value. The GitLab direct route

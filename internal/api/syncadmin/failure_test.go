@@ -108,6 +108,9 @@ func (f *faultReader) unitStatusCounts(context.Context, string, []uuid.UUID) (ma
 func (f *faultReader) unitRanges(context.Context, string, []uuid.UUID, bool) ([]unitRange, error) {
 	return nil, f.hit("unitRanges")
 }
+func (f *faultReader) unitWindowSplits(context.Context, string, []uuid.UUID, int) ([]unitWindowRow, error) {
+	return nil, f.hit("unitWindowSplits")
+}
 func (f *faultReader) countBackfillJobs(context.Context, string) (int64, error) {
 	return 1, f.hit("countBackfillJobs")
 }
@@ -191,7 +194,7 @@ func TestEveryStoreFailureIsA500(t *testing.T) {
 		{"get", func(h *handlers) http.HandlerFunc { return h.getSyncConfig }, config, []string{"configByID", "credentialIDs", "enabledDatasetKeys"}},
 		{"repositories", func(h *handlers) http.HandlerFunc { return h.getRepositories }, config, []string{"configByID", "sourcesForIntegration", "childOptions"}},
 		{"jobs", func(h *handlers) http.HandlerFunc { return h.listJobs }, config, []string{
-			"configByID", "scheduledSyncJobIDs", "jobRuns", "syncRunsByID", "unitStatusCounts", "unitRanges#1", "unitRanges#2"}},
+			"configByID", "scheduledSyncJobIDs", "jobRuns", "syncRunsByID", "unitStatusCounts", "unitRanges#1", "unitRanges#2", "unitWindowSplits"}},
 		{"backfill", func(h *handlers) http.HandlerFunc { return h.listBackfillJobs }, nil, []string{
 			"countBackfillJobs", "backfillJobs", "syncRunByID", "unitActivity", "runStatusCounts"}},
 		{"sync run", func(h *handlers) http.HandlerFunc { return h.getSyncRun }, run, []string{"syncRunByID"}},
@@ -233,7 +236,7 @@ func TestEveryStoreFailureIsA500(t *testing.T) {
 // no sync run reads no sync run table at all, as the Python helpers return
 // before their queries.
 func TestNoSyncRunReadsWithoutASyncRunID(t *testing.T) {
-	for _, method := range []string{"syncRunsByID", "unitStatusCounts", "unitRanges"} {
+	for _, method := range []string{"syncRunsByID", "unitStatusCounts", "unitRanges", "unitWindowSplits"} {
 		reader := &faultReader{fail: method, noPlannerRun: true}
 		h := &handlers{store: reader, features: faultFeatures{}, logger: quiet()}
 		recorder := serveAs(t, h, h.listJobs, "/x", map[string]string{"config_id": faultConfigID.String()})
@@ -261,4 +264,55 @@ func TestEmptyIDSetsSendNoQuery(t *testing.T) {
 
 func (f *faultReader) unitsSnapshot(_ context.Context, fn func(unitsSnapshotReads) error) error {
 	return fn(f)
+}
+
+type splitRows struct {
+	faultReader
+	rows []unitWindowRow
+}
+
+func (s *splitRows) unitWindowSplits(_ context.Context, _ string, _ []uuid.UUID, limit int) ([]unitWindowRow, error) {
+	if limit != longerWindowLimit {
+		return nil, errInjected
+	}
+	return s.rows, nil
+}
+
+// TestSplitsByRunFoldsOneSplitPerRun: the summary columns repeat on every
+// row of a run and the longer-window units follow in row order; a run with
+// no longer-window unit (NULL unit columns) lists none, rendered as [].
+func TestSplitsByRunFoldsOneSplitPerRun(t *testing.T) {
+	at := time.Date(2026, 11, 1, 12, 0, 0, 0, time.FixedZone("x", 3600))
+	since := at.Add(-time.Hour)
+	stuck, older := at.AddDate(0, 0, -30), at.AddDate(0, 0, -31)
+	runA, runB, source := uuid.New(), uuid.New(), uuid.New()
+	key := "work-items"
+	summary := unitWindowRow{RunID: runA, MedianSeconds: 3600, Since: since, Before: at, TypicalUnits: 5, LongerUnits: 2}
+	first, second := summary, summary
+	first.SourceID, first.DatasetKey, first.UnitSince, first.UnitBefore = &source, &key, &older, &at
+	second.SourceID, second.DatasetKey, second.UnitSince, second.UnitBefore = &source, &key, &stuck, &at
+	reader := &splitRows{rows: []unitWindowRow{first, second,
+		{RunID: runB, MedianSeconds: 86400, Since: since, Before: at, TypicalUnits: 4}}}
+	h := &handlers{store: reader, logger: quiet()}
+	request := httptest.NewRequest(http.MethodGet, "/x", nil)
+	splits, err := h.splitsByRun(request, "org", []uuid.UUID{runA, runB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"since":"2026-11-01T10:00:00Z","before":"2026-11-01T11:00:00Z","unit_count":5,"median_window_seconds":3600,` +
+		`"longer_window_unit_count":2,"longer_window_units":[` +
+		`{"source_id":"` + source.String() + `","dataset_key":"work-items","since":"2026-10-01T11:00:00Z","before":"2026-11-01T11:00:00Z"},` +
+		`{"source_id":"` + source.String() + `","dataset_key":"work-items","since":"2026-10-02T11:00:00Z","before":"2026-11-01T11:00:00Z"}]}`
+	if got := marshal(t, splits[runA].value()); got != want {
+		t.Errorf("run A:\n%s\nwant\n%s", got, want)
+	}
+	if got := marshal(t, splits[runB].value()); !strings.Contains(got, `"longer_window_unit_count":0,"longer_window_units":[]`) {
+		t.Errorf("run B: %s", got)
+	}
+	if len(splits) != 2 {
+		t.Errorf("splits = %v", splits)
+	}
+	if got := (*requestedSplit)(nil).value(); got != nil {
+		t.Errorf("nil split = %v", got)
+	}
 }

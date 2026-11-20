@@ -392,6 +392,33 @@ run_integration_go_test() {
 # args only, never env. DEV_HEALTH_GO_STEP_BOUND_SECS overrides the bound for tests.
 PROVIDERSYNC_STEP_BOUND_SECS=1380
 
+# run_shard_json NAME CMD...  (CHAOS-13766): CMD is the one go test call of a daily, workerservice, queryapiserver or remaining
+# integration shard. With GO_INTEGRATION_LEG_JSON_DIR set (CI) it runs CMD with -json after the `test` word, keeps the events in
+# ${GO_INTEGRATION_LEG_JSON_DIR}/NAME.json and prints the plain log from them (a line that is not a JSON event is printed raw); the
+# raw events (they carry test output) stay on the runner and the workflow converts them to a JUnit part. pipefail keeps go test's
+# exit code. Unset (a local run): CMD as it is.
+run_shard_json() {
+  local name="$1" dir="${GO_INTEGRATION_LEG_JSON_DIR:-}" i
+  shift
+  if [ -z "${dir}" ]; then
+    "$@"
+    return
+  fi
+  command -v jq >/dev/null 2>&1 || die "run_shard_json: GO_INTEGRATION_LEG_JSON_DIR needs jq to render go test -json"
+  if ! { mkdir -p -- "${dir}" && : >"${dir}/${name}.json"; }; then die "run_shard_json: cannot create ${dir}/${name}.json"; fi
+  local -a cmd=("$@")
+  for ((i = 0; i < ${#cmd[@]}; i++)); do
+    if [ "${cmd[i]}" = test ]; then cmd=("${cmd[@]:0:i+1}" -json "${cmd[@]:i+1}"); break; fi
+  done
+  (
+    set -o pipefail
+    "${cmd[@]}" \
+      | tee "${dir}/${name}.json" \
+      | jq -R -rj '. as $l | (try fromjson catch null) as $e | if ($e | type) == "object" then (if $e.Action == "output" then $e.Output else empty end) else $l + "\n" end'
+  )
+}
+
+
 group_ps_table() {
   ps -eo pid,pgid,ppid,etimes,args 2>/dev/null | awk -v g="$1" 'NR == 1 || $2 == g' | cut -c1-300
 }
@@ -1761,8 +1788,8 @@ GO_RACE_SOLO="${GO_RACE_SOLO:-${ROOT}/ci/go_race_solo.tsv}"
 # CHAOS-13833: race-leg test-name parts. ci/go_race_splits.tsv (package<TAB>parts) cuts a package into parts by
 # ci/go_race_split_weights.tsv (package<TAB>TestName<TAB>seconds: the largest hosted race time of each top-level test), with the
 # cutter of the test legs; a listed test with no row goes to the last part (never dropped). A part runs alone after the leg's
-# other packages and before its solo packages, and a top-level test of 30 s or more with no row fails the leg
-# (ci/go_race_unweighted_slow.awk).
+# other packages and before its solo packages, and a top-level test of 45 s or more with no row fails the leg (30 s up to 45 s warns
+# and prints the row to add; DEV_HEALTH_GO_RACE_UNWEIGHTED_FAIL_SECONDS, CHAOS-14277) (ci/go_race_unweighted_slow.awk).
 GO_RACE_SPLITS="${GO_RACE_SPLITS:-${ROOT}/ci/go_race_splits.tsv}"
 GO_RACE_SPLIT_WEIGHTS="${GO_RACE_SPLIT_WEIGHTS:-${ROOT}/ci/go_race_split_weights.tsv}"
 # CHAOS-13958: the race plan weighs a leg's race parts and solo packages as serial time after its parallel batch (ci/go_race_shard.awk
@@ -1846,7 +1873,7 @@ check_providersync_race_shard() {
       | tee "${json}" \
       | jq -rj 'select(.Action == "output") | .Output'
   ) || run_rc=$?
-  awk -v weights="${weights}" -v thresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${weights#"${ROOT}/"}" \
+  awk -v weights="${weights}" -v thresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS:-30}" -v failthresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_FAIL_SECONDS:-45}" -v summary="${GITHUB_STEP_SUMMARY:-}" -v label="${weights#"${ROOT}/"}" \
     -f "${GO_RACE_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_race_unweighted_slow.awk}" "${json}" || guard_rc=$?
   [ "${run_rc}" -ge "${guard_rc}" ] || run_rc="${guard_rc}"
   return "${run_rc}"
@@ -2019,7 +2046,7 @@ check_race_shard() {
         go_test_leg "${racelog}" "${partjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" -run "^($(printf '%s\n' "${names}" | paste -sd'|' -))\$" "${pkg}"
       ) || { cat -- "${partjson}" >>"${legjson}"; rm -f -- "${racelog}" "${partjson}"; return 1; }
       awk -v weights=<(awk -F'\t' -v k="${key}" '!/^#/ && $1 == k { print $2 "\t" $3 }' "${GO_RACE_SPLIT_WEIGHTS}") \
-        -v thresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${GO_RACE_SPLIT_WEIGHTS#"${ROOT}/"} (${key})" \
+        -v thresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS:-30}" -v failthresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_FAIL_SECONDS:-45}" -v summary="${GITHUB_STEP_SUMMARY:-}" -v rowprefix="${key}"$'\t' -v rowunit=s -v label="${GO_RACE_SPLIT_WEIGHTS#"${ROOT}/"} (${key})" \
         -f "${GO_RACE_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_race_unweighted_slow.awk}" "${partjson}" \
         || { cat -- "${partjson}" >>"${legjson}"; rm -f -- "${racelog}" "${partjson}"; return 1; }
       cat -- "${partjson}" >>"${legjson}" || die "cannot append the race part's go test -json to ${legjson}"
@@ -4425,7 +4452,7 @@ check_daily_test_shard() {
   tmo="$(job_go_test_timeout 22)" || return 2
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${DAILY_INTEGRATION_PACKAGE_KEY}"
+    run_shard_json "daily-${shard}" "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${DAILY_INTEGRATION_PACKAGE_KEY}"
   )
 }
 
@@ -4630,7 +4657,7 @@ check_workerservice_test_shard() {
   tmo="$(job_go_test_timeout 22)" || return 2
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}"
+    run_shard_json "workerservice-${shard}" "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}"
   )
 }
 
@@ -4835,7 +4862,7 @@ check_queryapiserver_test_shard() {
   tmo="$(job_go_test_timeout 22)" || return 2
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${QAPISERVER_INTEGRATION_PACKAGE_KEY}"
+    run_shard_json "queryapiserver-${shard}" "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${QAPISERVER_INTEGRATION_PACKAGE_KEY}"
   )
 }
 
@@ -5040,7 +5067,7 @@ check_remaining_test_shard() {
   tmo="$(job_go_test_timeout 22)" || return 2
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${REMAINING_INTEGRATION_PACKAGE_KEY}"
+    run_shard_json "remaining-${shard}" "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${REMAINING_INTEGRATION_PACKAGE_KEY}"
   )
 }
 

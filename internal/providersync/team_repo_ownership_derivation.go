@@ -110,6 +110,11 @@ type TeamRepoOwnershipProjectLink struct {
 	TeamID      string
 	IsPrimary   bool
 	Specificity uint16
+	// StoredProjectID is the project_id the row is stored under, when the
+	// loader moved ProjectID (a GitLab path link remapped to its catalog id);
+	// empty means ProjectID. The evidence key of the link uses it, so a held
+	// check finds the stored row.
+	StoredProjectID string
 }
 
 // teamRepoOwnershipProjectRef identifies a team_project_ownership row's
@@ -440,6 +445,10 @@ type teamRepoOwnershipDerivation struct {
 	// DonorsRefused counts, by teamattribution.LinkedIssueDonorRefusal reason,
 	// the distinct (source, donor) edges whose donor is not an issue.
 	DonorsRefused map[string]int
+	// Evidence is, for every claim the run derived (a co-owner the share floor
+	// dropped included), the keys of the input rows of every chain that gave
+	// it a link (CHAOS-9349): the store the absence proof of a later run reads.
+	Evidence map[teamRepoOwnershipClaimRef]map[teamRepoOwnershipEvidenceKey]struct{}
 }
 
 // isTextKeyTarget reports whether a dependency target is a key parsed from
@@ -525,8 +534,9 @@ func deriveTeamRepoOwnership(
 		byID[item.WorkItemID] = item
 	}
 
+	teamEvidence := teamRepoOwnershipTeamEvidence(projectLinks, projectToTeam)
 	donorsRefused := map[string]int{}
-	donorTeamID := buildDonorTeamIDResolver(byID, dependencyEdges, projectToTeam, knownLinearTeamKeys, donorsRefused)
+	donorTeamID := buildDonorTeamIDResolver(byID, dependencyEdges, projectToTeam, knownLinearTeamKeys, donorsRefused, teamEvidence)
 	// A key parsed from pull request text is a fallback only (chris,
 	// 2026-10-15): the native resolver walks every donor edge except text
 	// keys, and the full resolver is asked only when the native one finds no
@@ -538,7 +548,7 @@ func deriveTeamRepoOwnership(
 			nativeEdges = append(nativeEdges, edge)
 		}
 	}
-	nativeDonorTeamID := buildDonorTeamIDResolver(byID, nativeEdges, projectToTeam, knownLinearTeamKeys, nil)
+	nativeDonorTeamID := buildDonorTeamIDResolver(byID, nativeEdges, projectToTeam, knownLinearTeamKeys, nil, teamEvidence)
 	nativeLinkedPRs := map[[2]string]bool{}
 	for _, link := range issuePRLinks {
 		if link.Provenance == linktier.Native {
@@ -549,9 +559,18 @@ func deriveTeamRepoOwnership(
 	tallies := map[string]map[string]teamRepoOwnershipLinkCounts{}
 	repoArm := map[string]map[string]string{}
 	earliest := map[string]map[string]time.Time{}
-	assign := func(repoID, teamID, arm string, rank int, at time.Time) {
+	evidence := map[teamRepoOwnershipClaimRef]map[teamRepoOwnershipEvidenceKey]struct{}{}
+	assign := func(repoID string, chain teamRepoOwnershipChain, rank int, at time.Time, link ...teamRepoOwnershipEvidenceKey) {
+		teamID, arm := chain.teamID, chain.arm
 		if repoID == "" || teamID == "" {
 			return
+		}
+		claim := teamRepoOwnershipClaimRef{TeamID: teamID, RepoID: repoID}
+		if evidence[claim] == nil {
+			evidence[claim] = map[teamRepoOwnershipEvidenceKey]struct{}{}
+		}
+		for _, key := range append(link, chain.evidence...) {
+			evidence[claim][key] = struct{}{}
 		}
 		if tallies[repoID] == nil {
 			tallies[repoID] = map[string]teamRepoOwnershipLinkCounts{}
@@ -584,12 +603,13 @@ func deriveTeamRepoOwnership(
 		if item.RepoID == "" || !teamRepoOwnershipChangeRequestTypes[item.Type] {
 			continue
 		}
-		if teamID, arm := nativeDonorTeamID(item.WorkItemID); teamID != "" {
-			assign(item.RepoID, teamID, arm, linktier.Rank(linktier.Native), item.CreatedAt)
+		self := teamRepoOwnershipWorkItemEvidence(item)
+		if chain := nativeDonorTeamID(item.WorkItemID); chain.teamID != "" {
+			assign(item.RepoID, chain, linktier.Rank(linktier.Native), item.CreatedAt, self)
 			continue
 		}
-		teamID, arm := donorTeamID(item.WorkItemID)
-		if teamID == "" {
+		chain := donorTeamID(item.WorkItemID)
+		if chain.teamID == "" {
 			continue
 		}
 		if nativeLinkedPRs[[2]string{item.RepoID, changeRequestNumber(item.WorkItemID)}] {
@@ -597,7 +617,7 @@ func deriveTeamRepoOwnership(
 			continue
 		}
 		result.TextKeyCandidates++
-		assign(item.RepoID, teamID, arm, linktier.Rank(linktier.ExplicitText), item.CreatedAt)
+		assign(item.RepoID, chain, linktier.Rank(linktier.ExplicitText), item.CreatedAt, self)
 	}
 
 	// PR inheritance: work_graph_issue_pr's OWN repo_id, resolved via the
@@ -609,13 +629,17 @@ func deriveTeamRepoOwnership(
 			continue
 		}
 		rank := linktier.Rank(link.Provenance)
-		if teamID, arm := nativeDonorTeamID(link.WorkItemID); teamID != "" {
-			assign(link.RepoID, teamID, arm, rank, link.EvidenceAt)
+		row := []teamRepoOwnershipEvidenceKey{teamRepoOwnershipIssuePREvidence(link)}
+		if item, ok := byID[link.WorkItemID]; ok {
+			row = append(row, teamRepoOwnershipWorkItemEvidence(item))
+		}
+		if chain := nativeDonorTeamID(link.WorkItemID); chain.teamID != "" {
+			assign(link.RepoID, chain, rank, link.EvidenceAt, row...)
 			continue
 		}
-		if teamID, arm := donorTeamID(link.WorkItemID); teamID != "" {
+		if chain := donorTeamID(link.WorkItemID); chain.teamID != "" {
 			result.TextKeyCandidates++
-			assign(link.RepoID, teamID, arm, min(rank, linktier.Rank(linktier.ExplicitText)), link.EvidenceAt)
+			assign(link.RepoID, chain, min(rank, linktier.Rank(linktier.ExplicitText)), link.EvidenceAt, row...)
 		}
 	}
 
@@ -689,6 +713,7 @@ func deriveTeamRepoOwnership(
 	if len(donorsRefused) > 0 {
 		result.DonorsRefused = donorsRefused
 	}
+	result.Evidence = evidence
 	return result
 }
 
@@ -840,7 +865,8 @@ func buildDonorTeamIDResolver(
 	projectToTeam map[teamRepoOwnershipProjectRef]string,
 	knownLinearTeamKeys map[string]string,
 	refused map[string]int,
-) func(workItemID string) (string, string) {
+	teamEvidence func(item TeamRepoOwnershipWorkItem, teamID, arm string) []teamRepoOwnershipEvidenceKey,
+) func(workItemID string) teamRepoOwnershipChain {
 	keyIndex := buildIssueKeyIndex(byID)
 
 	type pair struct{ source, target string }
@@ -856,6 +882,10 @@ func buildDonorTeamIDResolver(
 	type resolvedTeam struct {
 		teamID string
 		arm    string
+		// edge is the stored key of the latest inheritable edge to the target
+		// (its raw target, an extkey text included); donor is the target's row.
+		edge  teamRepoOwnershipEvidenceKey
+		donor TeamRepoOwnershipWorkItem
 	}
 
 	// Only a donor that ITSELF already resolves to a team is a valid
@@ -897,7 +927,10 @@ func buildDonorTeamIDResolver(
 		if !resolves {
 			continue
 		}
-		targetTeam[target] = resolvedTeam{teamID: teamID, arm: arm}
+		edgeKey := teamRepoOwnershipDependencyEvidence(edge)
+		if held, ok := targetTeam[edge.SourceWorkItemID+"\x00"+target]; !ok || edgeKey.Key < held.edge.Key {
+			targetTeam[edge.SourceWorkItemID+"\x00"+target] = resolvedTeam{teamID: teamID, arm: arm, edge: edgeKey, donor: donor}
+		}
 		candidateTargets[edge.SourceWorkItemID] = append(candidateTargets[edge.SourceWorkItemID], target)
 	}
 
@@ -912,19 +945,30 @@ func buildDonorTeamIDResolver(
 	donorTeamBySource := make(map[string]resolvedTeam, len(candidateTargets))
 	for source, targets := range candidateTargets {
 		sort.Strings(targets)
-		donorTeamBySource[source] = targetTeam[targets[0]]
+		donorTeamBySource[source] = targetTeam[source+"\x00"+targets[0]]
 	}
 
-	return func(workItemID string) (string, string) {
+	// The chain's evidence is the rows of the CHOSEN chain only: the item's own
+	// team input, or the chosen donor's edge, row and team input. A refused
+	// donor is never chosen, so it records no key (CHAOS-9349 on CHAOS-14082).
+	inputs := func(item TeamRepoOwnershipWorkItem, teamID, arm string) []teamRepoOwnershipEvidenceKey {
+		if teamEvidence == nil {
+			return nil
+		}
+		return teamEvidence(item, teamID, arm)
+	}
+	return func(workItemID string) teamRepoOwnershipChain {
 		if item, ok := byID[workItemID]; ok {
 			if teamID, arm, resolves := resolveWorkItemTeamID(item, projectToTeam, knownLinearTeamKeys); resolves {
-				return teamID, arm
+				return teamRepoOwnershipChain{teamID: teamID, arm: arm, evidence: inputs(item, teamID, arm)}
 			}
 		}
 		if entry, ok := donorTeamBySource[workItemID]; ok {
-			return entry.teamID, entry.arm
+			evidence := append([]teamRepoOwnershipEvidenceKey{entry.edge, teamRepoOwnershipWorkItemEvidence(entry.donor)},
+				inputs(entry.donor, entry.teamID, entry.arm)...)
+			return teamRepoOwnershipChain{teamID: entry.teamID, arm: entry.arm, evidence: evidence}
 		}
-		return "", ""
+		return teamRepoOwnershipChain{}
 	}
 }
 

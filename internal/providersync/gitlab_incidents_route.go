@@ -291,14 +291,9 @@ func collectGitLabIncidentPages(
 			return items, page, nil
 		}
 		for _, raw := range pageItems {
-			var identity struct {
-				ID        any    `json:"id"`
-				IssueType string `json:"issue_type"`
-			}
-			decoder := json.NewDecoder(bytes.NewReader(raw))
-			decoder.UseNumber()
-			if decoder.Decode(&identity) != nil {
-				return nil, 0, providerfoundation.ErrNormalizationInvalid
+			identity, err := decodeGitLabIncidentIdentity(raw)
+			if err != nil {
+				return nil, 0, providerfoundation.RouteFailure(route, providerfoundation.ReasonBodyDecode, err)
 			}
 			if !strings.EqualFold(identity.IssueType, "incident") {
 				continue
@@ -699,3 +694,18 @@ func sha256Bytes(value []byte) []byte {
 }
 
 var _ CompleteRouteHandler = GitLabIncidentsRouteHandler{}
+
+type gitLabIncidentIdentity struct {
+	ID        any    `json:"id"`
+	IssueType string `json:"issue_type"`
+}
+
+func decodeGitLabIncidentIdentity(raw json.RawMessage) (gitLabIncidentIdentity, error) {
+	var identity gitLabIncidentIdentity
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&identity) != nil {
+		return identity, providerfoundation.ErrNormalizationInvalid
+	}
+	return identity, nil
+}

@@ -313,9 +313,12 @@ func apiPosture() RolePosture {
 			// integration_credentials' delete grant is declared once, above
 			// (CHAOS-6319's read-only entry, widened rather than duplicated
 			// here) -- the one-entry-per-table rule.
-			// SSO: encrypted_secrets presence is also read for
-			// credentials_deleted's count. The SSO activate and deactivate
-			// routes set a provider's status (UPDATE).
+			// SSO: sign-in reads providers; encrypted_secrets presence is also
+			// read for credentials_deleted's count, and the org purge deletes
+			// the org's rows. UPDATE stays declared, so the migration grants it
+			// as before, but it is retired (RetiredTableUpdates below): no
+			// go-api code updates the table; auth-service writes the providers
+			// (CHAOS-14131).
 			{"sso_providers", false, true, true},
 			// The admin IP-allowlist routes create, update and delete
 			// entries.
@@ -343,6 +346,11 @@ func apiPosture() RolePosture {
 			{"billing_audit_log", "actor_id", "UPDATE"},
 		},
 		RetiredTables: []string{"internal_service_credentials"},
+		// Read by readiness and DiagnoseRolePosture only: they accept the
+		// table-wide UPDATE held or absent. The migration reads the
+		// RequiredTables flags, which still grant it, until a later change
+		// drops it.
+		RetiredTableUpdates: []string{"sso_providers"},
 	}
 }
 

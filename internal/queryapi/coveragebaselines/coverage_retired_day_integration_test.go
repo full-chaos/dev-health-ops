@@ -57,8 +57,8 @@ func TestBaselinesLeaveOutARetiredDay(t *testing.T) {
 	}
 	measured := func(repo string, back int) {
 		t.Helper()
-		if err := admin.Exec(ctx, `INSERT INTO testops_coverage_metrics_daily (repo_id, day, line_coverage_pct, branch_coverage_pct,
- uncovered_files_count, coverage_regression_count, org_id, computed_at) VALUES (?, ?, 80, 70, 0, 0, ?, ?)`,
+		if err := admin.Exec(ctx, `INSERT INTO testops_coverage_metrics_daily (repo_id, day, line_coverage_pct, lines_covered, lines_total, branch_coverage_pct,
+ uncovered_files_count, coverage_regression_count, org_id, computed_at) VALUES (?, ?, 80, 80, 100, 70, 0, 0, ?, ?)`,
 			repo, end.AddDate(0, 0, -back), org, t1); err != nil {
 			t.Fatal(err)
 		}

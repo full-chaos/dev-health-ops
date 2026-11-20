@@ -262,8 +262,8 @@ func TestDirectAdapterColumnListsMirrorThePythonSinkOmissions(t *testing.T) {
 			t.Fatalf("work_items readback compares %q, a column this unit does not own", omitted)
 		}
 	}
-	if containsColumn(gitHubWorkItemTransitionsInsert, "provider") {
-		t.Fatal("work_item_transitions insert writes provider, which write_work_item_transitions does not")
+	if !containsColumn(gitHubWorkItemTransitionsInsert, "provider") || containsColumn(gitHubWorkItemTransitionsSelect, "provider") {
+		t.Fatal("work_item_transitions insert must write provider, and the readback must not compare it (rows stored before hold an empty provider)")
 	}
 }
 

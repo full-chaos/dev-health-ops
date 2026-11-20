@@ -9,13 +9,14 @@ import (
 
 // A chart of the flake rate or retry dependency rate is the bucket's flake (retry-dependent) cases over its distinct
 // cases, from the newest counts of each repository and day: never an average of the stored per-repository-day rates.
-// The failure recurrence score has no stored count and stays the mean of the stored values.
+// The failure recurrence score is the bucket's recurrent failed names over its distinct failed names, the same way.
 func TestFlakeAndRetryRateChartsAreTheCaseWeightedRuleOverTheCounts(t *testing.T) {
 	t.Parallel()
 	const source = "FROM (SELECT * FROM testops_test_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_test_metrics_daily"
 	for metric, expression := range map[string]string{
-		"flake_rate":            testops.TestFlakeRateWindowSQL,
-		"retry_dependency_rate": testops.TestRetryDependencyRateWindowSQL,
+		"flake_rate":               testops.TestFlakeRateWindowSQL,
+		"retry_dependency_rate":    testops.TestRetryDependencyRateWindowSQL,
+		"failure_recurrence_score": testops.TestFailureRecurrenceWindowSQL,
 	} {
 		registered, ok := supportedMetrics[metric]
 		if !ok || registered.SourceTable != "testops_test_metrics_daily" {
@@ -44,8 +45,5 @@ func TestFlakeAndRetryRateChartsAreTheCaseWeightedRuleOverTheCounts(t *testing.T
 				}
 			}
 		}
-	}
-	if got := withChartRule(supportedMetrics["failure_recurrence_score"]); got.rule != "" {
-		t.Errorf("failure_recurrence_score got a chart rule: %+v", got)
 	}
 }

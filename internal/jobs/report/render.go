@@ -187,7 +187,7 @@ func provenanceID(planID, artifactType, artifactID string) string {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(planID+":"+artifactType+":"+artifactID)).String()
 }
 
-// otherChartsTitle heads the charts no listed section printed; a plan section whose title shows as this one (closing hashes and case ignored) is renamed so the heading is unique.
+// otherChartsTitle heads the charts no listed section printed; a plan section whose title is this name (case ignored) is renamed so the heading is unique.
 const otherChartsTitle = "Other Charts"
 
 func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, provenance []ProvenanceRecord) string {
@@ -215,7 +215,7 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 			continue
 		}
 		title := section.title
-		if strings.EqualFold(strings.TrimRight(title, "# "), otherChartsTitle) {
+		if strings.EqualFold(title, otherChartsTitle) {
 			title = otherChartsTitle + " (plan section)"
 		}
 		lines = append(lines, "## "+markdownText(title), section.body, "", "### Insights",

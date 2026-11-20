@@ -206,20 +206,28 @@ WHERE sync_run_id = $1::uuid AND status IN ('planned', 'retrying', 'dispatching'
 	}
 
 	type runningLease struct {
-		unitID    string
-		owner     *string
-		expiresAt *time.Time
+		unitID string
+		owner  *string
 	}
-	rows, err = tx.Query(ctx, `
-SELECT id::text, lease_owner, lease_expires_at FROM public.sync_run_units
-WHERE sync_run_id = $1::uuid AND status = 'running'`, run.id)
+	// The feature-disabled callers send this statement unchanged. A termination that keeps live
+	// leases reads only the running units whose lease has expired, so a live one is never failed.
+	runningSQL := `
+SELECT id::text, lease_owner FROM public.sync_run_units
+WHERE sync_run_id = $1::uuid AND status = 'running'`
+	runningArgs := []any{run.id}
+	if termination.keepLiveLeases {
+		runningSQL += `
+  AND lease_expires_at IS NOT NULL AND lease_expires_at <= $2`
+		runningArgs = append(runningArgs, now)
+	}
+	rows, err = tx.Query(ctx, runningSQL, runningArgs...)
 	if err != nil {
 		return FeatureDisabledRunTransition{}, ErrReferenceDiscoveryUnavailable
 	}
 	var runningLeases []runningLease
 	for rows.Next() {
 		var lease runningLease
-		if err := rows.Scan(&lease.unitID, &lease.owner, &lease.expiresAt); err != nil {
+		if err := rows.Scan(&lease.unitID, &lease.owner); err != nil {
 			rows.Close()
 			return FeatureDisabledRunTransition{}, ErrReferenceDiscoveryUnavailable
 		}
@@ -241,9 +249,6 @@ WHERE sync_run_id = $1::uuid AND status IN ('planned', 'retrying', 'dispatching'
 	}
 
 	for _, lease := range runningLeases {
-		if termination.keepLiveLeases && (lease.expiresAt == nil || lease.expiresAt.After(now)) {
-			continue
-		}
 		if _, err := tx.Exec(ctx, `
 UPDATE public.sync_run_units
 SET status = $2, available_at = NULL, error = $3, result = $4::json,

@@ -82,7 +82,12 @@ func opportunityLess(a, b opportunity) bool {
 	if a.why != b.why {
 		return a.why < b.why
 	}
-	return strings.Join(a.refs, "\n") < strings.Join(b.refs, "\n")
+	if ra, rb := strings.Join(a.refs, "\n"), strings.Join(b.refs, "\n"); ra != rb {
+		return ra < rb
+	}
+	// Two repetitive-change clusters of one author and prefix can share every key above (a pull request linked to
+	// work items of two types) and still serve two ids (CHAOS-14266): the served id decides, never the hidden key.
+	return a.servedID() < b.servedID()
 }
 
 // sortPRRefs puts a cluster's pull request refs ("git_pull_requests:<repository>:<number>") in one order before

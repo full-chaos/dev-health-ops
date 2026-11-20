@@ -167,3 +167,70 @@ SET result = (result::jsonb || '{"rate_limit_progress_mark":"x"}'::jsonb)::json 
 		t.Fatalf("malformed mark: episode=%+v err=%v", episode, err)
 	}
 }
+
+// TestUnitStampsMergeOntoALegacyNullResultAsAnObject (CHAOS-14252 r1 P2): a
+// legacy row can hold the JSON literal null in result. `'null'::jsonb || {...}`
+// is an ARRAY, which loses every key and fails the next claim's decode. Each
+// unit stamp that merges onto result must treat a non-object as empty.
+func TestUnitStampsMergeOntoALegacyNullResultAsAnObject(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = instance.Close(context.Background()) }()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createProviderSyncFixture(t, ctx, pool)
+	seedProviderSyncFixture(t, ctx, pool)
+	repository, err := NewPostgresRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	for _, stamp := range []struct {
+		name, key string
+		write     func(Claim) error
+	}{
+		{"rate limit", "rate_limit_progress_mark", func(claim Claim) error {
+			return repository.DeferForRateLimit(ctx, claim, now.Add(time.Minute), now, RateLimitObservation{},
+				RateLimitEpisodeStep{Mark: &RateLimitProgressMark{PreparedChunks: 4, NextOrdinal: 4}})
+		}},
+		{"chunk continuation", "not_before", func(claim Claim) error {
+			return repository.DeferChunkContinuation(ctx, claim, now.Add(time.Minute), now)
+		}},
+		{"budget contention", "provider_budget_contention_deferrals", func(claim Claim) error {
+			_, err := repository.DeferForBudgetContention(ctx, claim, now.Add(time.Minute), now)
+			return err
+		}},
+		{"release for retry", "error_category", func(claim Claim) error {
+			return repository.ReleaseForRetry(ctx, claim, now)
+		}},
+	} {
+		t.Run(stamp.name, func(t *testing.T) {
+			seedBudgetEpisode(t, ctx, pool, firstUnitID, now)
+			if _, err := pool.Exec(ctx, `UPDATE public.sync_run_units SET result = 'null'::json WHERE id = $1`, firstUnitID); err != nil {
+				t.Fatal(err)
+			}
+			if err := stamp.write(claimForBudgetEpisode(t, ctx, repository, now)); err != nil {
+				t.Fatal(err)
+			}
+			var kind string
+			var hasKey bool
+			if err := pool.QueryRow(ctx, `
+SELECT jsonb_typeof(result::jsonb), COALESCE(result::jsonb ? $2, false)
+FROM public.sync_run_units WHERE id = $1`, firstUnitID, stamp.key).Scan(&kind, &hasKey); err != nil {
+				t.Fatal(err)
+			}
+			if kind != "object" || !hasKey {
+				t.Fatalf("%s on a null result stored a %s (key %q present=%v)", stamp.name, kind, stamp.key, hasKey)
+			}
+			// The next claim decodes the stored document.
+			claimForBudgetEpisode(t, ctx, repository, now.Add(time.Hour))
+		})
+	}
+}

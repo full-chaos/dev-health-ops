@@ -1102,7 +1102,7 @@ SET status = 'dispatching',
     available_at = NULL,
     error = 'provider_unit_retryable',
     result = (
-      COALESCE(unit.result::jsonb, '{}'::jsonb) ||
+      CASE WHEN jsonb_typeof(unit.result::jsonb) = 'object' THEN unit.result::jsonb ELSE jsonb_build_object() END ||
       jsonb_build_object('error_category', 'provider_unit_retryable')
     ),
     lease_owner = NULL,
@@ -1142,7 +1142,7 @@ SET status = 'dispatching',
     available_at = $4,
     error = 'provider_budget_contention',
     result = (
-      COALESCE(unit.result::jsonb, jsonb_build_object()) ||
+      CASE WHEN jsonb_typeof(unit.result::jsonb) = 'object' THEN unit.result::jsonb ELSE jsonb_build_object() END ||
       jsonb_build_object(
         'error_category', 'provider_budget_contention',
         'not_before', to_jsonb($4::timestamptz),
@@ -1172,7 +1172,7 @@ SET status = 'dispatching',
     rate_limit_deferrals = CASE WHEN $5::boolean THEN 1 ELSE COALESCE(unit.rate_limit_deferrals, 0) + 1 END,
     rate_limit_first_seen_at = CASE WHEN $5::boolean THEN $3 ELSE COALESCE(unit.rate_limit_first_seen_at, $3) END,
     result = (
-      COALESCE(unit.result::jsonb, jsonb_build_object()) ||
+      CASE WHEN jsonb_typeof(unit.result::jsonb) = 'object' THEN unit.result::jsonb ELSE jsonb_build_object() END ||
       jsonb_build_object(
         'error_category', 'provider_rate_limited',
         'not_before', to_jsonb($4::timestamptz),
@@ -1206,7 +1206,7 @@ SET status = 'dispatching',
     available_at = $4,
     error = 'provider_unit_chunk_continuation',
     result = (
-      COALESCE(unit.result::jsonb, jsonb_build_object()) ||
+      CASE WHEN jsonb_typeof(unit.result::jsonb) = 'object' THEN unit.result::jsonb ELSE jsonb_build_object() END ||
       jsonb_build_object(
         'error_category', 'provider_unit_chunk_continuation',
         'not_before', to_jsonb($4::timestamptz)

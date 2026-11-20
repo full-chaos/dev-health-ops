@@ -1,0 +1,11 @@
+REVISION	UPDATED                 	STATUS    	CHART               	APP VERSION	DESCRIPTION     
+8       	Mon Mar 02 11:02:40 2026	superseded	edge-proxy-3.7.2     	3.7.2      	Upgrade complete
+9       	Tue Mar 03 09:41:27 2026	deployed  	edge-proxy-3.7.2     	3.7.2      	Upgrade complete
+R1 newest 9 deployed
+R2 pods 2 of 2 Ready
+R2 image ok
+R2 restarts 0
+R3 reload Tue Mar 03 09:41:27 2026
+R3 config hash ok
+R3 snippets 0
+R3 reload lines: 1

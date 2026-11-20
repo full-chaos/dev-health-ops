@@ -1,0 +1,4 @@
+SCRAPE-POD acme-app-auth-068115991-b54vj 198.51.100.84
+SCRAPE-POD acme-app-auth-594caf4aa-dqhgf 198.51.100.24
+SCRAPE series 2 of 2
+SCRAPE PASS (2 pods)

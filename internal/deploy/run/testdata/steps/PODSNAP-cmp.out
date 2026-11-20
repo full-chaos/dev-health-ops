@@ -1,0 +1,23 @@
+PODSNAP acme-app-api-28183edf1-n4l2t kept
+PODSNAP acme-app-api-ba18beb8d-nn8qj kept
+PODSNAP acme-app-api-27805dada-55l29 kept
+PODSNAP acme-app-query-3ad79c8a4-8n7k5 kept
+PODSNAP acme-app-query-987177422-s6sml kept
+PODSNAP acme-app-query-adcacd517-rh7h8 kept
+PODSNAP acme-app-worker-batch-303796ba0-b5bg4 kept
+PODSNAP acme-app-worker-batch-83e5e65c7-c2jbk kept
+PODSNAP acme-app-worker-batch-55ad15620-9vvff kept
+PODSNAP acme-app-worker-sync-2f81567bc-skbhm kept
+PODSNAP acme-app-worker-sync-7a15ae49d-hzjjl kept
+PODSNAP acme-app-worker-stream-56b4aba5d-4l7x7 kept
+PODSNAP acme-app-worker-stream-7385d5753-f8lkb kept
+PODSNAP acme-app-scheduler-94bd00af9-98kcq kept
+PODSNAP acme-app-scheduler-c6aea78de-mctlc kept
+PODSNAP acme-app-scheduler-ba4d4f253-pk5nq kept
+PODSNAP acme-app-web-538bda721-846m7 exempt-target
+PODSNAP acme-app-web-793fd8e56-l72bg exempt-scaler
+PODSNAP acme-app-auth-4b7ee839d-mjqmc exempt-scaler
+PODSNAP acme-app-auth-1bce15e24-p6djn exempt-scaler
+PODSNAP before 21 pods: kept 16, missing 0, changed 0, exempt-target 1, exempt-scaler 4
+
+PODSNAP: PASS

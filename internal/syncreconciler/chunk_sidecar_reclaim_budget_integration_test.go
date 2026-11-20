@@ -4,6 +4,7 @@ package syncreconciler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -204,26 +205,24 @@ func TestChunkSidecarReclaimDeadlineCutStatementsStayChargedAndThrottle(t *testi
 	reclaim.limiter = newChunkReclaimLimiter(config.BytesPerMinute)
 	budget := DefaultStageBudgets()[StageChunkSidecarReclaim]
 	const ticks = 10
-	spent, throttled := 0, 0
+	cut, throttled := 0, 0
 	for tick := range ticks {
 		stageCtx, stageCancel := context.WithTimeout(ctx, budget)
-		started := time.Now()
 		result, stepErr := reclaim.Step(stageCtx, now, 100)
-		elapsed := time.Since(started)
 		stageCancel()
-		if elapsed >= budget {
-			spent++
+		if errors.Is(stepErr, context.DeadlineExceeded) && result.Bytes == 0 {
+			cut++
 		}
 		if result.Throttled {
 			throttled++
 		}
-		t.Logf("tick %d: %s throttled=%t (%v); limiter available %d bytes", tick, elapsed.Round(time.Millisecond),
-			result.Throttled, stepErr, reclaim.limiter.available(time.Now()))
+		t.Logf("tick %d: throttled=%t (%v); limiter available %d bytes", tick, result.Throttled, stepErr,
+			reclaim.limiter.available(time.Now()))
 	}
-	if spent > wantDeadlineCutsPerWindow || throttled == 0 {
-		t.Errorf("%d of %d ticks spent the whole %s budget and %d were throttled; want at most %d budget-long ticks "+
-			"in the window, then throttled ticks (a cut statement stays charged)",
-			spent, ticks, budget, throttled, wantDeadlineCutsPerWindow)
+	if cut > wantDeadlineCutsPerWindow || throttled == 0 || cut+throttled != ticks {
+		t.Errorf("%d of %d ticks were cut by the %s budget with nothing deleted and %d were throttled; want at most %d cut "+
+			"ticks in the window and every later tick throttled (a cut statement stays charged)",
+			cut, ticks, budget, throttled, wantDeadlineCutsPerWindow)
 	}
 }
 

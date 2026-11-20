@@ -44,11 +44,27 @@ func statesDriverMove(d MetricDelta) bool {
 	return ok && d.HasData && namesDrivers(d)
 }
 
+// oneTeamStatesMove says whether the value of a metric of a one-team request states a move (CHAOS-14379): a percent
+// between two measured values that is not exactly 0 %, or a rise from a measured 0, which is stated in absolute values
+// and has no percent. Not a steady value, not a value missing in a window, and not a work-item metric under a
+// repository filter (its value is the repo-linked calculation: no team-wide driver). The summary sentence and the
+// signal captions take this one predicate.
+func oneTeamStatesMove(d MetricDelta) bool {
+	if d.RepoFilterApplied != nil && *d.RepoFilterApplied && metricScope(d.Metric) == "team" {
+		return false
+	}
+	if d.FromZero() {
+		return true
+	}
+	_, ok := d.Percent()
+	return ok && d.HasData && namesDrivers(d)
+}
+
 // oneTeamDriverRows is the driver of a metric of a one-team request (CHAOS-14379): the team itself when the metric's
-// value states a move, so the driver has the value's own source, predicates and reducer; none otherwise. A value of the
-// items linked to the named repositories states no team-wide driver (statesDriverMove), so it gets none.
+// value states a move (oneTeamStatesMove), so the driver has the value's own source, predicates and reducer; none
+// otherwise.
 func oneTeamDriverRows(d MetricDelta, f Filters) []driverRow {
-	if !statesDriverMove(d) {
+	if !oneTeamStatesMove(d) {
 		return nil
 	}
 	return []driverRow{{ID: f.Scope.IDs[0]}}
@@ -65,13 +81,15 @@ func attachDriverCaptions(ctx context.Context, client QueryClient, f Filters, or
 	var scopeFilters = map[string]string{}
 	var bindings []dhclickhouse.Binding
 	for _, d := range deltas {
-		if !statesDriverMove(d) {
-			continue
-		}
 		scope := metricScope(d.Metric)
 		if oneTeamScope(scope, f) {
-			oneTeamRows[d.Metric] = oneTeamDriverRows(d, f)
-			labels[d.Metric] = d.Label
+			if rows := oneTeamDriverRows(d, f); rows != nil {
+				oneTeamRows[d.Metric] = rows
+				labels[d.Metric] = d.Label
+			}
+			continue
+		}
+		if !statesDriverMove(d) {
 			continue
 		}
 		filter, ok := scopeFilters[scope]

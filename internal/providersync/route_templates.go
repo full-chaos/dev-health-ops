@@ -31,6 +31,14 @@ const (
 	githubCodeScanningRoute = githubRepoRoute + "/code-scanning/alerts"
 	githubAdvisoriesRoute   = githubRepoRoute + "/security-advisories"
 
+	githubOrgTeamsRoute       = "/orgs/{org}/teams"
+	githubOrgTeamReposRoute   = "/orgs/{org}/teams/{slug}/repos"
+	githubOrgTeamMembersRoute = "/orgs/{org}/teams/{slug}/members"
+
+	gitlabGroupSubgroupsRoute = "/groups/{group}/subgroups"
+	gitlabGroupProjectsRoute  = "/groups/{group}/projects"
+	gitlabGroupMembersRoute   = "/groups/{group}/members"
+
 	graphQLRoute = "/graphql"
 
 	gitlabProjectRoute = "/projects/{project}"

@@ -115,8 +115,11 @@ func (*shapeRows) Err() error { return nil }
 func (*shapeRows) Close()     {}
 
 // shapeStore is the durable side: a write becomes durable only at a Commit of
-// the transaction that made it.
-type shapeStore struct{ durable []string }
+// the transaction that made it. commits counts the Commit calls that succeeded.
+type shapeStore struct {
+	durable []string
+	commits int
+}
 
 type shapeTx struct {
 	pgx.Tx
@@ -232,6 +235,7 @@ func (tx *shapeTx) Commit(context.Context) error {
 		return err
 	}
 	tx.store.durable = append(tx.store.durable, tx.open...)
+	tx.store.commits++
 	tx.open = nil
 	return nil
 }
@@ -304,6 +308,7 @@ func shapeCoordinator(t *testing.T, ids []string) *pgxpool.Pool {
 // shapeTick is what one tick did: items durable after it, and the pass line.
 type shapeTick struct {
 	committed int
+	commits   int
 	line      map[string]any
 	err       error
 }
@@ -376,7 +381,7 @@ func runShape(t *testing.T, pass, shape string, ticks int) ([]shapeTick, *shapeS
 				})
 			}
 		}
-		before := len(store.durable)
+		before, commitsBefore := len(store.durable), store.commits
 		captured, restore := captureSlogRecords(t)
 		now := time.Date(2026, 9, 8, 12, 0, tick, 0, time.UTC)
 		var err error
@@ -409,7 +414,7 @@ func runShape(t *testing.T, pass, shape string, ticks int) ([]shapeTick, *shapeS
 		}
 		line, _ := findSlogRecord(*captured, message)
 		restore()
-		results = append(results, shapeTick{committed: len(store.durable) - before, line: line, err: err})
+		results = append(results, shapeTick{committed: len(store.durable) - before, commits: store.commits - commitsBefore, line: line, err: err})
 	}
 	return results, store
 }
@@ -440,6 +445,11 @@ func TestOrphanedUnitRearmReachesTheTailBehindRepeatableSkips(t *testing.T) {
 	if got := shapeCommitted(ticks); got[0] != 1 {
 		t.Fatalf("committed per tick = %v, want the tail on tick 1 (main commits it on tick 1)", got)
 	}
+	for index, tick := range ticks {
+		if tick.commits != tick.committed {
+			t.Fatalf("tick %d: %d commits for %d re-arms, want one commit per re-arm and none for a skip", index+1, tick.commits, tick.committed)
+		}
+	}
 	assertDurableOnce(t, store)
 }
 
@@ -456,6 +466,11 @@ func TestOrphanedUnitRearmKeepsEachCommittedItemWhenTheDeadlineEndsThePass(t *te
 			}
 			if first.err == nil || first.line["ran"] != false || first.line["left"] == int64(0) {
 				t.Fatalf("tick 1 pass line = %v err=%v, want ran=false with the items left", first.line, first.err)
+			}
+			for index, tick := range ticks {
+				if tick.line["re_armed"] != int64(tick.committed) {
+					t.Fatalf("tick %d: re_armed=%v but %d committed, want re_armed to count committed re-arms only", index+1, tick.line["re_armed"], tick.committed)
+				}
 			}
 			total := 0
 			for _, tick := range ticks {

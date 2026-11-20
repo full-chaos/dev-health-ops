@@ -100,3 +100,19 @@ func TestReportTeamChartLiveFirst(t *testing.T) {
 	})
 	wantTeamChart(t, "team P", e.teamChart(org, "P"), map[string]float64{"2026-02-01": 3, "2026-02-02": 6})
 }
+
+// Two organizations never mix through the team source of a one-team chart.
+func TestReportTeamChartNeverMixesTwoOrgs(t *testing.T) {
+	e := startPooledEnv(t)
+	const orgA, orgB = "org-14353-chart-two-a", "org-14353-chart-two-b"
+	e.seedTeamChartRows(orgA, []teamChartRow{
+		{"2026-02-01", "P", 3, "2026-02-02 09:00:00", ""},
+		{"2026-02-02", "P", 4, "2026-02-02 10:00:00", "org"}, {"2026-02-02", "P", 7, "2026-02-02 10:00:00", "team"},
+	})
+	e.seedTeamChartRows(orgB, []teamChartRow{
+		{"2026-02-02", "P", 70, "2026-02-02 11:00:00", "team"}, {"2026-02-03", "P", 90, "2026-02-03 11:00:00", "team"},
+		{"2026-02-02", "C", 20, "2026-02-02 11:00:00", "team"},
+	})
+	wantTeamChart(t, "org A team P", e.teamChart(orgA, "P"), map[string]float64{"2026-02-01": 3, "2026-02-02": 7})
+	wantTeamChart(t, "org A team C (rows in org B only)", e.teamChart(orgA, "C"), map[string]float64{})
+}

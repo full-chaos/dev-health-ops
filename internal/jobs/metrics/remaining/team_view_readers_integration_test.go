@@ -186,3 +186,27 @@ func TestJobsTeamReadsLiveFirst(t *testing.T) {
 		Throughput: []int{3, 6}, Backlog: 4, WIP: []float64{5, 4}, TP: []float64{3, 6}, Cycle: []float64{10, 12},
 	})
 }
+
+// Two organizations never mix through the team view: the job callers scope their where by org_id, and the pick keys
+// by org_id too. Org B holds rows of the same team, scope and days with other values, and a day of its own; a read of
+// org A returns org A's rows only.
+func TestJobsTeamReadsNeverMixTwoOrgs(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	conn := startTeamViewStore(ctx, t)
+	t1, t2, t3 := teamViewVersions()
+	const orgA, orgB = "org-14353-two-a", "org-14353-two-b"
+	seedTeamViewRows(ctx, t, conn, orgA, []teamViewRow{
+		{1, "S", "P", 3, 5, hours(10), t1, ""},
+		{2, "S", "P", 4, 6, hours(12), t2, "org"}, {2, "S", "P", 7, 8, hours(14), t2, "team"},
+	})
+	seedTeamViewRows(ctx, t, conn, orgB, []teamViewRow{
+		{1, "S", "P", 30, 50, hours(100), t1, ""},
+		{2, "S", "P", 40, 60, hours(120), t3, "org"}, {2, "S", "P", 70, 80, hours(140), t3, "team"},
+		{2, "S", "C", 20, 30, hours(200), t3, "team"},
+	})
+	wantTeamViewReads(t, "org A team P", readTeamView(ctx, t, conn, orgA, "P"), teamViewReads{
+		Throughput: []int{3, 7}, Backlog: 8, WIP: []float64{5, 8}, TP: []float64{3, 7}, Cycle: []float64{10, 14},
+	})
+	wantTeamViewReads(t, "org A team C (rows in org B only)", readTeamView(ctx, t, conn, orgA, "C"), teamViewReads{})
+}

@@ -143,12 +143,11 @@ func TeamPick(table, newest string) string {
 		}
 	}
 	view := table + "." + Column
-	return fmt.Sprintf(`(
-        SELECT * FROM %[1]s
-        WHERE %[2]s IN ('%[3]s', '%[4]s', '%[5]s')
-        ORDER BY %[6]s DESC, multiIf(%[2]s = '%[5]s', 2, %[2]s = '%[4]s', 1, 0) DESC, %[7]s.computed_at DESC
-        LIMIT 1 BY %[8]s
-    )`, newest, view, teamkeytables.LegacyRowView, teamkeytables.OrgRowView, teamkeytables.TeamRowView,
+	return "(\n        SELECT * FROM " + newest + fmt.Sprintf(`
+        WHERE %[1]s IN ('%[2]s', '%[3]s', '%[4]s')
+        ORDER BY %[5]s DESC, multiIf(%[1]s = '%[4]s', 2, %[1]s = '%[3]s', 1, 0) DESC, %[6]s.computed_at DESC
+        LIMIT 1 BY %[7]s
+    )`, view, teamkeytables.LegacyRowView, teamkeytables.OrgRowView, teamkeytables.TeamRowView,
 		declared.LiveRow(table+"."), table, strings.Join(key, ", "))
 }
 

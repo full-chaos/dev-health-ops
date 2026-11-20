@@ -563,3 +563,88 @@ func TestTriggerBackstopMembershipRequiresOperateScope(t *testing.T) {
 		t.Fatalf("runs=%d builds=%d, want 0/0", runs, builds)
 	}
 }
+
+// TestTriggerBackstopPrintsTheGenerationOfTheRunItStarted: for each
+// trigger-backstop path, a fresh run prints the request generation, and a
+// :retry-1 run (started after the first run was canceled) prints its own
+// generation, the one stored on the run.
+func TestTriggerBackstopPrintsTheGenerationOfTheRunItStarted(t *testing.T) {
+	cases := []struct {
+		family string
+		extra  []string
+	}{
+		{family: "work_item_attribution"},
+		{family: "capacity", extra: []string{"--all-teams"}},
+		{family: "recommendations", extra: []string{"--all-teams"}},
+		{family: "membership_backfill"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.family, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			runtime := triggerIntegrationRuntime(t, ctx, commandAuthorizer{})
+			pool := runtime.pools.Domain
+			trigger := func() map[string]any {
+				t.Helper()
+				var stdout, stderr bytes.Buffer
+				code := dispatchMetrics(ctx, runtime, append([]string{
+					"remaining", "trigger-backstop", "--family", tc.family,
+					"--org", validTriggerOrg, "--review-evidence", "testing",
+					"--reason", "operator_test", "--correlation-id", "corr-1",
+				}, tc.extra...), &stdout, &stderr)
+				result := map[string]any{}
+				if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || code != 0 {
+					t.Fatalf("trigger: code=%d stdout=%q stderr=%q err=%v", code, stdout.String(), stderr.String(), err)
+				}
+				return result
+			}
+			storedGeneration := func(runID any) string {
+				t.Helper()
+				var generation string
+				if err := pool.QueryRow(ctx, "SELECT generation FROM remaining_metric_runs WHERE id = $1::uuid", runID).Scan(&generation); err != nil {
+					t.Fatal(err)
+				}
+				return generation
+			}
+
+			first := trigger()
+			base, _ := first["generation"].(string)
+			if first["status"] != "started" || !strings.HasPrefix(base, "manual-trigger:"+tc.family+":") || storedGeneration(first["run_id"]) != base {
+				t.Fatalf("fresh run printed %v (stored %q)", first, storedGeneration(first["run_id"]))
+			}
+			store, err := remaining.NewPostgresStore(pool)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.CancelRun(ctx, first["run_id"].(string)); err != nil {
+				t.Fatal(err)
+			}
+
+			retry := trigger()
+			if retry["status"] != "started" || retry["run_id"] == first["run_id"] {
+				t.Fatalf("retry trigger: %v", retry)
+			}
+			if want := base + ":retry-1"; retry["generation"] != want || storedGeneration(retry["run_id"]) != want {
+				t.Fatalf("retry run printed generation %v, stored %q, want %q", retry["generation"], storedGeneration(retry["run_id"]), want)
+			}
+			if tc.family == "membership_backfill" {
+				var fence string
+				if err := pool.QueryRow(ctx, `
+SELECT coalesce(outbox.prerequisite_completion_key, '')
+FROM worker_job_outbox AS outbox
+WHERE outbox.dedupe_key = 'remaining:partition:' || $1::text`, retry["partition_id"]).Scan(&fence); err != nil {
+					t.Fatal(err)
+				}
+				var buildGeneration string
+				if err := pool.QueryRow(ctx,
+					"SELECT correlation_id FROM work_graph_execution_requests WHERE 'work_graph_execution_request:' || id::text = $1", fence,
+				).Scan(&buildGeneration); err != nil {
+					t.Fatalf("graph build behind the retry partition (fence %q): %v", fence, err)
+				}
+				if buildGeneration != retry["generation"] {
+					t.Fatalf("retry partition waits on the build of %q, printed generation %v", buildGeneration, retry["generation"])
+				}
+			}
+		})
+	}
+}

@@ -3022,11 +3022,17 @@ func dispatchMetricsRemainingTriggerBackstop(
 		case outcome.AlreadyRan:
 			status = "already_ran"
 		}
+		// A ":retry-N" run carries its own generation; print the one the run
+		// (and, for membership, its graph build) is stored under.
+		printedGeneration := generation
+		if outcome.Generation != "" {
+			printedGeneration = outcome.Generation
+		}
 		result := map[string]any{
 			"family":          *family,
 			"org":             *org,
 			"day":             dayString,
-			"generation":      generation,
+			"generation":      printedGeneration,
 			"review_evidence": *reviewEvidence,
 			"status":          status,
 			"run_id":          outcome.RunID,

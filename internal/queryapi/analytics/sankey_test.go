@@ -212,8 +212,8 @@ func TestCompileSankey_NodesOrderByDimOrderMatchesPathPositionNotAlphabet(t *tes
 	// position", and the value/node_id tie-break preserves the existing
 	// per-branch top-N ordering globally instead of leaving it to
 	// whatever physical row order the union happens to hand back.
-	if !strings.Contains(nodes.sql, "ORDER BY dim_order ASC, value DESC, node_id ASC") {
-		t.Errorf("expected an outer ORDER BY dim_order ASC, value DESC, node_id ASC, got: %s", nodes.sql)
+	if !strings.Contains(nodes.sql, "ORDER BY dim_order ASC, value DESC, node_sort ASC") {
+		t.Errorf("expected an outer ORDER BY dim_order ASC, value DESC, node_sort ASC, got: %s", nodes.sql)
 	}
 
 	// dim_order must never leak into the projected columns -- queryNodes

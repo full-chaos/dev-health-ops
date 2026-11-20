@@ -201,7 +201,7 @@ func TestRepeatedListedSectionPrintsAChartOnce(t *testing.T) {
 // The fallback heading is the only "## Other Charts" heading: a plan section whose title is the same keeps a distinct title.
 func TestPlanSectionTitledOtherChartsKeepsOneFallbackHeading(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"other charts", "Other Charts", "other_charts", "OTHER_CHARTS"} {
+	for _, name := range []string{"other charts", "Other Charts"} {
 		unlisted := cicdCharts("team")
 		markdown := renderPlan(t, []string{"summary", name}, unlisted)
 		requireTables(t, markdown, unlisted)
@@ -214,20 +214,39 @@ func TestPlanSectionTitledOtherChartsKeepsOneFallbackHeading(t *testing.T) {
 		covered := cicdCharts("team")
 		markdown = renderPlan(t, []string{"summary", name, "cicd"}, covered)
 		requireTables(t, markdown, covered)
-		if got := strings.Count(markdown, "\n## Other Charts\n"); got != 0 {
-			t.Errorf("section %q with every chart printed: %d fallback headings, want 0:\n%s", name, got, markdown)
+		if got := strings.Count(strings.ToLower(markdown), "\n## other charts\n"); got != 1 {
+			t.Errorf("section %q with every chart printed: %d Other Charts headings, want only its own:\n%s", name, got, markdown)
 		}
-		if got := strings.Count(markdown, "\n## Other Charts (plan section)\n"); got != 1 {
-			t.Errorf("section %q with every chart printed: its heading count = %d, want 1:\n%s", name, got, markdown)
+		if got := strings.Count(markdown, "\n## "+name+"\n"); got != 1 {
+			t.Errorf("section %q with every chart printed: its heading count = %d, want 1 as written:\n%s", name, got, markdown)
+		}
+		if strings.Contains(markdown, "(plan section)") {
+			t.Errorf("section %q renamed with no fallback printed:\n%s", name, markdown)
 		}
 	}
 }
 
-// A Markdown reader drops the closing hashes of a heading: a plan section whose title shows as "Other Charts" must not
-// make a second heading of that name.
+// A section named other_charts shows as typed, so it is not "Other Charts" and keeps its own heading beside the fallback.
+func TestPlanSectionOtherChartsWithUnderscoreShowsAsTyped(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"other_charts", "OTHER_CHARTS"} {
+		unlisted := cicdCharts("team")
+		markdown := renderPlan(t, []string{"summary", name}, unlisted)
+		requireTables(t, markdown, unlisted)
+		if got := strings.Count(markdown, "\n## Other Charts\n"); got != 1 {
+			t.Errorf("section %q: %d Other Charts headings, want 1 (the fallback):\n%s", name, got, markdown)
+		}
+		if !strings.Contains(markdown, "\n## "+strings.ReplaceAll(name, "_", "\\_")+"\n") && !strings.Contains(markdown, "\n## "+name+"\n") {
+			t.Errorf("section %q does not show as typed:\n%s", name, markdown)
+		}
+	}
+}
+
+// A plan section whose title shows as "Other Charts" must not make a second heading of that name. A "#" suffix is
+// escaped, so it is part of the title and such a section keeps its name (TestOtherChartsCollisionIsExactName).
 func TestPlanSectionTitleShowingAsOtherChartsKeepsOneFallbackHeading(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"Other Charts ##", "other charts  #  ", "OTHER CHARTS", "Other Charts", "Other Charts ###"} {
+	for _, name := range []string{"OTHER CHARTS", "Other Charts"} {
 		unlisted := cicdCharts("team")
 		markdown := renderPlan(t, []string{"summary", name}, unlisted)
 		requireTables(t, markdown, unlisted)
@@ -246,8 +265,8 @@ func TestPlanSectionTitleShowingAsOtherChartsKeepsOneFallbackHeading(t *testing.
 		covered := cicdCharts("team")
 		markdown = renderPlan(t, []string{"summary", name, "cicd"}, covered)
 		requireTables(t, markdown, covered)
-		if got := strings.Count(markdown, "\n## Other Charts\n") + strings.Count(markdown, "\n## Other Charts ##\n"); got != 0 {
-			t.Errorf("section %q with every chart printed: %d lines show as the fallback heading, want 0:\n%s", name, got, markdown)
+		if got := strings.Count(markdown, "\n## "+name+"\n"); got != 1 || strings.Contains(markdown, "(plan section)") {
+			t.Errorf("section %q with every chart printed: %d headings as written, want 1 and no rename:\n%s", name, got, markdown)
 		}
 	}
 }

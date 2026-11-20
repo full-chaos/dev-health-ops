@@ -320,6 +320,7 @@ internal/cigates/workflows	workflows_venue_shards_test.go	ci/venue_oracle_weight
 internal/cigates/workflows	workflows_venue_shards_test.go	unexpressed	-	-
 internal/clicredentials	opensites_test.go	cmd	tree	*.go
 internal/clicredentials	opensites_test.go	internal	tree	*.go
+internal/deploy/inputs	hookrender_test.go	unexpressed	-	-
 internal/egressguard	egressguard_test.go	unexpressed	-	*.go
 internal/faultproxy	noship_test.go	.	tree	*
 internal/fixturescli	dropped_columns_census_test.go	internal/chmigrate/archive/sql	dir	*
@@ -505,6 +506,8 @@ internal/queryapi/investmentexplain	resolve_model_name_golden_test.go	internal/q
 internal/queryapi/pepgate	census_test.go	internal/queryapi/pepgate	dir	*
 internal/queryapi/rowview	census_test.go	cmd	tree	*.go
 internal/queryapi/rowview	census_test.go	internal	tree	*.go
+internal/queryapi/rowview	team_census_test.go	cmd	tree	*.go
+internal/queryapi/rowview	team_census_test.go	internal	tree	*.go
 internal/queryapi/server	build_routes_integration_test.go	unexpressed	-	-
 internal/queryapi/server	direct_env_reads_test.go	unexpressed	-	*.go
 internal/queryapi/server	edge_users_test.go	unexpressed	-	-
@@ -538,8 +541,11 @@ internal/schedulerservice	readiness_timeout_test.go	internal/schedulerservice	di
 internal/shadowvenue	requestsites_test.go	unexpressed	-	-
 internal/signingkey	keygen.go	unexpressed	-	-
 internal/signingkey	keygen_state_test.go	unexpressed	-	-
+internal/storage/clickhouse	batch_options_census_test.go	.	tree	*
+internal/storage/clickhouse/latestrow	latestrow_census_test.go	.	tree	*.go
 internal/storage/clickhouse/liverow	census_test.go	cmd	tree	*.go
 internal/storage/clickhouse/liverow	census_test.go	internal	tree	*.go
+internal/storage/clickhouse/liverow	gitversion_inventory_test.go	internal	tree	*.go
 internal/storage/postgres	api_authorization_platform_roles_test.go	internal/api	tree	*
 internal/storage/postgres	api_authorization_platform_roles_test.go	internal/apiservice	tree	*
 internal/storage/postgres	api_authorization_platform_roles_test.go	internal/pgmigrate/sql	dir	*
@@ -608,3 +614,4 @@ internal/workerservice	dependencies_test.go	unexpressed	-	-
 internal/workerservice	reports_test.go	unexpressed	-	-
 internal/workerservice	venue_golden_address_test.go	unexpressed	-	-
 internal/workerservice	writer_metrics_registration_test.go	unexpressed	-	-
+tools/lcovmerge	main.go	unexpressed	-	-

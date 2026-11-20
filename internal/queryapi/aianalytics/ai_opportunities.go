@@ -115,6 +115,9 @@ type opportunity struct {
 	idKey string
 }
 
+// anchorOrderKey pads the anchor to the uint64 width so the string compare of opportunityLess is the numeric order of the read's ORDER BY.
+func anchorOrderKey(anchor uint32) string { return fmt.Sprintf("%020d", uint64(anchor)) }
+
 // repetitiveClusterKey is the id key of one repetitive-change cluster past its repository: the title prefix, the
 // work type and the cluster's anchor, the number of its oldest pull request. A repository has one cluster per
 // author, work type and prefix (CHAOS-14266); two authors' clusters hold disjoint pull requests, so the anchor tells
@@ -316,7 +319,6 @@ type clusterRow struct {
 	RepoID   string
 	Count    int64
 	Prefix   string
-	Author   string
 	WorkType string
 	Refs     []string
 	Anchor   uint32
@@ -335,7 +337,7 @@ func loadClusters(ctx context.Context, client QueryClient, statement string, bin
 			n uint64
 		)
 		if withPrefix {
-			if err := rs.Scan(&r.RepoID, &r.Prefix, &n, &r.Refs, &r.Author, &r.WorkType, &r.Anchor); err != nil {
+			if err := rs.Scan(&r.RepoID, &r.Prefix, &n, &r.Refs, &r.WorkType, &r.Anchor); err != nil {
 				return nil, fmt.Errorf("aianalytics: opportunity cluster scan: %w", err)
 			}
 		} else if err := rs.Scan(&r.RepoID, &n, &r.Refs); err != nil {
@@ -358,16 +360,16 @@ func firstFive(refs []string) []string {
 	return refs
 }
 
+// ORDER BY ends with the anchor: within one prefix and work type two author clusters hold disjoint PRs, so their anchors differ (the statement takes no SQL comments).
 const repetitiveStatement = `SELECT
     toString(pr.repo_id) AS repo_id,
     lower(arrayStringConcat(arraySlice(splitByChar(' ', coalesce(pr.title, '')), 1, 3), ' ')) AS title_prefix,
-    count() AS prs_total,
-    groupArray(concat('git_pull_requests:', toString(pr.repo_id), ':', toString(pr.number))) AS pr_refs,
-    coalesce(pr.author_email, pr.author_name, '') AS cluster_author,
+    uniqExact(pr.number) AS prs_total,
+    groupUniqArray(concat('git_pull_requests:', toString(pr.repo_id), ':', toString(pr.number))) AS pr_refs,
     coalesce(nullIf(wi.type, ''), 'pull_request') AS cluster_work_type,
     argMin(pr.number, (pr.created_at, pr.number)) AS cluster_anchor
-FROM git_pull_requests AS pr
-LEFT JOIN work_graph_issue_pr AS link
+FROM git_pull_requests AS pr FINAL
+LEFT JOIN work_graph_issue_pr AS link FINAL
     ON link.repo_id = pr.repo_id AND link.pr_number = pr.number
     AND link.org_id = {org_id:String}
 INNER JOIN ai_attribution_resolved AS attr
@@ -385,7 +387,7 @@ WHERE pr.created_at >= now() - INTERVAL 30 DAY@@REPO@@
   AND coalesce(pr.title, '') != ''
 GROUP BY repo_id, coalesce(pr.author_email, pr.author_name, ''), coalesce(nullIf(wi.type, ''), 'pull_request'), title_prefix
 HAVING prs_total >= {cluster_min:UInt32}
-ORDER BY prs_total DESC, repo_id ASC, title_prefix ASC, cluster_author ASC, cluster_work_type ASC
+ORDER BY prs_total DESC, repo_id ASC, title_prefix ASC, cluster_work_type ASC, cluster_anchor ASC
 LIMIT 100`
 
 type titleRule struct {
@@ -421,7 +423,7 @@ const titleToilStatement = `SELECT
     toString(pr.repo_id) AS repo_id,
     count() AS prs_total,
     groupArray(concat('git_pull_requests:', toString(pr.repo_id), ':', toString(pr.number))) AS pr_refs
-FROM git_pull_requests AS pr
+FROM git_pull_requests AS pr FINAL
 LEFT ANTI JOIN ai_attribution_resolved AS attr
     ON attr.repo_id = pr.repo_id
     AND attr.subject_type = 'pull_request'
@@ -472,7 +474,7 @@ FROM (
     SELECT *
     FROM testops_test_metrics_daily
     WHERE org_id = {org_id:String}
-    ORDER BY computed_at DESC
+    ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC
     LIMIT 1 BY org_id, repo_id, day
 ) AS testops_test_metrics_daily
 WHERE day >= today() - 30@@REPO@@
@@ -670,7 +672,7 @@ func workflowOpportunities(ctx context.Context, client QueryClient, orgID, repoI
 			"Repetitive AI change pattern in "+repo,
 			strconv.FormatInt(r.Count, 10)+" AI-assisted PRs shared the title prefix '"+prefix+"' with the same author/work type over the last 30 days.",
 			scoreDeltaRaw(float64(r.Count)/float64(repetitiveClusterMinPRs), 1.0), refs).
-			sortedBy(float64(r.Count), r.Prefix, r.Author, r.WorkType)
+			sortedBy(float64(r.Count), r.Prefix, r.WorkType, anchorOrderKey(r.Anchor))
 		o.idKey = repetitiveClusterKey(r.Prefix, r.WorkType, r.Anchor)
 		out = append(out, o)
 	}

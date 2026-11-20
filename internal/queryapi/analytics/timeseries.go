@@ -228,6 +228,8 @@ func CompileTimeseries(req TimeseriesRequest, orgID string, timeoutSeconds int, 
 	}
 	owner := newTestopsOwner(orgID, req.Measure, []Dimension{req.Dimension}, useInvestment, filters)
 	dimCol = owner.column(req.Dimension, dimCol)
+	dimOut := keyProjection(req.Dimension, useInvestment, dimCol)
+	dimGroup := groupRef("dimension_value", dimOut, dimCol)
 
 	fc, err := translateFilters(orgID, filters, useInvestment, owner.filterColumns(req.Measure, useInvestment))
 	if err != nil {
@@ -288,10 +290,10 @@ FROM %s
 WHERE %s
   AND %s.org_id = {org_id:String}
 %s
-GROUP BY bucket, dimension_value
-ORDER BY bucket ASC, value DESC, dimension_value ASC
+GROUP BY bucket, %s
+ORDER BY bucket ASC, value DESC, %s ASC
 %s
-`, dateTruncUnit(req.Interval), dateCol, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, statementSettings(source, timeoutSeconds))
+`, dateTruncUnit(req.Interval), dateCol, dimOut, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, dimGroup, dimGroup, statementSettings(source, timeoutSeconds))
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
@@ -311,6 +313,14 @@ ORDER BY bucket ASC, value DESC, dimension_value ASC
 // buckets appended in row-arrival order (the SQL's own `ORDER BY bucket
 // ASC` already sorts them; Python does not re-sort after grouping,
 // neither does this).
+//
+// The REPO series keyed "" is the unassigned group: the work items with no
+// repository, which work_item_completion_daily stores with a NULL repo_id
+// (workitemengine). It is ONE series whose buckets sum those rows; it is not
+// left out, because no other field of the answer would show that share. A
+// repository's key is its UUID text, never "", so the group cannot merge
+// with a repository. "" names the unassigned repository on the investment
+// path too (dbColumn).
 //
 // The value column is scanned into *float64, not float64 -- CHAOS-4657
 // (chris 2026-08-31 04:18, Option B), the SAME shape and SAME product

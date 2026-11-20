@@ -75,6 +75,7 @@ internal/cigates/chartgates	worker_secret_env_scan_test.go	**/internal/...
 internal/cigates/chartgates	worker_secret_env_scan_test.go	unexpressed
 internal/cigates/chdatetime	scan_test.go	unexpressed
 internal/cigates/checkgo	ci_script_helpers_test.go	unexpressed
+internal/cigates/checkgo	go_test_cover_args_test.go	unexpressed
 internal/cigates/checkgo	go_test_leg_json_test.go	unexpressed
 internal/cigates/checkgo	integration_leg_json_test.go	unexpressed
 internal/cigates/checkgo	race_solo_test.go	unexpressed
@@ -195,6 +196,7 @@ internal/cigates/workflows	workflows_path_filters_test.go	unexpressed
 internal/cigates/workflows	workflows_wire_parity_test.go	unexpressed
 internal/cli	flagparse_census_test.go	cmd/dho
 internal/cli	flagparse_census_test.go	unexpressed
+internal/deploy/inputs	hookrender_test.go	unexpressed
 internal/fixturescli	provider_worlds_producer_integration_test.go	unexpressed
 internal/fixturescli	synthetic_integration_test.go	cmd/dho
 internal/goapiproof	legclient_pin_test.go	unexpressed
@@ -250,6 +252,8 @@ internal/storage/clickhouse	open_proxy_test.go	unexpressed
 internal/storage/clickhouse	param_types_census_test.go	cmd/...
 internal/storage/clickhouse	param_types_census_test.go	internal/...
 internal/storage/clickhouse	param_types_census_test.go	unexpressed
+internal/storage/clickhouse/latestrow	latestrow_census_test.go	...
+internal/storage/clickhouse/latestrow	latestrow_census_test.go	unexpressed
 internal/storage/postgres	api_authorization_integration_test.go	unexpressed
 internal/storage/postgres	openers_test.go	unexpressed
 internal/storage/postgres	provision_script_integration_test.go	unexpressed

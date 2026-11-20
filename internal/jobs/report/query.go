@@ -116,6 +116,25 @@ var unknownConfidenceCounter = func() metric.Int64Counter {
 	return counter
 }()
 
+const unchartedStoredSpecCounterName = "dev_health_report_plan_uncharted_stored_spec_total"
+
+var unchartedStoredSpecCounter = func() metric.Int64Counter {
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/jobs/report").Int64Counter(
+		unchartedStoredSpecCounterName,
+		metric.WithDescription("Stored chart specs dropped at decode because their metric is not a registry key."))
+	if err != nil {
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(unchartedStoredSpecCounterName)
+	}
+	return counter
+}()
+
+// warnUnchartedStoredSpec logs one WARN (plan id and the reason, never the metric name) and counts a stored chart spec
+// whose metric is not an exact registry key. The run goes on and the report lists the name as uncharted.
+func warnUnchartedStoredSpec(planID string) {
+	slog.Warn("stored chart spec dropped", "plan_id", planID, "reason", unchartedNoMetric)
+	unchartedStoredSpecCounter.Add(context.Background(), 1)
+}
+
 // warnUnknownConfidence logs one WARN (plan id, never the value) and counts a stored plan whose confidence level is unknown.
 func warnUnknownConfidence(ctx context.Context, planID, level string) {
 	if confidenceLevels[level] {
@@ -178,6 +197,10 @@ func decodeReportDefinition(
 	if result.Plan.ConfidenceThreshold == "" {
 		result.Plan.ConfidenceThreshold = "direct_fact"
 	}
+	named := map[string]bool{}
+	for _, entry := range uncharted {
+		named[entry.Label] = true
+	}
 	for _, chart := range plan.ChartSpecs {
 		groupBy, title := "", ""
 		if chart.GroupBy != nil {
@@ -195,6 +218,14 @@ func decodeReportDefinition(
 		if chart.OrganizationID != organizationID {
 			return ReportDefinition{}, ErrContractMismatch
 		}
+		if _, registered := supportedMetrics[chart.Metric]; !registered {
+			warnUnchartedStoredSpec(chart.PlanID)
+			if strings.TrimSpace(chart.Metric) != "" && !named[chart.Metric] {
+				named[chart.Metric] = true
+				result.Plan.UnchartedMetrics = append(result.Plan.UnchartedMetrics, UnchartedMetric{Label: chart.Metric, Reason: unchartedNoMetric})
+			}
+			continue
+		}
 		result.Charts = append(result.Charts, ChartSpec{
 			ChartID: chart.ChartID, PlanID: chart.PlanID, ChartType: chart.ChartType, Metric: chart.Metric,
 			GroupBy: groupBy, FilterTeams: append([]string(nil), chart.FilterTeams...),
@@ -204,6 +235,14 @@ func decodeReportDefinition(
 	}
 	return result, nil
 }
+
+const (
+	reportTypeWeeklyHealth  = "weekly_health"
+	reportTypeMonthlyReview = "monthly_review"
+)
+
+// builtinReportTypes holds every report type the product builds (defaultWirePlan); only these keys show title-cased.
+var builtinReportTypes = map[string]struct{}{reportTypeWeeklyHealth: {}, reportTypeMonthlyReview: {}}
 
 func defaultWirePlan(reportID, organizationID string, parameters map[string]any, now time.Time) wirePlan {
 	days := 7
@@ -217,9 +256,9 @@ func defaultWirePlan(reportID, organizationID string, parameters map[string]any,
 	}
 	end := now.Format(time.DateOnly)
 	start := now.AddDate(0, 0, -days).Format(time.DateOnly)
-	reportType, comparison := "weekly_health", "prior_week"
+	reportType, comparison := reportTypeWeeklyHealth, "prior_week"
 	if days > 7 {
-		reportType, comparison = "monthly_review", "prior_month"
+		reportType, comparison = reportTypeMonthlyReview, "prior_month"
 	}
 	plan := wirePlan{
 		PlanID: "auto-" + reportID, ReportType: reportType, Audience: "team_lead",

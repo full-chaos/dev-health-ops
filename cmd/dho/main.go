@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/billingcli"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/contractcheck"
+	"github.com/full-chaos/dev-health-ops/internal/deploycli"
 	"github.com/full-chaos/dev-health-ops/internal/fixturescli"
 	"github.com/full-chaos/dev-health-ops/internal/goapicli"
 	"github.com/full-chaos/dev-health-ops/internal/maintenancecli"
@@ -50,6 +51,7 @@ func commands() []cli.Command {
 		pushlifecyclecli.Command(),
 		billingcli.Command(),
 		contractcheck.Command(),
+		deploycli.Command(),
 		fixturescli.Command(),
 		goapicli.Command(),
 		maintenancecli.Command(),

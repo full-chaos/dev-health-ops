@@ -85,6 +85,7 @@ devhealth_auth_push_reconcile_drift	class	code: internal/auth/pushreconcile/reco
 devhealth_auth_push_reconcile_runs_total	outcome	code: internal/auth/pushreconcile/reconcilejob/probe.go
 dev_health_categorize_byo_optin_unreadable_total	reason	code: internal/jobs/investment/categorizebyo.go
 dev_health_report_plan_unknown_confidence_total		code: internal/jobs/report/query.go
+dev_health_report_plan_uncharted_stored_spec_total		code: internal/jobs/report/query.go
 dev_health_generation_repair_failures_total	step	code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_generation_repair_partial_total		code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_ic_finalize_refused_empty_org_total		code: internal/jobs/metrics/daily/icfinalize/executor.go
@@ -233,6 +234,7 @@ dev_health_execution_liveness_probe_failures_total	probe,reason	code: internal/p
 dev_health_execution_liveness_seconds_since_success	probe	code: internal/platform/selfprobe/monitor.go
 dev_health_gate_penalize_errors_total	path,provider	code: internal/providerfoundation/budget.go
 dev_health_github_tree_walk_near_ceiling_total	limit	code: internal/providerfoundation/budget.go
+dev_health_github_tests_cursor_cut_list_dropped_total	list	code: internal/providerfoundation/budget.go
 dev_health_github_work_items_issue_list_cap_exceeded_total	reason	code: internal/providerfoundation/budget.go
 dev_health_github_work_items_issue_list_stopped_total	reason	code: internal/providerfoundation/budget.go
 dev_health_github_work_items_issue_list_tie_paged_total	reason	code: internal/providerfoundation/budget.go
@@ -273,6 +275,7 @@ dev_health_provider_inventory_page_cap_total	dataset,provider	code: internal/pro
 dev_health_provider_open_run_skipped_total	dataset,provider,reason	code: internal/providerfoundation/budget.go
 dev_health_provider_per_run_truncation_total	cause,component,dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_prepared_snapshot_discarded_total	dataset,provider,reason	code: internal/providerfoundation/budget.go
+dev_health_provider_rate_limit_episode_restart_total	dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_request_usage_dropped_requests_total		code: internal/providersync/request_usage.go
 dev_health_provider_request_usage_dropped_rows_total		code: internal/providersync/request_usage.go
 dev_health_provider_requests_total	class,provider	code: internal/providerfoundation/budget.go
@@ -305,6 +308,7 @@ dev_health_runtime_ready		code: internal/platform/health/server.go
 dev_health_runtime_required_checks		code: internal/platform/health/server.go
 dev_health_runtime_uptime_seconds		code: internal/platform/health/server.go
 dev_health_scheduler_explicit_datasets_without_row_total		code: internal/scheduler/sync/materializer.go
+dev_health_sync_coverage_backfill_resolutions_total	outcome	code: internal/synccoverage/metrics.go
 dev_health_sync_coverage_datasets_excluded_by_intent_total	provider	code: internal/synccoverage/metrics.go
 dev_health_sync_coverage_folded_key_resolutions_total	canonical_dataset_key	code: internal/synccoverage/metrics.go
 dev_health_sync_dispatch_advisory_lock_wait_total	outcome	code: internal/platform/workersignals/workersignals.go
@@ -529,3 +533,4 @@ worker_work_item_attribution_native_runs_total		code: internal/jobruntime/teleme
 worker_work_item_attribution_native_scoped_runs_total		code: internal/jobruntime/telemetry.go
 worker_workgraph_lease_release_lost_total		code: internal/jobruntime/telemetry.go
 dev_health_config_clickhouse_non_native_dsn	key	code: internal/platform/config/clickhouse_non_native.go
+dev_health_config_clickhouse_dsn_host_problem	cause,key	code: internal/platform/config/clickhouse_non_native.go

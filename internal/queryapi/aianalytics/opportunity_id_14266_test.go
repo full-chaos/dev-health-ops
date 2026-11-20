@@ -27,15 +27,16 @@ const (
 	secretName14266  = "Bob Hidden-Name"
 )
 
-// cluster14266 is one cluster row; its anchor (the oldest pull request) is the first number given.
-func cluster14266(prefix, author, workType string, n int, numbers ...string) map[string]any {
+// cluster14266 is one cluster row; its anchor (the oldest pull request) is the first number given. The author argument is
+// the cluster's identity in the cell's story only: the read does not select it.
+func cluster14266(prefix, _, workType string, n int, numbers ...string) map[string]any {
 	refs := []any{}
 	for _, number := range numbers {
 		refs = append(refs, "git_pull_requests:"+repo14266+":"+number)
 	}
 	anchor, _ := strconv.ParseUint(numbers[0], 10, 32)
 	return map[string]any{"repo_id": repo14266, "title_prefix": prefix, "prs_total": float64(n), "pr_refs": refs,
-		"cluster_author": author, "cluster_work_type": workType, "cluster_anchor": float64(anchor)}
+		"cluster_work_type": workType, "cluster_anchor": float64(anchor)}
 }
 
 // repetitiveIDs14266 answers aiOpportunities over the clusters and returns each REPETITIVE_CHANGE id by its first

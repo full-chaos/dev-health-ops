@@ -10,12 +10,15 @@
 //   - legacy (the empty string): every row written before the column, and every
 //     row of a writer that does not name it. It counts in every view;
 //   - org: the items counted once in the organization;
-//   - scope: the items counted once in each work scope.
+//   - scope: the items counted once in each work scope;
+//   - team: the items counted once for each team that owns them
+//     (work_item_metrics_daily and work_item_state_durations_daily only).
 //
 // A reader that sums across work scopes (an organization total, a team set, a
 // person) takes OrgPredicate. A reader that reads one work scope, or lists the
-// scopes, takes ScopePredicate. While no writer stores an org or a scope row,
-// both predicates keep every row.
+// scopes, takes ScopePredicate. A reader that answers for one team takes
+// TeamSource. While no writer stores an org, a scope or a team row, each form
+// reads what the legacy rows hold.
 //
 // The package holds SQL text only. It imports no store and no job package.
 package rowview
@@ -23,6 +26,7 @@ package rowview
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
@@ -77,4 +81,62 @@ func predicate(table, qualifier, view string) string {
 		qualifier = table
 	}
 	return fmt.Sprintf("(%s.%s IN ('%s', '%s'))", qualifier, Column, teamkeytables.LegacyRowView, view)
+}
+
+// teamTables are the tables whose writers store team rows.
+var teamTables = map[string]struct{}{
+	"work_item_metrics_daily":         {},
+	"work_item_state_durations_daily": {},
+}
+
+// teamSourceAlias is the alias of the picked rows inside TeamSource.
+const teamSourceAlias = "team_view"
+
+// TeamSource is the FROM source of a reader that answers for one team: one row
+// per key without row_view, (org_id, day, provider, work_scope_id, team_id[,
+// status]), and only live rows. Of the newest row of each view of a key (the
+// table read with FINAL) it picks, in one LIMIT 1 BY, a live row first, then the
+// team row, then the org row, then the legacy row. A day that no writer of team
+// rows computed reads its org rows (or its legacy rows), as the org form does;
+// a retracted team row (a row of zeros) never hides a live org row. The live-row
+// rule runs again after the pick, so a key whose views are all rows of zeros
+// leaves the result.
+//
+// where is the reader's filter of the table. It runs before the pick, so it
+// must name key columns only (org_id, day, provider, work_scope_id, team_id,
+// status): a filter on a measure would change which view a key reads. Columns
+// in where are qualified by the table name or unqualified. The source has no
+// alias of its own: the reader gives it one.
+//
+// It panics for a table that holds no team rows and for an empty filter: a
+// reader of one team must not read every organization.
+func TeamSource(table, where string) string {
+	if _, ok := teamTables[table]; !ok {
+		panic("rowview: table " + table + " holds no team rows")
+	}
+	if strings.TrimSpace(where) == "" {
+		panic("rowview: TeamSource of " + table + " needs a filter")
+	}
+	declared, ok := teamkeytables.ByTable(table)
+	if !ok {
+		panic("rowview: table " + table + " is not declared in teamkeytables")
+	}
+	key := []string{table + ".org_id", table + "." + declared.DayColumn}
+	for _, column := range declared.Keys {
+		if column.Name != Column {
+			key = append(key, table+"."+column.Name)
+		}
+	}
+	view := table + "." + Column
+	return fmt.Sprintf(`(
+    SELECT * FROM (
+        SELECT * FROM %[1]s FINAL
+        WHERE (%[2]s)
+          AND %[3]s IN ('%[4]s', '%[5]s', '%[6]s')
+        ORDER BY %[7]s DESC, multiIf(%[3]s = '%[6]s', 2, %[3]s = '%[5]s', 1, 0) DESC, %[1]s.computed_at DESC
+        LIMIT 1 BY %[8]s
+    ) AS %[9]s
+    WHERE %[10]s
+)`, table, where, view, teamkeytables.LegacyRowView, teamkeytables.OrgRowView, teamkeytables.TeamRowView,
+		declared.LiveRow(table+"."), strings.Join(key, ", "), teamSourceAlias, declared.LiveRow(teamSourceAlias+"."))
 }

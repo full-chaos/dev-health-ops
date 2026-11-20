@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 )
@@ -91,7 +92,7 @@ func buildNarratives(plan Plan, charts []ChartResult) []narrative {
 		}
 		title := sectionTitles[section]
 		if title == "" {
-			title = titleCase(section)
+			title = section
 		}
 		result = append(result, narrative{sectionType: section, title: title, body: body, supportingMetrics: metrics})
 	}
@@ -125,9 +126,9 @@ func chartSentence(chart ChartResult) string {
 
 func metricTitle(chart ChartResult) string {
 	if definition, ok := supportedMetrics[chart.Spec.Metric]; ok {
-		return definition.DisplayName
+		return markdownLineStart(markdownText(definition.DisplayName))
 	}
-	return titleCase(chart.Spec.Metric)
+	return markdownLineStart(markdownText(chart.Spec.Metric))
 }
 
 func formatValue(value float64, unit string) string {
@@ -187,13 +188,13 @@ func provenanceID(planID, artifactType, artifactID string) string {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(planID+":"+artifactType+":"+artifactID)).String()
 }
 
-// otherChartsTitle heads the charts no listed section printed; a plan section whose title shows as this one (closing hashes and case ignored) is renamed so the heading is unique.
+// otherChartsTitle heads the charts no listed section printed; when that heading is printed, a plan section whose shown title is this name (case ignored) is renamed so the heading is unique.
 const otherChartsTitle = "Other Charts"
 
 func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, provenance []ProvenanceRecord) string {
 	window := "unspecified window"
 	if plan.TimeRangeStart != "" && plan.TimeRangeEnd != "" {
-		window = markdownHeadingText(plan.TimeRangeStart) + " → " + markdownHeadingText(plan.TimeRangeEnd)
+		window = markdownText(plan.TimeRangeStart) + " → " + markdownText(plan.TimeRangeEnd)
 	}
 	summary := "Available evidence appears limited for this summary."
 	for _, section := range narratives {
@@ -203,22 +204,22 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 		}
 	}
 	lines := []string{
-		"# " + markdownHeadingText(titleCase(plan.ReportType)) + " Report — " + window,
+		"# " + markdownText(reportTypeTitle(plan.ReportType)) + " Report — " + window,
 		"",
 		"## Summary",
 		summary,
 		"",
 	}
 	printed := make([]bool, len(charts))
+	var collidingHeadings []int
 	for _, section := range narratives {
 		if section.sectionType == "summary" {
 			continue
 		}
-		title := section.title
-		if strings.EqualFold(strings.TrimRight(title, "# "), otherChartsTitle) {
-			title = otherChartsTitle + " (plan section)"
+		if strings.EqualFold(trimMarkdownEdge(markdownLineBreaks.Replace(section.title)), otherChartsTitle) {
+			collidingHeadings = append(collidingHeadings, len(lines))
 		}
-		lines = append(lines, "## "+markdownHeadingText(title), section.body, "", "### Insights",
+		lines = append(lines, "## "+markdownText(section.title), section.body, "", "### Insights",
 			"No grounded insights for this section.", "", "### Charts")
 		found := false
 		for index, chart := range charts {
@@ -240,6 +241,9 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 		}
 	}
 	if len(unlisted) > 0 {
+		for _, index := range collidingHeadings {
+			lines[index] = "## " + markdownText(otherChartsTitle+" (plan section)")
+		}
 		lines = append(lines, "## "+otherChartsTitle)
 		for _, chart := range unlisted {
 			lines = append(lines, renderChart(chart), "")
@@ -248,7 +252,7 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 	if len(plan.UnchartedMetrics) > 0 {
 		lines = append(lines, "## Requested Metrics Without a Chart")
 		for _, metric := range plan.UnchartedMetrics {
-			lines = append(lines, "- "+markdownTableCell(metric.Label)+": "+markdownHeadingText(metric.Reason))
+			lines = append(lines, "- "+markdownListStart(metric.Label)+": "+markdownText(metric.Reason))
 		}
 		lines = append(lines, "")
 	}
@@ -264,35 +268,38 @@ func renderMarkdown(plan Plan, charts []ChartResult, narratives []narrative, pro
 			if metricName == "" {
 				metricName = "n/a"
 			}
-			lines = append(lines, fmt.Sprintf("- **%s:%s** — sources: %s; metrics: %s",
-				markdownHeadingText(record.ArtifactType), markdownHeadingText(record.ArtifactID), markdownHeadingText(source), markdownHeadingText(metricName)))
+			lines = append(lines, fmt.Sprintf("- %s — sources: %s; metrics: %s",
+				wrapEmphasis("**", markdownText(trimMarkdownEdge(record.ArtifactType))+":"+markdownText(trimMarkdownEdge(record.ArtifactID))), markdownText(source), markdownText(metricName)))
 		}
 	}
 	scope := formatScope(plan)
 	generated := strings.TrimSuffix(plan.CreatedAt.UTC().Format(time.RFC3339), "Z") + "+00:00"
 	lines = append(lines, "", "---",
-		fmt.Sprintf("Generated at %s | Confidence: %s | Scope: %s", generated, markdownHeadingText(plan.ConfidenceThreshold), scope))
-	return strings.TrimSpace(strings.Join(lines, "\n")) + "\n"
+		fmt.Sprintf("Generated at %s | Confidence: %s | Scope: %s", generated, markdownText(plan.ConfidenceThreshold), scope))
+	return trimMarkdownEdge(strings.Join(lines, "\n")) + "\n"
 }
 
 func renderChart(chart ChartResult) string {
 	if chart.NotApplicable != "" {
-		return "#### " + markdownHeadingText(chart.Title) + "\n\n_Not applicable: " + markdownHeadingText(chart.NotApplicable) + "_"
+		return "#### " + markdownText(chart.Title) + "\n\n" + emphasisLine("Not applicable", chart.NotApplicable)
 	}
 	note := ""
 	if chart.Note != "" {
-		note = "\n\n_Note: " + markdownHeadingText(chart.Note) + "_"
+		note = "\n\n" + emphasisLine("Note", chart.Note)
 	}
 	if len(chart.DataPoints) == 0 {
-		return "#### " + markdownHeadingText(chart.Title) + "\n\n_No data returned for this chart._" + note
+		return "#### " + markdownText(chart.Title) + "\n\n_No data returned for this chart._" + note
 	}
-	lines := []string{"#### " + markdownHeadingText(chart.Title), "", "| x | y | group |", "| --- | ---: | --- |"}
+	lines := []string{"#### " + markdownText(chart.Title), "", "| x | y | group |", "| --- | ---: | --- |"}
 	for _, point := range chart.DataPoints {
 		lines = append(lines, fmt.Sprintf("| %s | %s | %s |",
 			markdownTableCell(point.X), strconv.FormatFloat(point.Y, 'f', -1, 64), markdownTableCell(point.Group)))
 	}
 	return strings.Join(lines, "\n") + note
 }
+
+// trimMarkdownEdge drops only ASCII space, tab, CR and LF at the edges: a reader shows NBSP and other Unicode space.
+func trimMarkdownEdge(value string) string { return strings.Trim(value, " \t\r\n") }
 
 var markdownLineBreaks = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
 
@@ -311,8 +318,109 @@ func escapeMarkdown(value, escapes string) string {
 	return b.String()
 }
 
-// markdownHeadingText writes free text into a heading, note or list line.
-func markdownHeadingText(value string) string { return escapeMarkdown(value, "\\#") }
+// markdownText writes free text into a heading, note or list line, edge space dropped (a reader drops it there and a
+// closing marker after a space does not close): each character that starts inline Markdown, an
+// entity, a heading or a backslash escape gets a backslash. An "_" between two ASCII letters or digits stays plain:
+// CommonMark never reads it as emphasis, and source-table and metric names hold it.
+func markdownText(value string) string {
+	runes := []rune(trimMarkdownEdge(markdownLineBreaks.Replace(value)))
+	var b strings.Builder
+	for i, r := range runes {
+		if strings.ContainsRune("\\*_`[]<>~&#", r) && !(r == '_' && i > 0 && i < len(runes)-1 && asciiAlnum(runes[i-1]) && asciiAlnum(runes[i+1])) {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func asciiAlnum(r rune) bool {
+	return r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+}
+
+// emphasisLine writes "_label: value_". A closing "_" after Unicode space does not close the emphasis, so edge
+// space of the text is written outside the delimiters (wrapEmphasis).
+func emphasisLine(label, value string) string {
+	value = trimMarkdownEdge(markdownLineBreaks.Replace(value))
+	if value == "" {
+		return "_" + label + ":_"
+	}
+	return wrapEmphasis("_", label+": "+markdownText(value))
+}
+
+// wrapEmphasis puts delim around inner with its leading and trailing Unicode space outside: GFM opens a span only
+// before non-space and closes it only after non-space, and it shows NBSP and narrow NBSP.
+func wrapEmphasis(delim, inner string) string {
+	rest := strings.TrimLeftFunc(inner, unicode.IsSpace)
+	core := strings.TrimRightFunc(rest, unicode.IsSpace)
+	return inner[:len(inner)-len(rest)] + delim + core + delim + rest[len(core):]
+}
+
+// markdownListStart writes the first text of a list item as one table-cell escaped label. Whitespace the reader would
+// drop or fold (a run at either edge, or any run with a tab, line break or other space inside) is written as a visible
+// code span of escapes (`\n`, `\u0020`), so two labels that differ only by such whitespace read differently and a
+// padded name does not read as the name without padding. A single ASCII space between words stays a space. A span that
+// follows text gets one space before it: a backtick next to a pasted URL would join its link (a space ends it).
+func markdownListStart(value string) string {
+	runes := []rune(value)
+	var b strings.Builder
+	for i := 0; i < len(runes); {
+		if !unicode.IsSpace(runes[i]) {
+			j := i
+			for j < len(runes) && !unicode.IsSpace(runes[j]) {
+				j++
+			}
+			b.WriteString(markdownTableCell(string(runes[i:j])))
+			i = j
+			continue
+		}
+		j := i
+		plain := true
+		for j < len(runes) && unicode.IsSpace(runes[j]) {
+			plain = plain && runes[j] == ' '
+			j++
+		}
+		if plain && i > 0 && j < len(runes) {
+			b.WriteString(string(runes[i:j]))
+		} else {
+			if b.Len() > 0 {
+				b.WriteByte(' ')
+			}
+			b.WriteByte('`')
+			for _, r := range runes[i:j] {
+				switch r {
+				case '\n':
+					b.WriteString(`\n`)
+				case '\r':
+					b.WriteString(`\r`)
+				case '\t':
+					b.WriteString(`\t`)
+				default:
+					fmt.Fprintf(&b, `\u%04x`, r)
+				}
+			}
+			b.WriteByte('`')
+		}
+		i = j
+	}
+	return markdownLineStart(b.String())
+}
+
+// markdownLineStart keeps escaped text that opens a line from opening a block: a leading "-" or "+" (list, rule) or a
+// number with "." or ")" (ordered list). The other block starters ("#", ">", backtick, "~", "*", "=") are already escaped.
+func markdownLineStart(text string) string {
+	digits := 0
+	for digits < len(text) && text[digits] >= '0' && text[digits] <= '9' {
+		digits++
+	}
+	switch {
+	case strings.HasPrefix(text, "-"), strings.HasPrefix(text, "+"):
+		return "\\" + text
+	case digits > 0 && digits < len(text) && (text[digits] == '.' || text[digits] == ')'):
+		return text[:digits] + "\\" + text[digits:]
+	}
+	return text
+}
 
 // markdownTableCell writes a label as one table cell that reads as the label: each character that splits a cell,
 // starts inline Markdown or starts a heading gets a backslash escape.
@@ -321,18 +429,25 @@ func markdownTableCell(value string) string { return escapeMarkdown(value, "\\|*
 func formatScope(plan Plan) string {
 	parts := make([]string, 0, 3)
 	if len(plan.ScopeTeams) > 0 {
-		parts = append(parts, "teams="+markdownHeadingText(strings.Join(plan.ScopeTeams, ", ")))
+		parts = append(parts, "teams="+markdownText(strings.Join(plan.ScopeTeams, ", ")))
 	}
 	if len(plan.ScopeRepos) > 0 {
-		parts = append(parts, "repos="+markdownHeadingText(strings.Join(plan.ScopeRepos, ", ")))
+		parts = append(parts, "repos="+markdownText(strings.Join(plan.ScopeRepos, ", ")))
 	}
 	if len(plan.ScopeServices) > 0 {
-		parts = append(parts, "services="+markdownHeadingText(strings.Join(plan.ScopeServices, ", ")))
+		parts = append(parts, "services="+markdownText(strings.Join(plan.ScopeServices, ", ")))
 	}
 	if len(parts) == 0 {
 		return "global"
 	}
 	return strings.Join(parts, " | ")
+}
+
+func reportTypeTitle(value string) string {
+	if _, ok := builtinReportTypes[value]; ok {
+		return titleCase(value)
+	}
+	return value
 }
 
 func titleCase(value string) string {

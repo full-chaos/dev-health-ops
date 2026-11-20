@@ -25,8 +25,18 @@ var setsToken = regexp.MustCompile(`(?i)\btoken_version\s*=`)
 var setClause = regexp.MustCompile(`(?is)\bSET\b(.*?)(?:\bWHERE\b|\bRETURNING\b|$)`)
 
 func raisesTokenVersion(sql string) bool {
-	m := setClause.FindStringSubmatch(sql)
-	return m != nil && setsToken.MatchString(m[1])
+	judged := false
+	for _, stmt := range strings.Split(sql, ";") {
+		if table, kind, ok := passwordwriters.Match(stmt); !ok || table != passwordwriters.Public || kind != passwordwriters.Update {
+			continue
+		}
+		judged = true
+		m := setClause.FindStringSubmatch(stmt)
+		if m == nil || !setsToken.MatchString(m[1]) {
+			return false
+		}
+	}
+	return judged
 }
 
 // passwordUpdaters are the writers that change an existing user's password; each

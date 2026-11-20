@@ -18,6 +18,8 @@ func TestRaisesTokenVersionReadsTheSetClauseOnly(t *testing.T) {
 		{"set raises, no where", "UPDATE users SET password_hash = $2, token_version = token_version + 1", true},
 		{"token_version only in where", "UPDATE users SET password_hash = $2 WHERE id = $1 AND token_version = $3", false},
 		{"token_version only in returning", "UPDATE users SET password_hash = $2 WHERE id = $1 RETURNING token_version = 1", false},
+		{"two statements, second lacks it", "UPDATE users SET password_hash=$1, token_version=token_version+1 WHERE id=$2; UPDATE users SET password_hash=$3 WHERE id=$4", false},
+		{"two statements, both raise it", "UPDATE users SET password_hash=$1, token_version=token_version+1 WHERE id=$2; UPDATE users SET password_hash=$3, token_version=token_version+1 WHERE id=$4", true},
 		{"no token_version", "UPDATE users SET password_hash = $2 WHERE id = $1", false},
 	}
 	for _, c := range cases {

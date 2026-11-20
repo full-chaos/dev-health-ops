@@ -389,6 +389,7 @@ internal/cigates/workflows	workflows_path_filters_test.go
 internal/cigates/workflows	workflows_venue_always_runs_test.go
 internal/cigates/workflows	workflows_venue_main_alert_test.go
 internal/clicredentials	opensites_test.go
+internal/deploy/inputs	hookrender_test.go
 internal/deploy/selfpin	selfpin.go
 internal/deploy/selfpin	selfpin_test.go
 internal/deploymentcontract	manifest.go

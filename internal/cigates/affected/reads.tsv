@@ -186,6 +186,7 @@ internal/cigates/workflows	test	requirements-docs.txt
 internal/cigates/workflows	test	uv.lock
 internal/contractcheck	code	contracts
 internal/contractcheck	code	deploy
+internal/deploy/inputs	test	deploy
 internal/deploymentcontract	code	contracts
 internal/deploymentcontract	test	deploy
 internal/faultproxy	test	deploy

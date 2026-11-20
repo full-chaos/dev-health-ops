@@ -1,6 +1,6 @@
 //go:build integration
 
-package testopspooled
+package testopswindow
 
 import (
 	"context"
@@ -9,12 +9,13 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopspooled"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
 // Two stored versions of one repository day written in the same computed_at second give one newest row from
-// NewestStoredRows whatever the insert order across separate statements (same-key rows of ONE insert block collapse
+// testopspooled.NewestStoredRows whatever the insert order across separate statements (same-key rows of ONE insert block collapse
 // at insert; eight days, so a tiebreak that ignores computed_at cannot pass the control by luck); a version from a newer second still wins over the tiebreak. The versions differ in pooled_samples_stored
 // and in a named column. CHAOS-14351.
 func TestSameSecondVersionsGiveOneNewestStoredRow(t *testing.T) {
@@ -43,7 +44,7 @@ func TestSameSecondVersionsGiveOneNewestStoredRow(t *testing.T) {
 	const repo = "14351000-0000-4000-8000-0000000000a1"
 	const same = "2026-11-19 12:00:00"
 	row := func(stored int, total int, at string) string {
-		return `SELECT toUUID('` + repo + `'), '` + org + `', toDate('2026-11-10') + number, toUInt8(` + itoa(stored) + `), toUInt32(` + itoa(total) + `), toDateTime('` + at + `', 'UTC') FROM numbers(8)`
+		return `SELECT toUUID('` + repo + `'), '` + org + `', toDate('2026-11-10') + number, toUInt8(` + pooledText(stored) + `), toUInt32(` + pooledText(total) + `), toDateTime('` + at + `', 'UTC') FROM numbers(8)`
 	}
 	scenario := func(statements ...string) [2]uint64 {
 		t.Helper()
@@ -55,7 +56,7 @@ func TestSameSecondVersionsGiveOneNewestStoredRow(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		rows, err := conn.Query(ctx, `SELECT pooled_samples_stored, total_cases FROM `+NewestStoredRows(table, "total_cases"),
+		rows, err := conn.Query(ctx, `SELECT pooled_samples_stored, total_cases FROM `+testopspooled.NewestStoredRows(table, "total_cases"),
 			clickhouse.Named("org_id", org), clickhouse.Named("start_date", "2026-11-01"), clickhouse.Named("end_date", "2026-12-01"))
 		if err != nil {
 			t.Fatal(err)
@@ -94,7 +95,7 @@ func TestSameSecondVersionsGiveOneNewestStoredRow(t *testing.T) {
 	}
 }
 
-func itoa(n int) string {
+func pooledText(n int) string {
 	switch n {
 	case 0:
 		return "0"

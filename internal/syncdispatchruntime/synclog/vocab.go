@@ -28,6 +28,7 @@ var (
 	MsgDispatchSyncRunBudgetSurplusWithdrawalLostRace    = Msg{"dispatch_sync_run.budget_surplus_withdrawal_lost_race"}
 	MsgDispatchSyncRunBudgetSurplusWithdrawn             = Msg{"dispatch_sync_run.budget_surplus_withdrawn"}
 	MsgDispatchSyncRunClaimDeferredOutsideGuardSnapshot  = Msg{"dispatch_sync_run.claim_deferred_outside_guard_snapshot"}
+	MsgBackfillWaitGaugeTruncated                        = Msg{"backfill_wait_gauge.truncated"}
 	MsgBackfillWaitGaugeReadFailed                       = Msg{"backfill_wait_gauge.read_failed"}
 	MsgSyncDispatchAdmissionCaps                         = Msg{"sync_dispatch_admission_caps"}
 	MsgTeamsInsertCarriesProviderIdentity                = Msg{"teams_insert.carries_provider_identity"}
@@ -85,6 +86,7 @@ var (
 
 // Keys.
 var (
+	KeyBackfillWaitGroupLimit       = Key{"group_limit"}
 	KeyEgressClass                  = Key{"class"}
 	KeyEgressEntries                = Key{"entries"}
 	KeyStrict                       = Key{"strict"}

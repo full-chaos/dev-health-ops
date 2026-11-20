@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/domainroledb"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -200,4 +201,93 @@ func TestBackfillWaitGaugeUnderTheDomainRole(t *testing.T) {
 	if denials := venue.Denials.All(); len(denials) != 0 {
 		t.Fatalf("permission denials under the domain role: %v", denials)
 	}
+}
+
+// snapshotRaceTx runs a concurrent writer commit right before the first active-count read of a scrape (the claim of a
+// waiting unit), the case of the r1 P1: with one snapshot per scrape the claim is invisible to the whole scrape.
+type snapshotRaceDB struct {
+	pool  *pgxpool.Pool
+	claim func()
+}
+
+func (db snapshotRaceDB) BeginTx(ctx context.Context, options pgx.TxOptions) (pgx.Tx, error) {
+	tx, err := db.pool.BeginTx(ctx, options)
+	if err != nil {
+		return nil, err
+	}
+	return &snapshotRaceTxn{Tx: tx, claim: db.claim}, nil
+}
+
+type snapshotRaceTxn struct {
+	pgx.Tx
+	claim func()
+	fired bool
+}
+
+func (tx *snapshotRaceTxn) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	if !tx.fired && strings.Contains(sql, "FILTER (WHERE run.triggered_by") {
+		tx.fired = true
+		tx.claim()
+	}
+	return tx.Tx.QueryRow(ctx, sql, args...)
+}
+
+// One scrape never counts a unit as both waiting and active.
+func TestBackfillWaitGaugeOneSnapshotPerScrapeOnPostgres(t *testing.T) {
+	t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "8")
+	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		pgseed.Org(ctx, t, pool, waitGaugeOrg, "community")
+		run := "00000000-0000-4000-8000-0000000143f3"
+		seedWaitRun(t, ctx, pool, run, "backfill", "backfill", "running", now.Add(-time.Hour))
+		seedWaitUnits(t, ctx, pool, run, syncRunUnitStatusPlanned, "medium", 1, "0000014341", now)
+		source, err := NewBackfillWaitSource(snapshotRaceDB{pool: pool, claim: func() {
+			if _, err := pool.Exec(ctx, `UPDATE public.sync_run_units SET status = 'dispatching', updated_at = now() WHERE sync_run_id = $1::uuid`, run); err != nil {
+				t.Errorf("claim: %v", err)
+			}
+		}}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		if err := source.WritePrometheus(&out); err != nil {
+			t.Fatal(err)
+		}
+		text := out.String()
+		requireLine(t, text, `sync_dispatch_backfill_wait_units{provider="github",cost_class="medium",state="planned"} 1`)
+		requireLine(t, text, `sync_dispatch_backfill_wait_units{provider="github",cost_class="medium",state="active"} 0`)
+		requireLine(t, text, `sync_dispatch_backfill_wait_held_back_units{provider="github",cost_class="medium"} 0`)
+	})
+}
+
+// More waiting groups than the read limit: the groups past the limit fold into the ~other series; the sum of all series equals the true total and the truncation counter moves once.
+func TestBackfillWaitGaugeOverTheGroupLimitFoldsIntoOtherOnPostgres(t *testing.T) {
+	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		pgseed.Org(ctx, t, pool, waitGaugeOrg, "community")
+		run := "00000000-0000-4000-8000-0000000143f4"
+		seedWaitRun(t, ctx, pool, run, "backfill", "backfill", "running", now.Add(-time.Hour))
+		for i := 0; i <= 1000; i++ {
+			unit := pgseed.SyncRunUnit{ID: fmt.Sprintf("00000000-0000-4000-8000-%012x", 0x143510000+i), RunID: run, OrgID: waitGaugeOrg, Provider: fmt.Sprintf("provider-%04d", i),
+				CostClass: "medium", Mode: "backfill", Status: syncRunUnitStatusPlanned, UpdatedAt: &now}
+			pgseed.InsertSyncRunUnit(ctx, t, pool, unit)
+		}
+		text := waitGaugeText(t, ctx, pool)
+		requireLine(t, text, `sync_dispatch_backfill_wait_read_ok 1`)
+		requireLine(t, text, `sync_dispatch_backfill_wait_units{provider="~other",cost_class="~other",state="planned"} 1`)
+		total := 0
+		for _, line := range strings.Split(text, "\n") {
+			if strings.HasPrefix(line, "sync_dispatch_backfill_wait_units{") && strings.Contains(line, `state="planned"`) {
+				var n int
+				if _, err := fmt.Sscanf(line[strings.LastIndex(line, " ")+1:], "%d", &n); err != nil {
+					t.Fatal(err)
+				}
+				total += n
+			}
+		}
+		if total != 1001 {
+			t.Fatalf("planned units over all series = %d, want 1001", total)
+		}
+		requireLine(t, text, `sync_dispatch_backfill_wait_truncated_total 1`)
+	})
 }

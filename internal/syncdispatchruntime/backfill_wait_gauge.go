@@ -22,22 +22,35 @@ import (
 const (
 	backfillWaitCachePeriod = 60 * time.Second
 	backfillWaitReadTimeout = 5 * time.Second
-	// backfillWaitRowLimit bounds Q1: two rows (planned, retrying) per (org, provider, cost class) bucket.
+	// backfillWaitRowLimit bounds the groups Q1 returns one by one. The groups past it (the smallest) are folded by the SQL
+	// into one row per status with NULL org, provider and cost class: a real group has none of them NULL (columns NOT NULL),
+	// so the fold cannot collide with a real key. The gauge then carries them under backfillWaitFoldedLabel, keyed by a flag
+	// and not by that string, so a provider that carried the same name could not merge into it either.
 	backfillWaitRowLimit = 1000
+	// backfillWaitFoldedLabel is the label value of the folded series. A provider or cost class is a registry slug of
+	// [a-z0-9_-], so it never starts with "~".
+	backfillWaitFoldedLabel = "~other"
 )
 
 // backfillWaitOpenSQL is the open-backfill-run unit read. The backfill rule is the one readRunOrder applies
 // (admission_order.go); backfill_wait_gauge_test.go pins the two against each other. Plain SELECT: no row or bucket lock.
 const backfillWaitOpenSQL = `
-SELECT unit.org_id, unit.provider, unit.cost_class, unit.status, count(*)::int
-FROM public.sync_runs AS run
-JOIN public.sync_run_units AS unit ON unit.sync_run_id = run.id
-WHERE run.status <> ALL($1::text[])
-  AND (run.triggered_by = 'backfill' OR run.mode = 'backfill')
-  AND unit.status IN ('planned', 'retrying')
-GROUP BY unit.org_id, unit.provider, unit.cost_class, unit.status
-ORDER BY count(*) DESC
-LIMIT $2`
+WITH grouped AS (
+    SELECT unit.org_id, unit.provider, unit.cost_class, unit.status, count(*)::int AS n
+    FROM public.sync_runs AS run
+    JOIN public.sync_run_units AS unit ON unit.sync_run_id = run.id
+    WHERE run.status <> ALL($1::text[])
+      AND (run.triggered_by = 'backfill' OR run.mode = 'backfill')
+      AND unit.status IN ('planned', 'retrying')
+    GROUP BY unit.org_id, unit.provider, unit.cost_class, unit.status
+), ranked AS (
+    SELECT grouped.*, row_number() OVER (ORDER BY n DESC, org_id, provider, cost_class, status) AS rn
+    FROM grouped
+)
+SELECT CASE WHEN rn <= $2 THEN org_id END, CASE WHEN rn <= $2 THEN provider END, CASE WHEN rn <= $2 THEN cost_class END,
+       status, sum(n)::int
+FROM ranked
+GROUP BY 1, 2, 3, 4`
 
 const backfillWaitOpenRunsSQL = `
 SELECT count(*)::int
@@ -50,15 +63,19 @@ type BackfillWaitDB interface {
 	BeginTx(ctx context.Context, options pgx.TxOptions) (pgx.Tx, error)
 }
 
-type backfillWaitKey struct{ provider, costClass string }
+type backfillWaitKey struct {
+	provider, costClass string
+	folded              bool
+}
 
 type backfillWaitSample struct {
 	planned, retrying, active, heldBack int
 }
 
 type backfillWaitSnapshot struct {
-	openRuns int
-	series   map[backfillWaitKey]*backfillWaitSample
+	openRuns  int
+	truncated bool
+	series    map[backfillWaitKey]*backfillWaitSample
 }
 
 // BackfillWaitSource is a health.MetricsSource. One database read per cache period, whatever the number of scrapes; a failed
@@ -71,6 +88,8 @@ type BackfillWaitSource struct {
 	mu       sync.Mutex
 	readAt   time.Time
 	snapshot *backfillWaitSnapshot
+	// truncations counts the reads that folded groups past the limit.
+	truncations int64
 }
 
 func NewBackfillWaitSource(db BackfillWaitDB, logger *synclog.Logger) (*BackfillWaitSource, error) {
@@ -101,7 +120,7 @@ func backfillWaitHeldBack(costClass string, waiting, active, activeBackfill int,
 func (s *BackfillWaitSource) read(ctx context.Context, now time.Time) (*backfillWaitSnapshot, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), backfillWaitReadTimeout)
 	defer cancel()
-	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return nil, err
 	}
@@ -116,21 +135,31 @@ func (s *BackfillWaitSource) read(ctx context.Context, now time.Time) (*backfill
 		return nil, err
 	}
 	waiting := map[dispatchBucket]int{}
+	folded := &backfillWaitSample{}
 	for rows.Next() {
-		var bucket dispatchBucket
+		var org, provider, costClass *string
 		var status string
 		var n int
-		if err := rows.Scan(&bucket.orgID, &bucket.provider, &bucket.costClass, &status, &n); err != nil {
+		if err := rows.Scan(&org, &provider, &costClass, &status, &n); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		waiting[bucket] += n
-		sample := snapshot.sample(bucket)
+		sample := folded
+		if org != nil && provider != nil && costClass != nil {
+			bucket := dispatchBucket{orgID: *org, provider: *provider, costClass: *costClass}
+			waiting[bucket] += n
+			sample = snapshot.sample(bucket)
+		} else {
+			snapshot.truncated = true
+		}
 		if status == syncRunUnitStatusRetrying {
 			sample.retrying += n
 		} else {
 			sample.planned += n
 		}
+	}
+	if snapshot.truncated {
+		snapshot.series[backfillWaitKey{folded: true}] = folded
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -164,12 +193,12 @@ func (snapshot *backfillWaitSnapshot) sample(bucket dispatchBucket) *backfillWai
 	return snapshot.series[key]
 }
 
-func (s *BackfillWaitSource) current(ctx context.Context) *backfillWaitSnapshot {
+func (s *BackfillWaitSource) current(ctx context.Context) (*backfillWaitSnapshot, int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
 	if !s.readAt.IsZero() && now.Sub(s.readAt) < backfillWaitCachePeriod {
-		return s.snapshot
+		return s.snapshot, s.truncations
 	}
 	s.readAt = now
 	snapshot, err := s.read(ctx, now)
@@ -179,18 +208,25 @@ func (s *BackfillWaitSource) current(ctx context.Context) *backfillWaitSnapshot 
 		if !errors.Is(err, puddle.ErrClosedPool) {
 			s.logger.Warn(ctx, synclog.MsgBackfillWaitGaugeReadFailed, synclog.Failure(err))
 		}
-		return nil
+		return nil, s.truncations
 	}
 	s.snapshot = snapshot
-	return snapshot
+	if snapshot.truncated {
+		s.truncations++
+		s.logger.Warn(ctx, synclog.MsgBackfillWaitGaugeTruncated, synclog.Count(synclog.KeyBackfillWaitGroupLimit, backfillWaitRowLimit))
+	}
+	return snapshot, s.truncations
 }
 
 // WritePrometheus implements health.MetricsSource. The family names are literals: the label census reads them from here.
 func (s *BackfillWaitSource) WritePrometheus(w io.Writer) error {
-	snapshot := s.current(context.Background())
+	snapshot, truncations := s.current(context.Background())
 	readOK := 0
 	if snapshot != nil {
 		readOK = 1
+	}
+	if _, err := fmt.Fprintf(w, "# HELP sync_dispatch_backfill_wait_truncated_total Reads that folded waiting groups past the read limit into the ~other series.\n# TYPE sync_dispatch_backfill_wait_truncated_total counter\nsync_dispatch_backfill_wait_truncated_total %d\n", truncations); err != nil {
+		return err
 	}
 	if _, err := fmt.Fprintf(w, "# HELP sync_dispatch_backfill_wait_read_ok 1 when the last read of the backfill wait gauge worked, 0 when it failed (no wait samples then).\n# TYPE sync_dispatch_backfill_wait_read_ok gauge\nsync_dispatch_backfill_wait_read_ok %d\n", readOK); err != nil || snapshot == nil {
 		return err
@@ -203,6 +239,9 @@ func (s *BackfillWaitSource) WritePrometheus(w io.Writer) error {
 		keys = append(keys, key)
 	}
 	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].folded != keys[j].folded {
+			return !keys[i].folded
+		}
 		if keys[i].provider != keys[j].provider {
 			return keys[i].provider < keys[j].provider
 		}
@@ -216,11 +255,18 @@ func (s *BackfillWaitSource) WritePrometheus(w io.Writer) error {
 	}
 	for _, key := range keys {
 		sample := snapshot.series[key]
+		provider, costClass := key.provider, key.costClass
+		if key.folded {
+			provider, costClass = backfillWaitFoldedLabel, backfillWaitFoldedLabel
+		}
 		for _, state := range []struct {
 			name string
 			n    int
 		}{{"planned", sample.planned}, {"retrying", sample.retrying}, {"active", sample.active}} {
-			if _, err := fmt.Fprintf(w, "sync_dispatch_backfill_wait_units{provider=%q,cost_class=%q,state=%q} %d\n", key.provider, key.costClass, state.name, state.n); err != nil {
+			if key.folded && state.name == "active" {
+				continue
+			}
+			if _, err := fmt.Fprintf(w, "sync_dispatch_backfill_wait_units{provider=%q,cost_class=%q,state=%q} %d\n", provider, costClass, state.name, state.n); err != nil {
 				return err
 			}
 		}
@@ -229,6 +275,9 @@ func (s *BackfillWaitSource) WritePrometheus(w io.Writer) error {
 		return err
 	}
 	for _, key := range keys {
+		if key.folded {
+			continue
+		}
 		if _, err := fmt.Fprintf(w, "sync_dispatch_backfill_wait_held_back_units{provider=%q,cost_class=%q} %d\n", key.provider, key.costClass, snapshot.series[key].heldBack); err != nil {
 			return err
 		}

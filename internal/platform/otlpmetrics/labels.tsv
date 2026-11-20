@@ -366,6 +366,7 @@ sync_config_dataset_rows_changed_total	direction,provider	code: internal/api/syn
 sync_dispatch_backfill_open_runs		code: internal/syncdispatchruntime/backfill_wait_gauge.go
 sync_dispatch_backfill_wait_held_back_units	cost_class,provider	code: internal/syncdispatchruntime/backfill_wait_gauge.go
 sync_dispatch_backfill_wait_read_ok		code: internal/syncdispatchruntime/backfill_wait_gauge.go
+sync_dispatch_backfill_wait_truncated_total		code: internal/syncdispatchruntime/backfill_wait_gauge.go
 sync_dispatch_backfill_wait_units	cost_class,provider,state	code: internal/syncdispatchruntime/backfill_wait_gauge.go
 sync_dispatch_discovery_rearmed_total		code: internal/syncreconciler/loop.go
 sync_dispatch_exhausted_delivery_recoveries_total		code: internal/syncreconciler/loop.go

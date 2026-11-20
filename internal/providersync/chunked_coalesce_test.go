@@ -44,17 +44,19 @@ func (clock *coalesceClock) advance(by time.Duration) {
 // each run's jobs read with jobsPerRun small jobs (bigJobs for bigRun, 100 per page). The artifacts listing is empty, so
 // a walk is the runs phase and the final emission. failJobsOnce fails one run's first jobs read.
 type runsGroupDoer struct {
-	t            *testing.T
-	runs         int
-	perPage      int
-	jobsPerRun   int
-	bigRun       string
-	bigJobs      int
-	failJobsOnce string
-	clock        *coalesceClock
-	readCost     time.Duration
-	mu           sync.Mutex
-	jobGets      map[string]int
+	t             *testing.T
+	runs          int
+	perPage       int
+	jobsPerRun    int
+	bigRun        string
+	bigJobs       int
+	failJobsOnce  string
+	clock         *coalesceClock
+	readCost      time.Duration
+	wallAt        time.Time
+	readsPastWall int
+	mu            sync.Mutex
+	jobGets       map[string]int
 }
 
 func newRunsGroupDoer(t *testing.T, runs, jobsPerRun int) *runsGroupDoer {
@@ -109,6 +111,11 @@ func (doer *runsGroupDoer) Do(request *http.Request) (*http.Response, error) {
 		return githubTestsHTTPResponse(request, header, body.String()), nil
 	case strings.HasPrefix(path, "/repos/acme/api/actions/runs/") && strings.HasSuffix(path, "/jobs"):
 		runID := strings.TrimSuffix(strings.TrimPrefix(path, "/repos/acme/api/actions/runs/"), "/jobs")
+		doer.mu.Lock()
+		if doer.clock != nil && !doer.wallAt.IsZero() && !doer.clock.Now().Before(doer.wallAt) {
+			doer.readsPastWall++
+		}
+		doer.mu.Unlock()
 		doer.clock.advance(doer.readCost)
 		doer.mu.Lock()
 		doer.jobGets[runID]++
@@ -497,15 +504,16 @@ func TestChunkedRunsPhaseBigRunKeepsItsOwnGroupAndTheBounds(t *testing.T) {
 	}
 }
 
-// The wall bound still ends an attempt within one run of MaxWallTime, and filling groups raises the runs one 45 s attempt
-// commits. Costs per MEASURE-14408-1: 1.04 s per jobs read, 0.136 s per sink write; 9 jobs per run (11 runs per group).
+// The wall bound still ends an attempt at once: no GitHub read starts once the clock passed MaxWallTime (an operation
+// count on the injected clock). Filling groups raises the runs one 45 s attempt commits. Costs per MEASURE-14408-1: 1.04 s per jobs read, 0.136 s per sink write; 9 jobs per run (11 runs per group).
 func TestChunkedRunsPhaseThroughputPerAttemptBaseVersusHead(t *testing.T) {
+	wall := cicdDescriptor(t).ChunkPolicy.MaxWallTime
 	attempt := func(handler CompleteRouteHandler) (int, *ChunkContinuationError, *runsGroupSink, *runsGroupDoer, CompleteRouteExecutor, *LeaseSession) {
 		now := time.Date(2026, 7, 22, 21, 0, 0, 0, time.UTC)
 		_, session := runsGroupSession(t, now)
 		clock := &coalesceClock{now: now}
 		doer, sink, store := newRunsGroupDoer(t, 300, 9), newRunsGroupSink(), newChunkMemoryStore()
-		doer.clock, doer.readCost = clock, 1040*time.Millisecond
+		doer.clock, doer.readCost, doer.wallAt = clock, 1040*time.Millisecond, now.Add(wall)
 		sink.clock, sink.writeCost = clock, 136*time.Millisecond
 		executor := runsGroupExecutor(now, handler, store, sink, doer, clock)
 		_, err := executor.Execute(context.Background(), session, cicdDescriptor(t))
@@ -513,16 +521,15 @@ func TestChunkedRunsPhaseThroughputPerAttemptBaseVersusHead(t *testing.T) {
 		if !errors.As(err, &stopped) {
 			t.Fatalf("first attempt err=%v, want a wall continuation", err)
 		}
+		if stopped.Reason != ChunkStopWallTime || doer.readsPastWall != 0 {
+			t.Fatalf("first attempt stopped on %s with %d GitHub reads started past the wall, want the wall and 0",
+				stopped.Reason, doer.readsPastWall)
+		}
+		doer.wallAt = time.Time{}
 		return len(sink.pipelineRows), &stopped, sink, doer, executor, session
 	}
 	base, baseStop, _, _, _, _ := attempt(noCoalesceHandler{})
 	head, headStop, sink, doer, executor, session := attempt(GitHubTestsRouteHandler{})
-	wall := cicdDescriptor(t).ChunkPolicy.MaxWallTime
-	for name, stop := range map[string]*ChunkContinuationError{"base": baseStop, "head": headStop} {
-		if stop.Reason != ChunkStopWallTime || stop.Elapsed > wall+1500*time.Millisecond {
-			t.Fatalf("%s attempt stopped on %s after %s, want the wall within one run of %s", name, stop.Reason, stop.Elapsed, wall)
-		}
-	}
 	t.Logf("THROUGHPUT: runs per 45 s attempt base=%d (%d chunks) head=%d (%d chunks)", base, baseStop.Chunks, head, headStop.Chunks)
 	if head*4 < base*5 {
 		t.Fatalf("head commits %d runs per attempt, base %d: want at least 1.25x", head, base)

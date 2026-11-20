@@ -97,6 +97,8 @@ type planNode struct {
 	ActualRows          float64    `json:"Actual Rows"`
 	ActualLoops         float64    `json:"Actual Loops"`
 	RowsRemovedByFilter float64    `json:"Rows Removed by Filter"`
+	IndexName           string     `json:"Index Name"`
+	IndexCond           string     `json:"Index Cond"`
 	Plans               []planNode `json:"Plans"`
 }
 

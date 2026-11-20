@@ -4,10 +4,12 @@ package syncdispatchruntime
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -263,6 +265,103 @@ FROM generate_series(1, $4::int) AS n, generate_series(1, $5::int) AS k`, rqOrg,
 			}
 			t.Logf("%s: %d %s rows -> build %s (%.0f rows/s)", index.name, rows, index.table, elapsed.Round(time.Millisecond),
 				float64(rows)/elapsed.Seconds())
+		}
+	})
+}
+
+// planIndexConds lists the Index Cond of every plan node that scans the named index.
+func planIndexConds(node planNode, index string) []string {
+	var conds []string
+	if node.IndexName == index {
+		conds = append(conds, node.IndexCond)
+	}
+	for _, child := range node.Plans {
+		conds = append(conds, planIndexConds(child, index)...)
+	}
+	return conds
+}
+
+// Class 2 (acp plan3-build ack b): the head read's class expression is the 0167 index's own expression, so the class
+// is an index condition of ix_sync_runs_org_class_active_order for both classes. A query expression that differs from
+// the index expression (even an equivalent one) is only a filter, and the read walks the other class's runs.
+func TestB3HeadReadClassIsAnIndexConditionOfTheMigratedIndex(t *testing.T) {
+	const index = "ix_sync_runs_org_class_active_order"
+	withRearmQueuePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := pgNow()
+		const perClass = 70
+		for _, statement := range []string{
+			`INSERT INTO sync_runs (id, org_id, integration_id, triggered_by, mode, status, total_units, completed_units, failed_units, created_at)
+			 SELECT ('00000000-0000-4000-900c-' || lpad(to_hex(n), 12, '0'))::uuid, $1, $2::uuid,
+				CASE WHEN n % 2 = 0 THEN 'backfill' ELSE 'schedule' END, CASE WHEN n % 2 = 0 THEN 'backfill' ELSE 'incremental' END,
+				'running', 1, 0, 0, $4::timestamptz - make_interval(mins => n)
+			 FROM generate_series(1, 2 * $3::int) AS n`,
+			`INSERT INTO sync_run_reference_discoveries (id, sync_run_id, org_id, status, attempts, available_at, created_at, updated_at)
+			 SELECT ('00000000-0000-4000-900d-' || lpad(to_hex(n), 12, '0'))::uuid, ('00000000-0000-4000-900c-' || lpad(to_hex(n), 12, '0'))::uuid,
+				$1, 'success', 1, $4::timestamptz, $4::timestamptz, $4::timestamptz
+			 FROM generate_series(1, 2 * $3::int) AS n WHERE $2::text IS NOT NULL`,
+			`INSERT INTO sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode, status, attempts, created_at, updated_at)
+			 SELECT ('00000000-0000-4000-900e-' || lpad(to_hex(n), 12, '0'))::uuid, $1, ('00000000-0000-4000-900c-' || lpad(to_hex(n), 12, '0'))::uuid,
+				$2::uuid, $5::uuid, 'github', 'commits', 'medium', 'incremental', 'planned', 0, $4::timestamptz, $4::timestamptz
+			 FROM generate_series(1, 2 * $3::int) AS n`,
+		} {
+			args := []any{rqOrg, rqIntegration, perClass, now}
+			if containsPlaceholder(statement, "$5") {
+				args = append(args, rqSource)
+			}
+			if _, err := pool.Exec(ctx, statement, args...); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+		}
+		if _, err := pool.Exec(ctx, `ANALYZE`); err != nil {
+			t.Fatal(err)
+		}
+		for _, class := range []int{0, 1} {
+			plan, err := p3Explain(ctx, pool, bucketHeadsSQL, rqOrg, "github", "medium", class, now, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			conds := planIndexConds(plan, index)
+			t.Logf("class %d: %s conditions %q", class, index, conds)
+			if len(conds) != 1 || !strings.Contains(conds[0], "::integer = ") {
+				t.Fatalf("class %d: the head read's class is not an index condition of %s (conditions %q)", class, index, conds)
+			}
+		}
+	})
+}
+
+// acp plan3-build ack 3: a reservation goes with its run (fk_sync_dispatch_bucket_reservations_run, ON DELETE
+// CASCADE), proven on the migrated schema: the hand-built venues omit the foreign key so their TRUNCATE works.
+func TestB3ReservationGoesWithItsRunOnTheMigratedSchema(t *testing.T) {
+	withRearmQueuePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := pgNow()
+		gone, kept := rqID(1, 1, 0), rqID(1, 2, 0)
+		for _, runID := range []string{gone, kept} {
+			pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: runID, OrgID: rqOrg, IntegrationID: rqIntegration})
+			if err := rqSetReservation(ctx, pool, rqOrg, "github", "medium", runID, false, now); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var onDelete string
+		if err := pool.QueryRow(ctx, `SELECT COALESCE((SELECT confdeltype::text FROM pg_constraint
+WHERE conname = 'fk_sync_dispatch_bucket_reservations_run' AND conrelid = 'public.sync_dispatch_bucket_reservations'::regclass
+	AND confrelid = 'public.sync_runs'::regclass), '')`).Scan(&onDelete); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `DELETE FROM sync_runs WHERE id = $1::uuid`, gone); err != nil {
+			t.Fatalf("delete the run: %v", err)
+		}
+		_, goneLeft, err := rqReservation(ctx, pool, rqOrg, "github", "medium", gone)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, keptLeft, err := rqReservation(ctx, pool, rqOrg, "github", "medium", kept)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("fk on delete=%q; after the run's delete its reservation left=%v, the other run's left=%v", onDelete, goneLeft, keptLeft)
+		if onDelete != "c" || goneLeft || !keptLeft {
+			t.Fatalf("reservation cascade: fk on delete=%q (want c), deleted run's reservation left=%v (want false), other left=%v (want true)",
+				onDelete, goneLeft, keptLeft)
 		}
 	})
 }

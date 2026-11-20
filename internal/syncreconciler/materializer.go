@@ -157,20 +157,10 @@ func (materializer *Materializer) WithBucketSweeps(sweeps syncrunrollup.BucketSw
 // signal's enqueue is dropped as the running job's duplicate. A signal is recovered within this age plus one tick.
 const bucketSignalRecoveryAge = 60 * time.Second
 
-// unacknowledgedBucketSignalsSQL lists the buckets whose last signal is at least the recovery age old ($1 is now less
-// that age) and still unacknowledged, oldest signal first.
-const unacknowledgedBucketSignalsSQL = `
-SELECT signal.org_id, signal.provider, signal.cost_class
-FROM public.sync_dispatch_bucket_signals AS signal
-WHERE signal.generation > signal.acked_generation
-	AND signal.updated_at <= $1
-ORDER BY signal.updated_at, signal.org_id, signal.provider, signal.cost_class
-LIMIT $2`
-
 type signaledBucket struct{ orgID, provider, costClass string }
 
 func readUnacknowledgedBucketSignals(ctx context.Context, tx pgx.Tx, now time.Time, limit int) ([]signaledBucket, error) {
-	rows, err := tx.Query(ctx, unacknowledgedBucketSignalsSQL, now.Add(-bucketSignalRecoveryAge), limit)
+	rows, err := tx.Query(ctx, syncrunrollup.UnacknowledgedBucketSignalsSQL, now.Add(-bucketSignalRecoveryAge), limit)
 	if err != nil {
 		return nil, err
 	}

@@ -90,6 +90,16 @@ type BucketSweepEnqueuer interface {
 	EnsureBucketSweep(ctx context.Context, orgID, provider, costClass string) error
 }
 
+// UnacknowledgedBucketSignalsSQL lists the buckets whose last signal is at least the recovery age old ($1 is now less
+// that age) and still unacknowledged, oldest signal first: the reconciler's materializer enqueues their sweeps.
+const UnacknowledgedBucketSignalsSQL = `
+SELECT signal.org_id, signal.provider, signal.cost_class
+FROM public.sync_dispatch_bucket_signals AS signal
+WHERE signal.generation > signal.acked_generation
+	AND signal.updated_at <= $1
+ORDER BY signal.updated_at, signal.org_id, signal.provider, signal.cost_class
+LIMIT $2`
+
 // ReleaseSlot is the post-commit wake every writer that moves a unit out of its slot runs. With a sweep enqueuer it
 // signals the bucket and the bucket's sweep hands the slot to the oldest eligible waiter of the bucket, which may be
 // the freeing run itself; the freeing run is not woken on its own, so it cannot overtake an older waiter. A unit moved

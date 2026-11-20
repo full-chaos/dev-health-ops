@@ -554,12 +554,13 @@ func TestCoordinatorInsertsBackfillJobsAndDomainIsDenied(t *testing.T) {
 }
 
 // TestCoordinatorExecutesTheBucketSweepSignalStatements (CHAOS-14250) runs, as
-// the real NOSUPERUSER coordinator login, the two statements the reconciler's
-// ReleaseSlot paths (lease repair, unreclaimable sweep) execute after the
-// bucket sweep landed: BumpBucketGenerationSQL (INSERT ... ON CONFLICT DO
-// UPDATE on sync_dispatch_bucket_signals) and WakeDispatchAtSQL (the
-// outbox upsert). It also pins that the coordinator holds nothing on
-// sync_dispatch_bucket_reservations and cannot DELETE signals.
+// the real NOSUPERUSER coordinator login, the statements the reconciler runs
+// on the bucket sweep tables: the ReleaseSlot paths' (lease repair,
+// unreclaimable sweep) BumpBucketGenerationSQL (INSERT ... ON CONFLICT DO
+// UPDATE on sync_dispatch_bucket_signals) and WakeDispatchAtSQL (the outbox
+// upsert), and the materializer's UnacknowledgedBucketSignalsSQL read. It also
+// pins that the coordinator holds nothing on sync_dispatch_bucket_reservations
+// and cannot DELETE signals.
 func TestCoordinatorExecutesTheBucketSweepSignalStatements(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -573,6 +574,7 @@ func TestCoordinatorExecutesTheBucketSweepSignalStatements(t *testing.T) {
 	}{
 		{"BumpBucketGenerationSQL (insert arm)", syncrunrollup.BumpBucketGenerationSQL, []any{"org", "github", "standard", time.Now().UTC()}},
 		{"WakeDispatchAtSQL", syncrunrollup.WakeDispatchAtSQL, []any{"00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002", time.Now().UTC(), time.Now().UTC()}},
+		{"UnacknowledgedBucketSignalsSQL (materializer recovery read)", syncrunrollup.UnacknowledgedBucketSignalsSQL, []any{time.Now().UTC(), 100}},
 	} {
 		tx, err := coordinator.Begin(ctx)
 		if err != nil {

@@ -334,3 +334,126 @@ func TestNoRedactedValueOrItsHashInAnyGoldenOutput(t *testing.T) {
 		t.Fatalf("the cell reached %d cases with hidden values and %d CHANGED <redacted> rows: it checks nothing", checked, hiddenRows)
 	}
 }
+
+// oneSideRender is a render where the field named by site holds v; every other field is fixed.
+func oneSideRender(site, v string) string {
+	f := map[string]string{"ann": `"n"`, "args": `"--plain"`, "cmd": `"run"`, "env": `"p"`, "cmurl": `"u"`, "cmblob": `"b"`,
+		"crdname": `"x"`, "crdport": `"y"`, "cred": `{name: PLAIN, value: "v"}`, "inner": `{kind: Other, data: {token: "k"}}`}
+	f[site] = v
+	return `apiVersion: apps/v1
+kind: Deployment
+metadata: {name: d}
+spec:
+  template:
+    metadata:
+      annotations: {note: ` + f["ann"] + `}
+    spec:
+      containers:
+      - name: c
+        args: [` + f["args"] + `]
+        command: [` + f["cmd"] + `]
+        env:
+        - {name: PLAIN_URL, value: ` + f["env"] + `}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: cm}
+data: {url: ` + f["cmurl"] + `}
+binaryData: {blob: ` + f["cmblob"] + `}
+---
+apiVersion: example.invalid/v1
+kind: Widget
+metadata: {name: w}
+spec:
+  items: [{name: a, url: ` + f["crdname"] + `}]
+  ports: [{port: 80, url: ` + f["crdport"] + `}]
+  cred: ` + f["cred"] + `
+  inner: ` + f["inner"] + `
+`
+}
+
+// Gap 4 (#6748 r1): a literal "<redacted>" on one side and a redacted value on the other compare equal after
+// masking; the raw pair still differs, so it is ONE "CHANGED <redacted>" row, in both directions, with no raw
+// byte and no sha256 window of the redacted value in the output.
+func TestAOneSideRedactedChangeIsOneRow(t *testing.T) {
+	const uri, loose = "https://celluser@h.example.invalid/p", "see https://h.example.invalid/p@x"
+	lit := `"<redacted>"`
+	cases := []struct{ name, site, literal, marked, raw, path string }{
+		{"args loose", "args", lit, `"` + loose + `"`, loose, "Deployment/d .spec.template.spec.containers[name=c].args[0]"},
+		{"args userinfo", "args", lit, `"` + uri + `"`, uri, "Deployment/d .spec.template.spec.containers[name=c].args[0]"},
+		{"command loose", "cmd", lit, `"` + loose + `"`, loose, "Deployment/d .spec.template.spec.containers[name=c].command[0]"},
+		{"command userinfo", "cmd", lit, `"` + uri + `"`, uri, "Deployment/d .spec.template.spec.containers[name=c].command[0]"},
+		{"plain env userinfo", "env", lit, `"` + uri + `"`, uri, "Deployment/d .spec.template.spec.containers[name=c].env[name=PLAIN_URL].value"},
+		{"configmap data userinfo", "cmurl", lit, `"` + uri + `"`, uri, "ConfigMap/cm .data.url"},
+		{"configmap binaryData userinfo", "cmblob", lit, `"` + uri + `"`, uri, "ConfigMap/cm .binaryData.blob"},
+		{"annotation userinfo", "ann", lit, `"` + uri + `"`, uri, "Deployment/d .spec.template.metadata.annotations.note"},
+		{"list keyed by name", "crdname", lit, `"` + uri + `"`, uri, "Widget/w .spec.items[name=a].url"},
+		{"list keyed by port", "crdport", lit, `"` + uri + `"`, uri, "Widget/w .spec.ports[port=80/TCP].url"},
+		{"name toggles redaction", "cred", `{name: PLAIN, value: "<redacted>"}`, `{name: DB_PASSWORD, value: "s3cr3t-cell-v"}`, "s3cr3t-cell-v", "Widget/w .spec.cred.value"},
+		{"kind toggles data redaction", "inner", `{kind: Other, data: {token: "<redacted>"}}`, `{kind: ConfigMap, data: {token: "tok-cell-v"}}`, "tok-cell-v", "Widget/w .spec.inner.data.token"},
+		{"kind toggles binaryData redaction", "inner", `{kind: Other, binaryData: {token: "<redacted>"}}`, `{kind: ConfigMap, binaryData: {token: "tok-cell-b"}}`, "tok-cell-b", "Widget/w .spec.inner.binaryData.token"},
+	}
+	for _, c := range cases {
+		for _, dir := range []struct {
+			name string
+			a, b string
+		}{{"literal to redacted", c.literal, c.marked}, {"redacted to literal", c.marked, c.literal}} {
+			t.Run(c.name+"/"+dir.name, func(t *testing.T) {
+				writeFiles(t, map[string]string{"a.yaml": oneSideRender(c.site, dir.a), "b.yaml": oneSideRender(c.site, dir.b)})
+				rc, out, errOut := runMain([]string{"a.yaml", "b.yaml", "--rc-a", "0", "--rc-b", "0", "--info"}, "")
+				if rc != 0 || errOut != "" {
+					t.Fatalf("rc %d stderr %q", rc, errOut)
+				}
+				if want := c.path + " CHANGED <redacted>\n"; strings.Count(out, want) != 1 {
+					t.Errorf("want exactly one %q in:\n%s", want, out)
+				}
+				sum := sha256.Sum256([]byte(c.raw))
+				h := hex.EncodeToString(sum[:])
+				needles := []string{c.raw}
+				for i := 0; i+12 <= len(h); i++ {
+					needles = append(needles, h[i:i+12], strings.ToUpper(h[i:i+12]))
+				}
+				for _, n := range needles {
+					if strings.Contains(out+errOut, n) {
+						t.Errorf("the redacted value or its hash (%d bytes) reached the output", len(n))
+					}
+				}
+				_, added, _ := runMain([]string{"a.yaml", "b.yaml", "--rc-a", "0", "--rc-b", "0", "--expect-added", ""}, "")
+				if !strings.Contains(added, ": STOP (expected added [])") {
+					t.Errorf("--expect-added passed a hidden change:\n%s", added)
+				}
+			})
+		}
+	}
+}
+
+// Parity (#6748 r1): PyYAML's .nan is one shared object and Python's list/dict equality checks identity first, so a
+// redacted [.nan] or {n: .nan} on both sides is the same value in the kit: no row. A scalar .nan still differs.
+func TestASharedNaNInARedactedValueIsNoChange(t *testing.T) {
+	sites := map[string]string{
+		"env secret value":            `- {name: DB_PASSWORD, value: %s}`,
+		"name/value mapping":          `- {name: X_PASSWORD, value: %s}`,
+		"configmap secret key":        `token: %s`,
+		"configmap over-redacted key": `monkey: %s`,
+	}
+	for site, form := range sites {
+		for _, shape := range []string{"{n: .nan}", "[.nan]", "{n: [.nan, {m: .nan}]}", ".nan"} {
+			t.Run(site+"/"+shape, func(t *testing.T) {
+				v := strings.Replace(form, "%s", shape, 1)
+				var render string
+				switch {
+				case strings.HasPrefix(form, "- "):
+					render = "kind: Deployment\nmetadata: {name: d}\nspec:\n  template:\n    spec:\n      containers:\n      - name: c\n        env:\n        " + v + "\n"
+				default:
+					render = "kind: ConfigMap\nmetadata: {name: cm}\ndata:\n  " + v + "\n"
+				}
+				writeFiles(t, map[string]string{"a.yaml": render, "b.yaml": render})
+				rc, out, _ := runMain([]string{"a.yaml", "b.yaml", "--rc-a", "0", "--rc-b", "0", "--info"}, "")
+				rows := strings.Count(out, " CHANGED <redacted>\n")
+				if want := map[bool]int{true: 1, false: 0}[shape == ".nan"]; rc != 0 || rows != want {
+					t.Errorf("rc %d, %d hidden rows, want %d:\n%s", rc, rows, want, out)
+				}
+			})
+		}
+	}
+}

@@ -129,11 +129,23 @@ func asKit(v any) any {
 	return v
 }
 
-// hiddenChange is true when both sides hold a redacted value and the raw values differ (same() on the raws).
+// hiddenChange is true when either side holds a redacted value and the raw values differ (same() on the raws; an
+// unmarked side is its own raw). The masked values already compare equal here, so a literal "<redacted>" on one side
+// and a redacted value on the other is still a change. A gate must fail toward showing a change.
 func hiddenChange(a, b any) bool {
 	ra, okA := a.(*redactedValue)
 	rb, okB := b.(*redactedValue)
-	return okA && okB && !same(ra.raw, rb.raw)
+	if !okA && !okB {
+		return false
+	}
+	x, y := a, b
+	if okA {
+		x = ra.raw
+	}
+	if okB {
+		y = rb.raw
+	}
+	return !same(x, y)
 }
 
 // docKind is d.get("kind") for a doc that docs_of() keeps: a mapping with a truthy kind.

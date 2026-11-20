@@ -254,9 +254,13 @@ func pyEq(a, b any) bool {
 	return false
 }
 
-// identical stands in for Python's `is` shortcut inside container equality (a NaN equals itself there).
+// identical stands in for Python's `is` shortcut inside container equality (a NaN equals itself there). PyYAML's
+// .nan is one shared float object (sharedNaN), so [.nan] == [.nan] in Python; a scalar .nan still differs from itself.
 func identical(a, b any) bool {
 	switch x := a.(type) {
+	case float64:
+		y, ok := b.(float64)
+		return ok && isSharedNaN(x) && isSharedNaN(y)
 	case *pyDict:
 		y, ok := b.(*pyDict)
 		return ok && x == y

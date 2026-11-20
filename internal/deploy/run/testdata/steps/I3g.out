@@ -1,0 +1,4 @@
+HOOK acme-app-migrate absent (not a hook of this step)
+HOOK acme-app-grants absent (not a hook of this step)
+HOOK acme-app-index absent (not a hook of this step)
+HOOKGUARD PASS (0 hook rows)

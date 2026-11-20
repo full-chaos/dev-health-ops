@@ -1,0 +1,3 @@
+render A: helm rc=0 docs=4
+render B: helm rc=0 docs=4
+FULL RENDER DIFF: STOP (render floor: render A: docs=4 below --min-docs 5; render B: docs=4 below --min-docs 5)

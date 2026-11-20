@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: web
+  name: web
+spec:
+  flag: '1'
+  gone1: null
+  gone2: []
+  gone3: {}
+  keep: x
+  nanv: .nan
+  ratio: 1
+  removedempty: {}
+  removedmap:
+    a: 1
+  replicas: 1
+  same: 2.0
+  template:
+    metadata:
+      annotations:
+        checksum/config: abc
+      labels:
+        app: web
+        v: '1'
+    spec:
+      containers:
+      - args:
+        - <redacted>
+        - --plain
+        - --x
+        command:
+        - run
+        - <redacted>
+        env:
+        - name: DB_PASSWORD
+          value: <redacted>
+        - name: API_TOKEN
+          value: <redacted>
+        - name: PLAIN
+          value: v1
+        - name: SOME_URI
+          value: <redacted>
+        - name: LINK
+          value: see https://example.com/a@b
+        - name: X_KEY
+          value: <redacted>
+        - name: NOVALUE
+          valueFrom:
+            secretKeyRef:
+              key: k
+              name: s
+        image: app:1
+        name: app
+        ports:
+        - containerPort: 8080
+          protocol: TCP
+        - containerPort: 9090
+        volumeMounts: []
+      initContainers:
+      - image: busybox
+        name: i1
+      volumes: null
+---
+apiVersion: v1
+binaryData:
+  cert.token: <redacted>
+data:
+  API_KEY: <redacted>
+  DB_DSN: <redacted>
+  LOG_LEVEL: info
+  PLAIN: three
+  monkey: <redacted>
+kind: ConfigMap
+metadata:
+  name: cfg
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: dev-health-ops-postgresql
+spec:
+  ports:
+  - port: 5432
+  - port: 5433
+    protocol: UDP
+  replicas: 1
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc
+spec:
+  ports:
+  - port: 80
+    targetPort: 8080
+  - port: true

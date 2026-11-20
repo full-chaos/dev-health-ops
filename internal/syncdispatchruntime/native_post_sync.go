@@ -267,6 +267,10 @@ func (service *NativePostSyncService) fanout(ctx context.Context, args PostSyncA
 	if plan == nil {
 		observe = true
 		outcome = jobruntime.PostSyncFanoutOutcomeNoRepositories
+		state.step = stageOutcomeRecord
+		if err = service.recordPostSyncOutcome(ctx, tx, args, outcome); err != nil {
+			return err
+		}
 		state.step = stageCommitCheck
 		var allowed bool
 		if allowed, err = service.postSyncCommitAllowed(ctx, tx, args); err != nil {
@@ -349,6 +353,10 @@ func (service *NativePostSyncService) fanout(ctx context.Context, args PostSyncA
 	}
 	state.step = stageOwnershipDerivation
 	if err = service.publishTeamRepoOwnershipDerivation(ctx, tx, *plan); err != nil {
+		return err
+	}
+	state.step = stageOutcomeRecord
+	if err = service.recordPostSyncOutcome(ctx, tx, args, outcome); err != nil {
 		return err
 	}
 	state.step = stageCommitCheck
@@ -584,6 +592,39 @@ func (service *NativePostSyncService) observeTeamAutoimportFailure(
 ) {
 	logger := service.logger
 	logger.Error(ctx, synclog.MsgPostSyncTeamAutoimportHandoffDropped, synclog.Org(synclog.ParseID(plan.OrganizationID)), synclog.Run(synclog.ParseID(plan.SyncRunID)), synclog.Failure(err))
+}
+
+// recordPostSyncOutcome stamps the fan-out outcome on the run's post_sync ledger row in the fan-out transaction, so the
+// stamp commits with the work (or rolls back with it) and outlives the River job row: a run whose fan-out never committed
+// keeps a NULL outcome. The time is clock_timestamp(), not now(): this is the pass's last write before its commit check,
+// and now() would give the start of a transaction whose stages can run for minutes. The first committed outcome is kept; a later delivery updates nothing. A run with no ledger row
+// is not an error (the fan-out goes on), but it is logged: nothing records that run's outcome.
+func (service *NativePostSyncService) recordPostSyncOutcome(
+	ctx context.Context, tx pgx.Tx, args PostSyncArgs, outcome jobruntime.PostSyncFanoutOutcome,
+) error {
+	var ledgerPresent bool
+	err := tx.QueryRow(ctx, `
+WITH ledger AS (
+    SELECT id
+    FROM public.sync_run_post_dispatches
+    WHERE sync_run_id = $1::uuid AND org_id = $2 AND kind = 'post_sync'
+), stamped AS (
+    UPDATE public.sync_run_post_dispatches AS stamp
+    SET post_sync_outcome = $3, post_sync_committed_at = clock_timestamp()
+    WHERE stamp.id IN (SELECT id FROM ledger) AND stamp.post_sync_outcome IS NULL
+    RETURNING stamp.id
+)
+SELECT EXISTS (SELECT 1 FROM ledger) OR EXISTS (SELECT 1 FROM stamped)`,
+		args.SyncRunID(), args.OrganizationID(), string(outcome)).Scan(&ledgerPresent)
+	if err != nil {
+		return unavailable(stageOutcomeRecord, err)
+	}
+	if !ledgerPresent {
+		service.logger.Warn(ctx, synclog.MsgPostSyncOutcomeLedgerAbsent,
+			synclog.Run(synclog.ParseID(args.SyncRunID())),
+			synclog.Text(synclog.KeyOutcome, synclog.ParseLabel(string(outcome))))
+	}
+	return nil
 }
 
 func currentPostSyncReference(ctx context.Context, tx pgx.Tx, args PostSyncArgs) (bool, error) {

@@ -241,6 +241,7 @@ var exportedAPI = []string{
 	"var synclog.MsgPostSyncFanoutFailed synclog.Msg",
 	"var synclog.MsgPostSyncFanoutChainDefect synclog.Msg",
 	"var synclog.MsgPostSyncDeliveryNotCurrent synclog.Msg",
+	"var synclog.MsgPostSyncOutcomeLedgerAbsent synclog.Msg",
 	"var synclog.MsgPostSyncTouchedDays synclog.Msg",
 	"var synclog.MsgPostSyncTouchedDaysFailed synclog.Msg",
 	"var synclog.MsgPostSyncTouchedWindowOverBound synclog.Msg",

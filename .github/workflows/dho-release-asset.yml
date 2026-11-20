@@ -1,35 +1,33 @@
 name: dho release asset
 
-# Publishes dho-linux-arm64 and its sha256 as release assets with build provenance.
-# - workflow_call: auto-release.yml calls it with the new tag (a release made with
-#   GITHUB_TOKEN does not fire `on: release`, so there is no release trigger here).
-# - workflow_dispatch: publish the asset for an existing release tag.
-# - pull_request: build and prove the stamp only; the publish job never runs.
+# The proof leg of the dho release asset: builds dho-linux-arm64 exactly as the release does (auto-release.yml,
+# jobs dho-build and dho-publish carry the same build step text, pinned equal by internal/cigates/workflows
+# dho_release_asset_test.go) and proves the stamp. It publishes nothing.
+# - pull_request: build and prove the stamp for the PR head.
+# - workflow_dispatch: the same build for an existing release tag.
 on:
-  workflow_call:
-    inputs:
-      tag:
-        description: Release tag to build and publish
-        type: string
-        required: true
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to build and publish
+        description: Existing release tag to build and prove
         type: string
         required: true
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - .github/workflows/dho-release-asset.yml
+      - .github/workflows/auto-release.yml
       - cmd/dho/**
       - internal/platform/version/**
       - go.mod
       - go.sum
 
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.tag || github.event.pull_request.number }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # The fleet-wide shape (go.yml, go-workers-compose-proof.yml): a pull request by number, a push to main by commit sha
+  # (never cancelled), any other ref by name. A ready_for_review run gets its own group keyed by the head sha and is
+  # never cancelled.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}${{ github.event.action == 'ready_for_review' && '-ready-' || '' }}${{ github.event.action == 'ready_for_review' && github.event.pull_request.head.sha || '' }}
+  cancel-in-progress: ${{ (github.event_name == 'pull_request' && github.event.action != 'ready_for_review') || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
   contents: read
@@ -76,13 +74,12 @@ jobs:
       - name: Build dho linux arm64 and prove the stamp
         env:
           TAG: ${{ inputs.tag }}
-          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           VP=github.com/full-chaos/dev-health-ops/internal/platform/version
           COMMIT="$(git rev-parse HEAD)"
           [[ "${COMMIT}" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the commit is not 40 hex"; exit 1; }
-          if [ "${EVENT_NAME}" = "pull_request" ]; then VERSION="pr-${COMMIT:0:12}"; else VERSION="${TAG}"; fi
+          if [ -n "${TAG}" ]; then VERSION="${TAG}"; else VERSION="pr-${COMMIT:0:12}"; fi
           SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
           BUILD_TIME="$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ)"
           export CGO_ENABLED=0 GOFLAGS=-mod=readonly SOURCE_DATE_EPOCH
@@ -104,51 +101,3 @@ jobs:
           twin/dho-linux-amd64 version | jq -e --arg c "${COMMIT}" '.commit == $c and .commit != "unknown"'
           echo "commit=${COMMIT}"
           cat dist/dho-linux-arm64.sha256
-
-      - name: Upload the asset files
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: dho-linux-arm64
-          path: |
-            dist/dho-linux-arm64
-            dist/dho-linux-arm64.sha256
-          retention-days: 7
-          if-no-files-found: error
-
-  publish:
-    if: github.event_name != 'pull_request'
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
-    steps:
-      - name: Download the asset files
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: dho-linux-arm64
-          path: dist
-
-      - name: Verify the bytes
-        run: |
-          set -euo pipefail
-          cd dist
-          sha256sum -c dho-linux-arm64.sha256
-
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/dho-linux-arm64
-
-      - name: Upload the release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+\.[0-9]+)?$ ]] || { echo "::error::the tag is not vMAJOR.MINOR.PATCH[-suffix.N]"; exit 1; }
-          gh release upload "${TAG}" dist/dho-linux-arm64 dist/dho-linux-arm64.sha256

@@ -148,7 +148,7 @@ func TestRealClickHouse_AIAttributedPRsPageHoldsDistinctPullRequests(t *testing.
 	end := time.Now().UTC()
 	start := end.AddDate(0, 0, -3)
 	page := func(org string, limit, offset int) []string {
-		rows, err := loadAttributedPRs(ctx, client, org, start, end, "", nil, false, limit, offset)
+		rows, err := loadAttributedPRs(ctx, client, org, start, end, "", nil, false, "", limit, offset)
 		if err != nil {
 			t.Fatal(err)
 		}

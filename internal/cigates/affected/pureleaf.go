@@ -26,9 +26,10 @@ var pureStdlibNames = map[string]bool{
 }
 
 // pureStdlibValueMethods: the methods a pure function may call on a package-level value of the standard library, by the
-// value's full name. These only encode or decode their arguments.
+// value's full name. These return a new value and write into no caller-owned buffer (Encode and Decode are left out). A
+// package qualifier the file declares anywhere (even in another function) keeps the call out: that over-refusal fails closed.
 var pureStdlibValueMethods = func() map[string]map[string]bool {
-	enc := map[string]bool{"EncodeToString": true, "DecodeString": true, "EncodedLen": true, "DecodedLen": true, "Encode": true, "Decode": true}
+	enc := map[string]bool{"EncodeToString": true, "DecodeString": true, "EncodedLen": true, "DecodedLen": true}
 	m := map[string]map[string]bool{}
 	for _, v := range []string{"StdEncoding", "URLEncoding", "RawStdEncoding", "RawURLEncoding"} {
 		m["encoding/base64."+v] = enc

@@ -3,7 +3,6 @@ package affected
 import (
 	"go/ast"
 	"go/token"
-	"strconv"
 	"strings"
 )
 
@@ -132,37 +131,6 @@ type flowKey struct {
 	top    *ast.CallExpr
 }
 
-// literalLed reports whether a string concatenation starts with a string literal that does not leave the directory it is
-// resolved in (no absolute start) and holds no parent step in any literal part: the result cannot name a file outside
-// the directory a program that gets it runs in.
-func literalLed(b *ast.BinaryExpr) bool {
-	var lead ast.Expr = b
-	for {
-		x, ok := lead.(*ast.BinaryExpr)
-		if !ok || x.Op != token.ADD {
-			break
-		}
-		lead = x.X
-	}
-	first, ok := lead.(*ast.BasicLit)
-	if !ok || first.Kind != token.STRING {
-		return false
-	}
-	if v, err := strconv.Unquote(first.Value); err != nil || strings.HasPrefix(v, "/") {
-		return false
-	}
-	clean := true
-	ast.Inspect(b, func(n ast.Node) bool {
-		if l, ok := n.(*ast.BasicLit); ok && l.Kind == token.STRING {
-			if v, err := strconv.Unquote(l.Value); err != nil || strings.Contains(v, "..") {
-				clean = false
-			}
-		}
-		return clean
-	})
-	return clean
-}
-
 // shadowed reports whether a call's package qualifier (strings in strings.HasSuffix) is also a local or package-level
 // name of the directory, so the call may not be the package's function.
 func (g *flowGroup) shadowed(call *ast.CallExpr) bool {
@@ -268,9 +236,7 @@ func (r *flowRun) expr(e ast.Node, field string, mapKey bool, ret []flowFrame, d
 		return r.expr(p, "", mapKey, ret, depth)
 	case *ast.BinaryExpr:
 		if p.Op == token.ADD {
-			if !literalLed(p) {
-				r.composed = true
-			}
+			r.composed = true
 			return r.expr(p, "", false, ret, depth)
 		}
 		return false

@@ -10,11 +10,9 @@ import (
 	"testing"
 	"time"
 
-	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
-	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/crossorg"
 )
 
 // The cells of the team view of the cycle breakdown flame (CHAOS-14379): BuildResponse in mode cycle_breakdown reads
@@ -50,30 +48,13 @@ type flameTeamViewRow struct {
 	view    string
 }
 
+// startFlameTeamView starts ClickHouse through crossorg.Start, so this tagged file imports no clickhouse-go package with
+// an init (the side-effect census of the integration shards).
 func startFlameTeamView(t *testing.T) (context.Context, stdclickhouse.Conn, QueryClient) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	t.Cleanup(cancel)
-	ch, err := containers.StartClickHouse(ctx)
-	if err != nil {
-		t.Fatalf("start ClickHouse test dependency: %v", err)
-	}
-	t.Cleanup(func() { _ = ch.Close(context.Background()) })
-	chschema.Apply(ctx, t, ch)
-	options, err := stdclickhouse.ParseDSN(ch.URI)
-	if err != nil {
-		t.Fatalf("parse ClickHouse DSN: %v", err)
-	}
-	admin, err := stdclickhouse.Open(options)
-	if err != nil {
-		t.Fatalf("open ClickHouse admin connection: %v", err)
-	}
-	t.Cleanup(func() { _ = admin.Close() })
-	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: ch.URI})
-	if err != nil {
-		t.Fatalf("construct query client: %v", err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
+	admin, client := crossorg.Start(ctx, t)
 	return ctx, admin, client
 }
 

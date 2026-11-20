@@ -62,7 +62,7 @@ func (r driverDoubleRead) String() string {
 // data it takes the aggregate and blocked predicate from the SELECT emitted by
 // Home and applies those to the seeded, already unique live rows. For the
 // repo-linked data it returns item/attribution rows to the actual Go reducer.
-func driverDoubleHome(t *testing.T, metric string, linked, orgRows bool, ids []string) (*Response, driverDoubleRead, driverDoubleRead) {
+func driverDoubleHome(t *testing.T, metric string, linked, orgRows bool, ids []string, scenarios ...string) (*Response, driverDoubleRead, driverDoubleRead) {
 	t.Helper()
 	cur, prev := day(2026, 10, 21), day(2026, 10, 20)
 	now := cur.AddDate(0, 0, 1).Add(12 * time.Hour)
@@ -77,6 +77,29 @@ func driverDoubleHome(t *testing.T, metric string, linked, orgRows bool, ids []s
 		rows = []driverDoubleRow{{prev, "", 0.25}, {cur, "", 0.5}}
 	case "blocked_work":
 		rows = []driverDoubleRow{{prev, "blocked", 4}, {prev, "in_progress", 20}, {cur, "blocked", 8}, {cur, "in_progress", 2}}
+	}
+
+	if len(scenarios) == 1 {
+		for i := range rows {
+			if rows[i].status != "" && rows[i].status != "blocked" {
+				continue
+			}
+			if rows[i].day.Equal(prev) {
+				rows[i].value = 0
+			}
+			if scenarios[0] == "steady" {
+				rows[i].value = 0
+			}
+		}
+		if scenarios[0] == "missing" {
+			kept := rows[:0]
+			for _, row := range rows {
+				if row.day.Equal(cur) {
+					kept = append(kept, row)
+				}
+			}
+			rows = kept
+		}
 	}
 	var items, attributions, blocked [][]any
 	addItem := func(id, status string, start time.Time, done any) {
@@ -279,4 +302,127 @@ func driverDoubleMainTwoTeamsLinked(metric string, orgRows bool) string {
 		return sentence + " driven by Platform."
 	}
 	return sentence + "."
+}
+
+// A move from a measured 0 (the prior window measured 0, the current not) is stated in absolute values and has no
+// percent. One team: the summary and the captions name the team, with no driver read, for team rows ([t] and [t,t])
+// and org rows.
+func TestHomeOneTeamDriverOnAMoveFromAMeasuredZero(t *testing.T) {
+	// The query double only exposes this value's rows. A measured 0 can be
+	// live (e.g. WIP present with no completed items, a completion with no
+	// remaining WIP, a completed item's start/end equal, or items_touched > 0).
+	metrics := []string{"cycle_time", "throughput", "wip_saturation", "blocked_work"}
+	for _, metric := range metrics {
+		t.Run(metric, func(t *testing.T) {
+			for _, test := range []struct {
+				name    string
+				ids     []string
+				orgRows bool
+			}{
+				{"team-view", []string{driverDoubleTeam}, false},
+				{"team-view-duplicate", []string{driverDoubleTeam, driverDoubleTeam}, false},
+				{"org-fallback", []string{driverDoubleTeam}, true},
+			} {
+				resp, summaryRead, captionRead := driverDoubleHome(t, metric, false, test.orgRows, test.ids, "from-zero")
+				d := driverDoubleDelta(resp, metric)
+				if !d.FromZero() || d.PriorValue == nil || *d.PriorValue != 0 || d.Value <= 0 {
+					t.Fatalf("%s: expected a measured 0 -> positive move, got %+v", test.name, d)
+				}
+				summary, captions := driverDoubleSummary(resp)
+				var signalDelta string
+				for _, signal := range resp.Signals {
+					if signal.Metric == metric && signal.Delta != nil {
+						signalDelta = *signal.Delta
+					}
+				}
+				if signalDelta == "" || !strings.Contains(summary, "rose from") {
+					t.Fatalf("%s: the response did not state the move: summary=%q signal delta=%q", test.name, summary, signalDelta)
+				}
+				if summaryRead.currentSQL != "" || captionRead.currentSQL != "" {
+					t.Errorf("%s: unexpected driver SQL, summary %s, caption %s", test.name, summaryRead, captionRead)
+				}
+				named := strings.Contains(summary, "driven by Platform") &&
+					len(captions) == 1 && strings.Contains(captions[0], "Platform")
+				t.Logf("%s prior=%g current=%g summary=%q signal delta=%q captions=%q driver SQL=%t",
+					test.name, *d.PriorValue, d.Value, summary, signalDelta, captions,
+					summaryRead.currentSQL != "" || captionRead.currentSQL != "")
+				if !named {
+					t.Errorf("%s: the one-team move must name Platform in both outputs", test.name)
+				}
+			}
+		})
+	}
+}
+
+// The controls of the one-team driver: one team ([t], [t,t]) names the team for a percent move, a linked value names
+// none; no team and a team set keep main's driver reads; a steady or a missing value names none.
+func TestHomeOneTeamDriverControls(t *testing.T) {
+	scopes := []struct {
+		name string
+		ids  []string
+	}{
+		{"none", nil},
+		{"one", []string{driverDoubleTeam}},
+		{"duplicate", []string{driverDoubleTeam, driverDoubleTeam}},
+		{"set", []string{driverDoubleTeam, "jira:other"}},
+		{"set-duplicate", []string{driverDoubleTeam, "jira:other", driverDoubleTeam}},
+	}
+	for _, metric := range []string{"cycle_time", "throughput", "wip_saturation", "blocked_work"} {
+		t.Run(metric, func(t *testing.T) {
+			for _, scope := range scopes {
+				isOne := scope.name == "one" || scope.name == "duplicate"
+				for _, orgRows := range []bool{false, true} {
+					for _, linked := range []bool{false, true} {
+						resp, summaryRead, captionRead := driverDoubleHome(t, metric, linked, orgRows, scope.ids)
+						summary, captions := driverDoubleSummary(resp)
+						summaryNamed := strings.Contains(summary, "driven by Platform")
+						captionNamed := len(captions) == 1 && strings.Contains(captions[0], "Platform")
+						wantSummary := (isOne && !linked) || (!isOne && orgRows)
+						wantCaption := wantSummary && !linked
+						wantSummaryRead := !isOne && (orgRows || linked)
+						wantCaptionRead := !isOne && orgRows && !linked
+						gotSummaryRead, gotCaptionRead := summaryRead.currentSQL != "", captionRead.currentSQL != ""
+						t.Logf("%s org=%t linked=%t summary-name=%t caption-name=%t summary-SQL=%t caption-SQL=%t",
+							scope.name, orgRows, linked, summaryNamed, captionNamed, gotSummaryRead, gotCaptionRead)
+						if summaryNamed != wantSummary || captionNamed != wantCaption ||
+							gotSummaryRead != wantSummaryRead || gotCaptionRead != wantCaptionRead {
+							t.Errorf("wrong driver behavior: summary %q caption %v; want name in summary=%t caption=%t, driver SQL in summary=%t caption=%t",
+								summary, captions, wantSummary, wantCaption, wantSummaryRead, wantCaptionRead)
+						}
+					}
+				}
+			}
+			for _, scenario := range []string{"steady", "missing"} {
+				resp, summaryRead, captionRead := driverDoubleHome(t, metric, false, false, []string{driverDoubleTeam}, scenario)
+				summary, captions := driverDoubleSummary(resp)
+				if strings.Contains(summary, "driven by") || len(captions) > 0 ||
+					summaryRead.currentSQL != "" || captionRead.currentSQL != "" {
+					t.Errorf("%s: unexpected driver: summary=%q captions=%q", scenario, summary, captions)
+				}
+				t.Logf("%s summary=%q captions=%q", scenario, summary, captions)
+			}
+		})
+	}
+}
+
+// Main's answer on a move from a measured 0 for no team and a team set (org rows), pinned from main cd3c1b0339bd (log
+// ops2a2-r2-main-zero-1.log): no caption; the summary names a driver only for blocked_work (main's driver read takes
+// every status, ticket 14425). This PR keeps it.
+func TestHomeZeroPriorNoTeamAndTeamSetKeepMain(t *testing.T) {
+	for _, metric := range []string{"cycle_time", "throughput", "wip_saturation", "blocked_work"} {
+		for _, ids := range [][]string{nil, {driverDoubleTeam, "jira:other"}} {
+			resp, summaryRead, _ := driverDoubleHome(t, metric, false, true, ids, "from-zero")
+			summary, captions := driverDoubleSummary(resp)
+			want := map[string]string{
+				"cycle_time":     "Cycle Time rose from 0 days to 0.2 days.",
+				"throughput":     "Throughput rose from 0 items to 4 items.",
+				"wip_saturation": "WIP Saturation rose from 0 % to 50 %.",
+				"blocked_work":   "Blocked Work rose from 0 hours to 8 hours driven by Platform.",
+			}[metric]
+			if summary != want || len(captions) != 0 || summaryRead.currentSQL == "" {
+				t.Errorf("%s teams=%d: summary %q captions %q (driver read %s), want main's %q, no caption, a driver read",
+					metric, len(ids), summary, captions, summaryRead, want)
+			}
+		}
+	}
 }

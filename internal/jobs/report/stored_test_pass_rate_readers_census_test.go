@@ -51,7 +51,7 @@ var pinnedTableFiles = map[string]censusPin{
 		"not a reader: the newest-row key of the table"},
 	"internal/queryapi/aianalytics/ai_opportunities.go": {"a09c60ed330ccc58ec66d009330136122f0cbf21dd65ce13507d20f7b89ac31d",
 		"reader rule applied: newest-row subquery then the live-row filter, the outer query names flake and case counts"},
-	"internal/queryapi/analytics/testopsownership.go": {"488386f9a7d8ebfc6e109f4e8ffa94971c36298f8650a2bfd5e12626983f3f37",
+	"internal/queryapi/analytics/testopsownership.go": {"954e5f9aab6c61e60f31b311fa2a26f3ffbfd0b3ab5dc51b8607b9f5c4d0ffc0",
 		"not a reader: table name switch"},
 	"internal/queryapi/analytics/timeseries.go": {"9ca3c9eacf9844535929e0506e21c201f60c55ec889e42a20cef0436bcad7de8",
 		"not a reader: natural key map; the newest-row source leaves out a retired day (live-row filter)"},

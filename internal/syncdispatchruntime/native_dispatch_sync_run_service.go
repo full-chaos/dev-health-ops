@@ -226,7 +226,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	// below actually succeeds.
 	ctx = withRollupBumpTally(ctx)
 	ctx = withPostCommitLogs(ctx)
-	fence := &transportFence{args: args, kind: outboxKindDispatchSyncRun, unavailable: ErrDispatchSyncRunUnavailable}
+	fence := &transportFence{args: args, kind: outboxKindDispatchSyncRun, unavailable: ErrDispatchSyncRunUnavailable, logger: service.logger}
 
 	// The outbox-relay route-generation fence every native service already
 	// starts with (finalizeWorker/referenceDiscoveryWorker's own first

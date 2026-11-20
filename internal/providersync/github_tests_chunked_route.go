@@ -1188,6 +1188,22 @@ func normalizeLegacyGitHubTestsSkippedArtifacts(cursor githubTestsChunkCursor) g
 	return cursor
 }
 
+// recordGitHubTestsCutListsDropped counts and logs one emission whose cursor dropped cut lists to fit the byte budget
+// (CHAOS-14315). It fires once per degraded emission, never for the before cursor of the next one.
+func recordGitHubTestsCutListsDropped(cursor githubTestsChunkCursor, bytesBefore int, client *providerfoundation.HTTPClient, claim Claim, dropped []string) {
+	encoded, _ := json.Marshal(cursor)
+	for _, list := range dropped {
+		if client != nil {
+			client.Metrics.RecordCursorCutListDropped(list)
+		}
+	}
+	slog.Warn(
+		"github tests chunk cursor over the byte budget; cut lists dropped, the revisit of the cut second reads its runs again",
+		"provider", claim.Provider, "dataset", claim.Dataset, "repository", logging.ProviderText(cursor.Repo),
+		"dropped", strings.Join(dropped, ","), "bytes_after", len(encoded), "bytes_before", bytesBefore,
+	)
+}
+
 func encodeGitHubTestsChunkCursor(cursor githubTestsChunkCursor) (string, error) {
 	encoded, err := json.Marshal(cursor)
 	if err != nil || len(encoded) > maxChunkCursorBytes {
@@ -1449,9 +1465,15 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	cursor.Requests = invocationBaseRequests + requests
 	policyCache := map[string]githubTestsPolicy{}
 	emitCursor := func(before, after githubTestsChunkCursor, batch CompleteRouteBatch, final bool) error {
+		before, _ = githubTestsFitCursor(before)
 		beforeRaw, beforeErr := encodeGitHubTestsChunkCursor(before)
 		if beforeErr != nil {
 			return beforeErr
+		}
+		bytesBefore, _ := json.Marshal(after)
+		after, dropped := githubTestsFitCursor(after)
+		if len(dropped) > 0 {
+			recordGitHubTestsCutListsDropped(after, len(bytesBefore), client, claim, dropped)
 		}
 		afterRaw, afterErr := encodeGitHubTestsChunkCursor(after)
 		if afterErr != nil {

@@ -381,7 +381,7 @@ func gitLabTestsListedPipelineID(raw json.RawMessage) (int64, error) {
 	}
 	id, err := item.ID.Int64()
 	if err != nil || id < 1 {
-		return 0, providerfoundation.ErrNormalizationInvalid
+		return 0, providerfoundation.RouteFailure(gitlabPipelinesRoute, providerfoundation.ReasonBodyDecode, providerfoundation.ErrNormalizationInvalid)
 	}
 	return id, nil
 }

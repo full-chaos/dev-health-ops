@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: svc}
+spec:
+  replicas: 1
+  extra: {a: "1", b: "2"}
+  gone: null
+  emptyl: []
+  emptym: {}
+  template:
+    spec:
+      initContainers:
+        - {name: i1, image: "r/i1@sha256:aaaa"}
+        - {name: i2, image: "r/i2@sha256:aaaa"}
+      containers:
+        - name: app
+          image: "r/app@sha256:aaaa"
+          args: ["--dsn", "postgres://u:pw@h/db", "--x"]
+          ports:
+            - {containerPort: 8080, protocol: TCP, name: http}
+            - {containerPort: 9090, protocol: TCP, name: metrics}
+          env:
+            - {name: A, value: "1"}
+            - {name: B, value: "2"}
+            - {name: DB_PASSWORD, value: "SENTINEL-PW-a1b2c3"}
+            - {name: SOME_URI, value: "https://user@host/x"}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: cfg}
+data:
+  LOG_LEVEL: info
+  api_token: SENTINEL-TOKEN-d4e5f6
+  REMOVED_KEY: "/run/x"
+  URL: "https://bob@example.com/p"
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: sec}
+stringData: {PASSWORD: SENTINEL-SECRET-g7h8}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: gone-svc}
+spec: {ports: [{port: 80}]}

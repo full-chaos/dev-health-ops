@@ -134,7 +134,7 @@ func TestStageFailedLinesStayByteEqualWhenNotBudget(t *testing.T) {
 		{StageUnreclaimableSweep, sweepUnavailable(sweepStepBegin, serverPermissionDenied),
 			`{"level":"ERROR","msg":"syncreconciler.stage_failed","stage":"unreclaimable_sweep","budget_ms":600,"elapsed_ms":0,"sqlstate":"42501","error":"unreclaimable sweep begin domain transaction failed (sqlstate 42501): sync dispatch observer database unavailable","phase":"none","phases":""}`},
 		{StageTerminalDeliveryRepair, ErrUnavailable,
-			`{"level":"ERROR","msg":"syncreconciler.stage_failed","stage":"terminal_delivery_repair","budget_ms":750,"elapsed_ms":0,"sqlstate":"","error":"sync dispatch observer database unavailable","phase":"none","phases":""}`},
+			`{"level":"ERROR","msg":"syncreconciler.stage_failed","stage":"terminal_delivery_repair","budget_ms":1200,"elapsed_ms":0,"sqlstate":"","error":"sync dispatch observer database unavailable","phase":"none","phases":""}`},
 		{StageTerminalOutboxClose, terminalOutboxCloseUnavailable(terminalOutboxCloseStepBegin, serverPermissionDenied),
 			`{"level":"ERROR","msg":"syncreconciler.stage_failed","stage":"terminal_outbox_close","budget_ms":600,"elapsed_ms":0,"sqlstate":"42501","error":"terminal outbox close begin terminal-outbox-close transaction failed (sqlstate 42501): sync dispatch observer database unavailable","phase":"none","phases":""}`},
 		{StageOrphanedUnitRepair, ErrUnavailable,

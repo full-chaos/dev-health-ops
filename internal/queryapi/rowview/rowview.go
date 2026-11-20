@@ -151,6 +151,50 @@ func TeamPick(table, newest string) string {
 		declared.LiveRow(table+"."), table, strings.Join(key, ", "))
 }
 
+// ServedTeamSource is TeamSource for a served (query API) reader (CHAOS-14376):
+// the newest rows it picks from are read with the organization's own predicate,
+// org_id = {org_id:String}, in this text, so the read is scoped by the helper and
+// not by its caller. The caller binds org_id, as every served read does. where is
+// the reader's filter of key columns; it panics for a table that holds no team rows
+// and for an empty filter. A served reader never takes TeamSource or TeamPick: the
+// org scope census refuses them in the served roots. order is as for servedNewest.
+func ServedTeamSource(table, where, order string) string {
+	declared := mustTeamTable(table)
+	return fmt.Sprintf("(\n    SELECT * FROM %s AS %s\n    WHERE %s\n)",
+		TeamPick(table, servedNewest(declared, where, order)), teamSourceAlias, declared.LiveRow(teamSourceAlias+"."))
+}
+
+// ServedTeamPick is TeamPick for a served reader of each key's newest day: the
+// same organization-scoped read as ServedTeamSource, and no live-row rule after
+// the pick, so a key whose every view is retracted keeps its row of zeros as its
+// newest row (it adds 0 and keeps that day the key's newest day, as the org form
+// does). It panics as ServedTeamSource does. order is as for servedNewest.
+func ServedTeamPick(table, where, order string) string {
+	return TeamPick(table, servedNewest(mustTeamTable(table), where, order))
+}
+
+// servedNewest is the newest row of each full key of the table in the organization,
+// aliased as the table. With order "" the table is read FINAL, so of two versions
+// that share computed_at the merge order picks one. Else order is the reader's
+// version order (an expression, the largest wins): each full key keeps its first
+// row by order DESC, so the reader's org form, which picks by the same order,
+// serves the same version (CHAOS-14405).
+func servedNewest(declared teamkeytables.Table, where, order string) string {
+	table := declared.Table
+	if strings.TrimSpace(where) == "" {
+		panic("rowview: a served team view of " + table + " needs a filter")
+	}
+	if order == "" {
+		return fmt.Sprintf("(SELECT * FROM %[1]s FINAL WHERE %[1]s.org_id = {org_id:String} AND (%[2]s)) AS %[1]s", table, where)
+	}
+	key := []string{table + ".org_id", table + "." + declared.DayColumn}
+	for _, column := range declared.Keys {
+		key = append(key, table+"."+column.Name)
+	}
+	return fmt.Sprintf("(SELECT * FROM %[1]s WHERE %[1]s.org_id = {org_id:String} AND (%[2]s) ORDER BY %[3]s DESC LIMIT 1 BY %[4]s) AS %[1]s",
+		table, where, order, strings.Join(key, ", "))
+}
+
 // mustTeamTable panics for a table that holds no team rows.
 func mustTeamTable(table string) teamkeytables.Table {
 	if _, ok := teamTables[table]; !ok {

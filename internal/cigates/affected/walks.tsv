@@ -322,6 +322,8 @@ internal/clicredentials	opensites_test.go	cmd	tree	*.go
 internal/clicredentials	opensites_test.go	internal	tree	*.go
 internal/deploy/gitgate	gitgate.go	unexpressed	-	-
 internal/deploy/inputs	hookrender_test.go	unexpressed	-	-
+internal/deploy/renderdiff	gaps_test.go	unexpressed	-	-
+internal/deploy/renderdiff	golden_test.go	unexpressed	-	-
 internal/deploy/run	census_test.go	unexpressed	-	*.go
 internal/deploy/run	step_test.go	unexpressed	-	-
 internal/egressguard	egressguard_test.go	unexpressed	-	*.go
@@ -524,6 +526,7 @@ internal/queryapi/server	investment_scope_pin_wiring_test.go	unexpressed	-	-
 internal/queryapi/server	log_request_id_census_test.go	unexpressed	-	-
 internal/queryapi/server	mcp_proof_route_retired_test.go	unexpressed	-	*.go
 internal/queryapi/server	org_scope_census_test.go	unexpressed	-	-
+internal/queryapi/server	org_scope_team_view_test.go	unexpressed	-	*.go
 internal/queryapi/server	registered_document_field_gate_test.go	unexpressed	-	*.go
 internal/queryapi/server	registered_document_field_gate_test.go	unexpressed	-	-
 internal/queryapi/server	rest_allowlist_census_test.go	unexpressed	-	-

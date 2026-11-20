@@ -443,6 +443,36 @@ func TestRealClickHouse_TrendOverOwnedRepositoriesForASuppliedTeam(t *testing.T)
 	}
 }
 
+// A team's repositories come from team_repo_ownership only, never from
+// teams.repo_patterns (a manual mapping, D7013b): a team that has only patterns
+// answers no row, and an ownership row is what makes it answer.
+func TestRealClickHouse_PatternsOnlyTeamAnswersNoRow(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	repo(t, ctx, conn, "org-1", rA, "acme/web")
+	exec(t, ctx, conn, `INSERT INTO teams (id, name, org_id, repo_patterns, updated_at) VALUES ('p1', 'Patterns', 'org-1', ['acme/*', 'acme/web'], now64(6))`)
+	put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rA, day: day(now, 1), score: "0.5", sev: "elevated"})
+	teamRows := func(teamIDs []string) []model.CompoundingRiskPoint {
+		t.Helper()
+		got, err := Resolve(ctx, client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TeamIds: teamIDs, TrendDays: 30}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.Rows
+	}
+	if rows := teamRows([]string{"p1"}); len(rows) != 0 {
+		t.Fatalf("a team with only repo_patterns answered %#v, want no row", rows)
+	}
+	if rows := teamRows(nil); len(rows) != 0 {
+		t.Fatalf("the team breakout with no team named answered %#v, want no row for a patterns-only team", rows)
+	}
+	own(t, ctx, conn, "org-1", "p1", rA, "acme/web")
+	rows := teamRows([]string{"p1"})
+	if len(rows) != 1 || rows[0].ScopeID != "p1" || rows[0].Score == nil || *rows[0].Score != 0.5 {
+		t.Fatalf("with an ownership row the team answered %#v, want one row for p1 with score 0.5", rows)
+	}
+}
+
 // Coverage is served only beside a score, and a team point's mean score and mean
 // coverage are taken over the same rows (the rows that carry a score), on real
 // ClickHouse: a team that owns a full row, a partial row and a row with no input

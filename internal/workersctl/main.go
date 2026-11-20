@@ -703,6 +703,8 @@ func dispatch(ctx context.Context, runtime *operatorRuntime, args []string, stdo
 		return dispatchProvidersync(ctx, runtime, args[1:], stdout, stderr)
 	case "sync-dispatch-outbox":
 		return dispatchSyncDispatchOutbox(ctx, runtime, args[1:], stdout, stderr)
+	case "sync-runs":
+		return dispatchSyncRuns(ctx, runtime, args[1:], stdout, stderr)
 	case "streams":
 		if len(args) != 2 || args[1] != "status" {
 			return writeError(stderr, "invalid_request")
@@ -3680,6 +3682,7 @@ var orgStdinVerbNames = map[string]bool{
 	"providersync carry-team-ids":              true,
 	"providersync compact-ownership-intervals": true,
 	"providersync drain-removed-dependencies":  true,
+	"sync-runs cancel":                         true,
 }
 
 // orgStdinVerb reports whether args (after the optional leading "workers")

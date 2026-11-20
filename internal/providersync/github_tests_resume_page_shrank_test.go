@@ -59,6 +59,12 @@ func githubTestsRunsResumeCursor(index int) string {
 		`"index":` + strconv.Itoa(index) + `,"run_pages":1,"artifact_pages":0,"repo":"acme/api"}`
 }
 
+// githubTestsRunsResumeCursorAnchored is githubTestsRunsResumeCursor written by a binary that records the resume anchor:
+// the id of the run before index (githubTestsWorkflowRunsFixture(1, n) serves ids 1..n in order).
+func githubTestsRunsResumeCursorAnchored(index int) string {
+	return strings.TrimSuffix(githubTestsRunsResumeCursor(index), "}") + `,"ra":"` + strconv.Itoa(index) + `"}`
+}
+
 func githubTestsResumeCollect(
 	t *testing.T, client *providerfoundation.HTTPClient, resume string,
 ) (emissions int, finals int, err error) {
@@ -197,13 +203,14 @@ func TestGitHubTestsResumeReanchorIsCounted(t *testing.T) {
 }
 
 // A page that did NOT move must not be reported as a re-anchor, or the signal
-// becomes noise and the deploy check above means nothing.
+// becomes noise and the deploy check above means nothing. The cursor carries
+// its anchor (CHAOS-14316): one without it cannot show the page did not move.
 func TestGitHubTestsResumeWithinPageIsNotCountedAsReanchor(t *testing.T) {
 	doer := &githubTestsShrinkingRunsDoer{t: t, items: 5}
 	client := githubTestsClient(t, fakehttp.Client(doer))
 	client.Metrics = providerfoundation.NewMetrics()
 
-	if _, _, err := githubTestsResumeCollect(t, client, githubTestsRunsResumeCursor(2)); err != nil {
+	if _, _, err := githubTestsResumeCollect(t, client, githubTestsRunsResumeCursorAnchored(2)); err != nil {
 		t.Fatalf("collect: %v", err)
 	}
 

@@ -1,0 +1,3 @@
+kind: X
+metadata: {name: sm1}
+v: &m {<<: [*m]}

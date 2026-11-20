@@ -77,11 +77,15 @@ func runLongContinuationFrom(t *testing.T, urlBytes int, resume string, stopAfte
 	return err, cursors, last, client.Metrics
 }
 
-// A provider continuation URL near 3.8 KB plus the cut lists must not fail the chunk with a checkpoint conflict. At 3790
-// bytes the widest cursor of the whole walk is within 20 bytes of 4096 without its cut lists (main before the cut lists completes) and
-// a few bytes over with them.
+// longContinuationURLBytes puts the widest cursor of the walk within 20 bytes of 4096 without its cut lists. It was 3790
+// until a cursor kept its resume anchor (CHAOS-14316: up to 15 more bytes in this walk).
+const longContinuationURLBytes = 3775
+
+// A provider continuation URL near 3.8 KB plus the cut lists must not fail the chunk with a checkpoint conflict. At
+// longContinuationURLBytes the widest cursor of the whole walk is within 20 bytes of 4096 without its cut lists (main before
+// the cut lists completes) and a few bytes over with them.
 func TestGitHubTestsLongContinuationURLWithCutListsFinishesTheChunk(t *testing.T) {
-	const urlBytes = 3790
+	const urlBytes = longContinuationURLBytes
 	err, cursors := runLongContinuation(t, urlBytes)
 	if errors.Is(err, ErrChunkCheckpointConflict) {
 		t.Fatalf("continuation URL %d bytes: chunk failed with a checkpoint conflict after %d emissions", urlBytes, len(cursors))
@@ -125,7 +129,7 @@ func TestGitHubTestsCursorDegradeCountsAndLogs(t *testing.T) {
 	previous := slog.Default()
 	slog.SetDefault(logging.NewJSON(&output, slog.LevelWarn))
 	defer slog.SetDefault(previous)
-	err, cursors, _, metrics := runLongContinuationFrom(t, 3790, "", nil)
+	err, cursors, _, metrics := runLongContinuationFrom(t, longContinuationURLBytes, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +226,7 @@ func TestGitHubTestsCursorFitURLAloneOverBudgetStillFails(t *testing.T) {
 // Resumed from a stored degraded cursor, with a stop after every emission, the walk still reaches its final emission on the
 // same pages: every stored cursor decodes, the continuation URL of each is the padded Link URL, and each run is written once.
 func TestGitHubTestsCursorDegradeResumesOnTheSamePages(t *testing.T) {
-	const urlBytes = 3790
+	const urlBytes = longContinuationURLBytes
 	reference, referenceCursors := runLongContinuation(t, urlBytes)
 	if reference != nil {
 		t.Fatal(reference)

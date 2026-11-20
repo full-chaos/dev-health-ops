@@ -1,0 +1,10 @@
+kind: ConfigMap
+metadata: {name: more}
+data:
+  mixed3: {b: 1, a: 2, 3: c}
+  mixed4: {z: 1, 2: x, y: 3, 1: w}
+  floats: [1.0e+16, 1.0e+15, 9.999e+15, 1.5e-4, 1.5e-5, -0.0, 0.1, 100.0, 1.0e+22, 123456789.123]
+  ints: [0, -0, +5, 0b11, 0o17, 007, 0x_ff, 1_2:3_0]
+  dates: [2020-02-29, 2020-02-29 23:59:59.999999999 -01:30, 2020-1-2 3:04:05]
+  args: ["https://h/p@x", "plain", "x://y@z", "@://"]
+  command: ["see https://h/p@x"]

@@ -389,6 +389,9 @@ internal/cigates/workflows	workflows_path_filters_test.go
 internal/cigates/workflows	workflows_venue_always_runs_test.go
 internal/cigates/workflows	workflows_venue_main_alert_test.go
 internal/clicredentials	opensites_test.go
+internal/deploy/inputs	hookrender_test.go
+internal/deploy/selfpin	selfpin.go
+internal/deploy/selfpin	selfpin_test.go
 internal/deploymentcontract	manifest.go
 internal/egressguard	egressguard_test.go
 internal/fixturescli	dropped_columns_census_test.go
@@ -567,6 +570,7 @@ internal/queryapi/principal	verifier.go
 internal/queryapi/quadrant	identity.go
 internal/queryapi/recommendations	goldens_frozen_python_oracle_test.go
 internal/queryapi/rowview	census_test.go
+internal/queryapi/rowview	team_census_test.go
 internal/queryapi/scancensus	census_test.go
 internal/queryapi/server	build_routes_integration_test.go
 internal/queryapi/server	capacity_completion_distribution_test.go

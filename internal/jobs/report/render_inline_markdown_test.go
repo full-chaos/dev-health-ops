@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
@@ -82,7 +83,9 @@ type inlineSite struct {
 	forms  []func(value string) string
 }
 
-func plainFold(value string) string { return strings.TrimSpace(markdownLineBreaks.Replace(value)) }
+func plainFold(value string) string {
+	return strings.Trim(markdownLineBreaks.Replace(value), " \t\r\n")
+}
 
 func inlineSites() []inlineSite {
 	raw := []func(string) string{plainFold}
@@ -138,6 +141,12 @@ func renderInline(t *testing.T, set func(*Plan, *ChartResult, string), value str
 	return artifact.Markdown
 }
 
+// unchartedLabelEscapes reports a value whose uncharted-list label is written with visible escapes (edge whitespace, or a
+// tab, line break or other space inside): its cells are in stored_chart_unknown_metric_test.go.
+func unchartedLabelEscapes(value string) bool {
+	return value != strings.TrimSpace(value) || strings.ContainsFunc(value, func(r rune) bool { return unicode.IsSpace(r) && r != ' ' })
+}
+
 // A free-text value shows as written: a GFM parser reads the report with the same node kinds as one holding a plain
 // word, and the visible text is the value (line breaks as spaces).
 func TestRenderFreeTextShowsAsWritten(t *testing.T) {
@@ -163,6 +172,9 @@ func TestRenderFreeTextShowsAsWritten(t *testing.T) {
 			baseKinds, baseText := shape(t, renderInline(t, site.set, site.marker))
 			failures := 0
 			for _, value := range values {
+				if site.name == "uncharted label" && unchartedLabelEscapes(value) {
+					continue
+				}
 				markdown := renderInline(t, site.set, value)
 				kinds, visible := shape(t, markdown)
 				wantText := baseText
@@ -195,18 +207,17 @@ func TestMarkdownTextUnderscoreRule(t *testing.T) {
 	}
 }
 
-// Only the exact name collides with the fallback heading: a literal "#" suffix is part of the title, not a closing
-// sequence, so such a section keeps its name.
+// With no fallback printed no section is renamed; a literal "#" suffix is part of the title, not a closing sequence.
 func TestOtherChartsCollisionIsExactName(t *testing.T) {
 	for name, want := range map[string]string{
 		"Other Charts#": `## Other Charts\#` + "\n", "Other Charts ###": `## Other Charts \#\#\#` + "\n", "Other Charts #1": `## Other Charts \#1` + "\n",
-		"Other Charts": "## Other Charts (plan section)\n", "other charts": "## Other Charts (plan section)\n",
+		"Other Charts": "## Other Charts\n", "other charts": "## other charts\n",
 	} {
 		markdown := renderInline(t, func(p *Plan, _ *ChartResult, v string) { p.Sections = append(p.Sections, v) }, name)
 		if !strings.Contains(markdown, "\n"+want) {
 			t.Errorf("section %q: heading %q missing:\n%s", name, want, markdown)
 		}
-		if name != "Other Charts" && name != "other charts" && strings.Contains(markdown, "(plan section)") {
+		if strings.Contains(markdown, "(plan section)") {
 			t.Errorf("section %q was renamed:\n%s", name, markdown)
 		}
 	}
@@ -218,7 +229,7 @@ func TestRenderFreeTextShowsEdgeTrimmed(t *testing.T) {
 	const padded = " \tReview \t\r\n"
 	want := map[string]string{
 		"report type": "\n# Review Report — ", "window": "— Review → Review\n", "section": "\n## Review\n", "chart title": "\n#### Review\n",
-		"not applicable": "_Not applicable: Review_", "note": "_Note: Review_", "uncharted label": "\n- Review: why\n", "uncharted reason": "\n- lbl: Review\n",
+		"not applicable": "_Not applicable: Review_", "note": "_Note: Review_", "uncharted label": "\n- `\\u0020\\t`Review `\\u0020\\t\\r\\n`: why\n", "uncharted reason": "\n- lbl: Review\n",
 		"provenance artifact id": "**chart:Review** —", "provenance source": "sources: Review; metrics", "metric name": "metrics: Review\n",
 		"team scope": "Scope: teams=Review\n", "repo scope": "Scope: repos=Review\n", "service scope": "Scope: services=Review\n",
 		"footer confidence": "Confidence: Review |",

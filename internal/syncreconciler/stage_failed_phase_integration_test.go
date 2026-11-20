@@ -73,7 +73,6 @@ func materializerStagePipeline(t *testing.T, fn func(context.Context) error) *Mu
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
-		noopChunkSidecarReclaim(),
 		pipelineConfigWithBudget(StageMaterializer, 300*time.Millisecond),
 	)
 	if err != nil {

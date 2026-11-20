@@ -49,8 +49,8 @@ var pinnedTableFiles = map[string]censusPin{
 		"not a reader of pass_rate: suite duration percentiles"},
 	"internal/jobs/report/tablereads.go": {"90914bad43fc7f67f51fe068101b4808e68a525bd171c42e2c3f11c3c8db128f",
 		"not a reader: the newest-row key of the table"},
-	"internal/queryapi/aianalytics/ai_opportunities.go": {"bffde620089989c41b6cf6497f0a913961c1915ee90baa153ff4da902311c203",
-		"reader rule applied: newest-row subquery then the live-row filter, the outer query names flake and case counts (CHAOS-14294 and CHAOS-14285 re-pins: repetitiveStatement and titleToilStatement changed, no testops read)"},
+	"internal/queryapi/aianalytics/ai_opportunities.go": {"228abeb4d628c5c2c348f0d893de84c6f4b0d6fb81ff8d6bac68e26cd864e6a8",
+		"reader rule applied: newest-row subquery then the live-row filter, the outer query names flake and case counts (CHAOS-14294 and CHAOS-14285 re-pins: repetitiveStatement and titleToilStatement changed, no testops read; CHAOS-14286 re-pin: the newest-row ORDER BY gains a content-hash tiebreak after computed_at, same columns, same rule)"},
 	"internal/queryapi/analytics/testopsownership.go": {"954e5f9aab6c61e60f31b311fa2a26f3ffbfd0b3ab5dc51b8607b9f5c4d0ffc0",
 		"not a reader: table name switch"},
 	"internal/queryapi/analytics/timeseries.go": {"9ca3c9eacf9844535929e0506e21c201f60c55ec889e42a20cef0436bcad7de8",
@@ -61,7 +61,7 @@ var pinnedTableFiles = map[string]censusPin{
 		"not a reader of pass_rate: the pooled sources read stored duration samples or raw rows; the live gate leaves a retired day out of both arms"},
 	"internal/queryapi/testopswindow/testopswindow.go": {"311ffff3c5f3de09ff5863c47d4fe7e8c6aeda23121d60496fee210dac29aca4",
 		"reader rule applied: newest-row subquery then the live-row filter, the outer query names the case counts and the report completeness counts"},
-	"internal/teamkeytables/teamkeytables.go": {"2435f1299cefdf9a5b1fb3fcd6e792c24221e89469767cf4841dc78bf4c07f3a",
+	"internal/teamkeytables/teamkeytables.go": {"12835900d42816f40bd4e37162603f05af088f1eda0ae7c82ac3566f7f96026f",
 		"not a reader: the registry of the tables, their marker column and carried values"},
 }
 

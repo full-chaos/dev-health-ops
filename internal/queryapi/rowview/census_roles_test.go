@@ -49,7 +49,7 @@ var readerRoles = map[string]struct{ role, why string }{
 	"internal/queryapi/analytics/timeseries.go":                            {"names", "guard, spec, grant, doc comment or fixture: no row read of its own"},
 	"internal/queryapi/capacityforecast/capacityforecast.go":               {"names", "guard, spec, grant, doc comment or fixture: no row read of its own"},
 	"internal/queryapi/capacityforecast/clickhouse.go":                     {"reader-sum", "sums rows of several work scopes: takes the org predicate (CHAOS-8863 PR2)"},
-	"internal/queryapi/datahealth/coverage.go":                             {"names", "guard, spec, grant, doc comment or fixture: no row read of its own"},
+	"internal/queryapi/datahealth/coverage.go":                             {"reader-sum", "counts the rows of the lineage tables: takes the org predicate (CHAOS-14339)"},
 	"internal/queryapi/explain/metricconfig.go":                            {"reader-sum", "sums rows of several work scopes: takes the org predicate (CHAOS-8863 PR2)"},
 	"internal/queryapi/explain/metrics.go":                                 {"reader-sum", "builds the deduplicated source of the explain metrics; takes the org view for work_item_metrics_daily (PR2a)"},
 	"internal/queryapi/filteroptions/filteroptions.go":                     {"reader-nosum", "reads rows with no sum across scopes (a listing or one key)"},

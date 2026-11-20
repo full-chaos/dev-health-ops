@@ -474,7 +474,7 @@ FROM (
     SELECT *
     FROM testops_test_metrics_daily
     WHERE org_id = {org_id:String}
-    ORDER BY computed_at DESC
+    ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC
     LIMIT 1 BY org_id, repo_id, day
 ) AS testops_test_metrics_daily
 WHERE day >= today() - 30@@REPO@@

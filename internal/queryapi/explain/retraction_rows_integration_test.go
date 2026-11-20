@@ -67,12 +67,12 @@ func TestExplainReadersGiveRetractionRowsNoWeight(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s %s value: %v", org, metric, err)
 			}
-			contributors, err := reader.fetchMetricContributors(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, start, end, filter, nil, org, "")
+			contributors, err := reader.fetchMetricContributors(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, start, end, filter, nil, org, "", false)
 			if err != nil {
 				t.Fatalf("%s %s contributors: %v", org, metric, err)
 			}
 			answer.Contributors = sortedByID(contributors)
-			drivers, err := reader.fetchMetricDriverDelta(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, start, end, compareStart, compareEnd, filter, nil, org, "")
+			drivers, err := reader.fetchMetricDriverDelta(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, start, end, compareStart, compareEnd, filter, nil, org, "", false)
 			if err != nil {
 				t.Fatalf("%s %s drivers: %v", org, metric, err)
 			}

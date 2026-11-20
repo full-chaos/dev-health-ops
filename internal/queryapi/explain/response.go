@@ -149,7 +149,8 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 	}
 	scopeFilterSQL += metricStatusFilterSQL(config.StatusFilter)
 	// A team metric of exactly one team reads that team's view of the stored rows (CHAOS-14379). No team and a team
-	// set read the org view (a team set is CHAOS-10665's); the driver and contributor rows keep the org view.
+	// set read the org view (a team set is CHAOS-10665's). The driver and contributor rows of one team read the same
+	// view, so the value, the contributor row and the driver row of that team are one answer.
 	oneTeam := !unresolved && config.Scope == "team" && params.ScopeLevel == "team" && len(params.ScopeIDs) == 1
 
 	var (
@@ -196,11 +197,11 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 		pctChange = &safe
 	}
 
-	drivers, err := reader.fetchMetricDriverDelta(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID, shareSQL)
+	drivers, err := reader.fetchMetricDriverDelta(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID, shareSQL, oneTeam)
 	if err != nil {
 		return nil, err
 	}
-	contributors, err := reader.fetchMetricContributors(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID, shareSQL)
+	contributors, err := reader.fetchMetricContributors(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID, shareSQL, oneTeam)
 	if err != nil {
 		return nil, err
 	}

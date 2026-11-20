@@ -320,13 +320,13 @@ type metricRow struct {
 // metric's ranking there silently averages a quantity its own headline
 // and label present as a total. This is a declared, required divergence,
 // not a data-semantics choice.
-func (reader *Reader) fetchMetricContributors(ctx context.Context, table, column, groupBy, aggregator string, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID, shareSQL string) ([]metricRow, error) {
+func (reader *Reader) fetchMetricContributors(ctx context.Context, table, column, groupBy, aggregator string, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID, shareSQL string, oneTeam bool) ([]metricRow, error) {
 	if reader == nil || reader.client == nil {
 		return nil, ErrUnavailable
 	}
 	const limit = 6
 
-	fromClause := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day", false)
+	fromClause := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day", oneTeam)
 	// toFloat64(...) around the outer aggregator: same fix as
 	// fetchMetricValue's own doc comment -- a sum-aggregated integer
 	// column returns UInt64, which this binary's native driver refuses to
@@ -385,14 +385,14 @@ LIMIT {limit_n:UInt64}
 // in would change which branch the CASE takes for a NULL current/previous
 // pairing (see this package's own PR RISK-NOTES for the worked example
 // this avoids).
-func (reader *Reader) fetchMetricDriverDelta(ctx context.Context, table, column, groupBy, aggregator string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID, shareSQL string) ([]metricRow, error) {
+func (reader *Reader) fetchMetricDriverDelta(ctx context.Context, table, column, groupBy, aggregator string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID, shareSQL string, oneTeam bool) ([]metricRow, error) {
 	if reader == nil || reader.client == nil {
 		return nil, ErrUnavailable
 	}
 	const limit = 3
 
-	currentFrom := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day", false)
-	previousFrom := metricFromClause(table, column, scopeFilterSQL, "compare_start", "compare_end", false)
+	currentFrom := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day", oneTeam)
+	previousFrom := metricFromClause(table, column, scopeFilterSQL, "compare_start", "compare_end", oneTeam)
 	valueSQL, _ := aggregateSQL(aggregator, column, shareSQL)
 	// current/previous were a `WITH current AS (...), previous AS (...)`
 	// CTE pair until this fix: dev-health-go's client-side read-only

@@ -79,7 +79,7 @@ func attachDriverCaptions(ctx context.Context, client QueryClient, f Filters, or
 			}
 			scopeFilters[scope] = filter
 		}
-		batch = append(batch, driverBatchMetric{Metric: d.Metric, ScopeFilter: filter})
+		batch = append(batch, driverBatchMetric{Metric: d.Metric, ScopeFilter: filter, OneTeam: oneTeamScope(scope, f)})
 		labels[d.Metric] = d.Label
 	}
 	if len(batch) == 0 {

@@ -829,6 +829,15 @@ const nullableIntoPlainSites = `
 //	clickhouse.go fetchCycleBreakdown a0d30b3aefa3
 //	operatingreview.go fetchStateDurations dd682a464928
 //	operatingreview.go fetchWorkItems 6adb8910eb84
+//
+// CHAOS-14379 (one answer for one team): the contributor and driver rows of a one-team request read the same served
+// team view as its value. Select lists, column types and scan targets are unchanged; the statement source moved.
+// Re-pinned by hand, digests copied from the failing local TestScanTypeCensus run (logs/ops2a2-a-scan-1.log 91136a731bee), not
+// computed:
+//
+//	metrics.go fetchMetricContributors cefd207be352 -> 21d612f437ea
+//	metrics.go fetchMetricDriverDelta 2bfd5d011d4f -> 69d32d6caccb
+//	queries_metrics.go fetchMetricDriverDelta d0ccbc5bb0ed -> 5dc97fbe04a7
 const unverifiedSites = `
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|e67003e26fc2|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|e67003e26fc2|not-describable
@@ -862,14 +871,14 @@ internal/queryapi/datahealth/sourcehealth.go|SourceHealth|*string,**string,*bool
 internal/queryapi/drilldown/issues.go|BuildIssuesResponse|*string,*string,*string,**string,**string,**float64,**float64,**time.Time,**time.Time|efc62e04415b|not-describable
 internal/queryapi/drilldown/issues.go|buildBlockedIssuesResponse|*string,*string,**string,**string,*uint64|0df7b140bb0b|not-describable
 internal/queryapi/explain/metrics.go|fetchChangeFailureView|[]any|3bdc10632c75|variadic-destinations
-internal/queryapi/explain/metrics.go|fetchMetricContributors|*string,**float64|cefd207be352|spliced-select-list
-internal/queryapi/explain/metrics.go|fetchMetricDriverDelta|*string,**float64,*uint8,*uint8,**float64|2bfd5d011d4f|not-describable
+internal/queryapi/explain/metrics.go|fetchMetricContributors|*string,**float64|21d612f437ea|spliced-select-list
+internal/queryapi/explain/metrics.go|fetchMetricDriverDelta|*string,**float64,*uint8,*uint8,**float64|69d32d6caccb|not-describable
 internal/queryapi/explain/metrics.go|fetchMetricValue|**float64,*uint64|aff9d26238c0|spliced-select-list
 internal/queryapi/explain/repositories.go|fetchWorkItemProviders|*string|cc6f1e4e4f8c|not-describable
 internal/queryapi/home/queries_metric_drivers_batch.go|fetchMetricDriversBatch|*string,*string|61d29f14b0f2|not-describable
 internal/queryapi/home/queries_metrics.go|fetchBlockedHours|*time.Time,*float64|192873704868|not-describable
 internal/queryapi/home/queries_metrics.go|fetchChangeFailureView|[]any|fb135e9cbe2e|variadic-destinations
-internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|d0ccbc5bb0ed|not-describable
+internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|5dc97fbe04a7|not-describable
 internal/queryapi/home/queries_metrics.go|fetchMetricSeries|*time.Time,**float64|c8e2b0f2634a|spliced-select-list
 internal/queryapi/home/queries_metrics.go|fetchMetricValue|*int64,**float64|271ec8ba88d7|spliced-select-list
 internal/queryapi/home/queries_metrics.go|fetchPRReworkView|[]any|a0f9dc8a97b2|variadic-destinations

@@ -189,14 +189,19 @@ func explainTeamViewSummary(response *Response) string {
 // explainTeamViewWant is a hand-computed answer, in the numbers m of the seeded rows (0 = no row).
 type explainTeamViewWant struct {
 	current, prior float64    // the headline row of the current and of the comparison window
-	contributor    float64    // team P's contributor row (current window)
-	driver         [2]float64 // team P's driver row, current and comparison window
+	contributor    float64    // the team's contributor row (current window)
+	driver         [2]float64 // the team's driver row, current and comparison window
+	team           string     // the id of the contributor and driver row; "" = P
 }
 
 // render is the summary the want gives: each value is explainTeamViewServed of its m, and a delta is (c - p) / p * 100
 // (deltarule; the served raw values are a fixed multiple of m, so the percent is the same in m).
 func (want explainTeamViewWant) render(metric string) string {
 	served := func(m float64) string { return explainTeamViewNumber(explainTeamViewServed(metric, m)) }
+	team := want.team
+	if team == "" {
+		team = "P"
+	}
 	pct := func(c, p float64) string {
 		if c == 0 || p == 0 {
 			return "null"
@@ -205,11 +210,11 @@ func (want explainTeamViewWant) render(metric string) string {
 	}
 	contributors := "[]"
 	if want.contributor != 0 {
-		contributors = fmt.Sprintf("[P=%s/null/true/false]", served(want.contributor))
+		contributors = fmt.Sprintf("[%s=%s/null/true/false]", team, served(want.contributor))
 	}
 	drivers := "[]"
 	if want.driver[0] != 0 || want.driver[1] != 0 {
-		drivers = fmt.Sprintf("[P=%s/%s/%v/%v]", served(want.driver[0]), pct(want.driver[0], want.driver[1]), want.driver[0] != 0, want.driver[1] != 0)
+		drivers = fmt.Sprintf("[%s=%s/%s/%v/%v]", team, served(want.driver[0]), pct(want.driver[0], want.driver[1]), want.driver[0] != 0, want.driver[1] != 0)
 	}
 	return fmt.Sprintf("value=%s delta=%s data=%v/%v contributors=%s drivers=%s",
 		served(want.current), pct(want.current, want.prior), want.current != 0, want.prior != 0, contributors, drivers)
@@ -286,8 +291,9 @@ func TestExplainTeamViewNoOp(t *testing.T) {
 	}
 }
 
-// (2) A team row wins where one exists, for one team; a team set keeps the org form. The contributor and driver rows
-// keep the org form in every request (the named limit of the change): they are the org form's values, hand-computed.
+// (2) A team row wins where one exists, for one team; a team set keeps the org form. One team is one answer: the
+// headline, the contributor row and the driver row of that team read the same team view (headline = contributor =
+// driver current). A team set and no team read the org form in all three.
 func TestExplainTeamViewTeamRowWins(t *testing.T) {
 	ctx, admin, reader := startExplainTeamView(t)
 	t1, t2, t3 := explainTeamViewVersions()
@@ -297,12 +303,12 @@ func TestExplainTeamViewTeamRowWins(t *testing.T) {
 		explainTeamViewRow{1, "C", 2, t2, "team"}, explainTeamViewRow{2, "C", 3, t2, "team"},
 	))
 	// One team P: the headline reads P's D2 team row m=9 (live, and team > org), the D1 legacy row m=5:
-	// delta (9 - 5) / 5 * 100 = 80. Contributor and driver rows: the org form of P (org row 4, legacy 5).
-	teamP := explainTeamViewWant{current: 9, prior: 5, contributor: 4, driver: [2]float64{4, 5}}
+	// delta (9 - 5) / 5 * 100 = 80. The contributor row reads the same 9 and the driver row 9 against 5 (delta 80).
+	teamP := explainTeamViewWant{current: 9, prior: 5, contributor: 9, driver: [2]float64{9, 5}}
 	wantExplainTeamView(ctx, t, reader, org, "team P", []string{"P"}, teamP)
-	// One team C: the headline reads C's team rows, D2 m=3 and D1 m=2: delta (3 - 2) / 2 * 100 = 50. The org form
-	// holds no row of C, so there is no contributor and no driver row.
-	wantExplainTeamView(ctx, t, reader, org, "team C", []string{"C"}, explainTeamViewWant{current: 3, prior: 2})
+	// One team C: the headline reads C's team rows, D2 m=3 and D1 m=2: delta (3 - 2) / 2 * 100 = 50. The contributor
+	// row reads the same 3 and the driver row 3 against 2 (delta 50).
+	wantExplainTeamView(ctx, t, reader, org, "team C", []string{"C"}, explainTeamViewWant{current: 3, prior: 2, contributor: 3, driver: [2]float64{3, 2}, team: "C"})
 	// A team set [P, C] reads the org form: P's org row 4 and legacy 5; C has no org-form row.
 	wantExplainTeamView(ctx, t, reader, org, "teams P and C (a team set: org form)", []string{"P", "C"}, explainTeamViewOrgFormOfP())
 	// The team id list is a set: [P, P] is the one team P, [P, C, P] the team set [P, C].
@@ -322,7 +328,7 @@ func TestExplainTeamViewLiveFirst(t *testing.T) {
 		{2, "P", 4, t2, "org"}, {2, "P", 8, t1, "team"}, {2, "P", 0, t3, "team"},
 	})
 	// D2: the newest team row (t3) is a retraction row, so the live org row m=4 wins; D1 legacy m=5:
-	// delta (4 - 5) / 5 * 100 = -20. Contributor and driver rows: the org form, the same rows.
+	// delta (4 - 5) / 5 * 100 = -20. The contributor and driver rows read the same rows.
 	wantExplainTeamView(ctx, t, reader, org, "team P", []string{"P"}, explainTeamViewOrgFormOfP())
 }
 
@@ -337,21 +343,25 @@ func TestExplainTeamViewTwoOrgs(t *testing.T) {
 		{3, "P", 60, t3, "org"}, {3, "P", 70, t3, "team"},
 		{1, "C", 20, t3, "team"}, {2, "C", 30, t3, "team"}, {3, "C", 10, t3, "team"},
 	})
-	// Org A team P: A's team row 9 against A's legacy 5 (delta 80); contributor and driver rows: A's org form (4, 5).
-	wantExplainTeamView(ctx, t, reader, orgA, "org A team P", []string{"P"}, explainTeamViewWant{current: 9, prior: 5, contributor: 4, driver: [2]float64{4, 5}})
+	// Org A team P: A's team row 9 against A's legacy 5 (delta 80); the contributor and driver rows read the same rows.
+	wantExplainTeamView(ctx, t, reader, orgA, "org A team P", []string{"P"}, explainTeamViewWant{current: 9, prior: 5, contributor: 9, driver: [2]float64{9, 5}})
 	// Org A team C: C has rows in org B only.
 	wantExplainTeamView(ctx, t, reader, orgA, "org A team C (rows in org B only)", []string{"C"}, explainTeamViewWant{})
 	// Org A no team: A's org form of P.
 	wantExplainTeamView(ctx, t, reader, orgA, "org A no team", nil, explainTeamViewOrgFormOfP())
 }
 
-// The documented divergence (R2 of the plan, not a WANT): a live legacy row beside a live org row of one key, which no
-// writer on main stores. The org form reads both; the team form reads the org row. Both answers are recorded.
+// The documented divergence (R2 of the plan): a live legacy row beside a live org row of one key, which no writer on main
+// stores. The org form reads both (recorded, not a want). One team reads the org row (org > legacy, both live), and the
+// one-team answer is one answer: headline = contributor = driver current.
 func TestExplainTeamViewDivergence(t *testing.T) {
 	ctx, admin, reader := startExplainTeamView(t)
 	t1, t2, _ := explainTeamViewVersions()
 	const org = "org-14379-explain-divergence"
 	seedExplainTeamView(ctx, t, admin, org, []explainTeamViewRow{{1, "P", 5, t1, ""}, {2, "P", 7, t1, ""}, {2, "P", 4, t2, "org"}})
+	// One team P: D2 org row m=4, D1 legacy m=5: headline 4 (delta (4 - 5) / 5 * 100 = -20), contributor 4, driver 4
+	// against 5.
+	wantExplainTeamView(ctx, t, reader, org, "R2 one team P", []string{"P"}, explainTeamViewOrgFormOfP())
 	for _, metric := range explainTeamViewMetrics() {
 		t.Logf("DIVERGENCE (recorded, not a want) %s one team P: %s", metric, explainTeamViewSummary(explainTeamViewRequest(ctx, t, reader, org, metric, []string{"P"})))
 		t.Logf("DIVERGENCE (recorded, not a want) %s no team (org form): %s", metric, explainTeamViewSummary(explainTeamViewRequest(ctx, t, reader, org, metric, nil)))

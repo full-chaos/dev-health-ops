@@ -276,3 +276,100 @@ func TestHomeTeamViewRecordsTheLiveLegacyBesideLiveOrgDivergence(t *testing.T) {
 	t.Logf("DIVERGENCE (recorded, not a want) one team P: %s", homeTeamMetrics(ctx, t, client, org, "P"))
 	t.Logf("DIVERGENCE (recorded, not a want) no team (org form): %s", homeTeamMetrics(ctx, t, client, org))
 }
+
+// seedHomeTeamViewTeams stores P (Platform) and C (Core) as active teams: the driver names are read from them.
+func seedHomeTeamViewTeams(ctx context.Context, t *testing.T, admin stdclickhouse.Conn, org string) {
+	t.Helper()
+	at := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	for _, team := range [][2]string{{"P", "Platform"}, {"C", "Core"}} {
+		if err := admin.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, repo_patterns, updated_at, org_id, is_active)
+			VALUES (?, generateUUIDv4(), ?, ['org/*'], ?, ?, 1)`, team[0], team[1], at, org); err != nil {
+			t.Fatalf("insert team %v: %v", team, err)
+		}
+	}
+}
+
+// homeTeamViewCompareDay is a day of the comparison window [2026-09-23, 2026-10-07) of homeTeamViewNow.
+func homeTeamViewCompareDay() time.Time { return time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC) }
+
+// homeDriverText is the summary sentence and the driver captions of the metric signals of a response.
+func homeDriverText(resp *Response) (summary string, captions []string) {
+	if len(resp.Summary) > 0 {
+		summary = resp.Summary[0].Text
+	}
+	for _, signal := range resp.Signals {
+		if signal.Driver != nil {
+			captions = append(captions, *signal.Driver)
+		}
+	}
+	return summary, captions
+}
+
+// (2, driver rows) One team is one answer: the summary sentence and the driver captions name the drivers of the
+// team view the values read. Team C has team rows only, so the org form has no driver row of C.
+func TestHomeTeamViewDriverRowsReadTheTeamView(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	admin, client := newHomeTestClickHouse(ctx, t)
+	_, d2 := homeTeamViewDays()
+	_, t2, _ := homeTeamViewVersions()
+	const org = "org-14379-home-drivers"
+	seedHomeTeamViewTeams(ctx, t, admin, org)
+	seedHomeTeamView(ctx, t, admin, org, []homeTeamViewRow{
+		{homeTeamViewCompareDay(), "C", 2, homeHours(10), 0.2, 2, t2, "team"},
+		{d2, "C", 3, homeHours(8), 0.5, 4, t2, "team"},
+	})
+	// Team C, team rows only: cycle 8 h against 10 h = -20 %; throughput 3 against 2 = +50 %; wip 50 % against 20 % =
+	// +150 %; blocked 4 against 2 = +100 %. The largest move is wip_saturation.
+	wantHome(t, "team C values", homeTeamMetrics(ctx, t, client, org, "C"),
+		"cycle_time=0.333333 has=true prior=true pct=-20 spark=[0.333333]; "+
+			"throughput=3 has=true prior=true pct=50 spark=[3]; "+
+			"wip_saturation=50 has=true prior=true pct=150 spark=[50]; "+
+			"blocked_work=4 has=true prior=true pct=100 spark=[4]")
+	summary, captions := homeDriverText(homeTeamViewResponse(ctx, t, client, org, "C"))
+	if !strings.HasPrefix(summary, "WIP Saturation ") || !strings.HasSuffix(summary, " driven by Core.") {
+		t.Errorf("team C summary = %q, want the WIP Saturation move driven by Core", summary)
+	}
+	if len(captions) == 0 {
+		t.Error("team C: no metric signal names a driver; want Core (the driver rows of the team view)")
+	}
+	for _, caption := range captions {
+		if !strings.Contains(caption, "Core") {
+			t.Errorf("team C driver caption %q does not name Core", caption)
+		}
+	}
+}
+
+// (R2, driver rows) A live legacy row beside a live org row of one key (no writer on main stores it). One team P reads
+// the org row in the value and in the driver rows; the summary names the move of that value and its driver.
+func TestHomeTeamViewR2DriverRowsMatchTheValue(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	admin, client := newHomeTestClickHouse(ctx, t)
+	_, d2 := homeTeamViewDays()
+	t1, t2, _ := homeTeamViewVersions()
+	const org = "org-14379-home-drivers-r2"
+	seedHomeTeamViewTeams(ctx, t, admin, org)
+	seedHomeTeamView(ctx, t, admin, org, []homeTeamViewRow{
+		{homeTeamViewCompareDay(), "P", 4, homeHours(20), 0.4, 2, t1, ""},
+		{d2, "P", 7, homeHours(30), 0.7, 10, t1, ""}, {d2, "P", 5, homeHours(10), 0.5, 2.5, t2, "org"},
+	})
+	// One team P: the current window reads the org row (org > legacy, both live), the comparison window the legacy
+	// row. cycle 10 h against 20 h = -50 %; throughput 5 against 4 = +25 %; wip 50 % against 40 % = +25 %; blocked
+	// 2.5 against 2 = +25 %. The largest move is cycle_time.
+	wantHome(t, "R2 team P values", homeTeamMetrics(ctx, t, client, org, "P"),
+		"cycle_time=0.416667 has=true prior=true pct=-50 spark=[0.416667]; "+
+			"throughput=5 has=true prior=true pct=25 spark=[5]; "+
+			"wip_saturation=50 has=true prior=true pct=25 spark=[50]; "+
+			"blocked_work=2.5 has=true prior=true pct=25 spark=[2.5]")
+	summary, captions := homeDriverText(homeTeamViewResponse(ctx, t, client, org, "P"))
+	if !strings.HasPrefix(summary, "Cycle Time ") || !strings.HasSuffix(summary, " driven by Platform.") {
+		t.Errorf("R2 team P summary = %q, want the Cycle Time move driven by Platform", summary)
+	}
+	for _, caption := range captions {
+		if !strings.Contains(caption, "Platform") {
+			t.Errorf("R2 team P driver caption %q does not name Platform", caption)
+		}
+	}
+	t.Logf("DIVERGENCE (recorded, not a want) R2 no team (org form): %s", homeTeamMetrics(ctx, t, client, org))
+}

@@ -122,7 +122,7 @@ func TestHomePRReworkRatio_DeltaAndDriversFollowTheDeltaRule(t *testing.T) {
 	// ratio over reviewed pull requests. D1 (+100 %) is before D2 (-40 %). P
 	// has no percent and N has no value: neither is a driver.
 	drivers, err := fetchMetricDriverDelta(ctx, client, spec.Table, spec.Column, metricGroup(spec.Metric),
-		current, end, compareStart, compareEnd, "", nil, orgID, 10)
+		current, end, compareStart, compareEnd, "", nil, orgID, 10, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestHomePRReworkDriverLookupTreatsAPriorOnlyRepositoryLikeAnUndefinedCurren
 	write(undefinedCurrent, current, unreviewed, unreviewed) // a row, no review data: the rate is undefined
 
 	rows, err := fetchMetricDriverDelta(ctx, client, prrework.Table, prrework.DeprecatedRatioColumn, "repo_id",
-		current, current.AddDate(0, 0, 1), prior, prior.AddDate(0, 0, 1), "", nil, orgID, 10)
+		current, current.AddDate(0, 0, 1), prior, prior.AddDate(0, 0, 1), "", nil, orgID, 10, false)
 	if err != nil {
 		t.Fatal(err)
 	}

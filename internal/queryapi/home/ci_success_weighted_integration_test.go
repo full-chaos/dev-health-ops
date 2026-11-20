@@ -164,7 +164,7 @@ func TestHomeCISuccessDriversRankByTheWeightedRate(t *testing.T) {
 	seedPipelineDay(ctx, t, admin, org, repoZ, prior, computedAt, 50, 50, 0)
 	want := []string{repoZ.String(), repoY.String(), repoX.String()}
 
-	single, err := fetchMetricDriverDelta(ctx, client, metricTable("ci_success"), metricColumn("ci_success"), metricGroup("ci_success"), current, endDay, prior, priorEnd, "", nil, org, 3)
+	single, err := fetchMetricDriverDelta(ctx, client, metricTable("ci_success"), metricColumn("ci_success"), metricGroup("ci_success"), current, endDay, prior, priorEnd, "", nil, org, 3, false)
 	if err != nil {
 		t.Fatal(err)
 	}

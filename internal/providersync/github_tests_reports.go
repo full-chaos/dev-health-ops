@@ -627,6 +627,9 @@ var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 	// The deep range is a second look at runs older than the window; a stop
 	// there leaves no part of the window unread.
 	githubTestsLateRerunRunsComponent: {githubTestsPageBudgetCause: {}, githubTestsListingSaturatedCause: {}},
+	// The late re-run re-list stops before its oldest runs: the regular range was walked whole, so the gap is the deep range's
+	// oldest part only. Holding the watermark would hold a busy repository for ever; reports_complete stays false.
+	githubTestsLateRerunReportsComponent: {githubTestsPageBudgetCause: {}, githubTestsListingSaturatedCause: {}},
 	githubTestsReportMemberComponent: {
 		githubTestsArtifactOversizedCause:   {},
 		githubTestsArtifactExpiredCause:     {},
@@ -1003,6 +1006,7 @@ var githubTestsDerivedIncompleteVocabulary = map[string]map[string]struct{}{
 	githubTestsRunInventorySaturatedComponent:      {githubTestsListingSaturatedCause: {}},
 	githubTestsArtifactInventorySaturatedComponent: {githubTestsListingSaturatedCause: {}},
 	githubTestsLateRerunRunsComponent:              {githubTestsPageBudgetCause: {}, githubTestsListingSaturatedCause: {}},
+	githubTestsLateRerunReportsComponent:           {githubTestsPageBudgetCause: {}, githubTestsListingSaturatedCause: {}},
 }
 
 func githubTestsIncompleteInVocabulary(observation GitHubTestsIncomplete) bool {

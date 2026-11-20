@@ -12,6 +12,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -231,5 +232,63 @@ func TestDiscoverTeamIDsDropsATeamThatRetiresBetweenTheSetReads(t *testing.T) {
 	}
 	if want := []string{"team-stays"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("discovered %v, want %v (a team retired after the first read is dropped by the last)", got, want)
+	}
+}
+
+// The project owner read runs after the repository owner set and before the
+// union's activity read, so a stub of it changes the teams table between them.
+func TestDiscoverTeamIDsKeepsARepoOnlyOwnerRestoredBeforeTheUnionRead(t *testing.T) {
+	const (
+		org      = "org-discover-repo-owner-restored"
+		owner    = "team-repo-owner-restored"
+		repoID   = "a6666666-6666-6666-6666-666666666666"
+		repoName = "acme/restored-owner"
+	)
+	ctx, conn := startDiscoverFixture(t, org)
+	older := mustTimestamp(t, "2026-01-01 00:00:00")
+	retired := mustTimestamp(t, "2026-02-01 00:00:00")
+	restored := mustTimestamp(t, "2026-03-01 00:00:00")
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if err := conn.Exec(ctx, query, args...); err != nil {
+			t.Fatalf("seed failed: %v\nquery: %s", err, query)
+		}
+	}
+	exec(`INSERT INTO teams (id, name, org_id, provider, is_active, updated_at, last_synced)
+		VALUES (?, ?, ?, 'github', 0, ?, ?)`, owner, owner, org, retired, retired)
+	exec(`INSERT INTO repos (id, repo, created_at, last_synced, org_id, provider)
+		VALUES (?, ?, ?, ?, ?, 'github')`, repoID, repoName, older, older, org)
+	exec(`INSERT INTO team_repo_ownership
+		(org_id, provider, team_id, repo_id, repo_full_name, match_type,
+		 source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+		VALUES (?, 'github', ?, ?, ?, 'exact', 'inferred', 1, 1, 0, ?, NULL, ?)`,
+		org, owner, repoID, repoName, older, older)
+
+	executor, err := newClickHouseOnlyExecutor(ctx, conn, org)
+	if err != nil {
+		t.Fatalf("construct executor: %v", err)
+	}
+	executor.loadProjectOwners = func(context.Context, string, time.Time) ([]teamattribution.GithubWorkItemDerivationProjectFact, error) {
+		return nil, nil
+	}
+	if got, err := executor.DiscoverTeamIDs(ctx, org, time.Now().UTC()); err != nil || len(got) != 0 {
+		t.Fatalf("control discover = %v, %v; want no team (the owner is retired at every read)", got, err)
+	}
+
+	restores := 0
+	executor.loadProjectOwners = func(context.Context, string, time.Time) ([]teamattribution.GithubWorkItemDerivationProjectFact, error) {
+		restores++
+		return nil, conn.Exec(ctx, `INSERT INTO teams (id, name, org_id, provider, is_active, updated_at, last_synced)
+			VALUES (?, ?, ?, 'github', 1, ?, ?)`, owner, owner, org, restored, restored)
+	}
+	got, err := executor.DiscoverTeamIDs(ctx, org, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	if restores != 1 {
+		t.Fatalf("project owner reads = %d, want 1 (the restore ran between the two sets)", restores)
+	}
+	if want := []string{owner}; !reflect.DeepEqual(got, want) {
+		t.Errorf("discovered %v, want %v (a repo-only owner that is active at the union read is evaluated)", got, want)
 	}
 }

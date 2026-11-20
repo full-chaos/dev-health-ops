@@ -411,7 +411,8 @@ func ownerSharesOfRepo(teamOrder, mainOwners []string, storedShare func(string) 
 // window, the repos name join with its matched sentinel, a non-empty team id,
 // a repository that repos holds), plus the active-team rule of
 // AuthoritativeOwnersByRepo: an inactive team owns nothing. A failed read of
-// the inactive teams is returned, never read as "no team is inactive".
+// the inactive teams is returned, never read as "no team is inactive". The
+// activity read runs before the ownership read.
 func OwnersByRepo(
 	ctx context.Context, conn teamactive.Querier, orgID string, asOf time.Time,
 ) (map[string][]string, error) {
@@ -421,6 +422,32 @@ func OwnersByRepo(
 	inactive, err := teamactive.LoadInactive(ctx, conn, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("OwnersByRepo: %w", err)
+	}
+	candidates, err := OwnerCandidatesByRepo(ctx, conn, orgID, asOf)
+	if err != nil {
+		return nil, err
+	}
+	owners := map[string][]string{}
+	for repoIDText, teamIDs := range candidates {
+		for _, teamID := range teamIDs {
+			if !inactive.Has(teamID) {
+				owners[repoIDText] = append(owners[repoIDText], teamID)
+			}
+		}
+	}
+	return owners, nil
+}
+
+// OwnerCandidatesByRepo is OwnersByRepo with no active-team rule: every team
+// that owns each repository as of asOf, inactive teams included, keyed by
+// repo_id text, each list in team_id order. It reads no activity, so a caller
+// that unions it with other team sets applies ONE teamactive read to the whole
+// union itself.
+func OwnerCandidatesByRepo(
+	ctx context.Context, conn teamactive.Querier, orgID string, asOf time.Time,
+) (map[string][]string, error) {
+	if conn == nil || orgID == "" {
+		return nil, fmt.Errorf("OwnerCandidatesByRepo: a connection and an organization id are required")
 	}
 	rows, err := conn.Query(ctx, `
         SELECT DISTINCT
@@ -455,9 +482,6 @@ func OwnersByRepo(
 		var repoIDText, teamID string
 		if err := rows.Scan(&repoIDText, &teamID); err != nil {
 			return nil, err
-		}
-		if inactive.Has(teamID) {
-			continue
 		}
 		owners[repoIDText] = append(owners[repoIDText], teamID)
 	}

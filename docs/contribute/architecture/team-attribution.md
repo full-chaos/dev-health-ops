@@ -2378,10 +2378,12 @@ them is in their readers:
 Asserted on real ClickHouse by `TestTestopsTeamSeriesHoldNoSupersededTeam` (the benchmarking reader: the inactive team is no target), `TestTestopsTeamSeriesTakeTheOwnersAtTheRun` (the benchmarking reader takes the owners at the run instant), by `TestTestopsTeamSeriesCoOwnedRepoShowsInFullInBothOwnerSeries`, `TestTestopsTeamSeriesAttributesAWholeWindowToTheOwnersToday` and `TestTestopsTeamSeriesFollowTheOwnershipRules` (the analytics team series, which read the owners at the request), by `TestTestopsPooledP95IsOnePercentileOverThePooledRuns`, `TestTestopsPooledQueueTimeIsTheMeanOfTheQueueSamples` and `TestTestopsPooledTeamReadsTheOwnersAtTheRequest` (the pooled P95 and queue series, a co-owned repository whole for each owner), and by `TestForecastListHoldsNoSupersededTeam`. A new query-api reader that groups or filters one of the three TestOps daily tables by the stored `team_id` fails `TestNoQueryAPIReaderGroupsOrFiltersTestopsDailyByTheStoredTeam`, a source census over the string literals of `internal/queryapi`.
 The acr readers of `capacity_forecasts` and `recommendations_daily` are the acr surface's own.
 The recommendations job evaluates three sets of teams: the teams with a live `work_item_metrics_daily` row of the last
-30 days, the active teams that own a repository at the end of the evaluation window (`teamownership.OwnersByRepo`,
-the same instant as the owned repositories the loader reads), and the active teams that own a project at that instant
+30 days, the teams that own a repository at the end of the evaluation window (`teamownership.OwnerCandidatesByRepo`,
+the same instant as the owned repositories the loader reads), and the teams that own a project at that instant
 (the project ownership read of the attribution cascade, `LoadProjects`). Co-owners are owners in both owner sets. A team
-in several sets is evaluated once. So a team that owns repositories or projects but has no work items is evaluated, and
+in several sets is evaluated once. One activity read (`teamactive.LoadInactive`), taken after all three sets, drops
+every inactive team from the union; no set reads activity on its own, so a team retired at an earlier read and active
+at that last read is evaluated. So a team that owns repositories or projects but has no work items is evaluated, and
 a rule it fired before gets the `fired=false` row that clears it. When the project ownership read is past its row bound,
 the run keeps the other two sets, skips the project owners, and logs one WARN and adds 1 to
 `dev_health_recommendations_discovery_total` (outcome `project_owners_skipped_bound`).

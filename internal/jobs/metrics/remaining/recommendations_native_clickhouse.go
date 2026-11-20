@@ -47,11 +47,12 @@ var discoverTeamIDsSQL = `
 
 // DiscoverTeamIDs returns the teams to evaluate for an org: the teams with
 // recent work item rows, plus the teams that own a repository at asOf (the
-// window end; teamownership.OwnersByRepo), plus the teams that own a project at
-// asOf (teamattribution LoadProjects, co-owners included, the same as the
-// repository owners). A team in several sets is listed once. A team whose
-// newest teams row is inactive (teamactive.LoadInactive, read once, after the
-// sets) is dropped from the whole union. Without the
+// window end; teamownership.OwnerCandidatesByRepo, which reads no activity),
+// plus the teams that own a project at asOf (teamattribution LoadProjects,
+// co-owners included, the same as the repository owners). A team in several
+// sets is listed once. A team whose newest teams row is inactive
+// (teamactive.LoadInactive, read once, after the sets: the only activity read)
+// is dropped from the whole union. Without the
 // owner teams, a quiet owner team is never evaluated, so its old fired rules
 // never get the fired=false rows that clear them.
 //
@@ -100,7 +101,7 @@ func (executor *RecommendationsExecutor) DiscoverTeamIDs(
 	}
 
 	if orgID != "" && orgID != "default" {
-		owners, err := teamownership.OwnersByRepo(ctx, executor.conn, orgID, asOf)
+		owners, err := teamownership.OwnerCandidatesByRepo(ctx, executor.conn, orgID, asOf)
 		if err != nil {
 			return nil, fmt.Errorf("discover recommendation repository owner teams: %w", err)
 		}

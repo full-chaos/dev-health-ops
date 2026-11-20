@@ -56,9 +56,6 @@ var checkedInPoolComposition = map[string][]string{
 	// Domain-granted tables only.
 	"syncreconciler.NewLeaseRepair": {"domainPool"},
 	"syncreconciler.NewObserver":    {"domainPool"},
-	// CHAOS-14243: DELETE on both chunk tables is granted to the domain role
-	// only.
-	"syncreconciler.NewChunkSidecarReclaim": {"domainPool"},
 	// Observe/claim on the domain role, River delivery on the queue role.
 	"syncreconciler.NewKernel": {"domainPool", "queuePool"},
 	// The publish closure's reference read.
@@ -77,7 +74,6 @@ var componentsTheCommentMustName = map[string]string{
 	"syncreconciler.NewObserver":               "Observer",
 	"syncreconciler.NewKernel":                 "Kernel",
 	"syncreconciler.NewOrphanedUnitRepair":     "OrphanedUnitRepair",
-	"syncreconciler.NewChunkSidecarReclaim":    "ChunkSidecarReclaim",
 	"riverpgxv5.New":                           "River client",
 	"syncDispatchReference":                    "publish closure",
 }

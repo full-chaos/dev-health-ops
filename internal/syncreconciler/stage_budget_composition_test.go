@@ -114,8 +114,6 @@ func identifierToStageName(identifier string) string {
 		return string(StageMaterializer)
 	case "StageKernel":
 		return string(StageKernel)
-	case "StageChunkSidecarReclaim":
-		return string(StageChunkSidecarReclaim)
 	case "StageObserver":
 		return string(StageObserver)
 	default:

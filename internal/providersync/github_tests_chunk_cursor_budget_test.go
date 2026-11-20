@@ -110,6 +110,11 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 		)
 	}
 
+	// An artifacts phase mid-peel also carries its range and the cut list at its byte cap and widest second (CHAOS-14251:
+	// at most 122 bytes; the canary below stays 150).
+	cursor.RangeHi, cursor.RangeOldest, cursor.RangeItems = "2026-07-20T23:59:59Z", "2026-07-20T00:00:00Z", githubTestsSearchResultCap
+	cursor.CutSecond, cursor.CutRuns = githubTestsMaxCutSecond, githubTestsWidestCutRuns(t)
+
 	encoded, err := encodeGitHubTestsChunkCursor(cursor)
 	if err != nil {
 		t.Fatalf(
@@ -121,6 +126,7 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	if len(encoded) > maxChunkCursorBytes {
 		t.Fatalf("worst-case cursor is %d bytes, want <= %d (maxChunkCursorBytes)", len(encoded), maxChunkCursorBytes)
 	}
+	t.Logf("worst-case cursor %d bytes, headroom %d", len(encoded), maxChunkCursorBytes-len(encoded))
 	// A canary for margin erosion, not a hard correctness bound: a future
 	// field addition that eats this margin should fail loudly here before it
 	// ever gets close to the hard 4KiB limit in production.
@@ -445,4 +451,14 @@ func TestGitHubTestsChunkCursorLegacyTrimDoesNotExcuseAnUnrelatedUnmarkedCause(t
 		)
 	}
 	mustCompareGitHubTestsCompletionOK(t, claim, batch)
+}
+
+// githubTestsWidestCutRuns is a valid cut list of exactly githubTestsMaxCutRunsBytes bytes of the widest keys.
+func githubTestsWidestCutRuns(t *testing.T) string {
+	t.Helper()
+	runs := "99999999999999999999.999999,99999999999999999998.999999,99999999999999999997.999999,999999999999"
+	if len(runs) != githubTestsMaxCutRunsBytes || !githubTestsCutRunsValid(githubTestsMaxCutSecond, runs) {
+		t.Fatalf("widest cut list %q is %d bytes or invalid, want a valid list of %d bytes", runs, len(runs), githubTestsMaxCutRunsBytes)
+	}
+	return runs
 }

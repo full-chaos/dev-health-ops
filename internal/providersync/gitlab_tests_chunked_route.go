@@ -562,7 +562,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 		return project, parsedProjectID, nil
 	}
 	if cursor.Phase == "done" {
-		if cursor.Repo == "" && cursor.ProjectID > 0 {
+		if (cursor.Repo == "" || len(cursor.Repo) > gitLabTestsCursorRepoMaxBytes) && cursor.ProjectID > 0 {
 			project, _, fetchErr := fetchProject()
 			if fetchErr != nil {
 				return fetchErr

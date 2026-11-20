@@ -186,3 +186,37 @@ func TestGitLabTestsResumeIgnoresARepoAndProjectIDInTheCursor(t *testing.T) {
 		t.Fatalf("result repo/project_id = %v/%v", result.final.Result["repo"], result.final.Result["project_id"])
 	}
 }
+
+// A done cursor an older binary wrote carries the whole path, whatever its length. The done resume applies the same
+// length policy to it as to a new one: a path up to the limit is published as stored with no project read; a longer one is
+// replaced from the project, read exactly once, so a project renamed after the cursor was written publishes its new path.
+func TestGitLabTestsLegacyDoneCursorFollowsTheSameLengthPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		length   int
+		gets     int
+		wantLive bool
+	}{
+		{"at the limit", gitLabTestsCursorRepoMaxBytes, 0, false},
+		{"one byte over the limit", gitLabTestsCursorRepoMaxBytes + 1, 1, true},
+		{"3800 bytes", 3800, 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stored := gitLabLongRepo(tc.length)
+			fake := &gitLabResumeFake{t: t, pipelines: gitLabResumeFixture(), repoPath: "acme/renamed"}
+			_, final, err := gitLabCollectFrom(t, fake,
+				`{"phase":"done","pipelines":1,"jobs":0,"acceptance":0,"suites":0,"cases":0,"coverage":0,"requests":2,"pages":1,`+
+					`"pipeline_pages":1,"report_pages":1,"repo":"`+stored+`","project_id":123}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := stored
+			if tc.wantLive {
+				want = "acme/renamed"
+			}
+			if fake.projectGets != tc.gets || final.Result["repo"] != want {
+				t.Fatalf("project reads = %d (want %d), result repo = %.40v (want %.40s)", fake.projectGets, tc.gets, final.Result["repo"], want)
+			}
+		})
+	}
+}

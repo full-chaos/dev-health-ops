@@ -678,12 +678,22 @@ const nullableIntoPlainSites = `
 //	loadClusters (title toil) 6782179e5bab -> 02e42d9124bc
 //	loadDocDrift 9d9f4e10b7aa -> 74e03d28cf3f
 //	loadFlaky e2c82e8e8355 -> 7740a9c9e213
+//
+// CHAOS-14294 (the author is no input to the served order): repetitiveStatement no longer selects cluster_author (a String
+// coalesce, scanned into *string and never read) and orders by cluster_anchor in its place; the author expression stays in
+// GROUP BY only. The scan loses one *string; cluster_work_type (String) and cluster_anchor (UInt32, not Nullable) keep
+// their targets. Re-pinned by hand, digests copied from the local TestScanTypeCensus failure output (not computed):
+//
+//	loadClusters (repetitive) 02e42d9124bc -> a450acb675f1, scan -*string
+//	loadClusters (title toil) 02e42d9124bc -> a450acb675f1
+//	loadDocDrift 74e03d28cf3f -> 09972cf402ca
+//	loadFlaky 7740a9c9e213 -> e5e9fe385475
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a0d30b3aefa3|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*string,*uint32|02e42d9124bc|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|02e42d9124bc|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|74e03d28cf3f|not-describable
-internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|7740a9c9e213|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|a450acb675f1|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|a450acb675f1|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|09972cf402ca|not-describable
+internal/queryapi/aianalytics/ai_opportunities.go|loadFlaky|*string,*uint64,**float64|e5e9fe385475|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadRepoFlowRows|*string,*uint64,**float64,**float64,**float64,**float64|39a7e63ddf0e|not-describable
 internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*uint64,**float64,**float64,**float64|2653b84e5b21|not-describable
 internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|ffbc61d0410c|spliced-select-list

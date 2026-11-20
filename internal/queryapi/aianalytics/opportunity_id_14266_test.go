@@ -27,15 +27,16 @@ const (
 	secretName14266  = "Bob Hidden-Name"
 )
 
-// cluster14266 is one cluster row; its anchor (the oldest pull request) is the first number given.
-func cluster14266(prefix, author, workType string, n int, numbers ...string) map[string]any {
+// cluster14266 is one cluster row; its anchor (the oldest pull request) is the first number given. The author argument is
+// the cluster's identity in the cell's story only: the read does not select it.
+func cluster14266(prefix, _, workType string, n int, numbers ...string) map[string]any {
 	refs := []any{}
 	for _, number := range numbers {
 		refs = append(refs, "git_pull_requests:"+repo14266+":"+number)
 	}
 	anchor, _ := strconv.ParseUint(numbers[0], 10, 32)
 	return map[string]any{"repo_id": repo14266, "title_prefix": prefix, "prs_total": float64(n), "pr_refs": refs,
-		"cluster_author": author, "cluster_work_type": workType, "cluster_anchor": float64(anchor)}
+		"cluster_work_type": workType, "cluster_anchor": float64(anchor)}
 }
 
 // repetitiveIDs14266 answers aiOpportunities over the clusters and returns each REPETITIVE_CHANGE id by its first
@@ -405,9 +406,10 @@ func TestCell14266IDInputHoldsNoAuthor(t *testing.T) {
 // seed: digests of the answer with the ids blanked, recorded there. The ids alone are what this change moves.
 func TestCell14266OtherFieldsByteEqualToMain(t *testing.T) {
 	pinned := map[string]string{
-		"14266/two-authors":    "e6dd93fb9c81db813a19ddcc75af84616183fef64c8ba70dca146fbbe4798026",
-		"14266/two-prefixes":   "c1ecde99c34a03c87a6861931ccdffabac625d1bbf8d42c0d6cbf90519a58522",
-		"14266/two-work-types": "ecebf3b20b7792029b44f1955013477a0a52e9e67b37ed69a86757fe02f2df8b",
+		"14266/two-authors":  "e6dd93fb9c81db813a19ddcc75af84616183fef64c8ba70dca146fbbe4798026",
+		"14266/two-prefixes": "c1ecde99c34a03c87a6861931ccdffabac625d1bbf8d42c0d6cbf90519a58522",
+		// CHAOS-14294: re-pinned; one author, two work types, anchors 1 and 3 now serve by anchor (pull_request first), not by work type.
+		"14266/two-work-types": "e6dd93fb9c81db813a19ddcc75af84616183fef64c8ba70dca146fbbe4798026",
 		"ai/boundaries":        "d408533f8d1b064d58784649497a72fba0cd44146fc7dfaf5ef827602e423ea8",
 		"ai/everything":        "7bb46b6d1a1c28590cb72a24fcc5e1c62b4f230848e9d63b661733fe41e08565",
 		"ai/exactMinimums":     "7af548b1910c5a2777cc8d8647ee22f506b81d148d211c854b25e525a6a95ff1",

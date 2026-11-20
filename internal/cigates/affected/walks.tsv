@@ -539,6 +539,7 @@ internal/shadowvenue	requestsites_test.go	unexpressed	-	-
 internal/signingkey	keygen.go	unexpressed	-	-
 internal/signingkey	keygen_state_test.go	unexpressed	-	-
 internal/storage/clickhouse	batch_options_census_test.go	.	tree	*
+internal/storage/clickhouse/latestrow	latestrow_census_test.go	.	tree	*.go
 internal/storage/clickhouse/liverow	census_test.go	cmd	tree	*.go
 internal/storage/clickhouse/liverow	census_test.go	internal	tree	*.go
 internal/storage/postgres	api_authorization_platform_roles_test.go	internal/api	tree	*
@@ -609,3 +610,4 @@ internal/workerservice	dependencies_test.go	unexpressed	-	-
 internal/workerservice	reports_test.go	unexpressed	-	-
 internal/workerservice	venue_golden_address_test.go	unexpressed	-	-
 internal/workerservice	writer_metrics_registration_test.go	unexpressed	-	-
+tools/lcovmerge	main.go	unexpressed	-	-

@@ -115,6 +115,8 @@ func TestMetricsEndpointExposesAppCounterContract(t *testing.T) {
 		// process-wide singleton that must actually reach the real /metrics
 		// HTTP surface, not just satisfy its own package's unit tests.
 		"dev_health_metrics_finite_boundary_nonfinite_total",
+		// CHAOS-14298: backfill jobs by how a coverage build resolved them ("sync_coverage_backfill_resolution").
+		"dev_health_sync_coverage_backfill_resolutions_total",
 	}
 	for _, family := range wantFamilies {
 		if !strings.Contains(body, family) {
@@ -132,6 +134,7 @@ func TestMetricsEndpointExposesAppCounterContract(t *testing.T) {
 		"\n" + `dev_health_sync_dispatch_advisory_lock_wait_total{outcome="busy"} `,
 		"\n" + `dev_health_provider_sync_lease_renewal_failed_total{reason="error"} `,
 		"\n" + `dev_health_provider_sync_lease_renewal_failed_total{reason="lease_lost"} `,
+		"\n" + `dev_health_sync_coverage_backfill_resolutions_total{outcome="occurrence_unplanned"} `,
 	} {
 		if !strings.Contains(body, series) {
 			t.Errorf("GET /metrics response has no sample %q before any event\nfull body:\n%s", strings.TrimSpace(series), body)

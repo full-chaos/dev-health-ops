@@ -61,10 +61,11 @@ func TestGitHubTestsChunkRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 	if walk.cursor.Phase != "done" {
 		t.Fatalf("terminal phase=%q, want done", walk.cursor.Phase)
 	}
-	// 2 (repo, retried) + 1 (runs-phase listing) + 1 (jobs) + 1
-	// (artifacts-phase listing) + 1 (artifacts listing) = 6.
-	if walk.cursor.Requests != 6 {
-		t.Fatalf("cursor=%+v want Requests=6 (every physical attempt, from one source)", walk.cursor)
+	// 2 (repo, retried) + 1 (runs-phase listing) + 1 (jobs) + 1 (the deep
+	// range of the claim that holds a UTC midnight) + 1 (artifacts-phase
+	// listing) + 1 (artifacts listing) = 7.
+	if walk.cursor.Requests != 7 {
+		t.Fatalf("cursor=%+v want Requests=7 (every physical attempt, from one source)", walk.cursor)
 	}
 }
 
@@ -113,19 +114,20 @@ func TestGitHubTestsChunkRouteCountsListingPagesWhoseRunsAllFailNormalization(t 
 	claim := nativeTestClaim("github", "tests")
 	walk := walkGitHubTestsChunks(t, GitHubTestsRouteHandler{}, claim, client, 10)
 
-	// The artifacts phase re-lists the same /actions/runs endpoint (a 3rd
-	// hit) -- runsPage covers both phases.
-	if runsPage != 3 {
-		t.Fatalf("runs listing pages served=%d want 3 (2 runs-phase + 1 artifacts-phase)", runsPage)
+	// The deep range of the claim that holds a UTC midnight and the artifacts
+	// phase re-list the same /actions/runs endpoint (a 3rd and 4th hit) --
+	// runsPage covers every listing.
+	if runsPage != 4 {
+		t.Fatalf("runs listing pages served=%d want 4 (2 runs-phase + 1 deep range + 1 artifacts-phase)", runsPage)
 	}
 	if walk.cursor.Phase != "done" {
 		t.Fatalf("terminal phase=%q, want done", walk.cursor.Phase)
 	}
 	// 1 (repo) + 2 (runs-phase listing pages) + 1 (artifacts-phase listing) =
-	// 4. No job or artifact fetch ever fires because every run fails
-	// normalization in both phases.
-	if walk.cursor.Requests != 4 {
-		t.Fatalf("cursor=%+v want Requests=4 (every listing page counted even though no item ever reached the old refresh point)", walk.cursor)
+	// 4, plus 1 (the deep range listing) = 5. No job or artifact fetch ever
+	// fires because every run fails normalization in every listing.
+	if walk.cursor.Requests != 5 {
+		t.Fatalf("cursor=%+v want Requests=5 (every listing page counted even though no item ever reached the old refresh point)", walk.cursor)
 	}
 }
 

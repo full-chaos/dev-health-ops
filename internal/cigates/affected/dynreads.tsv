@@ -393,6 +393,7 @@ internal/deploy/gitgate	gitgate.go
 internal/deploy/gitgate	gitgate_test.go
 internal/deploy/inputs	hookrender_test.go
 internal/deploy/renderdiff	depth_test.go
+internal/deploy/renderdiff	gaps_test.go
 internal/deploy/renderdiff	golden_test.go
 internal/deploy/renderdiff	renderdiff.go
 internal/deploy/renderdiff	scrub_test.go

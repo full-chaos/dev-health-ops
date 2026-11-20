@@ -102,6 +102,7 @@ func runGoldens(t *testing.T, dir string) (byteEqual, tracebacks int) {
 		t.Fatal(err)
 	}
 	cases := readManifest(t, dir)
+	fixed := readFixed(t, filepath.Join(filepath.Dir(dir), fixedDir), filepath.Base(dir))
 	t.Chdir(kitInputs(t, filepath.Join(dir, "in")))
 	for _, c := range cases {
 		want, err := os.ReadFile(filepath.Join(dir, "out", c.name+".out"))
@@ -111,6 +112,9 @@ func runGoldens(t *testing.T, dir string) (byteEqual, tracebacks int) {
 		sum := sha256.Sum256(want)
 		if hex.EncodeToString(sum[:]) != c.sha {
 			t.Fatalf("%s: the golden file does not match its manifest sha", c.name)
+		}
+		if f, ok := fixed[c.name]; ok {
+			want, c.rc = f.out, f.rc
 		}
 		var stdin []byte
 		if c.stdin != "" {
@@ -301,6 +305,55 @@ func kitInputs(t *testing.T, in string) string {
 		}
 	}
 	return tmp
+}
+
+// fixedDir holds the cases whose expected stdout is NOT the kit's because a fix of a kit gap changes it (CHAOS-14332:
+// a changed redacted value is a row, an over-redacted ConfigMap key too, --live counts Secret docs). Each row names
+// its golden dir, case, rc, sha256 and the gap classes of its difference. Each was checked against the kit: every
+// kit-to-port line is in one of the three gap classes.
+const fixedDir = "fixed-3b"
+
+type fixedCase struct {
+	rc      int
+	out     []byte
+	classes string
+}
+
+func readFixed(t *testing.T, root, golden string) map[string]fixedCase {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, "MANIFEST.tsv"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]fixedCase{}
+	for _, line := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		f := strings.Split(line, "\t")
+		if len(f) != 5 || f[4] == "" {
+			t.Fatalf("fixed row %q: want golden, case, rc, sha256, classes", line)
+		}
+		if f[0] != golden {
+			continue
+		}
+		rc, err := strconv.Atoi(f[2])
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := os.ReadFile(filepath.Join(root, f[0], f[1]+".out"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sum := sha256.Sum256(body); hex.EncodeToString(sum[:]) != f[3] {
+			t.Fatalf("fixed %s/%s does not match its sha", f[0], f[1])
+		}
+		out[f[1]] = fixedCase{rc: rc, out: body, classes: f[4]}
+	}
+	return out
 }
 
 func firstDiff(a, b []byte) int {

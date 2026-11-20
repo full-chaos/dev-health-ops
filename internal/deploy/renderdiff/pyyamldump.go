@@ -65,7 +65,7 @@ func (r *representer) represent(v any, depth int) (*rnode, error) {
 	if depth >= representDepth {
 		return nil, &crashError{msg: "RecursionError: maximum recursion depth exceeded", fn: "main"}
 	}
-	switch x := v.(type) {
+	switch x := asKit(v).(type) {
 	case nil:
 		return &rnode{kind: rScalar, tag: yamlTag + "null", value: "null"}, nil
 	case string:

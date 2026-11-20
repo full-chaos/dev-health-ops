@@ -57,7 +57,8 @@ func redactAt(o any, depth int) any {
 		d := x.copy()
 		if name, ok := d.getS("name"); ok {
 			if s, isStr := name.(string); isStr && d.has("value") && secretyRe.MatchString(s) {
-				_ = d.set("value", redacted)
+				raw, _ := d.getS("value")
+				_ = d.set("value", &redactedValue{raw: raw})
 			}
 		}
 		if kind, ok := d.getS("kind"); ok && pyEq(kind, "ConfigMap") {
@@ -69,7 +70,7 @@ func redactAt(o any, depth int) any {
 							for i, k := range md.keys {
 								v := md.vals[i]
 								if cmKeyRe.MatchString(pyStr(k)) {
-									v = redacted
+									v = &redactedValue{raw: v}
 								}
 								_ = nd.set(k, v)
 							}
@@ -85,7 +86,7 @@ func redactAt(o any, depth int) any {
 					nl := make([]any, len(list))
 					for i, e := range list {
 						if s, isStr := e.(string); isStr && strings.Contains(s, "://") && strings.Contains(s, "@") {
-							nl[i] = redacted
+							nl[i] = &redactedValue{raw: e}
 						} else {
 							nl[i] = e
 						}
@@ -107,13 +108,33 @@ func redactAt(o any, depth int) any {
 		return out
 	case string:
 		if userinfoRe.MatchString(x) {
-			return redacted
+			return &redactedValue{raw: x}
 		}
 	}
 	return o
 }
 
 func (d *pyDict) getS(k string) (any, bool) { return d.get(k) }
+
+// redactedValue is a value redact() hides. Everywhere the kit reads it, it is the str "<redacted>" (it prints,
+// dumps, sorts, hashes and compares as that str). The raw value stays in memory for one boolean only: whether a
+// redacted value changed between A and B (a CHANGED row with no value and no hash of it). raw is never formatted.
+type redactedValue struct{ raw any }
+
+// asKit is the value the kit holds: a redactedValue is the str "<redacted>".
+func asKit(v any) any {
+	if _, ok := v.(*redactedValue); ok {
+		return redacted
+	}
+	return v
+}
+
+// hiddenChange is true when both sides hold a redacted value and the raw values differ (same() on the raws).
+func hiddenChange(a, b any) bool {
+	ra, okA := a.(*redactedValue)
+	rb, okB := b.(*redactedValue)
+	return okA && okB && !same(ra.raw, rb.raw)
+}
 
 // docKind is d.get("kind") for a doc that docs_of() keeps: a mapping with a truthy kind.
 func docKind(d any) (any, bool) {
@@ -250,7 +271,7 @@ func listKeys(lst []any) (string, []string, bool) {
 			break
 		}
 		n, _ := d.getS("name")
-		if s, isStr := n.(string); !isStr || s == "" {
+		if s, isStr := asKit(n).(string); !isStr || s == "" {
 			byName = false
 			break
 		}
@@ -259,7 +280,7 @@ func listKeys(lst []any) (string, []string, bool) {
 		keys := make([]string, len(lst))
 		for i, e := range lst {
 			n, _ := e.(*pyDict).getS("name")
-			keys[i] = n.(string)
+			keys[i] = asKit(n).(string)
 		}
 		return "name", keys, true
 	}
@@ -295,6 +316,7 @@ type row struct {
 	doc, path, verb string
 	old, new        []string
 	before, after   any
+	hidden          bool // a changed redacted value: printed as "CHANGED <redacted>"
 }
 
 type differ struct {
@@ -450,8 +472,11 @@ func (df *differ) leaves(a, b any, path string) {
 		if !inB {
 			vb = missing
 		}
-		if !same(va, vb) || inA != inB {
+		switch {
+		case !same(va, vb) || inA != inB:
 			df.row(p, "CHANGED", nil, nil, va, vb)
+		case hiddenChange(va, vb):
+			df.rows = append(df.rows, row{doc: df.doc, path: p, verb: "CHANGED", before: va, after: vb, hidden: true})
 		}
 	}
 }

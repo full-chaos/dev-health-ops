@@ -179,6 +179,12 @@ func groupKeyNotNull(dimCol string, useInvestment bool) string {
 	return "\n  AND " + dimCol + " IS NOT NULL"
 }
 
+// unassignedTeamKey is the one expression that names a team with no key: the empty string and NULL are the unassigned team, the
+// token the investment path and the sankey coverage use.
+func unassignedTeamKey(col string) string {
+	return "ifNull(nullIf(" + col + ", ''), 'unassigned')"
+}
+
 func dbColumn(dim Dimension, useInvestment bool) (string, error) {
 	if dim == DimensionAuthor {
 		return "", newValidationError("dimension", string(dim),
@@ -189,7 +195,7 @@ func dbColumn(dim Dimension, useInvestment bool) (string, error) {
 	if useInvestment {
 		switch dim {
 		case DimensionTeam:
-			return "ifNull(nullIf(ut.team_label, ''), 'unassigned')", nil
+			return unassignedTeamKey("ut.team_label"), nil
 		case DimensionRepo:
 			// Unassigned repo emits '' (NOT the bare 'unassigned'): the web
 			// adapter renders an empty repo label as a distinct "Unassigned
@@ -207,7 +213,9 @@ func dbColumn(dim Dimension, useInvestment bool) (string, error) {
 	} else {
 		switch dim {
 		case DimensionTeam:
-			return "team_id", nil
+			// work_item_completion_daily stores a work item with no owning team as team_id '' (not Nullable): that
+			// group is the unassigned team, named as the investment path names it, never a nameless "" team.
+			return unassignedTeamKey("team_id"), nil
 		case DimensionRepo:
 			return "repo_id", nil
 		case DimensionWorkType:

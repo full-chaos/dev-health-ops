@@ -334,6 +334,8 @@ type GitHubTestsRouteHandler struct {
 	// LateRerunLookback is how far below the regular artifacts floor the daily late re-run re-list reaches; zero keeps
 	// githubTestsLateRerunLookbackDefault.
 	LateRerunLookback time.Duration
+	// LateRerunMaxPages lowers the deep range's page budget when positive; zero keeps githubTestsLateRerunMaxPagesDefault.
+	LateRerunMaxPages int
 	// MaxWalkRecords lowers githubTestsMaxWalkRecords when positive; zero keeps it.
 	MaxWalkRecords int
 }
@@ -376,7 +378,8 @@ func (handler GitHubTestsRouteHandler) Collect(
 	if maxArtifactBytes <= 0 {
 		maxArtifactBytes = githubTestsMaxDownloadSize
 	}
-	if maxRuns < 1 || maxRuns > githubTestsMaxRuns || maxArtifacts < 1 || maxArtifacts > githubTestsMaxArtifacts || jobPages < 1 || jobPages > nativeMaxPages {
+	if maxRuns < 1 || maxRuns > githubTestsMaxRuns || maxArtifacts < 1 || maxArtifacts > githubTestsMaxArtifacts || jobPages < 1 || jobPages > nativeMaxPages ||
+		!handler.lateRerunConfigValid() {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
 	runPages := (maxRuns + nativePerPage - 1) / nativePerPage
@@ -405,13 +408,13 @@ func (handler GitHubTestsRouteHandler) Collect(
 	var relistPages int
 	relistStopped := false
 	if githubTestsRelistOwned(claim) {
-		relistItems, pages, over, err := collectGitHubTestsRunsPeeled(ctx, client, root, runPages, func(hi string) url.Values {
+		relistItems, pages, over, err := collectGitHubTestsRunsPeeled(ctx, client, root, handler.lateRerunMaxPages(), func(hi string) url.Values {
 			return githubTestsRelistQueryAt(claim, handler.lateRerunLookback(), hi)
 		})
 		if err != nil {
 			return CompleteRouteBatch{}, err
 		}
-		relistPages, relistStopped = pages, over || len(relistItems) > maxRuns
+		relistPages, relistStopped = pages, over
 		for _, raw := range relistItems {
 			artifactRuns = append(artifactRuns, githubTestsListedRun{raw: raw, relist: true})
 		}
@@ -432,7 +435,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 		skippedCauseCount    map[string]int
 	)
 	if relistStopped {
-		incomplete = append(incomplete, GitHubTestsIncomplete{Component: githubTestsLateRerunRelistComponent, Cause: githubTestsPageBudgetCause, Count: 1})
+		incomplete = append(incomplete, GitHubTestsIncomplete{Component: githubTestsLateRerunReportsComponent, Cause: githubTestsPageBudgetCause, Count: 1})
 	}
 	requests, pages := 1+runListPages+artifactListPages+relistPages, runListPages+artifactListPages+relistPages
 	policyCache := map[string]githubTestsPolicy{}
@@ -775,7 +778,7 @@ func githubTestsArtifactRunQuery(claim Claim) url.Values {
 // only the runs its listing reaches: runs created from its floor
 // (githubTestsArtifactRunsCreatedFrom). A run re-run after it left every floor
 // is read by the daily late re-run re-list instead
-// (github_tests_late_rerun_relist.go), whose rule floors the width at one day,
+// (github_tests_late_rerun_reports.go), whose rule floors the width at one day,
 // so such a run can take one more look. The provider
 // documents no bound on how long a run's artifacts can take to become
 // listable after the run itself stops changing, so the margin is sized off

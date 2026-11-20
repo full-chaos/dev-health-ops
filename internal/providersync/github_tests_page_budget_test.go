@@ -919,7 +919,7 @@ func TestGitHubTestsChunkRouteListingEndingExactlyAtTheBoundIsComplete(t *testin
 		githubTestsPagedReportDoer{githubTestsPagedDoer: &githubTestsPagedDoer{t: t, pages: 3, perPage: 2}, archive: archive})
 	// The regular listing is complete; the bound stops the late re-run deep range before it starts, which is its own advancing
 	// observation.
-	deepStop := []GitHubTestsIncomplete{{Component: githubTestsLateRerunRelistComponent, Cause: githubTestsPageBudgetCause, Count: 1}}
+	deepStop := []GitHubTestsIncomplete{{Component: githubTestsLateRerunReportsComponent, Cause: githubTestsPageBudgetCause, Count: 1}}
 	if fmt.Sprint(githubTestsSaturatedObservations(artifactsEnd)) != fmt.Sprint(deepStop) || len(artifactsEnd.Incomplete) != 0 ||
 		githubTestsWalkRecords(artifactsEnd) != githubTestsWalkRecords(full) {
 		t.Fatalf("artifacts listing ended at the bound: incomplete=%+v derived=%+v records=%d, want a complete regular walk of %d and only the deep-range stop",

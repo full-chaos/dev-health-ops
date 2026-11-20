@@ -388,9 +388,9 @@ func githubTestsSaturatedObservations(cursor githubTestsChunkCursor) []GitHubTes
 	}
 	switch cursor.Relist {
 	case githubTestsRelistStoppedBudget:
-		out = append(out, GitHubTestsIncomplete{Component: githubTestsLateRerunRelistComponent, Cause: githubTestsPageBudgetCause, Count: 1})
+		out = append(out, GitHubTestsIncomplete{Component: githubTestsLateRerunReportsComponent, Cause: githubTestsPageBudgetCause, Count: 1})
 	case githubTestsRelistStoppedSaturated:
-		out = append(out, GitHubTestsIncomplete{Component: githubTestsLateRerunRelistComponent, Cause: githubTestsListingSaturatedCause, Count: 1})
+		out = append(out, GitHubTestsIncomplete{Component: githubTestsLateRerunReportsComponent, Cause: githubTestsListingSaturatedCause, Count: 1})
 	}
 	return out
 }

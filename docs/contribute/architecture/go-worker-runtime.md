@@ -587,8 +587,8 @@ properties of that listing shape the walk:
   larger of one day and the window width. Each midnight has one owning unit, so
   this costs one extra listing a day per repository, and a late re-run's
   reports land up to one day plus a window width after it changed. The deeper
-  range has its own page budget. When it runs out, or a second cannot be peeled
-  past, the unit records `late_rerun_relist` (`page_budget_exhausted` or
+  range has its own page budget (1,000 pages; a unit resumes it across chunks).
+  When it runs out, or a second cannot be peeled past, the unit records `late_rerun_reports` (`page_budget_exhausted` or
   `listing_saturated`): `reports_complete` stays false and the watermark still
   advances. A re-run more than about 7 days after its run was created stays
   unread (GitHub allows a re-run up to 30 days later).

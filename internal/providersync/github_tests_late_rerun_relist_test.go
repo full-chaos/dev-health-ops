@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -178,7 +179,7 @@ func TestGitHubTestsLateRerunHeldClaimReownsMidnight(t *testing.T) {
 	}
 }
 
-// The deep range stops at its own page budget, or at a second it cannot peel past: one late_rerun_relist observation,
+// The deep range stops at its own page budget, or at a second it cannot peel past: one late_rerun_reports observation,
 // reports_complete=false, the watermark advances, and the comparator accepts the completion.
 func TestGitHubTestsLateRerunDeepStopAdvances(t *testing.T) {
 	since, before := time.Date(2026, 7, 4, 23, 0, 0, 0, time.UTC), time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC)
@@ -196,10 +197,10 @@ func TestGitHubTestsLateRerunDeepStopAdvances(t *testing.T) {
 		runs    []listingRun
 		cause   string
 	}{
-		{"page budget", GitHubTestsRouteHandler{MaxRuns: 100}, append([]listingRun{late}, makeListingRuns(2000, 150, time.Date(2026, 6, 28, 0, 0, 0, 0, time.UTC), time.Minute)...), githubTestsPageBudgetCause},
+		{"page budget", GitHubTestsRouteHandler{LateRerunMaxPages: 1}, append([]listingRun{late}, makeListingRuns(2000, 150, time.Date(2026, 6, 28, 0, 0, 0, 0, time.UTC), time.Minute)...), githubTestsPageBudgetCause},
 		{"saturated second", GitHubTestsRouteHandler{}, append([]listingRun{late}, saturating...), githubTestsListingSaturatedCause},
-		// 1,000 runs fill the first deep range and its 10-page budget exactly; the peeled next range finds the budget spent.
-		{"page budget at a peel", GitHubTestsRouteHandler{MaxRuns: 1000}, append([]listingRun{late}, makeListingRuns(3000, 1000, time.Date(2026, 6, 28, 0, 0, 0, 0, time.UTC), time.Minute)...), githubTestsPageBudgetCause},
+		// 1,000 runs fill the first deep range and a 10-page budget exactly; the peeled next range finds the budget spent.
+		{"page budget at a peel", GitHubTestsRouteHandler{LateRerunMaxPages: 10}, append([]listingRun{late}, makeListingRuns(3000, 1000, time.Date(2026, 6, 28, 0, 0, 0, 0, time.UTC), time.Minute)...), githubTestsPageBudgetCause},
 	} {
 		t.Run(cell.name, func(t *testing.T) {
 			fake := newListingFake(t, cell.runs)
@@ -207,7 +208,7 @@ func TestGitHubTestsLateRerunDeepStopAdvances(t *testing.T) {
 			if fake.artifactGets[late.id] != 1 {
 				t.Errorf("late re-run reads=%d, want 1 (newest first: listed before the stop)", fake.artifactGets[late.id])
 			}
-			want := []string{githubTestsLateRerunRelistComponent + "/" + cell.cause}
+			want := []string{githubTestsLateRerunReportsComponent + "/" + cell.cause}
 			var got []string
 			var incomplete []GitHubTestsIncomplete
 			if decodeCompletionValue(walk.final.Result, "incomplete", &incomplete) != nil {
@@ -236,7 +237,7 @@ func TestGitHubTestsLateRerunDeepStopAdvances(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Collect: %v", err)
 			}
-			if decodeCompletionValue(batch.Result, "incomplete", &incomplete) != nil || len(incomplete) != 1 || incomplete[0].Component != githubTestsLateRerunRelistComponent ||
+			if decodeCompletionValue(batch.Result, "incomplete", &incomplete) != nil || len(incomplete) != 1 || incomplete[0].Component != githubTestsLateRerunReportsComponent ||
 				batch.Watermark == nil || oracleFake.artifactGets[late.id] != 1 {
 				t.Errorf("oracle: incomplete=%+v watermark=%v late reads=%d, want the deep-range stop, an advanced watermark and 1 read", incomplete, batch.Watermark, oracleFake.artifactGets[late.id])
 			}
@@ -265,5 +266,47 @@ func TestGitHubTestsLateRerunCursorState(t *testing.T) {
 	_, fake, walk := lateRerunReads(t, claim, nil, 0)
 	if len(lateRerunDeepRanges(fake)) != 1 || walk.cursor.Relist != 0 || walk.cursor.Phase != "done" {
 		t.Errorf("deep ranges=%v final relist=%d phase=%q, want one deep range walked and the state back at 0", lateRerunDeepRanges(fake), walk.cursor.Relist, walk.cursor.Phase)
+	}
+}
+
+// The default deep budget is 1,000 pages. A deep range of 102 pages (over the regular range's 100) is walked in many chunks:
+// each continuation resumes the deep listing where the last one stopped, and the walk ends with no observation.
+func TestGitHubTestsLateRerunDeepRangeResumesAcrossChunks(t *testing.T) {
+	since, before := time.Date(2026, 7, 4, 23, 0, 0, 0, time.UTC), time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC)
+	late := listingRun{id: 1, created: time.Date(2026, 7, 1, 0, 50, 0, 0, time.UTC), startedAt: time.Date(2026, 7, 4, 1, 0, 0, 0, time.UTC), status: "completed", conclusion: "success"}
+	late.updated = late.startedAt.Add(time.Hour)
+	old := makeListingRuns(100000, 10100, time.Date(2026, 6, 27, 0, 0, 0, 0, time.UTC), 30*time.Second)
+	fake := newListingFake(t, append([]listingRun{late}, old...))
+	walk := walkListing(t, GitHubTestsRouteHandler{}, lateRerunClaim(since, before), fake, 2000)
+	if walk.passes < 3 {
+		t.Fatalf("passes=%d, want a deep range that needs several chunks", walk.passes)
+	}
+	if fake.artifactGets[late.id] != 1 {
+		t.Errorf("late re-run reads=%d, want 1", fake.artifactGets[late.id])
+	}
+	if got := append(walk.cursor.Incomplete, githubTestsSaturatedObservations(walk.cursor)...); len(got) != 0 {
+		t.Errorf("incomplete=%+v, want none: the deep range was walked whole", got)
+	}
+	if walk.final.Watermark == nil || !walk.final.Watermark.Equal(before) || walk.cursor.ArtifactPages <= 100 {
+		t.Errorf("watermark=%v deep pages=%d, want %s and more than the regular range's 100-page budget", walk.final.Watermark, walk.cursor.ArtifactPages, before)
+	}
+}
+
+// The deep range's settings are refused outside their bounds by both routes, before any request.
+func TestGitHubTestsLateRerunRefusesBadSettings(t *testing.T) {
+	claim := lateRerunClaim(time.Date(2026, 7, 4, 23, 0, 0, 0, time.UTC), time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC))
+	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	for name, handler := range map[string]GitHubTestsRouteHandler{
+		"pages over 1000": {LateRerunMaxPages: githubTestsLateRerunMaxPagesDefault + 1},
+		"negative pages":  {LateRerunMaxPages: -1},
+		"negative L":      {LateRerunLookback: -time.Hour},
+	} {
+		client := githubTestsClient(t, fakehttp.Client(newListingFake(t, nil)))
+		if err := handler.CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client, now, "", func(ChunkRouteEmission) error { return nil }); !errors.Is(err, ErrInvalidConfiguration) {
+			t.Errorf("%s: CollectChunks err=%v, want ErrInvalidConfiguration", name, err)
+		}
+		if _, err := handler.Collect(context.Background(), claim, providerfoundation.Credential{}, client, now); !errors.Is(err, ErrInvalidConfiguration) {
+			t.Errorf("%s: Collect err=%v, want ErrInvalidConfiguration", name, err)
+		}
 	}
 }

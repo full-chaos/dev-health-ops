@@ -621,7 +621,7 @@ var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 	githubTestsRunReportsComponent:   {githubTestsPerRunCapCause: {}, githubTestsAggregateOfPartsCause: {}},
 	// The late re-run re-list stops before its oldest runs: the regular range was walked whole, so the gap is the deep range's
 	// oldest part only. Holding the watermark would hold a busy repository for ever; reports_complete stays false.
-	githubTestsLateRerunRelistComponent: {githubTestsPageBudgetCause: {}, githubTestsListingSaturatedCause: {}},
+	githubTestsLateRerunReportsComponent: {githubTestsPageBudgetCause: {}, githubTestsListingSaturatedCause: {}},
 	githubTestsReportMemberComponent: {
 		githubTestsArtifactOversizedCause:   {},
 		githubTestsArtifactExpiredCause:     {},
@@ -997,7 +997,7 @@ var githubTestsIncompleteVocabulary = map[string]map[string]struct{}{
 var githubTestsDerivedIncompleteVocabulary = map[string]map[string]struct{}{
 	githubTestsRunInventorySaturatedComponent:      {githubTestsListingSaturatedCause: {}},
 	githubTestsArtifactInventorySaturatedComponent: {githubTestsListingSaturatedCause: {}},
-	githubTestsLateRerunRelistComponent:            {githubTestsPageBudgetCause: {}, githubTestsListingSaturatedCause: {}},
+	githubTestsLateRerunReportsComponent:           {githubTestsPageBudgetCause: {}, githubTestsListingSaturatedCause: {}},
 }
 
 func githubTestsIncompleteInVocabulary(observation GitHubTestsIncomplete) bool {

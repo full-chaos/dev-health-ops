@@ -227,7 +227,7 @@ type githubTestsChunkCursor struct {
 	// range read whole at its cut second (github_tests_cut_runs.go). A cursor without them skips nothing.
 	ActiveCutKeys  string `json:"ak,omitempty"`
 	CarriedCutKeys string `json:"ck,omitempty"`
-	// Relist is the state of the late re-run re-list (github_tests_late_rerun_relist.go): walking its deep range, or why it
+	// Relist is the state of the late re-run re-list (github_tests_late_rerun_reports.go): walking its deep range, or why it
 	// stopped before its oldest runs. The deep range starts ArtifactPages again from zero: the regular range is done by then.
 	Relist int `json:"rl,omitempty"`
 }
@@ -1392,7 +1392,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	if maxWalkRecords == 0 {
 		maxWalkRecords = githubTestsMaxWalkRecords
 	}
-	if maxWalkRecords < 1 || maxWalkRecords > githubTestsMaxWalkRecords {
+	if maxWalkRecords < 1 || maxWalkRecords > githubTestsMaxWalkRecords || !handler.lateRerunConfigValid() {
 		return ErrInvalidConfiguration
 	}
 	if err := validatePerRunPageBudget(
@@ -2466,7 +2466,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			}
 			return nil
 		}
-		allowance, budgetErr := remainingPageBudget((maxRuns+nativePerPage-1)/nativePerPage, cursor.ArtifactPages)
+		pageBudget := (maxRuns + nativePerPage - 1) / nativePerPage
+		if cursor.Relist == githubTestsRelistWalking {
+			pageBudget = handler.lateRerunMaxPages()
+		}
+		allowance, budgetErr := remainingPageBudget(pageBudget, cursor.ArtifactPages)
 		if errors.Is(budgetErr, ErrPaginationCapExceeded) && cursor.Relist == githubTestsRelistWalking {
 			cursor = recordGitHubTestsRelistStop(cursor, client, claim, githubTestsPageBudgetCause, cursor.RangeHi, cursor.RangeItems)
 			break

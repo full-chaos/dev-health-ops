@@ -203,12 +203,18 @@ func githubTestsLateRerunWanted(run gitHubWorkflowRunPayload, claim Claim, lookb
 	return !updated.UTC().Before(githubTestsLateRerunFloor(claim)) && !updated.UTC().Before(created.UTC().Add(lookback))
 }
 
-// githubTestsLateRerunListedOutsideDeepRange reports a run a deep listing answered although it is not in that deep
-// created range: created at or after floor, the start of the range above it (the runs range of the runs phase, the
-// regular range of the artifacts phase), or with no created time (GitHub cannot list it by created). Each route skips it
-// in the deep range, whatever the listing answered, so the two ranges of a phase never read one run twice in a claim.
-func githubTestsLateRerunListedOutsideDeepRange(pipeline githubTestsPipelineRow, floor time.Time) bool {
-	return pipeline.QueuedAt == nil || !pipeline.QueuedAt.UTC().Before(floor)
+// githubTestsRunsInterval is the created interval of the runs phase's runs range (deep false) or deep range, equal to
+// their queries: runs [since - lookback, before + 1 s), deep [date(floor - late), since - lookback). A claim that lists no
+// deep range has an unbounded interval: its admission and peel are main's.
+func githubTestsRunsInterval(claim Claim, deep bool, lookback, late time.Duration) githubTestsCreatedInterval {
+	if !githubTestsHoldsMidnight(claim) {
+		return githubTestsCreatedInterval{}
+	}
+	floor := claim.SinceAt.UTC().Add(-lookback).Truncate(time.Second)
+	if deep {
+		return githubTestsCreatedInterval{lo: githubTestsLateRerunFloor(claim).Add(-late).Truncate(24 * time.Hour), hi: floor, deep: true}
+	}
+	return githubTestsCreatedInterval{lo: floor, hi: claim.BeforeAt.UTC().Truncate(time.Second).Add(time.Second)}
 }
 
 // githubTestsRunsQuery is the created range of one runs-phase listing.
@@ -544,14 +550,16 @@ func collectGitHubTestsRunsPeeled(
 	ctx context.Context, client *providerfoundation.HTTPClient, root string, pageBudget int,
 	queryFor func(peeledHi string) url.Values,
 ) (items []json.RawMessage, pages int, over bool, err error) {
-	return collectGitHubTestsRunsPeeledBy(ctx, client, root, pageBudget, queryFor, githubTestsPeel)
+	return collectGitHubTestsRunsPeeledBy(ctx, client, root, pageBudget, queryFor, githubTestsPeel, nil)
 }
 
 // collectGitHubTestsRunsPeeledBy is collectGitHubTestsRunsPeeled with the peel rule given (an artifacts-phase range peels
-// inside its created interval).
+// inside its created interval). A non-nil admit keeps a listed run only when it admits the run's created time under the
+// ceiling of the response that supplied it (the chunked route's rule); a refused run is not kept and not marked seen.
 func collectGitHubTestsRunsPeeledBy(
 	ctx context.Context, client *providerfoundation.HTTPClient, root string, pageBudget int,
 	queryFor func(peeledHi string) url.Values, peel func(items int, oldest, rangeHi string) (string, bool, bool),
+	admit func(created *time.Time, rangeHi string) bool,
 ) (items []json.RawMessage, pages int, over bool, err error) {
 	seen := map[string]struct{}{}
 	hi := ""
@@ -572,6 +580,9 @@ func collectGitHubTestsRunsPeeledBy(
 			}
 			count++
 			oldest = githubTestsOlderCreated(oldest, parseGitHubWorkflowTime(run.CreatedAt))
+			if admit != nil && !admit(parseGitHubWorkflowTime(run.CreatedAt), hi) {
+				continue
+			}
 			if _, duplicate := seen[run.ID.String()]; !duplicate {
 				seen[run.ID.String()] = struct{}{}
 				items = append(items, raw)

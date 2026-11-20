@@ -1265,6 +1265,9 @@ GO_TEST_SPLITS="${GO_TEST_SPLITS:-${ROOT}/ci/go_test_splits.tsv}"
 # ci/go_test_split_weights.tsv (CHAOS-13668): package<TAB>TestName<TAB>seconds, the measured tests of the split packages. A test
 # leg cuts a split package's names by them (ci/go_race_shard.awk cut()), and the plan derives each part's weight from them.
 GO_TEST_SPLIT_WEIGHTS="${GO_TEST_SPLIT_WEIGHTS:-${ROOT}/ci/go_test_split_weights.tsv}"
+# ci/go_test_apart.tsv (CHAOS-14334): split packages whose parts the test plan keeps off the shards of each other's parts
+# (ci/go_race_shard.awk tapart=).
+GO_TEST_APART="${GO_TEST_APART:-${ROOT}/ci/go_test_apart.tsv}"
 # CHAOS-13664: the test-leg split is chain-aware (ci/go_race_shard.awk chain=1). check_test_shard runs the split-package jobs one
 # after another beside one go test of the shard's other packages, then the serial package alone, so a leg's wall is about
 # max(chain, rest / 2) + serial (+6..+34 s over the 50 legs of 5 main runs); the split places the chain and the serial package
@@ -1285,6 +1288,7 @@ check_test_shard_args() {
   [ -f "${GO_TEST_PINS}" ] || die "test shards need ${GO_TEST_PINS}"
   [ -f "${GO_TEST_SPLITS}" ] || die "test shards need ${GO_TEST_SPLITS}"
   [ -f "${GO_TEST_SPLIT_WEIGHTS}" ] || die "test shards need ${GO_TEST_SPLIT_WEIGHTS}"
+  [ -f "${GO_TEST_APART}" ] || die "test shards need ${GO_TEST_APART}"
 }
 
 # check_test_shard_plan SHARD COUNT: one "module<TAB>package<TAB>key" line per package of the shard, key = import path relative
@@ -1299,7 +1303,7 @@ check_test_shard_plan() {
     listing="$(test_leg_listed "go-list-all|${module_dir}" module_go "${module_dir}" list -mod=readonly -f '{{.ImportPath}}' ./... \
       | quality_filter "${module_dir}" "${modpath}" \
       | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_TEST_WEIGHTS}" -v pin="${GO_TEST_PINS}" \
-          -v splits="${GO_TEST_SPLITS}" -v tests="${GO_TEST_SPLIT_WEIGHTS}" \
+          -v splits="${GO_TEST_SPLITS}" -v tests="${GO_TEST_SPLIT_WEIGHTS}" -v tapart="$(if [ "${module_dir}" = "." ]; then printf '%s' "${GO_TEST_APART}"; fi)" \
           -v serial="${SERIAL_HEAVY_TEST_PACKAGE#"${modpath}/"}" -v chain=1 -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")" \
       || die "test shard ${shard}/${count}: the package list or its split (ci/go_race_shard.awk) failed in ${module_dir}"
     while IFS=$'\t' read -r pkg spart sparts; do

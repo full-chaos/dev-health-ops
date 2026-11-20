@@ -273,3 +273,159 @@ func TestTheChainAwarePlanRefusesASoloFile(t *testing.T) {
 		t.Fatalf("chain=1 with a solo file: want exit 2 and the refusal, got %v: %s", err, out)
 	}
 }
+
+// CHAOS-14334: the split packages of ci/go_test_apart.tsv shell out to ci/check_go.sh and run slower beside each other: test shard
+// 6/13 held parts of all four (919-940 s on slow runners, over the 900 s cap). The test plan (ci/go_race_shard.awk tapart=) keeps
+// each test shard to parts of at most one of them. The same plan with no apart rows is the red: it puts two or more on one shard.
+
+func testApartRows(t *testing.T) map[string]bool {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "go_test_apart.tsv"))
+	if err != nil {
+		t.Fatalf("ci/go_test_apart.tsv: %v", err)
+	}
+	rows := map[string]bool{}
+	for _, l := range strings.Split(string(b), "\n") {
+		if strings.TrimSpace(l) == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		k, reason, ok := strings.Cut(l, "\t")
+		if !ok || strings.TrimSpace(reason) == "" {
+			t.Fatalf("ci/go_test_apart.tsv: row is not <package><TAB><reason>: %q", l)
+		}
+		rows[k] = true
+	}
+	if len(rows) < 2 {
+		t.Fatalf("ci/go_test_apart.tsv holds %d row(s): nothing to keep apart", len(rows))
+	}
+	return rows
+}
+
+// testApartLegs plans every test leg with env; per leg, the listed packages it holds parts of, sorted.
+func testApartLegs(t *testing.T, env []string, listed map[string]bool) [][]string {
+	t.Helper()
+	_, parts := allLegs(t, env, "test-shard-plan", shardCount)
+	legs := make([][]string, shardCount)
+	for k := 1; k <= shardCount; k++ {
+		seen := map[string]bool{}
+		for _, l := range strings.Split(parts[k], "\n") {
+			f := strings.Split(l, "\t")
+			if len(f) == 5 && f[0] == "." && listed[f[2]] && !seen[f[2]] {
+				seen[f[2]] = true
+				legs[k-1] = append(legs[k-1], f[2])
+			}
+		}
+		sort.Strings(legs[k-1])
+	}
+	return legs
+}
+
+func TestNoTestShardHoldsPartsOfTwoApartPackages(t *testing.T) {
+	t.Parallel()
+	listed, splits := testApartRows(t), splitRows(t)
+	planned := map[string]bool{}
+	for k, leg := range testApartLegs(t, nil, listed) {
+		if len(leg) > 1 {
+			t.Errorf("test shard %d/%d holds parts of %s (ci/go_test_apart.tsv)", k+1, shardCount, strings.Join(leg, ", "))
+		}
+		for _, p := range leg {
+			planned[p] = true
+		}
+		t.Logf("test shard %d/%d: %v", k+1, shardCount, leg)
+	}
+	for p := range listed {
+		if splits[p] < 2 {
+			t.Errorf("ci/go_test_apart.tsv row %s: no split package of ci/go_test_splits.tsv", p)
+		}
+		if !planned[p] {
+			t.Errorf("ci/go_test_apart.tsv row %s: no test shard holds a part of it", p)
+		}
+	}
+}
+
+func TestTheTestPlanWithoutApartRowsPutsApartPackagesOnOneShard(t *testing.T) {
+	t.Parallel()
+	listed := testApartRows(t)
+	none := filepath.Join(t.TempDir(), "apart.tsv")
+	if err := os.WriteFile(none, []byte("# no rows\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, leg := range testApartLegs(t, []string{"GO_TEST_APART=" + none}, listed) {
+		if len(leg) > 1 {
+			return
+		}
+	}
+	t.Errorf("the %d-leg test plan without apart rows keeps the ci/go_test_apart.tsv packages apart by itself: the red is gone", shardCount)
+}
+
+// testApartAwk runs ci/go_race_shard.awk (chain=1, tapart) for shard of count over packages m/<name> split 2 ways, weight 200 each.
+func testApartAwk(t *testing.T, shard, count int, pkgs []string, apart string, chain bool) (string, string, error) {
+	t.Helper()
+	dir := t.TempDir()
+	var w, s, in strings.Builder
+	for _, p := range pkgs {
+		fmt.Fprintf(&w, "%s\t200\n", p)
+		fmt.Fprintf(&s, "%s\t2\n", p)
+		in.WriteString("m/" + p + "\n")
+	}
+	write := func(name, text string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	cmd := exec.Command("awk", "-v", "mod=m", "-v", "shard="+strconv.Itoa(shard), "-v", "count="+strconv.Itoa(count),
+		"-v", "weights="+write("w.tsv", w.String()), "-v", "splits="+write("s.tsv", s.String()), "-v", "serial=none", "-v", "defw=1",
+		"-v", "tapart="+write("a.tsv", apart), "-v", "chain="+map[bool]string{true: "1", false: ""}[chain], "-f", realShardAwk(t))
+	cmd.Stdin = strings.NewReader(in.String())
+	var out, errs strings.Builder
+	cmd.Stdout, cmd.Stderr = &out, &errs
+	err := cmd.Run()
+	return out.String(), errs.String(), err
+}
+
+// Three packages of two 100 s parts on three shards: the plain chain plan puts a part of a and a part of b on shard 1; with a and
+// b listed each shard holds parts of one of them; a row of no split package of the run is inert. On one shard the rule cannot hold,
+// and the plan says so. Bad rows are refused.
+func TestTheApartRuleKeepsListedPartsOffEachOthersShards(t *testing.T) {
+	t.Parallel()
+	pkgs := []string{"a", "b", "c"}
+	holds := func(apart string) []string {
+		var d []string
+		for k := 1; k <= 3; k++ {
+			out, errs, err := testApartAwk(t, k, 3, pkgs, apart, true)
+			if err != nil || errs != "" {
+				t.Fatalf("shard %d/3: %v\n%s", k, err, errs)
+			}
+			if strings.Contains(out, "m/a\t") && strings.Contains(out, "m/b\t") {
+				d = append(d, fmt.Sprintf("shard %d/3 holds parts of a and b", k))
+			}
+		}
+		return d
+	}
+	if d := holds("# no rows\n"); len(d) == 0 {
+		t.Error("the fixture's plain chain plan keeps a and b apart by itself: the red is gone")
+	}
+	for _, d := range holds("a\tshells out\nb\tshells out\nd\tno package of this run: inert\n") {
+		t.Error(d)
+	}
+	_, errs, err := testApartAwk(t, 1, 1, pkgs, "a\tshells out\nb\tshells out\n", true)
+	if err != nil || !strings.Contains(errs, "WARN test plan: m/b part 1/2 beside another apart package on leg 1/1") {
+		t.Errorf("one shard, two listed packages: want the WARN line, got %v: %s", err, errs)
+	}
+	for _, c := range []struct {
+		apart string
+		chain bool
+		want  string
+	}{
+		{"a\tshells out\na\tagain\n", true, "test apart row repeats a"},
+		{"a\t \n", true, "bad test apart row"},
+		{"a\tshells out\n", false, "tapart= is for chain=1 (the test legs) only"},
+	} {
+		_, errs, err := testApartAwk(t, 1, 3, pkgs, c.apart, c.chain)
+		if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 2 || !strings.Contains(errs, c.want) {
+			t.Errorf("apart rows %q (chain %v): want exit 2 and %q, got %v: %s", c.apart, c.chain, c.want, err, errs)
+		}
+	}
+}

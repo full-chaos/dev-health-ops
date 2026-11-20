@@ -45,6 +45,7 @@ func TestBackfillRunIDKeepsSyncRunMarkersAndRefusesOtherText(t *testing.T) {
 	}{
 		{"sync_run marker", "sync_run:" + runID.String(), runID, backfillMarkerSyncRun},
 		{"sync_run after an occurrence", "occurrence:" + testOccurrenceID + ";sync_run:" + runID.String(), runID, backfillMarkerSyncRun},
+		{"the last occurrence marker", "occurrence:junk;occurrence:" + testOccurrenceID, derivedTestRunID(t, testOccurrenceID), backfillMarkerOccurrence},
 		{"malformed sync_run", "sync_run:not-a-uuid", uuid.Nil, ""},
 		{"empty", "", uuid.Nil, ""},
 		{"celery task id", "4f6c1a2e-celery", uuid.Nil, ""},

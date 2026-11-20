@@ -123,7 +123,7 @@ WHERE occurrence.occurrence_id = $1 AND occurrence.org_id = $2`, trigger.Occurre
 	for _, task := range markers {
 		runID, marker := backfillRunID(&task)
 		if marker != backfillMarkerOccurrence || runID != planned {
-			t.Fatalf("backfillRunID(%q) = (%s, %q), want the run the reconciler planned (%s)", task, runID, marker, planned)
+			t.Errorf("backfillRunID(%q) = (%s, %q), want the run the reconciler planned (%s)", task, runID, marker, planned)
 		}
 		if _, err := pool.Exec(ctx, `INSERT INTO backfill_jobs (id,org_id,sync_config_id,celery_task_id,status,since_date,before_date) VALUES ($1,$2,$3::uuid,$4,'pending',$5::date,$6::date)`,
 			uuid.New(), orgID, configID, task, since, before.Add(-time.Microsecond)); err != nil {
@@ -141,10 +141,10 @@ WHERE occurrence.occurrence_id = $1 AND occurrence.org_id = $2`, trigger.Occurre
 		t.Fatal(err)
 	}
 	if got := backfillResolutionMetrics.outcomeCount(backfillOutcomeOccurrence) - occurrenceBefore; got != uint64(len(markers)) {
-		t.Fatalf("occurrence outcomes counted = %d, want %d (both markers read as the planned run)", got, len(markers))
+		t.Errorf("occurrence outcomes counted = %d, want %d (both markers read as the planned run)", got, len(markers))
 	}
 	if got := backfillResolutionMetrics.outcomeCount(backfillOutcomeOccurrenceUnplanned) - unplannedBefore; got != 0 {
-		t.Fatalf("occurrence_unplanned outcomes counted = %d, want 0", got)
+		t.Errorf("occurrence_unplanned outcomes counted = %d, want 0", got)
 	}
 }
 

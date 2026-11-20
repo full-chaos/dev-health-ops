@@ -48,6 +48,25 @@ type ShutdownTimeoutSource interface {
 	RequiredShutdownTimeout() time.Duration
 }
 
+// Releaser is a component that holds resources from its construction (a pool, a
+// warmed background check). When Run returns without having started it (a
+// cancelled context, an earlier component's Start error, its own Start error),
+// Run calls Release so nothing it holds outlives Run. Release must be safe on a
+// component that never started and on one already shut down.
+type Releaser interface {
+	Release()
+}
+
+// ReleaseAll calls Release on every component that is a Releaser, last first.
+// A caller that builds components but never runs them calls it.
+func ReleaseAll(components []Component) {
+	for index := len(components) - 1; index >= 0; index-- {
+		if releaser, ok := components[index].(Releaser); ok {
+			releaser.Release()
+		}
+	}
+}
+
 type Options struct {
 	Logger          *slog.Logger
 	ShutdownTimeout time.Duration
@@ -93,6 +112,7 @@ func New(options Options) (*Runtime, error) {
 // order under a fresh deadline that is not pre-canceled by the signal context.
 func (r *Runtime) Run(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
+		ReleaseAll(r.components)
 		return err
 	}
 
@@ -101,7 +121,9 @@ func (r *Runtime) Run(ctx context.Context) error {
 		r.logger.InfoContext(ctx, "starting runtime component", "component", component.Name())
 		if err := component.Start(ctx); err != nil {
 			startErr := fmt.Errorf("start component %s: %w", component.Name(), err)
-			return errors.Join(startErr, r.shutdown(ctx, started))
+			shutdownErr := r.shutdown(ctx, started)
+			ReleaseAll(r.components[len(started):])
+			return errors.Join(startErr, shutdownErr)
 		}
 		started = append(started, component)
 		if bound, ok := component.(interface{ Address() string }); ok && bound.Address() != "" {

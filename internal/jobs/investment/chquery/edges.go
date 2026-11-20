@@ -189,7 +189,7 @@ func (reader *Reader) FetchWorkGraphEdges(ctx context.Context, opts EdgeQueryOpt
 			targetType string
 			targetID   string
 			edgeType   string
-			repoID     string
+			repoID     *string
 			provider   *string
 			provenance string
 			// Float32 is the column's real type. Scanning into float32 and
@@ -212,6 +212,10 @@ func (reader *Reader) FetchWorkGraphEdges(ctx context.Context, opts EdgeQueryOpt
 		if provider != nil {
 			providerValue = *provider
 		}
+		repoIDValue := ""
+		if repoID != nil {
+			repoIDValue = *repoID
+		}
 
 		// Every String column goes through the Python driver's decode policy
 		// (see pythonparity.DecodeClickHouseString). The four node-key columns
@@ -231,7 +235,7 @@ func (reader *Reader) FetchWorkGraphEdges(ctx context.Context, opts EdgeQueryOpt
 				Confidence: float64(confidence),
 			},
 			EdgeType:   pythonparity.DecodeClickHouseStringValue(edgeType),
-			RepoID:     pythonparity.DecodeClickHouseStringValue(repoID),
+			RepoID:     pythonparity.DecodeClickHouseStringValue(repoIDValue),
 			Provider:   pythonparity.DecodeClickHouseStringValue(providerValue),
 			Provenance: pythonparity.DecodeClickHouseStringValue(provenance),
 			Evidence:   pythonparity.DecodeClickHouseStringValue(evidence),

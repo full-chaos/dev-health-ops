@@ -92,13 +92,18 @@ func TestLoadReposAppliesTheFirstRecordedOwnersBackward(t *testing.T) {
 		defer out.Close()
 		got := map[string][]string{}
 		for out.Next() {
-			var provider, team, teamName, repoID, repoName string
+			var provider, team, teamName string
+			var repoID, repoNameValue *string
 			var primary uint8
 			var specificity uint16
 			var priority int32
 			var updated time.Time
-			if err := out.Scan(&provider, &team, &teamName, &repoID, &repoName, &primary, &specificity, &priority, &updated); err != nil {
+			if err := out.Scan(&provider, &team, &teamName, &repoID, &repoNameValue, &primary, &specificity, &priority, &updated); err != nil {
 				t.Fatal(err)
+			}
+			var repoName string
+			if repoNameValue != nil {
+				repoName = *repoNameValue
 			}
 			got[strings.TrimPrefix(repoName, "acme/")] = append(got[strings.TrimPrefix(repoName, "acme/")], team)
 		}

@@ -223,11 +223,10 @@ type githubTestsChunkCursor struct {
 	// describes -- it only ever under-reports one telemetry field on a
 	// resumed walk, never mis-terminalizes a unit.
 	ArtifactsExcludedNotFound int `json:"artifacts_excluded_not_found,omitempty"`
-	// CutSecond and CutRuns (the runs or the artifacts phase; cleared when either ends) are the runs read whole at the
-	// oldest created second seen, so the next peeled range, which lists that second again, does not read them twice
-	// (githubTestsSkipCutRun). A cursor without them skips nothing.
-	CutSecond int64  `json:"cs,omitempty"`
-	CutRuns   string `json:"ci,omitempty"`
+	// ActiveCutKeys and CarriedCutKeys (artifacts phase only) keep a peeled range from reading again the runs the previous
+	// range read whole at its cut second (github_tests_cut_runs.go). A cursor without them skips nothing.
+	ActiveCutKeys  string `json:"ak,omitempty"`
+	CarriedCutKeys string `json:"ck,omitempty"`
 }
 
 // markGitHubTestsSkippedArtifactCauseOverflow returns a NEW map with cause
@@ -1009,11 +1008,11 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 			*cursor.ArchivesUnreadable > *cursor.ArchivesSeen) {
 		return githubTestsChunkCursor{}, ErrChunkCheckpointConflict
 	}
-	if !githubTestsCutRunsValid(cursor.CutSecond, cursor.CutRuns) {
+	if !githubTestsCutKeysValid(cursor) {
 		return githubTestsChunkCursor{}, chunkConflictBecause(githubTestsCutRunsConflict)
 	}
-	if cursor.Phase != githubTestsRunsPhase && cursor.Phase != githubTestsArtifactsPhase {
-		cursor = githubTestsClearCutRuns(cursor)
+	if cursor.Phase != githubTestsArtifactsPhase {
+		cursor = githubTestsClearCutKeys(cursor)
 	}
 	// A cursor already carrying aggregate overflow with no per-cause ledger
 	// at all predates SkippedArtifactCauseOverflow (CHAOS-4592 codex review
@@ -1434,12 +1433,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		case !saturated:
 			c.RangeHi = ""
 			c.Phase = githubTestsArtifactsPhase
-			c = githubTestsClearCutRuns(c)
 		case stuck:
 			c = recordGitHubTestsSaturated(c, client, claim, githubTestsRunInventorySaturatedComponent, githubTestsRunsPhase, hi, items)
 			c.RangeHi = ""
 			c.Phase = githubTestsArtifactsPhase
-			c = githubTestsClearCutRuns(c)
 		default:
 			c.RangeHi = nextHi
 		}
@@ -1453,14 +1450,15 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		case !saturated:
 			c.RangeHi = ""
 			c.Phase = githubTestsPhaseAfterArtifacts(handler)
-			c = githubTestsClearCutRuns(c)
+			c = githubTestsClearCutKeys(c)
 		case stuck:
 			c = recordGitHubTestsSaturated(c, client, claim, githubTestsArtifactInventorySaturatedComponent, githubTestsArtifactsPhase, hi, items)
 			c.RangeHi = ""
 			c.Phase = githubTestsPhaseAfterArtifacts(handler)
-			c = githubTestsClearCutRuns(c)
+			c = githubTestsClearCutKeys(c)
 		default:
 			c.RangeHi = nextHi
+			c = githubTestsFreezeCutKeys(c)
 		}
 		return c
 	}
@@ -1574,21 +1572,16 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				return errGitHubTestsWalkBound
 			}
 			before := cursor
-			var run gitHubWorkflowRunPayload
-			decoder := json.NewDecoder(strings.NewReader(string(page.Items[index])))
-			decoder.UseNumber()
-			if decoder.Decode(&run) != nil {
-				return providerfoundation.ErrNormalizationInvalid
+			run, err := decodeGitHubWorkflowRun(page.Items[index])
+			if err != nil {
+				return providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 			}
 			pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
 			cursor.RangeItems++
 			cursor.RangeOldest = githubTestsOlderCreated(cursor.RangeOldest, parseGitHubWorkflowTime(run.CreatedAt))
-			cutSecond, cutKey := githubTestsCutRunKey(run)
-			read := include && githubTestsRunWanted(run, pipeline, claim) && !githubTestsSkipCutRun(cursor, cutSecond, cutKey)
 			jobs := make([]githubTestsJobRow, 0)
 			acceptance := make([]githubTestsAcceptanceRow, 0)
-			var pipelines []githubTestsPipelineRow
-			if read {
+			if include && githubTestsRunWanted(run, pipeline, claim) {
 				var detailErr error
 				jobs, acceptance, detailErr = collectRunDetail(run, pipeline)
 				if detailErr != nil {
@@ -1597,14 +1590,16 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				cursor.Pipelines++
 				cursor.Jobs += len(jobs)
 				cursor.Acceptance += len(acceptance)
-				pipelines = []githubTestsPipelineRow{pipeline}
-				// An open run is read again when listed again, for its newer status. A run cut at the per-run jobs cap
-				// is recorded: the cap is deterministic.
-				if !githubTestsRunStatusOpen(pipeline.Status) {
-					cursor = githubTestsRecordCutRun(cursor, cutSecond, cutKey)
-				}
 			}
-			effects, effectErr := testOpsEffects(pipelines, jobs, acceptance, nil, nil, nil)
+			effects, effectErr := testOpsEffects(
+				func() []githubTestsPipelineRow {
+					if include && githubTestsRunWanted(run, pipeline, claim) {
+						return []githubTestsPipelineRow{pipeline}
+					}
+					return nil
+				}(),
+				jobs, acceptance, nil, nil, nil,
+			)
 			if effectErr != nil {
 				return effectErr
 			}
@@ -1673,7 +1668,6 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	if cursor.Phase == githubTestsRunsPhase {
 		cursor.Phase = githubTestsArtifactsPhase
 		cursor.NextURL, cursor.Index = "", 0
-		cursor = githubTestsClearCutRuns(cursor)
 	}
 	handlerOpenRan := false
 	// collectOpenRuns is the open phase: stored pipeline rows still open and
@@ -1894,15 +1888,15 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					return errGitHubTestsWalkBound
 				}
 				before := cursor
-				var run gitHubWorkflowRunPayload
-				decoder := json.NewDecoder(strings.NewReader(string(page.Items[index])))
-				decoder.UseNumber()
-				if decoder.Decode(&run) != nil {
-					return providerfoundation.ErrNormalizationInvalid
+				run, err := decodeGitHubWorkflowRun(page.Items[index])
+				if err != nil {
+					return providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 				}
 				pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
 				cursor.RangeItems++
-				cursor.RangeOldest = githubTestsOlderCreated(cursor.RangeOldest, parseGitHubWorkflowTime(run.CreatedAt))
+				if oldest := githubTestsOlderCreated(cursor.RangeOldest, parseGitHubWorkflowTime(run.CreatedAt)); oldest != cursor.RangeOldest {
+					cursor.RangeOldest, cursor.ActiveCutKeys = oldest, ""
+				}
 				cutSecond, cutKey := githubTestsCutRunKey(run)
 				suites := []testSuiteResultRow(nil)
 				cases := []testCaseResultRow(nil)
@@ -1932,10 +1926,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					// cap ahead of a real report artifact in the same run.
 					artifactItems := make([]githubTestsArtifactPayload, 0, len(artPage.Items))
 					for _, artifactRaw := range artPage.Items {
-						var artifact githubTestsArtifactPayload
-						decoder := json.NewDecoder(strings.NewReader(string(artifactRaw)))
-						decoder.UseNumber()
-						if decoder.Decode(&artifact) != nil || artifact.ID == "" {
+						artifact, err := decodeGitHubTestsArtifact(artifactRaw)
+						if err != nil {
+							return providerfoundation.RouteFailure(githubRunArtifactsRoute, providerfoundation.ReasonBodyDecode, err)
+						}
+						if artifact.ID == "" {
 							return providerfoundation.ErrNormalizationInvalid
 						}
 						if selected, reason := githubTestsArtifactSelectionSeam(artifact.Name); !selected {
@@ -2409,9 +2404,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						pipeline, run, lossBefore, lossAfter,
 						reportsExpected-nonReportArchives, len(expiredItems), githubTestsAdmittedReports(parsedReports, plan.Admitted), normalizedAt,
 					)
-					// Only a run read whole is recorded, in the same emission as its rows: a run with any loss is read again.
-					if len(completeness) == 0 || completeness[0].Complete {
+					// Only a run read whole (one complete verdict) is recorded, in the same emission as its rows; a read with no report
+					// source or any loss removes the run's key, so a run read earlier in this range is read again by the revisit.
+					if len(completeness) == 1 && completeness[0].Complete {
 						cursor = githubTestsRecordCutRun(cursor, cutSecond, cutKey)
+					} else {
+						cursor = githubTestsDropCutRun(cursor, cutKey)
 					}
 				}
 				cursor.Suites += len(suites)
@@ -2487,7 +2485,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	if cursor.Phase == githubTestsArtifactsPhase {
 		cursor.Phase = githubTestsPhaseAfterArtifacts(handler)
 	}
-	cursor = githubTestsClearCutRuns(cursor)
+	cursor = githubTestsClearCutKeys(cursor)
 	if cursor.Phase == githubTestsOpenPhase {
 		handlerOpenRan = true
 		if err := collectOpenRuns(); err != nil {

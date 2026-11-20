@@ -14,8 +14,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
-// The runs phase peels like the artifacts phase: the next range lists the cut second again. A run whose jobs were read
-// whole at that second, with a final status, is not read again; an open run, a new attempt or a failed read is.
+// The runs phase peels like the artifacts phase: the next range lists the cut second again. A run whose jobs the previous
+// range read whole at that second, with a final status, is not read again; an open run, a new attempt or a failed read is.
 
 // runsCutDoer serves the cut-dedup doer plus jobs: one job per run, or more than githubTestsMaxJobsPerRun over pages
 // for a capped run, a hard failure of a run's first jobs page, and a flip of an open run to completed after its first
@@ -256,8 +256,9 @@ func TestGitHubTestsRunsCutSecondFailedReadIsReadOnResume(t *testing.T) {
 	}
 }
 
-// The runs phase and the artifacts phase share the list: the cursor that enters the artifacts phase carries none, so
-// the artifacts phase lists the artifacts of every cut-second run once. A runs-phase cursor keeps its list on decode.
+// The runs phase and the artifacts phase share the cut lists (ak/ck): the cursor that enters the artifacts phase carries
+// neither, so the artifacts phase lists the artifacts of every cut-second run once. A runs-phase cursor keeps both on
+// decode.
 func TestGitHubTestsRunsCutListIsClearedForTheArtifactsPhase(t *testing.T) {
 	doer := newRunsCutDoer(t, cutDedupRuns(cutDedupBefore.Add(-time.Hour)))
 	walk := walkCutDedup(t, cutDedupClaim(false), doer, nil, nil)
@@ -265,24 +266,24 @@ func TestGitHubTestsRunsCutListIsClearedForTheArtifactsPhase(t *testing.T) {
 	for index := 0; index+1 < len(walk.cursors); index += 2 {
 		before, _ := decodeGitHubTestsChunkCursor(walk.cursors[index])
 		after, _ := decodeGitHubTestsChunkCursor(walk.cursors[index+1])
-		if after.Phase == githubTestsRunsPhase && after.CutRuns != "" {
+		if after.Phase == githubTestsRunsPhase && after.CarriedCutKeys != "" {
 			withList++
 		}
 		if before.Phase == githubTestsRunsPhase && after.Phase == githubTestsArtifactsPhase {
 			entered++
-			if after.CutSecond != 0 || after.CutRuns != "" {
-				t.Fatalf("the cursor entering the artifacts phase carries the runs list %d %q", after.CutSecond, after.CutRuns)
+			if after.ActiveCutKeys != "" || after.CarriedCutKeys != "" {
+				t.Fatalf("the cursor entering the artifacts phase carries the runs lists ak=%q ck=%q", after.ActiveCutKeys, after.CarriedCutKeys)
 			}
 		}
 	}
 	if withList == 0 || entered != 1 {
-		t.Fatalf("premise: %d runs-phase cursors carried a list, %d entered the artifacts phase; want > 0 and 1", withList, entered)
+		t.Fatalf("premise: %d runs-phase cursors carried a cut list, %d entered the artifacts phase; want > 0 and 1", withList, entered)
 	}
 	if got, want := doer.reads(cutDedupIDs), []int{1, 1, 1, 1, 1}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("artifact lists of %v = %v, want %v", cutDedupIDs, got, want)
 	}
-	kept, err := decodeGitHubTestsChunkCursor(`{"phase":"runs","repo":"acme/api","archives_seen":0,"archives_unreadable":0,"cs":1784528400,"ci":"5,6.2"}`)
-	if err != nil || kept.CutSecond != 1784528400 || kept.CutRuns != "5,6.2" {
-		t.Fatalf("a runs-phase list = %+v, %v; want it kept", kept, err)
+	kept, err := decodeGitHubTestsChunkCursor(`{"phase":"runs","repo":"acme/api","archives_seen":0,"archives_unreadable":0,"rh":"2026-07-20T06:30:00Z","ro":"2026-07-20T06:30:00Z","ri":3,"ak":"5,6.2","ck":"7"}`)
+	if err != nil || kept.ActiveCutKeys != "5,6.2" || kept.CarriedCutKeys != "7" {
+		t.Fatalf("runs-phase cut lists = ak %q ck %q, %v; want both kept", kept.ActiveCutKeys, kept.CarriedCutKeys, err)
 	}
 }

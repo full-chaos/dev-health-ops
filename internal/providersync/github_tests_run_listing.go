@@ -441,9 +441,9 @@ func collectGitHubTestsRunsPeeled(
 		pages += page.Pages
 		oldest, count := "", 0
 		for _, raw := range page.Items {
-			var run gitHubWorkflowRunPayload
-			if json.Unmarshal(raw, &run) != nil {
-				return nil, pages, false, providerfoundation.ErrNormalizationInvalid
+			run, err := decodeGitHubWorkflowRunListItem(raw)
+			if err != nil {
+				return nil, pages, false, providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 			}
 			count++
 			oldest = githubTestsOlderCreated(oldest, parseGitHubWorkflowTime(run.CreatedAt))
@@ -501,4 +501,12 @@ func (observer *githubTestsRateObserver) belowFloor() (bool, int64) {
 		return true, -1
 	}
 	return observer.remaining < observer.floor(), observer.remaining
+}
+
+func decodeGitHubWorkflowRunListItem(raw json.RawMessage) (gitHubWorkflowRunPayload, error) {
+	var run gitHubWorkflowRunPayload
+	if json.Unmarshal(raw, &run) != nil {
+		return run, providerfoundation.ErrNormalizationInvalid
+	}
+	return run, nil
 }

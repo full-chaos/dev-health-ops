@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -438,6 +439,10 @@ type authProxy struct {
 	cfg       AuthProxyConfig
 	logger    *slog.Logger
 	transport http.RoundTripper
+	// now and fallbackLogged rate-limit the flag-on local-answer line (logLocalAnswer), per route.
+	now            func() time.Time
+	fallbackMu     sync.Mutex
+	fallbackLogged map[string]time.Time
 	// refuseImpersonating, when set, fronts the owner-authenticated routes, which skip the scope layers.
 	refuseImpersonating func(http.Handler) http.Handler
 }
@@ -466,7 +471,7 @@ func newAuthProxy(cfg AuthProxyConfig, logger *slog.Logger) *authProxy {
 		ExpectContinueTimeout: time.Second,
 		ForceAttemptHTTP2:     true,
 	}
-	return &authProxy{cfg: cfg, logger: logger, transport: transport}
+	return &authProxy{cfg: cfg, logger: logger, transport: transport, now: time.Now, fallbackLogged: map[string]time.Time{}}
 }
 
 // proxiedRouteKeys maps "METHOD pattern" to the aggregate for every forwardable auth route. It is only a predicate over the route set the
@@ -607,9 +612,37 @@ func (p *authProxy) sessionRoute(aggregate AuthAggregate, local http.Handler) ht
 		outcome := state.outcome
 		if outcome == "" {
 			outcome = outcomeLocal
+			p.logLocalAnswer(r, aggregate)
 		}
 		count(r.Context(), aggregate, outcome)
 	})
+}
+
+// authProxyFallbackLogEvery is the window of logLocalAnswer: at most one line per route pattern in it.
+const authProxyFallbackLogEvery = time.Minute
+
+// logLocalAnswer makes a flag-on request that go-api answered itself loud (its own front checks refused it, or no
+// forward ran): one Warn line with the aggregate, the route pattern and the reason, at most once per route pattern and
+// window. It carries no path, body, header or token. The counter's outcome=local is the per-request record.
+func (p *authProxy) logLocalAnswer(r *http.Request, aggregate AuthAggregate) {
+	// The server's mux sets r.Pattern on every route it serves (method and path, or the method-free pattern of a method
+	// fallback); a request that reaches here without one still logs a fixed label, never an empty route.
+	route := r.Pattern
+	if route == "" {
+		route = "unmatched"
+	}
+	now := p.now()
+	p.fallbackMu.Lock()
+	last, seen := p.fallbackLogged[route]
+	if seen && now.Sub(last) < authProxyFallbackLogEvery {
+		p.fallbackMu.Unlock()
+		return
+	}
+	p.fallbackLogged[route] = now
+	p.fallbackMu.Unlock()
+	p.logger.WarnContext(r.Context(), "auth proxy: answered by go-api with the aggregate on",
+		slog.String("aggregate", string(aggregate)), slog.String("route", route), slog.String("reason", "not_forwarded"),
+		slog.String("window", authProxyFallbackLogEvery.String()))
 }
 
 func countLocal(aggregate AuthAggregate, local http.Handler) http.Handler {

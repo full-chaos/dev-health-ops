@@ -2,6 +2,7 @@ package synccoverage
 
 import (
 	"sort"
+	"strings"
 	"time"
 
 	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
@@ -43,15 +44,15 @@ func buildPayload(input payloadInput) (projectionPayload, error) {
 	}
 	backfillByPair := make(map[string][]coverageInterval)
 	expanded := 0
-	for _, interval := range input.Backfills {
-		sourceIDs := interval.SourceIDs
+	for _, group := range backfillTargetGroups(input.Backfills) {
+		sourceIDs := group.SourceIDs
 		if len(sourceIDs) == 0 {
 			for sourceID := range scopeSourceIDs {
 				sourceIDs = append(sourceIDs, sourceID)
 			}
 			sort.Strings(sourceIDs)
 		}
-		datasetKeys := interval.DatasetKeys
+		datasetKeys := group.DatasetKeys
 		if len(datasetKeys) == 0 {
 			datasetKeys = input.Scope.DatasetKeys
 		}
@@ -63,15 +64,17 @@ func buildPayload(input payloadInput) (projectionPayload, error) {
 				if _, ok := scopeDatasets[dataset]; !ok {
 					continue
 				}
-				expanded++
+				expanded += len(group.Ranges)
 				if expanded > maxBackfillPairs {
 					return nil, newLimitError("backfill_pair", expanded, maxBackfillPairs)
 				}
 				key := sourceID + "\x00" + dataset
-				backfillByPair[key] = append(backfillByPair[key], coverageInterval{
-					Since: interval.Since, Before: interval.Before,
-					SourceIDs: []string{sourceID}, RunIDs: interval.RunIDs,
-				})
+				for _, interval := range group.Ranges {
+					backfillByPair[key] = append(backfillByPair[key], coverageInterval{
+						Since: interval.Since, Before: interval.Before,
+						SourceIDs: []string{sourceID}, RunIDs: interval.RunIDs,
+					})
+				}
 			}
 		}
 	}
@@ -174,6 +177,40 @@ func buildPayload(input payloadInput) (projectionPayload, error) {
 		"datasets": datasetPayload, "sources": sources,
 		"backfill_windows": canonicalBackfillWindows(pairs),
 	}, nil
+}
+
+type backfillTargetGroup struct {
+	SourceIDs   []string
+	DatasetKeys []string
+	Ranges      []coverageInterval
+}
+
+// backfillTargetGroups merges backfills with the same source and dataset target before they expand to pairs, so
+// maxBackfillPairs bounds the merged ranges, not raw backfills x pairs (CHAOS-14233). The later per-pair merge
+// yields the same payload either way.
+func backfillTargetGroups(backfills []coverageInterval) []backfillTargetGroup {
+	byTarget := make(map[string]*backfillTargetGroup)
+	keys := make([]string, 0)
+	for _, interval := range backfills {
+		sourceIDs := uniqueSorted(interval.SourceIDs)
+		datasetKeys := uniqueSorted(interval.DatasetKeys)
+		key := strings.Join(sourceIDs, "\x00") + "\x01" + strings.Join(datasetKeys, "\x00")
+		group, ok := byTarget[key]
+		if !ok {
+			group = &backfillTargetGroup{SourceIDs: sourceIDs, DatasetKeys: datasetKeys}
+			byTarget[key] = group
+			keys = append(keys, key)
+		}
+		group.Ranges = append(group.Ranges, interval)
+	}
+	sort.Strings(keys)
+	groups := make([]backfillTargetGroup, 0, len(keys))
+	for _, key := range keys {
+		group := byTarget[key]
+		group.Ranges = mergeIntervals(group.Ranges)
+		groups = append(groups, *group)
+	}
+	return groups
 }
 
 func intervalForSchedule(active *schedule, now time.Time) *time.Duration {

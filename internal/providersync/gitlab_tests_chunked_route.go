@@ -280,9 +280,10 @@ func recordGitLabTestsInventoryTruncation(
 // pipeline GitLab stamps after that start (a new one, or one updated again, with an id the walk has passed) may be
 // unread by the walk even when its updated_at is at or before BeforeAt: GitLab's clock behind ours, or an explicit future
 // BeforeAt (a backfill). The claim therefore stops at WindowStart when that is earlier than BeforeAt, and the next window
-// (updated_after = the stored watermark, inclusive) lists every such pipeline. Contract: a pipeline in the window is read
-// by this walk or by the next window, never twice by one walk; the next window reads again what this walk read after
-// WindowStart (rows replace: every destination is a ReplacingMergeTree on its natural key).
+// (updated_after = the stored watermark, inclusive) lists every such pipeline. Contract: a pipeline in the window is
+// never skipped by both windows; when a pipeline enters above the page boundary inside one invocation, a pipeline can be
+// read twice by that walk (gitLabTestsSeek), and the next window reads again what this walk read after WindowStart
+// (idempotent: every destination is a ReplacingMergeTree on its natural key).
 //
 // A window-blocking truncation withholds the claim (CHAOS-2587), as does a cursor without WindowStart (an older binary
 // started the walk, so its start is unknown): the next window walks the range again rather than skip a pipeline.
@@ -368,9 +369,11 @@ func encodeGitLabTestsChunkCursor(cursor gitLabTestsChunkCursor) (string, error)
 //   - resumed (LastID > 0 at invocation start = seekID): start on the page that held it (Page, or Page-1 after a page
 //     end). On the FIRST page of a visit, if the page is empty or its first id < seekID and it is not page 1, the
 //     boundary may sit on an earlier page: step back one page and visit again, until a page's first id >= seekID or
-//     page 1. Then, on every page, skip every id at or above the last emitted id (cursor.LastID; seekID at a resume): it
-//     was read already (the offset pages shifted under the walk when a pipeline entered the listing above the page
-//     boundary) or it entered the listing after the walk start, which the next window reads (gitLabTestsWatermark).
+//     page 1. Then skip every id >= seekID (only the resume-time id: inside one invocation every listed item is read). A
+//     pipeline that enters the listing above the page boundary inside one invocation shifts the offset pages by one, so
+//     the last pipeline of a page is listed again first on the next page and read twice by the walk; its rows replace the
+//     stored ones (every destination is a ReplacingMergeTree on its natural key). Skipping it instead would defer an
+//     entering pipeline to the next window, where a listing that shrinks between two page requests can skip it.
 //   - legacy (Page > 0 with no LastID: a cursor written by the updated_at-ordered binary): its position names another
 //     order, so the phase starts again at page 1. Rows read twice replace the stored ones (every destination is a
 //     ReplacingMergeTree on its natural key); nothing is skipped.
@@ -688,7 +691,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 				if idErr != nil {
 					return idErr
 				}
-				if cursor.LastID > 0 && id >= cursor.LastID {
+				if seek.seekID > 0 && id >= seek.seekID {
 					continue
 				}
 				before := cursor
@@ -833,7 +836,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 			if idErr != nil {
 				return idErr
 			}
-			if cursor.LastID > 0 && id >= cursor.LastID {
+			if reportSeek.seekID > 0 && id >= reportSeek.seekID {
 				continue
 			}
 			before := cursor

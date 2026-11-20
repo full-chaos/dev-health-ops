@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"maps"
 	"net/http"
 	"strconv"
@@ -27,6 +28,8 @@ type gitLabEntryFake struct {
 	// a pipeline that enters the listing above the page boundary shifts the offset pages by one.
 	insert *gitLabResumePipeline
 	armed  bool
+	// withReport answers each test_report with one suite of one case, so the reports phase writes rows.
+	withReport bool
 }
 
 func (fake *gitLabEntryFake) Do(request *http.Request) (*http.Response, error) {
@@ -37,6 +40,11 @@ func (fake *gitLabEntryFake) Do(request *http.Request) (*http.Response, error) {
 	response, err := fake.gitLabResumeFake.Do(request)
 	if err != nil {
 		return response, err
+	}
+	if fake.withReport && strings.HasSuffix(request.URL.Path, "/test_report") {
+		id := strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, "/api/v4/projects/123/pipelines/"), "/test_report")
+		response.Body = io.NopCloser(strings.NewReader(`{"test_suites":[{"name":"api","total_time":"1.0","test_cases":[{"name":"case-` + id +
+			`","classname":"t.T","status":"success","execution_time":"1.0"}]}]}`))
 	}
 	switch {
 	case fake.rawDate != "":
@@ -74,6 +82,8 @@ type gitLabEntryResult struct {
 	final         CompleteRouteBatch
 	last          string
 	invocations   int
+	// rows holds every written ci_pipeline_runs and testops_run_report_completeness row, by destination and run id.
+	rows map[string]map[string][]string
 }
 
 func gitLabEntryRun(t *testing.T, fake *gitLabEntryFake, options gitLabEntryOptions) gitLabEntryResult {
@@ -82,7 +92,7 @@ func gitLabEntryRun(t *testing.T, fake *gitLabEntryFake, options gitLabEntryOpti
 	client.Metrics = providerfoundation.NewMetrics()
 	fake.reportGets = map[int]int{}
 	current := gitLabResumeReads{pipelines: map[int]int{}, reports: fake.reportGets}
-	var result gitLabEntryResult
+	result := gitLabEntryResult{rows: map[string]map[string][]string{}}
 	stop := errors.New("yield")
 	resume, emitted, next := options.start, 0, 0
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -94,7 +104,7 @@ func gitLabEntryRun(t *testing.T, fake *gitLabEntryFake, options gitLabEntryOpti
 			func(emission ChunkRouteEmission) error {
 				last = emission.CursorAfter
 				for _, effect := range emission.Batch.Effects {
-					if effect.Destination != "ci_pipeline_runs" {
+					if effect.Destination != "ci_pipeline_runs" && effect.Destination != testOpsRunReportCompletenessDestination {
 						continue
 					}
 					for _, raw := range effect.Rows {
@@ -104,8 +114,14 @@ func gitLabEntryRun(t *testing.T, fake *gitLabEntryFake, options gitLabEntryOpti
 						if json.Unmarshal(raw, &row) != nil {
 							t.Fatalf("undecodable %s row %s", effect.Destination, raw)
 						}
-						id, _ := strconv.Atoi(row.RunID)
-						current.pipelines[id]++
+						if result.rows[effect.Destination] == nil {
+							result.rows[effect.Destination] = map[string][]string{}
+						}
+						result.rows[effect.Destination][row.RunID] = append(result.rows[effect.Destination][row.RunID], string(raw))
+						if effect.Destination == "ci_pipeline_runs" {
+							id, _ := strconv.Atoi(row.RunID)
+							current.pipelines[id]++
+						}
 					}
 				}
 				if emission.Final {
@@ -436,10 +452,12 @@ func TestGitLabTestsWindowStartAtTheFirstEpochSecond(t *testing.T) {
 }
 
 // Inside one invocation the listing moves under the walk: a pipeline that enters the window above the page boundary
-// shifts the offset pages by one, so the last pipeline of page 1 is listed again first on page 2. No pipeline is read
-// twice by one walk in either phase, on a fresh walk and on a resumed one; the entering pipeline is read by this walk or
-// by the next window (its updated_at is after the walk start).
-func TestGitLabTestsAPipelineAboveThePageBoundaryIsNotReadTwiceByOneWalk(t *testing.T) {
+// shifts the offset pages by one, so the last pipeline of page 1 is listed again first on page 2 and may be read twice
+// by the walk (both phases, fresh and resumed). The stored state is what counts: every destination is a
+// ReplacingMergeTree on its natural key, so a second read must write the same row. After the walk each listed pipeline
+// has exactly one stored row per destination (the rows written for one key are byte-equal), and the entering pipeline is
+// read by this walk or by the next window.
+func TestGitLabTestsAPipelineAboveThePageBoundaryLeavesOneStoredRowPerKey(t *testing.T) {
 	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	completedAt := normalizedAt.Add(30 * time.Minute)
 	for _, phase := range []string{"pipelines", "reports"} {
@@ -452,36 +470,41 @@ func TestGitLabTestsAPipelineAboveThePageBoundaryIsNotReadTwiceByOneWalk(t *test
 				t.Parallel()
 				claim := gitLabEntryClaim(normalizedAt.Add(24 * time.Hour))
 				enters := gitLabResumePipeline{id: 1300, started: normalizedAt.Add(time.Minute), updated: normalizedAt.Add(2 * time.Minute)}
-				fake := &gitLabEntryFake{gitLabResumeFake: &gitLabResumeFake{t: t, pipelines: gitLabResumeFixture()}, date: normalizedAt, insert: &enters}
+				fake := &gitLabEntryFake{gitLabResumeFake: &gitLabResumeFake{t: t, pipelines: gitLabResumeFixture()}, date: normalizedAt, insert: &enters,
+					withReport: true}
 				walk := gitLabEntryRun(t, fake, gitLabEntryOptions{claim: claim, normalizedAt: normalizedAt, phase: phase, yields: tc.yields,
 					armAt: tc.armAt, fake: fake})
 				if fake.insert != nil {
 					t.Fatal("the pipeline never entered the listing: the cell proves nothing")
 				}
-				stored := gitLabEntryStored(claim, walk.final, completedAt)
-				next := claim
-				nextBefore := completedAt.Add(time.Hour)
-				next.SinceAt, next.BeforeAt = &stored, &nextBefore
-				following := gitLabEntryRun(t, fake, gitLabEntryOptions{claim: next, normalizedAt: completedAt})
-				reads := map[int]int{}
-				for id, count := range walk.before.of(phase) {
-					reads[id] += count
-				}
-				for id, count := range walk.after.of(phase) {
-					reads[id] += count
-				}
-				var twice []string
-				for id, count := range reads {
-					if count > 1 {
-						twice = append(twice, strconv.Itoa(id)+"x"+strconv.Itoa(count))
+				destination := map[string]string{"pipelines": "ci_pipeline_runs", "reports": testOpsRunReportCompletenessDestination}[phase]
+				stored := walk.rows[destination]
+				twice := 0
+				for runID, rows := range stored {
+					for _, row := range rows[1:] {
+						if row != rows[0] {
+							t.Errorf("%s: run %s written twice with different rows:\n%s\n%s", destination, runID, rows[0], row)
+						}
+					}
+					if len(rows) > 1 {
+						twice++
 					}
 				}
-				if len(twice) != 0 {
-					t.Errorf("%s: read twice by one walk: %v", phase, twice)
+				for _, pipeline := range gitLabResumeFixture() {
+					if len(stored[strconv.Itoa(pipeline.id)]) == 0 {
+						t.Errorf("%s: pipeline %d has no stored row", destination, pipeline.id)
+					}
 				}
-				if reads[1300]+following.before.of(phase)[1300] == 0 {
-					t.Errorf("%s: the entering pipeline is read by neither this walk nor the next window (since %s)", phase, stored.Format(time.RFC3339))
+				following := gitLabEntryRun(t, fake, gitLabEntryOptions{claim: func() Claim {
+					next := claim
+					since, before := gitLabEntryStored(claim, walk.final, completedAt), completedAt.Add(time.Hour)
+					next.SinceAt, next.BeforeAt = &since, &before
+					return next
+				}(), normalizedAt: completedAt})
+				if len(stored["1300"])+len(following.rows[destination]["1300"]) == 0 {
+					t.Errorf("%s: the entering pipeline is read by neither this walk nor the next window", destination)
 				}
+				t.Logf("%s: %d keys stored, %d written twice by the walk (rows replace)", destination, len(stored), twice)
 			})
 		}
 	}

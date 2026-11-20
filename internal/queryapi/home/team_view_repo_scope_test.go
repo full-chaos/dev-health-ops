@@ -22,9 +22,6 @@ func TestOneTeamLeavesRepoScopedReadsUnchanged(t *testing.T) {
 		if got, want := metricFromClause(spec.Table, spec.Column, filter, "start_day", "end_day", true), metricFromClause(spec.Table, spec.Column, filter, "start_day", "end_day", false); got != want {
 			t.Errorf("%s: the one-team source changed a repository read:\n%s\nwant\n%s", spec.Metric, got, want)
 		}
-		if got, want := driverDeltaSource(spec.Table, spec.Column, filter, "start_day", "end_day", true), driverDeltaSource(spec.Table, spec.Column, filter, "start_day", "end_day", false); got != want {
-			t.Errorf("%s: the one-team source changed a repository driver read", spec.Metric)
-		}
 	}
 	if repoMetrics == 0 {
 		t.Fatal("no repository metric in the spec list")

@@ -44,12 +44,23 @@ func statesDriverMove(d MetricDelta) bool {
 	return ok && d.HasData && namesDrivers(d)
 }
 
+// oneTeamDriverRows is the driver of a metric of a one-team request (CHAOS-14379): the team itself when the metric's
+// value states a move, so the driver has the value's own source, predicates and reducer; none otherwise. A value of the
+// items linked to the named repositories states no team-wide driver (statesDriverMove), so it gets none.
+func oneTeamDriverRows(d MetricDelta, f Filters) []driverRow {
+	if !statesDriverMove(d) {
+		return nil
+	}
+	return []driverRow{{ID: f.Scope.IDs[0]}}
+}
+
 // attachDriverCaptions sets Signal.Driver on the metric signals whose delta
 // states a move, from ONE batched driver read per request. A failed driver
 // read fails the request (like the summary sentence's); a failed name read
 // leaves the caption out (logged). Risk and recommendation signals carry none.
 func attachDriverCaptions(ctx context.Context, client QueryClient, f Filters, orgID string, now, startDay, endDay, compareStart, compareEnd time.Time, deltas []MetricDelta, signals []Signal) error {
 	var batch []driverBatchMetric
+	oneTeamRows := map[string][]driverRow{}
 	labels := map[string]string{}
 	var scopeFilters = map[string]string{}
 	var bindings []dhclickhouse.Binding
@@ -58,6 +69,11 @@ func attachDriverCaptions(ctx context.Context, client QueryClient, f Filters, or
 			continue
 		}
 		scope := metricScope(d.Metric)
+		if oneTeamScope(scope, f) {
+			oneTeamRows[d.Metric] = oneTeamDriverRows(d, f)
+			labels[d.Metric] = d.Label
+			continue
+		}
 		filter, ok := scopeFilters[scope]
 		if !ok {
 			var b []dhclickhouse.Binding
@@ -79,15 +95,21 @@ func attachDriverCaptions(ctx context.Context, client QueryClient, f Filters, or
 			}
 			scopeFilters[scope] = filter
 		}
-		batch = append(batch, driverBatchMetric{Metric: d.Metric, ScopeFilter: filter, OneTeam: oneTeamScope(scope, f)})
+		batch = append(batch, driverBatchMetric{Metric: d.Metric, ScopeFilter: filter})
 		labels[d.Metric] = d.Label
 	}
-	if len(batch) == 0 {
+	if len(batch) == 0 && len(oneTeamRows) == 0 {
 		return nil
 	}
-	rowsByMetric, err := fetchMetricDriversBatch(ctx, client, batch, startDay, endDay, compareStart, compareEnd, bindings, orgID, driverCaptionLimit)
-	if err != nil {
-		return err
+	rowsByMetric := map[string][]driverRow{}
+	if len(batch) > 0 {
+		var err error
+		if rowsByMetric, err = fetchMetricDriversBatch(ctx, client, batch, startDay, endDay, compareStart, compareEnd, bindings, orgID, driverCaptionLimit); err != nil {
+			return err
+		}
+	}
+	for metric, rows := range oneTeamRows {
+		rowsByMetric[metric] = rows
 	}
 	names := driverNamesByMetric(ctx, client, orgID, rowsByMetric)
 	for i := range signals {

@@ -416,9 +416,9 @@ type driverRow struct {
 // `previous` CTEs are inlined as FROM subqueries instead, matching
 // internal/analytics/flowmatrix.go's own identical fix for the same
 // guard (see that file's flowMatrixTeamActivitySelect doc comment).
-func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, column, groupBy string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string, limit int, oneTeam bool) ([]driverRow, error) {
-	currentFrom := driverDeltaSource(table, column, scopeFilter, "start_day", "end_day", oneTeam)
-	previousFrom := driverDeltaSource(table, column, scopeFilter, "compare_start", "compare_end", oneTeam)
+func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, column, groupBy string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string, limit int) ([]driverRow, error) {
+	currentFrom := driverDeltaSource(table, column, scopeFilter, "start_day", "end_day")
+	previousFrom := driverDeltaSource(table, column, scopeFilter, "compare_start", "compare_end")
 	if isPRRework(table, column) {
 		return fetchRateDriverDelta(ctx, client, prrework.WindowRateSQL, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
 	}

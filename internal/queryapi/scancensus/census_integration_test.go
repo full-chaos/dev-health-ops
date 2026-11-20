@@ -838,6 +838,12 @@ const nullableIntoPlainSites = `
 //	metrics.go fetchMetricContributors cefd207be352 -> 21d612f437ea
 //	metrics.go fetchMetricDriverDelta 2bfd5d011d4f -> 69d32d6caccb
 //	queries_metrics.go fetchMetricDriverDelta d0ccbc5bb0ed -> 5dc97fbe04a7
+//
+// CHAOS-14379 (the driver of one team comes from its value): the Home driver reads keep main's org form again, so the
+// fetchMetricDriverDelta statement is main's. Re-pinned by hand from the failing local TestScanTypeCensus run
+// (logs/ops2a2-d2-scan-1.log a918098a3514), not computed:
+//
+//	queries_metrics.go fetchMetricDriverDelta 5dc97fbe04a7 -> d0ccbc5bb0ed
 const unverifiedSites = `
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|e67003e26fc2|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|e67003e26fc2|not-describable
@@ -878,7 +884,7 @@ internal/queryapi/explain/repositories.go|fetchWorkItemProviders|*string|cc6f1e4
 internal/queryapi/home/queries_metric_drivers_batch.go|fetchMetricDriversBatch|*string,*string|61d29f14b0f2|not-describable
 internal/queryapi/home/queries_metrics.go|fetchBlockedHours|*time.Time,*float64|192873704868|not-describable
 internal/queryapi/home/queries_metrics.go|fetchChangeFailureView|[]any|fb135e9cbe2e|variadic-destinations
-internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|5dc97fbe04a7|not-describable
+internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|d0ccbc5bb0ed|not-describable
 internal/queryapi/home/queries_metrics.go|fetchMetricSeries|*time.Time,**float64|c8e2b0f2634a|spliced-select-list
 internal/queryapi/home/queries_metrics.go|fetchMetricValue|*int64,**float64|271ec8ba88d7|spliced-select-list
 internal/queryapi/home/queries_metrics.go|fetchPRReworkView|[]any|a0f9dc8a97b2|variadic-destinations

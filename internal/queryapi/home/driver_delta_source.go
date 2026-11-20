@@ -7,12 +7,10 @@ import "fmt"
 // table with a natural key takes metricFromClause's deduplicated source; a
 // table without one still gets its window, scope and org_id predicate, where
 // metricFromClause gives the bare table name and the reader would read every
-// organization. oneTeam reads the served team view of the one team
-// (metricFromClause), so the driver rows of a one-team request read the rows
-// its value reads (CHAOS-14379).
-func driverDeltaSource(table, column, scopeFilter, startParam, endParam string, oneTeam bool) string {
+// organization.
+func driverDeltaSource(table, column, scopeFilter, startParam, endParam string) string {
 	if _, dedup := dedupByComputedAt[table]; dedup {
-		return metricFromClause(table, column, scopeFilter, startParam, endParam, oneTeam)
+		return metricFromClause(table, column, scopeFilter, startParam, endParam, false)
 	}
 	return fmt.Sprintf(`(
             SELECT *

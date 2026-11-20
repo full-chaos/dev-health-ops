@@ -133,7 +133,7 @@ func TestDriverBatchMatchesTheSingleMetricRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, m := range metricsUnderTest {
-		single, err := fetchMetricDriverDelta(ctx, client, metricTable(m), metricColumn(m), metricGroup(m), current, endDay, prior, priorEnd, "", nil, org, 3, false)
+		single, err := fetchMetricDriverDelta(ctx, client, metricTable(m), metricColumn(m), metricGroup(m), current, endDay, prior, priorEnd, "", nil, org, 3)
 		if err != nil {
 			t.Fatal(err)
 		}

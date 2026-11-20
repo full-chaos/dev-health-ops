@@ -12,6 +12,8 @@ import (
 	"time"
 
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/explain"
 )
 
 // The cells of the team view of the one-team Home metric reads (CHAOS-14379): the value, the comparison value and the
@@ -372,4 +374,95 @@ func TestHomeTeamViewR2DriverRowsMatchTheValue(t *testing.T) {
 		}
 	}
 	t.Logf("DIVERGENCE (recorded, not a want) R2 no team (org form): %s", homeTeamMetrics(ctx, t, client, org))
+}
+
+// One team reads the newest row of a key, a NULL cycle included (ruling on PLAN-10664-ops2a2-delta-2, option B): its
+// answer is the answer of the merged parts and the answer of explain, in both merge states. The org form of Home
+// (no team, a team set) skips a newer NULL while an older row is still in another part (ticket 14424); that answer is
+// recorded only.
+func TestHomeTeamViewOneTeamIsTheMergedAnswer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	admin, client := newHomeTestClickHouse(ctx, t)
+	if err := admin.Exec(ctx, "SYSTEM STOP MERGES work_item_metrics_daily"); err != nil {
+		t.Fatal(err)
+	}
+	const org, team = "org-14379-home-merged", "P"
+	prev, cur := time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	older, newer := cur.Add(time.Hour), cur.Add(2*time.Hour)
+	now := cur.AddDate(0, 0, 1).Add(12 * time.Hour)
+	for _, row := range []struct {
+		at, day time.Time
+		scope   string
+		cycle   any
+	}{
+		{older, prev, "A", 48.0},
+		{older, cur, "A", 48.0},
+		{newer, cur, "A", nil},
+		{older, cur, "B", 24.0},
+	} {
+		if err := admin.Exec(ctx, `INSERT INTO work_item_metrics_daily
+			(org_id, day, provider, work_scope_id, team_id, team_name, row_view, wip_count_end_of_day, cycle_time_p50_hours, computed_at)
+			VALUES (?, ?, 'jira', ?, ?, ?, 'org', 1, ?, ?)`, org, row.day, row.scope, team, team, row.cycle, row.at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reader, err := explain.NewReader(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cycle := func(teams ...string) string {
+		f := Filters{Time: TimeFilter{RangeDays: 1, CompareDays: 1, EndDate: &now}}
+		if teams != nil {
+			f.Scope = ScopeFilter{Level: "team", IDs: teams}
+		}
+		resp, err := BuildResponse(ctx, client, nil, org, f, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range resp.Deltas {
+			if d.Metric == "cycle_time" {
+				prior := "nil"
+				if d.PriorValue != nil {
+					prior = fmt.Sprintf("%g", *d.PriorValue)
+				}
+				var spark []string
+				for _, p := range d.Spark {
+					spark = append(spark, fmt.Sprintf("%g", p.Value))
+				}
+				return fmt.Sprintf("value=%g prior=%s spark=[%s]", d.Value, prior, strings.Join(spark, " "))
+			}
+		}
+		return "missing"
+	}
+	explainCycle := func(teams ...string) string {
+		params := explain.Params{Metric: "cycle_time", ScopeLevel: "org", StartDay: cur, EndDay: cur.AddDate(0, 0, 1), CompareStart: prev, CompareEnd: cur}
+		if teams != nil {
+			params.ScopeLevel, params.ScopeIDs = "team", teams
+		}
+		resp, err := explain.BuildExplainResponse(ctx, reader, org, params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fmt.Sprintf("value=%g", resp.Value)
+	}
+	// The merged answer, by hand: day cur, scope A's newest row is live with a NULL cycle (no completed item), so A
+	// has no cycle; scope B 24 h. avg = 24 h = 1 d. Day prev: scope A 48 h = 2 d. Explain serves days too: 1.
+	const merged, explainMerged = "value=1 prior=2 spark=[1]", "value=1"
+	for _, phase := range []string{"parts unmerged", "parts merged"} {
+		if phase == "parts merged" {
+			if err := admin.Exec(ctx, "SYSTEM START MERGES work_item_metrics_daily"); err != nil {
+				t.Fatal(err)
+			}
+			if err := admin.Exec(ctx, "OPTIMIZE TABLE work_item_metrics_daily FINAL"); err != nil {
+				t.Fatal(err)
+			}
+			wantHome(t, phase+": no team", cycle(), merged)
+			wantHome(t, phase+": two teams", cycle(team, "Q"), merged)
+		}
+		wantHome(t, phase+": one team", cycle(team), merged)
+		wantHome(t, phase+": explain one team", explainCycle(team), explainMerged)
+		wantHome(t, phase+": explain no team", explainCycle(), explainMerged)
+		t.Logf("RECORDED (ticket 14424, not a want) %s: no team %s; two teams %s", phase, cycle(), cycle(team, "Q"))
+	}
 }

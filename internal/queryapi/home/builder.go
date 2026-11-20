@@ -414,13 +414,18 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 		// move, 0 % included), narrow: only a measured 0 % between two measured values.
 		driverText := "."
 		if namesDrivers(topDelta) {
-			scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, chClient, metricScope(topDelta.Metric), f, orgID, "team_id", "repo_id", now)
-			if err != nil {
-				return nil, err
-			}
-			driverRows, err := fetchMetricDriverDelta(ctx, chClient, metricTable(topDelta.Metric), metricColumn(topDelta.Metric), metricGroup(topDelta.Metric), startDay, endDay, compareStart, compareEnd, scopeFilter, scopeBindings, orgID, 3, oneTeamScope(metricScope(topDelta.Metric), f))
-			if err != nil {
-				return nil, err
+			var driverRows []driverRow
+			if oneTeamScope(metricScope(topDelta.Metric), f) {
+				driverRows = oneTeamDriverRows(topDelta, f)
+			} else {
+				scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, chClient, metricScope(topDelta.Metric), f, orgID, "team_id", "repo_id", now)
+				if err != nil {
+					return nil, err
+				}
+				driverRows, err = fetchMetricDriverDelta(ctx, chClient, metricTable(topDelta.Metric), metricColumn(topDelta.Metric), metricGroup(topDelta.Metric), startDay, endDay, compareStart, compareEnd, scopeFilter, scopeBindings, orgID, 3)
+				if err != nil {
+					return nil, err
+				}
 			}
 			// The sentence names the drivers by display name, never by id (CHAOS-9046).
 			if driverNameList := driverNames(ctx, chClient, orgID, metricGroup(topDelta.Metric), driverRows); len(driverNameList) > 0 {

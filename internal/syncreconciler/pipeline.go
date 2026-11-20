@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/dbphase"
@@ -161,7 +160,6 @@ type MutationPipeline struct {
 	sweep        UnreclaimableSweepStepper
 	outboxClose  TerminalOutboxCloseStepper
 	orphanedUnit OrphanedUnitRepairStepper
-	chunkReclaim ChunkSidecarReclaimStepper
 	config       MutationPipelineConfig
 
 	stages stageTelemetry
@@ -181,9 +179,6 @@ type MutationPipeline struct {
 	// one shared Go instance.
 	rollupBumps rollupBumpCounts
 	slowLog     stageSlowLog
-	// chunkReclaimLockSkipped counts reclaim ticks another session's tick
-	// lock skipped (sync_reconciler_chunk_sidecar_reclaim_lock_skipped_total).
-	chunkReclaimLockSkipped atomic.Uint64
 }
 
 // rollupBumpCounts is this package's own minimal counter for
@@ -247,15 +242,13 @@ func NewMutationPipeline(
 	sweep UnreclaimableSweepStepper,
 	outboxClose TerminalOutboxCloseStepper,
 	orphanedUnit OrphanedUnitRepairStepper,
-	chunkReclaim ChunkSidecarReclaimStepper,
 	config MutationPipelineConfig,
 ) (*MutationPipeline, error) {
 	// outboxClose is REQUIRED, unlike sweep -- see TerminalOutboxCloseStepper's
 	// doc comment for why CHAOS-4583's closer carries no staged-rollout risk
 	// the way the sweep's terminalization did.
 	if repair == nil || terminal == nil || materializer == nil || kernel == nil ||
-		observer == nil || outboxClose == nil || orphanedUnit == nil ||
-		chunkSidecarReclaimMissing(chunkReclaim) || !config.valid() {
+		observer == nil || outboxClose == nil || orphanedUnit == nil || !config.valid() {
 		return nil, ErrInvalidConfiguration
 	}
 	pipeline := &MutationPipeline{
@@ -269,7 +262,6 @@ func NewMutationPipeline(
 		sweep:        sweep,
 		outboxClose:  outboxClose,
 		orphanedUnit: orphanedUnit,
-		chunkReclaim: chunkReclaim,
 		config:       config,
 		stages:       newStageTelemetry(),
 		runawayLog:   newRunawayLogState(),
@@ -331,7 +323,7 @@ var errStageDegraded = errors.New("syncreconciler: stage failed its last " +
 var errStepOverrun = errors.New("syncreconciler: stage has been running past its budget and margin")
 
 // runStage bounds one stage call to its own budget instead of letting it
-// share the whole tick's envelope with its eight siblings (CHAOS-4239), and
+// share the whole tick's envelope with its seven siblings (CHAOS-4239), and
 // records the outcome unconditionally: a stage that runs to completion inside
 // its budget still gets its duration recorded, so the gauge is never silently
 // empty for a healthy stage.
@@ -1036,30 +1028,6 @@ func (pipeline *MutationPipeline) Step(
 		}
 	}
 
-	// After the kernel so it never delays a delivery, and NOT gated on
-	// aborted: a repair or kernel failure says nothing about terminal units'
-	// chunk rows, and gating on it let a busy kernel starve the cleanup. Its
-	// failure is absorbed and logged; the stage telemetry degrades readiness
-	// only on repeats.
-	if ctx.Err() == nil {
-		reclaimErr := pipeline.runStage(ctx, StageChunkSidecarReclaim, func(stageCtx context.Context) error {
-			reclaimed, stepErr := pipeline.chunkReclaim.Step(stageCtx, now, limit)
-			if reclaimed.LockSkipped {
-				pipeline.chunkReclaimLockSkipped.Add(1)
-			}
-			return stepErr
-		})
-		if reclaimErr != nil && ctx.Err() != nil {
-			return recovered, reclaimErr
-		}
-		if reclaimErr != nil {
-			slog.Warn(
-				"syncreconciler.chunk_sidecar_reclaim_stage_failed",
-				"error", reclaimErr.Error(),
-			)
-		}
-	}
-
 	// Observer always runs, whatever happened above -- it is read-only,
 	// independent of every earlier stage, and it is the stage whose success
 	// or failure this function ultimately reports to Loop (see the stage
@@ -1635,8 +1603,6 @@ func (pipeline *MutationPipeline) WritePrometheus(output io.Writer) error {
 		fmt.Fprintf(&text, "dev_health_sync_run_rollup_bumped_total{outcome=%q,path=%q} %d\n",
 			"failed", path, rollupBumps[[2]string{"failed", path}])
 	}
-	text.WriteString("# HELP sync_reconciler_chunk_sidecar_reclaim_lock_skipped_total Chunk sidecar reclaim ticks skipped because another reconciler session held the cluster-wide reclaim lock (CHAOS-14243).\n# TYPE sync_reconciler_chunk_sidecar_reclaim_lock_skipped_total counter\n")
-	fmt.Fprintf(&text, "sync_reconciler_chunk_sidecar_reclaim_lock_skipped_total %d\n", pipeline.chunkReclaimLockSkipped.Load())
 	_, err := io.WriteString(output, text.String())
 	return err
 }

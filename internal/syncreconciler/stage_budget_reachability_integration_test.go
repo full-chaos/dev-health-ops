@@ -102,7 +102,6 @@ func TestMutationPipelineStageBudgetReachability(t *testing.T) {
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
-		noopChunkSidecarReclaim(),
 		pipelineConfigWithBudget(StageMaterializer, 200*time.Millisecond),
 	)
 	if err != nil {

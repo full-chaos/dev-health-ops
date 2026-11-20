@@ -3,7 +3,9 @@
 package report
 
 import (
+	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -115,4 +117,86 @@ func TestReportTeamChartNeverMixesTwoOrgs(t *testing.T) {
 	})
 	wantTeamChart(t, "org A team P", e.teamChart(orgA, "P"), map[string]float64{"2026-02-01": 3, "2026-02-02": 7})
 	wantTeamChart(t, "org A team C (rows in org B only)", e.teamChart(orgA, "C"), map[string]float64{})
+}
+
+// A filter that repeats one team id asks for one team. The team filter of a request is built once, as a set
+// (decodeReportDefinition), for a saved chart's filter_teams and for a generated report's team_ids alike; the chart
+// then reads the team view, as for that team alone. A repeat inside a filter of two distinct teams keeps the team
+// set on the org view, as the two teams alone.
+func TestReportTeamChartOfARepeatedTeamTakesTheTeamRow(t *testing.T) {
+	e := startPooledEnv(t)
+	const org = "org-14353-chart-repeat"
+	e.seedTeamChartRows(org, append(orgWriterDay(),
+		teamChartRow{"2026-02-02", "P", 7, "2026-02-02 10:00:00", "team"},
+		teamChartRow{"2026-02-02", "C", 2, "2026-02-02 10:00:00", "team"},
+	))
+	adapter := &ClickHouseQueryAdapter{conn: e.conn, now: func() time.Time { return time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC) }}
+	// saved reads a saved plan whose one chart carries the filter.
+	saved := func(teams ...string) map[string]float64 {
+		t.Helper()
+		plan, err := json.Marshal(map[string]any{
+			"plan_id": "plan-repeat", "report_type": "custom", "org_id": org,
+			"chart_specs": []map[string]any{{
+				"chart_id": "c1", "plan_id": "plan-repeat", "chart_type": "line", "metric": "items_completed",
+				"group_by": "day", "filter_teams": teams, "time_range_start": "2026-02-01", "time_range_end": "2026-02-28", "org_id": org,
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		definition, err := decodeReportDefinition("report-repeat", org, plan, nil, time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC))
+		if err != nil || len(definition.Charts) != 1 {
+			t.Fatalf("decode saved plan %v: %v (%d charts)", teams, err, len(definition.Charts))
+		}
+		result, err := adapter.executeChart(e.ctx, definition.Charts[0])
+		if err != nil {
+			t.Fatalf("chart %v: %v", teams, err)
+		}
+		points := map[string]float64{}
+		for _, point := range result.DataPoints {
+			points[point.X] = point.Y
+		}
+		return points
+	}
+	wantTeamChart(t, "saved [P]", saved("P"), map[string]float64{"2026-02-01": 3, "2026-02-02": 7})
+	wantTeamChart(t, "saved [P,P]", saved("P", "P"), saved("P"))
+	wantTeamChart(t, "saved [C,C,C]", saved("C", "C", "C"), map[string]float64{"2026-02-02": 2})
+	wantTeamChart(t, "saved [P,C,P] = [P,C] (a team set: org form)", saved("P", "C", "P"), saved("P", "C"))
+	wantTeamChart(t, "saved [P,C]", saved("P", "C"), map[string]float64{"2026-02-01": 3, "2026-02-02": 4})
+
+	// generated reads the items_completed chart of a report generated from parameters (scope team, team_ids).
+	generated := func(teams ...string) []string {
+		t.Helper()
+		ids := make([]any, 0, len(teams))
+		for _, team := range teams {
+			ids = append(ids, team)
+		}
+		parameters, err := json.Marshal(map[string]any{"scope": "team", "team_ids": ids, "metrics": []any{"items_completed"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		definition, err := decodeReportDefinition("report-generated", org, nil, parameters, time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC))
+		if err != nil {
+			t.Fatalf("decode parameters %v: %v", teams, err)
+		}
+		for _, chart := range definition.Charts {
+			if chart.Metric == "items_completed" {
+				return chart.FilterTeams
+			}
+		}
+		t.Fatalf("parameters %v: no items_completed chart", teams)
+		return nil
+	}
+	for _, check := range []struct {
+		name  string
+		given []string
+		want  []string
+	}{
+		{"generated [P,P] = [P]", []string{"P", "P"}, []string{"P"}},
+		{"generated [P,C,P] = [P,C]", []string{"P", "C", "P"}, []string{"P", "C"}},
+	} {
+		if got := generated(check.given...); strings.Join(got, ",") != strings.Join(check.want, ",") {
+			t.Errorf("%s: the chart filter is %v", check.name, got)
+		}
+	}
 }

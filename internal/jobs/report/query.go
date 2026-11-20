@@ -169,7 +169,7 @@ func decodeReportDefinition(
 	}
 	result := ReportDefinition{Plan: Plan{
 		PlanID: plan.PlanID, ReportType: plan.ReportType, Audience: plan.Audience,
-		ScopeTeams: append([]string(nil), plan.ScopeTeams...), ScopeRepos: append([]string(nil), plan.ScopeRepos...),
+		ScopeTeams: distinctTeamIDs(plan.ScopeTeams), ScopeRepos: append([]string(nil), plan.ScopeRepos...),
 		ScopeServices: append([]string(nil), plan.ScopeServices...), TimeRangeStart: plan.TimeRangeStart,
 		TimeRangeEnd: plan.TimeRangeEnd, ComparisonPeriod: plan.ComparisonPeriod,
 		Sections: append([]string(nil), plan.Sections...), RequestedMetrics: append([]string(nil), plan.RequestedMetrics...),
@@ -198,12 +198,29 @@ func decodeReportDefinition(
 		}
 		result.Charts = append(result.Charts, ChartSpec{
 			ChartID: chart.ChartID, PlanID: chart.PlanID, ChartType: chart.ChartType, Metric: chart.Metric,
-			GroupBy: groupBy, FilterTeams: append([]string(nil), chart.FilterTeams...),
+			GroupBy: groupBy, FilterTeams: distinctTeamIDs(chart.FilterTeams),
 			FilterRepos: append([]string(nil), chart.FilterRepos...), TimeRangeStart: chart.TimeRangeStart,
 			TimeRangeEnd: chart.TimeRangeEnd, Title: title, OrganizationID: chart.OrganizationID,
 		})
 	}
 	return result, nil
+}
+
+// distinctTeamIDs is a team filter as a set: each id once, in the order of its
+// first use, compared as the team_id IN predicate compares ids (exact strings; a
+// blank id is an id). The request's team filter is built here once, so the
+// one-team view gate, the SQL and the scope read the same set (CHAOS-14353).
+func distinctTeamIDs(ids []string) []string {
+	var out []string
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, repeated := seen[id]; repeated {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 const (
@@ -988,7 +1005,9 @@ func sourceFrom(metric string, definition metricDefinition) string {
 // filtered to exactly ONE team, of a table that holds team rows, whose team filter
 // is the stored team_id (no owner join), for one organization, of a metric read
 // straight from the table. A chart of several teams sums a team set and a chart
-// grouped by team shows a row per team: both stay on the org view here.
+// grouped by team shows a row per team: both stay on the org view here. The
+// filter is a set of distinct ids (decodeReportDefinition, distinctTeamIDs), so
+// a filter that repeats one id asks for one team.
 func teamChart(spec ChartSpec, definition metricDefinition) bool {
 	return len(spec.FilterTeams) == 1 && spec.GroupBy != "team" && spec.OrganizationID != "" &&
 		rowview.HasTeamRows(definition.SourceTable) && definition.hasDimension("team") &&

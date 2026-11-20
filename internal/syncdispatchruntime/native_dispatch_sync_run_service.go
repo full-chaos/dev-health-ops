@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -17,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
+	"github.com/full-chaos/dev-health-ops/internal/syncbucket"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 )
 
@@ -70,6 +72,17 @@ type NativeDispatchSyncRunService struct {
 	// denial/exhaustion rollup bumps. See the constructor's variadic
 	// metrics parameter doc comment for why production wiring is deferred.
 	metrics *providerfoundation.Metrics
+	// sweeps enqueues a bucket's sync.bucket_sweep (CHAOS-14250). Nil keeps the per-run re-arm for capped work.
+	sweeps syncrunrollup.BucketSweepEnqueuer
+}
+
+// WithBucketSweeps hands this service's capped buckets and unused slots to their buckets' sync.bucket_sweep
+// (CHAOS-14250): a pass capped by a bucket then arms no timer of its own for the cap.
+func (service *NativeDispatchSyncRunService) WithBucketSweeps(sweeps syncrunrollup.BucketSweepEnqueuer) *NativeDispatchSyncRunService {
+	if service != nil {
+		service.sweeps = sweeps
+	}
+	return service
 }
 
 // NewNativeDispatchSyncRunService constructs the native dispatch_sync_run
@@ -332,6 +345,10 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 			service.logger.Warn(ctx, synclog.MsgDispatchSyncRunInvalidClaimUnitsTerminalized, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyInvalidClaimUnits, terminalizedBeforeCap), synclog.Text(synclog.KeyErrorCategory, synclog.ParseLabel(invalidProviderFamilyClaimErrorCategory)), synclog.Text(synclog.KeyPhase, synclog.LabelPreCapacity))
 		})
 	}
+
+	// --- acp lock-1 (CHAOS-14250): hydrate the pass's PagerDuty credentials BEFORE the bucket locks; from here on
+	// every budget estimate of this pass runs on ctx, which keeps it off the network (it reads the pass record) ---
+	ctx = preHydratePass(ctx, tx, service.bridge, run.id, service.nowUTC())
 
 	// --- DispatchGuard: authorize this pass ---
 	decision, err := authorizeRun(ctx, tx, service.logger, run.orgID, run.id, now)
@@ -596,12 +613,27 @@ WHERE id = $1::uuid`,
 			return ErrDispatchSyncRunUnavailable
 		}
 	}
+	// CHAOS-14250 N1: a slot this pass was granted and did not fill (a refusal, a deferred or terminalized unit, fewer
+	// units than slots) is reserved now, in this transaction and under the bucket locks the guard took, for the
+	// bucket's oldest eligible waiters, so no younger pass can take it before they run.
+	reservedRunIDs := append([]string(nil), decision.reservedRunIDs...)
+	for _, bucket := range handOffBuckets(decision.grantedSlots, claimedUnits) {
+		heads, err := syncbucket.ReserveHeads(ctx, tx, bucket.syncBucket(), service.nowUTC(), run.id)
+		if err != nil {
+			return ErrDispatchSyncRunUnavailable
+		}
+		reservedRunIDs = append(reservedRunIDs, heads.Reserved...)
+	}
 	if committed, err := service.commitFenced(ctx, tx, fence); err != nil {
 		return err
 	} else if !committed {
 		return nil
 	}
 	flushPostCommitLogs(ctx)
+	// The runs this pass reserved a slot for are due now, each woken by its own statement after the commit.
+	if len(reservedRunIDs) > 0 {
+		defer wakeReservedRuns(ctx, service.pool, reservedRunIDs, service.nowUTC())
+	}
 	// CHAOS-10013: every unit this pass terminalized (budget exhaustion, an
 	// invalid or unroutable claim) was counted against its bucket when the
 	// capacity decision was made, so a sibling the cap held back is due a pass
@@ -615,10 +647,18 @@ WHERE id = $1::uuid`,
 	if slotsFreedInPass > 0 {
 		defer syncrunrollup.WakeDispatch(ctx, service.pool, run.id, service.nowUTC(), syncrunrollup.DispatchWakePathDispatchPass)
 	}
-	// CHAOS-8880: this pass left free slots to older runs of a bucket; their next pass is due now, not at their
-	// back-off. After the commit, like the wake above, so the older pass sees this pass's claims.
-	if len(decision.heldBackRunIDs) > 0 {
-		defer wakeHeldBackRuns(ctx, service.pool, decision.heldBackRunIDs, service.nowUTC())
+	// CHAOS-14250: after the commit, each bucket that capped this run, and each bucket that gave this pass slots it
+	// did not fill (a budget or cooldown refusal, a deferred or terminalized unit, fewer units than slots), gets its
+	// sync.bucket_sweep: the sweep, not a timer of this run, brings the next pass of the bucket's oldest eligible
+	// waiter. A refused unit is retrying with a future available_at, so the sweep passes over this run until then.
+	capCovered := service.enqueueBucketSweeps(ctx, decision.cappedBuckets, handOffBuckets(decision.grantedSlots, claimedUnits)) &&
+		decision.concurrencyCapped
+	// CHAOS-14250 r1 class 1: a run the cap holds back whose bucket's sweep is enqueued parks its own dispatch row, so
+	// the reconciler's materializer does not re-arm it as a stale delivery: the sweep's wake unparks it. Deferred, so
+	// it runs after any re-arm below (a re-armed row is no longer dispatched and stays as it is) and before the
+	// in-pass release wake above, which unparks it.
+	if capCovered {
+		defer service.parkCappedDelivery(ctx, fence)
 	}
 
 	if riverQueued > 0 {
@@ -640,7 +680,7 @@ WHERE id = $1::uuid`,
 				dueNowRearmAt(nextDeferredAt, armAt), armAt)
 		case nextDeferredAt != nil:
 			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nextDeferredAt, service.nowUTC())
-		case len(cappedIDs) > 0:
+		case len(cappedIDs) > 0 && !capCovered:
 			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nil, service.nowUTC())
 		}
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunDispatched, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, riverQueued))
@@ -681,6 +721,19 @@ WHERE id = $1::uuid`,
 		// alone put a pass here), and made far more reachable by this ticket's
 		// allow-list, which is precisely what leaves a unit dispatchable rather
 		// than claiming it. Same rule, same helper, as the riverQueued > 0 arm.
+		// CHAOS-14250: the cap holds this run's work back and every capped
+		// bucket's sweep is enqueued: the sweep hands a freed slot to the
+		// bucket's oldest eligible waiter and re-arms itself, so the run arms
+		// no timer for the cap (a timer per waiting run made the passes grow
+		// with the queue). Only a budget or cooldown deferral keeps its own
+		// wakeup.
+		if capCovered && len(deferredOutsideSnapshot) == 0 {
+			if counts.nextDeferredAt != nil {
+				scheduleRedispatch(ctx, service.pool, service.logger, run.id, counts.nextDeferredAt, service.nowUTC())
+			}
+			service.logger.Info(ctx, synclog.MsgDispatchSyncRunNoop, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Count(synclog.KeyPendingUnits, counts.dispatchable))
+			return nil
+		}
 		armAt := service.nowUTC()
 		// CHAOS-8459: this pass claimed nothing, so the run is waiting on a
 		// cap or a long unit; the re-arm backs off with the idle time and a
@@ -691,9 +744,13 @@ WHERE id = $1::uuid`,
 		return nil
 	}
 	// b) Nothing dispatchable, but something is genuinely in flight
-	// (DISPATCHING not yet stale, or RUNNING) -- wait for it; no wakeup to
-	// arm, this pass's job here is done.
+	// (DISPATCHING not yet stale, or RUNNING) -- wait for it. CHAOS-14250 C7: a
+	// RETRYING unit with a future available_at still gets its wakeup at that
+	// instant: nothing else arms it when the pass ran before the retry was due.
 	if counts.inFlight > 0 {
+		if counts.nextDeferredAt != nil {
+			scheduleRedispatch(ctx, service.pool, service.logger, run.id, counts.nextDeferredAt, service.nowUTC())
+		}
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunWaitingInflight, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Count(synclog.KeyInFlightUnits, counts.inFlight))
 		return nil
 	}
@@ -950,4 +1007,90 @@ WHERE id = $1::uuid`,
 	flushPostCommitLogs(ctx)
 	flushRollupBumpTally(ctx, service.metrics)
 	return nil
+}
+
+// enqueueBucketSweeps enqueues the sweep of every bucket in capped and in unused, once each, and reports whether every
+// capped bucket's sweep was enqueued (false without an enqueuer). A failed enqueue is logged; the caller then keeps
+// the run's own re-arm for the cap.
+func (service *NativeDispatchSyncRunService) enqueueBucketSweeps(ctx context.Context, capped, unused []dispatchBucket) bool {
+	if service.sweeps == nil {
+		return false
+	}
+	done := make(map[dispatchBucket]bool, len(capped)+len(unused))
+	allCapped := true
+	release := make(map[dispatchBucket]bool, len(unused))
+	for _, bucket := range unused {
+		release[bucket] = true
+	}
+	for _, bucket := range append(append([]dispatchBucket(nil), unused...), capped...) {
+		if _, seen := done[bucket]; seen {
+			continue
+		}
+		// A slot this pass was given and did not use is a release (the sweep is due now); a cap only needs the
+		// bucket to have a sweep. Both signal the bucket first, so a sweep already running sweeps again.
+		err := syncrunrollup.BumpBucketGeneration(ctx, service.pool, bucket.orgID, bucket.provider, bucket.costClass, service.nowUTC())
+		switch {
+		case err != nil:
+		case release[bucket]:
+			err = service.sweeps.EnqueueBucketSweep(ctx, bucket.orgID, bucket.provider, bucket.costClass)
+		default:
+			err = service.sweeps.EnsureBucketSweep(ctx, bucket.orgID, bucket.provider, bucket.costClass)
+		}
+		done[bucket] = err == nil
+		if err != nil {
+			service.logger.Warn(ctx, synclog.MsgDispatchSyncRunUnitCompletionWakeFailed,
+				synclog.Text(synclog.KeyPath, synclog.ParseLabel(syncrunrollup.DispatchWakePathBucketSweep)), synclog.Failure(err))
+		}
+	}
+	for _, bucket := range capped {
+		allCapped = allCapped && done[bucket]
+	}
+	return allCapped
+}
+
+// bucketParkedError is the last_error of a dispatch row whose run the cap holds back and whose bucket's sweep will
+// wake it (CHAOS-14250). The reconciler's materializer leaves such a row alone; any dispatch wakeup clears it.
+const bucketParkedError = "bucket_parked"
+
+// parkDeliverySQL parks this delivery's own row: only while it is still the dispatched row of this delivery (the
+// transport fence's identity), so a wake or a newer delivery since the commit is never parked.
+const parkDeliverySQL = `
+UPDATE public.sync_dispatch_outbox
+SET last_error = '` + bucketParkedError + `'
+WHERE id = $1::uuid AND sync_run_id = $2::uuid AND org_id = $3 AND kind = $4
+    AND status = 'dispatched' AND dispatched_transport = 'river'
+    AND dispatched_route_generation = $5 AND attempts = $6
+    AND last_error IS NULL`
+
+// parkCappedDelivery runs parkDeliverySQL after the pass's commit. A failure is logged: the row then stays a stale
+// delivery the materializer re-arms, as before parking.
+func (service *NativeDispatchSyncRunService) parkCappedDelivery(ctx context.Context, fence *transportFence) {
+	args := fence.args
+	if _, err := service.pool.Exec(ctx, parkDeliverySQL, args.OutboxID(), args.SyncRunID(), args.OrganizationID(), fence.kind,
+		args.RouteGeneration(), args.Attempt()); err != nil {
+		service.logger.Warn(ctx, synclog.MsgDispatchSyncRunUnitCompletionWakeFailed, synclog.Run(synclog.ParseID(args.SyncRunID())),
+			synclog.Text(synclog.KeyPath, synclog.ParseLabel(syncrunrollup.DispatchWakePathBucketSweep)), synclog.Failure(err))
+	}
+}
+
+// handOffBuckets lists the buckets that granted this pass more slots than it claimed there, in bucket order.
+func handOffBuckets(granted map[dispatchBucket]int, claimed []budgetUnit) []dispatchBucket {
+	claimedIn := make(map[dispatchBucket]int, len(granted))
+	for _, unit := range claimed {
+		claimedIn[dispatchBucket{orgID: unit.orgID, provider: unit.provider, costClass: unit.costClass}]++
+	}
+	var buckets []dispatchBucket
+	for bucket, slots := range granted {
+		if slots > claimedIn[bucket] {
+			buckets = append(buckets, bucket)
+		}
+	}
+	sort.Slice(buckets, func(i, j int) bool {
+		a, b := buckets[i], buckets[j]
+		if a.provider != b.provider {
+			return a.provider < b.provider
+		}
+		return a.costClass < b.costClass
+	})
+	return buckets
 }

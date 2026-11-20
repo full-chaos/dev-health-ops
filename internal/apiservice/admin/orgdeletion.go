@@ -479,6 +479,15 @@ func (h *handlers) orgDeletionPurgePostgres(ctx context.Context, orgUUID uuid.UU
 		return fmt.Errorf("disable scheduled_jobs: %w", err)
 	}
 
+	// CHAOS-14250: the bucket sweep's own rows (the reservations first, they reference sync_runs). They stay out of
+	// orgDeletionTargets because that list is the frozen Python list (TestOrgDeletionTargetsMatchThePythonList)
+	// and its counts are a frozen response shape; the delete is unconditional and reports no count.
+	for _, table := range []string{"sync_dispatch_bucket_reservations", "sync_dispatch_bucket_signals"} {
+		if _, err := tx.Exec(ctx, "DELETE FROM public."+table+" WHERE org_id = $1", orgIDStr); err != nil {
+			return fmt.Errorf("delete %s: %w", table, err)
+		}
+	}
+
 	for _, target := range orgDeletionTargets {
 		if result.postgresTableCount[target.Table] == 0 {
 			continue

@@ -380,7 +380,9 @@ type UnreclaimableSweep struct {
 	// dispatch pass after the commit (CHAOS-10013): the unit's slot is free
 	// and a planned or retrying sibling may be waiting for it. The domain
 	// pool in production; nil only on the begin-func test constructor.
-	wake     syncrunrollup.Execer
+	wake syncrunrollup.Execer
+	// sweeps, when set, receives the slots this sweep frees (CHAOS-14250); nil keeps each run's own wake.
+	sweeps   syncrunrollup.BucketSweepEnqueuer
 	routes   unreclaimableRouteReader
 	jobs     unreclaimableJobReader
 	jobState string
@@ -392,6 +394,14 @@ type UnreclaimableSweep struct {
 // optional field for the reason CHAOS-4035 exists: the first version took one
 // pool, the caller passed the domain pool, and the mistake was invisible until
 // production answered 42501 once a second.
+// WithBucketSweeps hands the slots this sweep frees to their buckets' sync.bucket_sweep (CHAOS-14250).
+func (sweep *UnreclaimableSweep) WithBucketSweeps(sweeps syncrunrollup.BucketSweepEnqueuer) *UnreclaimableSweep {
+	if sweep != nil {
+		sweep.sweeps = sweeps
+	}
+	return sweep
+}
+
 func NewUnreclaimableSweep(
 	coordinatorPool *pgxpool.Pool,
 	domainPool *pgxpool.Pool,
@@ -647,7 +657,7 @@ func (sweep *UnreclaimableSweep) Step(
 		return candidates[left].syncRunID < candidates[right].syncRunID
 	})
 
-	var wakeRuns []string
+	var wakeRuns []syncrunrollup.SlotFree
 	for _, candidate := range candidates {
 		affected, err := sweep.terminalize(ctx, tx, candidate, now)
 		if err != nil {
@@ -658,7 +668,7 @@ func (sweep *UnreclaimableSweep) Step(
 		}
 		result.Terminalized += int(affected)
 		if affected == 1 {
-			wakeRuns = appendWakeRun(wakeRuns, candidate.syncRunID)
+			wakeRuns = appendWakeRun(wakeRuns, syncrunrollup.SlotFree{RunID: candidate.syncRunID, OrgID: candidate.orgID, Provider: candidate.provider, CostClass: candidate.costClass})
 		}
 	}
 
@@ -704,12 +714,20 @@ func (sweep *UnreclaimableSweep) Step(
 	}
 	// The lock is still held here, so no route mutation can interleave with
 	// this commit.
+	var reserved []string
+	if sweep.wake != nil {
+		var err error
+		if reserved, err = reserveReleasedSlots(ctx, tx, wakeRuns, now); err != nil {
+			held.release()
+			return UnreclaimableSweepResult{}, sweepUnavailable(sweepStepCommit, err)
+		}
+	}
 	commitErr := tx.Commit(ctx)
 	held.release()
 	if commitErr != nil {
 		return UnreclaimableSweepResult{}, sweepUnavailable(sweepStepCommit, commitErr)
 	}
-	wakeDispatchAfterCommit(ctx, sweep.wake, wakeRuns, now, syncrunrollup.DispatchWakePathUnreclaimableSweep)
+	wakeDispatchAfterCommit(ctx, sweep.wake, sweep.sweeps, wakeRuns, reserved, now, syncrunrollup.DispatchWakePathUnreclaimableSweep)
 	return result, nil
 }
 

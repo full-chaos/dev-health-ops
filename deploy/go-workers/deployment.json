@@ -310,6 +310,7 @@
         }
       ],
       "job_kinds": [
+        "sync.bucket_sweep",
         "sync.external_push_expiry_sweep",
         "sync.provider_oauth_revocations",
         "sync.team_autoimport",

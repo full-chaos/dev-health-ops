@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -30,6 +31,7 @@ const (
 	KindDailyMetricsPartition        = "metrics.daily_partition"
 	KindDailyMetricsFinalize         = "metrics.daily_finalize"
 	KindTeamAutoimport               = "sync.team_autoimport"
+	KindBucketSweep                  = "sync.bucket_sweep"
 	KindTeamRepoOwnershipDerivation  = "sync.team_repo_ownership_derivation"
 	KindProviderOAuthRevocations     = "sync.provider_oauth_revocations"
 	KindExternalPushExpirySweep      = "sync.external_push_expiry_sweep"
@@ -223,6 +225,15 @@ type TeamAutoimportPayload struct {
 	SyncRunID string `json:"sync_run_id"`
 }
 
+// BucketSweepPayload names one sync dispatch bucket: the (organization, provider, cost class) whose concurrency slots
+// the sweep hands to the oldest eligible waiting runs (CHAOS-14250). The three fields are the River uniqueness key of
+// the kind, so concurrent releases of one bucket collapse into one pending sweep.
+type BucketSweepPayload struct {
+	OrgID     string `json:"org_id" river:"unique"`
+	Provider  string `json:"provider" river:"unique"`
+	CostClass string `json:"cost_class" river:"unique"`
+}
+
 // TeamRepoOwnershipDerivationPayload carries only the authoritative successful
 // SyncRun. CHAOS-4365 item 1b: the worker re-derives team_repo_ownership from
 // already-synced ClickHouse data (team_project_ownership, work_items,
@@ -401,6 +412,13 @@ var definitions = map[string]contractDefinition{
 		CurrentVersion:    ContractVersionV1,
 		SupportedVersions: []int{ContractVersionV1},
 		DomainLink:        "sync_run",
+		OrganizationScope: "tenant",
+	},
+	KindBucketSweep: {
+		Kind:              KindBucketSweep,
+		CurrentVersion:    ContractVersionV1,
+		SupportedVersions: []int{ContractVersionV1},
+		DomainLink:        "sync_bucket",
 		OrganizationScope: "tenant",
 	},
 	KindTeamRepoOwnershipDerivation: {
@@ -595,6 +613,15 @@ func Decode(kind string, data []byte) (Envelope, error) {
 			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
 		}
 		payload = value
+	case KindBucketSweep:
+		var value BucketSweepPayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
 	case KindTeamRepoOwnershipDerivation:
 		var value TeamRepoOwnershipDerivationPayload
 		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
@@ -693,6 +720,8 @@ func MarshalCanonical(envelope Envelope) ([]byte, error) {
 		kind = KindDailyMetricsFinalize
 	case TeamAutoimportPayload:
 		kind = KindTeamAutoimport
+	case BucketSweepPayload:
+		kind = KindBucketSweep
 	case TeamRepoOwnershipDerivationPayload:
 		kind = KindTeamRepoOwnershipDerivation
 	case WorkGraphBuildPayload:
@@ -881,6 +910,27 @@ func (payload DailyMetricsFinalizePayload) validate() error {
 
 func (payload TeamAutoimportPayload) validate() error {
 	return validateUUID("sync_run_id", payload.SyncRunID)
+}
+
+// BucketSweepProviders and BucketSweepCostClasses are the closed sets of a sync.bucket_sweep payload: the provider
+// matrix (providersync.MatrixProviders) and the provider cost classes (providersync.CostLight/CostMedium/CostHeavy).
+// The payload schema enums and the compiled registry validator carry the same sets.
+var (
+	BucketSweepProviders   = []string{"github", "gitlab", "jira", "launchdarkly", "linear", "pagerduty"}
+	BucketSweepCostClasses = []string{"light", "medium", "heavy"}
+)
+
+func (payload BucketSweepPayload) validate() error {
+	if err := validateUUID("org_id", payload.OrgID); err != nil {
+		return err
+	}
+	if !slices.Contains(BucketSweepProviders, payload.Provider) {
+		return errors.New("provider is not a sync bucket provider")
+	}
+	if !slices.Contains(BucketSweepCostClasses, payload.CostClass) {
+		return errors.New("cost_class is not a sync bucket cost class")
+	}
+	return nil
 }
 
 func (payload TeamRepoOwnershipDerivationPayload) validate() error {

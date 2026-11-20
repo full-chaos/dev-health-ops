@@ -172,6 +172,7 @@ jobs:
               - 'internal/scheduler/sync/**'
               - 'internal/syncroute/**'
               - 'internal/syncrunrollup/**'
+              - 'internal/syncbucket/**'
               - 'internal/providersync/**'
               - 'internal/fixturescli/**'
               - 'internal/fixturesgen/**'

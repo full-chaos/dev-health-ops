@@ -21,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncbudget"
+	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
@@ -284,25 +285,25 @@ WHERE r.id = $1::uuid`, runID).Scan(&runStatus, &unitStatus, &availableAt); err 
 	})
 }
 
-// TestDispatchOfADeliveryAHoldBackWakeReArmedNamesDeliveryNotCurrent is the race
-// of CHAOS-14027 in a fixed order: the newer run's pass holds a slot back for the
-// older run and wakes it, re-arming the older run's outbox row to 'pending'
+// TestDispatchOfADeliveryASweepWakeReArmedNamesDeliveryNotCurrent is the race
+// of CHAOS-14027 in a fixed order: the bucket's sweep picks the older run and
+// wakes it (CHAOS-14250), re-arming the older run's outbox row to 'pending'
 // before the older run's own delivery reads it. That delivery's pass leaves the
 // run untouched; it must say why, and the re-armed delivery must dispatch the run.
 //
 // RED CONTROL: on the code this replaces the stale pass returns nil and logs
 // nothing for the run.
-func TestDispatchOfADeliveryAHoldBackWakeReArmedNamesDeliveryNotCurrent(t *testing.T) {
+func TestDispatchOfADeliveryASweepWakeReArmedNamesDeliveryNotCurrent(t *testing.T) {
 	withSmallDispatchPool(t, 4, func(ctx context.Context, pool *pgxpool.Pool) {
 		args := seedContentionRuns(t, ctx, pool, 2)
-		older, newer := args[0], args[1]
+		older := args[0]
 		service, logs := newLoggedContentionDispatchService(t, pool)
 
-		if err := service.Dispatch(ctx, newer); err != nil {
-			t.Fatalf("newer run's pass: %v", err)
+		if !syncrunrollup.WakeDispatch(ctx, pool, older.RunID, time.Now().UTC(), syncrunrollup.DispatchWakePathBucketSweep) {
+			t.Fatal("the sweep's wake of the older run armed nothing")
 		}
 		if got := dispatchOutboxStatus(t, ctx, pool, older.DispatchOutbox); got != "pending" {
-			t.Fatalf("older run's outbox row = %s after the newer pass held back for it, want pending (re-armed by the wake)", got)
+			t.Fatalf("older run's outbox row = %s after the sweep woke it, want pending (re-armed by the wake)", got)
 		}
 
 		if err := service.Dispatch(ctx, older); err != nil {

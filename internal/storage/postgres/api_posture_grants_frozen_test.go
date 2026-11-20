@@ -27,11 +27,13 @@ func apiGrantInputs(posture RolePosture) string {
 
 // mainAPIGrantInputs are the sha256 digests of apiGrantInputs(APIPostureFor(sessions, platformRolesOwned)) on ops main
 // ae1e234d (before CHAOS-14131), frozen: the River migration's api grants of this build are byte-equal to main's.
+// Re-pinned by CHAOS-14250: the only difference from main is two DELETE-only lines, sync_dispatch_bucket_signals and
+// sync_dispatch_bucket_reservations (org deletion removes the bucket sweep's rows).
 var mainAPIGrantInputs = map[[2]bool]string{
-	{false, false}: "bae045f10be5305a862ccb5bff535bd99372b4ea710d9cf06c5e81cccf733be9",
-	{true, false}:  "239c5ead9e227f57dbb9203a620e0e5ca6f7ea39933aaa90f0c34f9128f8b9e1",
-	{false, true}:  "7282fe458298002b632a8abaa461e10bae53fcfebc5acffa3257c6427fbc6002",
-	{true, true}:   "8b01504b4da7b37d086647ded1393e6305d77483d1c36b1e6c2d1d343405bb42",
+	{false, false}: "835a9fb2855d54ecb30c74db84fa5c353ef1c60602db24558995dd4857645fcf",
+	{true, false}:  "69d374e7eca7d3e63fb34d55760eadb604542bb1c6e3f2ba8a7feee887a50f07",
+	{false, true}:  "dceb9547cb9e69674dbdf51545046b999afd7ce6d9979dd19f70f9b085df24a5",
+	{true, true}:   "8053a876b0f5155398d77f9cefc7565c697b1dbbde165f08c46a8bb9deb3c67d",
 }
 
 // mainSSOProvidersGrant is main's sso_providers line of apiGrantInputs, under every switch.

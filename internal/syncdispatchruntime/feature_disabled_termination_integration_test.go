@@ -423,7 +423,7 @@ func waitForBlockedAdvisoryLock(t *testing.T, ctx context.Context, pool *pgxpool
 
 // waitForBlockedSyncRunsLock polls pg_stat_activity, deterministically (no
 // sleep-and-hope): it returns the instant Postgres itself reports a
-// session waiting on syncrunrollup.LockRun's own SELECT ... FOR UPDATE
+// session waiting on syncrunrollup.LockRun's own SELECT ... FOR NO KEY UPDATE
 // statement against sync_runs, or fails the test after a bounded deadline
 // if that never happens. Same technique as
 // native_dispatch_sync_run_rollback_fence_integration_test.go's own
@@ -437,7 +437,7 @@ func waitForBlockedSyncRunsLock(t *testing.T, ctx context.Context, pool *pgxpool
 			SELECT count(*) FROM pg_stat_activity
 			WHERE datname = current_database()
 			  AND wait_event_type = 'Lock'
-			  AND query LIKE '%FROM public.sync_runs WHERE id = $1 FOR UPDATE%'`,
+			  AND query LIKE '%FROM public.sync_runs WHERE id = $1 FOR NO KEY UPDATE%'`,
 		).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}

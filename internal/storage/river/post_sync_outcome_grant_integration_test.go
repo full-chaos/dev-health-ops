@@ -4,6 +4,7 @@ package riverstore_test
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -198,15 +199,27 @@ func TestPostSyncOutcomeGrantIsSkippedWithoutTheColumns(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				var before []pgmigrate.ChainFile
+				// Stack-safe (CHAOS-14250 stacks revision 0167 on 0166): the kept chain is exactly the files numbered
+				// below 0166, in order, whatever follows 0166.
+				var before, want []pgmigrate.ChainFile
 				for _, file := range chain {
 					if file.Revision == "0166" {
 						break
 					}
 					before = append(before, file)
 				}
-				if len(before) != len(chain)-1 {
-					t.Fatalf("chain to 0165: kept %d of %d files, want all but 0166", len(before), len(chain))
+				for _, file := range chain {
+					if number, err := strconv.Atoi(file.Revision); err == nil && number < 166 {
+						want = append(want, file)
+					}
+				}
+				if len(before) != len(want) || len(want) == len(chain) {
+					t.Fatalf("chain to 0165: kept %d files, want the %d files below 0166 of %d", len(before), len(want), len(chain))
+				}
+				for index := range want {
+					if before[index].Name != want[index].Name {
+						t.Fatalf("chain to 0165: file %d is %s, want %s", index, before[index].Name, want[index].Name)
+					}
 				}
 				conn, err := pgx.Connect(ctx, instance.URI)
 				if err != nil {

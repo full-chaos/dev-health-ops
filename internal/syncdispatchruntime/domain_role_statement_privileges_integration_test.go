@@ -17,6 +17,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
+	"github.com/full-chaos/dev-health-ops/internal/syncbucket"
+	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -1323,7 +1325,9 @@ CREATE TABLE sync_run_reference_discoveries (
  lease_owner text NULL, lease_expires_at timestamptz NULL, last_heartbeat_at timestamptz NULL,
  completed_at timestamptz NULL, error text NULL, result json NULL,
  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
-)`)
+);
+CREATE TABLE public.sync_dispatch_bucket_signals (org_id text NOT NULL, provider character varying(64) NOT NULL, cost_class character varying(32) NOT NULL, generation bigint DEFAULT 0 NOT NULL, acked_generation bigint DEFAULT 0 NOT NULL, updated_at timestamp with time zone NOT NULL, CONSTRAINT sync_dispatch_bucket_signals_pkey PRIMARY KEY (org_id, provider, cost_class));
+CREATE TABLE public.sync_dispatch_bucket_reservations (org_id text NOT NULL, provider character varying(64) NOT NULL, cost_class character varying(32) NOT NULL, sync_run_id uuid NOT NULL, backfill boolean NOT NULL, reserved_at timestamp with time zone NOT NULL, CONSTRAINT sync_dispatch_bucket_reservations_pkey PRIMARY KEY (org_id, provider, cost_class, sync_run_id), CONSTRAINT fk_sync_dispatch_bucket_reservations_run FOREIGN KEY (sync_run_id) REFERENCES public.sync_runs(id) ON DELETE CASCADE)`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1380,4 +1384,103 @@ func dispatchTestArgsLegacy() DispatchSyncRunArgs {
 		Version: ContractVersionV1, OrgID: discoveryTestOrg, RunID: discoveryTestRun,
 		DispatchOutbox: dispatchServiceTestOutbox, RouteGeneration: 1,
 	}}
+}
+
+// TestDomainRoleExecutesTheBucketSweepStatements (CHAOS-14250) runs every
+// bucket-sweep statement that touches sync_dispatch_bucket_signals /
+// sync_dispatch_bucket_reservations as the real NOSUPERUSER domain role, and
+// proves the verbs the posture withholds stay withheld.
+func TestDomainRoleExecutesTheBucketSweepStatements(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	admin, domain, denials, _ := startDomainRoleHarness(t, ctx, createDispatchTables)
+	seedDispatchRouteLegacy(t, ctx, admin)
+	markReferenceDiscoverySucceeded(t, ctx, admin)
+	const provider, costClass = "github", "standard"
+	bucket := dispatchBucket{orgID: discoveryTestOrg, provider: provider, costClass: costClass}
+	if _, err := admin.Exec(ctx, `INSERT INTO sync_run_units (id, org_id, sync_run_id, provider, dataset_key, source_id, status, cost_class)
+		VALUES ('00000000-0000-4000-8000-0000000000f1', $1, $2, $3, 'prs', gen_random_uuid(), 'planned', $4)`,
+		discoveryTestOrg, discoveryTestRun, provider, costClass); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+
+	// parkDeliverySQL: the dispatched row of the seeded delivery.
+	tag, err := domain.Exec(ctx, parkDeliverySQL, dispatchServiceTestOutbox, discoveryTestRun, discoveryTestOrg, "dispatch_sync_run", int64(1), 0)
+	if err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("parkDeliverySQL = %v, %v; want 1 row", tag, err)
+	}
+
+	// Signals: bump (INSERT then ON CONFLICT DO UPDATE), read, acknowledge.
+	for range 2 {
+		if err := syncrunrollup.BumpBucketGeneration(ctx, domain, bucket.orgID, provider, costClass, now); err != nil {
+			t.Fatalf("BumpBucketGeneration as the domain role: %v", err)
+		}
+	}
+	generation, err := syncrunrollup.ReadBucketGeneration(ctx, domain, bucket.orgID, provider, costClass)
+	if err != nil || generation != 2 {
+		t.Fatalf("ReadBucketGeneration = %d, %v; want 2", generation, err)
+	}
+	if signaled, err := syncrunrollup.AckBucketGeneration(ctx, domain, bucket.orgID, provider, costClass, generation); err != nil || signaled {
+		t.Fatalf("AckBucketGeneration = %v, %v; want false, nil", signaled, err)
+	}
+
+	// Sweep: heads read, reservation insert, expire, count, then the wake.
+	result, err := runBucketSweep(ctx, domain, bucket, time.Now)
+	if err != nil || len(result.woken) != 1 || result.woken[0] != discoveryTestRun {
+		t.Fatalf("runBucketSweep = %+v, %v; want the seeded run woken", result, err)
+	}
+	var reservations int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM sync_dispatch_bucket_reservations WHERE sync_run_id = $1`, discoveryTestRun).Scan(&reservations); err != nil || reservations != 1 {
+		t.Fatalf("reservations after the sweep = %d, %v; want 1", reservations, err)
+	}
+	tx, err := domain.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved, _, err := countBucketReservations(ctx, tx, bucket, "", time.Now())
+	if err != nil || reserved != 1 {
+		t.Fatalf("countBucketReservations = %d, %v; want 1", reserved, err)
+	}
+	if err := retireRunReservations(ctx, tx, discoveryTestRun); err != nil {
+		t.Fatalf("retireRunReservations as the domain role: %v", err)
+	}
+	if _, err := tx.Exec(ctx, syncbucket.ExpireReservationsSQL, bucket.orgID, provider, costClass, time.Now(), 60.0); err != nil {
+		t.Fatalf("expireBucketReservationsSQL as the domain role: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM sync_dispatch_bucket_reservations`).Scan(&reservations); err != nil || reservations != 0 {
+		t.Fatalf("reservations after retire = %d, %v; want 0", reservations, err)
+	}
+
+	// WakeDispatchAtSQL as the domain role (conflicting row: the on-conflict arm).
+	if !syncrunrollup.WakeDispatchAt(ctx, domain, discoveryTestRun, now.Add(time.Minute), now, syncrunrollup.DispatchWakePathBucketSweep) {
+		t.Fatal("WakeDispatchAt as the domain role armed nothing")
+	}
+	// The pass's PagerDuty pre-step read (passPagerDutyGroupsSQL on sync_run_units, acp lockio-1) runs on the pass's
+	// domain transaction, before the bucket locks.
+	preTx, err := domain.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := passPagerDutyGroups(ctx, preTx, discoveryTestRun, time.Now().UTC()); err != nil {
+		t.Fatalf("passPagerDutyGroupsSQL as the domain role: %v", err)
+	}
+	_ = preTx.Rollback(ctx)
+	denials.assertNone(t, "bucket sweep statements")
+
+	// Withheld verbs stay withheld.
+	for _, withheld := range []struct{ name, statement string }{
+		{"signals DELETE", `DELETE FROM public.sync_dispatch_bucket_signals`},
+		{"reservations UPDATE", `UPDATE public.sync_dispatch_bucket_reservations SET backfill = NOT backfill`},
+	} {
+		_, err := domain.Exec(ctx, withheld.statement)
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+			t.Errorf("%s as the domain role: err = %v, want 42501", withheld.name, err)
+		}
+	}
+	denials.reset()
 }

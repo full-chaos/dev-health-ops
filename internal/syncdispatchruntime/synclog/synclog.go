@@ -39,6 +39,9 @@ func New(inner *slog.Logger) *Logger { return &Logger{inner: inner} }
 // Default logs through slog.Default().
 func Default() *Logger { return &Logger{} }
 
+// Discard drops every line, for a step that must not repeat what a later step logs.
+func Discard() *Logger { return &Logger{inner: slog.New(slog.DiscardHandler)} }
+
 func (logger *Logger) log() *slog.Logger {
 	if logger == nil || logger.inner == nil {
 		return slog.Default()

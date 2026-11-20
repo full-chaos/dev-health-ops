@@ -579,6 +579,12 @@ func constructProviderSyncWorkerWithDependencies(
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
+	// CHAOS-14250: a unit end hands its slot to the bucket's sync.bucket_sweep.
+	bucketSweeps, err := newBucketSweepEnqueuer(cfg, postgresDatabase.pools.QueueControl)
+	if err != nil {
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	repository.BucketSweeps = bucketSweeps
 	if identities != nil {
 		repository.RepositoryIdentities = identities
 		// Loud, not fatal: with the flag on before the auth migration, the

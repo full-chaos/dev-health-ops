@@ -88,6 +88,8 @@ func referenceGuardDecision(units []dispatchGuardUnit, env guardEnv, orgID strin
 	}
 	var cappedUnitIDs []string
 	slotHeadroom := make(map[dispatchBucket]int, len(allBuckets))
+	grantedSlots := make(map[dispatchBucket]int, len(allBuckets))
+	var cappedBuckets []dispatchBucket
 	for _, bucket := range allBuckets {
 		activeCount, _, err := env.activeCount(bucket)
 		if err != nil {
@@ -111,9 +113,11 @@ func referenceGuardDecision(units []dispatchGuardUnit, env guardEnv, orgID strin
 		if allowedSlots < 0 {
 			allowedSlots = 0
 		}
+		grantedSlots[bucket] = allowedSlots
 		prioritized := append(append([]dispatchGuardUnit{}, reclaims...), newWork...)
 		var cappedNew, cappedStale int
 		if len(prioritized) > allowedSlots {
+			cappedBuckets = append(cappedBuckets, bucket)
 			for _, unit := range prioritized[allowedSlots:] {
 				cappedUnitIDs = append(cappedUnitIDs, unit.id)
 				if unit.status == syncRunUnitStatusDispatching {
@@ -135,9 +139,9 @@ func referenceGuardDecision(units []dispatchGuardUnit, env guardEnv, orgID strin
 		env.emit(bucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, 0)
 	}
 	if len(cappedUnitIDs) > 0 {
-		return guardDecision{allowed: true, reason: fmt.Sprintf("sync unit concurrency cap exceeded: %d capped", len(cappedUnitIDs)), reasonCode: guardReasonCodeUnitConcurrencyCap, cappedUnitIDs: cappedUnitIDs, concurrencyCapped: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs}, nil
+		return guardDecision{allowed: true, reason: fmt.Sprintf("sync unit concurrency cap exceeded: %d capped", len(cappedUnitIDs)), reasonCode: guardReasonCodeUnitConcurrencyCap, cappedUnitIDs: cappedUnitIDs, concurrencyCapped: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs, grantedSlots: grantedSlots, cappedBuckets: cappedBuckets}, nil
 	}
-	return guardDecision{allowed: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs}, nil
+	return guardDecision{allowed: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs, grantedSlots: grantedSlots}, nil
 }
 
 func randomGuardUnits(random *rand.Rand, n int, now time.Time) []dispatchGuardUnit {

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -417,7 +418,7 @@ func TestScheduledMaterializerRoleBoundary(t *testing.T) {
 		"INSERT INTO public.integration_sources (id) VALUES (gen_random_uuid())",
 		"INSERT INTO public.integration_datasets (id) VALUES (gen_random_uuid())",
 		"INSERT INTO public.sync_runs (id) VALUES (gen_random_uuid())",
-		"INSERT INTO public.sync_run_units (id,state) VALUES (gen_random_uuid(),'planned')",
+		"INSERT INTO public.sync_run_units (id,status) VALUES (gen_random_uuid(),'planned')",
 	}
 	for _, statement := range domainStatements {
 		if err := execInRolledBackTransaction(t, ctx, domain, statement); err != nil {
@@ -549,5 +550,40 @@ func TestCoordinatorInsertsBackfillJobsAndDomainIsDenied(t *testing.T) {
 	}
 	if err := execInRolledBackTransaction(t, ctx, domain, insert); !isInsufficientPrivilege(err) {
 		t.Errorf("domain role recorded a backfill job: error=%v\n  statement: %s", err, collapse(insert))
+	}
+}
+
+// TestCoordinatorExecutesTheBucketSweepSignalStatements (CHAOS-14250) runs, as
+// the real NOSUPERUSER coordinator login, the one bucket sweep statement the
+// reconciler runs on the coordinator pool: the materializer's
+// UnacknowledgedBucketSignalsSQL read. Every signal write (the ReleaseSlot paths
+// of lease repair, the unreclaimable sweep and route-unavailable termination)
+// runs on the domain pool, so the coordinator holds SELECT only on
+// sync_dispatch_bucket_signals and nothing on sync_dispatch_bucket_reservations.
+func TestCoordinatorExecutesTheBucketSweepSignalStatements(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	_, uri, roles := startGrantHarness(t, ctx)
+	coordinator := connectAs(t, ctx, uri, roles.coordinator, grantCoordinatorPass)
+
+	tx, err := coordinator.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, syncrunrollup.UnacknowledgedBucketSignalsSQL, time.Now().UTC(), 100, time.Unix(0, 0).UTC(), "", "", ""); err != nil {
+		t.Errorf("UnacknowledgedBucketSignalsSQL (materializer recovery read): denied to the coordinator role: %v", err)
+	}
+	_ = tx.Rollback(ctx)
+
+	for _, withheld := range []string{
+		"INSERT INTO public.sync_dispatch_bucket_signals (org_id, provider, cost_class, generation, acked_generation, updated_at) VALUES ('o', 'github', 'medium', 1, 0, now())",
+		"UPDATE public.sync_dispatch_bucket_signals SET acked_generation = generation",
+		"DELETE FROM public.sync_dispatch_bucket_signals",
+		"SELECT * FROM public.sync_dispatch_bucket_reservations",
+		"INSERT INTO public.sync_dispatch_bucket_reservations (org_id, provider, cost_class, sync_run_id, backfill, reserved_at) VALUES ('o', 'p', 'c', gen_random_uuid(), false, now())",
+	} {
+		if err := execInRolledBackTransaction(t, ctx, coordinator, withheld); !isInsufficientPrivilege(err) {
+			t.Errorf("coordinator %q: err = %v, want 42501", withheld, err)
+		}
 	}
 }

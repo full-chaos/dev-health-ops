@@ -398,3 +398,66 @@ func mustJSON(t *testing.T, value any) []byte {
 	}
 	return encoded
 }
+
+// HydrateUntil (CHAOS-14250, acp lock-1): a dispatch pass hydrates before it takes its bucket locks and must not need
+// the network again before its deadline. A stored token Hydrate keeps (it expires past the renewal window) is
+// refreshed when it would enter that window before `until`, and the returned instant is the token's expiry less the
+// window: the instant from which Hydrate would refresh it.
+func TestPagerDutyOAuthHydrateUntilRefreshesATokenThatWouldNeedTheNetworkBeforeTheDeadline(t *testing.T) {
+	t.Parallel()
+	key := secrets.NewValue("test-master-key")
+	cipher, err := NewFernetDecryptor(key, "salt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+	refreshToken := "refresh-token"
+	stored := pagerDutyOAuthTokens{
+		AccessToken: "stored-token", RefreshToken: &refreshToken,
+		ExpiresAt:     now.Add(10 * time.Minute),
+		GrantedScopes: append([]string(nil), pagerDutyOperationalReadScopes...),
+	}
+	hydrate := func(until *time.Time) (string, time.Time, int) {
+		t.Helper()
+		repository := &fakePagerDutyOAuthTokenRepository{record: PagerDutyOAuthTokenRecord{
+			Ciphertext: secrets.NewValue("v1:" + encryptForTest(t, mustJSON(t, stored), key.Reveal(), "salt")),
+			Version:    1, BindingID: "binding-1",
+		}}
+		doer := &pagerDutyRefreshDoer{}
+		hydrator := PagerDutyOAuthHydrator{
+			Repository: repository, Cipher: cipher, Doer: fakehttp.Client(doer),
+			AppClientID: secrets.NewValue("client-id"), AppClientSecret: secrets.NewValue("client-secret"),
+			Now: func() time.Time { return now },
+		}
+		lease := LeaseGuardFunc(func(context.Context) error { return nil })
+		scope := TenantScope{OrgID: "org-1", Provider: "pagerduty"}
+		credential := testCredential("pagerduty", map[string]string{
+			"auth_mode": "oauth", "oauth_credential_name": "operations", "oauth_binding_id": "binding-1",
+		})
+		var hydrated Credential
+		var validUntil time.Time
+		if until == nil {
+			hydrated, err = hydrator.Hydrate(context.Background(), lease, scope, credential)
+		} else {
+			hydrated, validUntil, err = hydrator.HydrateUntil(context.Background(), lease, scope, credential, *until)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		token, _ := hydrated.Secret("access_token")
+		return token.Reveal(), validUntil, doer.calls
+	}
+	if token, _, calls := hydrate(nil); token != "stored-token" || calls != 0 {
+		t.Fatalf("Hydrate: token %q, refreshes %d; want the stored token, no refresh", token, calls)
+	}
+	near := now.Add(time.Minute)
+	if token, validUntil, calls := hydrate(&near); token != "stored-token" || calls != 0 || !validUntil.Equal(now.Add(5*time.Minute)) {
+		t.Fatalf("HydrateUntil(now+1m): token %q, valid until %s, refreshes %d; want the stored token until %s, no refresh",
+			token, validUntil, calls, now.Add(5*time.Minute))
+	}
+	far := now.Add(10 * time.Minute)
+	if token, validUntil, calls := hydrate(&far); token != "refreshed-access-token" || calls != 1 || !validUntil.Equal(now.Add(55*time.Minute)) {
+		t.Fatalf("HydrateUntil(now+10m): token %q, valid until %s, refreshes %d; want the refreshed token until %s, one refresh",
+			token, validUntil, calls, now.Add(55*time.Minute))
+	}
+}

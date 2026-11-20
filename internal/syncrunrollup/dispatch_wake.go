@@ -24,20 +24,40 @@ import (
 // It is the tail only, so that a producer whose INSERT half differs (a VALUES
 // row, or a guarded INSERT ... SELECT) still shares one copy of the merge rule.
 // It reads nothing but EXCLUDED, so it carries no parameters of its own.
-const OutboxWakeupOnConflictSQL = `ON CONFLICT (sync_run_id, kind) DO UPDATE
+const OutboxWakeupOnConflictSQL = outboxWakeupOnConflictHead + outboxWakeupAvailableAtEarlier + outboxWakeupOnConflictTail
+
+const outboxWakeupOnConflictHead = `ON CONFLICT (sync_run_id, kind) DO UPDATE
 SET status = CASE
         WHEN public.sync_dispatch_outbox.status = 'dispatched'
          AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
         THEN public.sync_dispatch_outbox.status
         ELSE 'pending'
     END,
-    available_at = CASE
+`
+
+// outboxWakeupAvailableAtEarlier keeps the EARLIER of the row's own instant and the new one.
+const outboxWakeupAvailableAtEarlier = `    available_at = CASE
         WHEN public.sync_dispatch_outbox.status = 'dispatched'
          AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
         THEN public.sync_dispatch_outbox.available_at
         ELSE LEAST(public.sync_dispatch_outbox.available_at, EXCLUDED.available_at)
     END,
-    dispatched_at = CASE
+`
+
+// outboxWakeupAvailableAtDeadline is the arm of a wake for a future instant (CHAOS-14250 C7): a pending row keeps the
+// earlier of its own instant and the deadline, but a row that is not pending (dispatched: its delivery consumed or in
+// flight, or parked) takes the deadline itself, never its own past available_at, which a pass has already used.
+const outboxWakeupAvailableAtDeadline = `    available_at = CASE
+        WHEN public.sync_dispatch_outbox.status = 'dispatched'
+         AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
+        THEN public.sync_dispatch_outbox.available_at
+        WHEN public.sync_dispatch_outbox.status = 'pending'
+        THEN LEAST(public.sync_dispatch_outbox.available_at, EXCLUDED.available_at)
+        ELSE EXCLUDED.available_at
+    END,
+`
+
+const outboxWakeupOnConflictTail = `    dispatched_at = CASE
         WHEN public.sync_dispatch_outbox.status = 'dispatched'
          AND public.sync_dispatch_outbox.last_error = 'feature_disabled'
         THEN public.sync_dispatch_outbox.dispatched_at
@@ -156,6 +176,43 @@ WHERE run.id = $2::uuid
   )
 ` + OutboxWakeupOnConflictSQL
 
+// WakeDispatchAtSQL is WakeDispatchSQL with the wake instant ($3) apart from the write instant ($4): a run whose
+// unit was moved to a retry in the future is due at that retry (CHAOS-14250), and the claim columns are judged at now.
+// A row that is not pending takes the deadline, not LEAST with its consumed instant (outboxWakeupAvailableAtDeadline).
+const WakeDispatchAtSQL = `
+INSERT INTO public.sync_dispatch_outbox (
+    id, org_id, sync_run_id, kind, status, available_at, attempts,
+    created_at, updated_at
+)
+SELECT $1::uuid, run.org_id, run.id, 'dispatch_sync_run', 'pending',
+    $3::timestamptz, 0, $4::timestamptz, $4::timestamptz
+FROM public.sync_runs AS run
+WHERE run.id = $2::uuid
+  AND run.status NOT IN ('success', 'partial_failed', 'failed')
+  AND EXISTS (
+      SELECT 1
+      FROM public.sync_run_units AS unit
+      WHERE unit.sync_run_id = run.id
+        AND unit.status IN ('planned', 'retrying')
+  )
+` + outboxWakeupOnConflictHead + outboxWakeupAvailableAtDeadline + outboxWakeupOnConflictTail
+
+// WakeReservedSQL arms the dispatch wakeup of a run a slot writer just reserved a slot for (CHAOS-14250): the
+// writer's pick proved the run eligible under the bucket lock (syncbucket.ReserveHeads, which also counts a stale
+// dispatching unit as waiting), so only the run's openness is checked here, not WakeDispatchSQL's planned/retrying
+// guard.
+const WakeReservedSQL = `
+INSERT INTO public.sync_dispatch_outbox (
+    id, org_id, sync_run_id, kind, status, available_at, attempts,
+    created_at, updated_at
+)
+SELECT $1::uuid, run.org_id, run.id, 'dispatch_sync_run', 'pending',
+    $3::timestamptz, 0, $3::timestamptz, $3::timestamptz
+FROM public.sync_runs AS run
+WHERE run.id = $2::uuid
+  AND run.status NOT IN ('success', 'partial_failed', 'failed')
+` + OutboxWakeupOnConflictSQL
+
 // Execer is the one method WakeDispatch needs: *pgxpool.Pool and pgx.Tx both
 // satisfy it.
 type Execer interface {
@@ -171,6 +228,9 @@ const (
 	DispatchWakePathDispatchPass       = "dispatch_pass"
 	// DispatchWakePathHoldBack: a pass left free slots to an older run of the bucket and wakes it (CHAOS-8880).
 	DispatchWakePathHoldBack = "hold_back"
+	// DispatchWakePathBucketSweep: the bucket's sync.bucket_sweep job woke the oldest eligible waiter for a free slot
+	// (CHAOS-14250).
+	DispatchWakePathBucketSweep = "bucket_sweep"
 )
 
 // DispatchWakeTimeout bounds one wake statement. The wake is best effort and
@@ -223,10 +283,59 @@ func WakeDispatch(ctx context.Context, db Execer, syncRunID string, now time.Tim
 	return true
 }
 
+// WakeReserved runs WakeReservedSQL for each distinct run, after the writer's commit, each as its own statement, with
+// WakeDispatch's contract (best effort, counted under path).
+func WakeReserved(ctx context.Context, db Execer, runIDs []string, now time.Time, path string) {
+	seen := make(map[string]bool, len(runIDs))
+	for _, runID := range runIDs {
+		if seen[runID] {
+			continue
+		}
+		seen[runID] = true
+		wakeCtx, cancel := context.WithTimeout(ctx, DispatchWakeTimeout)
+		command, err := db.Exec(wakeCtx, WakeReservedSQL, uuid.New(), runID, now.UTC())
+		cancel()
+		switch {
+		case err != nil:
+			dispatchWakeCounts.record(path, DispatchWakeOutcomeFailed)
+			synclog.Default().Warn(ctx, synclog.MsgDispatchSyncRunUnitCompletionWakeFailed,
+				synclog.Run(synclog.ParseID(runID)), synclog.Text(synclog.KeyPath, synclog.ParseLabel(path)), synclog.Failure(err))
+		case command.RowsAffected() == 0:
+			dispatchWakeCounts.record(path, DispatchWakeOutcomeNotWaiting)
+		default:
+			dispatchWakeCounts.record(path, DispatchWakeOutcomeArmed)
+		}
+	}
+}
+
+// WakeDispatchAt arms the run's dispatch wakeup at the instant at (an existing row keeps an earlier one), with the
+// same contract as WakeDispatch.
+func WakeDispatchAt(ctx context.Context, db Execer, syncRunID string, at, now time.Time, path string) bool {
+	wakeCtx, cancel := context.WithTimeout(ctx, DispatchWakeTimeout)
+	defer cancel()
+	command, err := db.Exec(wakeCtx, WakeDispatchAtSQL, uuid.New(), syncRunID, at.UTC(), now.UTC())
+	if err != nil {
+		dispatchWakeCounts.record(path, DispatchWakeOutcomeFailed)
+		synclog.Default().Warn(ctx, synclog.MsgDispatchSyncRunUnitCompletionWakeFailed,
+			synclog.Run(synclog.ParseID(syncRunID)),
+			synclog.Text(synclog.KeyPath, synclog.ParseLabel(path)),
+			synclog.Failure(err),
+		)
+		return false
+	}
+	if command.RowsAffected() == 0 {
+		dispatchWakeCounts.record(path, DispatchWakeOutcomeNotWaiting)
+		return false
+	}
+	dispatchWakeCounts.record(path, DispatchWakeOutcomeArmed)
+	return true
+}
+
 var (
 	dispatchWakePaths = []string{
-		DispatchWakePathDispatchPass, DispatchWakePathHoldBack, DispatchWakePathLeaseRepair, DispatchWakePathProviderUnit,
-		DispatchWakePathRouteUnavailable, DispatchWakePathUnreclaimableSweep,
+		DispatchWakePathBucketSweep, DispatchWakePathDispatchPass, DispatchWakePathHoldBack,
+		DispatchWakePathLeaseRepair, DispatchWakePathProviderUnit, DispatchWakePathRouteUnavailable,
+		DispatchWakePathUnreclaimableSweep,
 	}
 	dispatchWakeOutcomes = []string{DispatchWakeOutcomeArmed, DispatchWakeOutcomeFailed, DispatchWakeOutcomeNotWaiting}
 )

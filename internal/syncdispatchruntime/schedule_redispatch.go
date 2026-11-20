@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/syncbucket"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 
 	"github.com/jackc/pgx/v5"
@@ -35,7 +36,7 @@ import (
 // deferred-outside-snapshot arm in dispatch_sync_run) reads the SAME env var
 // with the SAME default rather than keeping a second copy of the number.
 func redispatchCountdown() time.Duration {
-	return time.Duration(budgetEnvInt("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", 60)) * time.Second
+	return syncbucket.RedispatchCountdown()
 }
 
 // dueNowRearmAt is the wakeup rule for a pass that has work eligible NOW which
@@ -83,11 +84,7 @@ const redispatchBackoffJitter = 0.2
 // configured base is clamped to the base, so a bad setting turns the back-off
 // off and never makes the re-arm faster than the base.
 func redispatchCountdownMax(base time.Duration) time.Duration {
-	limit := time.Duration(budgetEnvInt("SYNC_DISPATCH_REDISPATCH_COUNTDOWN_MAX", redispatchBackoffMaxDefaultSeconds)) * time.Second
-	if limit < base {
-		return base
-	}
-	return limit
+	return syncbucket.RedispatchCountdownMax(base)
 }
 
 // backoffCountdown grows the re-arm delay with the time since the run last
@@ -122,6 +119,20 @@ func backoffCountdown(base, limit, idle time.Duration, syncRunID string) (time.D
 		jittered = limit
 	}
 	return jittered, level
+}
+
+// cappedRearmMaxDefaultSeconds is the default safety re-arm of a bucket's sync.bucket_sweep (CHAOS-14250): while
+// the bucket has an eligible waiter the sweep snoozes this long, so a lost slot-free release is bounded by it. A run
+// capped by a bucket arms no timer of its own for the cap.
+const cappedRearmMaxDefaultSeconds = 3600
+
+// cappedRearmMax is SYNC_DISPATCH_CAPPED_REARM_MAX, never below the back-off ceiling.
+func cappedRearmMax() time.Duration {
+	limit := time.Duration(budgetEnvInt("SYNC_DISPATCH_CAPPED_REARM_MAX", cappedRearmMaxDefaultSeconds)) * time.Second
+	if floor := redispatchCountdownMax(redispatchCountdown()); limit < floor {
+		return floor
+	}
+	return limit
 }
 
 // lastRunProgressAt is the newest end of a unit of the run (success or

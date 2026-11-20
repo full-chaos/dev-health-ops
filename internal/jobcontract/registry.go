@@ -545,6 +545,7 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 		KindDailyMetricsPartition:        {"partition_id"},
 		KindDailyMetricsFinalize:         {"run_id"},
 		KindTeamAutoimport:               {"sync_run_id"},
+		KindBucketSweep:                  {"org_id", "provider", "cost_class"},
 		KindTeamRepoOwnershipDerivation:  {"sync_run_id"},
 		KindRemainingCapacity:            {"partition_id"},
 		KindRemainingComplexity:          {"partition_id"},
@@ -591,6 +592,18 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 	}
 	if kind == KindTeamAutoimport || kind == KindTeamRepoOwnershipDerivation {
 		return validateUUIDProperty(properties["sync_run_id"])
+	}
+	if kind == KindBucketSweep {
+		if err := validateUUIDProperty(properties["org_id"]); err != nil {
+			return err
+		}
+		for field, values := range map[string][]string{"provider": BucketSweepProviders, "cost_class": BucketSweepCostClasses} {
+			property, ok := properties[field].(map[string]any)
+			if !ok || property["type"] != "string" || !equalStringList(property["enum"], values) {
+				return fmt.Errorf("%s schema drifts from compiled enum", field)
+			}
+		}
+		return nil
 	}
 	if kind == KindWorkGraphBuild || kind == KindInvestmentMaterialize {
 		return validateUUIDProperty(properties["request_id"])
@@ -866,4 +879,18 @@ func NativeRiverRouteKinds(data []byte) ([]string, error) {
 		}
 	}
 	return kinds, nil
+}
+
+// equalStringList reports whether a decoded JSON array holds exactly want, in order.
+func equalStringList(value any, want []string) bool {
+	list, ok := value.([]any)
+	if !ok || len(list) != len(want) {
+		return false
+	}
+	for index, item := range list {
+		if text, ok := item.(string); !ok || text != want[index] {
+			return false
+		}
+	}
+	return true
 }

@@ -172,7 +172,7 @@ func (tx *fakeLeaseRepairTx) QueryRow(_ context.Context, sql string, args ...any
 		// from the run lock below despite both being a bare "SELECT 1 ...
 		// FOR UPDATE": this one targets sync_run_units, not sync_runs.
 		kind = "unitlock"
-	case strings.Contains(sql, "public.sync_runs") && strings.Contains(sql, "FOR UPDATE"):
+	case strings.Contains(sql, "public.sync_runs") && strings.Contains(sql, "FOR NO KEY UPDATE"):
 		kind = "runlock"
 	}
 	if len(args) > 0 {

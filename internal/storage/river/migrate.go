@@ -1103,6 +1103,9 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		// domainPosture's sync_watermarks entry).
 		"DO $$ BEGIN IF to_regclass('public.sync_watermarks') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_watermarks TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_outbox') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + domainRole + "; END IF; END $$",
+		// CHAOS-14250 bucket sweep (see domainPosture): signals INSERT+UPDATE, reservations INSERT+DELETE.
+		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_bucket_signals') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_bucket_signals TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_bucket_reservations') IS NOT NULL THEN GRANT SELECT, INSERT, DELETE ON TABLE public.sync_dispatch_bucket_reservations TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO " + domainRole + "; END IF; END $$",
 		// UPDATE added by CHAOS-4209 for stampCanonicalSyncConfig's last_sync_*
 		// write on the domain transaction.

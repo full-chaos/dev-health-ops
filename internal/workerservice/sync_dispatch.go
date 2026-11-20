@@ -841,6 +841,14 @@ func buildSyncCoordinatorWorker(
 	// syncCoordinatorMetrics never needs to be scraped itself.
 	dispatchSyncRun.WithMetrics(syncCoordinatorMetrics)
 	referenceDiscovery.WithMetrics(syncCoordinatorMetrics)
+	// CHAOS-14250: a pass capped by a bucket, or leaving granted slots unused, enqueues the bucket's sync.bucket_sweep
+	// instead of arming a timer of its own for the cap.
+	bucketSweeps, err := newBucketSweepEnqueuer(cfg, postgresDatabase.pools.QueueControl)
+	if err != nil {
+		closeClickHouse()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	dispatchSyncRun.WithBucketSweeps(bucketSweeps)
 	if err := syncdispatchruntime.RegisterWorkers(
 		workers, dispatchSyncRun, postSync, finalizeSyncRun, referenceDiscovery,
 		syncdispatchruntime.WithHandlerObserver(observer),
@@ -915,6 +923,19 @@ func buildSyncCoordinatorWorker(
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	handlers = append(handlers, teamRepoOwnershipDerivation)
+	// sync.bucket_sweep (CHAOS-14250) is river from birth (state=celery_removed, route seed revision 0167).
+	bucketSweep, ok := registry.Descriptor(jobcontract.KindBucketSweep)
+	if !ok {
+		closeClickHouse()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	if err := syncdispatchruntime.RegisterBucketSweepWorker(
+		workers, postgresDatabase.pools.Domain, syncdispatchruntime.WithHandlerObserver(observer),
+	); err != nil {
+		closeClickHouse()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	handlers = append(handlers, bucketSweep)
 	// CHAOS-12010: the pending provider OAuth revocation rows no route sends.
 	providerRevocations, err := registerProviderRevocationsWorker(
 		cfg, registry, postgresDatabase, credentialCipher, observer, logger, workers,

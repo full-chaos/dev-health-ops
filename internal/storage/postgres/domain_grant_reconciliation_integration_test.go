@@ -548,7 +548,7 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 		"CREATE TABLE public.provider_oauth_credentials (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.github_app_installations (id uuid PRIMARY KEY, installation_id bigint, account_login text, account_type text, org_id text, suspended_at timestamptz, created_at timestamptz, updated_at timestamptz)",
 		"CREATE TABLE public.webhook_sync_requests (delivery_id uuid PRIMARY KEY, org_id text, sync_config_id uuid, mode text, source_ids text[], scheduled_for timestamptz, created_at timestamptz, attempts int, next_attempt_at timestamptz, last_error text, refused_at timestamptz, refused_reason text, minted_at timestamptz, occurrence_id text)",
-		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY, org_id text, status text)",
 		// Carries the columns syncroute's real route-mutation statements name,
 		// so a privilege denial cannot be mistaken for an undefined column
 		// (42703 is raised during parse analysis, before the ACL check).
@@ -561,7 +561,7 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 			generation bigint NOT NULL DEFAULT 1,
 			updated_at timestamptz NOT NULL DEFAULT now()
 		)`,
-		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, state text NOT NULL)",
+		"CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, sync_run_id uuid, status text)",
 		// CHAOS-4114: the executed-proof ledger joined domainPosture's manifest
 		// (migration 0109). Every domain GRANT is wrapped in a to_regclass guard,
 		// so a venue that never CREATEs it silently skips the grant and
@@ -596,14 +596,20 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 		// Production-shaped enough for the reconciler materializer privilege proof:
 		// PostgreSQL resolves every named column and the ON CONFLICT arbiter before
 		// checking INSERT, so a one-column stand-in could only prove a 42703.
+		// CHAOS-14250 bucket sweep tables (domain: signals INSERT+UPDATE, reservations INSERT+DELETE; coordinator: signals INSERT+UPDATE).
+		"CREATE TABLE public.sync_dispatch_bucket_signals (org_id text NOT NULL, provider character varying(64) NOT NULL, cost_class character varying(32) NOT NULL, generation bigint DEFAULT 0 NOT NULL, acked_generation bigint DEFAULT 0 NOT NULL, updated_at timestamp with time zone NOT NULL, CONSTRAINT sync_dispatch_bucket_signals_pkey PRIMARY KEY (org_id, provider, cost_class))",
+		"CREATE TABLE public.sync_dispatch_bucket_reservations (org_id text NOT NULL, provider character varying(64) NOT NULL, cost_class character varying(32) NOT NULL, sync_run_id uuid NOT NULL, backfill boolean NOT NULL, reserved_at timestamp with time zone NOT NULL, CONSTRAINT sync_dispatch_bucket_reservations_pkey PRIMARY KEY (org_id, provider, cost_class, sync_run_id), CONSTRAINT fk_sync_dispatch_bucket_reservations_run FOREIGN KEY (sync_run_id) REFERENCES public.sync_runs(id) ON DELETE CASCADE)",
 		`CREATE TABLE public.sync_dispatch_outbox (
 			id uuid PRIMARY KEY,
-			org_id uuid NOT NULL,
+			org_id text NOT NULL,
 			sync_run_id uuid NOT NULL,
 			kind text NOT NULL,
 			status text NOT NULL,
 			available_at timestamptz NOT NULL,
-			attempts integer NOT NULL,
+			attempts integer NOT NULL DEFAULT 0,
+			dispatched_at timestamptz NULL, dispatched_transport text NULL, dispatched_route_generation bigint NULL,
+			transport_job_id text NULL, claim_token text NULL, claim_transport text NULL,
+			claim_route_generation bigint NULL, claim_expires_at timestamptz NULL, last_error text NULL,
 			created_at timestamptz NOT NULL,
 			updated_at timestamptz NOT NULL,
 			UNIQUE (sync_run_id, kind)

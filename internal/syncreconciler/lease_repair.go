@@ -2,11 +2,10 @@ package syncreconciler
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"sort"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/syncbucket"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 	"github.com/jackc/pgx/v5"
@@ -68,6 +67,16 @@ type LeaseRepair struct {
 	// countdown. The production constructor always sets it; only the
 	// begin-func constructor the unit tests use leaves it nil.
 	wake syncrunrollup.Execer
+	// sweeps, when set, receives the slots a repair frees (CHAOS-14250); nil keeps each run's own wake.
+	sweeps syncrunrollup.BucketSweepEnqueuer
+}
+
+// WithBucketSweeps hands the slots this repair frees to their buckets' sync.bucket_sweep (CHAOS-14250).
+func (repair *LeaseRepair) WithBucketSweeps(sweeps syncrunrollup.BucketSweepEnqueuer) *LeaseRepair {
+	if repair != nil {
+		repair.sweeps = sweeps
+	}
+	return repair
 }
 
 func NewLeaseRepair(pool *pgxpool.Pool) (*LeaseRepair, error) {
@@ -177,7 +186,7 @@ func (repair *LeaseRepair) Step(ctx context.Context, now time.Time, limit int) (
 		return candidates[left].syncRunID < candidates[right].syncRunID
 	})
 	result := LeaseRepairResult{Selected: len(candidates)}
-	wakeRuns := make([]string, 0, len(candidates))
+	wakeRuns := make([]syncrunrollup.SlotFree, 0, len(candidates))
 	for _, candidate := range candidates {
 		decision := decideExpiredLeaseRepair(candidate, repair.config)
 		var affected int64
@@ -228,13 +237,23 @@ func (repair *LeaseRepair) Step(ctx context.Context, now time.Time, limit int) (
 			return LeaseRepairResult{}, ErrUnavailable
 		}
 		if affected == 1 {
-			wakeRuns = appendWakeRun(wakeRuns, candidate.syncRunID)
+			slot := syncrunrollup.SlotFree{RunID: candidate.syncRunID, OrgID: candidate.orgID, Provider: candidate.provider, CostClass: candidate.costClass}
+			if decision.retry {
+				slot.RetryAt = expiredLeaseRetryAt(now, repair.config)
+			}
+			wakeRuns = appendWakeRun(wakeRuns, slot)
+		}
+	}
+	var reserved []string
+	if repair.wake != nil {
+		if reserved, err = reserveReleasedSlots(ctx, tx, wakeRuns, now); err != nil {
+			return LeaseRepairResult{}, ErrUnavailable
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return LeaseRepairResult{}, ErrUnavailable
 	}
-	wakeDispatchAfterCommit(ctx, repair.wake, wakeRuns, now, syncrunrollup.DispatchWakePathLeaseRepair)
+	wakeDispatchAfterCommit(ctx, repair.wake, repair.sweeps, wakeRuns, reserved, now, syncrunrollup.DispatchWakePathLeaseRepair)
 	return result, nil
 }
 
@@ -311,6 +330,11 @@ func selectExpiredLeaseCandidates(
 	return candidates, nil
 }
 
+// expiredLeaseRetryAt is the available_at markExpiredLeaseRetrying writes.
+func expiredLeaseRetryAt(now time.Time, config LeaseRepairConfig) time.Time {
+	return now.Add(config.RetryBackoff)
+}
+
 func markExpiredLeaseRetrying(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -318,7 +342,7 @@ func markExpiredLeaseRetrying(
 	now time.Time,
 	config LeaseRepairConfig,
 ) (int64, error) {
-	retryAt := now.Add(config.RetryBackoff)
+	retryAt := expiredLeaseRetryAt(now, config)
 	command, err := tx.Exec(ctx, markExpiredLeaseRetryingSQL,
 		candidate.id, candidate.leaseOwner, now, retryAt,
 		workitemcontract.LinearExpiredLeaseRetryDestinations())
@@ -408,8 +432,7 @@ func acquireLeaseRepairBucketLocks(ctx context.Context, tx pgx.Tx, candidates []
 }
 
 func leaseRepairBucketAdvisoryID(orgID, provider, costClass string) int64 {
-	digest := sha256.Sum256([]byte(orgID + ":" + provider + ":" + costClass))
-	return int64(binary.BigEndian.Uint64(digest[:8]) & ((uint64(1) << 63) - 1))
+	return syncbucket.LockKey(syncbucket.Bucket{OrgID: orgID, Provider: provider, CostClass: costClass})
 }
 
 // Both mutations repeat the status, owner, expiry, nonterminal-run, and

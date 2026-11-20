@@ -42,7 +42,7 @@ RETURNING completed_units, failed_units, total_units`
 // Bump runs SQL and returns the resulting counters (completed, failed,
 // total) so the caller can log/record telemetry.
 //
-// Lock-first, ALWAYS: the sync_runs row is locked (SELECT ... FOR UPDATE)
+// Lock-first, ALWAYS: the sync_runs row is locked (SELECT ... FOR NO KEY UPDATE)
 // in its own statement BEFORE the recompute runs. SQL's two COUNT(*)
 // subqueries reference only the run id, so Postgres plans them as
 // InitPlans -- evaluated ONCE per statement, using the snapshot at
@@ -59,7 +59,7 @@ RETURNING completed_units, failed_units, total_units`
 // transaction: providersync's per-unit commit and syncdispatchruntime's
 // denial/exhaustion paths both do, in the sequence unit-row-lock (their own
 // UPDATE public.sync_run_units, before calling Bump) then run-row-lock
-// (Bump's own SELECT ... FOR UPDATE above).
+// (Bump's own SELECT ... FOR NO KEY UPDATE above).
 //
 // A caller whose single transaction terminalizes candidates spanning
 // MULTIPLE different sync_run_ids -- syncreconciler's LeaseRepair.Step and
@@ -116,9 +116,13 @@ func Bump(
 // fresh, correct counts silently overwritten by this caller's now-stale
 // ones, since neither side is a compare-and-swap -- whichever commits last
 // wins outright.
+//
+// NO KEY: any child-FK insert (units, bucket reservations) takes FOR KEY SHARE on this run and now passes LockRun;
+// FOR UPDATE deadlocked cross-bucket writers. No production path inserts a unit into a committed run: the run and its
+// units are inserted in one transaction (internal/scheduler/sync/materializer.go:2474-2496).
 func LockRun(ctx context.Context, tx pgx.Tx, syncRunID string) error {
 	var locked int
-	return tx.QueryRow(ctx, `SELECT 1 FROM public.sync_runs WHERE id = $1 FOR UPDATE`, syncRunID).Scan(&locked)
+	return tx.QueryRow(ctx, `SELECT 1 FROM public.sync_runs WHERE id = $1 FOR NO KEY UPDATE`, syncRunID).Scan(&locked)
 }
 
 // ArmFinalizeSQL re-arms a run's finalize_sync_run dispatch-outbox row so the

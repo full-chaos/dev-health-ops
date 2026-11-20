@@ -2,8 +2,7 @@ package syncreconciler
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
+	"github.com/full-chaos/dev-health-ops/internal/syncbucket"
 	"sort"
 
 	"github.com/jackc/pgx/v5"
@@ -18,7 +17,7 @@ import (
 //
 // Why this is needed even after round 3's fix (candidates sorted by
 // ascending sync_run_id before the write-then-Bump loop): Bump's own
-// `SELECT ... FOR UPDATE` on sync_runs holds that row's lock for the REST
+// `SELECT ... FOR NO KEY UPDATE` on sync_runs holds that row's lock for the REST
 // of the transaction, not just for the duration of the Bump call. So once
 // the first candidate in a run has been written and Bump'd, this
 // transaction already holds that run's lock for every later statement --
@@ -86,8 +85,7 @@ func lockSyncRunUnitsAscending(ctx context.Context, tx pgx.Tx, unitIDs []string)
 // copy) already deliberately maintain, by design, as a shared numeric
 // CONTRACT rather than shared code.
 func unreclaimableBucketAdvisoryID(orgID, provider, costClass string) int64 {
-	digest := sha256.Sum256([]byte(orgID + ":" + provider + ":" + costClass))
-	return int64(binary.BigEndian.Uint64(digest[:8]) & ((uint64(1) << 63) - 1))
+	return syncbucket.LockKey(syncbucket.Bucket{OrgID: orgID, Provider: provider, CostClass: costClass})
 }
 
 // acquireUnreclaimableBucketLocks takes the SAME sorted per-(orgID,

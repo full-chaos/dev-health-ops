@@ -854,6 +854,13 @@ func domainPosture() RolePosture {
 			// _migrate_jira_watermarks_on_rename).
 			{"sync_watermarks", true, true, true},
 			{"sync_dispatch_outbox", true, true, false},
+			// CHAOS-14250 bucket sweep: the dispatch pass, bucket sweep worker and
+			// provider unit completion bump/ack the signal generation (INSERT+UPDATE,
+			// never DELETE).
+			{"sync_dispatch_bucket_signals", true, true, false},
+			// CHAOS-14250 bucket sweep: the sweep inserts head reservations and
+			// expires/retires them (INSERT+DELETE, never UPDATE).
+			{"sync_dispatch_bucket_reservations", true, false, true},
 			{"worker_job_outbox", true, false, false},
 			// The heavy worker's categorization on an org's own model reserves
 			// a budget row (llmbudget.PgStore.Admit: INSERT) and settles it
@@ -1217,6 +1224,11 @@ func coordinatorPosture() RolePosture {
 			// internal/syncreconciler/materializer.go:450. The first three also use
 			// ON CONFLICT DO UPDATE.
 			{"sync_dispatch_outbox", true, true, false},
+			// CHAOS-14250 bucket sweep: the materializer's recovery only reads the signals
+			// (UnacknowledgedBucketSignalsSQL); every signal write (lease repair, the
+			// unreclaimable sweep, route-unavailable termination) runs on the domain pool.
+			// No reservations access.
+			{"sync_dispatch_bucket_signals", false, false, false},
 			{"sync_run_units", false, false, false},
 			{"sync_runs", false, true, false},
 			{"sync_dispatch_transport_routes", false, true, false},

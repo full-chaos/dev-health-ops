@@ -250,7 +250,7 @@ func (sweep *UnreclaimableSweep) terminalizeRouteUnavailable(
 		return candidates[left].syncRunID < candidates[right].syncRunID
 	})
 
-	var wakeRuns []string
+	var wakeRuns []syncrunrollup.SlotFree
 	for _, candidate := range candidates {
 		affected, err := sweep.terminalizeOneRouteUnavailable(
 			ctx, tx, candidate, result.RouteUnavailableFault, now,
@@ -263,7 +263,7 @@ func (sweep *UnreclaimableSweep) terminalizeRouteUnavailable(
 		}
 		result.RouteUnavailableTerminalized += int(affected)
 		if affected == 1 {
-			wakeRuns = appendWakeRun(wakeRuns, candidate.syncRunID)
+			wakeRuns = appendWakeRun(wakeRuns, syncrunrollup.SlotFree{RunID: candidate.syncRunID, OrgID: candidate.orgID, Provider: candidate.provider, CostClass: candidate.costClass})
 		}
 	}
 
@@ -289,12 +289,20 @@ func (sweep *UnreclaimableSweep) terminalizeRouteUnavailable(
 		result.DeclinedRouteChange = true
 		return nil
 	}
+	var reserved []string
+	if sweep.wake != nil {
+		var err error
+		if reserved, err = reserveReleasedSlots(ctx, tx, wakeRuns, now); err != nil {
+			held.release()
+			return sweepUnavailable(sweepStepCommit, err)
+		}
+	}
 	commitErr := tx.Commit(ctx)
 	held.release()
 	if commitErr != nil {
 		return sweepUnavailable(sweepStepCommit, commitErr)
 	}
-	wakeDispatchAfterCommit(ctx, sweep.wake, wakeRuns, now, syncrunrollup.DispatchWakePathRouteUnavailable)
+	wakeDispatchAfterCommit(ctx, sweep.wake, sweep.sweeps, wakeRuns, reserved, now, syncrunrollup.DispatchWakePathRouteUnavailable)
 	return nil
 }
 

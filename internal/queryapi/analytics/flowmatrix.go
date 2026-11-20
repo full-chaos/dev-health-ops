@@ -659,7 +659,7 @@ LIMIT {max_edges:UInt32}
 // ErrUnsafeStatement, which resolveFlowMatrix then SWALLOWS to an empty
 // result. Shape copied from Lane A's workgraph/scope.go, which hit the
 // identical guard live.
-// A team key must hold a char that is not whitespace: the match() class is the ECMA-262 "White Space" and "Line Terminators" set (what JS trim removes), not just ''.
+// A team key must hold a char that is not whitespace: the match() class is the ECMA-262 "White Space" and "Line Terminators" set (what JS trim removes), not just the empty string.
 const flowMatrixTeamActivitySelect = `
     SELECT
         wct.work_item_id,

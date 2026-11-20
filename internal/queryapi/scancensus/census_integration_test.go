@@ -767,7 +767,7 @@ const nullableIntoPlainSites = `
 //
 //	fetchRiskSignals 54de9ad8afd6 -> 06cb489933a0
 //
-// CHAOS-14395: the TEAM and REPO flow-matrix templates filter blank team ids with match() instead of != ''. Select lists,
+// CHAOS-14395: the TEAM and REPO flow-matrix templates filter blank team ids with match() instead of an empty-string test. Select lists,
 // column types and scan targets are unchanged; only the statement text moved. Re-pinned by hand, digests copied from the
 // local TestScanTypeCensus failure output (not computed):
 //

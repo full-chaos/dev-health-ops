@@ -694,7 +694,7 @@ func TestCompileFlowMatrix_TeamRepo_UseInvestmentTrue_EdgesExcludeEmptyBridge(t 
 		wantEmptyGuard string
 	}{
 		{DimensionTeam, "repo_id IS NOT NULL"},
-		{DimensionRepo, "ut.team_id != ''"},
+		{DimensionRepo, `ut.team_id IS NOT NULL AND match(ut.team_id, '[^\\s\\x{0B}\\p{Z}\\x{FEFF}]')`},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.dim), func(t *testing.T) {

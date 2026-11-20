@@ -1,0 +1,6 @@
+ConfigMap/cfg
+Deployment/web
+Secret/creds
+Secret/new-secret
+Service/svc
+StatefulSet/dev-health-ops-postgresql

@@ -1,0 +1,7 @@
+render A: helm rc=0 docs=6
+render B: helm rc=0 docs=6
+Deployment/web .spec.nanv CHANGED
+docs A 6 B 6 (all kinds, Secrets as Kind/name only; hook-included: a helm template render); kinds in A: ConfigMap=1, Deployment=1, Secret=2, Service=1, StatefulSet=1
+added []; removed []; changed field rows 1; element rows added 0 removed 0; reordered rows 0; pod-template label/annotation rows 0; postgres sts rows 0
+names: A 3 B 4; added ['Secret/new-secret']; removed []
+FULL RENDER DIFF: STOP (expected added [])

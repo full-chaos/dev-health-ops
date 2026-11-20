@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1/in/full-render-diff.py", line 487, in <module>
+    sys.exit(main(sys.argv[1:]))
+             ^^^^^^^^^^^^^^^^^^
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1/in/full-render-diff.py", line 361, in main
+    (pa, pb), rc_a, rc_b, opts = parse_args(argv)
+                                 ^^^^^^^^^^^^^^^^
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1/in/full-render-diff.py", line 313, in parse_args
+    opts["min_docs"] = int(v)
+                       ^^^^^^
+ValueError: Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit

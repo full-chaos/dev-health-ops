@@ -195,10 +195,12 @@ func ReadServiceRepositoryMappings(
 			repoIDStr  *string
 			confidence *float64
 			validFrom  *time.Time
+
+			relationshipProvenance, mappingKind, ruleID, sourceURL *string
 		)
 		if err := rows.Scan(
-			&r.ServiceID, &repoIDStr, &r.Provider, &r.RelationshipProvenance,
-			&confidence, &r.MappingKind, &r.RuleID, &r.SourceURL, &validFrom,
+			&r.ServiceID, &repoIDStr, &r.Provider, &relationshipProvenance,
+			&confidence, &mappingKind, &ruleID, &sourceURL, &validFrom,
 		); err != nil {
 			return nil, logReadErr(ctx, "scan operational_service_repository_mappings row", organizationID, err, "repo_id", repoIDLogAttr(repoID))
 		}
@@ -207,6 +209,8 @@ func ReadServiceRepositoryMappings(
 		} else {
 			validFromSet++
 		}
+		r.RelationshipProvenance, r.MappingKind = derefString(relationshipProvenance), derefString(mappingKind)
+		r.RuleID, r.SourceURL = derefString(ruleID), derefString(sourceURL)
 		r.RelationshipConfidence = confidence
 		if repoIDStr != nil && *repoIDStr != "" {
 			parsed, err := uuid.Parse(*repoIDStr)
@@ -327,10 +331,13 @@ func ReadIncidents(
 		var (
 			r         IncidentRow
 			startedAt *time.Time
+
+			serviceID, escalationPolicyID, sourceURL *string
 		)
-		if err := rows.Scan(&r.ID, &r.ServiceID, &r.EscalationPolicyID, &startedAt, &r.SourceURL); err != nil {
+		if err := rows.Scan(&r.ID, &serviceID, &escalationPolicyID, &startedAt, &sourceURL); err != nil {
 			return nil, logReadErr(ctx, "scan operational_incidents row", organizationID, err)
 		}
+		r.ServiceID, r.EscalationPolicyID, r.SourceURL = derefString(serviceID), derefString(escalationPolicyID), derefString(sourceURL)
 		r.StartedAt = startedAt
 		out = append(out, r)
 	}
@@ -366,10 +373,14 @@ func ReadServices(ctx context.Context, conn driver.Conn, organizationID string) 
 
 	var out []ServiceRow
 	for rows.Next() {
-		var r ServiceRow
-		if err := rows.Scan(&r.ID, &r.OwningTeamID, &r.EscalationPolicyID); err != nil {
+		var (
+			r                                ServiceRow
+			owningTeamID, escalationPolicyID *string
+		)
+		if err := rows.Scan(&r.ID, &owningTeamID, &escalationPolicyID); err != nil {
 			return nil, logReadErr(ctx, "scan operational_services row", organizationID, err)
 		}
+		r.OwningTeamID, r.EscalationPolicyID = derefString(owningTeamID), derefString(escalationPolicyID)
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
@@ -436,10 +447,12 @@ func ReadAlerts(ctx context.Context, conn driver.Conn, organizationID string, in
 		var (
 			r           directRow
 			triggeredAt *time.Time
+			sourceURL   *string
 		)
-		if err := rows.Scan(&r.ID, &r.IncidentID, &r.SourceURL, &triggeredAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.IncidentID, &sourceURL, &triggeredAt); err != nil {
 			return nil, logReadErr(ctx, "scan operational_alerts row", organizationID, err)
 		}
+		r.SourceURL = derefString(sourceURL)
 		r.EventAt = triggeredAt
 		out = append(out, r)
 	}
@@ -479,10 +492,13 @@ func ReadTimelineEvents(ctx context.Context, conn driver.Conn, organizationID st
 		var (
 			r          directRow
 			occurredAt *time.Time
+
+			actorID, body, sourceURL *string
 		)
-		if err := rows.Scan(&r.ID, &r.IncidentID, &r.PersonID, &r.Body, &r.SourceURL, &occurredAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.IncidentID, &actorID, &body, &sourceURL, &occurredAt); err != nil {
 			return nil, logReadErr(ctx, "scan operational_incident_timeline_events row", organizationID, err)
 		}
+		r.PersonID, r.Body, r.SourceURL = derefString(actorID), derefString(body), derefString(sourceURL)
 		r.EventAt = occurredAt
 		out = append(out, r)
 	}
@@ -525,10 +541,11 @@ func ReadNotes(ctx context.Context, conn driver.Conn, organizationID string, inc
 		// (incident_id, body, source_url, event) shape as timeline via
 		// [*timeline, *notes] below -- author_user_id is read here but never
 		// used (notes never feed _append_user, only timeline does).
-		var authorUserID string
-		if err := rows.Scan(&r.ID, &r.IncidentID, &r.Body, &authorUserID, &r.SourceURL, &createdAt); err != nil {
+		var authorUserID, sourceURL *string
+		if err := rows.Scan(&r.ID, &r.IncidentID, &r.Body, &authorUserID, &sourceURL, &createdAt); err != nil {
 			return nil, logReadErr(ctx, "scan operational_incident_notes row", organizationID, err)
 		}
+		r.SourceURL = derefString(sourceURL)
 		r.EventAt = createdAt
 		out = append(out, r)
 	}
@@ -566,10 +583,13 @@ func ReadResponders(ctx context.Context, conn driver.Conn, organizationID string
 		var (
 			r          directRow
 			assignedAt *time.Time
+
+			userID, sourceURL *string
 		)
-		if err := rows.Scan(&r.ID, &r.IncidentID, &r.PersonID, &r.SourceURL, &assignedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.IncidentID, &userID, &sourceURL, &assignedAt); err != nil {
 			return nil, logReadErr(ctx, "scan operational_incident_responders row", organizationID, err)
 		}
+		r.PersonID, r.SourceURL = derefString(userID), derefString(sourceURL)
 		r.EventAt = assignedAt
 		out = append(out, r)
 	}
@@ -687,9 +707,17 @@ func ReadDeployments(
 
 	var out []DeploymentRow
 	for rows.Next() {
-		var r DeploymentRow
-		if err := rows.Scan(&r.RepoID, &r.DeploymentID, &r.Environment, &r.DeployedAt); err != nil {
+		var (
+			r           DeploymentRow
+			environment *string
+			deployedAt  *time.Time
+		)
+		if err := rows.Scan(&r.RepoID, &r.DeploymentID, &environment, &deployedAt); err != nil {
 			return nil, logReadErr(ctx, "scan deployments row", organizationID, err, "repo_id", repoIDLogAttr(repoID))
+		}
+		r.Environment = derefString(environment)
+		if deployedAt != nil {
+			r.DeployedAt = *deployedAt
 		}
 		out = append(out, r)
 	}
@@ -1184,4 +1212,12 @@ func concatRows(a, b []directRow) []directRow {
 	out = append(out, a...)
 	out = append(out, b...)
 	return out
+}
+
+// derefString reads a NULL as "", the value clickhouse-go v2.49 left in a plain string.
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }

@@ -568,7 +568,7 @@ func (handler JiraTeamCatalogRouteHandler) collectProjectSprints(
 		for _, raw := range boardSprints {
 			var payload map[string]any
 			if err := decodeJiraJSON(raw, &payload); err != nil {
-				return nil, providerfoundation.ErrNormalizationInvalid
+				return nil, providerfoundation.RouteFailure(jiraBoardSprintRoute, providerfoundation.ReasonBodyDecode, err)
 			}
 			sprint, sprintErr := normalizeJiraSprint(claim, payload, normalizedAt)
 			if sprintErr != nil {
@@ -673,7 +673,7 @@ func (handler JiraTeamCatalogRouteHandler) iterBoardSprints(
 		query := url.Values{"startAt": {strconv.Itoa(startAt)}, "maxResults": {strconv.Itoa(jiraTeamCatalogPerPage)}}
 		path := "/rest/agile/1.0/board/" + url.PathEscape(boardID) + "/sprint?" + query.Encode()
 		var page jiraTeamCatalogSprintsPage
-		fetchErr := jiraFetchObject(ctx, client, http.MethodGet, "/rest/agile/1.0/board/{board}/sprint", path, nil, &page)
+		fetchErr := jiraFetchObject(ctx, client, http.MethodGet, jiraBoardSprintRoute, path, nil, &page)
 		if fetchErr != nil {
 			var providerErr *providerfoundation.ProviderError
 			if errors.As(fetchErr, &providerErr) && providerErr.StatusCode == http.StatusBadRequest {

@@ -256,9 +256,14 @@ func derivedDaySnapshot(t *testing.T, ctx context.Context, conn driver.Conn, org
 	}
 	snapshot := map[string]string{}
 	for table, source := range sources {
-		var count, hash uint64
-		if err := conn.QueryRow(ctx, `SELECT count(), groupBitXor(cityHash64(* EXCEPT (computed_at))) FROM `+source, orgID, day).Scan(&count, &hash); err != nil {
+		var count uint64
+		var hashValue *uint64
+		if err := conn.QueryRow(ctx, `SELECT count(), groupBitXor(cityHash64(* EXCEPT (computed_at))) FROM `+source, orgID, day).Scan(&count, &hashValue); err != nil {
 			t.Fatalf("snapshot %s: %v", table, err)
+		}
+		var hash uint64
+		if hashValue != nil {
+			hash = *hashValue
 		}
 		snapshot[table] = fmt.Sprintf("%d rows, hash %d", count, hash)
 	}

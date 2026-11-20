@@ -143,7 +143,7 @@ func (handler PagerDutyBusinessServicesRouteHandler) Collect(
 	}
 	pages, err := providerfoundation.CollectPagerDutyOffsetPages(
 		ctx, &counted, providerfoundation.PagerDutyOffsetOptions{
-			Path: "/business_services", Route: "/business_services", DataKey: "business_services",
+			Path: "/business_services", Route: pagerDutyBusinessServicesRoute, DataKey: "business_services",
 			PerPage: perPage, MaxPages: maxPages,
 		},
 	)
@@ -155,9 +155,9 @@ func (handler PagerDutyBusinessServicesRouteHandler) Collect(
 	}
 	rows := make([]pagerDutyBusinessServiceRow, 0, len(pages.Items))
 	for _, raw := range pages.Items {
-		var payload pagerDutyBusinessServicePayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+		payload, err := decodePagerDutyBusinessServiceItem(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(pagerDutyBusinessServicesRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		row, err := normalizePagerDutyBusinessService(
 			claim, providerInstance, payload, normalizedAt,
@@ -303,3 +303,14 @@ func pagerDutyBusinessServiceTombstone(
 }
 
 var _ CompleteRouteHandler = PagerDutyBusinessServicesRouteHandler{}
+
+// pagerDutyBusinessServicesRoute is the route template of the /business_services list.
+const pagerDutyBusinessServicesRoute = "/business_services"
+
+func decodePagerDutyBusinessServiceItem(raw json.RawMessage) (pagerDutyBusinessServicePayload, error) {
+	var payload pagerDutyBusinessServicePayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
+}

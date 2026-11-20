@@ -15,14 +15,19 @@ func clamp01(v float64) float64 { return math.Max(0.0, math.Min(1.0, v)) }
 // scoreRatio scores a ratio against its threshold: 0.5 at the threshold,
 // rising above it, clamped to [0, 1]. scoreDelta is the same arithmetic for an
 // absolute difference.
-func scoreRatio(value, threshold float64) float64 {
+func scoreRatio(value, threshold float64) float64 { return clamp01(scoreRatioRaw(value, threshold)) }
+
+func scoreDelta(value, threshold float64) float64 { return scoreRatio(value, threshold) }
+
+// scoreRatioRaw is scoreRatio before the clamp: it keeps the order of values the clamp maps to 1.
+func scoreRatioRaw(value, threshold float64) float64 {
 	if threshold <= 0 {
 		return 0.0
 	}
-	return clamp01(float64((value/threshold-1.0)/2.0) + 0.50)
+	return float64((value/threshold-1.0)/2.0) + 0.50
 }
 
-func scoreDelta(value, threshold float64) float64 { return scoreRatio(value, threshold) }
+func scoreDeltaRaw(value, threshold float64) float64 { return scoreRatioRaw(value, threshold) }
 
 // stableOpportunityID is the first 24 hex digits of the SHA-256 of
 // "kind:entity:secondary", kind being the stored (lower-case) spelling.

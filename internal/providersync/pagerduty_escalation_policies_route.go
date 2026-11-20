@@ -136,7 +136,7 @@ func (handler PagerDutyEscalationPoliciesRouteHandler) Collect(
 	counted.Doer = pagerDutyEscalationPoliciesCountingDoer{delegate: client.Doer, attempts: &requests}
 	pages, err := providerfoundation.CollectPagerDutyOffsetPages(
 		ctx, &counted, providerfoundation.PagerDutyOffsetOptions{
-			Path: "/escalation_policies", Route: "/escalation_policies", DataKey: "escalation_policies",
+			Path: "/escalation_policies", Route: pagerDutyEscalationPoliciesRoute, DataKey: "escalation_policies",
 			PerPage: perPage, MaxPages: maxPages,
 		},
 	)
@@ -148,9 +148,9 @@ func (handler PagerDutyEscalationPoliciesRouteHandler) Collect(
 	}
 	rows := make([]pagerDutyEscalationPolicyRow, 0, len(pages.Items))
 	for _, raw := range pages.Items {
-		var payload pagerDutyEscalationPolicyPayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+		payload, err := decodePagerDutyEscalationPolicyItem(raw)
+		if err != nil {
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(pagerDutyEscalationPoliciesRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		row, err := normalizePagerDutyEscalationPolicy(
 			claim, providerInstance, payload, normalizedAt,
@@ -288,3 +288,14 @@ func fillPagerDutyEscalationPolicyOrdering(row *pagerDutyEscalationPolicyRow) er
 }
 
 var _ CompleteRouteHandler = PagerDutyEscalationPoliciesRouteHandler{}
+
+// pagerDutyEscalationPoliciesRoute is the route template of the /escalation_policies list.
+const pagerDutyEscalationPoliciesRoute = "/escalation_policies"
+
+func decodePagerDutyEscalationPolicyItem(raw json.RawMessage) (pagerDutyEscalationPolicyPayload, error) {
+	var payload pagerDutyEscalationPolicyPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return payload, providerfoundation.ErrNormalizationInvalid
+	}
+	return payload, nil
+}

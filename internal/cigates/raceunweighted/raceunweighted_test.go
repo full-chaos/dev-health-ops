@@ -169,13 +169,13 @@ func TestARefusedRaceSplitTableRowFailsTheLegAndThePlanBeforeAnyTest(t *testing.
 
 const rows = "# header\nTestSlowWeighted\t40000\nTestWeighted\t1500\n"
 
-func TestUnweightedTopLevelTestOf31SecondsFailsTheLegAndNamesItAndItsSeconds(t *testing.T) {
+func TestUnweightedTopLevelTestOf45SecondsFailsTheLegAndNamesItAndItsSeconds(t *testing.T) {
 	t.Parallel()
-	r := leg(t, "1", []string{ev("run", "TestSlowNew", 0), ev("pass", "TestSlowNew", 31.25)}, 0, rows)
+	r := leg(t, "1", []string{ev("run", "TestSlowNew", 0), ev("pass", "TestSlowNew", 45.25)}, 0, rows)
 	if r.Err == nil {
-		t.Fatalf("leg passed with an unweighted 31 s test: %s", r.Stdout)
+		t.Fatalf("leg passed with an unweighted 45.25 s test: %s", r.Stdout)
 	}
-	for _, want := range []string{"unweighted-slow-test: TestSlowNew", "31.25s", "add a row to ci/go_providersync_race_weights.tsv (median ms of 3 race runs)"} {
+	for _, want := range []string{"unweighted-slow-test: TestSlowNew", "45.25s", "add a row to ci/go_providersync_race_weights.tsv (median ms of 3 race runs)"} {
 		if !strings.Contains(r.Stderr, want) {
 			t.Errorf("stderr misses %q: %s", want, r.Stderr)
 		}
@@ -204,22 +204,76 @@ func TestPlantedRealWeightsRowCoversItsTest(t *testing.T) {
 	}
 }
 
-func TestThresholdIsThirtySecondsInclusive(t *testing.T) {
+// CHAOS-14277: 30 <= t < 45 s with no row only warns (the row to add is printed, loud, every time); >= 45 s fails.
+func summaryFile(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "summary.md")
+}
+
+func TestBandEdgesAreInclusiveAtWarnAndFail(t *testing.T) {
 	t.Parallel()
-	if r := leg(t, "1", []string{ev("pass", "TestNew", 29.99)}, 0, rows); r.Err != nil {
-		t.Errorf("29.99 s failed: %s", r.Stderr)
+	sum := summaryFile(t)
+	r := leg(t, "1", []string{ev("pass", "TestNew", 29.9)}, 0, rows, "GITHUB_STEP_SUMMARY="+sum)
+	if r.Err != nil || strings.Contains(r.Stderr, "unweighted-slow") {
+		t.Errorf("29.9 s is not silent: %v %s", r.Err, r.Stderr)
 	}
-	r := leg(t, "1", []string{ev("pass", "TestNew", 30)}, 0, rows)
-	if r.Err == nil || !strings.Contains(r.Stderr, "unweighted-slow-test: TestNew") {
-		t.Errorf("exactly 30 s passed: %v %s", r.Err, r.Stderr)
+	if b, _ := os.ReadFile(sum); strings.Contains(string(b), "unweighted-slow") {
+		t.Errorf("29.9 s wrote the summary: %s", b)
+	}
+	for _, c := range []struct {
+		secs float64
+		row  string
+	}{{30, "TestNew\t30000"}, {30.7, "TestNew\t30700"}, {44.99, "TestNew\t44990"}} {
+		sum := summaryFile(t)
+		r := leg(t, "1", []string{ev("pass", "TestNew", c.secs)}, 0, rows, "GITHUB_STEP_SUMMARY="+sum)
+		if r.Err != nil {
+			t.Fatalf("%v s failed the leg (warn band must exit 0): %s", c.secs, r.Stderr)
+		}
+		for _, want := range []string{"::warning::unweighted-slow-warning: TestNew took", "and has no row in ", "\n" + c.row + "\n"} {
+			if !strings.Contains(r.Stderr, want) {
+				t.Errorf("%v s: stderr misses %q: %s", c.secs, want, r.Stderr)
+			}
+		}
+		b, _ := os.ReadFile(sum)
+		if !strings.Contains(string(b), "add this row:\n"+c.row+"\n") {
+			t.Errorf("%v s: summary misses the exact row %q: %q", c.secs, c.row, b)
+		}
+		if strings.Contains(r.Stderr, "unweighted-slow-test:") || !strings.Contains(r.Stdout, "ci-leg race: OK") {
+			t.Errorf("%v s: warn band counted as a failure: %s%s", c.secs, r.Stderr, r.Stdout)
+		}
+	}
+	r = leg(t, "1", []string{ev("pass", "TestNew", 45)}, 0, rows)
+	if r.Err == nil || !strings.Contains(r.Stderr, "unweighted-slow-test: TestNew took 45s") {
+		t.Errorf("exactly 45 s passed: %v %s", r.Err, r.Stderr)
+	}
+}
+
+func TestWeightedTestInTheBandIsSilent(t *testing.T) {
+	t.Parallel()
+	r := leg(t, "1", []string{ev("pass", "TestSlowWeighted", 40)}, 0, rows)
+	if r.Err != nil || strings.Contains(r.Stderr, "unweighted-slow") {
+		t.Errorf("a weighted 40 s test warned or failed: %v %s", r.Err, r.Stderr)
+	}
+}
+
+func TestBadFailThresholdExitsTwo(t *testing.T) {
+	t.Parallel()
+	for _, v := range []string{"20", "abc", "45.5", "-1"} {
+		r := leg(t, "1", []string{ev("pass", "TestWeighted", 1)}, 0, rows, "DEV_HEALTH_GO_RACE_UNWEIGHTED_FAIL_SECONDS="+v)
+		if r.Err == nil || r.Code != 2 || !strings.Contains(r.Stderr, "must be a whole number of seconds >= the warn threshold") {
+			t.Errorf("fail threshold %q: rc %d %v %s", v, r.Code, r.Err, r.Stderr)
+		}
 	}
 }
 
 func TestThresholdEnvOverrideApplies(t *testing.T) {
 	t.Parallel()
-	r := leg(t, "1", []string{ev("pass", "TestNew", 12)}, 0, rows, "DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS=10")
-	if r.Err == nil {
-		t.Fatal("12 s passed under a 10 s threshold")
+	band := []string{"DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS=10", "DEV_HEALTH_GO_RACE_UNWEIGHTED_FAIL_SECONDS=11"}
+	if r := leg(t, "1", []string{ev("pass", "TestNew", 12)}, 0, rows, band...); r.Err == nil {
+		t.Fatal("12 s passed under a 11 s fail threshold")
+	}
+	if r := leg(t, "1", []string{ev("pass", "TestNew", 10.5)}, 0, rows, band...); r.Err != nil || !strings.Contains(r.Stderr, "::warning::unweighted-slow-warning: TestNew") {
+		t.Fatalf("10.5 s under a 10/11 s band did not warn with rc 0: %v %s", r.Err, r.Stderr)
 	}
 }
 
@@ -234,8 +288,8 @@ func TestSubtestOver30SecondsUnderAWeightedParentPasses(t *testing.T) {
 
 func TestUnweightedParentIsNamedNotItsSubtest(t *testing.T) {
 	t.Parallel()
-	r := leg(t, "1", []string{ev("pass", "TestNew/sub", 40), ev("pass", "TestNew/other", 3), ev("pass", "TestNew", 43)}, 0, rows)
-	if r.Err == nil || !strings.Contains(r.Stderr, "unweighted-slow-test: TestNew took 43s") {
+	r := leg(t, "1", []string{ev("pass", "TestNew/sub", 44), ev("pass", "TestNew/other", 3), ev("pass", "TestNew", 47)}, 0, rows)
+	if r.Err == nil || !strings.Contains(r.Stderr, "unweighted-slow-test: TestNew took 47s") {
 		t.Fatalf("parent not named: %v %s", r.Err, r.Stderr)
 	}
 	if strings.Contains(r.Stderr, "TestNew/") {
@@ -246,7 +300,7 @@ func TestUnweightedParentIsNamedNotItsSubtest(t *testing.T) {
 func TestWeightLookupIsExactNameOnly(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"TestSlowWeightedX", "TestSlowWeight", "testslowweighted", "TestSlowWeighted "} {
-		r := leg(t, "1", []string{ev("pass", name, 35)}, 0, rows)
+		r := leg(t, "1", []string{ev("pass", name, 46)}, 0, rows)
 		if r.Err == nil || !strings.Contains(r.Stderr, "unweighted-slow-test: "+name+" took") {
 			t.Errorf("near-miss %q counted as weighted: %v %s", name, r.Err, r.Stderr)
 		}
@@ -276,7 +330,7 @@ func TestStreamWithNoTopLevelResultFailsTheGuard(t *testing.T) {
 
 func TestLegExitCodeIsTheLargerOfGoTestAndGuard(t *testing.T) {
 	t.Parallel()
-	clean, slow := []string{ev("pass", "TestWeighted", 1)}, []string{ev("pass", "TestNew", 31)}
+	clean, slow := []string{ev("pass", "TestWeighted", 1)}, []string{ev("pass", "TestNew", 46)}
 	if r := leg(t, "1", clean, 1, rows); r.Err == nil {
 		t.Error("a failing go test with a clean stream passed the leg")
 	}

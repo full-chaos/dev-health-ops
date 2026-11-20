@@ -136,10 +136,14 @@ func (h *handlers) loadReadinessBYOConfig(ctx context.Context, orgID string) (re
 	return cfg.bindDefaultKey(key), nil
 }
 
-// readinessURLValid vets the saved base url against the saved key and the SSRF
-// guard before any prober (OpenAI or Anthropic) sees it.
-func (h *handlers) readinessURLValid(ctx context.Context, cfg readinessBYOConfig) (bool, error) {
-	valid, _, _, err := h.checkBaseURL(ctx, cfg.baseURL, cfg.apiKey.Reveal(), cfg.staleKey.Reveal())
+// readinessURLValid vets the saved base url against every stored key of the org
+// and the SSRF guard before any prober (OpenAI or Anthropic) sees it.
+func (h *handlers) readinessURLValid(ctx context.Context, orgID string, cfg readinessBYOConfig) (bool, error) {
+	keys, err := h.readerLeakKeys(ctx, orgID, cfg.baseURL, cfg.apiKey.Reveal(), cfg.staleKey.Reveal())
+	if err != nil {
+		return false, err
+	}
+	valid, _, _, err := h.checkBaseURL(ctx, cfg.baseURL, keys...)
 	return valid, err
 }
 
@@ -182,7 +186,7 @@ func (h *handlers) postLLMSettingsReadiness(w http.ResponseWriter, r *http.Reque
 		policy.WriteDetail(w, http.StatusNotFound, readinessProviderUnavailableMessage(resolvedProvider), nil)
 		return
 	}
-	validURL, err := h.readinessURLValid(ctx, cfg)
+	validURL, err := h.readinessURLValid(ctx, orgID, cfg)
 	if err != nil {
 		h.internalError(ctx, w, "validate byo base url", err)
 		return

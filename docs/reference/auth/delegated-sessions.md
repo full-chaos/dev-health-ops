@@ -166,7 +166,9 @@ request to a platform wrap, fail-closed on PDP-enforced rows (outcome
 `impersonation_refused`). On a platform row the PDP is first asked the row's
 role question, as the legacy platform wrap asks it before the session: a
 caller the PDP denies gets the legacy deny (outcome `deny`), and an allow or
-no verdict is still the session refusal. Its read keeps the legacy answer
+no verdict is still the session refusal. On an organization write row a
+caller with no `admin.impersonate` (no session context) is first asked the
+question it is asked with no row, with the same result. Its read keeps the legacy answer
 (unjudged `impersonation`). The stop route is exempt and is decided by the PDP with the
 administrator's own bearer.
 With the web change below live, the Superadmin UI is refused in every tab while

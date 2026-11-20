@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-ops/internal/platform/dsnclass"
@@ -232,6 +233,9 @@ type Config struct {
 	// never accommodate even one retry.
 	PreclaimReadinessTimeout time.Duration
 	LogLevel                 slog.Level
+	// NonNativeClickHouseKeys names each ClickHouse service DSN key that holds an http or https DSN. Load accepts
+	// it; ObserveNonNativeClickHouse reports it.
+	NonNativeClickHouseKeys []string
 
 	DomainDatabaseURI      secrets.Value
 	QueueDatabaseURI       secrets.Value
@@ -733,11 +737,16 @@ func Load(spec Spec) (Config, error) {
 	if err := validateURI("API_DATABASE_URI", cfg.APIDatabaseURI, postgresSchemes...); err != nil {
 		return Config{}, err
 	}
-	if err := validateURI("CLICKHOUSE_URI", cfg.ClickHouseURI, "clickhouse", "http", "https"); err != nil {
+	if err := validateClickHouseServiceURI("CLICKHOUSE_URI", cfg.ClickHouseURI); err != nil {
 		return Config{}, err
 	}
-	if err := validateURI("API_CLICKHOUSE_URI", cfg.APIClickHouseURI, "clickhouse", "http", "https"); err != nil {
+	if err := validateClickHouseServiceURI("API_CLICKHOUSE_URI", cfg.APIClickHouseURI); err != nil {
 		return Config{}, err
+	}
+	for _, key := range clickHouseServiceKeys {
+		if clickHouseHTTPScheme(cfg.clickHouseDSN(key)) != "" {
+			cfg.NonNativeClickHouseKeys = append(cfg.NonNativeClickHouseKeys, key)
+		}
 	}
 	if err := validateURI("VALKEY_URI", cfg.ValkeyURI, "redis", "rediss", "unix"); err != nil {
 		return Config{}, err
@@ -1547,6 +1556,44 @@ func validateName(kind, value string) error {
 			continue
 		}
 		return fmt.Errorf("%s must contain only lowercase letters, digits, and hyphens", kind)
+	}
+	return nil
+}
+
+// clickHouseHTTPScheme returns "http" or "https" for a DSN that clickhouse-go would open over its HTTP protocol, else
+// "". That path ignores rows.Err() on batches, so a service should use clickhouse://; this is hygiene, not a start
+// refusal (D6465). CLIs resolve their sink through ResolveDSN and are not bound by this.
+func clickHouseHTTPScheme(value secrets.Value) string {
+	if !value.Configured() {
+		return ""
+	}
+	if parsed, err := url.Parse(value.Reveal()); err == nil && parsed != nil {
+		if scheme := strings.ToLower(parsed.Scheme); scheme == "http" || scheme == "https" {
+			return scheme
+		}
+	}
+	return ""
+}
+
+// hasHostName reports whether the URL names a host: a bracketed IPv6 literal, or a hostname with a letter or digit.
+func hasHostName(parsed *url.URL) bool {
+	host := parsed.Hostname()
+	if strings.HasPrefix(parsed.Host, "[") {
+		return net.ParseIP(host) != nil
+	}
+	return strings.ContainsFunc(host, func(r rune) bool {
+		return unicode.IsLetter(r) || unicode.IsDigit(r)
+	})
+}
+
+func validateClickHouseServiceURI(key string, value secrets.Value) error {
+	if err := validateURI(key, value, "clickhouse", "http", "https"); err != nil {
+		return err
+	}
+	if clickHouseHTTPScheme(value) != "" {
+		if parsed, err := url.Parse(value.Reveal()); err != nil || !hasHostName(parsed) {
+			return fmt.Errorf("%s must be a valid supported URI", key)
+		}
 	}
 	return nil
 }

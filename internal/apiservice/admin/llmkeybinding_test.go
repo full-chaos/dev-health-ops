@@ -193,7 +193,7 @@ func TestAnUnboundDefaultKeyReachesNoVendor(t *testing.T) {
 		spy := &resolverSpy{valid: true}
 		keyed := cfg
 		keyed.baseURL = "https://" + key + ".example.invalid/v1"
-		if valid, err := readerHandlers(spy).readinessURLValid(context.Background(), keyed); err != nil || valid || spy.calls != 0 {
+		if valid, err := readerHandlers(spy).readinessURLValid(context.Background(), "org", keyed); err != nil || valid || spy.calls != 0 {
 			t.Errorf("%s: a base_url holding the unbound key passed: valid=%v err=%v resolver calls=%d", name, valid, err, spy.calls)
 		}
 		if strings.Contains(fmt.Sprintf("%v %+v %#v", cfg, cfg, cfg), key) {

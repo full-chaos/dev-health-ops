@@ -257,7 +257,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 	}
 
 	subgroupPages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
-		Path: rootPath + "/subgroups", Route: "/groups/{group}/subgroups", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogSubgroupsMaxPages,
+		Path: rootPath + "/subgroups", Route: gitlabGroupSubgroupsRoute, PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogSubgroupsMaxPages,
 	})
 	if err != nil {
 		return gitlabTeamCatalogWalkFailure(ctx, ref, "subgroups_fetch_failed", requests, err)
@@ -269,9 +269,9 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 
 	groups := []gitlabTeamCatalogGroupPayload{root}
 	for _, raw := range subgroupPages.Items {
-		var subgroup gitlabTeamCatalogGroupPayload
-		if err := json.Unmarshal(raw, &subgroup); err != nil {
-			return GitLabTeamCatalogBatch{}, providerfoundation.ErrNormalizationInvalid
+		subgroup, err := decodeGitLabTeamCatalogGroup(raw)
+		if err != nil {
+			return GitLabTeamCatalogBatch{}, providerfoundation.RouteFailure(gitlabGroupSubgroupsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		groups = append(groups, subgroup)
 	}
@@ -312,7 +312,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		projectListingProven, projectListingResponses := false, 0
 		if selections.Teams || selections.Projects {
 			projectPages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
-				Path: groupPathValue + "/projects", Route: "/groups/{group}/projects", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogProjectsMaxPages,
+				Path: groupPathValue + "/projects", Route: gitlabGroupProjectsRoute, PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogProjectsMaxPages,
 			})
 			if err != nil {
 				return gitlabTeamCatalogWalkFailure(ctx, ref, "group_projects_fetch_failed", requests, err)
@@ -325,9 +325,9 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 			projectListingResponses = ownershipListingResponses(projectPages)
 			projectKeys = make([]string, 0, len(projectPages.Items))
 			for _, raw := range projectPages.Items {
-				var project gitlabTeamCatalogProjectPayload
-				if err := json.Unmarshal(raw, &project); err != nil {
-					return GitLabTeamCatalogBatch{}, providerfoundation.ErrNormalizationInvalid
+				project, err := decodeGitLabTeamCatalogProject(raw)
+				if err != nil {
+					return GitLabTeamCatalogBatch{}, providerfoundation.RouteFailure(gitlabGroupProjectsRoute, providerfoundation.ReasonBodyDecode, err)
 				}
 				path := strings.TrimSpace(project.PathWithNamespace)
 				if path == "" {
@@ -375,7 +375,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 			teamID := gitlabTeamID(group.FullPath)
 			groupByTeam[teamID] = groupPathValue
 			memberPages, memberErr := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
-				Path: groupPathValue + "/members", Route: "/groups/{group}/members", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogMembersMaxPages,
+				Path: groupPathValue + "/members", Route: gitlabGroupMembersRoute, PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogMembersMaxPages,
 			})
 			if memberErr != nil {
 				// A single group's member-fetch failure under non-strict
@@ -401,9 +401,9 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 				}
 				unusable := 0
 				for _, raw := range memberPages.Items {
-					var member gitlabTeamCatalogMemberPayload
-					if err := json.Unmarshal(raw, &member); err != nil {
-						return GitLabTeamCatalogBatch{}, providerfoundation.ErrNormalizationInvalid
+					member, err := decodeGitLabTeamCatalogMember(raw)
+					if err != nil {
+						return GitLabTeamCatalogBatch{}, providerfoundation.RouteFailure(gitlabGroupMembersRoute, providerfoundation.ReasonBodyDecode, err)
 					}
 					row, memberID, ok := normalizeGitLabMembershipRow(ref.OrgID, teamID, member, resolver, normalizedAt)
 					if !ok {
@@ -468,7 +468,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 			sourceExternalIDs[id] = true
 		}
 		allProjectPages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
-			Path: rootPath + "/projects", Route: "/groups/{group}/projects", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogAllProjectsMaxPages,
+			Path: rootPath + "/projects", Route: gitlabGroupProjectsRoute, PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogAllProjectsMaxPages,
 			Query: url.Values{"include_subgroups": {"true"}},
 		})
 		if err != nil {
@@ -481,9 +481,9 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		discoveredIDs := make(map[string]bool, len(allProjectPages.Items))
 		nativeIDByProject := make(map[string]string, len(allProjectPages.Items))
 		for _, raw := range allProjectPages.Items {
-			var project gitlabTeamCatalogProjectPayload
-			if err := json.Unmarshal(raw, &project); err != nil {
-				return GitLabTeamCatalogBatch{}, providerfoundation.ErrNormalizationInvalid
+			project, err := decodeGitLabTeamCatalogProject(raw)
+			if err != nil {
+				return GitLabTeamCatalogBatch{}, providerfoundation.RouteFailure(gitlabGroupProjectsRoute, providerfoundation.ReasonBodyDecode, err)
 			}
 			nativeID := strings.TrimSpace(project.ID.String())
 			discoveredIDs[nativeID] = true
@@ -1030,4 +1030,28 @@ func (handler GitLabTeamCatalogRouteHandler) projectRefPaths(
 	slog.Default().DebugContext(ctx, "gitlab_team_catalog_ref_paths", "org_id", orgID, "projects", len(listed),
 		"resolved", len(resolution.Paths), "ambiguous", len(resolution.Ambiguous))
 	return paths, nil
+}
+
+func decodeGitLabTeamCatalogGroup(raw json.RawMessage) (gitlabTeamCatalogGroupPayload, error) {
+	var group gitlabTeamCatalogGroupPayload
+	if json.Unmarshal(raw, &group) != nil {
+		return group, providerfoundation.ErrNormalizationInvalid
+	}
+	return group, nil
+}
+
+func decodeGitLabTeamCatalogProject(raw json.RawMessage) (gitlabTeamCatalogProjectPayload, error) {
+	var project gitlabTeamCatalogProjectPayload
+	if json.Unmarshal(raw, &project) != nil {
+		return project, providerfoundation.ErrNormalizationInvalid
+	}
+	return project, nil
+}
+
+func decodeGitLabTeamCatalogMember(raw json.RawMessage) (gitlabTeamCatalogMemberPayload, error) {
+	var member gitlabTeamCatalogMemberPayload
+	if json.Unmarshal(raw, &member) != nil {
+		return member, providerfoundation.ErrNormalizationInvalid
+	}
+	return member, nil
 }

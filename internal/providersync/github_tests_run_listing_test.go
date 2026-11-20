@@ -28,7 +28,6 @@ type listingRun struct {
 	status     string
 	conclusion string
 	branch     string
-	attempt    int // run_attempt; zero means 1
 }
 
 // listingFake is a GitHub that honours created ranges, branch, paging, the documented cap of 1,000 results for a
@@ -87,9 +86,9 @@ func (run listingRun) json() string {
 	if branch == "" {
 		branch = "main"
 	}
-	return fmt.Sprintf(`{"id":%d,"name":"CI","status":%q,"conclusion":%s,"created_at":%q,"run_started_at":%q,"updated_at":%q,"run_attempt":%d,"event":"push","head_sha":"abc","head_branch":%q,"html_url":"https://github.com/acme/api/actions/runs/%d","pull_requests":[]}`,
+	return fmt.Sprintf(`{"id":%d,"name":"CI","status":%q,"conclusion":%s,"created_at":%q,"run_started_at":%q,"updated_at":%q,"run_attempt":1,"event":"push","head_sha":"abc","head_branch":%q,"html_url":"https://github.com/acme/api/actions/runs/%d","pull_requests":[]}`,
 		run.id, run.status, conclusion, run.created.UTC().Format(time.RFC3339), started.UTC().Format(time.RFC3339),
-		run.updated.UTC().Format(time.RFC3339), max(1, run.attempt), branch, run.id)
+		run.updated.UTC().Format(time.RFC3339), branch, run.id)
 }
 
 func (fake *listingFake) respond(request *http.Request, header http.Header, body string, status int) *http.Response {
@@ -583,11 +582,11 @@ func TestArtifactsListingPeelsPastTheSearchCap(t *testing.T) {
 }
 
 // Fewer than 1,000 runs is one range per phase and no peel; 1,000 fills the cap, so each phase lists one more range;
-// 1,001 loses nothing. The claim holds a UTC midnight, so the runs phase also lists its deep range once (no run there).
+// 1,001 loses nothing.
 func TestPeelStartsOnlyWhenARangeFillsTheCap(t *testing.T) {
 	for _, tc := range []struct {
 		runs, wantRanges int
-	}{{999, 3}, {1000, 5}, {1001, 5}} {
+	}{{999, 2}, {1000, 4}, {1001, 4}} {
 		fake := newListingFake(t, makeListingRuns(1, tc.runs, listingSince, 20*time.Second))
 		claim := listingClaim(listingSince, listingSince.Add(24*time.Hour))
 		walk := walkListing(t, GitHubTestsRouteHandler{}, claim, fake, 0)
@@ -840,13 +839,6 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			c.RangeHi, c.RangeOldest, c.RangeItems = "2026-07-20T23:59:59Z", "2026-07-20T00:00:00Z", githubTestsSearchResultCap
 			c.SaturatedRuns, c.SaturatedArtifacts = true, true
 			c.ActiveCutKeys, c.CarriedCutKeys = githubTestsWidestCutKeys(t), githubTestsWidestCutKeys(t)
-		}},
-		{"runs deep range peel", func(c *githubTestsChunkCursor) {
-			c.Phase = githubTestsRunsPhase
-			c.LateRuns, c.LateRunPages = true, githubTestsLateRerunMaxPages
-			c.RangeHi, c.RangeOldest, c.RangeItems = "2026-07-20T23:59:59Z", "2026-07-20T00:00:00Z", githubTestsSearchResultCap
-			c.SaturatedRuns, c.SaturatedArtifacts = true, true
-			c.LateRunsBudget, c.LateRunsSaturated = true, true
 		}},
 		{"artifacts peel", func(c *githubTestsChunkCursor) {
 			c.Phase = githubTestsArtifactsPhase

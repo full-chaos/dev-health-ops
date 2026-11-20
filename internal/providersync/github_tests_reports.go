@@ -396,11 +396,6 @@ const (
 	githubTestsRunInventorySaturatedComponent      = "run_inventory_saturated"
 	githubTestsArtifactInventorySaturatedComponent = "artifact_inventory_saturated"
 	githubTestsListingSaturatedCause               = "listing_saturated"
-	// githubTestsLateRerunRunsComponent records that the deep range of the
-	// runs phase (the daily late re-run relist) stopped at its page budget or a
-	// saturated second: cicd pipeline rows of older re-runs keep their stored
-	// attempt. It advances the watermark (the window itself was walked).
-	githubTestsLateRerunRunsComponent = "late_rerun_runs"
 	// The per-run components record that ONE workflow run held more items than
 	// its cap allows, so that run was committed with only the first cap-worth
 	// (CHAOS-4142). Count is the number of RUNS truncated in that category,
@@ -624,9 +619,6 @@ var githubTestsWatermarkAdvancingPairs = map[string]map[string]struct{}{
 	githubTestsRunJobsComponent:      {githubTestsPerRunCapCause: {}},
 	githubTestsRunArtifactsComponent: {githubTestsPerRunCapCause: {}},
 	githubTestsRunReportsComponent:   {githubTestsPerRunCapCause: {}, githubTestsAggregateOfPartsCause: {}},
-	// The deep range is a second look at runs older than the window; a stop
-	// there leaves no part of the window unread.
-	githubTestsLateRerunRunsComponent: {githubTestsPageBudgetCause: {}, githubTestsListingSaturatedCause: {}},
 	githubTestsReportMemberComponent: {
 		githubTestsArtifactOversizedCause:   {},
 		githubTestsArtifactExpiredCause:     {},
@@ -1002,7 +994,6 @@ var githubTestsIncompleteVocabulary = map[string]map[string]struct{}{
 var githubTestsDerivedIncompleteVocabulary = map[string]map[string]struct{}{
 	githubTestsRunInventorySaturatedComponent:      {githubTestsListingSaturatedCause: {}},
 	githubTestsArtifactInventorySaturatedComponent: {githubTestsListingSaturatedCause: {}},
-	githubTestsLateRerunRunsComponent:              {githubTestsPageBudgetCause: {}, githubTestsListingSaturatedCause: {}},
 }
 
 func githubTestsIncompleteInVocabulary(observation GitHubTestsIncomplete) bool {

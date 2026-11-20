@@ -184,8 +184,7 @@ func TestGitHubTestsRouteEmitsSixCompleteEffectsAndStripsRedirectAuth(t *testing
 	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
 		t.Fatalf("watermark=%v", batch.Watermark)
 	}
-	// The claim holds a UTC midnight, so the runs listing is followed by its deep range (one more listing).
-	if len(doer.requests) != 8 || doer.requests[7] != "blob.example/report.zip" {
+	if len(doer.requests) != 7 || doer.requests[6] != "blob.example/report.zip" {
 		t.Fatalf("requests=%v", doer.requests)
 	}
 	// cicd and tests delegate to ONE complete-row unit, so this same batch must
@@ -275,10 +274,8 @@ func TestGitHubTestsRouteDefaultCollectsMoreThanTwoPagesOfInWindowRuns(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 3 pages of the runs range and 3 of its deep range: the claim holds a UTC midnight, and the fake answers every
-	// runs listing with the same pages.
-	if doer.runListRequests != 6 {
-		t.Fatalf("workflow run pages=%d want 6", doer.runListRequests)
+	if doer.runListRequests != 3 {
+		t.Fatalf("workflow run pages=%d want 3", doer.runListRequests)
 	}
 	for _, effect := range batch.Effects {
 		if effect.Destination == "ci_pipeline_runs" && len(effect.Rows) == 201 {

@@ -145,72 +145,6 @@ func githubTestsRunsRangeHi(claim Claim, peeledHi string) string {
 	return claim.BeforeAt.UTC().Format(time.RFC3339)
 }
 
-// The claim that holds a UTC midnight lists the runs once more in a deep range
-// (the late re-run relist): runs created up to the late lookback before the
-// runs range, so a run re-run after it left the refresh lookback gets its new
-// attempt once a day. The deep range has its own page budget.
-const (
-	githubTestsLateRerunLookbackDefault = 7 * 24 * time.Hour
-	githubTestsLateRerunMaxPages        = 1000
-)
-
-// githubTestsHoldsMidnight reports whether an incremental claim with both
-// edges holds a UTC midnight M with since < M <= before. Contiguous claims
-// hold each midnight once; a retry or a held claim keeps its window, so it
-// holds the same midnight again.
-func githubTestsHoldsMidnight(claim Claim) bool {
-	if claim.Mode != "incremental" || claim.SinceAt == nil || claim.BeforeAt == nil {
-		return false
-	}
-	midnight := claim.SinceAt.UTC().Truncate(24 * time.Hour).Add(24 * time.Hour)
-	return !midnight.After(claim.BeforeAt.UTC())
-}
-
-// githubTestsLateRerunFloor is the oldest last-updated time the deep range
-// reads: the window start minus the window width, at least one day. Two deep
-// claims are at most one day plus one width apart, so their spans meet.
-func githubTestsLateRerunFloor(claim Claim) time.Time {
-	since := claim.SinceAt.UTC()
-	return since.Add(-max(24*time.Hour, claim.BeforeAt.UTC().Sub(since)))
-}
-
-// githubTestsLateRerunRunsQuery is the created range of one deep listing:
-// from the start of the floor's day minus the late lookback to one second
-// before the runs range, so no run is listed by both ranges of one claim.
-// Both ends are times, like the runs range (the artifacts listing starts at a
-// date).
-func githubTestsLateRerunRunsQuery(claim Claim, lookback, late time.Duration, peeledHi string) url.Values {
-	hi := peeledHi
-	if hi == "" {
-		hi = claim.SinceAt.UTC().Add(-lookback - time.Second).Format(time.RFC3339)
-	}
-	lo := githubTestsLateRerunFloor(claim).Add(-late).Truncate(24 * time.Hour).Format(time.RFC3339)
-	return url.Values{"per_page": {"100"}, "created": {lo + ".." + hi}}
-}
-
-// githubTestsLateRerunWanted is the keep rule of the deep range: the run
-// changed at or after the floor, and at least the refresh lookback after its
-// creation. A run that last changed sooner was read in its final state by the
-// runs range of the claim that holds that change. A run with no creation time
-// (GitHub cannot list it by created) or no last-updated time (no late change
-// can be shown) is refused; the runs range's own rule for such a run is
-// unchanged.
-func githubTestsLateRerunWanted(run gitHubWorkflowRunPayload, claim Claim, lookback time.Duration) bool {
-	created, updated := parseGitHubWorkflowTime(run.CreatedAt), parseGitHubWorkflowTime(run.UpdatedAt)
-	if created == nil || updated == nil {
-		return false
-	}
-	return !updated.UTC().Before(githubTestsLateRerunFloor(claim)) && !updated.UTC().Before(created.UTC().Add(lookback))
-}
-
-// githubTestsLateRerunListedOutsideDeepRange reports a run the deep listing answered although it is not in the deep
-// created range: created at or after the runs range's floor (it belongs to the runs range), or with no created time
-// (GitHub cannot list it by created). Each route skips it in the deep range, whatever the listing answered, so the two
-// ranges never read one run twice in a claim.
-func githubTestsLateRerunListedOutsideDeepRange(pipeline githubTestsPipelineRow, claim Claim, lookback time.Duration) bool {
-	return pipeline.QueuedAt == nil || !pipeline.QueuedAt.UTC().Before(claim.SinceAt.UTC().Add(-lookback))
-}
-
 // githubTestsRunsQuery is the created range of one runs-phase listing.
 func githubTestsRunsQuery(claim Claim, lookback time.Duration, peeledHi string) url.Values {
 	query := url.Values{"per_page": {"100"}}
@@ -418,44 +352,6 @@ func (handler GitHubTestsRouteHandler) refreshLookback() time.Duration {
 	return githubTestsRefreshLookbackDefault
 }
 
-func (handler GitHubTestsRouteHandler) lateRerunLookback() time.Duration {
-	if handler.LateRerunLookback > 0 {
-		return handler.LateRerunLookback
-	}
-	return githubTestsLateRerunLookbackDefault
-}
-
-func (handler GitHubTestsRouteHandler) lateRerunMaxPages() int {
-	if handler.LateRerunMaxPages > 0 {
-		return handler.LateRerunMaxPages
-	}
-	return githubTestsLateRerunMaxPages
-}
-
-// recordGitHubTestsLateRerunRunsStop records that the deep range of the runs
-// phase ended before its end (page budget, walk bound or a saturated second),
-// as a cursor flag the result turns into its late_rerun_runs observation. The pair
-// advances the watermark: re-runs older than the stop keep their stored row,
-// and reports_complete stays false, so coverage shows the gap.
-func recordGitHubTestsLateRerunRunsStop(
-	cursor githubTestsChunkCursor, client *providerfoundation.HTTPClient, claim Claim, cause string, pages int,
-) githubTestsChunkCursor {
-	if cause == githubTestsListingSaturatedCause {
-		cursor.LateRunsSaturated = true
-	} else {
-		cursor.LateRunsBudget = true
-	}
-	if client != nil {
-		client.Metrics.RecordInventoryPageCap(claim.Provider, claim.Dataset)
-	}
-	slog.Warn(
-		"late re-run relist of the runs stopped before its end; older re-runs keep their stored row",
-		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", logging.ProviderText(cursor.Repo), "component", githubTestsLateRerunRunsComponent, "cause", cause, "pages", pages,
-	)
-	return cursor
-}
-
 // recordGitHubTestsSaturated records a listing range that cannot be walked
 // past GitHub's cap of results: more runs share one second than the cap allows.
 // The cursor keeps one flag per phase; githubTestsFinalMetadataBatch turns the
@@ -489,12 +385,6 @@ func githubTestsSaturatedObservations(cursor githubTestsChunkCursor) []GitHubTes
 	}
 	if cursor.SaturatedArtifacts {
 		out = append(out, GitHubTestsIncomplete{Component: githubTestsArtifactInventorySaturatedComponent, Cause: githubTestsListingSaturatedCause, Count: 1})
-	}
-	if cursor.LateRunsBudget {
-		out = append(out, GitHubTestsIncomplete{Component: githubTestsLateRerunRunsComponent, Cause: githubTestsPageBudgetCause, Count: 1})
-	}
-	if cursor.LateRunsSaturated {
-		out = append(out, GitHubTestsIncomplete{Component: githubTestsLateRerunRunsComponent, Cause: githubTestsListingSaturatedCause, Count: 1})
 	}
 	return out
 }

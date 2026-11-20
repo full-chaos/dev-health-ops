@@ -91,7 +91,7 @@ func FixedEnv() []string {
 }
 
 // Tools is the closed set of binaries the real Runner starts.
-var Tools = []string{"git", "helm", "kubectl"}
+var Tools = []string{"git", "helm"}
 
 // Exec is the real Runner. Env is the whole child env; argv[0] must be one of
 // Tools and is resolved on the PATH of Env (never the caller's PATH). The
@@ -105,17 +105,16 @@ func Real() Exec { return Exec{Env: FixedEnv()} }
 
 // command builds the exec.Cmd of one closed-set binary: each case names its
 // binary as a literal, the words come from the Step's argv. Any other name is
-// refused before anything starts.
+// refused before anything starts. Every git call turns off git's detached
+// auto-maintenance (it can still write in the repo after the call returns).
 func command(ctx context.Context, name string, args []string) (*exec.Cmd, error) {
 	switch name {
 	case "git":
-		return exec.CommandContext(ctx, "git", args...), nil
+		return exec.CommandContext(ctx, "git", append([]string{"-c", "maintenance.auto=false"}, args...)...), nil
 	case "helm":
 		return exec.CommandContext(ctx, "helm", args...), nil
-	case "kubectl":
-		return exec.CommandContext(ctx, "kubectl", args...), nil
 	}
-	return nil, Refuse("exec: argv[0] is not one of git, helm, kubectl")
+	return nil, Refuse("exec: argv[0] is not one of git, helm")
 }
 
 // Run starts c.Argv with no shell.

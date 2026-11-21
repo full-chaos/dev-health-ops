@@ -1,6 +1,7 @@
 package syncdispatchruntime
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -125,6 +126,72 @@ func TestChunkedShareGivesTheSlotBackAfterABudgetDeferral(t *testing.T) {
 	assertAdmittedIDs(t, "next pass, s0 deferred by the budget step", chunkSharePass(t, shareScheduledRun(), "medium", units, active), "l1")
 	units[1] = chunkShareUnit("s0", syncRunUnitStatusRetrying, "github", "medium", "prs", &dueAgain)
 	assertAdmittedIDs(t, "pass at s0's available_at", chunkSharePass(t, shareScheduledRun(), "medium", units, active), "s0")
+}
+
+// staleUnit is a dispatching unit past the stale cutoff: a reclaim candidate the active read does not count.
+func staleUnit(id, provider, dataset string) dispatchGuardUnit {
+	unit := chunkShareUnit(id, syncRunUnitStatusDispatching, provider, "medium", dataset, nil)
+	unit.updatedAt = admissionNow.Add(-2 * staleDispatchSeconds())
+	return unit
+}
+
+// P1-2 and M10: a stale chunked reclaim uses up the chunked share like a new chunked unit, so beside it the run's short
+// unit, not a second chunked unit, gets the other slot (github and gitlab medium; l1 planned or due; s0 planned or due).
+func TestChunkedShareChargesStaleChunkedReclaims(t *testing.T) {
+	past := admissionNow.Add(-time.Second)
+	for _, provider := range []string{"github", "gitlab"} {
+		for _, l1Due := range []bool{false, true} {
+			for _, s0Due := range []bool{false, true} {
+				l1 := chunkShareUnit("l1", syncRunUnitStatusPlanned, provider, "medium", "cicd", nil)
+				if l1Due {
+					l1 = chunkShareUnit("l1", syncRunUnitStatusRetrying, provider, "medium", "cicd", &past)
+				}
+				s0 := chunkShareUnit("s0", syncRunUnitStatusPlanned, provider, "medium", "prs", nil)
+				if s0Due {
+					s0 = chunkShareUnit("s0", syncRunUnitStatusRetrying, provider, "medium", "prs", &past)
+				}
+				units := []dispatchGuardUnit{staleUnit("l0", provider, "cicd"), l1, s0}
+				name := fmt.Sprintf("%s l1 due=%v s0 due=%v", provider, l1Due, s0Due)
+				t.Run(name, func(t *testing.T) {
+					assertAdmittedIDs(t, name, chunkSharePass(t, shareScheduledRun(), "medium", units, chunkShareBucket{}), "l0", "s0")
+				})
+			}
+		}
+	}
+}
+
+// M11: the share never refuses a stale chunked reclaim, it only uses the share up. A reclaim held back while the run's
+// short units run could sit idle long enough for the unreclaimable sweep to fail it (dispatching, no lease, idle past the
+// stale window), so the reclaim keeps its priority even when the chunked share is already spent.
+func TestChunkedShareNeverRefusesAStaleChunkedReclaim(t *testing.T) {
+	units := []dispatchGuardUnit{staleUnit("l0", "github", "cicd"), plannedMedium("s0", "prs")}
+	got := chunkSharePass(t, shareScheduledRun(), "medium", units, chunkShareBucket{active: 1, activeChunked: 1})
+	assertAdmittedIDs(t, "l1 active, l0 stale, s0 planned", got, "l0")
+	units = []dispatchGuardUnit{staleUnit("l0", "github", "cicd"), staleUnit("l2", "github", "cicd"), plannedMedium("s0", "prs")}
+	assertAdmittedIDs(t, "l0 and l2 stale, s0 planned", chunkSharePass(t, shareScheduledRun(), "medium", units, chunkShareBucket{}), "l0", "l2")
+}
+
+// The cooldown-expiry sequence: s0 is deferred by a cooldown, l1 then takes the other slot, l0 and later l1 go stale.
+// The share holds at every pass where it can: at t=960 s the stale l1 is reclaimed beside the live l0 (a reclaim is never
+// refused), so s0, due again, waits for the first chunked end, and gets that slot then.
+func TestChunkedShareCooldownExpirySequence(t *testing.T) {
+	future := admissionNow.Add(16 * time.Minute)
+	due := admissionNow.Add(-time.Second)
+	fresh := func(id string) dispatchGuardUnit {
+		return chunkShareUnit(id, syncRunUnitStatusDispatching, "github", "medium", "cicd", nil)
+	}
+	s0 := func(at *time.Time) dispatchGuardUnit {
+		return chunkShareUnit("s0", syncRunUnitStatusRetrying, "github", "medium", "prs", at)
+	}
+	pass := func(name string, units []dispatchGuardUnit, state chunkShareBucket, want ...string) {
+		t.Helper()
+		assertAdmittedIDs(t, name, chunkSharePass(t, shareScheduledRun(), "medium", units, state), want...)
+	}
+	pass("t=0", []dispatchGuardUnit{plannedMedium("l0", "cicd"), plannedMedium("l1", "cicd"), plannedMedium("s0", "prs")}, chunkShareBucket{}, "l0", "s0")
+	pass("t=60s, s0 deferred", []dispatchGuardUnit{plannedMedium("l1", "cicd"), s0(&future)}, chunkShareBucket{active: 1, activeChunked: 1}, "l1")
+	pass("t=900s, l0 stale", []dispatchGuardUnit{staleUnit("l0", "github", "cicd"), fresh("l1"), s0(&future)}, chunkShareBucket{active: 1, activeChunked: 1}, "l0")
+	pass("t=960s, l1 stale, s0 due", []dispatchGuardUnit{fresh("l0"), staleUnit("l1", "github", "cicd"), s0(&due)}, chunkShareBucket{active: 1, activeChunked: 1}, "l1")
+	pass("first chunked end, s0 due", []dispatchGuardUnit{s0(&due)}, chunkShareBucket{active: 1, activeChunked: 1}, "s0")
 }
 
 // Card cell (i): with a live backfill unit in the bucket both shares apply and the smaller bound wins.

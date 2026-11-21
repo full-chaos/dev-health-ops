@@ -394,7 +394,16 @@ func (fold *guardBucketFold) cappedIDs() []string {
 	claimableNew := max(fold.slots-fold.reclaimCount, 0)
 	chunkedLimit := claimableNew
 	if fold.plainWaiting && fold.chunkedShare >= 0 {
-		chunkedLimit = min(chunkedLimit, fold.chunkedShare)
+		// A kept stale chunked reclaim is not in activeChunked (the active read counts fresh dispatching only), so it
+		// uses up the share here. The share never refuses the reclaim itself: held back, an idle stale unit is what the
+		// unreclaimable sweep fails.
+		keptChunkedReclaims := 0
+		for _, unit := range fold.reclaims {
+			if unit.chunked {
+				keptChunkedReclaims++
+			}
+		}
+		chunkedLimit = min(chunkedLimit, max(fold.chunkedShare-keptChunkedReclaims, 0))
 	}
 	admitted, admittedChunked := 0, 0
 	for _, unit := range fold.news {

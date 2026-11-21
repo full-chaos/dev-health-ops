@@ -194,6 +194,19 @@ func deletionShiftExecutor(
 	at func(githubTestsChunkCursor) bool, mutate func(),
 ) CompleteRouteExecutionResult {
 	t.Helper()
+	result, reached := deletionShiftExecutorReached(t, handler, claim, doer, at, mutate)
+	if !reached {
+		t.Fatal("premise: the walk never reached the mutation point")
+	}
+	return result
+}
+
+// deletionShiftExecutorReached is deletionShiftExecutor that reports whether an attempt end satisfied at.
+func deletionShiftExecutorReached(
+	t *testing.T, handler GitHubTestsRouteHandler, claim Claim, doer providerfoundation.HTTPDoer,
+	at func(githubTestsChunkCursor) bool, mutate func(),
+) (CompleteRouteExecutionResult, bool) {
+	t.Helper()
 	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	unit := nativeTestClaim("github", "cicd").Unit
 	unit.SinceAt, unit.BeforeAt, unit.Mode = claim.SinceAt, claim.BeforeAt, claim.Mode
@@ -220,10 +233,7 @@ func deletionShiftExecutor(
 	for attempt := 1; attempt <= 2000; attempt++ {
 		result, execErr := executor.Execute(context.Background(), session, descriptor)
 		if execErr == nil {
-			if !mutated {
-				t.Fatal("premise: the walk never reached the mutation point")
-			}
-			return result
+			return result, mutated
 		}
 		if !errors.As(execErr, new(ChunkContinuationError)) {
 			t.Fatalf("attempt %d: %v", attempt, execErr)
@@ -242,7 +252,7 @@ func deletionShiftExecutor(
 		}
 	}
 	t.Fatal("the unit does not complete in 2000 attempts")
-	return CompleteRouteExecutionResult{}
+	return CompleteRouteExecutionResult{}, false
 }
 
 // deletionShiftOutcome is one measured cell: the survivors the uninterrupted walk of the survivors reads and the resumed

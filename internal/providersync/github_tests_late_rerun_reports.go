@@ -178,6 +178,7 @@ func recordGitHubTestsArtifactsWalkBound(
 		return recordGitHubTestsWalkBound(cursor, client, claim, githubTestsArtifactInventoryComponent, bound)
 	}
 	logGitHubTestsWalkBound(cursor, claim, githubTestsLateRerunReportsComponent, bound)
+	cursor = githubTestsHoldDeepStopAfterCredit(cursor, client, claim, githubTestsArtifactInventoryComponent)
 	return recordGitHubTestsRelistStop(cursor, client, claim, githubTestsPageBudgetCause, cursor.RangeHi, cursor.RangeItems)
 }
 

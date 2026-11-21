@@ -61,7 +61,7 @@ var pinnedTableFiles = map[string]censusPin{
 		"not a reader of pass_rate: the pooled sources read stored duration samples or raw rows; the live gate leaves a retired day out of both arms"},
 	"internal/queryapi/testopswindow/testopswindow.go": {"9d5f75544bf86eb88b3153540f9a4c1fcfbe34ad3c20ebfb011e9fb37e6e9b20",
 		"reader rule applied: newest-row subquery then the live-row filter, the outer query names the case counts and the report completeness counts"},
-	"internal/teamkeytables/teamkeytables.go": {"12835900d42816f40bd4e37162603f05af088f1eda0ae7c82ac3566f7f96026f",
+	"internal/teamkeytables/teamkeytables.go": {"f42b820d1461322c830939efab4a1701959c262e4afb231bddae17fad9bfa1cd",
 		"not a reader: the registry of the tables, their marker column and carried values"},
 }
 

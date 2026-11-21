@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // The golden holds, for neutral synthetic requests over the three request
@@ -88,6 +89,19 @@ func queryKind(statement string) string {
 // projection differs, drops the projection and the ranking-column alias.
 func comparableText(kind, statement string) string {
 	q := strings.Join(strings.Fields(statement), " ")
+	if kind == "team" {
+		// Declared divergence from the frozen reference (CHAOS-14426): the Go read
+		// picks ONE whole version per (day, team, repo) by the newest computed_at and,
+		// on a tie, the hash of the version (teamkeytables.TeamMetricsDailyNewestOrder);
+		// the reference reads three independent argMax(<col>, computed_at). For keys
+		// whose newest computed_at is unique the two give the same values. The frozen
+		// text is compared with the pick block put back.
+		picked := strings.Join(strings.Fields("argMax("+teamkeytables.TeamMetricsDailyPick+", "+teamkeytables.TeamMetricsDailyNewestOrder+") AS picked, "+
+			"picked.1 AS commits_count, picked.2 AS after_hours_commits_count, picked.3 AS weekend_commits_count,"), " ")
+		frozen := "argMax(commits_count, computed_at) AS commits_count, argMax(after_hours_commits_count, computed_at) AS after_hours_commits_count, " +
+			"argMax(weekend_commits_count, computed_at) AS weekend_commits_count,"
+		q = strings.Replace(q, picked, frozen, 1)
+	}
 	if kind == "own" || kind == "teams" {
 		if i := strings.Index(q, " FROM "); i >= 0 {
 			q = q[i:]

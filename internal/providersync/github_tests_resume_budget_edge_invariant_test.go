@@ -401,23 +401,29 @@ func TestGitHubTestsResumeOlderBinaryCursorWithoutReseekState(t *testing.T) {
 }
 
 // The named transition residual (CHAOS-14385, acp ruling (a)): a deep walk that an OLDER binary re-sought and yielded
-// inside, resumed by this binary, reads what main reads: its cursor carries no re-seek pages and no credit, so the deep
-// stop advances the watermark past the same unread runs as main (1, 3 and 3 here). This cell fails if this binary does
-// worse than main; a later fix of the residual changes it on purpose.
+// inside, resumed by this binary: its cursor carries no re-seek pages and no credit, so the deep stop advances the
+// watermark. Main leaves 1, 3 and 3 runs unread here. The listing replay at the page-budget stop (CHAOS-14435) needs no
+// stored state, so it also covers an older binary's cursor: the page-end shape now reads the survivor main leaves (0);
+// the two shapes that yield inside the re-seek stay at main's 3. This cell fails if this binary does worse than main on
+// any shape, or if the pinned value moves (a later fix of the residual changes it on purpose).
 func TestGitHubTestsResumeOlderBinaryCursorTransitionResidualSameAsMain(t *testing.T) {
-	mainUnread := map[string]int{"multi_page_yield_at_page_end": 1, "two_yields_inside": 3, "two_yields_after": 3}
+	type residual struct{ main, here int }
+	unread := map[string]residual{"multi_page_yield_at_page_end": {1, 0}, "two_yields_inside": {3, 3}, "two_yields_after": {3, 3}}
 	deep := budgetEdgeListings()[1]
 	for _, coalesce := range coalesceFlags {
 		for _, shape := range budgetEdgeShapes() {
-			want, ok := mainUnread[shape.name]
+			want, ok := unread[shape.name]
 			if !ok {
 				continue
 			}
 			t.Run(coalesceName(coalesce)+"/"+shape.name, func(t *testing.T) {
-				unread, _, walk, _ := budgetEdgeRun(t, deep, shape, coalesce, budgetEdgeStrip(t))
-				t.Logf("unread_survivors=%d watermark=%v", len(unread), walk.final.Watermark != nil)
-				if len(unread) != want || walk.final.Watermark == nil {
-					t.Errorf("deep residual: unread=%d watermark=%v, want main's %d unread with the watermark advanced", len(unread), walk.final.Watermark != nil, want)
+				got, _, walk, _ := budgetEdgeRun(t, deep, shape, coalesce, budgetEdgeStrip(t))
+				t.Logf("unread_survivors=%d main=%d watermark=%v", len(got), want.main, walk.final.Watermark != nil)
+				if len(got) > want.main {
+					t.Errorf("deep residual: unread=%d, main leaves %d: this binary reads less than main", len(got), want.main)
+				}
+				if len(got) != want.here || walk.final.Watermark == nil {
+					t.Errorf("deep residual: unread=%d watermark=%v, want %d unread with the watermark advanced", len(got), walk.final.Watermark != nil, want.here)
 				}
 			})
 		}

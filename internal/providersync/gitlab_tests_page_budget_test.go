@@ -14,14 +14,16 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
-// gitLabTestsPagedDoer serves a fixed number of pipeline pages, each holding
-// perPage pipelines with no artifacts to download. Both chunked phases walk
+// gitLabTestsPagedDoer serves pages*perPage-missing pipelines with no artifacts to
+// download, newest id first, as GitLab answers order_by=id&sort=desc: a request
+// gets offsets [(page-1)*per_page, page*per_page). Both chunked phases walk
 // the same /pipelines listing, so pipelineListRequests counts the re-visits
 // that CHAOS-4130 is about.
 type gitLabTestsPagedDoer struct {
 	t                    *testing.T
 	pages                int
 	perPage              int
+	missing              int
 	pipelineListRequests int
 }
 
@@ -34,24 +36,29 @@ func (doer *gitLabTestsPagedDoer) Do(request *http.Request) (*http.Response, err
 	case path == "/api/v4/projects/123":
 		body = `{"id":123,"path_with_namespace":"acme/api","default_branch":"main","only_allow_merge_if_pipeline_succeeds":true}`
 	case path == "/api/v4/projects/123/pipelines":
-		page := 1
-		if raw := request.URL.Query().Get("page"); raw != "" {
-			parsed, err := strconv.Atoi(raw)
-			if err != nil {
-				doer.t.Fatalf("invalid page query %q: %v", raw, err)
+		page, perPage := 1, doer.perPage
+		for key, target := range map[string]*int{"page": &page, "per_page": &perPage} {
+			if raw := request.URL.Query().Get(key); raw != "" {
+				parsed, err := strconv.Atoi(raw)
+				if err != nil {
+					doer.t.Fatalf("invalid %s query %q: %v", key, raw, err)
+				}
+				*target = parsed
 			}
-			page = parsed
 		}
-		if page < 1 || page > doer.pages {
-			doer.t.Fatalf("unexpected pipelines page %d", page)
+		total := doer.pages*doer.perPage - doer.missing
+		from := (page - 1) * perPage
+		if page < 1 || perPage < 1 || from > total {
+			doer.t.Fatalf("unexpected pipelines page %d per_page %d", page, perPage)
 		}
 		doer.pipelineListRequests++
-		if page < doer.pages {
+		to := min(from+perPage, total)
+		if to < total {
 			header.Set("X-Next-Page", strconv.Itoa(page+1))
 		}
-		items := make([]string, 0, doer.perPage)
-		for offset := 0; offset < doer.perPage; offset++ {
-			id := strconv.Itoa(9000 + (page-1)*doer.perPage + offset)
+		items := make([]string, 0, to-from)
+		for offset := from; offset < to; offset++ {
+			id := strconv.Itoa(9000 + total - 1 - offset)
 			items = append(items, `{"id":`+id+`,"name":"CI","ref":"main","status":"success",`+
 				`"created_at":"2026-07-22T10:00:00Z","started_at":"2026-07-22T10:01:00Z",`+
 				`"finished_at":"2026-07-22T10:05:00Z","source":"push","sha":"abc",`+
@@ -78,7 +85,8 @@ func (doer *gitLabTestsPagedDoer) Do(request *http.Request) (*http.Response, err
 // Nothing has cancelled a GitLab project yet only because none has been busy
 // enough; the counters must charge a page once, on first entry, here too.
 func TestGitLabTestsChunkRouteCountsEachPipelinePageOnce(t *testing.T) {
-	doer := &gitLabTestsPagedDoer{t: t, pages: 2, perPage: 3}
+	// 199 pipelines: the last page is short, so no binary asks for a page past it.
+	doer := &gitLabTestsPagedDoer{t: t, pages: 2, perPage: 100, missing: 1}
 	claim := nativeTestClaim("gitlab", "tests")
 	client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
 	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
@@ -144,7 +152,7 @@ func TestGitLabTestsChunkRouteCountsEachPipelinePageOnce(t *testing.T) {
 // deterministic-terminal category that destroyed the GitHub units in
 // CHAOS-4130 -- the project just has to be busy enough to get there.
 func TestGitLabTestsChunkRouteFinalizesTruncatedInventoryInsteadOfCancelling(t *testing.T) {
-	doer := &gitLabTestsPagedDoer{t: t, pages: 3, perPage: 2}
+	doer := &gitLabTestsPagedDoer{t: t, pages: 3, perPage: 100}
 	claim := nativeTestClaim("gitlab", "tests")
 	client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
 	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
@@ -214,7 +222,7 @@ func TestGitLabTestsChunkRouteFinalizesTruncatedInventoryInsteadOfCancelling(t *
 // It is the branch the CHAOS-4130 units actually died on: they never got to
 // spend a request.
 func TestGitLabTestsChunkRouteResumeWithExhaustedBudgetFinalizes(t *testing.T) {
-	doer := &gitLabTestsPagedDoer{t: t, pages: 3, perPage: 2}
+	doer := &gitLabTestsPagedDoer{t: t, pages: 3, perPage: 100}
 	claim := nativeTestClaim("gitlab", "tests")
 	client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
 	spent, err := encodeGitLabTestsChunkCursor(gitLabTestsChunkCursor{

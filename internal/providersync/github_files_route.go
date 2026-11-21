@@ -877,7 +877,7 @@ var gitHubFilesWidestInstant = time.Date(2026, 12, 31, 23, 59, 59, 999_999_999, 
 // non-final emission: the same split, the same cursor stamping and the same
 // payload sizing it uses. ok is false when the split yields more than one.
 func gitHubFilesPreparedChunk(effect EffectBatch, before, after string) (PreparedProviderChunk, bool) {
-	chunks, err := splitCompleteRouteBatch(CompleteRouteBatch{Effects: []EffectBatch{effect}}, ShadowComparison{}, GitHubFilesChunkPolicy())
+	chunks, err := splitCompleteRouteBatch(nil, CompleteRouteBatch{Effects: []EffectBatch{effect}}, ShadowComparison{}, GitHubFilesChunkPolicy())
 	if err != nil || len(chunks) != 1 {
 		return PreparedProviderChunk{}, false
 	}

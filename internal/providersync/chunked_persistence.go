@@ -156,8 +156,8 @@ type ChunkPolicy struct {
 // (MaxSourceItems, MaxEffectRows, MaxPreparedBytes), not per attempt.
 const defaultMaxChunksPerAttempt = 64
 
-// testOpsMaxSourceItems is the rows-per-destination bound of the TestOps routes: with MaxEffectRows (500) the split's
-// bound is min(500, 500) = 500, and both must stay at or above it. Measured 5x the rows per sub-chunk for about +8 % sub-chunk time.
+// testOpsMaxSourceItems is the rows-per-destination bound of the TestOps routes: with MaxEffectRows (500) the split's first cap is
+// min(500, 500) = 500, and both must stay at or above it.
 const testOpsMaxSourceItems = 500
 
 // TestOpsRouteChunkPolicy is the chunk policy of the github and gitlab cicd and tests routes: the default with 500 rows per destination.
@@ -488,21 +488,27 @@ func ChunkContinuationDelay(err error) (time.Duration, bool) {
 // preserves destination ordering. A route-specific iterator can replace this
 // adapter without changing the persistence protocol.
 func SplitCompleteRouteBatch(batch CompleteRouteBatch, policy ChunkPolicy) ([]PreparedProviderChunk, error) {
-	return splitCompleteRouteBatch(batch, ShadowComparison{}, policy)
+	return splitCompleteRouteBatch(nil, batch, ShadowComparison{}, policy)
 }
 
 // SplitCompleteRouteBatchWithComparison is the production adapter. The
 // comparator result is attached only to the final chunk so an exact resume
 // can complete the unit without invoking the provider or Python again.
 func SplitCompleteRouteBatchWithComparison(
+	claim Claim,
 	batch CompleteRouteBatch,
 	comparison ShadowComparison,
 	policy ChunkPolicy,
 ) ([]PreparedProviderChunk, error) {
-	return splitCompleteRouteBatch(batch, comparison, policy)
+	return splitCompleteRouteBatch(&claim, batch, comparison, policy)
 }
 
+// splitCompleteRouteBatch halves the rows per sub-chunk until every sub-chunk fits. The caps run 500, 250, 125, 100, 50, 25, 12, 6, 3, 1:
+// the steps from 100 down are those of the 100-row split this one replaced. At two or more rows a sub-chunk also has to be accepted by the
+// store's own builder under the worst-case stamps (storeRefusesSubchunk); a claim of nil skips that check (a caller whose next step is the
+// builder itself). At one row only the raw size test applies: the store then decides with the real stamps.
 func splitCompleteRouteBatch(
+	claim *Claim,
 	batch CompleteRouteBatch,
 	comparison ShadowComparison,
 	policy ChunkPolicy,
@@ -512,270 +518,104 @@ func splitCompleteRouteBatch(
 	}
 	ordered := append([]EffectBatch(nil), batch.Effects...)
 	sortEffectBatches(ordered)
-	// A prepared chunk is bounded by both the provider-page budget and the sink effect-row budget. The smaller bound is intentional:
-	// a provider can emit several normalized effects for one source item, so using only the effect cap would allow one source page to
-	// grow without limit.
-	capRows := min(policy.MaxEffectRows, policy.MaxSourceItems)
-	packer := newChunkPacker(batch, comparison, policy, ordered, capRows)
-	return packer.pack()
-}
-
-// chunkPacker cuts one emission into prepared chunks greedily: a chunk takes the next r rows of EVERY destination (so chunk
-// boundaries stay row-aligned across the destinations), r as large as the row cap and the byte limit allow. The byte limit follows the
-// chunk's own largest slice: the reserved limit for two or more rows, the policy limit for one row (nothing left to shrink), so a row
-// alone is refused only when it is over the policy limit. The trailing destination (effectSplitsLast) and the final metadata ride the
-// last chunk when they fit, else a chunk of their own after it. Row sizes are summed from prefix arrays; each chunk is encoded
-// exactly once to confirm its size.
-type chunkPacker struct {
-	batch      CompleteRouteBatch
-	comparison ShadowComparison
-	policy     ChunkPolicy
-	ordered    []EffectBatch
-	capRows    int
-	body       []int // indexes into ordered of the destinations packed in row order
-	tail       int   // index into ordered of the trailing destination, -1 when none
-	prefix     [][]int
-	maxBody    int
-	skeleton   int
-}
-
-func newChunkPacker(batch CompleteRouteBatch, comparison ShadowComparison, policy ChunkPolicy, ordered []EffectBatch, capRows int) *chunkPacker {
-	packer := &chunkPacker{batch: batch, comparison: comparison, policy: policy, ordered: ordered, capRows: capRows, tail: -1}
-	packer.prefix = make([][]int, len(ordered))
-	for index, effect := range ordered {
-		if effectSplitsLast(effect.Destination) {
-			packer.tail = index
-		} else {
-			packer.body = append(packer.body, index)
-			packer.maxBody = max(packer.maxBody, len(effect.Rows))
-		}
-		sums := make([]int, len(effect.Rows)+1)
-		for position, row := range effect.Rows {
-			sums[position+1] = sums[position] + len(row) + 1
-		}
-		packer.prefix[index] = sums
-	}
-	return packer
-}
-
-func (packer *chunkPacker) slice(index, from, take int) []json.RawMessage {
-	rows := packer.ordered[index].Rows
-	lo, hi := min(from, len(rows)), min(from+take, len(rows))
-	return rows[lo:hi]
-}
-
-// estimate is a safe upper bound of the encoded size of the chunk made of rows [from, from+take) of every body destination.
-func (packer *chunkPacker) estimate(from, take int) int {
-	total := packer.skeleton
-	for _, index := range packer.body {
-		sums := packer.prefix[index]
-		lo, hi := min(from, len(sums)-1), min(from+take, len(sums)-1)
-		total += sums[hi] - sums[lo]
-	}
-	return total
-}
-
-// build makes the chunk of rows [from, from+take) of every body destination plus tailTake rows of the trailing destination; final
-// attaches the final metadata. It returns the chunk and its exact encoded size.
-func (packer *chunkPacker) build(from, take, tailFrom, tailTake int, final bool) (PreparedProviderChunk, int, error) {
-	effects := make([]EffectBatch, 0, len(packer.ordered))
-	for index, effect := range packer.ordered {
-		var rows []json.RawMessage
-		if index == packer.tail {
-			rows = packer.slice(index, tailFrom, tailTake)
-		} else {
-			rows = packer.slice(index, from, take)
-		}
-		part, err := BuildEffectBatch(effect.Destination, effect.Recovery, rows)
-		if err != nil {
-			return PreparedProviderChunk{}, 0, err
-		}
-		effects = append(effects, part)
-	}
-	payloadBytes := 0
-	for _, effect := range effects {
-		payloadBytes += effect.PayloadBytes
-	}
-	chunk := PreparedProviderChunk{
-		SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion, Effects: effects, PayloadBytes: payloadBytes,
-	}
-	if final {
-		packer.attachFinal(&chunk)
-	}
-	encoded, err := encodedPreparedChunkPayload(chunk)
-	if err != nil {
-		return PreparedProviderChunk{}, 0, err
-	}
-	chunk.PayloadBytes = len(encoded)
-	return chunk, len(encoded), nil
-}
-
-func (packer *chunkPacker) attachFinal(chunk *PreparedProviderChunk) {
-	chunk.InventoryComplete = true
-	chunk.Result = cloneChunkResult(packer.batch.Result)
-	chunk.Watermark = packer.batch.Watermark
-	chunk.Evidence = packer.batch.Evidence
-	chunk.Comparison = packer.comparison
-	chunk.WorklogObservations = append([]JiraWorklogFetchObservation(nil), packer.batch.WorklogObservations...)
-}
-
-func (packer *chunkPacker) limit(rows int) int {
-	if rows <= 1 {
-		return packer.policy.MaxPreparedBytes
-	}
-	return splitPayloadLimit(packer.policy)
-}
-
-func (packer *chunkPacker) pack() ([]PreparedProviderChunk, error) {
-	skeleton, _, err := packer.build(0, 0, 0, 0, false)
-	if err != nil {
-		return nil, err
-	}
-	// The estimate is the measured empty skeleton plus the rows; it can be low by the payload_bytes digits of the destinations that
-	// have rows (about 40 bytes), which the exact encode of the chosen chunk below corrects.
-	packer.skeleton = skeleton.PayloadBytes
-	var chunks []PreparedProviderChunk
-	var spans [][2]int
-	for from := 0; from < packer.maxBody; {
-		remaining := packer.maxBody - from
-		take := min(packer.capRows, remaining)
-		if take >= 2 {
-			reserved := splitPayloadLimit(packer.policy)
-			low, high := 1, take // the largest take >= 2 whose estimate fits the reserved limit, else 1
-			for low < high {
-				middle := (low + high + 1) / 2
-				if packer.estimate(from, middle) <= reserved {
-					low = middle
-				} else {
-					high = middle - 1
-				}
+	// A prepared chunk is bounded by both the provider-page budget and the
+	// sink effect-row budget. The smaller bound is intentional: a provider can
+	// emit several normalized effects for one source item, so using only the
+	// effect cap would allow one source page to grow without limit.
+	maxRows := min(policy.MaxEffectRows, policy.MaxSourceItems)
+	for maxRows >= 1 {
+		count := 1
+		for _, effect := range ordered {
+			if rows := (len(effect.Rows) + maxRows - 1) / maxRows; rows > count {
+				count = rows
 			}
-			take = low
 		}
-		var chunk PreparedProviderChunk
-		for {
-			var size int
-			chunk, size, err = packer.build(from, take, 0, 0, false)
-			if err != nil {
-				return nil, err
-			}
-			if take <= 1 {
-				if size > packer.policy.MaxPreparedBytes {
-					return nil, ErrChunkPolicyExceeded
+		chunks := make([]PreparedProviderChunk, 0, count)
+		valid := true
+		for ordinal := 0; ordinal < count; ordinal++ {
+			effects := make([]EffectBatch, 0, len(ordered))
+			for _, effect := range ordered {
+				// A trailing destination's rows fill the LAST sub-chunks of the emission, so they commit after every row
+				// of the other destinations (effectSplitsLast).
+				shift := 0
+				if effectSplitsLast(effect.Destination) {
+					shift = count - (len(effect.Rows)+maxRows-1)/maxRows
 				}
+				start := (ordinal - shift) * maxRows
+				if ordinal < shift || start > len(effect.Rows) {
+					start = len(effect.Rows)
+				}
+				end := start + maxRows
+				if end > len(effect.Rows) {
+					end = len(effect.Rows)
+				}
+				part, err := BuildEffectBatch(effect.Destination, effect.Recovery, effect.Rows[start:end])
+				if err != nil {
+					return nil, err
+				}
+				effects = append(effects, part)
+			}
+			payloadBytes := 0
+			for _, effect := range effects {
+				payloadBytes += effect.PayloadBytes
+			}
+			if payloadBytes > policy.MaxPreparedBytes {
+				valid = false
 				break
 			}
-			if size <= packer.limit(take) {
+			chunk := PreparedProviderChunk{
+				SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion,
+				Ordinal: ordinal, TotalChunks: count, Effects: effects,
+				InventoryComplete: ordinal == count-1, PayloadBytes: payloadBytes,
+			}
+			if chunk.InventoryComplete {
+				chunk.Result = cloneChunkResult(batch.Result)
+				chunk.Watermark = batch.Watermark
+				chunk.Evidence = batch.Evidence
+				chunk.Comparison = comparison
+				chunk.WorklogObservations = append([]JiraWorklogFetchObservation(nil), batch.WorklogObservations...)
+			}
+			encoded, encodeErr := encodedPreparedChunkPayload(chunk)
+			if encodeErr != nil {
+				return nil, encodeErr
+			}
+			chunk.PayloadBytes = len(encoded)
+			if chunk.PayloadBytes > policy.MaxPreparedBytes || maxRows >= 2 && claim != nil && storeRefusesSubchunk(*claim, chunk) {
+				valid = false
 				break
 			}
-			take -= 1 + (size-packer.limit(take))/max(1, size/take)
-			take = max(take, 1)
+			chunk.ManifestDigest = preparedChunkDigest(chunk)
+			chunks = append(chunks, chunk)
 		}
-		chunks = append(chunks, chunk)
-		spans = append(spans, [2]int{from, take})
-		from += take
-	}
-	return packer.finish(chunks, spans)
-}
-
-// finish places the trailing destination's rows and the final metadata, then numbers the chunks. The trailing rows go to the LAST
-// ceil(rows/cap) chunks, aligned from the end (the verdict commits after every other row of the run); the final metadata rides the
-// last chunk. When a chunk would pass its byte limit with them, they go into chunks of their own after the body instead.
-func (packer *chunkPacker) finish(chunks []PreparedProviderChunk, spans [][2]int) ([]PreparedProviderChunk, error) {
-	tailRows := 0
-	if packer.tail >= 0 {
-		tailRows = len(packer.ordered[packer.tail].Rows)
-	}
-	groups := (tailRows + packer.capRows - 1) / packer.capRows
-	total := max(len(chunks), groups, 1)
-	for len(spans) < total {
-		spans = append(spans, [2]int{packer.maxBody, 0})
-	}
-	shift := total - groups
-	placed := make([]PreparedProviderChunk, 0, total)
-	fits := true
-	for position := 0; position < total && fits; position++ {
-		tailFrom, tailTake := 0, 0
-		if position >= shift {
-			tailFrom = (position - shift) * packer.capRows
-			tailTake = min(tailRows-tailFrom, packer.capRows)
+		if valid {
+			return chunks, nil
 		}
-		candidate, size, err := packer.build(spans[position][0], spans[position][1], tailFrom, tailTake, position == total-1)
-		if err != nil {
-			return nil, err
-		}
-		if size > packer.limit(max(spans[position][1], tailTake)) {
-			fits = false
+		if maxRows == 1 {
 			break
 		}
-		placed = append(placed, candidate)
+		maxRows = nextSplitCap(maxRows)
 	}
-	if fits {
-		return packer.number(placed)
-	}
-	// The trailing rows or the final metadata do not fit beside the body rows: keep the body chunks as built and pack them after.
-	placed = placed[:0]
-	for position := range spans {
-		if spans[position][1] == 0 {
-			continue
-		}
-		candidate, size, err := packer.build(spans[position][0], spans[position][1], 0, 0, false)
-		if err != nil {
-			return nil, err
-		}
-		if size > packer.limit(spans[position][1]) && spans[position][1] > 1 || size > packer.policy.MaxPreparedBytes {
-			return nil, ErrChunkPolicyExceeded
-		}
-		placed = append(placed, candidate)
-	}
-	for tailFrom := 0; ; {
-		take := min(packer.capRows, tailRows-tailFrom)
-		for {
-			candidate, size, err := packer.build(packer.maxBody, 0, tailFrom, take, tailFrom+take >= tailRows)
-			if err != nil {
-				return nil, err
-			}
-			if size <= packer.limit(take) {
-				placed = append(placed, candidate)
-				break
-			}
-			if take <= 1 {
-				return nil, ErrChunkPolicyExceeded
-			}
-			take = max(1, take/2)
-		}
-		tailFrom += take
-		if tailFrom >= tailRows {
-			break
-		}
-	}
-	return packer.number(placed)
+	return nil, ErrChunkPolicyExceeded
 }
 
-func (packer *chunkPacker) number(chunks []PreparedProviderChunk) ([]PreparedProviderChunk, error) {
-	for ordinal := range chunks {
-		chunks[ordinal].Ordinal, chunks[ordinal].TotalChunks = ordinal, len(chunks)
-		chunks[ordinal].InventoryComplete = ordinal == len(chunks)-1
-		encoded, err := encodedPreparedChunkPayload(chunks[ordinal])
-		if err != nil {
-			return nil, err
-		}
-		chunks[ordinal].PayloadBytes = len(encoded)
-		chunks[ordinal].ManifestDigest = preparedChunkDigest(chunks[ordinal])
+// nextSplitCap halves the cap, but never steps over 100: from 500 the caps are 250, 125, 100, then 50, 25, 12, 6, 3, 1.
+func nextSplitCap(maxRows int) int {
+	next := maxRows / 2
+	if maxRows > 100 && next < 100 {
+		next = 100
 	}
-	return chunks, nil
+	return next
 }
 
-// splitReserveBytes is what the split does not measure of a stored chunk: the ledger column (bounded as a whole by
-// maxEffectLedgerStateBytes), the two cursors stamped after the split (maxChunkCursorBytes each, and the sidecar is JSON: a
-// character costs up to 6 bytes escaped), and about 1 KiB for the manifest digest, the executor's ordinal and the stamped
-// payload_bytes. Every other field of PreparedProviderChunk (rows, final result, watermark, evidence, comparison) is measured.
-const splitReserveBytes = maxEffectLedgerStateBytes + 2*6*maxChunkCursorBytes + 1<<10
-
-// splitPayloadLimit is the sidecar size a chunk of two or more rows may reach. The store refuses a chunk whose payload and ledger
-// column together pass maxChunkPayloadBytes (buildPreparedChunkMaterial). A one-row chunk is judged on MaxPreparedBytes instead.
-func splitPayloadLimit(policy ChunkPolicy) int {
-	return min(policy.MaxPreparedBytes, maxChunkPayloadBytes-splitReserveBytes)
+// storeRefusesSubchunk reports whether the store's own builder (buildPreparedChunkMaterial: the ledger of the chunk's effects, the payload
+// and the ledger together under 2 MiB, Validate) refuses the sub-chunk as the executor will stamp it, under the worst case: two cursors of 4 KiB
+// of characters that JSON escapes to six bytes, the highest ordinal digits, no total (resetEmissionChunks stamps 0), the widest instant.
+func storeRefusesSubchunk(claim Claim, chunk PreparedProviderChunk) bool {
+	worst := strings.Repeat("&", maxChunkCursorBytes)
+	chunk.TotalChunks, chunk.CursorBefore, chunk.CursorAfter = 0, worst, worst
+	chunk.Ordinal, chunk.ManifestDigest = 999_999, ""
+	_, err := buildPreparedChunkMaterial(claim, chunk, gitHubFilesWidestInstant)
+	return err != nil
 }
 
 func preparedChunkDigest(chunk PreparedProviderChunk) string {

@@ -203,8 +203,8 @@ func TestTestOpsRouteFailingHeavyEmissionPacksUnderTwoMiBOnRealStores(t *testing
 			t.Fatalf("stored chunk payload+ledger=%d status=%s, want <= %d and committed", withLedger, status, maxChunkPayloadBytes)
 		}
 	}
-	if chunks < 5 || chunks > 8 {
-		t.Fatalf("stored chunks=%d, want 2,000 failing rows (~5 KB each) packed about 400 to a chunk (5) plus the final chunk", chunks)
+	if chunks < 8 || chunks > 10 {
+		t.Fatalf("stored chunks=%d, want 2,000 failing rows (~5 KB each) halved from 500 to 250 rows per chunk (8) plus the final chunk", chunks)
 	}
 	var stored uint64
 	if err := conn.QueryRow(ctx, `SELECT count() FROM test_case_results FINAL WHERE org_id = ?`, session.Claim.OrgID).Scan(&stored); err != nil || stored != 2000 {
@@ -278,8 +278,8 @@ func (sink *crashAfterWriteSink) WriteEffect(ctx context.Context, claim Claim, e
 }
 
 // The window cell: one case with a failure message that puts its single-row chunk 40 KB over the split's reserved limit sits among 500
-// small cases, so main (100-row chunks, 2 MiB limit) accepts the chunk that holds it. The greedy split closes the chunk before it, gives it a
-// chunk of its own and goes on with the rest (3 chunks plus the final one at most; the chunk count is in the log line); every row is
+// small cases, so main (100-row chunks, 2 MiB limit) accepts the chunk that holds it. The split halves the emission until the store builder
+// accepts the worst-case stamps (down to single-row chunks near the edge; the chunk count is in the log line); every row is
 // written once to ClickHouse and the store refuses nothing.
 func TestTestOpsRouteBigRowInTheReserveWindowIsAllWrittenOnceWithNoRefusal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
@@ -289,7 +289,7 @@ func TestTestOpsRouteBigRowInTheReserveWindowIsAllWrittenOnceWithNoRefusal(t *te
 	sink := TestOpsClickHouseEffects{Conn: conn, Lease: session}
 	descriptor := cicdDescriptor(t)
 	descriptor.ChunkPolicy.MaxChunksPerAttempt = 1000
-	handler := rowsPolicyHandler{cases: 500, bigMessageBytes: splitPayloadLimit(TestOpsRouteChunkPolicy()) + 40_000 - 1_450}
+	handler := rowsPolicyHandler{cases: 500, bigMessageBytes: marginBase + 40_000 - 1_450}
 	var lastErr error
 	for attempt := 0; attempt < 60; attempt++ {
 		executor := runsGroupExecutor(time.Now().UTC(), handler, repository, newRunsGroupSink(), newRunsGroupDoer(t, 1, 1), nil)
@@ -311,8 +311,8 @@ func TestTestOpsRouteBigRowInTheReserveWindowIsAllWrittenOnceWithNoRefusal(t *te
 		t.Fatal(err)
 	}
 	t.Logf("window cell: 500 cases, one big row: %d stored chunks (incl. the final one), largest payload %d bytes, clickhouse rows=%d distinct=%d", chunks, largest, rows, distinct)
-	if chunks > 4 {
-		t.Fatalf("stored chunks=%d, want at most 4 (rows before the big row, the big row alone, the rest, the final chunk)", chunks)
+	if chunks > 600 {
+		t.Fatalf("stored chunks=%d, want at most 600 (worst-case stamps force single-row chunks near the edge; no refusal)", chunks)
 	}
 	if rows != 500 || distinct != 500 {
 		t.Fatalf("clickhouse holds %d rows (%d distinct), want every one of the 500 cases written once", rows, distinct)

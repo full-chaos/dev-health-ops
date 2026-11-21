@@ -115,7 +115,7 @@ func (executor CompleteRouteExecutor) executeChunked(
 				return ErrShadowMismatch
 			}
 			chunks, collectErr := SplitCompleteRouteBatchWithComparison(
-				batch, comparison, policy,
+				session.Claim, batch, comparison, policy,
 			)
 			if collectErr != nil {
 				return collectErr

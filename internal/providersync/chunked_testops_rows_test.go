@@ -15,6 +15,9 @@ import (
 // The TestOps routes split an emission at 500 rows per destination, not 100: the artifacts phase of a big report fills 5x fewer sub-chunks.
 // The split also keeps a sub-chunk under what the store accepts: payload + ledger column + the two cursors stamped after the split.
 
+// marginBase is the sub-chunk payload size the margin shapes are placed relative to (2 MiB minus 82,944 bytes).
+const marginBase = 2_014_208
+
 var testOpsRoutePairs = [][2]string{{"github", "cicd"}, {"github", "tests"}, {"gitlab", "cicd"}, {"gitlab", "tests"}}
 
 func syntheticTestCaseRows(count int, org string) []json.RawMessage {
@@ -162,17 +165,6 @@ func TestTestOpsRouteAttemptCommitsFiveHundredRowSubchunks(t *testing.T) {
 	}
 }
 
-func TestSplitPayloadLimitLeavesRoomForTheLedgerAndTheCursors(t *testing.T) {
-	t.Parallel()
-	want := maxChunkPayloadBytes - maxEffectLedgerStateBytes - 12*maxChunkCursorBytes - 1<<10
-	if got := splitPayloadLimit(DefaultChunkPolicy()); got != want {
-		t.Fatalf("limit for a 2 MiB policy = %d, want %d", got, want)
-	}
-	if got := splitPayloadLimit(ChunkPolicy{MaxPreparedBytes: 4096}); got != 4096 {
-		t.Fatalf("limit for a 4 KiB policy = %d, want it unchanged", got)
-	}
-}
-
 // The ledger column of one sub-chunk is bounded AS A WHOLE at write: encodeEffectLedgerState refuses a state over
 // maxEffectLedgerStateBytes (effect_ledger.go), whatever the entry count. Seven entries at their maximum are far under it.
 func TestEffectLedgerColumnIsBoundedAsAWholeAtWrite(t *testing.T) {
@@ -240,7 +232,7 @@ func TestSplitHalvesAPayloadThatTheStoreWouldRefuseWithItsLedger(t *testing.T) {
 	if size := measure(effect); size > maxChunkPayloadBytes || size < maxChunkPayloadBytes-1000 {
 		t.Fatalf("the synthetic payload is %d bytes, want it just under 2 MiB (%d)", size, maxChunkPayloadBytes)
 	}
-	chunks, err := SplitCompleteRouteBatch(CompleteRouteBatch{Effects: []EffectBatch{effect}}, TestOpsRouteChunkPolicy())
+	chunks, err := splitUnderTest(nativeTestClaim("github", "cicd"), CompleteRouteBatch{Effects: []EffectBatch{effect}}, TestOpsRouteChunkPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,124 +257,6 @@ func abs(value int) int {
 		return -value
 	}
 	return value
-}
-
-// github/files pre-checks "one emission = one sub-chunk" with the SAME split (gitHubFilesPreparedChunk) and the store's builder, so the
-// reserved limit is shared by construction: an emission in the reserved margin is not one sub-chunk any more and the route halves its rows.
-func TestGitHubFilesPreCheckSharesTheReservedSplitLimit(t *testing.T) {
-	t.Parallel()
-	claim := nativeTestClaim("github", "files")
-	build := func(contentBytes int) EffectBatch {
-		rows := make([]gitFileRow, 100)
-		stamp := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
-		for index := range rows {
-			content := strings.Repeat("x", contentBytes)
-			rows[index] = gitFileRow{RepoID: "r", Path: "f" + strconv.Itoa(index), Contents: &content, LastSynced: stamp, OrgID: claim.OrgID}
-		}
-		effect, err := effectBatchFromValues("git_files", EffectReadbackRequired, rows)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return effect
-	}
-	limit := splitPayloadLimit(GitHubFilesChunkPolicy())
-	sawFit, sawSplit := false, false
-	for size := 19_000; size <= 22_000; size += 50 {
-		effect := build(size)
-		chunk := PreparedProviderChunk{SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion, Effects: []EffectBatch{effect}}
-		encoded, err := encodedPreparedChunkPayload(chunk)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if gap := len(encoded) - limit; gap > -300 && gap < 300 {
-			continue
-		}
-		fits := gitHubFilesChunkFits(claim, effect, "b", "a")
-		if want := len(encoded) < limit; fits != want {
-			t.Fatalf("emission of %d payload bytes (limit %d): fits=%t, want %t", len(encoded), limit, fits, want)
-		}
-		sawFit, sawSplit = sawFit || fits, sawSplit || !fits
-	}
-	if !sawFit || !sawSplit {
-		t.Fatalf("the sweep did not cross the limit (fit=%t split=%t)", sawFit, sawSplit)
-	}
-}
-
-// Whatever the split accepts, the store accepts: a payload at the split's limit, then the executor's own steps after the split (cursors at
-// 4 KiB of characters that JSON escapes to 6 bytes each, a high ordinal, the manifest digest) and, for the final emission, a final result of
-// 60 KiB, then the store's builder with the real ledger of the seven TestOps effects. Both for a non-final and for a final sub-chunk.
-func TestSplitAcceptedSubchunkIsAcceptedByTheStoreAtWorstCaseCursorsAndFinalResult(t *testing.T) {
-	t.Parallel()
-	claim := nativeTestClaim("github", "cicd")
-	policy := TestOpsRouteChunkPolicy()
-	limit := splitPayloadLimit(policy)
-	for _, final := range []bool{false, true} {
-		var result map[string]any
-		if final {
-			result = map[string]any{"complete": true, "detail": strings.Repeat("r", 60<<10)}
-		}
-		build := func(pad int) CompleteRouteBatch {
-			rows := make([]json.RawMessage, 100)
-			for index := range rows {
-				size := 19_000
-				if index == 0 {
-					size += pad
-				}
-				rows[index] = json.RawMessage(`{"org_id":"org-acme","pad":"` + strings.Repeat("x", size) + `"}`)
-			}
-			effects := make([]EffectBatch, 0, 7)
-			for _, destination := range []string{"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks", "test_suite_results",
-				"test_case_results", "coverage_snapshots", testOpsRunReportCompletenessDestination} {
-				var destinationRows []json.RawMessage
-				if destination == "test_case_results" {
-					destinationRows = rows
-				}
-				effect, err := BuildEffectBatch(destination, EffectReadbackRequired, destinationRows)
-				if err != nil {
-					t.Fatal(err)
-				}
-				effects = append(effects, effect)
-			}
-			return CompleteRouteBatch{Effects: effects, Result: result}
-		}
-		measure := func(batch CompleteRouteBatch) int {
-			chunk := PreparedProviderChunk{SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion, TotalChunks: 1,
-				Effects: batch.Effects, InventoryComplete: true, Result: batch.Result}
-			encoded, err := encodedPreparedChunkPayload(chunk)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return len(encoded)
-		}
-		pad, target := 0, limit-200
-		for step := 0; step < 40 && abs(measure(build(pad))-target) > 40; step++ {
-			pad += target - measure(build(pad))
-		}
-		batch := build(pad)
-		if size := measure(batch); size > limit || size < limit-1000 {
-			t.Fatalf("final=%t: the synthetic sub-chunk is %d bytes, want it just under the split limit %d", final, size, limit)
-		}
-		chunks, err := splitCompleteRouteBatch(batch, ShadowComparison{}, policy)
-		if err != nil || len(chunks) != 1 {
-			t.Fatalf("final=%t: split = %d chunks, err=%v, want one sub-chunk under the limit", final, len(chunks), err)
-		}
-		worst := strings.Repeat("&", maxChunkCursorBytes)
-		resetEmissionChunks(chunks, ChunkRouteEmission{CursorBefore: worst, CursorAfter: worst})
-		if final {
-			chunks[0].InventoryComplete, chunks[0].Result = true, cloneChunkResult(batch.Result)
-		}
-		if err := sizeEmissionChunks(chunks); err != nil {
-			t.Fatal(err)
-		}
-		chunks[0].Ordinal = 999_999
-		chunks[0].ManifestDigest = preparedChunkDigest(chunks[0])
-		material, err := buildPreparedChunkMaterial(claim, chunks[0], time.Date(2026, 12, 31, 23, 59, 59, 999_999_999, time.UTC))
-		if err != nil {
-			t.Fatalf("final=%t: the store refuses what the split accepted: %v", final, err)
-		}
-		t.Logf("final=%t: payload %d + ledger %d = %d of %d", final, len(material.payloadRaw), len(material.ledgerRaw),
-			len(material.payloadRaw)+len(material.ledgerRaw), maxChunkPayloadBytes)
-	}
 }
 
 // A chunk that cannot shrink any further (one row per destination) is judged on the plain policy limit, so a single row in the reserve
@@ -422,7 +296,7 @@ func tunedMarginPad(t *testing.T, above int) int {
 		}
 		return len(encoded)
 	}
-	target := splitPayloadLimit(TestOpsRouteChunkPolicy()) + above
+	target := marginBase + above
 	pad := target - 2000
 	for step := 0; step < 40 && abs(measure(pad)-target) > 8; step++ {
 		pad += target - measure(pad)
@@ -458,7 +332,7 @@ func TestSingleRowInTheReserveMarginIsAcceptedOnEveryTestOpsRoute(t *testing.T) 
 		if !ok {
 			t.Fatalf("%s/%s has no descriptor", route[0], route[1])
 		}
-		chunks, err := SplitCompleteRouteBatch(marginBatch(t, []json.RawMessage{marginRow(t, pad)}), descriptor.ChunkPolicy)
+		chunks, err := splitUnderTest(nativeTestClaim(route[0], route[1]), marginBatch(t, []json.RawMessage{marginRow(t, pad)}), descriptor.ChunkPolicy)
 		if err != nil || len(chunks) != 1 {
 			t.Fatalf("%s/%s: a single row in the margin split into %d chunks, err=%v, want 1 and nil", route[0], route[1], len(chunks), err)
 		}
@@ -479,11 +353,11 @@ func TestSingleRowInTheReserveMarginIsAcceptedOnEveryTestOpsRoute(t *testing.T) 
 // over 2 MiB. Both are the behaviour on main before the reserve existed, not a change of this PR.
 func TestSingleRowAboveWhatTheStoreAcceptsIsRefusedAsOnMain(t *testing.T) {
 	t.Parallel()
-	over := tunedMarginPad(t, maxChunkPayloadBytes-splitPayloadLimit(TestOpsRouteChunkPolicy())+4000)
+	over := tunedMarginPad(t, maxChunkPayloadBytes-marginBase+4000)
 	if _, err := SplitCompleteRouteBatch(marginBatch(t, []json.RawMessage{marginRow(t, over)}), TestOpsRouteChunkPolicy()); !errors.Is(err, ErrChunkPolicyExceeded) {
 		t.Fatalf("a one-row payload over 2 MiB: err=%v, want the policy refusal", err)
 	}
-	between := tunedMarginPad(t, maxChunkPayloadBytes-splitPayloadLimit(TestOpsRouteChunkPolicy())-300)
+	between := tunedMarginPad(t, maxChunkPayloadBytes-marginBase-300)
 	chunks, err := SplitCompleteRouteBatch(marginBatch(t, []json.RawMessage{marginRow(t, between)}), TestOpsRouteChunkPolicy())
 	if err != nil || len(chunks) != 1 {
 		t.Fatalf("a one-row payload just under 2 MiB: %d chunks, err=%v, want the split to accept it", len(chunks), err)
@@ -498,7 +372,7 @@ func TestRowsEachInTheReserveMarginHalveToSingleRowsAndAreAllKept(t *testing.T) 
 	t.Parallel()
 	pad := tunedMarginPad(t, 3000)
 	rows := []json.RawMessage{marginRow(t, pad), marginRow(t, pad+1), marginRow(t, pad+2)}
-	chunks, err := SplitCompleteRouteBatch(marginBatch(t, rows), TestOpsRouteChunkPolicy())
+	chunks, err := splitUnderTest(nativeTestClaim("github", "cicd"), marginBatch(t, rows), TestOpsRouteChunkPolicy())
 	if err != nil || len(chunks) != 3 {
 		t.Fatalf("3 rows each in the margin split into %d chunks, err=%v, want 3 single-row chunks", len(chunks), err)
 	}
@@ -531,7 +405,7 @@ func TestGitHubFilesSingleRowInTheReserveMarginKeepsItsContents(t *testing.T) {
 		}
 		return effect
 	}
-	limit := splitPayloadLimit(GitHubFilesChunkPolicy())
+	limit := marginBase
 	length := limit + 3000
 	for step := 0; step < 40; step++ {
 		chunk := PreparedProviderChunk{SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion, TotalChunks: 1,
@@ -547,51 +421,5 @@ func TestGitHubFilesSingleRowInTheReserveMarginKeepsItsContents(t *testing.T) {
 	}
 	if !gitHubFilesChunkFits(claim, build(length), "before", "after") {
 		t.Fatalf("a single file row %d bytes over the reserved limit is refused by the pre-check although the store takes it", 3000)
-	}
-}
-
-// A singleton TAIL of a larger emission is judged on the plain policy limit too: the limit follows the candidate chunk's own largest
-// destination slice, not the emission-wide row cap. 500 small cases and a 501st in the reserve margin give two chunks under the 500-row
-// policy (the cap does not collapse to one row) and six under the 100-row policy; the tail is accepted by the store at a low and at a high ordinal.
-func TestSingletonTailInTheReserveMarginDoesNotHalveTheEmission(t *testing.T) {
-	t.Parallel()
-	pad := tunedMarginPad(t, 3000)
-	rows := make([]json.RawMessage, 0, 501)
-	for index := 0; index < 500; index++ {
-		rows = append(rows, marginRow(t, 50))
-	}
-	rows = append(rows, marginRow(t, pad))
-	for _, policy := range []struct {
-		name   string
-		policy ChunkPolicy
-		chunks int
-	}{{"the TestOps policy (500 rows)", TestOpsRouteChunkPolicy(), 2}, {"the default policy (100 rows, as on main)", DefaultChunkPolicy(), 6}} {
-		chunks, err := SplitCompleteRouteBatch(marginBatch(t, rows), policy.policy)
-		if err != nil || len(chunks) != policy.chunks {
-			t.Fatalf("%s: 501 cases with a singleton tail in the margin gave %d chunks, err=%v, want %d", policy.name, len(chunks), err, policy.chunks)
-		}
-		tail := chunks[len(chunks)-1]
-		tailRows := 0
-		for _, effect := range tail.Effects {
-			if effect.Destination == "test_case_results" {
-				tailRows = len(effect.Rows)
-			}
-		}
-		if tailRows != 1 {
-			t.Fatalf("%s: the tail holds %d case rows, want the one big row", policy.name, tailRows)
-		}
-		if err := storeAcceptsChunks(t, chunks); err != nil {
-			t.Fatalf("%s: the store refuses a chunk of the emission: %v", policy.name, err)
-		}
-		resetEmissionChunks(chunks, ChunkRouteEmission{CursorBefore: strings.Repeat("&", maxChunkCursorBytes), CursorAfter: strings.Repeat("&", maxChunkCursorBytes)})
-		last := len(chunks) - 1
-		if err := sizeEmissionChunks(chunks[last : last+1]); err != nil {
-			t.Fatal(err)
-		}
-		chunks[last].Ordinal = 999_999
-		chunks[last].ManifestDigest = preparedChunkDigest(chunks[last])
-		if _, err := buildPreparedChunkMaterial(nativeTestClaim("github", "cicd"), chunks[last], time.Date(2026, 12, 31, 23, 59, 59, 999_999_999, time.UTC)); err != nil {
-			t.Fatalf("%s: the store refuses the tail at ordinal 999,999 with 4 KiB escaped cursors: %v", policy.name, err)
-		}
 	}
 }

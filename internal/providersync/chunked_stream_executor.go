@@ -187,7 +187,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 				batch.Evidence = FetchEvidence{}
 				batch.WorklogObservations = nil
 			}
-			chunks, splitErr := splitCompleteRouteBatch(batch, finalComparison, policy)
+			chunks, splitErr := splitCompleteRouteBatch(&session.Claim, batch, finalComparison, policy)
 			if splitErr != nil {
 				return nil, splitErr
 			}
@@ -530,7 +530,7 @@ func coalescedEmissionFits(claim Claim, policy ChunkPolicy, emission ChunkRouteE
 	batch.Result, batch.Watermark = nil, nil
 	batch.Evidence = FetchEvidence{}
 	batch.WorklogObservations = nil
-	chunks, err := splitCompleteRouteBatch(batch, ShadowComparison{}, policy)
+	chunks, err := splitCompleteRouteBatch(&claim, batch, ShadowComparison{}, policy)
 	if err != nil || len(chunks) != 1 {
 		return false
 	}

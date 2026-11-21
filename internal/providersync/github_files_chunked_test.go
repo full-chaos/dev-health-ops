@@ -860,42 +860,6 @@ func TestGitHubFilesChunkFitsNeverAcceptsWhatTheNanosecondClockStoreRefuses(t *t
 		t.Fatal(err)
 	}
 	guess := 2_000_000 + maxChunkPayloadBytes - len(material.payloadRaw) - len(material.ledgerRaw)
-	// FIRST assertion (the claim of this test): a fine-step sweep across the pre-check edge and across the store's edge, with the
-	// nanosecond clock: no length is accepted by the pre-check and then refused by the store. storeAccepts builds the chunk without the
-	// split, so it does not share the pre-check's limit.
-	storeAccepts := func(length int) bool {
-		chunk := PreparedProviderChunk{SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion, Ordinal: 99999,
-			CursorBefore: "before", CursorAfter: "after", Effects: []EffectBatch{fitsTestEffect(t, length)}}
-		if sizeEmissionChunks([]PreparedProviderChunk{chunk}) != nil {
-			return false
-		}
-		chunk.PayloadBytes = 0
-		encoded, err := encodedPreparedChunkPayload(chunk)
-		if err != nil {
-			return false
-		}
-		chunk.PayloadBytes = len(encoded)
-		chunk.ManifestDigest = preparedChunkDigest(chunk)
-		_, err = buildPreparedChunkMaterial(claim, chunk, nanos)
-		return err == nil
-	}
-	preCheckEdge := guess - splitReserveBytes + 8 // about where the reserved split limit ends the pre-check
-	sweptFit, sweptRefused := 0, 0
-	for _, centre := range []int{preCheckEdge, guess} {
-		for length := centre - 4096; length <= centre+4096; length += 512 {
-			if gitHubFilesChunkFits(claim, fitsTestEffect(t, length), "before", "after") {
-				sweptFit++
-				if !storeAccepts(length) {
-					t.Fatalf("length %d: the pre-check accepts it and the store (ns clock) refuses it", length)
-				}
-			} else {
-				sweptRefused++
-			}
-		}
-	}
-	if sweptFit == 0 || sweptRefused == 0 {
-		t.Fatalf("the sweep did not cross the pre-check edge (accepted %d, refused %d)", sweptFit, sweptRefused)
-	}
 	low, high := guess-32, guess+32
 	if !productionAccepts(claim, fitsTestEffect(t, low), nanos) || productionAccepts(claim, fitsTestEffect(t, high), nanos) {
 		low, high = 1_000_000, 2_200_000

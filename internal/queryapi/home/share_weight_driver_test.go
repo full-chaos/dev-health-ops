@@ -119,7 +119,8 @@ func shareDoubleHome(t *testing.T) (*Response, shareDoubleRead, shareDoubleRead)
 			return scan([][]any{{shareDoubleRepoA, "acme/a"}, {shareDoubleRepoB, "acme/b"}})
 		case strings.Contains(q, "name AS display_name"):
 			return scan([][]any{{shareDoubleTeam, "Ops"}})
-		case strings.Contains(q, "argMax(total_loc_touched,") && strings.Contains(q, "AS value"):
+		// A value read picks one version of every measure (CHAOS-14430): it is the churn read when it sums this column.
+		case strings.Contains(q, "AS picked") && strings.Contains(q, "sum(total_loc_touched") && strings.Contains(q, "AS value"):
 			if !strings.Contains(q, shareMarker) {
 				return nil, fmt.Errorf("the team-scoped churn value is not weighted:\n%s", q)
 			}

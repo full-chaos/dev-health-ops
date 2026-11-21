@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
+	"slices"
 	"strings"
 	"time"
 
@@ -57,38 +58,43 @@ func metricFromClause(table, column, scopeFilter, startParam, endParam string, o
 		// as a stored ratio.
 		valueColumns = changefailure.CountColumns
 	}
-	var valueProjections []string
 	if isPRRework(table, column) {
-		// The rework ratio is computed from the day's counts, never read as a
-		// stored ratio. The counts are Nullable (a row written before they
-		// existed holds NULL), and argMax skips a NULL argument: it would take
-		// a count of an OLDER row of the day. The tuple keeps the NULL of the
-		// newest row, so all four counts come from one generation.
-		valueColumns = nil
-		for _, vc := range prrework.CountColumns {
-			valueProjections = append(valueProjections, fmt.Sprintf("tupleElement(argMax(tuple(%s), computed_at), 1) AS %s", vc, vc))
-		}
+		// The rework ratio is computed from the day's counts, never read as a stored ratio.
+		valueColumns = prrework.CountColumns
 	}
-	for _, vc := range valueColumns {
-		if nullableValueColumns[vc] {
-			// argMax skips a NULL argument: while an older version sits in an unmerged part it would serve that
-			// version instead of the newest row's NULL. The tuple is never NULL, so the newest row wins (as explain).
-			valueProjections = append(valueProjections, fmt.Sprintf("tupleElement(argMax(tuple(%s), computed_at), 1) AS %s", vc, vc))
-			continue
+	return newestVersionSource(table, valueColumns, source, fmt.Sprintf(`WHERE day >= {%s:Date} AND day < {%s:Date}
+            %s`, startParam, endParam, scopeFilter), "GROUP BY "+strings.Join(naturalKey, ", "))
+}
+
+// newestVersionSource is one row per key of table: ONE version picked by rowview.VersionOrder (the newest computed_at,
+// then the hash of the measures, so a computed_at tie serves one version whatever the insert order), with the value
+// columns and the live-row columns of that version. A Nullable column keeps the picked version's NULL. The live-row rule
+// is read from the picked row: a key whose picked version is a retraction row leaves the result.
+// where is the reader's filter (a WHERE clause); the organization predicate is added here. groupBy is the GROUP BY
+// clause of the key.
+func newestVersionSource(table string, valueColumns []string, source, where, groupBy string) string {
+	key := strings.TrimPrefix(groupBy, "GROUP BY ")
+	columns := append([]string(nil), valueColumns...)
+	live := ""
+	if liverow.Registered(table) {
+		for _, column := range liverow.Columns(table) {
+			if !slices.Contains(columns, column) {
+				columns = append(columns, column)
+			}
 		}
-		valueProjections = append(valueProjections, fmt.Sprintf("argMax(%s, computed_at) AS %s", vc, vc))
+		live = "\n        WHERE " + liverow.Predicate(table, "newest")
 	}
 	return fmt.Sprintf(`(
+        SELECT * FROM (
             SELECT
                 %s,
                 %s
             FROM %s
-            WHERE day >= {%s:Date} AND day < {%s:Date}
             %s
               AND org_id = {org_id:String}
-            GROUP BY %s%s
-        )`, strings.Join(naturalKey, ",\n                "), strings.Join(valueProjections, ",\n                "),
-		source, startParam, endParam, scopeFilter, strings.Join(naturalKey, ", "), liveRowHaving(table))
+            %s
+        ) AS newest%s
+    )`, strings.ReplaceAll(key, ", ", ",\n                "), rowview.VersionPick(table, columns), source, where, groupBy, live)
 }
 
 // teamViewSource is the served team view of a table with team rows (CHAOS-14379), aliased as the table: one row per
@@ -97,24 +103,11 @@ func metricFromClause(table, column, scopeFilter, startParam, endParam string, o
 func teamViewSource(table, where string) (source string, ok bool) {
 	switch table {
 	case "work_item_metrics_daily":
-		return rowview.ServedTeamSource("work_item_metrics_daily", where, "") + " AS work_item_metrics_daily", true
+		return rowview.ServedTeamSource("work_item_metrics_daily", where, rowview.WorkItemMetricsNewestOrder) + " AS work_item_metrics_daily", true
 	case "work_item_state_durations_daily":
-		return rowview.ServedTeamSource("work_item_state_durations_daily", where, "") + " AS work_item_state_durations_daily", true
+		return rowview.ServedTeamSource("work_item_state_durations_daily", where, rowview.StateDurationsNewestOrder) + " AS work_item_state_durations_daily", true
 	}
 	return "", false
-}
-
-// liveRowHaving keeps a key of a team-keyed daily table only when its newest
-// row is a measurement (see package liverow). A retraction row is the newest
-// row of a key the compute no longer produces: it is not a sample of an
-// average, not a row of the has-data count and not a driver to name. Without
-// this, a bare argMax over a Nullable column also skips the NULL of the
-// retraction row and serves the older value it replaced.
-func liveRowHaving(table string) string {
-	if !liverow.Registered(table) {
-		return ""
-	}
-	return "\n            HAVING " + liverow.NewestPredicate(table, "")
 }
 
 // metricValueExpression ports _metric_value_expression (api/queries/
@@ -355,30 +348,18 @@ func fetchBlockedHours(ctx context.Context, client QueryClient, startDay, endDay
 	source, view := "work_item_state_durations_daily", "\n              AND "+rowview.OrgPredicate("work_item_state_durations_daily", "")
 	if oneTeam {
 		source, view = rowview.ServedTeamSource("work_item_state_durations_daily",
-			"day >= {start_day:Date} AND day < {end_day:Date} AND status = 'blocked'"+scopeFilter, "")+" AS work_item_state_durations_daily", ""
+			"day >= {start_day:Date} AND day < {end_day:Date} AND status = 'blocked'"+scopeFilter, rowview.StateDurationsNewestOrder)+" AS work_item_state_durations_daily", ""
 	}
 	query := fmt.Sprintf(`
         SELECT
             day,
             sum(duration_hours) AS value
-        FROM (
-            SELECT
-                day,
-                provider,
-                work_scope_id,
-                team_id,
-                status,
-                argMax(duration_hours, computed_at) AS duration_hours
-            FROM %s
-            WHERE day >= {start_day:Date} AND day < {end_day:Date}
-              AND status = 'blocked'
-            %s
-              AND org_id = {org_id:String}%s
-            GROUP BY day, provider, work_scope_id, team_id, status, row_view%s
-        )
+        FROM %s
         GROUP BY day
         ORDER BY day
-    `, source, scopeFilter, view, liveRowHaving("work_item_state_durations_daily"))
+    `, newestVersionSource("work_item_state_durations_daily", []string{"duration_hours"}, source, fmt.Sprintf(`WHERE day >= {start_day:Date} AND day < {end_day:Date}
+              AND status = 'blocked'
+            %s%s`, scopeFilter, view), "GROUP BY day, provider, work_scope_id, team_id, status, row_view"))
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},

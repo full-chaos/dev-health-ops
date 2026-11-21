@@ -289,7 +289,23 @@ func TestGitHubTestsResumeDeepReportsUnderCreditHoldsTheWatermark(t *testing.T) 
 							t.Fatal(err)
 						}
 						plain := newListingFake(t, slices.Clone(fake.runs))
-						next := deletionShiftPlainWalk(t, handler, listing.claim, deletionShiftDoer(t, plain, true))
+						// The next walk starts from an empty cursor (decodeGitHubTestsChunkCursor("")): no deletion mark, no credit.
+						firstMark := -1
+						nextCursor := chargedResumeWalk(t, handler, listing.claim, deletionShiftDoer(t, plain, true),
+							func(c githubTestsChunkCursor) bool {
+								if firstMark < 0 {
+									firstMark = c.DeletionProven
+								}
+								return false
+							}, func(githubTestsChunkCursor) {})
+						next, nextErr := githubTestsFinalMetadataBatch(listing.claim, nextCursor)
+						if nextErr != nil {
+							t.Fatal(nextErr)
+						}
+						if final.DeletionProven != 1 || firstMark != 0 || nextCursor.DeletionProven != 0 || nextCursor.RecordCredit != 0 {
+							t.Errorf("deletion mark: walk 1 ends %d (want 1), walk 2 starts %d and ends %d with credit %d (want 0, 0, 0)",
+								final.DeletionProven, firstMark, nextCursor.DeletionProven, nextCursor.RecordCredit)
+						}
 						unread := chargedR1Unread(listing, plain, fake)
 						incomplete := deletionShiftIncomplete(t, batch.Result)
 						t.Logf("CELL deep_reports_credit/%s/%s pause=%d bound=%d pipelines=%d rc=%d unread=%v watermark=%v incomplete=%v next_watermark=%v",
@@ -830,4 +846,23 @@ func TestGitHubTestsDeepStopCountsOnePageCapPerPhase(t *testing.T) {
 			}
 		}
 	}
+}
+
+// The cursor decode ignores fields it does not know (json.Unmarshal, no DisallowUnknownFields): a binary without the
+// deletion mark reads a cursor that carries "d":1 and resumes it as main (rollback). The same cell runs on main's form.
+func TestGitHubTestsCursorWithTheDeletionMarkDecodesWithoutIt(t *testing.T) {
+	raw := `{"phase":"runs","next_url":"https://api.github.com/repos/acme/api/actions/runs?page=2","index":3,"pipelines":3,"jobs":0,"acceptance":0,"suites":0,"cases":0,"coverage":0,"requests":9,"pages":4,"run_pages":2,"artifact_pages":0,"repo":"acme/api","archives_seen":0,"archives_unreadable":0,"ra":"98","rc":4,"d":1}`
+	var withoutMark struct {
+		Phase string `json:"phase"`
+		Index int    `json:"index"`
+	}
+	if err := json.Unmarshal([]byte(raw), &withoutMark); err != nil || withoutMark.Phase != "runs" || withoutMark.Index != 3 {
+		t.Fatalf("a struct without the field: %+v %v", withoutMark, err)
+	}
+	cursor, err := decodeGitHubTestsChunkCursor(raw)
+	if err != nil || cursor.Phase != "runs" || cursor.Index != 3 || cursor.RecordCredit != 4 {
+		t.Fatalf("decode = %+v %v", cursor, err)
+	}
+	encoded, err := encodeGitHubTestsChunkCursor(cursor)
+	t.Logf("CELL decode_with_mark encoded=%s err=%v", encoded, err)
 }

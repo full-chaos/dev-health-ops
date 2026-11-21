@@ -554,10 +554,12 @@ func githubTestsRestorePagesEntered(cursor githubTestsChunkCursor) githubTestsCh
 	return cursor
 }
 
-// githubTestsPeelFreePages is the free pages of the range a peel starts (CHAOS-14435). The range ends at the cut second,
-// inclusive, so its first positions list again the runs of that second the finished range listed (cutListed): they were
-// charged there. A run deleted before the cut moves where an uninterrupted walk of the surviving runs peels, so it lists
-// fewer of them again and its page budget reaches deeper; the free pages keep this walk from reading less. At least one.
+// githubTestsPeelFreePages is the pages a peel gives back to its listing's page budget (CHAOS-14435). The next range ends at
+// the cut second, inclusive, so its first positions list again the runs of that second the finished range listed
+// (cutListed): they were charged there. A run deleted in the overlap or the first range moves where an uninterrupted walk
+// of the surviving runs peels, so it lists fewer of them again and its page budget reaches deeper; the pages given back keep
+// this walk from reading less. At least one. Page accounting only: the range is not a re-seek range, so it earns no record
+// credit (the runs of the cut second it reads are first reads, or carried and not read).
 func githubTestsPeelFreePages(cutListed int) int {
 	return max(1, (cutListed+nativePerPage-1)/nativePerPage)
 }
@@ -1757,7 +1759,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		default:
 			c.RangeHi = nextHi
 			c = githubTestsFreezeCutKeys(c)
-			c.ReseekPages = githubTestsPeelFreePages(cutListed)
+			if c.LateRuns {
+				c.LateRunPages = max(0, c.LateRunPages-githubTestsPeelFreePages(cutListed))
+			} else {
+				c.RunPages = max(0, c.RunPages-githubTestsPeelFreePages(cutListed))
+			}
 		}
 		return c
 	}
@@ -1783,7 +1789,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			c.RangeHi = nextHi
 			c = githubTestsFreezeCutKeys(c)
 			// The artifacts phase does not count the runs of its cut second; its carried list holds at most 4 runs.
-			c.ReseekPages = githubTestsPeelFreePages(0)
+			c.ArtifactPages = max(0, c.ArtifactPages-githubTestsPeelFreePages(0))
 		}
 		return c
 	}

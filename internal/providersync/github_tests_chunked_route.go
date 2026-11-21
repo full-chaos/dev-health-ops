@@ -1788,6 +1788,98 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	}
 	lookback := handler.refreshLookback()
 	lateLookback := handler.lateRerunLookback()
+	// The listing replay (CHAOS-14435). A run deleted before the walk's position moves where an uninterrupted walk of the
+	// surviving runs peels and stops at the page budget, so at a budget stop the listing is walked again from its start,
+	// listing only (githubTestsReplayListing), and the walk may list the pages that reach the replay's frontier on top of
+	// its budget. The page counter only rises: a listing stops for good at its budget plus X = min(ceil(budget / 10), 10)
+	// pages. The frontier and the anchor of the last grant live in this invocation only; a grant needs the anchor to move
+	// (an attempt that yields has committed a run listed after the grant). A replay that does not finish (an error, the rate
+	// floor, the end of the context) grants nothing: the stop is the release before it's.
+	type listingReplay struct {
+		frontier    *githubTestsFrontier
+		unfinished  bool
+		granted     bool
+		grantAnchor string
+		budget      int
+	}
+	replays := map[string]*listingReplay{}
+	listingBudget := func(listing string, budget int) int {
+		if replay := replays[listing]; replay != nil {
+			return max(budget, replay.budget)
+		}
+		return budget
+	}
+	extendAtStop := func(
+		listing string, budget, counter int, query func(string) url.Values, interval githubTestsCreatedInterval, runsPhase bool,
+	) bool {
+		if handler.noListingReplay {
+			return false
+		}
+		replay := replays[listing]
+		if replay == nil {
+			replay = &listingReplay{}
+			replays[listing] = replay
+		}
+		limit := budget + min((budget+9)/10, 10)
+		status, behind, granted := "", 0, 0
+		switch {
+		case counter >= limit:
+			status = "cap"
+		case replay.granted && replay.grantAnchor == cursor.AnchorID:
+			status = "no_progress"
+		case replay.unfinished:
+			status = "replay_unfinished"
+		case replay.frontier == nil && (!rateObserved.seen || rateObserved.remaining-int64(budget) < rateObserved.floor()):
+			status = "rate_floor"
+		}
+		if status == "" && replay.frontier == nil {
+			frontier, replayErr := githubTestsReplayListing(githubTestsListingWalk{ctx: ctx, client: client, path: root + "/actions/runs"},
+				query, interval, runsPhase, budget)
+			cursor.Requests = invocationBaseRequests + requests
+			cursor.Pages += frontier.pages
+			if replayErr != nil {
+				replay.unfinished, status = true, "replay_unfinished"
+			} else {
+				replay.frontier = &frontier
+			}
+		}
+		if status == "" {
+			behind, granted = replay.frontier.grant(cursor)
+			granted = min(granted, limit-counter)
+			status = "granted"
+			if granted <= 0 {
+				status = "not_behind"
+			}
+		}
+		slog.Info("provider inventory page budget stop checked by the listing replay",
+			"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", logging.ProviderText(cursor.Repo),
+			"listing", listing, "status", status, "behind", behind, "granted", granted, "pages", counter, "cap", limit)
+		if granted <= 0 {
+			return false
+		}
+		replay.budget, replay.granted, replay.grantAnchor = counter+granted, true, cursor.AnchorID
+		return true
+	}
+	extendRunsAtStop := func() bool {
+		if cursor.LateRuns {
+			return extendAtStop("deep_runs", lateMaxPages, cursor.LateRunPages, func(hi string) url.Values {
+				return githubTestsLateRerunRunsQuery(claim, lookback, lateLookback, hi)
+			}, githubTestsRunsInterval(claim, true, lookback, lateLookback), true)
+		}
+		return extendAtStop("runs", (maxRuns+nativePerPage-1)/nativePerPage, cursor.RunPages, func(hi string) url.Values {
+			return githubTestsRunsQuery(claim, lookback, hi)
+		}, githubTestsRunsInterval(claim, false, lookback, lateLookback), true)
+	}
+	extendArtifactsAtStop := func() bool {
+		if cursor.Relist == githubTestsRelistWalking {
+			return extendAtStop("deep_reports", lateMaxPages, cursor.ArtifactPages, func(hi string) url.Values {
+				return githubTestsRelistQueryAt(claim, lateLookback, hi)
+			}, githubTestsArtifactInterval(claim, true, lateLookback), false)
+		}
+		return extendAtStop("artifacts", (maxRuns+nativePerPage-1)/nativePerPage, cursor.ArtifactPages, func(hi string) url.Values {
+			return githubTestsArtifactRunQueryAt(claim, hi)
+		}, githubTestsArtifactInterval(claim, false, lateLookback), false)
+	}
 	// nextRunsListing follows a finished listing range of the runs phase: the
 	// runs range of the claim that holds a UTC midnight goes on to the deep
 	// range, every other one to the artifacts phase.
@@ -2075,7 +2167,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		if cursor.LateRuns {
 			// The deep range: its own budget; a stop records the advancing
 			// late_rerun_runs pair and the phase goes on.
-			allowance, budgetErr := githubTestsListingAllowance(lateMaxPages, cursor.LateRunPages, githubTestsFreePages(cursor))
+			allowance, budgetErr := githubTestsListingAllowance(listingBudget("deep_runs", lateMaxPages), cursor.LateRunPages, githubTestsFreePages(cursor))
 			exhausted := errors.Is(budgetErr, ErrPaginationCapExceeded)
 			if budgetErr != nil && !exhausted {
 				return budgetErr
@@ -2087,6 +2179,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				}
 				if moved {
 					cursor = reseek(cursor)
+					continue
+				}
+				if extendRunsAtStop() {
 					continue
 				}
 			}
@@ -2105,6 +2200,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				if visitErr != nil {
 					return visitErr
 				}
+				if !exhausted && collection.PageBudgetExhausted && extendRunsAtStop() {
+					continue
+				}
 				exhausted = exhausted || collection.PageBudgetExhausted
 			}
 			if exhausted {
@@ -2116,7 +2214,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		query := githubTestsRunsQuery(claim, lookback, cursor.RangeHi)
 		allowance, budgetErr := githubTestsListingAllowance(
-			(maxRuns+nativePerPage-1)/nativePerPage, cursor.RunPages, githubTestsFreePages(cursor))
+			listingBudget("runs", (maxRuns+nativePerPage-1)/nativePerPage), cursor.RunPages, githubTestsFreePages(cursor))
 		if errors.Is(budgetErr, ErrPaginationCapExceeded) {
 			moved, movedErr := movedAtSpentBudget(githubTestsRunsPhase)
 			if movedErr != nil {
@@ -2124,6 +2222,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			}
 			if moved {
 				cursor = reseek(cursor)
+				continue
+			}
+			if extendRunsAtStop() {
 				continue
 			}
 			cursor = recordGitHubTestsInventoryTruncation(
@@ -2151,6 +2252,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			return visitErr
 		}
 		if collection.PageBudgetExhausted {
+			if extendRunsAtStop() {
+				continue
+			}
 			cursor = recordGitHubTestsInventoryTruncation(
 				cursor, client, claim, githubTestsRunInventoryComponent, cursor.RunPages)
 			break
@@ -2962,10 +3066,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		// A resume inside a page (a finished page included: its cursor keeps the page to check the anchor) re-reads a
 		// charged page, so that read is free, as in the runs phase.
-		allowance, budgetErr := githubTestsListingAllowance((maxRuns+nativePerPage-1)/nativePerPage, cursor.ArtifactPages, githubTestsFreePages(cursor))
+		allowance, budgetErr := githubTestsListingAllowance(listingBudget("artifacts", (maxRuns+nativePerPage-1)/nativePerPage),
+			cursor.ArtifactPages, githubTestsFreePages(cursor))
 		if cursor.Relist == githubTestsRelistWalking {
 			// The deep range: its own budget, under the shared listing allowance (charged on entering a page).
-			allowance, budgetErr = githubTestsListingAllowance(lateMaxPages, cursor.ArtifactPages, githubTestsFreePages(cursor))
+			allowance, budgetErr = githubTestsListingAllowance(listingBudget("deep_reports", lateMaxPages), cursor.ArtifactPages,
+				githubTestsFreePages(cursor))
 		}
 		if errors.Is(budgetErr, ErrPaginationCapExceeded) {
 			moved, movedErr := movedAtSpentBudget(githubTestsArtifactsPhase)
@@ -2976,6 +3082,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				// A re-seek reads runs again: the totality counters become unknown, as in the visitor.
 				cursor.ArchivesSeen, cursor.ArchivesUnreadable = nil, nil
 				cursor = reseek(cursor)
+				continue
+			}
+			if extendArtifactsAtStop() {
 				continue
 			}
 		}
@@ -3003,6 +3112,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		if visitErr != nil {
 			return visitErr
+		}
+		if collection.PageBudgetExhausted && extendArtifactsAtStop() {
+			continue
 		}
 		if collection.PageBudgetExhausted && cursor.Relist == githubTestsRelistWalking {
 			cursor = recordGitHubTestsRelistStop(cursor, client, claim, githubTestsPageBudgetCause, cursor.RangeHi, cursor.RangeItems)

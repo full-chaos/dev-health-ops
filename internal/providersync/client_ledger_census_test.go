@@ -87,6 +87,7 @@ func censusOf(t *testing.T, sources map[string]string) []string {
 var listedClientSites = map[string]string{
 	"jira_atlassian_route.go: field JiraAtlassianRouteHandler.GraphQLClient":   "second client of a unit route: the route gives its copy the unit client's Ledger (TestJiraAtlassianRouteCountsTheGraphQLClientsRequestsInTheUnitLedger)",
 	"github_team_catalog_route.go: field GitHubTeamCatalogRouteHandler.Client": "post-sync team import service, not a sync unit: no unit ledger exists",
+	"github_tests_listing_walk.go: field githubTestsListingWalk.client":        "the tests route's own client: CollectChunks passes its counted copy of the unit client (the unit's Ledger kept) to the walk and to its listing replay",
 	"linear_absence.go: field LinearAbsenceProver.Client":                      "absence lookup of the team import, not a sync unit: no unit ledger exists",
 	"membership_absence.go: field githubMembershipAbsence.client":              "absence lookup of the team import, not a sync unit: no unit ledger exists",
 	"membership_absence.go: field gitlabMembershipAbsence.client":              "absence lookup of the team import, not a sync unit: no unit ledger exists",

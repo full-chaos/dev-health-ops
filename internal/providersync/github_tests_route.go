@@ -343,6 +343,8 @@ type GitHubTestsRouteHandler struct {
 	LateRerunMaxPages int
 	// MaxWalkRecords lowers githubTestsMaxWalkRecords when positive; zero keeps it.
 	MaxWalkRecords int
+	// noListingReplay turns the listing replay at a page-budget stop off: the walk stops as the release before it.
+	noListingReplay bool
 }
 
 func (handler GitHubTestsRouteHandler) Collect(

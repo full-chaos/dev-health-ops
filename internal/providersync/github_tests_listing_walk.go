@@ -79,3 +79,85 @@ func githubTestsEndRange(
 	cursor.RangeHi = nextHi
 	return cursor, githubTestsRangeNext, hi, items
 }
+
+// githubTestsFrontier is where a fresh walk of a listing stops under its page budget (CHAOS-14435): the pages it entered,
+// the runs it listed (a re-listed cut second counts again), and each distinct dated run's second and order in it.
+type githubTestsFrontier struct {
+	pages, listed int
+	seconds       map[int64]int
+	runs          map[string]githubTestsFrontierRun
+}
+
+type githubTestsFrontierRun struct {
+	second  int64
+	ordinal int
+}
+
+// grant is the pages a walk stopped at its page budget may list on top of it to reach the frontier. The frontier walk listed
+// behind runs in seconds older than the walk's (its active range's oldest second; at a range start the range end; neither:
+// the listing start): ceil(behind / per page) + 1 (the +1 covers the walk's own re-listed cut second). GitHub does not
+// order runs inside a second by contract, so the walk's own second earns the +1 alone, inside a range only, and only when
+// the frontier walk listed more runs of it than up to the walk's anchor in its own order (an anchor it did not list is
+// past it, or deleted: nothing).
+func (frontier githubTestsFrontier) grant(cursor githubTestsChunkCursor) (behind, pages int) {
+	walked, dated := githubTestsCutSecond(cursor.RangeOldest)
+	if cursor.RangeItems == 0 {
+		walked, dated = githubTestsCutSecond(cursor.RangeHi)
+	}
+	for second, runs := range frontier.seconds {
+		if !dated || second < walked {
+			behind += runs
+		}
+	}
+	if behind > 0 {
+		return behind, (behind+nativePerPage-1)/nativePerPage + 1
+	}
+	anchor, listed := frontier.runs[cursor.AnchorID]
+	if dated && cursor.RangeItems > 0 && listed && anchor.second == walked && frontier.seconds[walked] > anchor.ordinal+1 {
+		return 0, 1
+	}
+	return 0, 0
+}
+
+// githubTestsReplayListing walks a listing from its start under its page budget with a count-only visitor: the same
+// paginator call, page entries and range ends (peel, stuck, saturated) as the walk; it reads and emits nothing.
+func githubTestsReplayListing(
+	walk githubTestsListingWalk, query func(rangeHi string) url.Values, interval githubTestsCreatedInterval, runsPhase bool, budget int,
+) (githubTestsFrontier, error) {
+	frontier := githubTestsFrontier{seconds: map[int64]int{}, runs: map[string]githubTestsFrontierRun{}}
+	var cursor githubTestsChunkCursor
+	for frontier.pages < budget {
+		ended := false
+		walk.query, walk.initialURL, walk.maxPages = query(cursor.RangeHi), "", budget-frontier.pages
+		collection, err := walk.run(func(page providerfoundation.PageVisit) error {
+			cursor = githubTestsEnterPage(cursor, func(*githubTestsChunkCursor) { frontier.pages++ })
+			for _, item := range page.Items {
+				run, decodeErr := decodeGitHubWorkflowRun(item)
+				if decodeErr != nil {
+					return providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, decodeErr)
+				}
+				cursor = githubTestsListRun(cursor, run, runsPhase)
+				frontier.listed++
+				id, created := githubTestsAnchorID(run), parseGitHubWorkflowTime(run.CreatedAt)
+				if _, seen := frontier.runs[id]; id != "" && created != nil && !seen {
+					second := created.UTC().Unix()
+					frontier.runs[id] = githubTestsFrontierRun{second: second, ordinal: frontier.seconds[second]}
+					frontier.seconds[second]++
+				}
+			}
+			if page.CursorAfter == "" {
+				var end githubTestsRangeEnd
+				cursor, end, _, _ = githubTestsEndRange(cursor, interval, runsPhase)
+				ended = end != githubTestsRangeNext
+			}
+			return nil
+		})
+		if err != nil {
+			return frontier, err
+		}
+		if ended || collection.PageBudgetExhausted {
+			break
+		}
+	}
+	return frontier, nil
+}

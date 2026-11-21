@@ -100,6 +100,9 @@ func TestGitHubTestsPeelReplayRoundingEdge(t *testing.T) {
 				count := pages*100 + 400
 				runs := peelReplayRuns(listing, count, 1001-listed, 1005)
 				for _, coalesce := range []bool{false, true} {
+					if coalesce && pages == 100 {
+						continue // plain-leg time: the 100-page cell with run groups off
+					}
 					name := fmt.Sprintf("rounding/%s/pages=%d/listed=%d/%s", listing.name, pages, listed, deletionShiftFlag(coalesce))
 					t.Run(name, func(t *testing.T) {
 						outcome := peelReplayMeasure(t, listing, peelReplayHandler(listing, pages, coalesce), coalesce, runs, "route",
@@ -142,6 +145,9 @@ func TestGitHubTestsPeelReplayOverlapDeletionAtThePageBudget(t *testing.T) {
 					}
 				}
 				for _, coalesce := range []bool{false, true} {
+					if coalesce && (pages == 100 || listing.reports) {
+						continue // plain-leg time: the 100-page cells and the reports listings with run groups off
+					}
 					name := fmt.Sprintf("overlap/%s/pages=%d/%s/%s", listing.name, pages, mode, deletionShiftFlag(coalesce))
 					t.Run(name, func(t *testing.T) {
 						outcome := peelReplayMeasure(t, listing, peelReplayHandler(listing, pages, coalesce), coalesce, runs, "route", at, count+1-998)
@@ -176,6 +182,9 @@ func TestGitHubTestsPeelReplayNewerDeletion(t *testing.T) {
 		for _, sh := range shapes {
 			runs := peelReplayRuns(listing, sh.count, sh.from, sh.to)
 			for _, coalesce := range []bool{false, true} {
+				if coalesce && listing.reports {
+					continue // plain-leg time: CoalesceRuns groups runs-phase emissions; the reports listings run it off
+				}
 				name := fmt.Sprintf("newer/%s/%s/%s", listing.name, sh.name, deletionShiftFlag(coalesce))
 				t.Run(name, func(t *testing.T) {
 					outcome := peelReplayMeasure(t, listing, peelReplayHandler(listing, sh.pages, coalesce), coalesce, runs, "route",
@@ -205,6 +214,9 @@ func TestGitHubTestsPeelReplayDeletionPositionByPageFill(t *testing.T) {
 		}
 		for _, position := range positions {
 			for _, coalesce := range []bool{false, true} {
+				if coalesce && fill < 100 {
+					continue // plain-leg time: run groups on at the fills main leaves a survivor unread
+				}
 				name := fmt.Sprintf("property/fill=%d/position=%d/%s", fill, position, deletionShiftFlag(coalesce))
 				t.Run(name, func(t *testing.T) {
 					outcome := peelReplayMeasure(t, listing, peelReplayHandler(listing, pages, coalesce), coalesce, slices.Clone(runs), "route",

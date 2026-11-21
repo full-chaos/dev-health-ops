@@ -416,6 +416,11 @@ func deletionShiftCheck(t *testing.T, name string, outcome deletionShiftOutcome)
 	if len(outcome.unread) > want {
 		t.Errorf("%s: %d survivors unread, main leaves %d: this binary reads less than main", name, len(outcome.unread), want)
 	}
+	// Class charged: a deletion before the anchor is credited, so the walk reads every survivor the uninterrupted walk of
+	// the survivors reads.
+	if strings.HasPrefix(name, "charged/") && len(outcome.unread) != 0 {
+		t.Errorf("%s: %d survivors unread, want 0 (watermark advanced=%v)", name, len(outcome.unread), outcome.watermark)
+	}
 }
 
 // Class "charged": a run already read (and charged to the record bound) is deleted before the resume point; the walk at

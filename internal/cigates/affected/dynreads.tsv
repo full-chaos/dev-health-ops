@@ -692,6 +692,7 @@ internal/synchandoff	trigger_writer_census_test.go
 internal/syncreconciler	no_celery_test.go
 internal/syncrunrollup	arm_finalize_test.go
 internal/syncrunrollup	cross_package_registry_test.go
+internal/syncrunrollup	status_writer_inventory_test.go
 internal/teamactive	roster_census_test.go
 internal/teamattribution	is_primary_census_test.go
 internal/teamattribution	linked_issue_donor_census_test.go

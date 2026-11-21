@@ -86,7 +86,7 @@ func TestTestOpsRouteMixedRowBoundResumeBothDirections(t *testing.T) {
 			defer cancel()
 			repository, session, pool := runsGroupPostgres(t, ctx)
 			sink := newRunsGroupSink()
-			digests := func() string {
+			digests := func() map[int]string {
 				rows, err := pool.Query(ctx, `SELECT ordinal, manifest_digest, payload_bytes FROM public.sync_run_unit_effect_chunks WHERE sync_run_unit_id=$1::uuid ORDER BY ordinal`, firstUnitID)
 				if err != nil {
 					t.Fatal(err)
@@ -101,9 +101,9 @@ func TestTestOpsRouteMixedRowBoundResumeBothDirections(t *testing.T) {
 					}
 					out[ordinal] = digest
 				}
-				return fmt.Sprint(out)
+				return out
 			}
-			var first string
+			var first map[int]string
 			run := func(index int, one step) error {
 				descriptor := cicdDescriptor(t)
 				descriptor.ChunkPolicy.MaxSourceItems, descriptor.ChunkPolicy.MaxChunksPerAttempt = one.rows, one.bound
@@ -138,25 +138,13 @@ func TestTestOpsRouteMixedRowBoundResumeBothDirections(t *testing.T) {
 				t.Fatalf("distinct job rows=%d written twice=%d, want 1000 and 0", len(sink.jobRows), duplicates)
 			}
 			final := digests()
-			for ordinal, digest := range parseDigests(first) {
-				if parseDigests(final)[ordinal] != digest {
-					t.Fatalf("prepared chunk %d changed: %s -> %s (a prepared group is replayed as stored)", ordinal, digest, parseDigests(final)[ordinal])
+			for ordinal, digest := range first {
+				if final[ordinal] != digest {
+					t.Fatalf("prepared chunk %d changed: %s -> %s (a prepared group is replayed as stored)", ordinal, digest, final[ordinal])
 				}
 			}
 		})
 	}
-}
-
-func parseDigests(rendered string) map[int]string {
-	out := map[int]string{}
-	for _, field := range strings.Fields(strings.Trim(rendered, "map[]")) {
-		if parts := strings.SplitN(field, ":", 2); len(parts) == 2 {
-			if ordinal, err := strconv.Atoi(parts[0]); err == nil {
-				out[ordinal] = parts[1]
-			}
-		}
-	}
-	return out
 }
 
 func startRowsClickHouse(t *testing.T, ctx context.Context) driver.Conn {

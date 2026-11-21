@@ -220,17 +220,22 @@ func assignUnowned(teamsOfRepo map[string][]string, repoRows []storedRow, labels
 	labels[activeteams.UnassignedID] = unassignedTeamLabel
 }
 
-// withUnassignedPoint adds the no-team point to a breakout built from stored
-// team rows: the writer stores no team row for a repository no team owns, so
-// the point is derived from the day's repository rows of the unowned
-// repositories by the same rule as the derived path. A stored no-team row is
-// kept as it is. Ownership is read at the selected day, the instant the
-// daily writer resolves it at, never at request time.
-func withUnassignedPoint(ctx context.Context, client QueryClient, orgID string, d time.Time, points []model.CompoundingRiskPoint, teams []string, labels map[string]string, repoIDs idList, now time.Time) ([]model.CompoundingRiskPoint, error) {
+// withUnstoredTeamPoints adds to a breakout built from stored team rows the
+// points of the teams of the day's repository rows that have no live stored
+// row: the no-team point (the writer stores no team row for a repository no
+// team owns), and a team whose stored row is missing, retracted or not yet
+// written for the day. Each is derived from the day's repository rows by the
+// same rule as the derived path. A team with a live stored row keeps it, and a
+// stored no-team row is kept as it is, and a day that holds one reads nothing
+// more (no current writer stores it). Ownership is read at the selected day,
+// the instant the daily writer resolves it at, never at request time.
+func withUnstoredTeamPoints(ctx context.Context, client QueryClient, orgID string, d time.Time, points []model.CompoundingRiskPoint, teams []string, labels map[string]string, repoIDs idList, now time.Time) ([]model.CompoundingRiskPoint, error) {
+	stored := map[string]bool{}
 	for _, p := range points {
 		if p.ScopeID == activeteams.UnassignedID {
 			return points, nil
 		}
+		stored[p.ScopeID] = true
 	}
 	repoRows, err := latestRowsLimit(ctx, client, orgID, d, scopeRepo, repoIDs, 0)
 	if err != nil {
@@ -240,17 +245,21 @@ func withUnassignedPoint(ctx context.Context, client QueryClient, orgID string, 
 	if err != nil {
 		return nil, err
 	}
-	var unowned []storedRow
+	assignUnowned(teamsOfRepo, repoRows, labels)
+	var missing []string
 	for _, r := range repoRows {
-		if len(teamsOfRepo[r.scopeID]) == 0 {
-			unowned = append(unowned, r)
+		for _, team := range teamsOfRepo[r.scopeID] {
+			if !stored[team] {
+				stored[team] = true
+				missing = append(missing, team)
+			}
 		}
 	}
-	if len(unowned) == 0 {
+	// teamPoints reads an empty team filter as every team.
+	if len(missing) == 0 {
 		return points, nil
 	}
-	assignUnowned(teamsOfRepo, unowned, labels)
-	points = append(points, teamPoints(d, unowned, teamsOfRepo, labels, nil, now)...)
+	points = append(points, teamPoints(d, repoRows, teamsOfRepo, labels, missing, now)...)
 	sortByScore(points)
 	return points, nil
 }
@@ -512,7 +521,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 				points = append(points, point(model.CompoundingRiskScopeTeam, d, r.scopeID, labelOr(labels, r.scopeID), r))
 			}
 			if len(teamIDs) == 0 {
-				if points, err = withUnassignedPoint(ctx, client, orgID, d, points, order, labels, repoIDs, now); err != nil {
+				if points, err = withUnstoredTeamPoints(ctx, client, orgID, d, points, order, labels, repoIDs, now); err != nil {
 					return nil, err
 				}
 			}

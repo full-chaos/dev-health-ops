@@ -84,6 +84,15 @@ the trend covers only repositories with a row. A filter that leaves out a
 repository gives each team the mean of the scores of its selected
 repositories, and an empty filter gives no rows.
 
+A team that owns a repository with a row that day but has no persisted team
+score for the day (not computed yet, or withdrawn) is listed with the mean of
+the scores of those repositories, the same rule as the filtered case. That is
+a plain mean of repository scores, while a persisted team score is computed
+again from the team's inputs weighted by ownership share, so the two can
+differ for the same repositories. A team that has a persisted score keeps it
+until the next daily run replaces it, also when newer repository rows of the
+day exist.
+
 Every definition publishes its unit, aggregation, display precision, null and
 zero semantics, supported scopes and dimensions, range limits, comparison
 rule, definition version, query version, source version, and freshness policy.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
@@ -110,7 +111,12 @@ func comparableText(kind, statement string) string {
 		// computed_at are summed. For keys whose newest row is unique the two give
 		// the same values. The frozen text is compared with the reference's
 		// FROM ... GROUP BY t.day put back.
-		picked := strings.Join(strings.Fields("FROM ("+repoNewestVersions+") AS t GROUP BY t.day"), " ")
+		// Second declared divergence (CHAOS-14455): the Go read ends the inner
+		// GROUP BY with HAVING max(liverow.Predicate) = 1, so a day whose picked
+		// versions hold no measurement is left out by the same statement (one
+		// snapshot); the reference returns it with ratio 0.0. The golden inputs
+		// hold no retraction row, so no day differs.
+		picked := strings.Join(strings.Fields("FROM ("+repoNewestVersions+") AS t GROUP BY t.day HAVING max("+liverow.Predicate("team_metrics_daily", "t")+") = 1"), " ")
 		frozen := "FROM team_metrics_daily AS t INNER JOIN ( SELECT day, max(computed_at) AS latest_computed_at FROM team_metrics_daily " +
 			"WHERE org_id = {org_id:String} AND day >= {since_date:Date} AND day <= {until_date:Date} AND repo_id IN ( " +
 			"SELECT toString(id) FROM repos WHERE org_id = {org_id:String} AND (repo = {repo_id:String} OR toString(id) = {repo_id:String}) ) " +

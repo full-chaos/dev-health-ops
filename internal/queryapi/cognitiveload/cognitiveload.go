@@ -963,25 +963,6 @@ func fetchOwnershipCandidates(ctx context.Context, client QueryClient, orgID str
 // docstring). The rows summed are those of repoNewestVersions: one whole
 // version per (day, team, repo) key.
 func fetchRepoScopedTeamMetrics(ctx context.Context, client QueryClient, orgID, sinceDate, untilDate, repoID string) ([]teamRatioRow, error) {
-	query := `
-        SELECT
-            day,
-            if(total_commits > 0,
-               total_after_hours_commits / total_commits, 0.0
-            ) AS after_hours_commit_ratio,
-            if(total_commits > 0,
-               total_weekend_commits / total_commits, 0.0
-            ) AS weekend_commit_ratio
-        FROM (
-            SELECT
-                t.day AS day,
-                sum(t.commits_count)             AS total_commits,
-                sum(t.after_hours_commits_count) AS total_after_hours_commits,
-                sum(t.weekend_commits_count)      AS total_weekend_commits
-            FROM (` + repoNewestVersions + `) AS t
-            GROUP BY t.day
-        )
-        ORDER BY day`
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "since_date", Value: sinceDate},
@@ -989,7 +970,7 @@ func fetchRepoScopedTeamMetrics(ctx context.Context, client QueryClient, orgID, 
 		{Name: "repo_id", Value: repoID},
 	}
 
-	rows, err := client.Query(ctx, query, bindings)
+	rows, err := client.Query(ctx, repoScopedTeamMetricsQuery, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}
@@ -1007,31 +988,33 @@ func fetchRepoScopedTeamMetrics(ctx context.Context, client QueryClient, orgID, 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows: %w", err)
 	}
-	if len(result) == 0 {
-		return result, nil
-	}
-	// The SQL above is pinned to the Python reference. It gives a day whose
-	// newest rows of the repository hold no commit a ratio of 0.0. Those rows
-	// are retraction rows (package liverow): a measured row holds a commit.
-	// Such a day has no measurement, so it is left out, as a day with no row.
-	retracted, err := fetchRetractedRepoDays(ctx, client, bindings)
-	if err != nil {
-		return nil, err
-	}
-	if len(retracted) == 0 {
-		return result, nil
-	}
-	kept := result[:0]
-	for _, row := range result {
-		if !retracted[row.day.UTC()] {
-			kept = append(kept, row)
-		}
-	}
-	if len(kept) == 0 {
-		return nil, nil
-	}
-	return kept, nil
+	return result, nil
 }
+
+// repoScopedTeamMetricsQuery sums the rows of repoNewestVersions by day. The
+// HAVING leaves out a day whose picked versions hold no measurement (package
+// liverow), as a day with no row; ratios and liveness come from one scan, so a
+// write between two reads cannot serve a retracted day as 0.0.
+var repoScopedTeamMetricsQuery = `
+        SELECT
+            day,
+            if(total_commits > 0,
+               total_after_hours_commits / total_commits, 0.0
+            ) AS after_hours_commit_ratio,
+            if(total_commits > 0,
+               total_weekend_commits / total_commits, 0.0
+            ) AS weekend_commit_ratio
+        FROM (
+            SELECT
+                t.day AS day,
+                sum(t.commits_count)             AS total_commits,
+                sum(t.after_hours_commits_count) AS total_after_hours_commits,
+                sum(t.weekend_commits_count)      AS total_weekend_commits
+            FROM (` + repoNewestVersions + `) AS t
+            GROUP BY t.day
+            HAVING max(` + liverow.Predicate("team_metrics_daily", "t") + `) = 1
+        )
+        ORDER BY day`
 
 // repoNewestVersions is the newest generation of the repository's rows of
 // each day (the latest computed_at of the day over every team id), read as
@@ -1073,33 +1056,3 @@ const repoNewestVersions = `
                     AND (repo = {repo_id:String} OR toString(id) = {repo_id:String})
               )
             GROUP BY team_metrics_daily.day, team_metrics_daily.team_id, team_metrics_daily.repo_id`
-
-// retractedRepoDaysQuery reads the rows of fetchRepoScopedTeamMetrics
-// (repoNewestVersions) and returns the days on which no picked version is a
-// measurement.
-var retractedRepoDaysQuery = `
-        SELECT t.day AS no_measured_row_day
-        FROM (` + repoNewestVersions + `) AS t
-        GROUP BY t.day
-        HAVING max(` + liverow.Predicate("team_metrics_daily", "t") + `) = 0
-        ORDER BY no_measured_row_day`
-
-func fetchRetractedRepoDays(ctx context.Context, client QueryClient, bindings []clickhouse.Binding) (map[time.Time]bool, error) {
-	rows, err := client.Query(ctx, retractedRepoDaysQuery, bindings)
-	if err != nil {
-		return nil, fmt.Errorf("retracted repo days query: %w", err)
-	}
-	defer rows.Close()
-	days := map[time.Time]bool{}
-	for rows.Next() {
-		var day time.Time
-		if scanErr := rows.Scan(&day); scanErr != nil {
-			return nil, fmt.Errorf("retracted repo days scan: %w", scanErr)
-		}
-		days[day.UTC()] = true
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("retracted repo days rows: %w", err)
-	}
-	return days, nil
-}

@@ -225,3 +225,85 @@ func TestRealStampsKeepTwoSingleRowChunksInTheCursorMargin(t *testing.T) {
 		}
 	}
 }
+
+func realStampFilesEffect(t *testing.T, claim Claim, now time.Time, contents int) EffectBatch {
+	t.Helper()
+	rows := make([]gitFileRow, 2)
+	for index := range rows {
+		text := strings.Repeat("x", contents)
+		rows[index] = gitFileRow{RepoID: realStampRepoID, Path: fmt.Sprintf("src/part-%d.txt", index), Contents: &text, LastSynced: now, OrgID: claim.OrgID}
+	}
+	effect, err := effectBatchFromValues("git_files", EffectReadbackRequired, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return effect
+}
+
+// A files emission that the files pre-check accepts by raw size (gitHubFilesPreparedChunk: nil claim, no ledger) but whose payload and
+// ledger together pass 2 MiB. The files route owns that decision (it halves its own rows); the shared split must not halve it again, so
+// the emission stays one chunk and the store refuses it at prepare, as on main. The files route passes a nil claim to the split.
+func TestGitHubFilesEmissionAcceptedByRawSizeStaysOneChunkAndIsRefusedByTheStore(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 123456789, time.UTC)
+	descriptor, ok := Descriptor("github", "files")
+	if !ok || !descriptor.Chunked {
+		t.Fatal("missing chunked files descriptor")
+	}
+	claim, session := completeRouteSessionFor(t, now, false, "github", descriptor.RouteDataset)
+	contents := 1_040_000
+	for ; contents < 1_060_000; contents += 25 {
+		effect := realStampFilesEffect(t, claim, now, contents)
+		chunk, fits := gitHubFilesPreparedChunk(effect, "", realStampCursor)
+		if !fits {
+			t.Fatalf("contents %d: the raw pre-check refuses before the store's ledger does", contents)
+		}
+		chunk.Ordinal = 0
+		if _, err := buildPreparedChunkMaterial(claim, chunk, gitHubFilesWidestInstant); err != nil {
+			break
+		}
+	}
+	effect := realStampFilesEffect(t, claim, now, contents)
+	if _, fits := gitHubFilesPreparedChunk(effect, "", realStampCursor); !fits {
+		t.Fatalf("contents %d: the raw pre-check refuses", contents)
+	}
+	final, err := effectBatchFromValues("git_files", EffectReadbackRequired, []gitFileRow(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := realStampHandler{effects: []EffectBatch{effect}, final: []EffectBatch{final}}
+	store := NewInProcessChunkLedger(claim)
+	executor := completeRouteExecutor(now, handler, store, &recoveryRowSink{})
+	executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
+	executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
+	executor.BudgetLimits = map[CostClass]int{claim.CostClass: 1}
+	_, err = executor.Execute(context.Background(), session, descriptor)
+	checkpoint, _ := store.LoadChunkCheckpoint(context.Background(), claim, now)
+	if !errors.Is(err, ErrChunkCheckpointConflict) || checkpoint.PreparedChunks != 0 {
+		t.Fatalf("contents %d: err=%v prepared=%d, want the store to refuse the one chunk at prepare (prepared 0), as on main", contents, err, checkpoint.PreparedChunks)
+	}
+}
+
+// Every chunked descriptor of the registry is served by a handler that streams (ChunkedCompleteRouteHandler), so executeChunked, whose
+// split has no real stamps, is not reached by a production route.
+func TestEveryChunkedDescriptorHasAStreamingHandler(t *testing.T) {
+	seen := 0
+	for key := range providerExecutorRegistry {
+		provider, dataset, _ := strings.Cut(key, "/")
+		descriptor, ok := Descriptor(provider, dataset)
+		if !ok || !descriptor.Chunked {
+			continue
+		}
+		seen++
+		route, selected := SelectGitFamilyRoute(provider, dataset, GitFamilyDeps{})
+		if !selected {
+			t.Errorf("%s: a chunked descriptor with no known route handler", key)
+			continue
+		}
+		if _, streams := route.Handler.(ChunkedCompleteRouteHandler); !streams {
+			t.Errorf("%s: a chunked descriptor whose handler %T does not stream", key, route.Handler)
+		}
+	}
+	if seen < 5 {
+		t.Fatalf("saw %d chunked descriptors, want at least the github and gitlab cicd and tests routes and github files", seen)
+	}
+}

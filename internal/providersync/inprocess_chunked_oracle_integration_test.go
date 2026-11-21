@@ -235,7 +235,8 @@ func (g *chunkOpGenerator) chunk(ordinal, total int, complete bool, cursor strin
 	effects := make([]EffectBatch, 1+g.rng.Intn(2))
 	digests := make([]string, len(effects))
 	for i := range effects {
-		rows := make([]string, 1+g.rng.Intn(3))
+		// An effect may be empty: the mark then commits it (commitDeferredEmptyEffects) on both stores.
+		rows := make([]string, g.rng.Intn(4))
 		for r := range rows {
 			rows[r] = fmt.Sprintf(`{"org_id":"org-acme","run_id":"%d-%d-%d-%d"}`, ordinal, variant, i, r)
 		}

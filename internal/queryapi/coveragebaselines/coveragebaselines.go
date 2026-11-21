@@ -3,7 +3,8 @@
 // before a given day (chris, 2026-10-03: "the running 30 day average"). It is
 // not a set target. Line coverage pools the stored line counts over the counted
 // days (covered lines over total lines), the rule of the other line coverage
-// readers; branch coverage is the mean of the stored day percents.
+// readers; branch coverage pools the stored branch counts the same way
+// (covered branches over total branches of the counted days).
 //
 // It is Go-only: no Python resolver exists for it.
 //
@@ -86,7 +87,10 @@ func newestPerRepoDay(scopeFilter string) string {
                 day_lines.1 AS day_lines_covered,
                 day_lines.2 AS day_lines_total,
                 day_lines_covered IS NOT NULL AND day_lines_total IS NOT NULL AND day_lines_total > 0 AS line_counted,
-                (argMax(tuple(branch_coverage_pct), computed_at)).1 AS branch_pct
+                argMax(tuple(branches_covered, branches_total), computed_at) AS day_branches,
+                day_branches.1 AS day_branches_covered,
+                day_branches.2 AS day_branches_total,
+                day_branches_covered IS NOT NULL AND day_branches_total IS NOT NULL AND day_branches_total > 0 AS branch_counted
             FROM testops_coverage_metrics_daily
             WHERE org_id = {org_id:String}
               AND day >= {start_day:Date}
@@ -97,9 +101,9 @@ func newestPerRepoDay(scopeFilter string) string {
 
 // statement reads, per repository, each measure over the window and the number
 // of days that hold a value. Line coverage is covered lines over total lines of
-// the counted days, NULL when no day is counted. Branch coverage is the mean:
-// avg() over a Nullable column leaves the NULL days out and is NULL when no day
-// holds a value.
+// the counted days, NULL when no day is counted. Branch coverage is the same
+// over the branch counts. A day with a NULL branch count, or with no branches,
+// is not a counted day: it is in neither sum and not in branch_days.
 func statement(scopeFilter string) string {
 	return `
         SELECT
@@ -107,8 +111,8 @@ func statement(scopeFilter string) string {
             nullIf(r.repo, '') AS repo_name,
             100 * sumIf(b.day_lines_covered, b.line_counted) / nullIf(sumIf(b.day_lines_total, b.line_counted), 0) AS line_value,
             countIf(b.line_counted) AS line_days,
-            avg(b.branch_pct) AS branch_mean,
-            countIf(b.branch_pct IS NOT NULL) AS branch_days
+            100 * sumIf(b.day_branches_covered, b.branch_counted) / nullIf(sumIf(b.day_branches_total, b.branch_counted), 0) AS branch_value,
+            countIf(b.branch_counted) AS branch_days
         FROM (` + newestPerRepoDay(scopeFilter) + `
         ) AS b
         LEFT JOIN (
@@ -169,19 +173,19 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, endDate grap
 	out := []model.RepoCoverageBaseline{}
 	for rows.Next() {
 		var (
-			repoID                string
-			repoName              *string
-			lineValue, branchMean *float64
-			lineDays, branchDays  uint64
+			repoID                 string
+			repoName               *string
+			lineValue, branchValue *float64
+			lineDays, branchDays   uint64
 		)
-		if scanErr := rows.Scan(&repoID, &repoName, &lineValue, &lineDays, &branchMean, &branchDays); scanErr != nil {
+		if scanErr := rows.Scan(&repoID, &repoName, &lineValue, &lineDays, &branchValue, &branchDays); scanErr != nil {
 			return nil, fmt.Errorf("coveragebaselines: scan: %w", scanErr)
 		}
 		row := model.RepoCoverageBaseline{
 			RepoID:            repoID,
 			LineBaselinePct:   baseline(lineValue, int(lineDays)),
 			LineDays:          int(lineDays),
-			BranchBaselinePct: baseline(branchMean, int(branchDays)),
+			BranchBaselinePct: baseline(branchValue, int(branchDays)),
 			BranchDays:        int(branchDays),
 		}
 		if repoName != nil && *repoName != "" {

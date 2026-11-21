@@ -55,7 +55,7 @@ var pinnedTableFiles = map[string]censusPin{
 		"not a reader: table name switch"},
 	"internal/queryapi/analytics/timeseries.go": {"9ca3c9eacf9844535929e0506e21c201f60c55ec889e42a20cef0436bcad7de8",
 		"not a reader: natural key map; the newest-row source leaves out a retired day (live-row filter)"},
-	"internal/queryapi/analytics/validate.go": {"d977b4a87b667d108dc25053d92bde3cc2854f139f702346ce3adc81ba5a6d3a",
+	"internal/queryapi/analytics/validate.go": {"0b0cfd182fad9799e865319ce2f57a98498db8f99fcc99e3273c6c985fc001b1",
 		"not a reader: routes a measure to the table, the column rule lives elsewhere"},
 	"internal/queryapi/testopspooled/testopspooled.go": {"8c4ab634fbecfe249a7826329a9ab34934371c0201f58a31d2537510adb1b490",
 		"not a reader of pass_rate: the pooled sources read stored duration samples or raw rows; the live gate leaves a retired day out of both arms"},

@@ -116,11 +116,11 @@ func TestResolveScope_ReadsTheSameRowsAsThePerRepositoryBaseline(t *testing.T) {
 }
 
 // Line coverage of the scope is one ratio over every counted repo-day, its days
-// the days with a counted repo-day; branch coverage is the mean over the days of
-// the day means. The text pins the three levels and their order; the values are
+// the days with a counted repo-day; branch coverage is the same over the branch
+// counts. The text pins the three levels and their order; the values are
 // pinned on a real ClickHouse (scope_integration_test.go,
 // coverage_pooled_line_integration_test.go).
-func TestScopeStatement_PoolsLinesAndAveragesTheBranchDays(t *testing.T) {
+func TestScopeStatement_PoolsLinesAndBranches(t *testing.T) {
 	client := &fakeClient{}
 	if _, err := ResolveScope(context.Background(), client, "org-1", endDay(), Scope{}); err != nil {
 		t.Fatal(err)
@@ -129,14 +129,15 @@ func TestScopeStatement_PoolsLinesAndAveragesTheBranchDays(t *testing.T) {
 	order := []string{
 		"100 * sum(d.day_covered) / nullIf(sum(d.day_total), 0) AS line_value",
 		"countIf(d.day_counted > 0) AS line_days",
-		"avg(d.day_branch_pct) AS branch_mean",
-		"countIf(d.day_branch_pct IS NOT NULL) AS branch_days",
+		"100 * sum(d.day_branch_covered) / nullIf(sum(d.day_branch_total), 0) AS branch_value",
+		"countIf(d.day_branch_total > 0) AS branch_days",
 		"sumIf(b.day_lines_covered, b.line_counted) AS day_covered",
 		"sumIf(b.day_lines_total, b.line_counted) AS day_total",
 		"countIf(b.line_counted) AS day_counted",
-		"avg(b.branch_pct) AS day_branch_pct",
+		"sumIf(b.day_branches_covered, b.branch_counted) AS day_branch_covered",
+		"sumIf(b.day_branches_total, b.branch_counted) AS day_branch_total",
 		"argMax(tuple(lines_covered, lines_total), computed_at) AS day_lines",
-		"(argMax(tuple(branch_coverage_pct), computed_at)).1 AS branch_pct",
+		"argMax(tuple(branches_covered, branches_total), computed_at) AS day_branches",
 		"GROUP BY repo_id, day",
 		"GROUP BY b.day",
 	}

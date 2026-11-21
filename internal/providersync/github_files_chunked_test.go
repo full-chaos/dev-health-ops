@@ -860,9 +860,9 @@ func TestGitHubFilesChunkFitsNeverAcceptsWhatTheNanosecondClockStoreRefuses(t *t
 		t.Fatal(err)
 	}
 	guess := 2_000_000 + maxChunkPayloadBytes - len(material.payloadRaw) - len(material.ledgerRaw)
-	// FIRST assertion (the claim of this test): a fine-step sweep across the store's edge, with the nanosecond clock: no length is
-	// accepted by the pre-check and then refused by the store. storeAccepts builds the chunk without the split, so it does not share
-	// the pre-check's limit. A one-row emission is judged on the plain policy limit, so its edge is the store's edge.
+	// FIRST assertion (the claim of this test): a fine-step sweep across the pre-check edge and across the store's edge, with the
+	// nanosecond clock: no length is accepted by the pre-check and then refused by the store. storeAccepts builds the chunk without the
+	// split, so it does not share the pre-check's limit.
 	storeAccepts := func(length int) bool {
 		chunk := PreparedProviderChunk{SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion, Ordinal: 99999,
 			CursorBefore: "before", CursorAfter: "after", Effects: []EffectBatch{fitsTestEffect(t, length)}}
@@ -879,8 +879,9 @@ func TestGitHubFilesChunkFitsNeverAcceptsWhatTheNanosecondClockStoreRefuses(t *t
 		_, err = buildPreparedChunkMaterial(claim, chunk, nanos)
 		return err == nil
 	}
+	preCheckEdge := guess - splitReserveBytes + 8 // about where the reserved split limit ends the pre-check
 	sweptFit, sweptRefused := 0, 0
-	for _, centre := range []int{guess} {
+	for _, centre := range []int{preCheckEdge, guess} {
 		for length := centre - 4096; length <= centre+4096; length += 512 {
 			if gitHubFilesChunkFits(claim, fitsTestEffect(t, length), "before", "after") {
 				sweptFit++

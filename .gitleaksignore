@@ -38,5 +38,4 @@ internal/auth/authapi/testdata/web-approver.v1.json:jwt:66
 internal/auth/authapi/testdata/web-approver.v1.json:jwt:76
 internal/auth/authapi/testdata/web-approver.v1.json:jwt:77
 # test constant, not a secret: the repository id fixture shared by many test files (same value on main in internal/jobs/metrics/daily/testops_flake_counts_test.go); the rule fires on the const name
-c61e2a709e7cfea45a22c25bf9bfaa92f6775411:internal/providersync/chunked_stamp_keys_test.go:generic-api-key:28
 internal/providersync/chunked_stamp_keys_test.go:generic-api-key:28

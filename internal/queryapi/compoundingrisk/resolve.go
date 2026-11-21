@@ -229,7 +229,7 @@ func assignUnowned(teamsOfRepo map[string][]string, repoRows []storedRow, labels
 // stored no-team row is kept as it is, and a day that holds one reads nothing
 // more (no current writer stores it). Ownership is read at the selected day,
 // the instant the daily writer resolves it at, never at request time.
-func withUnstoredTeamPoints(ctx context.Context, client QueryClient, orgID string, d time.Time, points []model.CompoundingRiskPoint, teams []string, labels map[string]string, repoIDs idList, now time.Time) ([]model.CompoundingRiskPoint, error) {
+func withUnstoredTeamPoints(ctx context.Context, client QueryClient, orgID string, d time.Time, points []model.CompoundingRiskPoint, teams []string, labels map[string]string, selectedRows func() ([]storedRow, error), now time.Time) ([]model.CompoundingRiskPoint, error) {
 	stored := map[string]bool{}
 	for _, p := range points {
 		if p.ScopeID == activeteams.UnassignedID {
@@ -237,7 +237,7 @@ func withUnstoredTeamPoints(ctx context.Context, client QueryClient, orgID strin
 		}
 		stored[p.ScopeID] = true
 	}
-	repoRows, err := latestRowsLimit(ctx, client, orgID, d, scopeRepo, repoIDs, 0)
+	repoRows, err := selectedRows()
 	if err != nil {
 		return nil, err
 	}
@@ -369,26 +369,49 @@ func repoScopeForTeams(ctx context.Context, client QueryClient, orgID string, re
 	return out, nil
 }
 
-// repoFilterNarrows reports whether a repository filter leaves out a
-// repository with a measured row of the day. The filter is resolved by id or
-// full name as the row read resolves it. An absent filter keeps every
-// repository; an empty one keeps none.
-func repoFilterNarrows(ctx context.Context, client QueryClient, orgID string, d time.Time, repoIDs idList) (bool, error) {
+// selectRepoRows keeps the rows of the repositories a filter names, by id or
+// by full name, as repoIDFilter resolves them in a read: the repository must be
+// a repository of the org, and only the first maxRows filter values count. An
+// absent filter keeps every row.
+func selectRepoRows(ctx context.Context, client QueryClient, orgID string, rows []storedRow, repoIDs idList) ([]storedRow, error) {
 	if repoIDs == nil {
-		return false, nil
+		return rows, nil
 	}
-	if repoIDs.excludesEverything() {
-		return true, nil
+	ids := make([]string, 0, len(rows))
+	for _, r := range rows {
+		ids = append(ids, r.scopeID)
 	}
-	all, err := latestRowsLimit(ctx, client, orgID, d, scopeRepo, nil, 0)
+	names, err := repoLabels(ctx, client, orgID, ids)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	selected, err := latestRowsLimit(ctx, client, orgID, d, scopeRepo, repoIDs, 0)
-	if err != nil {
-		return false, err
+	wanted := map[string]bool{}
+	for _, v := range repoIDs.bounded() {
+		wanted[v] = true
 	}
-	return len(selected) < len(all), nil
+	var kept []storedRow
+	for _, r := range rows {
+		if name, ok := names[r.scopeID]; ok && (wanted[r.scopeID] || wanted[name]) {
+			kept = append(kept, r)
+		}
+	}
+	return kept, nil
+}
+
+// rowsOf keeps the rows whose scope id is one of ids (capped as a read caps
+// its filter values).
+func rowsOf(rows []storedRow, ids idList) []storedRow {
+	wanted := map[string]bool{}
+	for _, id := range ids.bounded() {
+		wanted[id] = true
+	}
+	var kept []storedRow
+	for _, r := range rows {
+		if wanted[r.scopeID] {
+			kept = append(kept, r)
+		}
+	}
+	return kept
 }
 
 // Resolve answers compoundingRisk for the org. Breakout TEAM with no team named
@@ -494,12 +517,33 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 			points = append(points, point(model.CompoundingRiskScopeRepo, d, r.scopeID, labelOr(labels, r.scopeID), r))
 		}
 	} else {
+		// The day's repository rows are read at most once: the same rows decide
+		// whether the filter leaves a repository out and are the rows the teams
+		// are derived from.
+		var dayRows, selected []storedRow
+		dayRowsRead := false
+		selectedRows := func() ([]storedRow, error) {
+			if !dayRowsRead {
+				rows, err := latestRowsLimit(ctx, client, orgID, d, scopeRepo, nil, 0)
+				if err != nil {
+					return nil, err
+				}
+				if selected, err = selectRepoRows(ctx, client, orgID, rows, repoIDs); err != nil {
+					return nil, err
+				}
+				dayRows, dayRowsRead = rows, true
+			}
+			return selected, nil
+		}
 		// A stored team row covers every repository of its team, so it is
 		// served only when the filter keeps every repository of the day;
 		// otherwise the teams are derived from the selected repository rows.
-		narrows, err := repoFilterNarrows(ctx, client, orgID, d, repoIDs)
-		if err != nil {
-			return nil, err
+		narrows := false
+		if repoIDs != nil {
+			if _, err := selectedRows(); err != nil {
+				return nil, err
+			}
+			narrows = len(selected) < len(dayRows)
 		}
 		var teamRows []storedRow
 		if !narrows {
@@ -526,7 +570,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 				points = append(points, point(model.CompoundingRiskScopeTeam, d, r.scopeID, labelOr(labels, r.scopeID), r))
 			}
 			if len(teamIDs) == 0 {
-				if points, err = withUnstoredTeamPoints(ctx, client, orgID, d, points, order, labels, repoIDs, now); err != nil {
+				if points, err = withUnstoredTeamPoints(ctx, client, orgID, d, points, order, labels, selectedRows, now); err != nil {
 					return nil, err
 				}
 			}
@@ -536,9 +580,15 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 					return nil, err
 				}
 			}
-			repoRows, err := latestRowsLimit(ctx, client, orgID, d, scopeRepo, fallbackRepoIDs, 0)
-			if err != nil {
-				return nil, err
+			var repoRows []storedRow
+			// Named teams that own no selected repository read no row.
+			if len(teamIDs) == 0 || !fallbackRepoIDs.excludesEverything() {
+				if repoRows, err = selectedRows(); err != nil {
+					return nil, err
+				}
+				if len(teamIDs) > 0 {
+					repoRows = rowsOf(dayRows, fallbackRepoIDs)
+				}
 			}
 			candidates := teamIDs
 			if len(candidates) == 0 {

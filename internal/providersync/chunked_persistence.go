@@ -505,10 +505,28 @@ func SplitCompleteRouteBatchWithComparison(
 
 // splitCompleteRouteBatch halves the rows per sub-chunk until every sub-chunk fits. The caps run 500, 250, 125, 100, 50, 25, 12, 6, 3, 1:
 // the steps from 100 down are those of the 100-row split this one replaced. At two or more rows a sub-chunk also has to be accepted by the
-// store's own builder under the worst-case stamps (storeRefusesSubchunk); a claim of nil skips that check (a caller whose next step is the
-// builder itself). At one row only the raw size test applies: the store then decides with the real stamps.
+// store's own builder (storeRefusesSubchunk); a claim of nil skips that check (a caller whose next step is the builder itself). At one row
+// only the raw size test applies: the store then decides with the real stamps.
 func splitCompleteRouteBatch(
 	claim *Claim,
+	batch CompleteRouteBatch,
+	comparison ShadowComparison,
+	policy ChunkPolicy,
+) ([]PreparedProviderChunk, error) {
+	return splitCompleteRouteBatchStamped(claim, nil, batch, comparison, policy)
+}
+
+// splitStamps are the stamps the streaming executor puts on the chunks of one emission after the split: the ordinal of the first chunk,
+// the cursor before the first chunk and the cursor after the last one.
+type splitStamps struct {
+	ordinalBase  int
+	cursorBefore string
+	cursorAfter  string
+}
+
+func splitCompleteRouteBatchStamped(
+	claim *Claim,
+	stamps *splitStamps,
 	batch CompleteRouteBatch,
 	comparison ShadowComparison,
 	policy ChunkPolicy,
@@ -580,7 +598,7 @@ func splitCompleteRouteBatch(
 				return nil, encodeErr
 			}
 			chunk.PayloadBytes = len(encoded)
-			if chunk.PayloadBytes > policy.MaxPreparedBytes || maxRows >= 2 && claim != nil && storeRefusesSubchunk(*claim, chunk) {
+			if chunk.PayloadBytes > policy.MaxPreparedBytes || maxRows >= 2 && claim != nil && storeRefusesSubchunk(*claim, chunk, stamps, ordinal, count) {
 				valid = false
 				break
 			}
@@ -608,13 +626,29 @@ func nextSplitCap(maxRows int) int {
 }
 
 // storeRefusesSubchunk reports whether the store's own builder (buildPreparedChunkMaterial: the ledger of the chunk's effects, the payload
-// and the ledger together under 2 MiB, Validate) refuses the sub-chunk as the executor will stamp it, under the worst case: two cursors of 4 KiB
-// of characters that JSON escapes to six bytes, the highest ordinal digits, no total (resetEmissionChunks stamps 0), the widest instant.
-func storeRefusesSubchunk(claim Claim, chunk PreparedProviderChunk) bool {
+// and the ledger together under 2 MiB, Validate) refuses the sub-chunk as the executor will stamp it. It tests the worst case first: two
+// cursors of 4 KiB of characters that JSON escapes to six bytes, the highest ordinal digits, no total (resetEmissionChunks stamps 0), the
+// widest instant. Only when the worst case refuses and the caller gave the real stamps does it test again with the real ordinal and the real
+// cursors; the sub-chunk is refused only if the real-stamp build refuses too.
+func storeRefusesSubchunk(claim Claim, chunk PreparedProviderChunk, stamps *splitStamps, index, count int) bool {
+	chunk.TotalChunks, chunk.ManifestDigest = 0, ""
+	real := chunk
 	worst := strings.Repeat("&", maxChunkCursorBytes)
-	chunk.TotalChunks, chunk.CursorBefore, chunk.CursorAfter = 0, worst, worst
-	chunk.Ordinal, chunk.ManifestDigest = 999_999, ""
-	_, err := buildPreparedChunkMaterial(claim, chunk, gitHubFilesWidestInstant)
+	chunk.CursorBefore, chunk.CursorAfter, chunk.Ordinal = worst, worst, 999_999
+	if _, err := buildPreparedChunkMaterial(claim, chunk, gitHubFilesWidestInstant); err == nil {
+		return false
+	}
+	if stamps == nil {
+		return true
+	}
+	real.Ordinal, real.CursorBefore, real.CursorAfter = stamps.ordinalBase+index, "", ""
+	if index == 0 {
+		real.CursorBefore = stamps.cursorBefore
+	}
+	if index == count-1 {
+		real.CursorAfter = stamps.cursorAfter
+	}
+	_, err := buildPreparedChunkMaterial(claim, real, gitHubFilesWidestInstant)
 	return err != nil
 }
 

@@ -206,6 +206,41 @@ func gateStoreErr(claim Claim, chunks []PreparedProviderChunk, batch CompleteRou
 	return -1, nil
 }
 
+// gateRealStamped stamps the chunks as the streaming executor does: the real ordinal, the cursor before on the first chunk and the cursor
+// after on the last one, no total.
+func gateRealStamped(chunks []PreparedProviderChunk, batch CompleteRouteBatch, stamps *splitStamps) []PreparedProviderChunk {
+	stamped := append([]PreparedProviderChunk(nil), chunks...)
+	for index := range stamped {
+		stamped[index].TotalChunks, stamped[index].CursorBefore, stamped[index].CursorAfter = 0, "", ""
+		stamped[index].Ordinal = stamps.ordinalBase + index
+		stamped[index].InventoryComplete = index == len(stamped)-1
+		stamped[index].Result = nil
+		if index == 0 {
+			stamped[index].CursorBefore = stamps.cursorBefore
+		}
+		if index == len(stamped)-1 {
+			stamped[index].CursorAfter = stamps.cursorAfter
+			stamped[index].Result = cloneChunkResult(batch.Result)
+		}
+		stamped[index].PayloadBytes = 0
+	}
+	return stamped
+}
+
+func gateStoreErrWith(claim Claim, chunks []PreparedProviderChunk, batch CompleteRouteBatch, stamps *splitStamps) (int, error) {
+	if stamps == nil {
+		return gateStoreErr(claim, chunks, batch)
+	}
+	stamped := gateRealStamped(chunks, batch, stamps)
+	for index := range stamped {
+		stamped[index].ManifestDigest = ""
+		if _, err := buildPreparedChunkMaterial(claim, stamped[index], gitHubFilesWidestInstant); err != nil {
+			return index, err
+		}
+	}
+	return -1, nil
+}
+
 func gateLargest(chunk PreparedProviderChunk) int {
 	largest := 0
 	for _, effect := range chunk.Effects {
@@ -248,8 +283,19 @@ func gateTunedPad(t *testing.T, shape gateShape, below int) int {
 	return pad
 }
 
+// The worst-case arm is the product input of a caller that has no real stamps (the non-streaming executor, the coalescing fit check).
+func TestSplitGateWorstCaseStamps(t *testing.T) {
+	t.Parallel()
+	runSplitGate(t, nil)
+}
+
+// The real-stamp arm is the streaming executor: the oracle is main's split built with the stamps the executor puts on it.
 func TestSplitGate(t *testing.T) {
 	t.Parallel()
+	runSplitGate(t, &splitStamps{ordinalBase: 0, cursorBefore: `{"page":1}`, cursorAfter: `{"page":2}`})
+}
+
+func runSplitGate(t *testing.T, stamps *splitStamps) {
 	started := time.Now()
 	testops, byDefault := TestOpsRouteChunkPolicy(), DefaultChunkPolicy()
 	var shapes []gateShape
@@ -307,11 +353,11 @@ func TestSplitGate(t *testing.T) {
 		mainChunks, mainErr := mainSplitCompleteRouteBatch(batch, ShadowComparison{}, byDefault)
 		mainOK := mainErr == nil
 		if mainOK {
-			if _, err := gateStoreErr(claim, mainChunks, batch); err != nil {
+			if _, err := gateStoreErrWith(claim, mainChunks, batch, stamps); err != nil {
 				mainOK = false
 			}
 		}
-		chunks, err := splitUnderTest(claim, batch, shape.policy)
+		chunks, err := splitUnderTestStamped(claim, stamps, batch, shape.policy)
 		if err != nil {
 			if mainOK {
 				t.Errorf("%s: refused (%v) where the main arm succeeds with %d chunks", shape.name, err, len(mainChunks))
@@ -347,13 +393,17 @@ func TestSplitGate(t *testing.T) {
 			}
 		}
 		stamped := gateStamped(chunks, batch)
+		instant := time.Date(2026, 12, 31, 23, 59, 59, 999_999_999, time.UTC)
+		if stamps != nil {
+			stamped, instant = gateRealStamped(chunks, batch, stamps), gitHubFilesWidestInstant
+		}
 		for index := range stamped {
 			stamped[index].ManifestDigest = ""
 			if gateLargest(chunks[index]) < 2 {
 				continue
 			}
-			if _, err := buildPreparedChunkMaterial(claim, stamped[index], time.Date(2026, 12, 31, 23, 59, 59, 999_999_999, time.UTC)); err != nil {
-				t.Errorf("%s: the store builder refuses chunk %d of %d (%d rows) under the worst-case stamps: %v", shape.name, index, len(chunks), gateLargest(chunks[index]), err)
+			if _, err := buildPreparedChunkMaterial(claim, stamped[index], instant); err != nil {
+				t.Errorf("%s: the store builder refuses chunk %d of %d (%d rows) under the stamps: %v", shape.name, index, len(chunks), gateLargest(chunks[index]), err)
 				break
 			}
 		}

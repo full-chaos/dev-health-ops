@@ -187,7 +187,13 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 				batch.Evidence = FetchEvidence{}
 				batch.WorklogObservations = nil
 			}
-			chunks, splitErr := splitCompleteRouteBatch(&session.Claim, batch, finalComparison, policy)
+			splitClaim := &session.Claim
+			if session.Claim.Provider == "github" && session.Claim.Dataset == "files" {
+				splitClaim = nil
+			}
+			chunks, splitErr := splitCompleteRouteBatchStamped(splitClaim,
+				&splitStamps{ordinalBase: nextOrdinal, cursorBefore: emission.CursorBefore, cursorAfter: emission.CursorAfter},
+				batch, finalComparison, policy)
 			if splitErr != nil {
 				return nil, splitErr
 			}

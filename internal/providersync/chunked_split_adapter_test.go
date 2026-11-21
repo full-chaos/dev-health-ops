@@ -4,3 +4,7 @@ package providersync
 func splitUnderTest(claim Claim, batch CompleteRouteBatch, policy ChunkPolicy) ([]PreparedProviderChunk, error) {
 	return splitCompleteRouteBatch(&claim, batch, ShadowComparison{}, policy)
 }
+
+func splitUnderTestStamped(claim Claim, stamps *splitStamps, batch CompleteRouteBatch, policy ChunkPolicy) ([]PreparedProviderChunk, error) {
+	return splitCompleteRouteBatchStamped(&claim, stamps, batch, ShadowComparison{}, policy)
+}

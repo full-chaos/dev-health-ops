@@ -26,6 +26,8 @@ type rowsPolicyHandler struct {
 	jobs, cases, failingPercent int
 	// bigMessageBytes, when set, gives the case in the middle of the emission a failure message of that many bytes.
 	bigMessageBytes int
+	// bigEveryCase gives every case that failure message instead of only the one in the middle.
+	bigEveryCase bool
 }
 
 func (handler rowsPolicyHandler) Collect(context.Context, Claim, providerfoundation.Credential, *providerfoundation.HTTPClient, time.Time) (CompleteRouteBatch, error) {
@@ -47,7 +49,7 @@ func (handler rowsPolicyHandler) CollectChunks(_ context.Context, claim Claim, _
 			class := "pkg/synthetic.Suite"
 			row := testCaseResultRow{OrgID: claim.OrgID, RepoID: rowsRepoID, RunID: "run-1", SuiteID: suite, CaseID: hashTestIdentifier(suite, name),
 				CaseName: name, ClassName: &class, Status: "passed", LastSynced: stamp}
-			if handler.bigMessageBytes > 0 && index == handler.cases/2 {
+			if handler.bigMessageBytes > 0 && (index == handler.cases/2 || handler.bigEveryCase) {
 				message := strings.Repeat("m", handler.bigMessageBytes)
 				row.Status, row.FailureMessage = "failed", &message
 			}
@@ -279,7 +281,7 @@ func (sink *crashAfterWriteSink) WriteEffect(ctx context.Context, claim Claim, e
 
 // The window cell: one case with a failure message that puts its single-row chunk 40 KB over the split's reserved limit sits among 500
 // small cases, so main (100-row chunks, 2 MiB limit) accepts the chunk that holds it. The split halves the emission until the store builder
-// accepts the worst-case stamps (down to single-row chunks near the edge; the chunk count is in the log line); every row is
+// accepts the real stamps (11 chunks with the final one; main needs about 10); every row is
 // written once to ClickHouse and the store refuses nothing.
 func TestTestOpsRouteBigRowInTheReserveWindowIsAllWrittenOnceWithNoRefusal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
@@ -311,10 +313,40 @@ func TestTestOpsRouteBigRowInTheReserveWindowIsAllWrittenOnceWithNoRefusal(t *te
 		t.Fatal(err)
 	}
 	t.Logf("window cell: 500 cases, one big row: %d stored chunks (incl. the final one), largest payload %d bytes, clickhouse rows=%d distinct=%d", chunks, largest, rows, distinct)
-	if chunks > 600 {
-		t.Fatalf("stored chunks=%d, want at most 600 (worst-case stamps force single-row chunks near the edge; no refusal)", chunks)
+	if chunks > 12 {
+		t.Fatalf("stored chunks=%d, want at most 12 (main needs about 10; the real stamps do not force single-row chunks)", chunks)
 	}
 	if rows != 500 || distinct != 500 {
 		t.Fatalf("clickhouse holds %d rows (%d distinct), want every one of the 500 cases written once", rows, distinct)
 	}
 }
+
+// Two rows, each 10 to 40 KB under 2 MiB, real Postgres and ClickHouse, the real-form TestOps cursor: no two fit one chunk, so the split halves
+// to single rows, and the store accepts each with its real stamps: two data chunks plus the final one, each row written once. A refusal
+// at one row under the worst-case cursors (49 KB of escaped text) would end the emission without a write.
+func TestTestOpsRouteSingleRowsInTheCursorMarginAreOneChunkEachOnRealStores(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	conn := startRowsClickHouse(t, ctx)
+	repository, session, pool := runsGroupPostgres(t, ctx)
+	sink := TestOpsClickHouseEffects{Conn: conn, Lease: session}
+	executor := runsGroupExecutor(time.Now().UTC(), rowsPolicyHandler{cases: 2, bigEveryCase: true, bigMessageBytes: singleRowMarginMessageBytes}, repository, newRunsGroupSink(), newRunsGroupDoer(t, 1, 1), nil)
+	executor.Committer.Sink, executor.Committer.Readback = sink, sink
+	if _, err := executor.Execute(ctx, session, cicdDescriptor(t)); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	var chunks, largest int
+	if err := pool.QueryRow(ctx, `SELECT count(*), COALESCE(max(payload_bytes + octet_length(ledger::text)), 0) FROM public.sync_run_unit_effect_chunks WHERE sync_run_unit_id=$1::uuid`, firstUnitID).Scan(&chunks, &largest); err != nil {
+		t.Fatal(err)
+	}
+	margin := maxChunkPayloadBytes - largest
+	if chunks != 3 || margin < 10_000 || margin > 40_000 {
+		t.Fatalf("stored chunks=%d, largest payload+ledger=%d (margin %d), want 3 chunks (two rows, the final one) and a margin of 10 to 40 KB", chunks, largest, margin)
+	}
+	var rows uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM test_case_results FINAL WHERE org_id = ?`, session.Claim.OrgID).Scan(&rows); err != nil || rows != 2 {
+		t.Fatalf("clickhouse holds %d cases (err=%v), want 2", rows, err)
+	}
+}
+
+const singleRowMarginMessageBytes = 2_070_000

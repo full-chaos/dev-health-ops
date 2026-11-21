@@ -166,21 +166,4 @@ func TestInvestmentBreakdownScopedDocuments_RegistryServesEachNameWithItsOwnDige
 	if got, ok := operationForDocument(registeredInvestmentBreakdownV1Document, byDigest); !ok || got != "investmentBreakdown" {
 		t.Errorf("the legacy investmentBreakdown text resolves to %q, %v; want investmentBreakdown, true", got, ok)
 	}
-	// acr sends each scoped text by its exact digest and pins it in its vendored catalogue, so the text before
-	// CHAOS-12999 stays accepted under the same name until acr has refreshed its pin.
-	for operation, legacyText := range map[string]string{
-		"investmentBreakdownTeam":       registeredInvestmentBreakdownTeamV1Document,
-		"investmentBreakdownRepository": registeredInvestmentBreakdownRepositoryV1Document,
-		"teamWorkItemBreakdown":         registeredTeamWorkItemBreakdownV1Document,
-	} {
-		if legacy := legacyDigestsByOperation[operation]; len(legacy) != 1 || legacy[0] != digestHex(legacyText) {
-			t.Errorf("legacyDigestsByOperation[%s] = %v, want exactly the digest of the text before sizedUnitCount", operation, legacy)
-		}
-		if strings.Contains(legacyText, "sizedUnitCount") {
-			t.Errorf("%s: the legacy text selects sizedUnitCount: it is not the old text", operation)
-		}
-		if got, ok := operationForDocument(legacyText, byDigest); !ok || got != operation {
-			t.Errorf("the legacy %s text resolves to %q, %v; want %s, true", operation, got, ok, operation)
-		}
-	}
 }

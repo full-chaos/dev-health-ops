@@ -626,9 +626,11 @@ WHERE id = $1::uuid`,
 		// this pass's deferrals: a retrying unit an earlier pass deferred keeps its wake, and work still due now
 		// (concurrency-capped units, a unit that became claimable after the guard's snapshot, CHAOS-4605) wants the
 		// countdown. scheduleRedispatch writes ONE wakeup and overwrites a pending row, so it takes the earlier of the two.
-		counts, err := service.pendingUnitCountsNow(ctx, run.id)
+		// On a failed read the pass arms from its own values, as before the read existed, and does not return the error:
+		// a retried delivery would run admission again under the same attempt.
+		counts, err := service.pendingUnitCountsNow(ctx, run.id, now)
 		if err != nil {
-			return err
+			counts = pendingUnitCounts{dispatchable: len(decision.cappedUnitIDs)}
 		}
 		armAt := service.nowUTC()
 		if at, ok := queuedPassRearmAt(nextDeferredAt, counts, len(deferredOutsideSnapshot) > 0, armAt); ok {
@@ -642,7 +644,7 @@ WHERE id = $1::uuid`,
 	// SECOND, separate transaction (Python's own second
 	// `with get_postgres_session_sync() as session:` block, opened only
 	// after the first one above already committed).
-	counts, err := service.pendingUnitCountsNow(ctx, run.id)
+	counts, err := service.pendingUnitCountsNow(ctx, run.id, now)
 	if err != nil {
 		return err
 	}

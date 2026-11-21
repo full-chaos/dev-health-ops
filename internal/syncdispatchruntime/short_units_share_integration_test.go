@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -749,4 +751,157 @@ WHERE id = $1::uuid`, outboxID, dispatchRouteGeneration); err != nil {
 			t.Error("the retried delivery armed no wake while l1 is capped")
 		}
 	})
+}
+
+// flipClockTracer moves the service clock past a deadline when the pass reaches its commit snapshot: the guard and the
+// claim run on the old clock, the post-commit pending-counts read and the arm on the new one.
+type flipClockTracer struct{ armed, flipped atomic.Bool }
+
+func (tracer *flipClockTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if tracer.armed.Load() && strings.Contains(data.SQL, "FOR NO KEY UPDATE OF outbox NOWAIT") {
+		tracer.flipped.Store(true)
+	}
+	return ctx
+}
+
+func (tracer *flipClockTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// Class 2 (round 1 of PR #6804): s0's deferral (1 s) expires between the guard and the post-commit pending-counts read
+// (the clock moves 2 s at the commit snapshot). The arm must be at once or at the deadline, never one countdown late.
+func runShortShareDeferralExpiresDuringThePass(t *testing.T, mode string) {
+	withDispatchServicePool(t, func(ctx context.Context, base *pgxpool.Pool) {
+		tracer := &flipClockTracer{}
+		cfg := base.Config().Copy()
+		cfg.ConnConfig.Tracer = tracer
+		pool, err := pgxpool.NewWithConfig(ctx, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		capped := mode == "queued_capped" || mode == "no_queue_capped"
+		denial := denialConfig{countdown: "60", deferral: "4", jitter: "0", lateL1: !capped, l2: capped}
+		cell := newShortShareDenialWith(t, ctx, pool, denial)
+		const skew = 2 * time.Second
+		cell.svc.now = func() time.Time {
+			if tracer.flipped.Load() {
+				return time.Now().UTC().Add(skew)
+			}
+			return time.Now().UTC()
+		}
+		switch mode {
+		case "no_queue_inflight":
+			cell.exec(`UPDATE sync_run_units SET status = 'running', lease_owner = 'w', lease_expires_at = now() + interval '5 minutes', updated_at = now() WHERE id = '` + denialL0 + `'`)
+		case "no_queue_only_deferred":
+			cell.exec(`DELETE FROM sync_run_units WHERE id = '` + denialL0 + `'`)
+		case "no_queue_capped":
+			// l0 and l2 hold both slots, so l1 is capped and the pass queues nothing: the tail's case a.
+			cell.exec(`UPDATE sync_run_units SET status = 'running', lease_owner = 'w', lease_expires_at = now() + interval '5 minutes', updated_at = now() WHERE id IN ('` + denialL0 + `', '` + denialL2 + `')`)
+		}
+		cell.exec(`UPDATE sync_run_units SET status = 'retrying', available_at = clock_timestamp() + interval '1 second', updated_at = now() WHERE id = '` + denialS0 + `'`)
+		deadline := cell.availableAt(denialS0)
+		tracer.armed.Store(true)
+		cell.pass("the pass (" + mode + ")")
+		if !tracer.flipped.Load() {
+			t.Fatal("the clock did not move at the commit snapshot")
+		}
+		armed := cell.armedAt()
+		passClock := time.Now().UTC().Add(skew)
+		limit := deadline
+		if passClock.After(limit) {
+			limit = passClock
+		}
+		switch {
+		case armed == nil:
+			t.Errorf("%s: no wake armed; s0's deadline %s", mode, deadline.Format(time.RFC3339Nano))
+		case armed.After(limit):
+			t.Errorf("%s: wake %s, late by %s past max(deadline %s, the pass's clock)", mode, armed.UTC().Format(time.RFC3339Nano), armed.Sub(deadline).Round(time.Second), deadline.UTC().Format(time.RFC3339Nano))
+		}
+	})
+}
+
+func TestShortUnitsShareDeferralExpiresDuringTheQueuedCappedPass(t *testing.T) {
+	runShortShareDeferralExpiresDuringThePass(t, "queued_capped")
+}
+
+func TestShortUnitsShareDeferralExpiresDuringTheQueuedUncappedPass(t *testing.T) {
+	runShortShareDeferralExpiresDuringThePass(t, "queued_uncapped")
+}
+
+func TestShortUnitsShareDeferralExpiresDuringTheNoQueueInflightPass(t *testing.T) {
+	runShortShareDeferralExpiresDuringThePass(t, "no_queue_inflight")
+}
+
+func TestShortUnitsShareDeferralExpiresDuringTheNoQueueOnlyDeferredPass(t *testing.T) {
+	runShortShareDeferralExpiresDuringThePass(t, "no_queue_only_deferred")
+}
+
+// failCountsTracer breaks the connection when the post-commit pending-counts read starts, so that read fails.
+type failCountsTracer struct{ armed, failed atomic.Bool }
+
+func (tracer *failCountsTracer) TraceQueryStart(ctx context.Context, conn *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if tracer.armed.Load() && strings.Contains(data.SQL, "min(available_at) FILTER") {
+		tracer.failed.Store(true)
+		_ = conn.PgConn().Conn().Close()
+	}
+	return ctx
+}
+
+func (tracer *failCountsTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// Class 1 (round 1 of PR #6804): the pending-counts read fails after a committed queued pass (l0 and l1 queued, l2
+// capped). The pass returns nil (no retried delivery runs admission again under the same attempt) and arms from its own
+// values (the capped l2: the countdown); the committed claims and publishes stay as they are.
+func TestShortUnitsShareQueuedPassReadFailureArmsFromThePass(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, base *pgxpool.Pool) {
+		tracer := &failCountsTracer{}
+		cfg := base.Config().Copy()
+		cfg.ConnConfig.Tracer = tracer
+		pool, err := pgxpool.NewWithConfig(ctx, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		cell := newShortShareDenialWith(t, ctx, pool, denialConfig{countdown: "60", deferral: "4", jitter: "0", l2: true})
+		cell.exec(`DELETE FROM sync_run_units WHERE id = '` + denialS0 + `'`)
+		outboxID, _, ok := shortShareRelay(t, ctx, base, nil)
+		if !ok {
+			t.Fatal("no due dispatch row")
+		}
+		tracer.armed.Store(true)
+		start := time.Now().UTC()
+		err = cell.svc.Dispatch(ctx, DispatchSyncRunArgs{TransportArgs: TransportArgs{
+			Version: ContractVersionV1, OrgID: discoveryTestOrg, RunID: discoveryTestRun,
+			DispatchOutbox: outboxID, RouteGeneration: dispatchRouteGeneration,
+		}})
+		tracer.armed.Store(false)
+		if !tracer.failed.Load() {
+			t.Fatal("the pending-counts read was not reached")
+		}
+		if err != nil {
+			t.Fatalf("Dispatch returned %v, want nil after a failed post-commit read", err)
+		}
+		for id, want := range map[string]string{denialL0: syncRunUnitStatusDispatching, denialL1: syncRunUnitStatusDispatching, denialL2: syncRunUnitStatusPlanned} {
+			if got, _ := cell.status(id); got != want {
+				t.Errorf("%s: %s, want %s", id[len(id)-8:], got, want)
+			}
+		}
+		var publishes int
+		if err := base.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE dedupe_key IN ($1, $2)`, "sync.provider_unit:"+denialL0, "sync.provider_unit:"+denialL1).Scan(&publishes); err != nil {
+			t.Fatal(err)
+		}
+		if publishes != 2 {
+			t.Errorf("publishes of l0 and l1 = %d, want 2", publishes)
+		}
+		armed := cell.armedAt()
+		if armed == nil {
+			t.Fatal("no wake armed after the failed read")
+		}
+		if armed.Before(start.Add(59*time.Second)) || armed.After(time.Now().UTC().Add(61*time.Second)) {
+			t.Errorf("wake %s, want the countdown (60 s) from the pass", armed.UTC().Format(time.RFC3339Nano))
+		}
+	})
+}
+
+func TestShortUnitsShareDeferralExpiresDuringTheNoQueueCappedPass(t *testing.T) {
+	runShortShareDeferralExpiresDuringThePass(t, "no_queue_capped")
 }

@@ -20,7 +20,10 @@ type pendingUnitCounts struct {
 	nextDeferredAt *time.Time
 }
 
-func computePendingUnitCounts(ctx context.Context, tx pgx.Tx, syncRunID string, now time.Time) (pendingUnitCounts, error) {
+// The stale cutoff is taken at now (the read); a RETRYING unit is split at admittedAt, the pass's admission time: a
+// deadline that passes between admission and the read stays a deferral (nextDeferredAt <= now, armed at once), it is
+// not counted as due work that waits for a countdown.
+func computePendingUnitCounts(ctx context.Context, tx pgx.Tx, syncRunID string, now, admittedAt time.Time) (pendingUnitCounts, error) {
 	staleCutoff := staleDispatchCutoff(now)
 	// One aggregate row whatever the unit count: the classification below is the per-row switch this function used to
 	// run in Go. A RETRYING unit with no available_at is in neither class.
@@ -36,7 +39,7 @@ SELECT
 FROM public.sync_run_units
 WHERE sync_run_id = $1::uuid AND status IN ($2, $3, $4, $5)`,
 		syncRunID, syncRunUnitStatusPlanned, syncRunUnitStatusDispatching, syncRunUnitStatusRunning,
-		syncRunUnitStatusRetrying, staleCutoff, now,
+		syncRunUnitStatusRetrying, staleCutoff, admittedAt,
 	).Scan(&counts.dispatchable, &counts.inFlight, &counts.nextDeferredAt)
 	if err != nil {
 		return pendingUnitCounts{}, fmt.Errorf("load pending unit counts: %w", err)
@@ -44,13 +47,14 @@ WHERE sync_run_id = $1::uuid AND status IN ($2, $3, $4, $5)`,
 	return counts, nil
 }
 
-// pendingUnitCountsNow reads computePendingUnitCounts in its own transaction, after the pass committed.
-func (service *NativeDispatchSyncRunService) pendingUnitCountsNow(ctx context.Context, syncRunID string) (pendingUnitCounts, error) {
+// pendingUnitCountsNow reads computePendingUnitCounts in its own transaction, after the pass committed; admittedAt is
+// the pass's admission time.
+func (service *NativeDispatchSyncRunService) pendingUnitCountsNow(ctx context.Context, syncRunID string, admittedAt time.Time) (pendingUnitCounts, error) {
 	tx, err := service.pool.Begin(ctx)
 	if err != nil {
 		return pendingUnitCounts{}, ErrDispatchSyncRunUnavailable
 	}
-	counts, err := computePendingUnitCounts(ctx, tx, syncRunID, service.nowUTC())
+	counts, err := computePendingUnitCounts(ctx, tx, syncRunID, service.nowUTC(), admittedAt)
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		return pendingUnitCounts{}, err

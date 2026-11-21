@@ -44,7 +44,7 @@ func TestRealClickHouse_StoredTeamRowsCoverTheSelectedRepositorySet(t *testing.T
 	type seedFn func(seedCtx, *testing.T, time.Time)
 	type world struct {
 		t1, t2, teamComputed string
-		cMovedToT2           bool
+		cMovedToT2, bOwned   bool
 	}
 	seedWorld := func(w world) seedFn {
 		return func(c seedCtx, t *testing.T, now time.Time) {
@@ -59,6 +59,9 @@ func TestRealClickHouse_StoredTeamRowsCoverTheSelectedRepositorySet(t *testing.T
 				own(t, c.ctx, c.conn, "org-1", "t1", rC, "acme/lib")
 			}
 			own(t, c.ctx, c.conn, "org-1", "t2", rX, "acme/ops")
+			if w.bOwned {
+				own(t, c.ctx, c.conn, "org-1", "t2", rB, "acme/api")
+			}
 			for id, score := range map[string]string{rA: "0.25", rB: "0.875", rC: "0.75", rX: "0.625"} {
 				put(t, c.ctx, c.conn, risk{org: "org-1", scope: "repo", id: id, day: day(now, 1), score: score, sev: "low"})
 			}
@@ -82,6 +85,9 @@ func TestRealClickHouse_StoredTeamRowsCoverTheSelectedRepositorySet(t *testing.T
 	olderTeamRows := seedWorld(world{t1: "0.55", t2: "0.7", teamComputed: "now() - INTERVAL 1 HOUR"})
 	// C moved from t1 to t2 after both stored rows were written.
 	moved := seedWorld(world{t1: "0.55", t2: "0.7", teamComputed: "now() - INTERVAL 1 HOUR", cMovedToT2: true})
+	// Every repository is owned (B by t2) and every team has a live stored
+	// row: nothing is derived.
+	allStored := seedWorld(world{t1: "0.55", t2: "0.7", bOwned: true})
 	// t3 owns D, which has no repository row and no t3 row on the day (only
 	// two days before).
 	idleTeam := then(stored, func(c seedCtx, t *testing.T, now time.Time) {
@@ -170,6 +176,8 @@ func TestRealClickHouse_StoredTeamRowsCoverTheSelectedRepositorySet(t *testing.T
 			[]scored{{"unassigned", 0.875}, {"t2", 0.7}, {"t1", 0.55}}, 0.625},
 		{"a repository moved between two stored teams: both stay stored until the finalize", moved, nil, nil,
 			[]scored{{"unassigned", 0.875}, {"t2", 0.7}, {"t1", 0.55}}, 0.625},
+		{"every repository owned and every team stored: no row is derived", allStored, nil, nil,
+			[]scored{{"t2", 0.7}, {"t1", 0.55}}, 0.625},
 		{"a team with no repository row and no stored row of the day is not listed", idleTeam, nil, nil,
 			[]scored{{"unassigned", 0.875}, {"t2", 0.625}, {"t1", 0.55}}, 0.625},
 		{"a team of another organization is never derived", otherOrg, nil, nil,

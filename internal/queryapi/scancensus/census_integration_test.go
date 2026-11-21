@@ -866,6 +866,21 @@ const nullableIntoPlainSites = `
 // TestScanTypeCensus run (logs/ops2a2-g-scan-1.log a089023a5bc4), not computed:
 //
 //	operatingreview.go fetchChangeFailureAgg 3230768230ad -> 69446d48d9d3
+//
+// CHAOS-14441 / CHAOS-14425: the Home driver reads (fetchMetricDriverDelta, fetchRateDriverDelta, the batched
+// metricDriverSelect) take the value's reducer and status filter and rank a move from a measured 0 by the absolute rise;
+// the rank column (delta_pct or delta_abs) is spliced into the select list. Scan targets are unchanged; the file SQL
+// digest moved, and the two driver reads are now classed spliced-select-list (was not-describable). Re-pinned by hand,
+// digests copied from the failing local TestScanTypeCensus run (logs/l14441-scan-1.log 90931ff2a2d3), not computed:
+//
+//	queries_metric_drivers_batch.go fetchMetricDriversBatch 61d29f14b0f2 -> e7e8b7f8955e
+//	queries_metrics.go fetchBlockedHours ccb3ecc2e76c -> 224ae017b462
+//	queries_metrics.go fetchChangeFailureView fb135e9cbe2e -> 02b9a54bef69
+//	queries_metrics.go fetchMetricDriverDelta d0ccbc5bb0ed -> 1d471ff67adb (not-describable -> spliced-select-list)
+//	queries_metrics.go fetchMetricSeries c8e2b0f2634a -> 600ac24505e4
+//	queries_metrics.go fetchMetricValue 271ec8ba88d7 -> 32cfbee5d369
+//	queries_metrics.go fetchPRReworkView a0f9dc8a97b2 -> f2e5aa5edd0b
+//	queries_metrics.go fetchRateDriverDelta 58589d38e782 -> fef6e4dd8810 (not-describable -> spliced-select-list)
 const unverifiedSites = `
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|e67003e26fc2|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|e67003e26fc2|not-describable
@@ -903,14 +918,14 @@ internal/queryapi/explain/metrics.go|fetchMetricContributors|*string,**float64|2
 internal/queryapi/explain/metrics.go|fetchMetricDriverDelta|*string,**float64,*uint8,*uint8,**float64|69d32d6caccb|not-describable
 internal/queryapi/explain/metrics.go|fetchMetricValue|**float64,*uint64|aff9d26238c0|spliced-select-list
 internal/queryapi/explain/repositories.go|fetchWorkItemProviders|*string|cc6f1e4e4f8c|not-describable
-internal/queryapi/home/queries_metric_drivers_batch.go|fetchMetricDriversBatch|*string,*string|61d29f14b0f2|not-describable
-internal/queryapi/home/queries_metrics.go|fetchBlockedHours|*time.Time,*float64|ccb3ecc2e76c|not-describable
-internal/queryapi/home/queries_metrics.go|fetchChangeFailureView|[]any|fb135e9cbe2e|variadic-destinations
-internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|d0ccbc5bb0ed|not-describable
-internal/queryapi/home/queries_metrics.go|fetchMetricSeries|*time.Time,**float64|c8e2b0f2634a|spliced-select-list
-internal/queryapi/home/queries_metrics.go|fetchMetricValue|*int64,**float64|271ec8ba88d7|spliced-select-list
-internal/queryapi/home/queries_metrics.go|fetchPRReworkView|[]any|a0f9dc8a97b2|variadic-destinations
-internal/queryapi/home/queries_metrics.go|fetchRateDriverDelta|*string,**float64,**float64|58589d38e782|not-describable
+internal/queryapi/home/queries_metric_drivers_batch.go|fetchMetricDriversBatch|*string,*string|e7e8b7f8955e|not-describable
+internal/queryapi/home/queries_metrics.go|fetchBlockedHours|*time.Time,*float64|224ae017b462|not-describable
+internal/queryapi/home/queries_metrics.go|fetchChangeFailureView|[]any|02b9a54bef69|variadic-destinations
+internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|1d471ff67adb|spliced-select-list
+internal/queryapi/home/queries_metrics.go|fetchMetricSeries|*time.Time,**float64|600ac24505e4|spliced-select-list
+internal/queryapi/home/queries_metrics.go|fetchMetricValue|*int64,**float64|32cfbee5d369|spliced-select-list
+internal/queryapi/home/queries_metrics.go|fetchPRReworkView|[]any|f2e5aa5edd0b|variadic-destinations
+internal/queryapi/home/queries_metrics.go|fetchRateDriverDelta|*string,**float64,**float64|fef6e4dd8810|spliced-select-list
 internal/queryapi/home/queries_signals.go|fetchRiskSignals|*string,*string,**float64,*string,*time.Time,**float64|06cb489933a0|not-describable
 internal/queryapi/home/queries_sync.go|FetchLatestSuccessfulSyncAt|**time.Time|9dfe899f0474|statement-not-static
 internal/queryapi/home/repolinked.go|readBasis|*string,*string,*uint8|ed45fd9e4470|spliced-select-list

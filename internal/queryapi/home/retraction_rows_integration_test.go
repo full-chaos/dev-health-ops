@@ -70,7 +70,7 @@ func TestHomeReadersGiveRetractionRowsNoWeight(t *testing.T) {
 			}
 			answers.Series[spec.Metric] = series
 			drivers, err := fetchMetricDriverDelta(ctx, client, spec.Table, spec.Column, metricGroup(spec.Metric),
-				driverStart, driverEnd, compareStart, compareEnd, "", nil, org, 20)
+				driverStart, driverEnd, compareStart, compareEnd, "", nil, org, 20, false)
 			if err != nil {
 				t.Fatalf("%s %s drivers: %v", org, spec.Metric, err)
 			}

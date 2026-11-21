@@ -18,6 +18,8 @@ import (
 type driverBatchMetric struct {
 	Metric      string
 	ScopeFilter string
+	// FromZero is a value that rose from a measured 0: its drivers rank by the absolute rise (driverRank).
+	FromZero bool
 }
 
 // fetchMetricDriversBatch is fetchMetricDriverDelta for several metrics in ONE
@@ -26,7 +28,7 @@ type driverBatchMetric struct {
 // limit rows per metric (LIMIT n BY metric). The row count is bounded in the
 // SQL by limit times the number of metrics, so the 1,000-row cap of the query
 // client is never reached. A metric without a driver row is absent from the
-// result. Ties on the percent break by id, so one request names the same
+// result. Ties on the rank break by id, so one request names the same
 // drivers twice.
 //
 // fetchMetricDriverDelta is left as it is: its caller (the summary sentence)
@@ -44,7 +46,7 @@ func fetchMetricDriversBatch(ctx context.Context, client QueryClient, batch []dr
         FROM (
 %s
         )
-        ORDER BY metric, delta_pct DESC, id
+        ORDER BY metric, rank_value DESC, id
         LIMIT {limit_n:UInt32} BY metric
     `, strings.Join(parts, "\n            UNION ALL\n"))
 	bindings := append([]dhclickhouse.Binding{
@@ -77,26 +79,20 @@ func fetchMetricDriversBatch(ctx context.Context, client QueryClient, batch []dr
 
 // metricDriverSelect is the select of fetchMetricDriverDelta / fetchRateDriverDelta
 // for one metric, without the ORDER BY and LIMIT, with the metric key as a
-// column. Only the metric's own spec (table, column, group) shapes it.
+// column and the rank as rank_value. Only the metric's own spec (table, column,
+// group, reducer, status) and the move of its value shape it.
 func metricDriverSelect(m driverBatchMetric) string {
 	table, column, groupBy := metricTable(m.Metric), metricColumn(m.Metric), metricGroup(m.Metric)
-	currentFrom := metricFromClause(table, column, m.ScopeFilter, "start_day", "end_day", false)
-	previousFrom := metricFromClause(table, column, m.ScopeFilter, "compare_start", "compare_end", false)
-	pct := deltarule.DriverPercentSQL("current.value", "previous.value", "previous.present")
-	value, where := "avg("+column+")", "delta_pct IS NOT NULL"
-	switch {
-	case isPRRework(table, column):
-		value, where = prrework.WindowRateSQL, "current.value IS NOT NULL AND delta_pct IS NOT NULL"
-	case table == changefailure.Table:
-		value, where = changefailure.WindowRateSQL, "current.value IS NOT NULL AND delta_pct IS NOT NULL"
-	case isPipelineSuccess(table, column):
-		value, where = pipelineSuccessWindowRateSQL, "current.value IS NOT NULL AND delta_pct IS NOT NULL"
-	}
-	return fmt.Sprintf(`            SELECT metric, id, delta_pct FROM (
+	scopeFilter := m.ScopeFilter + driverStatusFilter(table, column)
+	currentFrom := metricFromClause(table, column, scopeFilter, "start_day", "end_day", false)
+	previousFrom := metricFromClause(table, column, scopeFilter, "compare_start", "compare_end", false)
+	value, rate := driverValueSQL(table, column)
+	rank, alias, where := driverRank(m.FromZero, driverSums(table, column), rate)
+	return fmt.Sprintf(`            SELECT metric, id, %s AS rank_value FROM (
                 SELECT
                     '%s' AS metric,
                     toString(current.id) AS id,
-                    toFloat64(%s) AS delta_pct
+                    toFloat64(%s) AS %s
                 FROM (
                     SELECT %s AS id, %s AS value
                     FROM %s
@@ -108,5 +104,63 @@ func metricDriverSelect(m driverBatchMetric) string {
                     GROUP BY %s
                 ) AS previous ON current.id = previous.id
                 WHERE %s
-            )`, m.Metric, pct, groupBy, value, currentFrom, groupBy, groupBy, value, previousFrom, groupBy, where)
+            )`, alias, m.Metric, rank, alias, groupBy, value, currentFrom, groupBy, groupBy, value, previousFrom, groupBy, where)
+}
+
+// driverValueSQL is the value of one driver group in a window, by the reducer of the metric's own value: the window
+// rate of a rate metric (rate is true: the value can be NULL), the sum of a summed metric (cast: a sum of an integer
+// column is UInt64, which does not scan into a float), else the average.
+func driverValueSQL(table, column string) (value string, rate bool) {
+	switch {
+	case isPRRework(table, column):
+		return prrework.WindowRateSQL, true
+	case table == changefailure.Table:
+		return changefailure.WindowRateSQL, true
+	case isPipelineSuccess(table, column):
+		return pipelineSuccessWindowRateSQL, true
+	case driverSums(table, column):
+		return "toFloat64(sum(" + column + "))", false
+	}
+	return "avg(" + column + ")", false
+}
+
+// driverSums says whether the Home value of this table and column is a sum (metricSpec.Aggregator): its drivers sum
+// too, as the value does.
+func driverSums(table, column string) bool {
+	for _, m := range metrics {
+		if m.Table == table && m.Column == column {
+			return m.Aggregator == "sum"
+		}
+	}
+	return false
+}
+
+// driverStatusFilter is the status predicate of the value: Blocked Work sums the hours in the blocked status only
+// (fetchBlockedHours), so its drivers read only those rows.
+func driverStatusFilter(table, column string) string {
+	if table == metricTable("blocked_work") && column == metricColumn("blocked_work") {
+		return "\n              AND status = 'blocked'"
+	}
+	return ""
+}
+
+// driverRank is the rank of a driver row, its column name, and the rows that are drivers.
+//
+// A percent move ranks by the percent (deltarule.DriverPercentSQL): a group with no row or no value in a window has
+// none. A rise from a measured 0 has no percent: it ranks by the absolute rise. A summed value counts a group with no
+// row in the prior window as 0, as the value's own sum does, so that group is a driver of the rise. Any other value
+// (an average, a rate) needs a measured 0 in the prior window: a stored row whose value is 0, not NULL.
+func driverRank(fromZero, sums, rate bool) (rank, alias, where string) {
+	if !fromZero {
+		where = "delta_pct IS NOT NULL"
+		if rate {
+			where = "current.value IS NOT NULL AND delta_pct IS NOT NULL"
+		}
+		return deltarule.DriverPercentSQL("current.value", "previous.value", "previous.present"), "delta_pct", where
+	}
+	where = "current.value > 0 AND previous.present = 1 AND previous.value IS NOT NULL AND previous.value = 0"
+	if sums {
+		where = "current.value > 0 AND (previous.present = 0 OR previous.value = 0)"
+	}
+	return "current.value - if(previous.present = 1, previous.value, 0)", "delta_abs", where
 }

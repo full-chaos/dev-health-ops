@@ -31,25 +31,13 @@ func driverCaption(label string, names []string) *string {
 	return &s
 }
 
-// statesDriverMove says whether a delta is a stated move with a driver to
-// name: a percent between two measured values that is not exactly 0 %. Not a
-// work-item metric under a repository filter: its value is the repo-linked
-// calculation, while the team daily table that names its drivers has no
-// repository dimension, so the teams named would not be the filtered ones.
-func statesDriverMove(d MetricDelta) bool {
-	if d.RepoFilterApplied != nil && *d.RepoFilterApplied && metricScope(d.Metric) == "team" {
-		return false
-	}
-	_, ok := d.Percent()
-	return ok && d.HasData && namesDrivers(d)
-}
-
-// oneTeamStatesMove says whether the value of a metric of a one-team request states a move (CHAOS-14379): a percent
-// between two measured values that is not exactly 0 %, or a rise from a measured 0, which is stated in absolute values
-// and has no percent. Not a steady value, not a value missing in a window, and not a work-item metric under a
-// repository filter (its value is the repo-linked calculation: no team-wide driver). The summary sentence and the
-// signal captions take this one predicate.
-func oneTeamStatesMove(d MetricDelta) bool {
+// statesMove says whether the value of a metric states a move with a driver to name (CHAOS-14379, CHAOS-14441): a
+// percent between two measured values that is not exactly 0 %, or a rise from a measured 0, which is stated in absolute
+// values and has no percent. Not a steady value, not a value missing in a window, and not a work-item metric under a
+// repository filter: its value is the repo-linked calculation, while the team daily rows that name drivers have no
+// repository dimension (CHAOS-14425). The summary sentence and the signal captions take this one predicate, in every
+// form.
+func statesMove(d MetricDelta) bool {
 	if d.RepoFilterApplied != nil && *d.RepoFilterApplied && metricScope(d.Metric) == "team" {
 		return false
 	}
@@ -61,10 +49,10 @@ func oneTeamStatesMove(d MetricDelta) bool {
 }
 
 // oneTeamDriverRows is the driver of a metric of a one-team request (CHAOS-14379): the team itself when the metric's
-// value states a move (oneTeamStatesMove), so the driver has the value's own source, predicates and reducer; none
+// value states a move (statesMove), so the driver has the value's own source, predicates and reducer; none
 // otherwise.
 func oneTeamDriverRows(d MetricDelta, f Filters) []driverRow {
-	if !oneTeamStatesMove(d) {
+	if !statesMove(d) {
 		return nil
 	}
 	return []driverRow{{ID: f.Scope.IDs[0]}}
@@ -89,7 +77,7 @@ func attachDriverCaptions(ctx context.Context, client QueryClient, f Filters, or
 			}
 			continue
 		}
-		if !statesDriverMove(d) {
+		if !statesMove(d) {
 			continue
 		}
 		filter, ok := scopeFilters[scope]
@@ -113,7 +101,7 @@ func attachDriverCaptions(ctx context.Context, client QueryClient, f Filters, or
 			}
 			scopeFilters[scope] = filter
 		}
-		batch = append(batch, driverBatchMetric{Metric: d.Metric, ScopeFilter: filter})
+		batch = append(batch, driverBatchMetric{Metric: d.Metric, ScopeFilter: filter, FromZero: d.FromZero()})
 		labels[d.Metric] = d.Label
 	}
 	if len(batch) == 0 && len(oneTeamRows) == 0 {

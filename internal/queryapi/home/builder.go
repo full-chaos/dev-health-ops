@@ -413,7 +413,7 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 		// D5900). DECLARED DIVERGENCE from the reference (home.py:1123 names the drivers of any
 		// move, 0 % included), narrow: only a measured 0 % between two measured values.
 		driverText := "."
-		if namesDrivers(topDelta) {
+		if statesMove(topDelta) {
 			var driverRows []driverRow
 			if oneTeamScope(metricScope(topDelta.Metric), f) {
 				driverRows = oneTeamDriverRows(topDelta, f)
@@ -422,7 +422,7 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 				if err != nil {
 					return nil, err
 				}
-				driverRows, err = fetchMetricDriverDelta(ctx, chClient, metricTable(topDelta.Metric), metricColumn(topDelta.Metric), metricGroup(topDelta.Metric), startDay, endDay, compareStart, compareEnd, scopeFilter, scopeBindings, orgID, 3)
+				driverRows, err = fetchMetricDriverDelta(ctx, chClient, metricTable(topDelta.Metric), metricColumn(topDelta.Metric), metricGroup(topDelta.Metric), startDay, endDay, compareStart, compareEnd, scopeFilter, scopeBindings, orgID, 3, topDelta.FromZero())
 				if err != nil {
 					return nil, err
 				}

@@ -84,6 +84,7 @@ internal/jobs/metrics/daily	34
 internal/jobs/metrics/prrework	5
 internal/jobs/metrics/remaining	14
 internal/jobs/metrics/remaining/stepcause	1
+internal/jobs/report	61
 internal/jobs/workgraph/units	40
 internal/loadharness	22
 internal/platform/logging	24
@@ -99,6 +100,7 @@ internal/queryapi/pepgate	4
 internal/queryapi/server	46
 internal/queryapiservice	3
 internal/storage/clickhouse	12
+internal/storage/clickhouse/latestrow	55
 internal/storage/postgres	63
 internal/storedversion	39
 internal/streamhandlers	8

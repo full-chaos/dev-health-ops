@@ -9,6 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // CHAOS-4246: the weekly-report engine charts daily metric rollups that are
@@ -157,12 +158,16 @@ func teamDedupFromSource(table string) string {
 // as the table (CHAOS-14407). Two versions that share the version column give one
 // of them whatever the scan order: work_item_metrics_daily orders by its one
 // version order, the order its served readers pick by, so a report and a page
-// chart the same version of a tied key; every other table breaks the tie by the
+// chart the same version of a tied key; team_metrics_daily orders by the order the page and the
+// recommendations job pick by (teamkeytables); every other table breaks the tie by the
 // hash of the whole row.
 func newestVersions(table string, read tableRead) string {
 	order := read.Version + " DESC, cityHash64(tuple(*)) DESC"
 	if table == "work_item_metrics_daily" {
 		order = rowview.WorkItemMetricsNewestOrder + " DESC"
+	}
+	if table == "team_metrics_daily" {
+		order = teamkeytables.TeamMetricsDailyNewestOrder + " DESC"
 	}
 	return fmt.Sprintf("(SELECT * FROM %s ORDER BY %s LIMIT 1 BY %s) AS %s",
 		table, order, strings.Join(read.Key, ", "), table)

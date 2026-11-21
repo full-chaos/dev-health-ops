@@ -496,16 +496,25 @@ func (repository *PostgresRepository) MarkChunkCommitted(
 	if chunk.ManifestDigest != digest {
 		return ErrChunkCheckpointConflict
 	}
-	for _, effect := range chunk.Ledger.Effects {
-		if effect.Status != GenerationBlockCommitted {
+	changed, err := commitDeferredEmptyEffects(&chunk, now)
+	if err != nil {
+		return err
+	}
+	var ledger any
+	if changed {
+		encoded := encodeEffectLedgerState(chunk.Ledger)
+		if len(encoded) == 0 {
 			return ErrChunkCheckpointConflict
 		}
+		ledger = string(encoded)
 	}
 	// The statement matches only a PENDING sidecar, so RowsAffected separates a
 	// real transition from an idempotent replay. Rows are added on the
 	// transition alone; a replay must not inflate the count, and a sidecar in
-	// any other state must not silently advance the checkpoint.
-	command, err := tx.Exec(ctx, markChunkCommittedSQL, claim.OrgID, claim.ID, claim.GenerationKey(), ordinal, now.UTC())
+	// any other state must not silently advance the checkpoint. The deferred
+	// empty effects commit in the same statement, so a committed sidecar always
+	// has a fully committed ledger and a replay writes no ledger.
+	command, err := tx.Exec(ctx, markChunkCommittedSQL, claim.OrgID, claim.ID, claim.GenerationKey(), ordinal, now.UTC(), ledger)
 	if err != nil {
 		return NewChunkStoreError(err)
 	}
@@ -668,7 +677,7 @@ WHERE org_id=$1 AND sync_run_unit_id=$2::uuid AND generation=$3 AND ordinal=$4`
 // from an idempotent replay and add the chunk's rows exactly once.
 const markChunkCommittedSQL = `
 UPDATE public.sync_run_unit_effect_chunks
-SET status='committed', updated_at=$5
+SET status='committed', ledger=COALESCE($6::jsonb, ledger), updated_at=$5
 WHERE org_id=$1 AND sync_run_unit_id=$2::uuid AND generation=$3 AND ordinal=$4
   AND status='pending'`
 

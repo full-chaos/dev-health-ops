@@ -164,6 +164,12 @@ func latestDay(ctx context.Context, client QueryClient, orgID, scope string, ids
 // latestRows returns the latest computed row per scope id on one day,
 // ordered by score descending with unscored rows last, capped at maxRows.
 func latestRows(ctx context.Context, client QueryClient, orgID string, day time.Time, scope string, ids idList) ([]storedRow, error) {
+	return latestRowsLimit(ctx, client, orgID, day, scope, ids, maxRows)
+}
+
+// latestRowsLimit is latestRows with a row cap of limit; limit <= 0 reads every
+// row, for a caller that aggregates the rows before it applies a cap.
+func latestRowsLimit(ctx context.Context, client QueryClient, orgID string, day time.Time, scope string, ids idList, limit int) ([]storedRow, error) {
 	if ids.excludesEverything() {
 		return nil, nil
 	}
@@ -235,7 +241,10 @@ func latestRows(ctx context.Context, client QueryClient, orgID string, day time.
 			bindings = append(bindings, clickhouse.Binding{Name: "scope_ids", Value: ids.bounded()})
 		}
 	}
-	query += fmt.Sprintf("\n    GROUP BY scope_id%s\n)\nORDER BY score DESC NULLS LAST\nLIMIT %d", measuredRowHaving, maxRows)
+	query += fmt.Sprintf("\n    GROUP BY scope_id%s\n)\nORDER BY score DESC NULLS LAST", measuredRowHaving)
+	if limit > 0 {
+		query += fmt.Sprintf("\nLIMIT %d", limit)
+	}
 
 	rs, err := client.Query(ctx, query, bindings)
 	if err != nil {

@@ -463,8 +463,10 @@ func TestRealClickHouse_PatternsOnlyTeamAnswersNoRow(t *testing.T) {
 	if rows := teamRows([]string{"p1"}); len(rows) != 0 {
 		t.Fatalf("a team with only repo_patterns answered %#v, want no row", rows)
 	}
-	if rows := teamRows(nil); len(rows) != 0 {
-		t.Fatalf("the team breakout with no team named answered %#v, want no row for a patterns-only team", rows)
+	for _, r := range teamRows(nil) {
+		if r.ScopeID == "p1" {
+			t.Fatalf("the team breakout with no team named answered a row for the patterns-only team: %#v", r)
+		}
 	}
 	own(t, ctx, conn, "org-1", "p1", rA, "acme/web")
 	rows := teamRows([]string{"p1"})

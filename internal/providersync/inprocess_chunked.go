@@ -451,17 +451,26 @@ func (store *InProcessChunkLedger) MarkChunkCommitted(
 	if chunk.ManifestDigest != digest {
 		return ErrChunkCheckpointConflict
 	}
-	for _, effect := range chunk.Ledger.Effects {
-		if effect.Status != GenerationBlockCommitted {
+	changed, err := commitDeferredEmptyEffects(&chunk, now)
+	if err != nil {
+		return err
+	}
+	var ledgerRaw []byte
+	if changed {
+		if ledgerRaw = encodeEffectLedgerState(chunk.Ledger); len(ledgerRaw) == 0 {
 			return ErrChunkCheckpointConflict
 		}
 	}
 	// markChunkCommittedSQL matches only a pending sidecar: a real transition adds
-	// the rows once, a replay of a committed one adds nothing.
+	// the rows once (and commits the deferred empty effects), a replay of a
+	// committed one adds nothing and writes no ledger.
 	row := store.chunks[ordinal]
 	rows := int64(0)
 	if row.status == "pending" {
 		row.status = "committed"
+		if ledgerRaw != nil {
+			row.ledgerRaw = ledgerRaw
+		}
 		for _, effect := range chunk.Effects {
 			rows += int64(len(effect.Rows))
 		}

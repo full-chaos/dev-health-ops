@@ -1,8 +1,11 @@
 package providersync
 
 import (
+	"fmt"
 	"slices"
+	"sort"
 	"testing"
+	"time"
 )
 
 // peelBudgetMain is each cell's number on main before CHAOS-14435 (the same cells run there; logs in the PR): distinct
@@ -235,5 +238,93 @@ func TestGitHubTestsPeelGivesNoRecordCreditToFirstReads(t *testing.T) {
 				peelBudgetCheck(t, name, len(listing.reads(fake)), true)
 			})
 		}
+	}
+}
+
+// NOT closed (Codex r1 P1 of CHAOS-14435, follow-up ticket): a run NEWER than the cut, deleted after the peel, leaves the
+// active range's anchor in place, so the walk keeps its cut, while an uninterrupted walk of the surviving runs peels one
+// run lower (sparse) or lists one run more of a dense cut second. At the page budget edge the uninterrupted walk reads
+// deeper. These cells pin the gap: the survivors unread here are never more than on main.
+func TestGitHubTestsPeelKeepsItsCutAfterANewerDeletionNoWorseThanMain(t *testing.T) {
+	if cutDifferentialRace {
+		t.Skip("run in the plain test legs (minutes of walks under -race)")
+	}
+	type shape struct {
+		name     string
+		count    int
+		from, to int // one created second (0: none)
+		pages    int
+		deleted  []int
+	}
+	shapes := []shape{
+		{"sparse", 1120, 0, 0, 11, []int{1100}},
+		{"dense_same_cut", 1120, 71, 170, 11, []int{1100}},   // positions 951..1,050: the cut second straddles the cap
+		{"dense_cut_moves", 1120, 121, 170, 11, []int{1100}}, // positions 951..1,000: the cap ends exactly at the second's end
+		// The listing ends inside the next range's budget, or the budget ends two ranges on: this binary's gaps.
+		{"sparse_listing_end", 1201, 0, 0, 11, []int{1181}},
+		{"sparse_listing_end_two", 1201, 0, 0, 11, []int{1181, 1180}},
+		{"sparse_second_peel", 2150, 0, 0, 12, []int{2130}},
+		{"sparse_second_peel_two", 2150, 0, 0, 12, []int{2130, 2129}},
+	}
+	for _, listing := range deletionShiftRaceListings() {
+		secondRange := func(c githubTestsChunkCursor) bool { return c.RangeHi != "" }
+		for _, sh := range shapes {
+			handler := GitHubTestsRouteHandler{MaxRuns: sh.pages * 100}
+			if listing.deep {
+				handler = GitHubTestsRouteHandler{LateRerunMaxPages: sh.pages}
+			}
+			runs := listing.runs(1, sh.count)
+			if sh.from > 0 {
+				runs = peelBudgetRuns(listing, sh.count, sh.from, sh.to)
+			}
+			for _, cell := range []struct {
+				mode string
+				at   func(githubTestsChunkCursor) bool
+			}{
+				{"midpage", func(c githubTestsChunkCursor) bool { return secondRange(c) && c.RangeItems == 2 && c.Index > 0 }},
+				{"page_end", func(c githubTestsChunkCursor) bool { return secondRange(c) && c.RangeItems == 100 && c.Index == 0 }},
+				{"executor", func(c githubTestsChunkCursor) bool { return secondRange(c) && c.RangeItems >= 2 }},
+			} {
+				if cell.mode == "executor" && listing.name != "runs" {
+					continue // the executor path is the same for every listing; the runs listing pins it
+				}
+				for _, coalesce := range deletionShiftFlags() {
+					name := fmt.Sprintf("newer/%s/%s/%s/%s", listing.name, sh.name, cell.mode, deletionShiftFlag(coalesce))
+					t.Run(fmt.Sprintf("%s/%s/%s/%s", listing.name, sh.name, cell.mode, deletionShiftFlag(coalesce)), func(t *testing.T) {
+						deletionShiftRaceSkip(t, cell.mode)
+						mode := "route"
+						if cell.mode == "executor" {
+							mode = "executor"
+						}
+						outcome := deletionShiftMeasure(t, listing, handler, coalesce, runs, mode, cell.at, sh.deleted...)
+						peelBudgetCheck(t, name, len(outcome.unread), true)
+					})
+				}
+			}
+		}
+	}
+}
+
+// The same gap at the shipped page budget (100 pages): 10,300 runs one a second in the runs listing, ten peels; the
+// newest run is deleted at the last range's first page end.
+func TestGitHubTestsPeelKeepsItsCutAtTheShippedBudgetNoWorseThanMain(t *testing.T) {
+	if cutDifferentialRace {
+		t.Skip("run in the plain test legs")
+	}
+	listing := deletionShiftListings()[0]
+	runs := makeListingRuns(1, 10300, listingSince.Add(time.Minute), time.Second)
+	claim := listingClaim(listingSince, listingSince.Add(6*time.Hour))
+	listing.claim = claim
+	for _, coalesce := range deletionShiftFlags() {
+		name := "newer/shipped_budget/" + deletionShiftFlag(coalesce)
+		t.Run(deletionShiftFlag(coalesce), func(t *testing.T) {
+			outcome := deletionShiftMeasure(t, listing, GitHubTestsRouteHandler{}, coalesce, runs, "route",
+				func(c githubTestsChunkCursor) bool {
+					return c.RangeHi != "" && c.RangeItems == 100 && c.Index == 0 && c.RunPages >= 90
+				}, 10300)
+			unread := slices.Clone(outcome.unread)
+			sort.Ints(unread)
+			peelBudgetCheck(t, name, len(unread), true)
+		})
 	}
 }

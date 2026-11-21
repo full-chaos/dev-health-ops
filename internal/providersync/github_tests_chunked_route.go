@@ -1807,37 +1807,29 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	// at the oldest created time seen, in the same phase. A range that makes no
 	// progress is recorded and the phase ends.
 	endRunsRange := func(c githubTestsChunkCursor) githubTestsChunkCursor {
-		nextHi, saturated, stuck := githubTestsRunsInterval(claim, c.LateRuns, lookback, lateLookback).peel(c.RangeItems, c.RangeOldest, c.RangeHi)
-		items, hi := c.RangeItems, c.RangeHi
-		if saturated && !stuck && c.RangeOldestItems >= githubTestsSearchResultCap {
-			stuck, hi = true, nextHi
-		}
-		c.RangeItems, c.RangeOldest, c.RangeOldestItems, c.AnchorID, c.ReseekPages, c.PagesEntered = 0, "", 0, "", 0, 0
+		c, end, hi, items := githubTestsEndRange(c, githubTestsRunsInterval(claim, c.LateRuns, lookback, lateLookback), true)
 		switch {
-		case !saturated:
+		case end == githubTestsRangeListingEnd:
 			c = nextRunsListing(c)
-		case stuck && c.LateRuns:
+		case end == githubTestsRangeStuck && c.LateRuns:
 			c = recordGitHubTestsLateRerunRunsStop(c, client, claim, githubTestsListingSaturatedCause, c.LateRunPages)
 			c = nextRunsListing(c)
-		case stuck:
+		case end == githubTestsRangeStuck:
 			c = recordGitHubTestsSaturated(c, client, claim, githubTestsRunInventorySaturatedComponent, githubTestsRunsPhase, hi, items)
 			c = nextRunsListing(c)
 		default:
-			c.RangeHi = nextHi
 			c = githubTestsFreezeCutKeys(c)
 		}
 		return c
 	}
 	endArtifactsRange := func(c githubTestsChunkCursor) githubTestsChunkCursor {
-		nextHi, saturated, stuck := githubTestsArtifactInterval(claim, c.Relist == githubTestsRelistWalking, lateLookback).peel(c.RangeItems, c.RangeOldest, c.RangeHi)
-		items, hi := c.RangeItems, c.RangeHi
-		c.RangeItems, c.RangeOldest, c.AnchorID, c.ReseekPages, c.PagesEntered = 0, "", "", 0, 0
-		switch {
-		case !saturated:
+		c, end, hi, items := githubTestsEndRange(c, githubTestsArtifactInterval(claim, c.Relist == githubTestsRelistWalking, lateLookback), false)
+		switch end {
+		case githubTestsRangeListingEnd:
 			c.RangeHi = ""
 			c = githubTestsClearCutKeys(c)
 			c = githubTestsEndArtifactsListing(c, claim, handler)
-		case stuck:
+		case githubTestsRangeStuck:
 			if c.Relist == githubTestsRelistWalking {
 				c = recordGitHubTestsRelistStop(c, client, claim, githubTestsListingSaturatedCause, hi, items)
 			} else {
@@ -1847,7 +1839,6 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			c.Phase = githubTestsPhaseAfterArtifacts(handler)
 			c = githubTestsClearCutKeys(c)
 		default:
-			c.RangeHi = nextHi
 			c = githubTestsFreezeCutKeys(c)
 		}
 		return c
@@ -1995,14 +1986,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				return providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 			}
 			pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
-			cursor.RangeItems++
-			created := parseGitHubWorkflowTime(run.CreatedAt)
-			if oldest := githubTestsOlderCreated(cursor.RangeOldest, created); oldest != cursor.RangeOldest {
-				cursor.RangeOldest, cursor.ActiveCutKeys, cursor.RangeOldestItems = oldest, "", 0
-			}
-			if created != nil && created.UTC().Format(time.RFC3339) == cursor.RangeOldest {
-				cursor.RangeOldestItems++
-			}
+			cursor = githubTestsListRun(cursor, run, true)
 			cutSecond, cutKey := githubTestsCutRunKey(run)
 			wanted := githubTestsRunWanted(run, pipeline, claim)
 			if cursor.LateRuns {
@@ -2107,10 +2091,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				}
 			}
 			if !exhausted {
-				pageOptions := providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Route: githubRunsRoute,
-					Query: githubTestsLateRerunRunsQuery(claim, lookback, lateLookback, cursor.RangeHi), DataKey: "workflow_runs",
-					MaxPages: allowance, InitialURL: cursor.NextURL}
-				collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, pageOptions, emitRunPage)
+				collection, visitErr := githubTestsListingWalk{ctx: ctx, client: client, path: root + "/actions/runs",
+					query: githubTestsLateRerunRunsQuery(claim, lookback, lateLookback, cursor.RangeHi), initialURL: cursor.NextURL,
+					maxPages: allowance}.run(emitRunPage)
 				if errors.Is(visitErr, errGitHubTestsReseek) {
 					cursor = reseek(cursor)
 					continue
@@ -2150,8 +2133,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		if budgetErr != nil {
 			return budgetErr
 		}
-		pageOptions := providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Route: githubRunsRoute, Query: query, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}
-		collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, pageOptions, emitRunPage)
+		collection, visitErr := githubTestsListingWalk{ctx: ctx, client: client, path: root + "/actions/runs", query: query,
+			initialURL: cursor.NextURL, maxPages: allowance}.run(emitRunPage)
 		if errors.Is(visitErr, errGitHubTestsReseek) {
 			cursor = reseek(cursor)
 			continue
@@ -2422,10 +2405,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					return providerfoundation.RouteFailure(githubRunsRoute, providerfoundation.ReasonBodyDecode, err)
 				}
 				pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
-				cursor.RangeItems++
-				if oldest := githubTestsOlderCreated(cursor.RangeOldest, parseGitHubWorkflowTime(run.CreatedAt)); oldest != cursor.RangeOldest {
-					cursor.RangeOldest, cursor.ActiveCutKeys = oldest, ""
-				}
+				cursor = githubTestsListRun(cursor, run, false)
 				cutSecond, cutKey := githubTestsCutRunKey(run)
 				suites := []testSuiteResultRow(nil)
 				cases := []testCaseResultRow(nil)
@@ -3011,7 +2991,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		if budgetErr != nil {
 			return budgetErr
 		}
-		collection, visitErr := providerfoundation.VisitGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{Path: root + "/actions/runs", Route: githubRunsRoute, Query: artifactQuery, DataKey: "workflow_runs", MaxPages: allowance, InitialURL: cursor.NextURL}, artifactPage)
+		collection, visitErr := githubTestsListingWalk{ctx: ctx, client: client, path: root + "/actions/runs", query: artifactQuery,
+			initialURL: cursor.NextURL, maxPages: allowance}.run(artifactPage)
 		if errors.Is(visitErr, errGitHubTestsReseek) {
 			cursor = reseek(cursor)
 			continue

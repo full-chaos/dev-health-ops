@@ -665,3 +665,33 @@ func TestGitHubTestsPeelReplayGrantAtTheWalksSecond(t *testing.T) {
 		}
 	}
 }
+
+// The replay is count-only: it lists, and it neither credits records nor proves a deletion (CHAOS-14434's credit step and
+// its DeletionProven mark stay the walk's). A grant on a newer deletion (no deletion before the anchor) leaves RecordCredit
+// and DeletionProven at 0 in every cursor the walk emits.
+func TestGitHubTestsPeelReplayIsCountOnly(t *testing.T) {
+	peelReplaySkipRace(t)
+	listing := deletionShiftListings()[0]
+	const pages = 11
+	for _, coalesce := range []bool{false, true} {
+		t.Run(deletionShiftFlag(coalesce), func(t *testing.T) {
+			fake := newListingFake(t, peelReplayRuns(listing, 1500, 0, 0))
+			deleted, highest, credit, proven := false, 0, 0, 0
+			peelReplayYieldingWalk(t, peelReplayHandler(listing, pages, coalesce), listing.claim, fake, 1<<30, func(c githubTestsChunkCursor) bool {
+				highest, credit, proven = max(highest, c.RunPages), max(credit, c.RecordCredit), max(proven, c.DeletionProven)
+				if !deleted && listing.in(c) && peelReplaySecondRangeAt(c) {
+					deleted = true
+					return true
+				}
+				return false
+			}, func() { resumeDeletionDelete(fake, 1480) })
+			t.Logf("CELL count_only/%s run_pages=%d record_credit=%d deletion_proven=%d", deletionShiftFlag(coalesce), highest, credit, proven)
+			if highest <= pages {
+				t.Fatalf("premise: no grant (run_pages %d)", highest)
+			}
+			if credit != 0 || proven != 0 {
+				t.Errorf("record_credit=%d deletion_proven=%d after a replay grant, want 0 and 0", credit, proven)
+			}
+		})
+	}
+}

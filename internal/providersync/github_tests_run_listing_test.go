@@ -859,7 +859,8 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 		// cursor: a later field pays for itself.
 		{"runs deep range peel", 250, func(c *githubTestsChunkCursor) {
 			c.Phase = githubTestsRunsPhase
-			c.LateRuns, c.LateRunPages = true, githubTestsLateRerunMaxPages
+			// The listing replay's grants take the deep counter to its cap, budget + 10 pages (CHAOS-14435): same digit count.
+			c.LateRuns, c.LateRunPages = true, githubTestsLateRerunMaxPages+10
 			c.RangeHi, c.RangeOldest, c.RangeItems = "2026-07-20T23:59:59Z", "2026-07-20T00:00:00Z", githubTestsSearchResultCap
 			c.SaturatedRuns, c.SaturatedArtifacts = true, true
 			c.LateRunsBudget, c.LateRunsSaturated = true, true

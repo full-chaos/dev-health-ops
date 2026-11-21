@@ -474,7 +474,9 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 		}
 		labels, order := teamLabels(ctx, client, orgID)
 		if len(teamRows) > 0 {
-			labels[activeteams.UnassignedID] = unassignedTeamLabel
+			if len(teamIDs) == 0 {
+				labels[activeteams.UnassignedID] = unassignedTeamLabel
+			}
 			for _, r := range teamRows {
 				points = append(points, point(model.CompoundingRiskScopeTeam, d, r.scopeID, labelOr(labels, r.scopeID), r))
 			}

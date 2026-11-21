@@ -167,3 +167,24 @@ func TestRealClickHouse_StoredUnassignedRowKeepsScoreAndGetsCanonicalLabel(t *te
 		t.Fatalf("stored unassigned row label %q entity %v score %v, want %q and 0.75", u.ScopeLabel, u.ScopeEntity, u.Score, unassignedTeamLabel)
 	}
 }
+
+// An explicit teamIds request keeps the stored row as stored (id as label):
+// a client that reuses the returned scopeId "unassigned" as a filter gets the
+// answer main gives.
+func TestRealClickHouse_StoredUnassignedRowNamedByTeamIdsKeepsStoredLabel(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	seedRepos(seedCtx{ctx, conn}, t, now, true, true)
+	put(t, ctx, conn, risk{org: "org-1", scope: "team", id: "unassigned", day: day(now, 1), score: "0.75", sev: "high"})
+	got, err := Resolve(ctx, client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TeamIds: []string{"unassigned"}, TrendDays: 30}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Rows) != 1 || got.Rows[0].ScopeID != "unassigned" {
+		t.Fatalf("rows %v, want [unassigned]", ids(got.Rows))
+	}
+	u := got.Rows[0]
+	if u.ScopeLabel != "unassigned" || u.ScopeEntity == nil || u.ScopeEntity.DisplayName != "unassigned" || u.Score == nil || *u.Score != 0.75 {
+		t.Fatalf("named stored unassigned row label %q entity %v, want the stored id as label on main", u.ScopeLabel, u.ScopeEntity)
+	}
+}

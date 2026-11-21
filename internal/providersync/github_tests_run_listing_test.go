@@ -851,6 +851,7 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			c.RangeOldestItems = githubTestsSearchResultCap
 			c.AnchorID = githubTestsWidestAnchorID
 			c.ReseekPages, c.PagesEntered, c.RecordCredit = githubTestsWidestReseekPages, githubTestsWidestReseekPages, githubTestsWidestRecordCredit
+			c.DeletionProven = 1
 		}},
 		// The deep range's floor is 250 (CHAOS-14385, acp ruling): its runs cut lists keep the 882 bytes main writes (a smaller
 		// cap re-read a dense cut second and read fewer runs than main at the record bound), and its cursor holds the re-seek
@@ -869,6 +870,7 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			// search is a created range under GitHub's 1,000-result cap: at most 10 pages entered, at most 10 free.
 			deepPages := githubTestsSearchResultCap / nativePerPage
 			c.ReseekPages, c.PagesEntered, c.RecordCredit = deepPages, deepPages, githubTestsWidestRecordCredit
+			c.DeletionProven = 1
 			c.LateRecords = githubTestsMaxWalkRecords
 		}},
 		{"artifacts peel", 300, func(c *githubTestsChunkCursor) {
@@ -878,6 +880,7 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			c.ActiveCutKeys, c.CarriedCutKeys = githubTestsWidestCutKeys(t), githubTestsWidestCutKeys(t)
 			c.AnchorID = githubTestsWidestAnchorID
 			c.ReseekPages, c.PagesEntered, c.RecordCredit = githubTestsWidestReseekPages, githubTestsWidestReseekPages, githubTestsWidestRecordCredit
+			c.DeletionProven = 1
 			c.LateRecords = githubTestsMaxWalkRecords
 		}},
 		{"open phase", 300, func(c *githubTestsChunkCursor) {

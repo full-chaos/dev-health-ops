@@ -194,6 +194,19 @@ func deletionShiftExecutor(
 	at func(githubTestsChunkCursor) bool, mutate func(),
 ) CompleteRouteExecutionResult {
 	t.Helper()
+	result, reached := deletionShiftExecutorReached(t, handler, claim, doer, at, mutate)
+	if !reached {
+		t.Fatal("premise: the walk never reached the mutation point")
+	}
+	return result
+}
+
+// deletionShiftExecutorReached is deletionShiftExecutor that reports whether an attempt end satisfied at.
+func deletionShiftExecutorReached(
+	t *testing.T, handler GitHubTestsRouteHandler, claim Claim, doer providerfoundation.HTTPDoer,
+	at func(githubTestsChunkCursor) bool, mutate func(),
+) (CompleteRouteExecutionResult, bool) {
+	t.Helper()
 	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	unit := nativeTestClaim("github", "cicd").Unit
 	unit.SinceAt, unit.BeforeAt, unit.Mode = claim.SinceAt, claim.BeforeAt, claim.Mode
@@ -220,10 +233,7 @@ func deletionShiftExecutor(
 	for attempt := 1; attempt <= 2000; attempt++ {
 		result, execErr := executor.Execute(context.Background(), session, descriptor)
 		if execErr == nil {
-			if !mutated {
-				t.Fatal("premise: the walk never reached the mutation point")
-			}
-			return result
+			return result, mutated
 		}
 		if !errors.As(execErr, new(ChunkContinuationError)) {
 			t.Fatalf("attempt %d: %v", attempt, execErr)
@@ -242,18 +252,38 @@ func deletionShiftExecutor(
 		}
 	}
 	t.Fatal("the unit does not complete in 2000 attempts")
-	return CompleteRouteExecutionResult{}
+	return CompleteRouteExecutionResult{}, false
 }
 
 // deletionShiftOutcome is one measured cell: the survivors the uninterrupted walk of the survivors reads and the resumed
 // walk does not, and whether the resumed walk advanced the watermark.
 type deletionShiftOutcome struct {
-	unread    []int
-	watermark bool
+	unread     []int
+	watermark  bool
+	incomplete []string
+}
+
+// deletionShiftIncomplete is the component/cause of each incomplete observation of a final result.
+func deletionShiftIncomplete(t *testing.T, result map[string]any) []string {
+	t.Helper()
+	raw, err := json.Marshal(result["incomplete"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var observations []GitHubTestsIncomplete
+	if err := json.Unmarshal(raw, &observations); err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, observation := range observations {
+		out = append(out, observation.Component+"/"+observation.Cause)
+	}
+	return out
 }
 
 func (outcome deletionShiftOutcome) String() string {
-	return fmt.Sprintf("unread=%d first=%v watermark=%v", len(outcome.unread), outcome.unread[:min(3, len(outcome.unread))], outcome.watermark)
+	return fmt.Sprintf("unread=%d first=%v watermark=%v incomplete=%v", len(outcome.unread), outcome.unread[:min(3, len(outcome.unread))],
+		outcome.watermark, outcome.incomplete)
 }
 
 // deletionShiftMeasure runs one shape in one mode ("route", "previous_cursor", "executor") with run groups off or on: yield
@@ -268,11 +298,13 @@ func deletionShiftMeasure(
 	fake := newListingFake(t, slices.Clone(runs))
 	doer := deletionShiftDoer(t, fake, listing.reports)
 	var watermark bool
+	var incomplete []string
 	in := func(c githubTestsChunkCursor) bool { return listing.in(c) && at(c) }
 	switch mode {
 	case "executor":
 		result := deletionShiftExecutor(t, handler, listing.claim, doer, in, func() { resumeDeletionDelete(fake, deleted...) })
 		watermark = result.Watermark != nil
+		incomplete = deletionShiftIncomplete(t, result.Result)
 	default:
 		var rewrite func(string) string
 		if mode == "previous_cursor" {
@@ -280,6 +312,7 @@ func deletionShiftMeasure(
 		}
 		final := deletionShiftWalk(t, handler, listing.claim, doer, in, func(githubTestsChunkCursor) { resumeDeletionDelete(fake, deleted...) }, rewrite)
 		watermark = final.Watermark != nil
+		incomplete = deletionShiftIncomplete(t, final.Result)
 	}
 	survivors := newListingFake(t, slices.Clone(fake.runs))
 	deletionShiftPlainWalk(t, handler, listing.claim, deletionShiftDoer(t, survivors, listing.reports))
@@ -290,7 +323,7 @@ func deletionShiftMeasure(
 		}
 	}
 	sort.Ints(unread)
-	return deletionShiftOutcome{unread: unread, watermark: watermark}
+	return deletionShiftOutcome{unread: unread, watermark: watermark, incomplete: incomplete}
 }
 
 // deletionShiftReportRecords is the report rows one run's JUnit artifact writes.
@@ -415,6 +448,22 @@ func deletionShiftCheck(t *testing.T, name string, outcome deletionShiftOutcome)
 	}
 	if len(outcome.unread) > want {
 		t.Errorf("%s: %d survivors unread, main leaves %d: this binary reads less than main", name, len(outcome.unread), want)
+	}
+	// Class charged: a deletion before the anchor is credited, so the walk reads every survivor the uninterrupted walk of
+	// the survivors reads. The artifacts listing's average (report rows over every run the runs phase read) under-credits
+	// mid-phase: its walk leaves one survivor unread, and must stop on a recorded truncation with the watermark held, so
+	// the next walk reads it (never a silent skip).
+	switch {
+	case strings.HasPrefix(name, "charged/artifacts/"):
+		if len(outcome.unread) != 1 || outcome.watermark || !slices.Contains(outcome.incomplete, githubTestsArtifactInventoryComponent+"/"+githubTestsPageBudgetCause) {
+			t.Errorf("%s: unread=%d watermark advanced=%v incomplete=%v, want 1 unread on a recorded %s stop with the watermark held",
+				name, len(outcome.unread), outcome.watermark, outcome.incomplete, githubTestsArtifactInventoryComponent)
+		}
+	case strings.HasPrefix(name, "charged/") && len(outcome.unread) != 0:
+		t.Errorf("%s: %d survivors unread, want 0 (watermark advanced=%v)", name, len(outcome.unread), outcome.watermark)
+	case strings.HasPrefix(name, "charged/deep_") && outcome.watermark:
+		// A deep stop at the record bound in a walk that proved a deletion holds the watermark.
+		t.Errorf("%s: the deep stop after a proven deletion advanced the watermark (incomplete=%v)", name, outcome.incomplete)
 	}
 }
 

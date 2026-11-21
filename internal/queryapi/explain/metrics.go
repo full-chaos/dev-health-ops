@@ -3,6 +3,7 @@ package explain
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,19 +31,6 @@ var dedupNaturalKeys = map[string][]string{
 	"work_item_metrics_daily":         {"day", "provider", "work_scope_id", "team_id", "row_view"},
 	"deploy_metrics_daily":            {"day", "repo_id"},
 	changefailure.Table:               {"day", "repo_id"},
-}
-
-// nullableMetricColumns names every metricConfigs column that is
-// Nullable(Float64) in its own table's CREATE TABLE (001_metrics_v2.sql):
-// work_item_metrics_daily.cycle_time_p50_hours and
-// repo_metrics_daily.pr_first_review_p50_hours. The other six columns
-// metricConfigs reaches are all non-nullable (UInt32 or a bare Float64,
-// confirmed against the same migration), so a plain argMax is correct
-// for them.
-var nullableMetricColumns = map[string]bool{
-	"cycle_time_p50_hours":      true,
-	"pr_first_review_p50_hours": true,
-	"revert_rate":               true,
 }
 
 // sourceColumns are the columns metricFromClause deduplicates for a metric:
@@ -92,27 +80,6 @@ func aggregateSQL(aggregator, column, shareSQL string) (value, known string) {
 // other side holds one). Dropping in SQL, before the LIMIT, keeps a no-data
 // group from taking one of the few places.
 
-// metricValueProjection applies the class ruling (b) dedup fix for a
-// Nullable metric column: `argMax(col, version)` on a Nullable column can
-// return a STALE non-null version instead of the row with the true
-// maximal version, if that latest version's own value happens to be
-// NULL -- argMax's candidate selection skips a NULL `arg`, it does not
-// track "the value at the max version" the way a non-nullable column
-// does. The fix is `(argMax(tuple(col), version)).1`: wrapping the
-// Nullable column in a tuple makes argMax compare candidates by
-// (value IS NOT NULL, value) tuples instead, so the TRUE latest version
-// always wins, NULL included. Python's own reader
-// (api/queries/metrics.py's _metric_from_clause) is NOT a correct
-// exemplar here (bare argMax on a Nullable column) -- this is a
-// declared, required divergence under the class ruling, not a
-// data-semantics choice.
-func metricValueProjection(column string) string {
-	if nullableMetricColumns[column] {
-		return fmt.Sprintf("(argMax(tuple(%s), computed_at)).1 AS %s", column, column)
-	}
-	return fmt.Sprintf("argMax(%s, computed_at) AS %s", column, column)
-}
-
 // metricFromClause ports _metric_from_clause (api/queries/metrics.py:
 // 61-104), restricted to the dedup branch: every table metricConfigs
 // names IS in dedupNaturalKeys (see that map's own doc comment), so
@@ -124,9 +91,8 @@ func metricValueProjection(column string) string {
 // WHERE, before the GROUP BY that collapses to one row per natural key --
 // never a filter applied after a cross-tenant scan.
 //
-// DEDUP + class ruling (b): the value projection is
-// metricValueProjection's own argMax/tuple-argMax choice, never a bare
-// argMax on a Nullable column (see that function's own doc comment).
+// DEDUP + class ruling (b): newestVersionSource picks one version per key
+// with a tuple argMax, so a Nullable column keeps the picked version's NULL.
 //
 // startParam/endParam name the bound query params so one function serves
 // both the current window (start_day/end_day) and the comparison window
@@ -150,21 +116,37 @@ func metricFromClause(table, column, scopeFilterSQL, startParam, endParam string
 		// key, so a legacy retraction row never merges with an org row under argMax.
 		scopeFilterSQL += "\n      AND " + rowview.OrgPredicate(table, "")
 	}
-	keyColumns := strings.Join(keys, ",\n        ")
-	projections := make([]string, 0, 2)
-	for _, source := range sourceColumns(table, column) {
-		projections = append(projections, metricValueProjection(source))
+	return newestVersionSource(table, sourceColumns(table, column), source, fmt.Sprintf(`WHERE day >= {%s:Date} AND day < {%s:Date}
+    %s
+      AND org_id = {org_id:String}`, startParam, endParam, scopeFilterSQL), strings.Join(keys, ", "))
+}
+
+// newestVersionSource is one row per key of table: ONE version picked by rowview.VersionOrder (the newest computed_at,
+// then the hash of the measures, so a computed_at tie serves one version whatever the insert order), with the source
+// columns and the live-row columns of that version. A Nullable column keeps the picked version's NULL (a tuple is never
+// NULL). The live-row rule is read from the picked row: a key whose picked version is a retraction row leaves the
+// result, so it is not a sample of an average, a contributor or a driver.
+func newestVersionSource(table string, valueColumns []string, source, where, key string) string {
+	columns := append([]string(nil), valueColumns...)
+	live := ""
+	if liverow.Registered(table) {
+		for _, column := range liverow.Columns(table) {
+			if !slices.Contains(columns, column) {
+				columns = append(columns, column)
+			}
+		}
+		live = "\n    WHERE " + liverow.Predicate(table, "newest")
 	}
 	return fmt.Sprintf(`(
-    SELECT
-        %s,
+    SELECT * FROM (
+        SELECT
+            %s,
+            %s
+        FROM %s
         %s
-    FROM %s
-    WHERE day >= {%s:Date} AND day < {%s:Date}
-    %s
-      AND org_id = {org_id:String}
-    GROUP BY %s%s
-)`, keyColumns, strings.Join(projections, ",\n        "), source, startParam, endParam, scopeFilterSQL, keyColumns, liveRowHaving(table))
+        GROUP BY %s
+    ) AS newest%s
+)`, strings.ReplaceAll(key, ", ", ",\n            "), rowview.VersionPick(table, columns), source, where, key, live)
 }
 
 // teamViewSource is the served team view of a table with team rows (CHAOS-14379), aliased as the table: one row per
@@ -173,22 +155,11 @@ func metricFromClause(table, column, scopeFilterSQL, startParam, endParam string
 func teamViewSource(table, where string) (source string, ok bool) {
 	switch table {
 	case "work_item_metrics_daily":
-		return rowview.ServedTeamSource("work_item_metrics_daily", where, "") + " AS work_item_metrics_daily", true
+		return rowview.ServedTeamSource("work_item_metrics_daily", where, rowview.WorkItemMetricsNewestOrder) + " AS work_item_metrics_daily", true
 	case "work_item_state_durations_daily":
-		return rowview.ServedTeamSource("work_item_state_durations_daily", where, "") + " AS work_item_state_durations_daily", true
+		return rowview.ServedTeamSource("work_item_state_durations_daily", where, rowview.StateDurationsNewestOrder) + " AS work_item_state_durations_daily", true
 	}
 	return "", false
-}
-
-// liveRowHaving keeps a key of a team-keyed daily table only when its newest
-// row is a measurement (see package liverow). A retraction row is the newest
-// row of a key the compute no longer produces: it is not a sample of an
-// average, and its team is not a contributor or a driver.
-func liveRowHaving(table string) string {
-	if !liverow.Registered(table) {
-		return ""
-	}
-	return "\n    HAVING " + liverow.NewestPredicate(table, "")
 }
 
 // fetchMetricValue ports fetch_metric_value (api/queries/metrics.py:

@@ -189,42 +189,17 @@ func TestResolveScopeDisplayNamesTeamQueryShape(t *testing.T) {
 // TestMetricFromClauseQueryShape pins metricFromClause's own dedup
 // subquery shape (class ruling (a)+(b)): argMax(...) dedup, org filter
 // and any scope filter all sit INSIDE the same subquery, before the
-// GROUP BY that collapses to one row per natural key. Uses a
-// NON-nullable column (items_completed) so the marker is the plain
-// argMax form; TestMetricValueProjectionUsesTupleArgMaxForNullableColumn
-// is the Nullable-column shape's own test.
+// GROUP BY that collapses to one row per natural key (one version of the
+// key's measures, CHAOS-14430).
 func TestMetricFromClauseQueryShape(t *testing.T) {
 	clause := metricFromClause("work_item_metrics_daily", "items_completed", " AND team_id IN {scope_ids:Array(String)}", "start_day", "end_day", false)
 	assertSameDepth(t, clause,
-		"argMax(items_completed, computed_at)",
+		"argMax(tuple(work_item_metrics_daily.items_completed,",
 		"team_id IN {scope_ids:Array(String)}",
 		"org_id = {org_id:String}",
 	)
 	if !strings.Contains(clause, "WHERE day >= {start_day:Date} AND day < {end_day:Date}") {
 		t.Fatalf("clause missing start/end day window:\n%s", clause)
-	}
-}
-
-// TestMetricValueProjectionUsesTupleArgMaxForNullableColumn pins the
-// class ruling (b) fix: a Nullable(Float64) metric column
-// (cycle_time_p50_hours, pr_first_review_p50_hours) is deduped via
-// `(argMax(tuple(col), version)).1`, never a bare `argMax(col, version)`
-// -- see metricValueProjection's own doc comment for why a bare argMax
-// on a Nullable column can silently return a stale version.
-func TestMetricValueProjectionUsesTupleArgMaxForNullableColumn(t *testing.T) {
-	got := metricValueProjection("cycle_time_p50_hours")
-	want := "(argMax(tuple(cycle_time_p50_hours), computed_at)).1 AS cycle_time_p50_hours"
-	if got != want {
-		t.Fatalf("metricValueProjection(cycle_time_p50_hours) = %q, want %q", got, want)
-	}
-	got = metricValueProjection("pr_first_review_p50_hours")
-	want = "(argMax(tuple(pr_first_review_p50_hours), computed_at)).1 AS pr_first_review_p50_hours"
-	if got != want {
-		t.Fatalf("metricValueProjection(pr_first_review_p50_hours) = %q, want %q", got, want)
-	}
-	// A non-nullable column stays a plain argMax.
-	if got := metricValueProjection("items_completed"); got != "argMax(items_completed, computed_at) AS items_completed" {
-		t.Fatalf("metricValueProjection(items_completed) = %q, want plain argMax", got)
 	}
 }
 

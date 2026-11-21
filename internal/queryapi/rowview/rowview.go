@@ -225,6 +225,45 @@ const WorkItemMetricsNewestOrder = `(work_item_metrics_daily.computed_at, cityHa
     work_item_metrics_daily.lead_time_p90_hours, work_item_metrics_daily.wip_age_p50_hours,
     work_item_metrics_daily.wip_age_p90_hours)))`
 
+// StateDurationsNewestOrder is the version order of a work_item_state_durations_daily key, as
+// WorkItemMetricsNewestOrder is for work_item_metrics_daily: the newest computed_at, then the highest hash of the
+// version's three measures.
+const StateDurationsNewestOrder = `(work_item_state_durations_daily.computed_at, cityHash64(tuple(
+                work_item_state_durations_daily.duration_hours, work_item_state_durations_daily.items_touched,
+                work_item_state_durations_daily.avg_wip)))`
+
+// VersionOrder is the version order of a key of table for a reader that picks columns: the shared order of a team
+// table, else the newest computed_at, then the highest hash of those columns. Columns are qualified by the table, so
+// the order reads the stored row and not an alias of the select list.
+func VersionOrder(table string, columns []string) string {
+	switch table {
+	case "work_item_metrics_daily":
+		return WorkItemMetricsNewestOrder
+	case "work_item_state_durations_daily":
+		return StateDurationsNewestOrder
+	}
+	return "(" + table + ".computed_at, cityHash64(tuple(" + qualified(table, columns) + ")))"
+}
+
+// VersionPick is the select list that picks ONE version of each key by VersionOrder: the tuple of the columns as
+// picked, then picked.N AS <column> for each. A Nullable column keeps the picked version's NULL (a tuple is never
+// NULL), so no column comes from another version. The caller groups by the key.
+func VersionPick(table string, columns []string) string {
+	items := []string{"argMax(tuple(" + qualified(table, columns) + "), " + VersionOrder(table, columns) + ") AS picked"}
+	for i, column := range columns {
+		items = append(items, fmt.Sprintf("picked.%d AS %s", i+1, column))
+	}
+	return strings.Join(items, ",\n                ")
+}
+
+func qualified(table string, columns []string) string {
+	out := make([]string, len(columns))
+	for i, column := range columns {
+		out[i] = table + "." + column
+	}
+	return strings.Join(out, ", ")
+}
+
 // mustTeamTable panics for a table that holds no team rows.
 func mustTeamTable(table string) teamkeytables.Table {
 	if _, ok := teamTables[table]; !ok {

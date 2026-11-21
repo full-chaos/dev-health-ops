@@ -8,16 +8,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 )
 
-// Re-arm fence cells: an older pass must not move a row a newer delivery owns, a failed re-arm must not end the job
-// as a success with no wake, and a retry of a committed attempt must not admit work that became admissible after
-// that commit. One run, one bucket (github/commits/rest_core), a live running unit R and planned units.
+// Re-arm fence cells: the re-arm a pass writes after its commit, against every state the run's dispatch row can be
+// in by then (row state x the row's attempt against the pass's delivery attempt). An older pass must not move a row
+// a newer delivery owns, and its upsert must not clear a live relay claim. One run, one bucket
+// (github/commits/rest_core), a live running unit R and planned units.
 
 const (
 	rearmFenceRunning  = "00000000-0000-4000-8000-0000001447a0"
@@ -32,12 +32,12 @@ func rearmFenceArgs(attempt int64) DispatchSyncRunArgs {
 	return args
 }
 
-// seedRearmFenceRun seeds the delivered row at attempt 1, R running under a live lease, and the planned units.
-func seedRearmFenceRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, planned ...string) {
+// seedRearmFenceRun seeds the delivered row at attempt, R running under a live lease, and the planned units.
+func seedRearmFenceRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, attempt int64, planned ...string) {
 	t.Helper()
 	seedDispatchRoute(t, ctx, pool)
 	markReferenceDiscoverySucceeded(t, ctx, pool)
-	if _, err := pool.Exec(ctx, `UPDATE sync_dispatch_outbox SET attempts = 1 WHERE id = $1`, dispatchServiceTestOutbox); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE sync_dispatch_outbox SET attempts = $2 WHERE id = $1`, dispatchServiceTestOutbox, attempt); err != nil {
 		t.Fatal(err)
 	}
 	now := pgNow()
@@ -84,23 +84,6 @@ func installAfterPassCommit(t *testing.T, service *NativeDispatchSyncRunService,
 	return hook
 }
 
-// lockTimeoutPool is a second pool on the same database whose sessions give up a lock wait after timeout, so a held
-// lock fails the service's statement at once instead of blocking it.
-func lockTimeoutPool(t *testing.T, ctx context.Context, pool *pgxpool.Pool, timeout string) *pgxpool.Pool {
-	t.Helper()
-	config, err := pgxpool.ParseConfig(pool.Config().ConnString())
-	if err != nil {
-		t.Fatal(err)
-	}
-	config.ConnConfig.RuntimeParams["lock_timeout"] = timeout
-	limited, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(limited.Close)
-	return limited
-}
-
 // leaseRepairRetries stands in for LeaseRepair.Step on R (running -> retrying, a deferral earlier than the
 // countdown) and runs the real post-commit wake it arms (syncrunrollup.WakeDispatch, path lease_repair).
 func leaseRepairRetries(t *testing.T, ctx context.Context, pool *pgxpool.Pool, retryAt time.Time) {
@@ -136,13 +119,14 @@ type rearmFenceRow struct {
 	status      string
 	attempts    int64
 	availableAt time.Time
+	claimToken  *string
 }
 
 func readRearmFenceRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool) rearmFenceRow {
 	t.Helper()
 	var row rearmFenceRow
-	if err := pool.QueryRow(ctx, `SELECT status, attempts, available_at FROM sync_dispatch_outbox WHERE sync_run_id = $1 AND kind = $2`,
-		discoveryTestRun, outboxKindDispatchSyncRun).Scan(&row.status, &row.attempts, &row.availableAt); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT status, attempts, available_at, claim_token FROM sync_dispatch_outbox WHERE sync_run_id = $1 AND kind = $2`,
+		discoveryTestRun, outboxKindDispatchSyncRun).Scan(&row.status, &row.attempts, &row.availableAt, &row.claimToken); err != nil {
 		t.Fatal(err)
 	}
 	return row
@@ -157,29 +141,6 @@ func providerUnitPublishes(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 	return count
 }
 
-func rearmFenceUnitStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id string) string {
-	t.Helper()
-	var status string
-	if err := pool.QueryRow(ctx, `SELECT status FROM sync_run_units WHERE id = $1`, id).Scan(&status); err != nil {
-		t.Fatal(err)
-	}
-	return status
-}
-
-// holdInTx opens a transaction on pool, runs statement in it and keeps it open until release.
-func holdInTx(t *testing.T, ctx context.Context, pool *pgxpool.Pool, statement string, args ...any) (release func()) {
-	t.Helper()
-	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, statement, args...); err != nil {
-		_ = tx.Rollback(ctx)
-		t.Fatal(err)
-	}
-	return func() { _ = tx.Rollback(ctx) }
-}
-
 // TestRearmFenceOlderPassKeepsANewerDelivery (D1): the pass at attempt 1 queues one unit and leaves one capped. After
 // its commit and before its re-arm, a lease repair turns R into a retry and wakes the run, and the relay delivers
 // that wake at attempt 2. The old pass's re-arm must leave the row the attempt-2 delivery owns, and that delivery
@@ -187,7 +148,7 @@ func holdInTx(t *testing.T, ctx context.Context, pool *pgxpool.Pool, statement s
 func TestRearmFenceOlderPassKeepsANewerDelivery(t *testing.T) {
 	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "2")
-		seedRearmFenceRun(t, ctx, pool, rearmFencePlannedA, rearmFencePlannedB)
+		seedRearmFenceRun(t, ctx, pool, 1, rearmFencePlannedA, rearmFencePlannedB)
 		retryAt := pgNow().Add(30 * time.Second)
 
 		old := newTestDispatchService(t, pool)
@@ -227,7 +188,7 @@ func TestRearmFenceOlderPassKeepsANewerDelivery(t *testing.T) {
 func TestRearmFenceOlderPassKeepsAWakeArmedMidPass(t *testing.T) {
 	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "2")
-		seedRearmFenceRun(t, ctx, pool, rearmFencePlannedA, rearmFencePlannedB)
+		seedRearmFenceRun(t, ctx, pool, 1, rearmFencePlannedA, rearmFencePlannedB)
 		retryAt := pgNow().Add(30 * time.Second)
 
 		old := newTestDispatchService(t, pool)
@@ -249,114 +210,200 @@ func TestRearmFenceOlderPassKeepsAWakeArmedMidPass(t *testing.T) {
 	})
 }
 
-// rearmFailurePass runs the D2 pass: one unit queued, one capped, so the pass re-arms after its commit. When
-// holdRow is set, another transaction holds the run's outbox row from the commit on, and the service's lock_timeout
-// fails the re-arm's row lock.
-func rearmFailurePass(t *testing.T, ctx context.Context, pool *pgxpool.Pool, holdRow bool) (rearmFenceRow, error) {
+// The matrix below runs one pass at delivery attempt 2: one unit queued, one capped, so after its commit the pass
+// re-arms the run at armAt + the 60 s countdown (main: the cappedIDs arm; #6804: queuedPassRearmAt with the capped
+// unit dispatchable). setRow puts the row in the state under test between that commit and the re-arm.
+
+const rearmMatrixAttempt = 2
+
+func rearmMatrixPass(t *testing.T, ctx context.Context, pool *pgxpool.Pool, setRow func(hookAt time.Time)) (before, after rearmFenceRow, hookAt time.Time) {
 	t.Helper()
 	t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "2")
-	seedRearmFenceRun(t, ctx, pool, rearmFencePlannedA, rearmFencePlannedB)
-	service := newTestDispatchService(t, lockTimeoutPool(t, ctx, pool, "300ms"))
-	release := func() {}
+	seedRearmFenceRun(t, ctx, pool, rearmMatrixAttempt, rearmFencePlannedA, rearmFencePlannedB)
+	service := newTestDispatchService(t, pool)
 	hook := installAfterPassCommit(t, service, func() {
-		if holdRow {
-			release = holdInTx(t, ctx, pool, `SELECT 1 FROM sync_dispatch_outbox WHERE id = $1 FOR UPDATE`, dispatchServiceTestOutbox)
+		hookAt = time.Now().UTC()
+		if setRow != nil {
+			setRow(hookAt)
 		}
+		before = readRearmFenceRow(t, ctx, pool)
 	})
-	err := service.Dispatch(ctx, rearmFenceArgs(1))
-	release()
+	if err := service.Dispatch(ctx, rearmFenceArgs(rearmMatrixAttempt)); err != nil {
+		t.Fatalf("pass: %v, want nil", err)
+	}
 	if !hook.fired.Load() {
 		t.Fatal("precondition: the post-commit hook did not fire")
 	}
 	if got := providerUnitPublishes(t, ctx, pool); got != 1 {
-		t.Fatalf("precondition: the pass published %d units, want 1 (its commit landed)", got)
+		t.Fatalf("precondition: the pass published %d units, want 1 (one slot free, one unit capped)", got)
 	}
-	return readRearmFenceRow(t, ctx, pool), err
+	after = readRearmFenceRow(t, ctx, pool)
+	t.Logf("before re-arm: %s/%d/%s claim=%v; after: %s/%d/%s claim=%v", before.status, before.attempts, before.availableAt, before.claimToken != nil,
+		after.status, after.attempts, after.availableAt, after.claimToken != nil)
+	return before, after, hookAt
 }
 
-// TestRearmFenceFailedRearmIsNotASuccessWithNoWake (D2): the pass committed and its re-arm write failed. The job must
-// not end as a success with the row still 'dispatched' and no pending wake for the capped unit.
-func TestRearmFenceFailedRearmIsNotASuccessWithNoWake(t *testing.T) {
-	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		row, err := rearmFailurePass(t, ctx, pool, true)
-		t.Logf("dispatch err=%v row status=%s attempts=%d available_at=%s", err, row.status, row.attempts, row.availableAt)
-		if err == nil && row.status != "pending" {
-			t.Errorf("Dispatch returned nil with row status=%s: a failed re-arm ended the job as a success with no pending wake", row.status)
-		}
-	})
-}
-
-// TestRearmFenceRearmArmsAWakeWhenTheWriteSucceeds is D2's control: no held row, the re-arm lands.
-func TestRearmFenceRearmArmsAWakeWhenTheWriteSucceeds(t *testing.T) {
-	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		row, err := rearmFailurePass(t, ctx, pool, false)
-		if err != nil || row.status != "pending" || row.attempts != 1 {
-			t.Fatalf("Dispatch err=%v row status=%s attempts=%d, want nil/pending/1", err, row.status, row.attempts)
-		}
-	})
-}
-
-// retryAfterCommittedPass runs the D3 sequence: a zero-queue pass (the one slot is R's) commits, its tail
-// pending-counts read fails (another transaction holds sync_run_units, the service's lock_timeout gives up), the
-// job returns an error, then freeSlot (R ends) or not, then River's retry of the SAME attempt.
-func retryAfterCommittedPass(t *testing.T, ctx context.Context, pool *pgxpool.Pool, freeSlot bool) {
+// relayClaims stands in for the relay claim (syncreconciler/kernel.go claimRiverRoutesSQL) of a pending row: the
+// next attempt, a live claim until expiresAt.
+func relayClaims(t *testing.T, ctx context.Context, pool *pgxpool.Pool, expiresAt time.Time) {
 	t.Helper()
-	t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", "1")
-	seedRearmFenceRun(t, ctx, pool, rearmFencePlannedA)
-	service := newTestDispatchService(t, lockTimeoutPool(t, ctx, pool, "300ms"))
-	release := func() {}
-	hook := installAfterPassCommit(t, service, func() {
-		release = holdInTx(t, ctx, pool, `LOCK TABLE sync_run_units IN ACCESS EXCLUSIVE MODE`)
-	})
-	first := service.Dispatch(ctx, rearmFenceArgs(1))
-	release()
-	if !hook.fired.Load() || first == nil {
-		t.Fatalf("precondition: hook fired=%v first err=%v, want true/non-nil (the tail read after the commit failed)", hook.fired.Load(), first)
-	}
-	if got := providerUnitPublishes(t, ctx, pool); got != 0 {
-		t.Fatalf("precondition: the first pass published %d units, want 0 (the bucket is full)", got)
-	}
-	if row := readRearmFenceRow(t, ctx, pool); row.status != "dispatched" || row.attempts != 1 {
-		t.Fatalf("precondition: row status=%s attempts=%d, want dispatched/1 (the retry passes the start fence)", row.status, row.attempts)
-	}
-	if freeSlot {
-		if _, err := pool.Exec(ctx, `
-UPDATE sync_run_units SET status = 'success', lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
-WHERE id = $1::uuid`, rearmFenceRunning); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := service.Dispatch(ctx, rearmFenceArgs(1)); err != nil {
-		t.Fatalf("retry: %v, want nil", err)
+	if _, err := pool.Exec(ctx, `
+UPDATE sync_dispatch_outbox
+SET claim_token = gen_random_uuid()::text, claim_expires_at = $2, claim_transport = 'river',
+    claim_route_generation = $3, attempts = attempts + 1, updated_at = now()
+WHERE sync_run_id = $1 AND kind = 'dispatch_sync_run' AND status = 'pending'`, discoveryTestRun, expiresAt, dispatchRouteGeneration); err != nil {
+		t.Fatal(err)
 	}
 }
 
-// TestRearmFenceRetryOfACommittedAttemptAdmitsNothingNew (D3): between the failed attempt and its retry, R ends and
-// frees the slot. The retry runs under the attempt whose pass already committed: it must not claim and publish the
-// planned unit under that attempt; it must leave a wake so the next delivery admits it. This asserts the completion
-// marker option; a ruling that a retry may admit makes this cell a declared-behavior cell instead.
-func TestRearmFenceRetryOfACommittedAttemptAdmitsNothingNew(t *testing.T) {
+// relayPublishFails stands in for recordTransportPublishFailureSQL (syncreconciler/failure_backoff.go): the claim
+// returns to pending at the relay's backoff.
+func relayPublishFails(t *testing.T, ctx context.Context, pool *pgxpool.Pool, retryAt time.Time) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `
+UPDATE sync_dispatch_outbox
+SET status = 'pending', available_at = $2, claim_token = NULL, claim_expires_at = NULL, claim_transport = NULL,
+    claim_route_generation = NULL, last_error = 'transport_publish_failed', updated_at = now()
+WHERE sync_run_id = $1 AND kind = 'dispatch_sync_run' AND claim_token IS NOT NULL`, discoveryTestRun, retryAt); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func wakeRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, at time.Time) {
+	t.Helper()
+	if !syncrunrollup.WakeDispatch(ctx, pool, discoveryTestRun, at, syncrunrollup.DispatchWakePathProviderUnit) {
+		t.Fatal("precondition: the wake did not arm")
+	}
+}
+
+func assertRowUnchanged(t *testing.T, before, after rearmFenceRow, why string) {
+	t.Helper()
+	if after.status != before.status || after.attempts != before.attempts || !after.availableAt.Equal(before.availableAt) ||
+		(after.claimToken == nil) != (before.claimToken == nil) || (after.claimToken != nil && *after.claimToken != *before.claimToken) {
+		t.Errorf("row %s/%d/%s claim=%v -> %s/%d/%s claim=%v, want unchanged: %s", before.status, before.attempts, before.availableAt, before.claimToken != nil,
+			after.status, after.attempts, after.availableAt, after.claimToken != nil, why)
+	}
+}
+
+// TestRearmFenceMatrixOwnDispatchedRowCountsDown: dispatched at the pass's own attempt. WANT (as today): pending at
+// the countdown, same attempt.
+func TestRearmFenceMatrixOwnDispatchedRowCountsDown(t *testing.T) {
 	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		retryAfterCommittedPass(t, ctx, pool, true)
-		published := providerUnitPublishes(t, ctx, pool)
-		status := rearmFenceUnitStatus(t, ctx, pool, rearmFencePlannedA)
-		row := readRearmFenceRow(t, ctx, pool)
-		t.Logf("after retry: published=%d unit=%s row status=%s attempts=%d", published, status, row.status, row.attempts)
-		if published != 0 || status != syncRunUnitStatusPlanned {
-			t.Errorf("retry of committed attempt 1 published %d units and left the unit %s, want 0/planned", published, status)
+		before, after, hookAt := rearmMatrixPass(t, ctx, pool, nil)
+		if before.status != "dispatched" || before.attempts != rearmMatrixAttempt {
+			t.Fatalf("precondition: row %s/%d, want dispatched/%d", before.status, before.attempts, rearmMatrixAttempt)
 		}
-		if row.status != "pending" {
-			t.Errorf("row status=%s after the retry, want pending: the unit the retry did not admit has no wake", row.status)
+		if lag := after.availableAt.Sub(hookAt); after.status != "pending" || after.attempts != rearmMatrixAttempt || lag < 59*time.Second || lag > 65*time.Second {
+			t.Fatalf("row %s/%d available_at=hook+%s, want pending/%d at hook+60s: the pass's own row counts down", after.status, after.attempts, lag, rearmMatrixAttempt)
 		}
 	})
 }
 
-// TestRearmFenceRetryWithNothingNewAdmitsNothing is D3's control: the slot stays full, the retry admits nothing.
-func TestRearmFenceRetryWithNothingNewAdmitsNothing(t *testing.T) {
+// TestRearmFenceMatrixPendingSameAttemptKeepsTheEarlierWake: a wake (W4) moved the row to pending at the same
+// attempt. WANT (as today, CHAOS-10013): the earlier wake stays.
+func TestRearmFenceMatrixPendingSameAttemptKeepsTheEarlierWake(t *testing.T) {
 	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		retryAfterCommittedPass(t, ctx, pool, false)
-		if published, status := providerUnitPublishes(t, ctx, pool), rearmFenceUnitStatus(t, ctx, pool, rearmFencePlannedA); published != 0 || status != syncRunUnitStatusPlanned {
-			t.Fatalf("retry published %d units and left the unit %s, want 0/planned", published, status)
+		before, after, _ := rearmMatrixPass(t, ctx, pool, func(at time.Time) { wakeRun(t, ctx, pool, at) })
+		if before.status != "pending" || before.attempts != rearmMatrixAttempt {
+			t.Fatalf("precondition: row %s/%d, want pending/%d", before.status, before.attempts, rearmMatrixAttempt)
 		}
+		assertRowUnchanged(t, before, after, "a wake another writer armed is a real due time")
+	})
+}
+
+// TestRearmFenceMatrixPendingHigherAttemptKeepsTheEarlierRetry: the relay claimed the row (attempt 3) and its
+// publish failed (W3): pending, unclaimed, at the relay's backoff, which is earlier than the pass's countdown. WANT
+// (as today): unchanged; no delivery runs attempt 3, the row is a wake like any other pending row.
+func TestRearmFenceMatrixPendingHigherAttemptKeepsTheEarlierRetry(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		before, after, _ := rearmMatrixPass(t, ctx, pool, func(at time.Time) {
+			wakeRun(t, ctx, pool, at)
+			relayClaims(t, ctx, pool, at.Add(10*time.Minute))
+			relayPublishFails(t, ctx, pool, at.Add(5*time.Second))
+		})
+		if before.status != "pending" || before.attempts != rearmMatrixAttempt+1 || before.claimToken != nil {
+			t.Fatalf("precondition: row %s/%d claim=%v, want pending/%d unclaimed", before.status, before.attempts, before.claimToken != nil, rearmMatrixAttempt+1)
+		}
+		assertRowUnchanged(t, before, after, "the relay's earlier retry stays")
+	})
+}
+
+// TestRearmFenceMatrixPendingHigherAttemptTakesTheEarlierOfRetryAndCountdown: as above, but the relay's backoff is
+// later than the pass's countdown. WANT (as today, the upsert's LEAST): pending at the countdown, attempt 3.
+func TestRearmFenceMatrixPendingHigherAttemptTakesTheEarlierOfRetryAndCountdown(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		_, after, hookAt := rearmMatrixPass(t, ctx, pool, func(at time.Time) {
+			wakeRun(t, ctx, pool, at)
+			relayClaims(t, ctx, pool, at.Add(10*time.Minute))
+			relayPublishFails(t, ctx, pool, at.Add(5*time.Minute))
+		})
+		if lag := after.availableAt.Sub(hookAt); after.status != "pending" || after.attempts != rearmMatrixAttempt+1 || lag < 59*time.Second || lag > 65*time.Second {
+			t.Fatalf("row %s/%d available_at=hook+%s, want pending/%d at hook+60s (the earlier of the two)", after.status, after.attempts, lag, rearmMatrixAttempt+1)
+		}
+	})
+}
+
+// TestRearmFenceMatrixPendingHigherAttemptKeepsALiveClaim: the relay holds a live claim at attempt 3 (it is about to
+// deliver) that expires after the pass's target. WANT (as today): unchanged, the claim stays.
+func TestRearmFenceMatrixPendingHigherAttemptKeepsALiveClaim(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		before, after, _ := rearmMatrixPass(t, ctx, pool, func(at time.Time) {
+			wakeRun(t, ctx, pool, at)
+			relayClaims(t, ctx, pool, at.Add(10*time.Minute))
+		})
+		if before.claimToken == nil || before.attempts != rearmMatrixAttempt+1 {
+			t.Fatalf("precondition: claim=%v attempts=%d, want a live claim at %d", before.claimToken != nil, before.attempts, rearmMatrixAttempt+1)
+		}
+		assertRowUnchanged(t, before, after, "a live relay claim stays")
+	})
+}
+
+// TestRearmFenceMatrixPendingHigherAttemptKeepsAClaimThatExpiresBeforeTheTarget (D1b): the relay's live claim
+// expires after now but before the pass's target (now + 60 s). The upsert judges liveness against its own
+// updated_at, which is the target, so it clears a claim that is live now and the relay's mark then fails. WANT:
+// liveness judged at now; the claim stays.
+func TestRearmFenceMatrixPendingHigherAttemptKeepsAClaimThatExpiresBeforeTheTarget(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		before, after, _ := rearmMatrixPass(t, ctx, pool, func(at time.Time) {
+			wakeRun(t, ctx, pool, at)
+			relayClaims(t, ctx, pool, at.Add(20*time.Second))
+		})
+		if before.claimToken == nil || before.attempts != rearmMatrixAttempt+1 {
+			t.Fatalf("precondition: claim=%v attempts=%d, want a live claim at %d", before.claimToken != nil, before.attempts, rearmMatrixAttempt+1)
+		}
+		assertRowUnchanged(t, before, after, "a claim live NOW must not be cleared because it expires before the re-arm's target")
+	})
+}
+
+// TestRearmFenceMatrixDispatchedHigherAttemptIsNotWritten (D1): the relay delivered attempt 3 before the re-arm.
+// WANT: the row is not written; the attempt-3 delivery keeps it.
+func TestRearmFenceMatrixDispatchedHigherAttemptIsNotWritten(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		before, after, _ := rearmMatrixPass(t, ctx, pool, func(at time.Time) {
+			wakeRun(t, ctx, pool, at)
+			relayDelivers(t, ctx, pool)
+		})
+		if before.status != "dispatched" || before.attempts != rearmMatrixAttempt+1 {
+			t.Fatalf("precondition: row %s/%d, want dispatched/%d", before.status, before.attempts, rearmMatrixAttempt+1)
+		}
+		assertRowUnchanged(t, before, after, "a newer delivery owns the row")
+	})
+}
+
+// TestRearmFenceMatrixDispatchedLowerAttemptIsNotWritten: dispatched at an attempt BELOW the pass's. No writer makes
+// this state while the run exists (attempts only grows, kernel.go claim; rows are deleted only with their org), so
+// it is set out of band here. WANT: not written: the pass cannot show the row is its own, and moving it would refuse
+// whatever delivery holds it.
+func TestRearmFenceMatrixDispatchedLowerAttemptIsNotWritten(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		before, after, _ := rearmMatrixPass(t, ctx, pool, func(time.Time) {
+			if _, err := pool.Exec(ctx, `UPDATE sync_dispatch_outbox SET attempts = $2 WHERE id = $1`, dispatchServiceTestOutbox, rearmMatrixAttempt-1); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if before.status != "dispatched" || before.attempts != rearmMatrixAttempt-1 {
+			t.Fatalf("precondition: row %s/%d, want dispatched/%d", before.status, before.attempts, rearmMatrixAttempt-1)
+		}
+		assertRowUnchanged(t, before, after, "the pass does not own a row at another attempt")
 	})
 }

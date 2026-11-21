@@ -508,7 +508,7 @@ func TestGitLabTestsListingStepBackBound(t *testing.T) {
 		capped bool
 	}{{"moves past the bound", 1000, true}, {"moves 5 times", 5, false}} {
 		t.Run(tc.name, func(t *testing.T) {
-			fake := newGitLabContinuityFake(t, gitLabContinuityFixture(1500, 1, 1))
+			fake := newGitLabContinuityFake(t, gitLabContinuityFixture(600, 1, 1))
 			moves := 0
 			fake.every = func(request, page, perPage int) {
 				if request == 0 || perPage == nativePerPage || moves >= tc.moves {

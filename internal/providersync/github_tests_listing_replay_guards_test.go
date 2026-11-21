@@ -544,3 +544,63 @@ func TestGitHubTestsPeelReplayCursorHoldsNoReplayCount(t *testing.T) {
 		}
 	})
 }
+
+// Named residual: a run deleted inside the active range during one invocation (the anchor at the stop's page end, no
+// resume) shifts the next page by its page number, as on the release before. The grant at the stop sees the walk's own
+// second short by two ids and lists one page more, but the shifted page passes one survivor; the next stop cannot see it (its
+// second is newer than the walk's). Pinned as is: without the replay 2 unread [400 401], with it 1 [401]; the runs and
+// artifacts listings record the stop and hold the watermark (the next walk reads it), the deep listings record the stop
+// and advance it.
+func TestGitHubTestsPeelReplayResidualAnchorDeletedInsideOneInvocation(t *testing.T) {
+	peelReplaySkipRace(t)
+	for _, listing := range deletionShiftListings() {
+		for _, replay := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/replay_%v", listing.name, replay), func(t *testing.T) {
+				const count, pages = 1500, 11
+				handler := peelReplayHandler(listing, pages, false)
+				handler.noListingReplay = !replay
+				runs := peelReplayRuns(listing, count, 1098, 1101)
+				fake := newListingFake(t, slices.Clone(runs))
+				removed := false
+				final := peelReplayYieldingWalk(t, handler, listing.claim, deletionShiftDoer(t, fake, listing.reports), 1<<30, func(c githubTestsChunkCursor) bool {
+					if !listing.in(c) {
+						return false
+					}
+					if peelReplayCounter(listing, c) == pages && c.Index == 0 && !removed {
+						resumeDeletionDelete(fake, 402)
+						removed = true
+					}
+					return peelReplaySecondRangeAt(c) && !fake.gone[count]
+				}, func() { resumeDeletionDelete(fake, count) })
+				fresh := replayGuardFresh(t, listing, handler, fake.runs, func(f *listingFake) providerfoundation.HTTPDoer {
+					return deletionShiftDoer(t, f, listing.reports)
+				})
+				unread := replayGuardUnread(listing, fresh, fake)
+				incomplete := deletionShiftIncomplete(t, final.Result)
+				t.Logf("CELL residual/%s/replay_%v unread=%v watermark=%v incomplete=%v", listing.name, replay, unread, final.Watermark != nil, incomplete)
+				if !removed {
+					t.Fatal("premise: the walk never reached its budget stop")
+				}
+				want := []int{400, 401}
+				if replay {
+					want = []int{401}
+				}
+				if !slices.Equal(unread, want) {
+					t.Errorf("unread=%v, want %v", unread, want)
+				}
+				component := githubTestsRunInventoryComponent
+				switch {
+				case listing.name == "deep_runs":
+					component = githubTestsLateRerunRunsComponent
+				case listing.name == "deep_reports":
+					component = githubTestsLateRerunReportsComponent
+				case listing.reports:
+					component = githubTestsArtifactInventoryComponent
+				}
+				if !slices.Contains(incomplete, component+"/"+githubTestsPageBudgetCause) || (final.Watermark != nil) != listing.deep {
+					t.Errorf("incomplete=%v watermark=%v, want the %s stop recorded and the watermark advanced only in a deep listing", incomplete, final.Watermark != nil, component)
+				}
+			})
+		}
+	}
+}

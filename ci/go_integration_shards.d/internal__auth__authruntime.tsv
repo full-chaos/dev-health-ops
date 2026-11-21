@@ -1,5 +1,5 @@
 internal/auth/authruntime	1079
-split-by-test	3
+split-by-test	4
 TestHeaderCarrierPrincipalParity	112
 TestQueryAPIEnforceParity	98
 TestJWKSAnswersWhileTheDatabaseIsBlackholed	75

@@ -326,7 +326,7 @@ jobs:
         # CHAOS-5362: this job now also builds/runs dho worker/
         # dev-health-worker-migrate/dho reconciler (ci/lib/go_worker_
         # fixture.sh), same as the metrics-executed-proof job below.
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
@@ -493,7 +493,7 @@ jobs:
 
       - name: Set up Go
         id: setup-go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'

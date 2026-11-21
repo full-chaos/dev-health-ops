@@ -68,8 +68,8 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 			if err := validateTestOpsProvider(claim, row.Provider); err != nil {
 				return err
 			}
-			if !recordGitHubTestsKey(seen, row.OrgID, row.RepoID, row.RunID) {
-				return duplicateNaturalKeyError(effect.Destination, "org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID)
+			if err := recordTestOpsKey(seen, effect.Destination, row.naturalKey()); err != nil {
+				return err
 			}
 		}
 		if err := recordMovedPipelineFinishDays(ctx, sink.Conn, claim.OrgID, rows); err != nil {
@@ -107,8 +107,8 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 				}
 				return ErrInvalidConfiguration
 			}
-			if !recordGitHubTestsKey(seen, row.OrgID, row.RepoID, row.RunID, row.JobID) {
-				return duplicateNaturalKeyError(effect.Destination, "org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID, "job_id", row.JobID)
+			if err := recordTestOpsKey(seen, effect.Destination, row.naturalKey()); err != nil {
+				return err
 			}
 			if err := batch.Append(row.OrgID, row.RepoID, row.RunID, row.JobID, row.JobName, row.Stage, row.Status, row.StartedAt, row.FinishedAt, row.DurationSeconds, row.RunnerType, row.RetryAttempt, row.LastSynced); err != nil {
 				return err
@@ -139,8 +139,8 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 			if err := validateTestOpsProvider(claim, row.Provider); err != nil {
 				return err
 			}
-			if !recordGitHubTestsKey(seen, row.OrgID, row.RepoID, row.RunID, row.CheckKey) {
-				return duplicateNaturalKeyError(effect.Destination, "org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID, "check_key", row.CheckKey)
+			if err := recordTestOpsKey(seen, effect.Destination, row.naturalKey()); err != nil {
+				return err
 			}
 			if err := batch.Append(row.OrgID, row.RepoID, row.RunID, row.CheckKey, row.CheckName, row.Provider, row.Requirement, row.Result, row.RuleVersion, row.Provenance, row.TargetBranch, row.PRNumber, row.SourceURL, row.ObservedAt, row.LastSynced); err != nil {
 				return err
@@ -168,8 +168,8 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 				}
 				return ErrInvalidConfiguration
 			}
-			if !recordGitHubTestsKey(seen, row.OrgID, row.RepoID, row.RunID, row.SuiteID) {
-				return duplicateNaturalKeyError(effect.Destination, "org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID, "suite_id", row.SuiteID)
+			if err := recordTestOpsKey(seen, effect.Destination, row.naturalKey()); err != nil {
+				return err
 			}
 			counts, err := gitHubTestsCounts(row.TotalCount, row.PassedCount, row.FailedCount, row.SkippedCount, row.ErrorCount, row.QuarantinedCount, row.RetriedCount)
 			if err != nil {
@@ -205,8 +205,8 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 				}
 				return ErrInvalidConfiguration
 			}
-			if !recordGitHubTestsKey(seen, row.OrgID, row.RepoID, row.RunID, row.SuiteID, row.CaseID) {
-				return duplicateNaturalKeyError(effect.Destination, "org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID, "suite_id", row.SuiteID, "case_id", row.CaseID)
+			if err := recordTestOpsKey(seen, effect.Destination, row.naturalKey()); err != nil {
+				return err
 			}
 			retry, err := gitHubTestsUint32(row.RetryAttempt)
 			if err != nil {
@@ -238,8 +238,8 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 				}
 				return ErrInvalidConfiguration
 			}
-			if !recordGitHubTestsKey(seen, row.OrgID, row.RepoID, row.RunID, row.SnapshotID) {
-				return duplicateNaturalKeyError(effect.Destination, "org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID, "snapshot_id", row.SnapshotID)
+			if err := recordTestOpsKey(seen, effect.Destination, row.naturalKey()); err != nil {
+				return err
 			}
 			linesTotal, err := gitHubTestsNullableUint32(row.LinesTotal)
 			if err != nil {
@@ -296,8 +296,8 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 			if err := validateTestOpsRunReportCompletenessRow(claim, row); err != nil {
 				return err
 			}
-			if !recordGitHubTestsKey(seen, row.OrgID, row.RepoID, row.RunID, fmt.Sprint(row.RunAttempt)) {
-				return duplicateNaturalKeyError(effect.Destination, "org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID, "run_attempt", fmt.Sprint(row.RunAttempt))
+			if err := recordTestOpsKey(seen, effect.Destination, row.naturalKey()); err != nil {
+				return err
 			}
 			attempt, err := gitHubTestsUint32(row.RunAttempt)
 			if err != nil {
@@ -322,6 +322,87 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 		return sendGitHubTestsBatch(ctx, sink.Lease, batch)
 	}
 	return ErrInvalidConfiguration
+}
+
+// The natural key of each TestOps row, as the name/value pairs the sink refuses to see twice in one write batch. The sink and the
+// chunk split read the same rules (testOpsBatchKeyCollision).
+func (row githubTestsPipelineRow) naturalKey() []string {
+	return []string{"org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID}
+}
+
+func (row githubTestsJobRow) naturalKey() []string {
+	return []string{"org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID, "job_id", row.JobID}
+}
+
+func (row githubTestsAcceptanceRow) naturalKey() []string {
+	return []string{"org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID, "check_key", row.CheckKey}
+}
+
+func (row testSuiteResultRow) naturalKey() []string {
+	return []string{"org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID, "suite_id", row.SuiteID}
+}
+
+func (row testCaseResultRow) naturalKey() []string {
+	return []string{"org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID, "suite_id", row.SuiteID, "case_id", row.CaseID}
+}
+
+func (row coverageSnapshotRow) naturalKey() []string {
+	return []string{"org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID, "snapshot_id", row.SnapshotID}
+}
+
+func (row testOpsRunReportCompletenessRow) naturalKey() []string {
+	return []string{"org_id", row.OrgID, "repo_id", row.RepoID, "run_id", row.RunID, "run_attempt", fmt.Sprint(row.RunAttempt)}
+}
+
+type testOpsKeyedRow interface{ naturalKey() []string }
+
+// recordTestOpsKey records a row's natural key in seen and refuses one already there with the duplicate natural key error.
+func recordTestOpsKey(seen map[string]struct{}, destination string, key []string) error {
+	values := make([]string, 0, len(key)/2)
+	for index := 1; index < len(key); index += 2 {
+		values = append(values, key[index])
+	}
+	if !recordGitHubTestsKey(seen, values...) {
+		return duplicateNaturalKeyError(destination, key...)
+	}
+	return nil
+}
+
+// testOpsBatchKeyCollision is the sink's natural-key refusal of one effect as one write batch, without the write: the duplicate natural
+// key error of the first repeated key, or nil. A destination with no key rule (git_files and every non-TestOps one) and rows that do not
+// decode (the sink refuses those on its own) give nil.
+func testOpsBatchKeyCollision(effect EffectBatch) error {
+	switch effect.Destination {
+	case "ci_pipeline_runs":
+		return testOpsKeyCollision[githubTestsPipelineRow](effect)
+	case "ci_job_runs":
+		return testOpsKeyCollision[githubTestsJobRow](effect)
+	case "ci_acceptance_checks":
+		return testOpsKeyCollision[githubTestsAcceptanceRow](effect)
+	case "test_suite_results":
+		return testOpsKeyCollision[testSuiteResultRow](effect)
+	case "test_case_results":
+		return testOpsKeyCollision[testCaseResultRow](effect)
+	case "coverage_snapshots":
+		return testOpsKeyCollision[coverageSnapshotRow](effect)
+	case testOpsRunReportCompletenessDestination:
+		return testOpsKeyCollision[testOpsRunReportCompletenessRow](effect)
+	}
+	return nil
+}
+
+func testOpsKeyCollision[T testOpsKeyedRow](effect EffectBatch) error {
+	rows, err := decodeEffectRows[T](effect)
+	if err != nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		if err := recordTestOpsKey(seen, effect.Destination, row.naturalKey()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func recordGitHubTestsKey(seen map[string]struct{}, parts ...string) bool {

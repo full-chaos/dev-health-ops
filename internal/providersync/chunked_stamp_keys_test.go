@@ -417,3 +417,33 @@ func TestChunkStampSinkKeyRefusalUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// The split's key check is the sink's own: per destination, testOpsBatchKeyCollision gives the error WriteEffect gives for the same
+// batch, and nil for a batch the sink accepts; git_files has no key rule.
+func TestChunkStampKeyRulesAreTheSinks(t *testing.T) {
+	t.Parallel()
+	claim := nativeTestClaim("github", "cicd")
+	sink := TestOpsClickHouseEffects{Conn: &keyConn{}, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })}
+	for _, destination := range stampDestinations {
+		for _, keys := range [][]int{{10_000, 10_001, 10_000}, {10_000, 10_001}} {
+			rows := make([]json.RawMessage, 0, len(keys))
+			for _, key := range keys {
+				rows = append(rows, keyRow(t, claim, destination, key))
+			}
+			effect, err := BuildEffectBatch(destination, EffectReadbackRequired, rows)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sinkErr := sink.WriteEffect(context.Background(), claim, effect)
+			splitErr := testOpsBatchKeyCollision(effect)
+			if fmt.Sprint(sinkErr) != fmt.Sprint(splitErr) {
+				t.Fatalf("%s %v: sink %v, split check %v", destination, keys, sinkErr, splitErr)
+			}
+		}
+	}
+	files := fitsTestEffect(t, 10)
+	files.Rows = append(files.Rows, files.Rows[0])
+	if err := testOpsBatchKeyCollision(files); err != nil {
+		t.Fatalf("git_files: %v, want no key rule", err)
+	}
+}

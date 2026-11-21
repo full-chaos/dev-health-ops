@@ -564,7 +564,8 @@ func lateRerunYieldWalk(t *testing.T, handler GitHubTestsRouteHandler, claim Cla
 // always finishes. A deep range with exactly its budget of pages, resumed inside a page, writes the late re-run and
 // records no observation; so does the production shape: the 1,000-page default and the default chunk size. Its pages
 // hold 3 runs (2,993 runs: three peeled ranges, exactly 1,000 pages, 2 runs on the last), so a resume lands inside a
-// page at most chunk ends, and the walk ends at the budget: each page a resume charged again would lose the re-run.
+// page at most chunk ends, and the walk ends at the budget: each page a resume charged again would lose the re-run. The
+// first page of each of the two peeled ranges is free (CHAOS-14435: it lists the cut second again), so 998 are charged.
 func TestLateRerunRunsResumeInsideAPageCostsNoPage(t *testing.T) {
 	claim := lateRerunMidnightClaim("incremental")
 	for _, cell := range []struct {
@@ -594,8 +595,8 @@ func TestLateRerunRunsResumeInsideAPageCostsNoPage(t *testing.T) {
 			t.Errorf("%s: rows=%d incomplete=%v watermark=%v deep pages=%d, want the late re-run, no observation, the window end",
 				cell.name, len(walk.pipelines), incomplete, walk.final.Watermark, walk.cursor.LateRunPages)
 		}
-		if cell.heavy && (walk.cursor.LateRunPages != githubTestsLateRerunMaxPages || walk.passes < 2) {
-			t.Errorf("%s: deep pages=%d passes=%d, want exactly the 1,000-page budget over more than one invocation", cell.name, walk.cursor.LateRunPages, walk.passes)
+		if cell.heavy && (walk.cursor.LateRunPages != githubTestsLateRerunMaxPages-2 || walk.passes < 2) {
+			t.Errorf("%s: deep pages=%d passes=%d, want the 1,000 pages less the 2 free peel pages over more than one invocation", cell.name, walk.cursor.LateRunPages, walk.passes)
 		}
 	}
 }

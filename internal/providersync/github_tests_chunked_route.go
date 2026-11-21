@@ -554,6 +554,14 @@ func githubTestsRestorePagesEntered(cursor githubTestsChunkCursor) githubTestsCh
 	return cursor
 }
 
+// githubTestsPeelFreePages is the free pages of the range a peel starts (CHAOS-14435). The range ends at the cut second,
+// inclusive, so its first positions list again the runs of that second the finished range listed (cutListed): they were
+// charged there. A run deleted before the cut moves where an uninterrupted walk of the surviving runs peels, so it lists
+// fewer of them again and its page budget reaches deeper; the free pages keep this walk from reading less. At least one.
+func githubTestsPeelFreePages(cutListed int) int {
+	return max(1, (cutListed+nativePerPage-1)/nativePerPage)
+}
+
 // githubTestsEnterPage enters the next page of the active range (at index 0): it counts the page and charges it to the page
 // budget unless it is a free page of the range's re-seek.
 func githubTestsEnterPage(cursor githubTestsChunkCursor, charge func(*githubTestsChunkCursor)) githubTestsChunkCursor {
@@ -1732,7 +1740,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	// progress is recorded and the phase ends.
 	endRunsRange := func(c githubTestsChunkCursor) githubTestsChunkCursor {
 		nextHi, saturated, stuck := githubTestsRunsInterval(claim, c.LateRuns, lookback, lateLookback).peel(c.RangeItems, c.RangeOldest, c.RangeHi)
-		items, hi := c.RangeItems, c.RangeHi
+		items, hi, cutListed := c.RangeItems, c.RangeHi, c.RangeOldestItems
 		if saturated && !stuck && c.RangeOldestItems >= githubTestsSearchResultCap {
 			stuck, hi = true, nextHi
 		}
@@ -1749,6 +1757,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		default:
 			c.RangeHi = nextHi
 			c = githubTestsFreezeCutKeys(c)
+			c.ReseekPages = githubTestsPeelFreePages(cutListed)
 		}
 		return c
 	}
@@ -1773,6 +1782,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		default:
 			c.RangeHi = nextHi
 			c = githubTestsFreezeCutKeys(c)
+			// The artifacts phase does not count the runs of its cut second; its carried list holds at most 4 runs.
+			c.ReseekPages = githubTestsPeelFreePages(0)
 		}
 		return c
 	}

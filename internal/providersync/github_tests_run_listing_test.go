@@ -652,9 +652,10 @@ func TestPeelProgressGuardEndsAStuckRange(t *testing.T) {
 	}
 }
 
-// Beyond the 100-page phase budget the unit records the page budget marker and withholds the watermark.
+// Beyond the 100-page phase budget the unit records the page budget marker and withholds the watermark. Each peel's first
+// page is free (CHAOS-14435), so the window holds 12,000 runs: 100 charged pages and about 11 free ones do not reach its end.
 func TestPageBudgetStillStopsAWindowOfMoreThanTenThousandRuns(t *testing.T) {
-	fake := newListingFake(t, makeListingRuns(1, 11000, listingSince, 8*time.Second))
+	fake := newListingFake(t, makeListingRuns(1, 12000, listingSince, 7*time.Second))
 	claim := listingClaim(listingSince, listingSince.Add(25*time.Hour))
 	walk := walkListing(t, GitHubTestsRouteHandler{}, claim, fake, 0)
 	found := false

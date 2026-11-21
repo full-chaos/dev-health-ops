@@ -416,6 +416,10 @@ func deletionShiftCheck(t *testing.T, name string, outcome deletionShiftOutcome)
 	if len(outcome.unread) > want {
 		t.Errorf("%s: %d survivors unread, main leaves %d: this binary reads less than main", name, len(outcome.unread), want)
 	}
+	// CHAOS-14435 (peel): WANT every survivor the uninterrupted walk of the survivors reads.
+	if strings.HasPrefix(name, "peel/") && len(outcome.unread) != 0 {
+		t.Errorf("%s: %d survivors unread, want 0 (watermark advanced=%v)", name, len(outcome.unread), outcome.watermark)
+	}
 }
 
 // Class "charged": a run already read (and charged to the record bound) is deleted before the resume point; the walk at
@@ -538,5 +542,29 @@ func TestGitHubTestsDenseCutSecondAtTheRecordBoundNoWorseThanMain(t *testing.T) 
 				t.Errorf("%s: read %d runs, main reads %d", name, read, want)
 			}
 		})
+	}
+}
+
+// The no-deletion control of the peel's free pages (CHAOS-14435): 1,300 runs one a second, a page budget of 11. The first
+// range lists 1,000 runs and peels at the second of its oldest; the next range lists that run again (carried: no read).
+// main charges that range's first page and reads 99 runs more (1,099); with the free first page the walk reads one page
+// more (1,199). The over-read is that one page per peel, never more.
+func TestGitHubTestsPeelFreePageReadsOnePageMoreThanMain(t *testing.T) {
+	for _, listing := range deletionShiftRaceListings()[:min(2, len(deletionShiftRaceListings()))] {
+		for _, coalesce := range deletionShiftFlags() {
+			t.Run(listing.name+"/"+deletionShiftFlag(coalesce), func(t *testing.T) {
+				handler := GitHubTestsRouteHandler{MaxRuns: 1100, CoalesceRuns: coalesce}
+				if listing.deep {
+					handler = GitHubTestsRouteHandler{LateRerunMaxPages: 11, CoalesceRuns: coalesce}
+				}
+				fake := newListingFake(t, listing.runs(1, 1300))
+				deletionShiftPlainWalk(t, handler, listing.claim, deletionShiftDoer(t, fake, listing.reports))
+				read := len(listing.reads(fake))
+				t.Logf("CELL peel_control/%s/%s read=%d (main 1099)", listing.name, deletionShiftFlag(coalesce), read)
+				if read != 1199 {
+					t.Errorf("a peeled listing at its page budget read %d runs, want 1,199: main's 1,099 and one free page", read)
+				}
+			})
+		}
 	}
 }

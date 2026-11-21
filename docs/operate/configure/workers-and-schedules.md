@@ -405,6 +405,12 @@ continue:
   `worker_job_attempts_total` for kind `sync.provider_unit`. A worker image
   older than this behavior still retries the job (attempts 1-4) and River
   discards it on attempt 5.
+- A unit that the canonical-incident feature gate failed (`error_category`
+  `feature_disabled`) is closed the same way once its run is closed: a queued
+  provider-unit job of that unit completes on its next attempt without work, and
+  the Info line carries `closed_by` `feature_disabled`. While the run is still
+  open, the job keeps the retry. Re-enabling the feature does not reopen the
+  unit: the next scheduled occurrence plans a new run with new units.
 
 The verb refuses a run in which a worker holds a live lease on a unit
 (`sync_run_running_unit`). Add `--allow-running` to cancel the run anyway; that

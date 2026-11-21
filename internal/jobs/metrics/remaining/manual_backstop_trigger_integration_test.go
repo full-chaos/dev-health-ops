@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -358,5 +360,147 @@ func TestStartManualBackfillRunWorkItemAttributionCoexistsWithASameDayAutomaticO
 	}
 	if runCount != 2 {
 		t.Fatalf("expected exactly 2 independent runs (manual + automatic), found %d", runCount)
+	}
+}
+
+type recordingPartitionPublisher struct{ prerequisites []string }
+
+func (publisher *recordingPartitionPublisher) PublishPartitionTx(
+	_ context.Context, _ pgx.Tx, _ Run, _ Partition, prerequisiteCompletionKey string,
+) error {
+	publisher.prerequisites = append(publisher.prerequisites, prerequisiteCompletionKey)
+	return nil
+}
+
+// recordingGraphBuild stands in for the work-graph build the CLI chains: it
+// records the generation it was asked for and returns a completion key
+// derived from it.
+type recordingGraphBuild struct{ generations []string }
+
+func (build *recordingGraphBuild) prerequisite(_ context.Context, _ pgx.Tx, generation string) (string, error) {
+	build.generations = append(build.generations, generation)
+	return graphBuildKeyFor(generation), nil
+}
+
+func graphBuildKeyFor(generation string) string {
+	return "work_graph_execution_request:" + uuid.NewSHA1(uuid.NameSpaceOID, []byte(generation)).String()
+}
+
+func newManualMembershipStore(t *testing.T, ctx context.Context) (*PostgresStore, *pgxpool.Pool) {
+	t.Helper()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	createRemainingTables(t, ctx, pool)
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store, pool
+}
+
+func countMembershipRuns(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID string) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(ctx,
+		"SELECT count(*) FROM remaining_metric_runs WHERE org_id = $1::uuid AND family = 'membership_backfill'", orgID,
+	).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// TestStartManualMembershipTriggerRunFencesTheRunBehindItsGraphBuild: the
+// manual membership run carries the nightly binding's scope and day label,
+// and its partition is published behind the chained graph build's key.
+func TestStartManualMembershipTriggerRunFencesTheRunBehindItsGraphBuild(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	store, pool := newManualMembershipStore(t, ctx)
+	const orgID = "00000000-0000-4000-8000-000000014416"
+	day := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	generation := "manual-trigger:membership_backfill:" + orgID + ":" + day
+
+	if _, err := store.StartManualMembershipTriggerRun(ctx, orgID, day, generation, nil, &recordingPartitionPublisher{}); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("nil graph-build prerequisite: err=%v, want ErrInvalidState", err)
+	}
+	if got := countMembershipRuns(t, ctx, pool, orgID); got != 0 {
+		t.Fatalf("membership runs after a refused start = %d, want 0", got)
+	}
+
+	build, publisher := &recordingGraphBuild{}, &recordingPartitionPublisher{}
+	outcome, err := store.StartManualMembershipTriggerRun(ctx, orgID, day, generation, build.prerequisite, publisher)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if outcome.AlreadyRan || outcome.RunID == "" {
+		t.Fatalf("outcome = %+v, want a fresh run", outcome)
+	}
+	if len(build.generations) != 1 || build.generations[0] != generation {
+		t.Fatalf("graph build generations = %v, want [%s]", build.generations, generation)
+	}
+	if len(publisher.prerequisites) != 1 || publisher.prerequisites[0] != graphBuildKeyFor(generation) {
+		t.Fatalf("partition published behind %v, want [%s]", publisher.prerequisites, graphBuildKeyFor(generation))
+	}
+	wantScope, err := validateFamilyScope("membership_backfill", json.RawMessage(`{"version":1,"repo_ids":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var scopeKey string
+	var scopeMatches bool
+	if err := pool.QueryRow(ctx, `
+SELECT run.scope_key, partition.scope = $2::jsonb
+FROM remaining_metric_runs AS run
+JOIN remaining_metric_partitions AS partition ON partition.run_id = run.id
+WHERE run.id = $1::uuid`, outcome.RunID, string(wantScope)).Scan(&scopeKey, &scopeMatches); err != nil {
+		t.Fatal(err)
+	}
+	if scopeKey != day || !scopeMatches {
+		t.Fatalf("scope_key=%q scope matches nightly binding=%v, want %q/true", scopeKey, scopeMatches, day)
+	}
+}
+
+// TestStartManualMembershipTriggerRunGivesARetryRunItsOwnGraphBuild: when the
+// request's earlier run is terminal, the bumped :retry-1 run is fenced behind
+// a graph build keyed on its own generation, not the base one.
+func TestStartManualMembershipTriggerRunGivesARetryRunItsOwnGraphBuild(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	store, pool := newManualMembershipStore(t, ctx)
+	const orgID = "00000000-0000-4000-8000-000000014417"
+	day := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	generation := "manual-trigger:membership_backfill:" + orgID + ":" + day
+
+	build, publisher := &recordingGraphBuild{}, &recordingPartitionPublisher{}
+	first, err := store.StartManualMembershipTriggerRun(ctx, orgID, day, generation, build.prerequisite, publisher)
+	if err != nil {
+		t.Fatalf("first start: %v", err)
+	}
+	if err := store.CancelRun(ctx, first.RunID); err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.StartManualMembershipTriggerRun(ctx, orgID, day, generation, build.prerequisite, publisher)
+	if err != nil {
+		t.Fatalf("second start: %v", err)
+	}
+	retry := generation + ":retry-1"
+	if second.Generation != retry || second.RunID == first.RunID {
+		t.Fatalf("second outcome = %+v, want a new run under %s", second, retry)
+	}
+	if got := build.generations[len(build.generations)-1]; got != retry {
+		t.Fatalf("last graph build generation = %q, want %q (all: %v)", got, retry, build.generations)
+	}
+	if got := publisher.prerequisites[len(publisher.prerequisites)-1]; got != graphBuildKeyFor(retry) {
+		t.Fatalf("retry partition published behind %q, want %q", got, graphBuildKeyFor(retry))
+	}
+	if got := countMembershipRuns(t, ctx, pool, orgID); got != 2 {
+		t.Fatalf("membership runs = %d, want 2", got)
 	}
 }

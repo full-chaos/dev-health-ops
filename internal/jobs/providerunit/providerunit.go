@@ -1114,7 +1114,7 @@ func validateProviderFamilyExecutionClaim(claim providersync.Claim) error {
 }
 
 // lifecycleResultUnitClosed is the sync_provider_unit_finished result of a job whose unit an
-// operator cancel closed: the job completes without work.
+// operator cancel or the feature gate closed for good: the job completes without work.
 const lifecycleResultUnitClosed = "unit_closed"
 
 func (handler *Handler) Work(
@@ -1141,8 +1141,8 @@ func (handler *Handler) Work(
 	})
 	var closed *providersync.UnitClosedError
 	if errors.As(err, &closed) {
-		// The job's work went with the operator cancel: complete it now, not after four retries
-		// and a River discard.
+		// The job's work went with the unit's terminal failure: complete it now, not after four
+		// retries and a River discard.
 		handler.logLifecycleWith(ctx, execution, providersync.Claim{Unit: providersync.Unit{
 			ID: execution.Args.Payload.UnitID, SyncRunID: closed.SyncRunID,
 			Provider: closed.Provider, Dataset: closed.Dataset, Mode: closed.Mode,

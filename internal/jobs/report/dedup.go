@@ -125,10 +125,7 @@ func dedupFromSource(table string) string {
 	if !ok {
 		return table
 	}
-	newest := fmt.Sprintf(
-		"(SELECT * FROM %s ORDER BY %s DESC LIMIT 1 BY %s) AS %s",
-		table, read.Version, strings.Join(read.Key, ", "), table,
-	)
+	newest := newestVersions(table, read)
 	if table == "work_item_cycle_times" {
 		// A reopened item's newest row is a retraction: no completed_at, no hours. It is not a completion.
 		return fmt.Sprintf("(SELECT * FROM %s WHERE completed_at IS NOT NULL) AS %s", newest, table)
@@ -151,11 +148,22 @@ func dedupFromSource(table string) string {
 // then team, org, legacy), and the live-row rule then leaves out a key whose
 // views are all retracted. A co-owner team reads the items of its team rows.
 func teamDedupFromSource(table string) string {
-	read := tableReads[table]
-	newest := fmt.Sprintf(
-		"(SELECT * FROM %s ORDER BY %s DESC LIMIT 1 BY %s) AS %s",
-		table, read.Version, strings.Join(read.Key, ", "), table,
-	)
+	newest := newestVersions(table, tableReads[table])
 	return fmt.Sprintf("(SELECT * FROM %s AS %s WHERE %s) AS %s",
 		rowview.TeamPick(table, newest), table, liverow.Predicate(table, ""), table)
+}
+
+// newestVersions is the newest version of each declared key of the table, aliased
+// as the table (CHAOS-14407). Two versions that share the version column give one
+// of them whatever the scan order: work_item_metrics_daily orders by its one
+// version order, the order its served readers pick by, so a report and a page
+// chart the same version of a tied key; every other table breaks the tie by the
+// hash of the whole row.
+func newestVersions(table string, read tableRead) string {
+	order := read.Version + " DESC, cityHash64(tuple(*)) DESC"
+	if table == "work_item_metrics_daily" {
+		order = rowview.WorkItemMetricsNewestOrder + " DESC"
+	}
+	return fmt.Sprintf("(SELECT * FROM %s ORDER BY %s LIMIT 1 BY %s) AS %s",
+		table, order, strings.Join(read.Key, ", "), table)
 }

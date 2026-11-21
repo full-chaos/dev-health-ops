@@ -35,6 +35,7 @@ var readerRoles = map[string]struct{ role, why string }{
 	"internal/jobs/metrics/workitemmetrics/blocked.go":                     {"writer", "writes the table or builds its rows"},
 	"internal/jobs/metrics/workitemmetrics/capability.go":                  {"writer", "writes the table or builds its rows"},
 	"internal/jobs/metrics/workitemmetrics/compute.go":                     {"writer", "writes the table or builds its rows"},
+	"internal/jobs/report/dedup.go":                                        {"reader-sum", "sums rows of several work scopes: takes the org predicate; picks a version of work_item_metrics_daily by its one version order"},
 	"internal/jobs/report/query.go":                                        {"reader-sum", "sums rows of several work scopes: takes the org predicate (CHAOS-8863 PR2)"},
 	"internal/jobs/report/tablereads.go":                                   {"names", "guard, spec, grant, doc comment or fixture: no row read of its own"},
 	"internal/migrationmatrix/curated.go":                                  {"names", "guard, spec, grant, doc comment or fixture: no row read of its own"},

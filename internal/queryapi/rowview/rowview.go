@@ -101,7 +101,7 @@ const teamSourceAlias = "team_view"
 // TeamSource is the FROM source of a reader that answers for one team: one row
 // per key without row_view, (org_id, day, provider, work_scope_id, team_id[,
 // status]), and only live rows. Of the newest row of each view of a key (the
-// table read with FINAL) it picks, in one LIMIT 1 BY, a live row first, then the
+// first row of each full key by order DESC) it picks, in one LIMIT 1 BY, a live row first, then the
 // team row, then the org row, then the legacy row (TeamPick). A day that no
 // writer of team rows computed reads its org rows (or its legacy rows), as the
 // org form does; a retracted team row (a row of zeros) never hides a live org
@@ -114,16 +114,22 @@ const teamSourceAlias = "team_view"
 // in where are qualified by the table name or unqualified. The source has no
 // alias of its own: the reader gives it one.
 //
-// It panics for a table that holds no team rows and for an empty filter: a
-// reader of one team must not read every organization.
-func TeamSource(table, where string) string {
+// order is the reader's version order (an expression, the largest wins), as for
+// servedNewest; it is never "": the table is not read FINAL, so of two versions
+// that share computed_at the order picks one, not the merge order (CHAOS-14407).
+//
+// It panics for a table that holds no team rows, for an empty filter (a reader
+// of one team must not read every organization) and for an empty order.
+func TeamSource(table, where, order string) string {
 	declared := mustTeamTable(table)
 	if strings.TrimSpace(where) == "" {
 		panic("rowview: TeamSource of " + table + " needs a filter")
 	}
-	newest := fmt.Sprintf("(SELECT * FROM %[1]s FINAL WHERE (%[2]s)) AS %[1]s", table, where)
+	if strings.TrimSpace(order) == "" {
+		panic("rowview: TeamSource of " + table + " needs a version order")
+	}
 	return fmt.Sprintf("(\n    SELECT * FROM %s AS %s\n    WHERE %s\n)",
-		TeamPick(table, newest), teamSourceAlias, declared.LiveRow(teamSourceAlias+"."))
+		TeamPick(table, orderedNewest(declared, "("+where+")", order)), teamSourceAlias, declared.LiveRow(teamSourceAlias+"."))
 }
 
 // TeamPick is the pick of TeamSource without its live-row rule after the pick,
@@ -187,12 +193,19 @@ func servedNewest(declared teamkeytables.Table, where, order string) string {
 	if order == "" {
 		return fmt.Sprintf("(SELECT * FROM %[1]s FINAL WHERE %[1]s.org_id = {org_id:String} AND (%[2]s)) AS %[1]s", table, where)
 	}
+	return orderedNewest(declared, table+".org_id = {org_id:String} AND ("+where+")", order)
+}
+
+// orderedNewest is the first row of each full key of the table (row_view
+// included) by order DESC among the rows that pass filter, aliased as the table.
+func orderedNewest(declared teamkeytables.Table, filter, order string) string {
+	table := declared.Table
 	key := []string{table + ".org_id", table + "." + declared.DayColumn}
 	for _, column := range declared.Keys {
 		key = append(key, table+"."+column.Name)
 	}
-	return fmt.Sprintf("(SELECT * FROM %[1]s WHERE %[1]s.org_id = {org_id:String} AND (%[2]s) ORDER BY %[3]s DESC LIMIT 1 BY %[4]s) AS %[1]s",
-		table, where, order, strings.Join(key, ", "))
+	return fmt.Sprintf("(SELECT * FROM %[1]s WHERE %[2]s ORDER BY %[3]s DESC LIMIT 1 BY %[4]s) AS %[1]s",
+		table, filter, order, strings.Join(key, ", "))
 }
 
 // WorkItemMetricsNewestOrder is the version order of a work_item_metrics_daily key, for the `order` argument of

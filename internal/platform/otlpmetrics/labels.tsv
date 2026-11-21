@@ -270,6 +270,7 @@ dev_health_provider_budget_denied_total	provider	code: internal/providerfoundati
 dev_health_provider_budget_release_errors_total	provider	code: internal/providerfoundation/budget.go
 dev_health_provider_budget_underestimate_total	dataset,dimension,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_chunk_continuation_total	dataset,provider	code: internal/providerfoundation/budget.go
+dev_health_provider_gitlab_tests_window_start_fallback_total	dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_incident_entitlement_refused_total	dataset,provider,seam	code: internal/providerfoundation/budget.go
 dev_health_provider_inventory_page_cap_total	dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_open_run_skipped_total	dataset,provider,reason	code: internal/providerfoundation/budget.go

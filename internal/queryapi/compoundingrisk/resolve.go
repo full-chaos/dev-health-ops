@@ -405,7 +405,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 					return nil, err
 				}
 			}
-			repoRows, err := latestRows(ctx, client, orgID, d, scopeRepo, fallbackRepoIDs)
+			repoRows, err := latestRowsLimit(ctx, client, orgID, d, scopeRepo, fallbackRepoIDs, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -438,6 +438,9 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 				labels[activeteams.UnassignedID] = unassignedTeamLabel
 			}
 			points = teamPoints(d, repoRows, teamsOfRepo, labels, teamIDs, now)
+			if len(points) > maxRows {
+				points = points[:maxRows]
+			}
 		}
 	}
 

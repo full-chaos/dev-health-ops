@@ -162,3 +162,26 @@ func TestRealClickHouse_StoredTeamRowPathUnchangedBoundary(t *testing.T) {
 		t.Fatalf("stored-row path changed: rows %#v trend %v", got.Rows, tr)
 	}
 }
+
+// More repositories than maxRows on the selected day: the fallback aggregates
+// every repository before any cap, so rows and trend cover the same set.
+func TestRealClickHouse_TeamBreakoutNoTeamMoreRepositoriesThanRowCap(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	exec(t, ctx, conn, `INSERT INTO teams (id, name, org_id, updated_at) VALUES ('t1', 'Platform', 'org-1', now64(6))`)
+	exec(t, ctx, conn, `INSERT INTO repos (id, repo, org_id, created_at, last_synced)
+		SELECT toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(number), 12, '0'))), concat('acme/r', toString(number)), 'org-1', now64(3), now64(3) FROM numbers(%d)`, maxRows+1)
+	exec(t, ctx, conn, `INSERT INTO compounding_risk_daily (org_id, day, scope, scope_id, compounding_risk, severity, w_churn, w_complexity, w_ownership, w_review, threshold_elevated, threshold_high)
+		SELECT 'org-1', toDate('%s'), 'repo', concat('00000000-0000-4000-8000-', leftPad(toString(number), 12, '0')), if(number = %d, 0.0, 1.0), 'low', 0.25, 0.25, 0.25, 0.25, 0.4, 0.7 FROM numbers(%d)`, day(now, 1).Format("2006-01-02"), maxRows, maxRows+1)
+	got, err := Resolve(ctx, client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TrendDays: 30}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Rows) != 1 || got.Rows[0].ScopeID != "unassigned" || got.Rows[0].Score == nil || len(got.Trend) != 1 || got.Trend[0].Score == nil {
+		t.Fatalf("rows %#v trend %#v, want one unassigned row and one trend day", got.Rows, got.Trend)
+	}
+	rowMean, trend := *got.Rows[0].Score, *got.Trend[0].Score
+	if rowMean-trend > 1e-9 || trend-rowMean > 1e-9 {
+		t.Errorf("rows cover other repositories than the trend: rows %v, trend %v", rowMean, trend)
+	}
+}

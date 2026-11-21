@@ -10,6 +10,7 @@ import (
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -34,9 +35,12 @@ func TestCapacityNewestRowsCollapsesByTheRequiredKeyAndVersion(t *testing.T) {
 		t.Errorf("LIMIT 1 BY columns = %v, want %v", got, capacityRequiredCollapseKey)
 	}
 
-	order := strings.Index(query, "ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC")
+	order := strings.Index(query, "ORDER BY "+rowview.WorkItemMetricsNewestOrder+" DESC")
 	if order < 0 {
-		t.Errorf("newest row must be chosen by computed_at DESC with a content tie-break: %q", query)
+		t.Errorf("newest row must be chosen by the served version order: %q", query)
+	}
+	if strings.Contains(query, "tuple(*)") {
+		t.Errorf("the pick must not hash the whole row: %q", query)
 	}
 	where := strings.Index(query, "WHERE org_id = {org_id:String}")
 	limit := strings.Index(query, "LIMIT 1 BY")

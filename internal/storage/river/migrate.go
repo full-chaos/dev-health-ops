@@ -1079,6 +1079,10 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		// nor larger than the manifest.
 		"DO $$ BEGIN IF to_regclass('public.sync_run_reference_discoveries') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_run_reference_discoveries TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_run_post_dispatches') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.sync_run_post_dispatches TO " + domainRole + "; END IF; END $$",
+		// The post_sync fan-out's outcome stamp: UPDATE on the two outcome columns only (domainPosture's ColumnScoped), so
+		// the rest of the ledger row stays insert-once. Guarded on the column through to_regclass, so a database without the
+		// table or without pgmigrate 0166 skips it (a ::regclass cast would raise on a missing table).
+		"DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('public.sync_run_post_dispatches') AND attname = 'post_sync_committed_at' AND NOT attisdropped) THEN GRANT UPDATE (post_sync_outcome, post_sync_committed_at) ON TABLE public.sync_run_post_dispatches TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_compute_checkpoints') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.sync_compute_checkpoints TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.job_runs') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.job_runs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_run_unit_chunk_checkpoints') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_run_unit_chunk_checkpoints TO " + domainRole + "; END IF; END $$",

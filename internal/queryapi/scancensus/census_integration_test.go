@@ -891,7 +891,7 @@ internal/queryapi/cognitiveload/cognitiveload.go|fetchOwnershipCandidates|*strin
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchFileTimeseries|*time.Time,*string,*string,**uint32,**float64,**uint32,**uint32|69bcb13af3df|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchRepoTimeseries|*time.Time,*string,**uint64,**uint64,**float64,**uint64,**uint64|2d500256c88b|spliced-select-list
 internal/queryapi/compoundingrisk/read.go|latestDay|**time.Time|818fa20627a4|not-describable
-internal/queryapi/compoundingrisk/read.go|latestRows|*string,**float64,*string,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,*float64,*float64,*float64,*float64,*float64,*float64,*time.Time|9af7066815e3|not-describable
+internal/queryapi/compoundingrisk/read.go|latestRowsLimit|*string,**float64,*string,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,*float64,*float64,*float64,*float64,*float64,*float64,*time.Time|484e5d4507e3|not-describable
 internal/queryapi/compoundingrisk/read.go|repoTrend|*time.Time,**float64|e90c541be45a|not-describable
 internal/queryapi/datahealth/connectors.go|Connectors|*string,*string,*[]byte,**time.Time,**bool,**string,*[]byte,**time.Time,**int32,**time.Time,**time.Time,*[]byte,**string|d9838116a756|not-describable
 internal/queryapi/datahealth/coverage.go|MetricLineage|**time.Time,*uint64|bb9897d55705|not-describable

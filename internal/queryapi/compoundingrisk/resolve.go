@@ -304,6 +304,13 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 	if filter != nil {
 		breakout, trendDays = filter.Breakout, filter.TrendDays
 		repoIDs, teamIDs = filter.RepoIds, filter.TeamIds
+		// An empty teamIds means the same as an absent one: every team. Without
+		// this an empty list reaches idList.excludesEverything and skips the
+		// stored team rows. repoIds is not changed: an empty repoIds excludes
+		// everything.
+		if len(teamIDs) == 0 {
+			teamIDs = nil
+		}
 		if filter.Day != nil {
 			d := filter.Day.Time()
 			wantDay = &d

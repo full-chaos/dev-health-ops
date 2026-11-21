@@ -638,10 +638,6 @@ WHERE id = $1::uuid`,
 			armAt := service.nowUTC()
 			scheduleRedispatch(ctx, service.pool, service.logger, run.id,
 				dueNowRearmAt(nextDeferredAt, armAt), armAt)
-		// A concurrency-capped unit is due now too: the earlier of the countdown and the deferral (dueNowRearmAt).
-		case decision.concurrencyCapped && len(decision.cappedUnitIDs) > 0:
-			armAt := service.nowUTC()
-			scheduleRedispatch(ctx, service.pool, service.logger, run.id, dueNowRearmAt(nextDeferredAt, armAt), armAt)
 		case nextDeferredAt != nil:
 			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nextDeferredAt, service.nowUTC())
 		case len(cappedIDs) > 0:

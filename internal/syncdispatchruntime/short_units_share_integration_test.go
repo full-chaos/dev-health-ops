@@ -467,15 +467,23 @@ func (cell *shortShareDenial) want(name, l1Status string) {
 	}
 }
 
-// C1c (a), the re-arm order: a pass that queued l0, deferred s0 and capped l1 arms the EARLIER of the countdown (2 s)
-// and the deferral (5 s), so the first pass inside the deferral window admits l1.
-func TestShortUnitsShareCappedChunkedUnitAtTheCountdownInsideTheDeferral(t *testing.T) {
+// C1c (a), the re-arm is the one of main: a pass that queued l0, deferred s0 and capped l1 arms s0's available_at (the
+// deferral, 5 s), not the earlier countdown (2 s). The pass there finds s0 due again, so the slot is kept for it.
+func TestShortUnitsShareCappedPassArmsTheDeferralAsOnMain(t *testing.T) {
 	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		cell := newShortShareDenial(t, ctx, pool, "2", "5", "0")
 		cell.pass("pass 1")
 		cell.want("pass 1 (s0 kept the slot, the budget step denied it)", syncRunUnitStatusPlanned)
-		cell.pass("pass 2 (the run's own armed pass)")
-		cell.want("pass 2 (first pass inside the deferral window)", syncRunUnitStatusDispatching)
+		var armed, s0At time.Time
+		if err := pool.QueryRow(ctx, `SELECT (SELECT available_at FROM sync_dispatch_outbox WHERE sync_run_id = $1 AND kind = 'dispatch_sync_run' AND status = 'pending'),
+       (SELECT available_at FROM sync_run_units WHERE id = $2::uuid)`, discoveryTestRun, denialS0).Scan(&armed, &s0At); err != nil {
+			t.Fatal(err)
+		}
+		if !armed.Equal(s0At) {
+			t.Fatalf("pass 1 armed %s, want s0's available_at %s", armed.UTC().Format(time.RFC3339Nano), s0At.UTC().Format(time.RFC3339Nano))
+		}
+		cell.pass("pass 2 (the run's own armed pass, at s0's available_at)")
+		cell.want("pass 2 (s0 due again and denied again)", syncRunUnitStatusPlanned)
 	})
 }
 

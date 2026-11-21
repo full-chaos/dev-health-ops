@@ -125,8 +125,40 @@ func keySplits(t *testing.T, claim Claim, emission ChunkRouteEmission) (mainChun
 	return mainChunks, headChunks
 }
 
-// The position sweep: one repeated ci_job_runs key at sorted (i, i+1) of n rows, at every position. The head stores exactly where MAIN
-// stores (both ways), with MAIN's error where MAIN refuses and MAIN's chunk count where MAIN stores.
+// sweepPositions is every pair start i (0..n-2) of n rows; under -race it is the boundary set: i at k*100-1, k*100, k*100+1 and
+// k*125-1, k*125, k*125+1 (the 250 and 500 multiples are among them), and the two ends.
+func sweepPositions(n int, race bool) []int {
+	positions := []int{}
+	if !race {
+		for i := 0; i+1 < n; i++ {
+			positions = append(positions, i)
+		}
+		return positions
+	}
+	seen := map[int]bool{}
+	add := func(i int) {
+		if i >= 0 && i+1 < n && !seen[i] {
+			seen[i] = true
+			positions = append(positions, i)
+		}
+	}
+	for _, step := range []int{100, 125} {
+		for k := 1; k*step <= n; k++ {
+			add(k*step - 1)
+			add(k * step)
+			add(k*step + 1)
+		}
+	}
+	for _, i := range []int{0, 1, n - 3, n - 2} {
+		add(i)
+	}
+	sort.Ints(positions)
+	return positions
+}
+
+// The position sweep: one repeated ci_job_runs key at sorted (i, i+1) of n rows. The head stores exactly where MAIN stores (both ways),
+// with MAIN's error where MAIN refuses and MAIN's chunk count where MAIN stores. Every position in the plain run; the boundary set
+// under -race (sweepPositions).
 func TestChunkStampRepeatedKeySweepEqualsMain(t *testing.T) {
 	t.Parallel()
 	claim := nativeTestClaim("github", "cicd")
@@ -134,11 +166,17 @@ func TestChunkStampRepeatedKeySweepEqualsMain(t *testing.T) {
 		const groups = 8
 		var mu sync.Mutex
 		mainStored, headStored := 0, 0
+		positions := sweepPositions(n, raceEnabled)
+		mode := "every position"
+		if raceEnabled {
+			mode = "race build: boundary positions"
+		}
 		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
 			for group := range groups {
 				t.Run(fmt.Sprintf("group=%d", group), func(t *testing.T) {
 					t.Parallel()
-					for i := group; i+1 < n; i += groups {
+					for index := group; index < len(positions); index += groups {
+						i := positions[index]
 						emission := keyEmission(t, claim, map[string]int{"ci_job_runs": n - 1}, map[string][]int{"ci_job_runs": {i}})
 						mainChunks, headChunks := keySplits(t, claim, emission)
 						mainOut, headOut := keyOutcome(t, claim, mainChunks), keyOutcome(t, claim, headChunks)
@@ -157,7 +195,7 @@ func TestChunkStampRepeatedKeySweepEqualsMain(t *testing.T) {
 				})
 			}
 		})
-		t.Logf("n=%d: stored at %d positions on MAIN and %d on the head, of %d", n, mainStored, headStored, n-1)
+		t.Logf("n=%d (%s, %d of %d positions): stored at %d positions on MAIN and %d on the head", n, mode, len(positions), n-1, mainStored, headStored)
 	}
 }
 

@@ -286,14 +286,14 @@ func (g *chunkOpGenerator) next() chunkOperation {
 		}
 		chunk := g.chunk(o, total, complete, g.cursor(), 0, complete || g.rng.Intn(8) == 0)
 		return chunkOperation{fmt.Sprintf("prepare in order %d complete=%v", o, complete), o + 1, func(ctx context.Context, s ChunkedEffectStore, c Claim, now time.Time) (any, error) {
-			return s.PrepareChunk(ctx, c, chunk, now)
+			return s.PrepareChunk(ctx, c, chunk, now, now)
 		}}
 	case roll < 30: // ahead of the checkpoint, or a replay of an earlier ordinal (same or other content)
 		o := g.rng.Intn(g.sent + 3)
 		variant := g.rng.Intn(2)
 		chunk := g.chunk(o, 0, false, g.cursor(), variant, false)
 		return chunkOperation{fmt.Sprintf("prepare ordinal %d variant %d", o, variant), o + 1, func(ctx context.Context, s ChunkedEffectStore, c Claim, now time.Time) (any, error) {
-			return s.PrepareChunk(ctx, c, chunk, now)
+			return s.PrepareChunk(ctx, c, chunk, now, now)
 		}}
 	case roll < 38: // a group of sub-chunks (atomic)
 		start := g.sent
@@ -310,7 +310,7 @@ func (g *chunkOpGenerator) next() chunkOperation {
 			chunks[n-1].RouteVersion = "other-route"
 		}
 		return chunkOperation{fmt.Sprintf("prepare group %d..%d", start, start+n-1), start + n, func(ctx context.Context, s ChunkedEffectStore, c Claim, now time.Time) (any, error) {
-			return s.PrepareChunkGroup(ctx, c, chunks, now)
+			return s.PrepareChunkGroup(ctx, c, chunks, now, now)
 		}}
 	case roll < 42: // a bad chunk
 		chunk := g.chunk(g.sent, 0, false, "", 0, false)
@@ -325,7 +325,7 @@ func (g *chunkOpGenerator) next() chunkOperation {
 			chunk.SchemaVersion = "v0"
 		}
 		return chunkOperation{"prepare invalid chunk", 0, func(ctx context.Context, s ChunkedEffectStore, c Claim, now time.Time) (any, error) {
-			return s.PrepareChunk(ctx, c, chunk, now)
+			return s.PrepareChunk(ctx, c, chunk, now, now)
 		}}
 	case roll < 50:
 		return chunkOperation{"load checkpoint", 0, func(ctx context.Context, s ChunkedEffectStore, c Claim, now time.Time) (any, error) {

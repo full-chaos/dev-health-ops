@@ -1113,11 +1113,11 @@ func (*testEffectLedger) LoadChunkCheckpoint(context.Context, providersync.Claim
 	return providersync.ChunkCheckpoint{}, providersync.ErrChunkCheckpointNotFound
 }
 
-func (*testEffectLedger) PrepareChunk(context.Context, providersync.Claim, providersync.PreparedProviderChunk, time.Time) (providersync.PreparedProviderChunk, error) {
+func (*testEffectLedger) PrepareChunk(context.Context, providersync.Claim, providersync.PreparedProviderChunk, time.Time, time.Time) (providersync.PreparedProviderChunk, error) {
 	return providersync.PreparedProviderChunk{}, providersync.ErrInvalidConfiguration
 }
 
-func (*testEffectLedger) PrepareChunkGroup(context.Context, providersync.Claim, []providersync.PreparedProviderChunk, time.Time) ([]providersync.PreparedProviderChunk, error) {
+func (*testEffectLedger) PrepareChunkGroup(context.Context, providersync.Claim, []providersync.PreparedProviderChunk, time.Time, time.Time) ([]providersync.PreparedProviderChunk, error) {
 	return nil, providersync.ErrInvalidConfiguration
 }
 

@@ -313,6 +313,8 @@ func cicdDescriptor(t *testing.T) CompleteRouteDescriptor {
 	if !ok || !descriptor.Chunked {
 		t.Fatalf("descriptor=%+v", descriptor)
 	}
+	// The coalescing cells pin group sizes against a 100-row cap (coalescing is dark; CHAOS-14411 moved the route to 500).
+	descriptor.ChunkPolicy = DefaultChunkPolicy()
 	return descriptor
 }
 

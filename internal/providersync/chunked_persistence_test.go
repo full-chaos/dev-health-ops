@@ -430,7 +430,7 @@ func (store *chunkMemoryStore) LoadChunkCheckpoint(
 }
 
 func (store *chunkMemoryStore) PrepareChunk(
-	_ context.Context, claim Claim, input PreparedProviderChunk, now time.Time,
+	_ context.Context, claim Claim, input PreparedProviderChunk, now, _ time.Time,
 ) (PreparedProviderChunk, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -480,7 +480,7 @@ func (store *chunkMemoryStore) PrepareChunk(
 // snapshots and restores its own state so a mid-group failure cannot leave a
 // partially prepared emission, exactly as the single transaction cannot.
 func (store *chunkMemoryStore) PrepareChunkGroup(
-	ctx context.Context, claim Claim, chunks []PreparedProviderChunk, now time.Time,
+	ctx context.Context, claim Claim, chunks []PreparedProviderChunk, now, leaseNow time.Time,
 ) ([]PreparedProviderChunk, error) {
 	if len(chunks) == 0 {
 		return nil, ErrInvalidConfiguration
@@ -495,7 +495,7 @@ func (store *chunkMemoryStore) PrepareChunkGroup(
 
 	prepared := make([]PreparedProviderChunk, 0, len(chunks))
 	for _, chunk := range chunks {
-		out, err := store.PrepareChunk(ctx, claim, chunk, now)
+		out, err := store.PrepareChunk(ctx, claim, chunk, now, leaseNow)
 		if err != nil {
 			store.mu.Lock()
 			store.checkpoint, store.chunks = snapshotCheckpoint, snapshotChunks

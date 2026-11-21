@@ -149,20 +149,18 @@ func emptyEffectsEmission(t *testing.T, run string, cases int, withSuites bool) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	resetEmissionChunks(chunks, ChunkRouteEmission{CursorBefore: "b-" + run, CursorAfter: "a-" + run})
-	if err := sizeEmissionChunks(chunks); err != nil {
-		t.Fatal(err)
-	}
 	for index := range chunks {
-		chunks[index].Ordinal = index
-		chunks[index].ManifestDigest = preparedChunkDigest(chunks[index])
+		chunks[index], err = stampEmissionChunk(chunks[index].Effects, index, len(chunks), chunkStamps{CursorBefore: "b-" + run, CursorAfter: "a-" + run})
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	return chunks
 }
 
 func (env emptyEffectsEnv) prepare(t *testing.T, ctx context.Context, chunks []PreparedProviderChunk) []PreparedProviderChunk {
 	t.Helper()
-	prepared, err := env.repository.PrepareChunkGroup(ctx, env.claim, chunks, time.Now().UTC())
+	prepared, err := env.repository.PrepareChunkGroup(ctx, env.claim, chunks, time.Now().UTC(), time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -916,6 +916,14 @@ func TestGitHubFilesPreCheckChunkIsTheChunkTheExecutorStores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The pre-check stamps the widest ordinal (CHAOS-14411 F3); at the stored ordinal it is the stored chunk.
+	if mine.Ordinal != gitHubFilesWidestOrdinal {
+		t.Fatalf("pre-check ordinal %d, want %d", mine.Ordinal, gitHubFilesWidestOrdinal)
+	}
+	mine, err = stampEmissionChunk(mine.Effects, 0, 1, chunkStamps{CursorBefore: mine.CursorBefore, CursorAfter: mine.CursorAfter, OrdinalBase: stored.Ordinal})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if stored.PayloadBytes != mine.PayloadBytes || stored.CursorBefore != mine.CursorBefore ||
 		stored.CursorAfter != mine.CursorAfter || len(stored.Effects) != len(mine.Effects) {
 		t.Fatalf("stored chunk differs from the pre-checked chunk: payload %d/%d cursors %q,%q / %q,%q effects %d/%d", stored.PayloadBytes, mine.PayloadBytes, stored.CursorBefore, stored.CursorAfter, mine.CursorBefore, mine.CursorAfter, len(stored.Effects), len(mine.Effects))

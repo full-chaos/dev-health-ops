@@ -62,7 +62,7 @@ func TestChunkEmptyEffectsAreCommittedByTheMarkInProcess(t *testing.T) {
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
 	store := NewInProcessChunkLedger(claim)
-	prepared, err := store.PrepareChunk(ctx, claim, emptyEffectsChunk(t, 0, `{"org_id":"org-acme","run_id":"1","job_id":"j"}`), now)
+	prepared, err := store.PrepareChunk(ctx, claim, emptyEffectsChunk(t, 0, `{"org_id":"org-acme","run_id":"1","job_id":"j"}`), now, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestChunkEmptyEffectsMarkRefusesAnEntryThatIsNotProvablyEmpty(t *testing.T)
 		t.Run(testCase.name, func(t *testing.T) {
 			claim := nativeTestClaim("github", "tests")
 			store := NewInProcessChunkLedger(claim)
-			prepared, err := store.PrepareChunk(ctx, claim, testCase.chunk(t), now)
+			prepared, err := store.PrepareChunk(ctx, claim, testCase.chunk(t), now, now)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -170,7 +170,7 @@ func TestChunkEmptyEffectsStayOnTheOldPathWithoutBothOptIns(t *testing.T) {
 	claim := nativeTestClaim("github", "tests")
 
 	inProcess := NewInProcessChunkLedger(claim)
-	prepared, err := inProcess.PrepareChunk(ctx, claim, emptyEffectsChunk(t, 0, row), now)
+	prepared, err := inProcess.PrepareChunk(ctx, claim, emptyEffectsChunk(t, 0, row), now, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestChunkEmptyEffectsStayOnTheOldPathWithoutBothOptIns(t *testing.T) {
 	}
 
 	memory := newChunkMemoryStore()
-	prepared, err = memory.PrepareChunk(ctx, claim, emptyEffectsChunk(t, 0, row), now)
+	prepared, err = memory.PrepareChunk(ctx, claim, emptyEffectsChunk(t, 0, row), now, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestChunkEmptyEffectsMarkIsFencedInProcess(t *testing.T) {
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	claim := nativeTestClaim("github", "tests")
 	store := NewInProcessChunkLedger(claim)
-	prepared, err := store.PrepareChunk(ctx, claim, emptyEffectsChunk(t, 0), now)
+	prepared, err := store.PrepareChunk(ctx, claim, emptyEffectsChunk(t, 0), now, now)
 	if err != nil {
 		t.Fatal(err)
 	}

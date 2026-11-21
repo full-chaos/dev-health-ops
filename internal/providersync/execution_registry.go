@@ -524,7 +524,7 @@ func Descriptor(
 	if (provider == "github" || provider == "gitlab") &&
 		(dataset == "cicd" || dataset == "tests") {
 		descriptor.Chunked = true
-		descriptor.ChunkPolicy = DefaultChunkPolicy()
+		descriptor.ChunkPolicy = TestOpsRouteChunkPolicy()
 	}
 	return descriptor, true
 }

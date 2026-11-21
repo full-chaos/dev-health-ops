@@ -167,7 +167,7 @@ func TestPreparedChunkSurvivesTheStoreRoundTripAtTheCrossings(t *testing.T) {
 		claim := nativeTestClaim("github", "cicd")
 		store := NewInProcessChunkLedger(claim)
 		chunk := chunkEndingAt(t, target)
-		prepared, err := store.PrepareChunk(ctx, claim, chunk, now)
+		prepared, err := store.PrepareChunk(ctx, claim, chunk, now, now)
 		if err != nil {
 			t.Fatalf("length %d: prepare: %v", target, err)
 		}

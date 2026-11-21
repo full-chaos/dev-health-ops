@@ -120,6 +120,7 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	// And the re-seek state at its widest plus the deep range's record count, which stays in every cursor after the deep
 	// range (CHAOS-14385; one more fewer exclusion sample record pays for them).
 	cursor.ReseekPages, cursor.PagesEntered, cursor.RecordCredit = githubTestsWidestReseekPages, githubTestsWidestReseekPages, githubTestsWidestRecordCredit
+	cursor.DeletionProven = 1
 	cursor.LateRecords = githubTestsMaxWalkRecords
 
 	encoded, err := encodeGitHubTestsChunkCursor(cursor)

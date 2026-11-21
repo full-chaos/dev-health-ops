@@ -262,6 +262,10 @@ type githubTestsChunkCursor struct {
 	// part, runs read again, and the record bounds do not charge them. It stays for the whole walk. A credit earned in the deep
 	// range is also taken off LateRecords, so the window records less this credit leave the deep range out as before.
 	RecordCredit int `json:"rc,omitempty"`
+	// DeletionProven is 1 once a resume of this walk proved a run deleted before its anchor (githubTestsResumeDeleted), with
+	// or without credit: a deep stop at the record bound then holds the watermark (githubTestsHoldDeepStopAfterDeletion).
+	// It stays for the whole walk; an older binary ignores it and behaves as main (CHAOS-14434).
+	DeletionProven int `json:"d,omitempty"`
 }
 
 // markGitHubTestsSkippedArtifactCauseOverflow returns a NEW map with cause
@@ -623,6 +627,19 @@ func recordGitHubTestsWalkBound(
 	cursor = markGitHubTestsInventoryTruncated(cursor, client, claim, component)
 	logGitHubTestsWalkBound(cursor, claim, component, bound)
 	return cursor
+}
+
+// githubTestsHoldDeepStopAfterDeletion: a deep listing stopped at the record bound in a walk that proved a deletion
+// (DeletionProven) may stop before a survivor the deletion credit did not cover (CHAOS-14434). Its advancing stop then
+// also records a window-blocking truncation (run_inventory for the deep runs, artifact_inventory for the deep reports): the
+// watermark holds, and the next walk reads the deep range again. Re-seek credit alone (an inserted run) holds nothing.
+func githubTestsHoldDeepStopAfterDeletion(
+	cursor githubTestsChunkCursor, client *providerfoundation.HTTPClient, claim Claim, component string,
+) githubTestsChunkCursor {
+	if cursor.DeletionProven == 0 {
+		return cursor
+	}
+	return markGitHubTestsInventoryTruncated(cursor, client, claim, component)
 }
 
 // githubTestsOpenRunsWalkBoundComponent names the open phase in the walk-bound WARN line only; it is not an inventory component.
@@ -1098,14 +1115,32 @@ func githubTestsResumeStart(
 //   - not on the page, whose first run is created before the anchor's second (anchorSecond, the range's oldest listed
 //     second): the anchor and every run up to it moved to an earlier page, so at least index runs are gone;
 //   - not on the page otherwise (moved later, or deleted or reordered inside its second): 0.
+//
+// The contract does not order runs inside one created second, so a found anchor that shares its second with another run
+// of the page proves nothing: 0.
 func githubTestsDeletedBeforeAnchor(items []json.RawMessage, index int, anchor, anchorSecond string) int {
 	if anchor == "" || index < 1 || len(items) == 0 {
 		return 0
 	}
+	seconds := make([]int64, len(items))
+	found := -1
 	for position, item := range items {
-		if githubTestsListedRunID(item) == anchor {
-			return max(0, index-1-position)
+		if run, err := decodeGitHubWorkflowRun(item); err == nil {
+			if created := parseGitHubWorkflowTime(run.CreatedAt); created != nil {
+				seconds[position] = created.UTC().Unix()
+			}
 		}
+		if found < 0 && githubTestsListedRunID(item) == anchor {
+			found = position
+		}
+	}
+	if found >= 0 {
+		for position, second := range seconds {
+			if position != found && second == seconds[found] {
+				return 0
+			}
+		}
+		return max(0, index-1-found)
 	}
 	second, ok := githubTestsCutSecond(anchorSecond)
 	if !ok {
@@ -1122,15 +1157,20 @@ func githubTestsDeletedBeforeAnchor(items []json.RawMessage, index int, anchor, 
 }
 
 // githubTestsResumeDeleted is githubTestsDeletedBeforeAnchor for the first page of a resume that seeks again: inside a
-// page on the page itself, at a page end on the page before it (pageEnd).
+// page on the page itself, at a page end on the page before it (pageEnd). A position is only proof on full pages: the
+// range's runs listed must be whole pages of per_page up to the stored index, and the re-fetched page must be full, else a
+// page that GitHub packed differently between two attempts moves the anchor with nothing deleted: 0.
 func githubTestsResumeDeleted(cursor githubTestsChunkCursor, page providerfoundation.PageVisit, pageEnd githubTestsPageEnd) int {
 	if cursor.NextURL != page.CursorBefore {
 		return 0
 	}
 	if cursor.Index > 0 {
+		if cursor.RangeItems != (cursor.PagesEntered-1)*nativePerPage+cursor.Index || len(page.Items) != nativePerPage {
+			return 0
+		}
 		return githubTestsDeletedBeforeAnchor(page.Items, cursor.Index, cursor.AnchorID, cursor.RangeOldest)
 	}
-	if !pageEnd.known {
+	if !pageEnd.known || cursor.RangeItems != cursor.PagesEntered*nativePerPage || len(pageEnd.items) != nativePerPage {
 		return 0
 	}
 	return githubTestsDeletedBeforeAnchor(pageEnd.items, len(pageEnd.items), cursor.AnchorID, cursor.RangeOldest)
@@ -1230,7 +1270,7 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 		cursor.OpenSkipEvent != nil && (cursor.OpenSkipEvent.RunID == "" || cursor.OpenSkipEvent.Reason == "") ||
 		cursor.Index < 0 || cursor.NextURL == "" && cursor.Index != 0 ||
 		cursor.AnchorID != "" && !githubTestsCutRunDigits(cursor.AnchorID, 20) ||
-		cursor.RunPages < 0 || cursor.ArtifactPages < 0 || cursor.ReseekPages < 0 || cursor.PagesEntered < 0 || cursor.RecordCredit < 0 || cursor.Relist < 0 || cursor.Relist > githubTestsRelistStoppedSaturated ||
+		cursor.RunPages < 0 || cursor.ArtifactPages < 0 || cursor.ReseekPages < 0 || cursor.PagesEntered < 0 || cursor.RecordCredit < 0 || cursor.DeletionProven < 0 || cursor.DeletionProven > 1 || cursor.Relist < 0 || cursor.Relist > githubTestsRelistStoppedSaturated ||
 		// The counter pair is either both known or both unknown, never split:
 		// a cursor carrying exactly one is corrupt, not a legacy shape (a
 		// legacy cursor predates the field entirely, so it is missing BOTH).
@@ -1700,7 +1740,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	// also comes off LateRecords, as creditRecords does (CHAOS-14434).
 	deletionCeiling := maxWalkRecords / 20
 	creditDeletion := func(deleted int, phase string) {
-		if deleted <= 0 || cursor.Pipelines <= 0 {
+		if deleted <= 0 {
+			return
+		}
+		cursor.DeletionProven = 1
+		if cursor.Pipelines <= 0 {
 			return
 		}
 		records := cursor.Pipelines + cursor.Jobs + cursor.Acceptance
@@ -1759,6 +1803,43 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			creditDeletion(githubTestsResumeDeleted(cursor, visit, pageEnd), phase)
 		}
 		return action == githubTestsResumeReseek, nil
+	}
+	// creditAtBound checks the anchor of a resume that starts at the record bound, before the bound stop: the stop would
+	// otherwise keep the charge of a run deleted before the anchor. A proven deletion that earns credit is credited and the
+	// listing is sought again (true); a proven deletion without credit (no population, or the ceiling spent) only marks the
+	// walk (DeletionProven) and stops at the bound; anything else stops at the bound as before (false). Only the
+	// invocation's first listing call resumes.
+	creditAtBound := func(phase string) (bool, error) {
+		if !firstPage || cursor.NextURL == "" || cursor.AnchorID == "" {
+			return false, nil
+		}
+		defer func() { firstPage = false }()
+		page := providerfoundation.PageVisit{CursorBefore: cursor.NextURL}
+		var pageEnd githubTestsPageEnd
+		if cursor.Index > 0 {
+			collection, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
+				Path: root + "/actions/runs", Route: githubRunsRoute, DataKey: "workflow_runs", MaxPages: 1, InitialURL: cursor.NextURL,
+			})
+			cursor.Requests = invocationBaseRequests + requests
+			if err != nil {
+				return false, err
+			}
+			cursor.Pages += collection.Pages
+			page.Items = collection.Items
+		} else {
+			end, err := resumePageEnd(page)
+			if err != nil {
+				return false, err
+			}
+			pageEnd = end
+		}
+		credit := cursor.RecordCredit
+		creditDeletion(githubTestsResumeDeleted(cursor, page, pageEnd), phase)
+		if cursor.RecordCredit == credit {
+			return false, nil
+		}
+		githubTestsResumeStart(cursor, page, true, pageEnd, client, claim, phase)
+		return true, nil
 	}
 	// coalesceHeld: the last emission was coalescable, so the executor may still hold it.
 	coalesceHeld := false
@@ -2153,8 +2234,19 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	}
 
 	for cursor.Phase == githubTestsRunsPhase {
+		if walkBoundHit() {
+			credited, creditErr := creditAtBound(githubTestsRunsPhase)
+			if creditErr != nil {
+				return creditErr
+			}
+			if credited {
+				cursor = reseek(cursor)
+				continue
+			}
+		}
 		if walkBoundHit() && cursor.LateRuns {
 			logGitHubTestsWalkBound(cursor, claim, githubTestsLateRerunRunsComponent, maxWalkRecords)
+			cursor = githubTestsHoldDeepStopAfterDeletion(cursor, client, claim, githubTestsRunInventoryComponent)
 			cursor = recordGitHubTestsLateRerunRunsStop(cursor, client, claim, githubTestsPageBudgetCause, cursor.LateRunPages)
 			cursor = nextRunsListing(cursor)
 			cursor.NextURL, cursor.Index = "", 0
@@ -2195,6 +2287,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				}
 				if errors.Is(visitErr, errGitHubTestsWalkBound) {
 					logGitHubTestsWalkBound(cursor, claim, githubTestsLateRerunRunsComponent, maxWalkRecords)
+					cursor = githubTestsHoldDeepStopAfterDeletion(cursor, client, claim, githubTestsRunInventoryComponent)
 					visitErr, exhausted = nil, true
 				}
 				if visitErr != nil {
@@ -2439,6 +2532,17 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		)
 	}
 	for cursor.Phase == githubTestsArtifactsPhase {
+		if windowBoundHit() {
+			credited, creditErr := creditAtBound(githubTestsArtifactsPhase)
+			if creditErr != nil {
+				return creditErr
+			}
+			if credited {
+				cursor.ArchivesSeen, cursor.ArchivesUnreadable = nil, nil
+				cursor = reseek(cursor)
+				continue
+			}
+		}
 		if windowBoundHit() {
 			cursor = recordGitHubTestsArtifactsWalkBound(cursor, client, claim, maxWalkRecords)
 			break

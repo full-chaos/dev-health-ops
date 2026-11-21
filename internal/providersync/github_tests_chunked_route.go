@@ -1628,6 +1628,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	counted := *client
 	var rateObserved githubTestsRateObserver
 	counted.Doer = githubTestsChunkCountingDoer{delegate: client.Doer, attempts: &requests, observed: &rateObserved}
+	// The listing replay (CHAOS-14435) sends through the same client (gate, lease, retry, ledger, rate observer) but counts
+	// its attempts apart: no serialized counter (Requests, Pages) holds a replay request.
+	replayRequests := 0
+	replayCounted := *client
+	replayCounted.Doer = githubTestsChunkCountingDoer{delegate: client.Doer, attempts: &replayRequests, observed: &rateObserved}
 	client = &counted
 	emitFinalMetadata := func(cursor githubTestsChunkCursor) error {
 		cursor.Phase = "done"
@@ -1888,6 +1893,65 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		budget      int
 	}
 	replays := map[string]*listingReplay{}
+	// listedRuns: the ids of the runs the walk listed in this invocation, by created second, for the active listing (its
+	// active range's oldest second and the range end only). With the cut keys of those seconds they are what the walk is
+	// known to have listed of its own second, which the replay's frontier is compared with by id.
+	listedRuns, listedListing := map[int64]map[string]bool{}, ""
+	noteListed := func(listing string, run gitHubWorkflowRunPayload) {
+		if listing != listedListing {
+			listedRuns, listedListing = map[int64]map[string]bool{}, listing
+		}
+		id, created := githubTestsAnchorID(run), parseGitHubWorkflowTime(run.CreatedAt)
+		if id == "" || created == nil {
+			return
+		}
+		second := created.UTC().Unix()
+		if listedRuns[second] == nil {
+			listedRuns[second] = map[string]bool{}
+		}
+		listedRuns[second][id] = true
+		oldest, _ := githubTestsCutSecond(cursor.RangeOldest)
+		hi, _ := githubTestsCutSecond(cursor.RangeHi)
+		for kept := range listedRuns {
+			if kept != second && kept != oldest && kept != hi {
+				delete(listedRuns, kept)
+			}
+		}
+	}
+	knownListed := func(listing string) func(int64) map[string]bool {
+		return func(second int64) map[string]bool {
+			known := map[string]bool{}
+			if listing == listedListing {
+				for id := range listedRuns[second] {
+					known[id] = true
+				}
+			}
+			addKeys := func(keys string) {
+				for _, key := range strings.Split(keys, ",") {
+					if key != "" && key != githubTestsCutKeysOverflow {
+						known[strings.SplitN(key, ".", 2)[0]] = true
+					}
+				}
+			}
+			if oldest, ok := githubTestsCutSecond(cursor.RangeOldest); ok && oldest == second {
+				addKeys(cursor.ActiveCutKeys)
+			}
+			if hi, ok := githubTestsCutSecond(cursor.RangeHi); ok && hi == second {
+				addKeys(cursor.CarriedCutKeys)
+			}
+			return known
+		}
+	}
+	errReplayRateFloor := errors.New("github tests listing replay under the rate floor")
+	replayHealthy := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !rateObserved.seen || rateObserved.remaining < rateObserved.floor() {
+			return errReplayRateFloor
+		}
+		return nil
+	}
 	listingBudget := func(listing string, budget int) int {
 		if replay := replays[listing]; replay != nil {
 			return max(budget, replay.budget)
@@ -1917,11 +1981,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		case replay.frontier == nil && (!rateObserved.seen || rateObserved.remaining-int64(budget) < rateObserved.floor()):
 			status = "rate_floor"
 		}
+		replayedRequests, replayedPages := 0, 0
 		if status == "" && replay.frontier == nil {
-			frontier, replayErr := githubTestsReplayListing(githubTestsListingWalk{ctx: ctx, client: client, path: root + "/actions/runs"},
-				query, interval, runsPhase, budget)
-			cursor.Requests = invocationBaseRequests + requests
-			cursor.Pages += frontier.pages
+			before := replayRequests
+			frontier, replayErr := githubTestsReplayListing(githubTestsListingWalk{ctx: ctx, client: &replayCounted, path: root + "/actions/runs"},
+				query, interval, runsPhase, budget, replayHealthy)
+			replayedRequests, replayedPages = replayRequests-before, frontier.pages
 			if replayErr != nil {
 				replay.unfinished, status = true, "replay_unfinished"
 			} else {
@@ -1929,7 +1994,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			}
 		}
 		if status == "" {
-			behind, granted = replay.frontier.grant(cursor)
+			behind, granted = replay.frontier.grant(cursor, knownListed(listing))
 			granted = min(granted, limit-counter)
 			status = "granted"
 			if granted <= 0 {
@@ -1938,11 +2003,13 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		slog.Info("provider inventory page budget stop checked by the listing replay",
 			"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", logging.ProviderText(cursor.Repo),
-			"listing", listing, "status", status, "behind", behind, "granted", granted, "pages", counter, "cap", limit)
+			"listing", listing, "status", status, "behind", behind, "granted", granted, "pages", counter, "cap", limit,
+			"replay_requests", replayedRequests, "replay_pages", replayedPages)
 		if granted <= 0 {
 			return false
 		}
-		replay.budget, replay.granted, replay.grantAnchor = counter+granted, true, cursor.AnchorID
+		// A spent grant needs a fresh, finished replay before the next one: later deletions move the frontier.
+		replay.budget, replay.granted, replay.grantAnchor, replay.frontier = counter+granted, true, cursor.AnchorID, nil
 		return true
 	}
 	extendRunsAtStop := func() bool {
@@ -2153,6 +2220,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				}
 			})
 		}
+		// The runs before the resume index were listed by an earlier invocation.
+		for _, item := range page.Items[:start] {
+			if run, decodeErr := decodeGitHubWorkflowRun(item); decodeErr == nil {
+				noteListed(githubTestsRunsListingName(cursor), run)
+			}
+		}
 		for index := start; index < len(page.Items); index++ {
 			if walkBoundHit() {
 				return errGitHubTestsWalkBound
@@ -2164,6 +2237,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			}
 			pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
 			cursor = githubTestsListRun(cursor, run, true)
+			noteListed(githubTestsRunsListingName(cursor), run)
 			cutSecond, cutKey := githubTestsCutRunKey(run)
 			wanted := githubTestsRunWanted(run, pipeline, claim)
 			if cursor.LateRuns {
@@ -2607,6 +2681,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					return errGitHubTestsReseek
 				}
 			}
+			// The runs before the resume index were listed by an earlier invocation.
+			for _, item := range page.Items[:start] {
+				if run, decodeErr := decodeGitHubWorkflowRun(item); decodeErr == nil {
+					noteListed(githubTestsArtifactsListingName(cursor), run)
+				}
+			}
 			for index := start; index < len(page.Items); index++ {
 				if windowBoundHit() {
 					return errGitHubTestsWalkBound
@@ -2618,6 +2698,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				}
 				pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
 				cursor = githubTestsListRun(cursor, run, false)
+				noteListed(githubTestsArtifactsListingName(cursor), run)
 				cutSecond, cutKey := githubTestsCutRunKey(run)
 				suites := []testSuiteResultRow(nil)
 				cases := []testCaseResultRow(nil)

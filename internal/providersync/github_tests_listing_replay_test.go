@@ -158,7 +158,7 @@ func peelReplayReplay(t *testing.T, listing deletionShiftListing, handler GitHub
 	}
 	walk := githubTestsListingWalk{ctx: context.Background(), client: client,
 		path: providerRelativePath(client, "repos", owner, repository) + "/actions/runs"}
-	frontier, err := githubTestsReplayListing(walk, query, interval, !listing.reports, budget)
+	frontier, err := githubTestsReplayListing(walk, query, interval, !listing.reports, budget, func() error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -639,8 +639,9 @@ func TestGitHubTestsPeelReplayRollbackResumesACounterPastTheBudget(t *testing.T)
 	}
 }
 
-// F5: the walk's own second. GitHub does not order runs inside a second, so it earns one page at most, inside a range,
-// when the frontier walk listed more of that second's runs than up to the walk's anchor; never a computed distance.
+// F5: the walk's own second. GitHub does not order runs inside a second, so that second is compared by run id: the runs of it
+// the frontier walk listed and the walk did not (by id) earn ceil(missing / per page) pages; never an order or a distance
+// within the second. Older seconds earn ceil(behind / per page) + 1.
 func TestGitHubTestsPeelReplayGrantAtTheWalksSecond(t *testing.T) {
 	second := time.Date(2026, 8, 14, 9, 0, 0, 0, time.UTC)
 	frontier := githubTestsFrontier{seconds: map[int64]int{}, runs: map[string]githubTestsFrontierRun{}}
@@ -652,25 +653,43 @@ func TestGitHubTestsPeelReplayGrantAtTheWalksSecond(t *testing.T) {
 	}
 	add(second.Add(time.Second), "9")
 	add(second, "5", "4", "3")
-	inRange := func(anchor string) githubTestsChunkCursor {
-		return githubTestsChunkCursor{RangeItems: 7, RangeOldest: second.Format(time.RFC3339), AnchorID: anchor}
+	inRange := githubTestsChunkCursor{RangeItems: 7, RangeOldest: second.Format(time.RFC3339), AnchorID: "4"}
+	knows := func(ids ...string) func(int64) map[string]bool {
+		return func(at int64) map[string]bool {
+			known := map[string]bool{}
+			if at == second.Unix() {
+				for _, id := range ids {
+					known[id] = true
+				}
+			}
+			return known
+		}
 	}
 	for _, cell := range []struct {
 		name          string
 		cursor        githubTestsChunkCursor
+		known         func(int64) map[string]bool
 		behind, pages int
 	}{
-		{"tie_behind_in_order", inRange("4"), 0, 1},
-		{"tie_at_the_frontier", inRange("3"), 0, 0},
-		{"tie_anchor_not_listed", inRange("77"), 0, 0},
-		{"tie_at_a_range_start", githubTestsChunkCursor{RangeHi: second.Format(time.RFC3339), AnchorID: "4"}, 0, 0},
-		{"walk_past_the_frontier", githubTestsChunkCursor{RangeItems: 7, RangeOldest: second.Add(-time.Hour).Format(time.RFC3339), AnchorID: "1"}, 0, 0},
-		{"behind_older_seconds", githubTestsChunkCursor{RangeItems: 7, RangeOldest: second.Add(2 * time.Second).Format(time.RFC3339), AnchorID: "1"}, 4, 2},
+		{"second_one_id_missing", inRange, knows("5", "4"), 1, 1},
+		{"second_same_ids_other_order", inRange, knows("3", "5", "4"), 0, 0},
+		{"second_more_ids_listed", inRange, knows("3", "4", "5", "6"), 0, 0},
+		{"second_at_a_range_start", githubTestsChunkCursor{RangeHi: second.Format(time.RFC3339)}, knows("5"), 2, 1},
+		{"walk_past_the_frontier", githubTestsChunkCursor{RangeItems: 7, RangeOldest: second.Add(-time.Hour).Format(time.RFC3339)}, knows(), 0, 0},
+		{"behind_older_seconds", githubTestsChunkCursor{RangeItems: 7, RangeOldest: second.Add(2 * time.Second).Format(time.RFC3339)}, knows(), 4, 2},
 	} {
-		behind, pages := frontier.grant(cell.cursor)
+		behind, pages := frontier.grant(cell.cursor, cell.known)
 		if behind != cell.behind || pages != cell.pages {
 			t.Errorf("%s: behind=%d pages=%d, want %d and %d", cell.name, behind, pages, cell.behind, cell.pages)
 		}
+	}
+	many := githubTestsFrontier{seconds: map[int64]int{}, runs: map[string]githubTestsFrontierRun{}}
+	for id := range 150 {
+		many.runs[fmt.Sprint(1000+id)] = githubTestsFrontierRun{second: second.Unix(), ordinal: id}
+		many.seconds[second.Unix()]++
+	}
+	if behind, pages := many.grant(inRange, knows()); behind != 150 || pages != 2 {
+		t.Errorf("a second of 150 runs none listed: behind=%d pages=%d, want 150 and 2 (one page per 100 missing ids)", behind, pages)
 	}
 }
 

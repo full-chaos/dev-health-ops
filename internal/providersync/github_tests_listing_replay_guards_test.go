@@ -200,10 +200,12 @@ func TestGitHubTestsPeelReplayBoundarySecondByRunID(t *testing.T) {
 						return false
 					}
 					if peelReplayCounter(listing, c) == pages && c.Index == 0 && !removed {
-						if shape == "anchor_deleted" {
-							resumeDeletionDelete(fake, 402)
-						}
 						removed = true
+						if shape == "anchor_deleted" {
+							// The anchor goes while the walk is paused at its budget stop: the resume sees it.
+							resumeDeletionDelete(fake, 402)
+							return true
+						}
 					}
 					return peelReplaySecondRangeAt(c) && !fake.gone[count]
 				}, func() { resumeDeletionDelete(fake, count) })
@@ -293,9 +295,11 @@ func (body replayGuardCancelOnClose) Close() error {
 
 // A replay grants only when it finished: the rate floor is checked on every replay response and the context once more
 // before the frontier is taken. A floor crossed on the 2nd or the last replay page, or a cancel after the last page's body,
-// grants nothing; the stop is the release before's: under the floor the walk records it and goes on (same survivors
-// unread as without the replay); under a cancelled context the walk's next request fails with context canceled, as the
-// release before's walk does after its stop.
+// grants nothing, and the walk records the page-budget stop as the release before does. Under the floor the walk goes on
+// to its final emission. Under a cancelled context the stop is recorded on the cursor; the walk then ends at its next
+// request with context canceled (a runs listing: the artifacts listing's first request), as the release before's walk does
+// after the same stop, or, when no request follows (a reports listing is the last listing), it emits its final batch with
+// the stop recorded.
 func TestGitHubTestsPeelReplayGrantsOnlyAfterAFinishedReplay(t *testing.T) {
 	peelReplaySkipRace(t)
 	for _, listing := range deletionShiftListings() {
@@ -387,9 +391,9 @@ func TestGitHubTestsPeelReplayGrantsOnlyAfterAFinishedReplay(t *testing.T) {
 					if charged > pages {
 						t.Errorf("page counter %d past the budget %d after an unfinished replay", charged, pages)
 					}
-					if condition == "context_last_page" {
+					if condition == "context_last_page" && !listing.reports {
 						if !errors.Is(err, context.Canceled) || final != nil {
-							t.Errorf("cancelled walk: err=%v final=%v, want context canceled and no final emission", err, final != nil)
+							t.Errorf("cancelled walk: err=%v final=%v, want context canceled at the next request and no final emission", err, final != nil)
 						}
 						return
 					}

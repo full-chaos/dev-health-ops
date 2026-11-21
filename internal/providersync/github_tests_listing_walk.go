@@ -96,10 +96,9 @@ type githubTestsFrontierRun struct {
 // grant is the pages a walk stopped at its page budget may list on top of it to reach the frontier. The frontier walk listed
 // behind runs in seconds older than the walk's (its active range's oldest second; at a range start the range end; neither:
 // the listing start): ceil(behind / per page) + 1 (the +1 covers the walk's own re-listed cut second). GitHub does not
-// order runs inside a second by contract, so the walk's own second earns the +1 alone, inside a range only, and only when
-// the frontier walk listed more runs of it than up to the walk's anchor in its own order (an anchor it did not list is
-// past it, or deleted: nothing).
-func (frontier githubTestsFrontier) grant(cursor githubTestsChunkCursor) (behind, pages int) {
+// order runs inside a second, so the walk's own second is compared by run id: the runs of it the frontier walk listed and
+// known (the ids the walk listed of that second) does not hold earn ceil(missing / per page) pages; none missing, none.
+func (frontier githubTestsFrontier) grant(cursor githubTestsChunkCursor, known func(second int64) map[string]bool) (behind, pages int) {
 	walked, dated := githubTestsCutSecond(cursor.RangeOldest)
 	if cursor.RangeItems == 0 {
 		walked, dated = githubTestsCutSecond(cursor.RangeHi)
@@ -112,17 +111,25 @@ func (frontier githubTestsFrontier) grant(cursor githubTestsChunkCursor) (behind
 	if behind > 0 {
 		return behind, (behind+nativePerPage-1)/nativePerPage + 1
 	}
-	anchor, listed := frontier.runs[cursor.AnchorID]
-	if dated && cursor.RangeItems > 0 && listed && anchor.second == walked && frontier.seconds[walked] > anchor.ordinal+1 {
-		return 0, 1
+	if !dated {
+		return 0, 0
 	}
-	return 0, 0
+	listed := known(walked)
+	missing := 0
+	for id, run := range frontier.runs {
+		if run.second == walked && !listed[id] {
+			missing++
+		}
+	}
+	return missing, (missing + nativePerPage - 1) / nativePerPage
 }
 
 // githubTestsReplayListing walks a listing from its start under its page budget with a count-only visitor: the same
-// paginator call, page entries and range ends (peel, stuck, saturated) as the walk; it reads and emits nothing.
+// paginator call, page entries and range ends (peel, stuck, saturated) as the walk; it reads and emits nothing. healthy is
+// asked after every page and once more at the end: an error ends the replay unfinished (no frontier).
 func githubTestsReplayListing(
 	walk githubTestsListingWalk, query func(rangeHi string) url.Values, interval githubTestsCreatedInterval, runsPhase bool, budget int,
+	healthy func() error,
 ) (githubTestsFrontier, error) {
 	frontier := githubTestsFrontier{seconds: map[int64]int{}, runs: map[string]githubTestsFrontierRun{}}
 	var cursor githubTestsChunkCursor
@@ -150,7 +157,7 @@ func githubTestsReplayListing(
 				cursor, end, _, _ = githubTestsEndRange(cursor, interval, runsPhase)
 				ended = end != githubTestsRangeNext
 			}
-			return nil
+			return healthy()
 		})
 		if err != nil {
 			return frontier, err
@@ -159,5 +166,20 @@ func githubTestsReplayListing(
 			break
 		}
 	}
-	return frontier, nil
+	return frontier, healthy()
+}
+
+// githubTestsRunsListingName and githubTestsArtifactsListingName name the active listing of the runs and the artifacts phase.
+func githubTestsRunsListingName(cursor githubTestsChunkCursor) string {
+	if cursor.LateRuns {
+		return "deep_runs"
+	}
+	return "runs"
+}
+
+func githubTestsArtifactsListingName(cursor githubTestsChunkCursor) string {
+	if cursor.Relist == githubTestsRelistWalking {
+		return "deep_reports"
+	}
+	return "artifacts"
 }

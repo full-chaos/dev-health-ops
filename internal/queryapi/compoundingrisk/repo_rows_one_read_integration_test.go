@@ -75,17 +75,50 @@ func seedFourRepos(c seedCtx, t *testing.T, now time.Time) {
 	put(t, c.ctx, c.conn, risk{org: "org-1", scope: "team", id: "t2", day: day(now, 1), score: "0.625", sev: "elevated"})
 }
 
-// An explicit empty repoIds selects no repository: every path answers no row
-// and no trend, and sends no statement.
+func answerOf(got *model.CompoundingRiskResult) string {
+	var b strings.Builder
+	for _, r := range got.Rows {
+		fmt.Fprintf(&b, "row %s %q", r.ScopeID, r.ScopeLabel)
+		if r.Score != nil {
+			fmt.Fprintf(&b, " %v", *r.Score)
+		}
+		b.WriteString("|")
+	}
+	for _, p := range got.Trend {
+		fmt.Fprintf(&b, "trend %s", p.Day.String())
+		if p.Score != nil {
+			fmt.Fprintf(&b, " %v", *p.Score)
+		}
+		b.WriteString("|")
+	}
+	return b.String()
+}
+
+// An explicit empty repoIds with no team named selects no repository: no row,
+// no trend, and no statement. With teams named it means the same as an absent
+// repoIds (the fallback's parity rule, pinned by
+// TestRealClickHouse_FallbackRepoFilterIntersectsOwnership), on a day with
+// stored team rows and on a derived day alike.
 func TestRealClickHouse_EmptyRepoIdsAnswersNothingOnEveryPath(t *testing.T) {
 	ctx, conn, client := startStore(t)
 	now := time.Now().UTC()
 	seedFourRepos(seedCtx{ctx, conn}, t, now)
 	// org-1 day 2: repository rows only, so the team breakout derives there.
 	put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rA, day: day(now, 2), score: "0.25", sev: "low"})
+	put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rC, day: day(now, 2), score: "0.5", sev: "elevated"})
 	selected := gqlDate(day(now, 1))
 	derivedDay := gqlDate(day(now, 2))
-	cases := []struct {
+	resolve := func(t *testing.T, in model.CompoundingRiskFilterInput, repoIDs []string) (*model.CompoundingRiskResult, int) {
+		t.Helper()
+		in.RepoIds, in.TrendDays = repoIDs, 30
+		c := &countingClient{QueryClient: client}
+		got, err := Resolve(ctx, c, "org-1", &in, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got, c.statements
+	}
+	for _, tc := range []struct {
 		name string
 		in   model.CompoundingRiskFilterInput
 	}{
@@ -93,22 +126,29 @@ func TestRealClickHouse_EmptyRepoIdsAnswersNothingOnEveryPath(t *testing.T) {
 		{"team, no team named, stored rows", model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam}},
 		{"team, no team named, stored rows, explicit day", model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, Day: &selected}},
 		{"team, no team named, derived day", model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, Day: &derivedDay}},
-		{"team, named team, stored rows", model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TeamIds: []string{"t1"}}},
-		{"team, named teams, stored rows, explicit day", model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TeamIds: []string{"t1", "t2"}, Day: &selected}},
-		{"team, named team, derived day", model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TeamIds: []string{"t1"}, Day: &derivedDay}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			in := tc.in
-			in.RepoIds, in.TrendDays = []string{}, 30
-			c := &countingClient{QueryClient: client}
-			got, err := Resolve(ctx, c, "org-1", &in, now)
-			if err != nil {
-				t.Fatal(err)
+	} {
+		t.Run("empty/"+tc.name, func(t *testing.T) {
+			got, statements := resolve(t, tc.in, []string{})
+			t.Logf("rows %s trend %d points, %d statements", rowsText(got), len(got.Trend), statements)
+			if len(got.Rows) != 0 || len(got.Trend) != 0 || statements != 0 {
+				t.Errorf("repoIds [] answered rows %s and %d trend points with %d statements, want nothing and no statement", rowsText(got), len(got.Trend), statements)
 			}
-			t.Logf("rows %s trend %d points, %d statements", rowsText(got), len(got.Trend), c.statements)
-			if len(got.Rows) != 0 || len(got.Trend) != 0 || c.statements != 0 {
-				t.Errorf("repoIds [] answered rows %s and %d trend points with %d statements, want nothing and no statement", rowsText(got), len(got.Trend), c.statements)
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		in   model.CompoundingRiskFilterInput
+	}{
+		{"named team, stored rows", model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TeamIds: []string{"t1"}}},
+		{"named teams, stored rows, explicit day", model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TeamIds: []string{"t1", "t2"}, Day: &selected}},
+		{"named team, derived day", model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TeamIds: []string{"t1"}, Day: &derivedDay}},
+	} {
+		t.Run("as absent/"+tc.name, func(t *testing.T) {
+			empty, _ := resolve(t, tc.in, []string{})
+			absent, _ := resolve(t, tc.in, nil)
+			t.Logf("repoIds []: %s; absent: %s", answerOf(empty), answerOf(absent))
+			if answerOf(empty) != answerOf(absent) || len(absent.Rows) == 0 {
+				t.Errorf("named teams with repoIds [] answered %s, want the answer of an absent repoIds %s", answerOf(empty), answerOf(absent))
 			}
 		})
 	}

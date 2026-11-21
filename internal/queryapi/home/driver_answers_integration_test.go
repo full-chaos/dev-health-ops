@@ -15,7 +15,9 @@ import (
 // The Home driver of a no-team or team-set request, and of a repository metric in any form, on a real ClickHouse
 // (CHAOS-14441, CHAOS-14425): the driver takes the value's own reducer and status filter, and a move from a measured 0
 // ranks its drivers by the absolute rise. Each case WANTs the summary driver and the caption; the answer of main
-// b737db18f3b2 is in the "main" comment of the case (log l14441-answers-main-1.log 152839e1a104).
+// b737db18f3b2 is in the "main" field of the case (logs l14441-answers-main-1.log 152839e1a104 and, for the
+// absent-prior cases, l14441-answers-main-2.log 36346fc641f0). zp-null-cycle runs only with the tuple read of ticket
+// 14424 (PR 6772).
 //
 // Teams Ops and Web. Repositories acme/a and acme/b, both owned by Ops (share 1), so one team [Ops] and the team set
 // [Ops, Web] scope the same two repositories. avg and sum differ by design (row counts differ between windows):
@@ -220,17 +222,17 @@ func TestHomeDriverAnswersOnClickHouse(t *testing.T) {
 				}
 			}
 		}},
-		{"zp-absent-throughput", "throughput", teamForms, []string{"Web", "Ops"}, "not run at main", func(org string) {
+		{"zp-absent-throughput", "throughput", teamForms, []string{"Web", "Ops"}, "none / none", func(org string) {
 			ansWorkItemRow(ctx, t, admin, org, compareStart, "scope-0", ansOps, 0, at)
 			ansWorkItemRow(ctx, t, admin, org, startDay, "scope-0", ansOps, 1, at)
 			ansWorkItemRow(ctx, t, admin, org, startDay, "scope-0", ansWeb, 100, at)
 		}},
-		{"zp-absent-cycle", "cycle_time", teamForms, []string{"Ops"}, "not run at main", func(org string) {
+		{"zp-absent-cycle", "cycle_time", teamForms, []string{"Ops"}, "none / none", func(org string) {
 			ansCycleRow(ctx, t, admin, org, compareStart, ansOps, 0.0, at)
 			ansCycleRow(ctx, t, admin, org, startDay, ansOps, 24.0, at)
 			ansCycleRow(ctx, t, admin, org, startDay, ansWeb, 48.0, at)
 		}},
-		{"zp-absent-churn", "churn", repoForms, []string{"acme/b", "acme/a"}, "not run at main", func(org string) {
+		{"zp-absent-churn", "churn", repoForms, []string{"acme/b", "acme/a"}, "none / none", func(org string) {
 			a, b := ansRepos(ctx, t, admin, org, at)
 			for _, r := range []struct {
 				repo uuid.UUID
@@ -243,7 +245,7 @@ func TestHomeDriverAnswersOnClickHouse(t *testing.T) {
 				}
 			}
 		}},
-		{"zp-null-cycle", "cycle_time", teamForms, []string{"Web"}, "not run at main", func(org string) {
+		{"zp-null-cycle", "cycle_time", teamForms, []string{"Web"}, "not run (needs PR 6772)", func(org string) {
 			ansCycleRow(ctx, t, admin, org, compareStart, ansOps, 0.0, at.Add(-time.Hour))
 			ansCycleRow(ctx, t, admin, org, compareStart, ansOps, nil, at)
 			ansCycleRow(ctx, t, admin, org, compareStart, ansWeb, 0.0, at)

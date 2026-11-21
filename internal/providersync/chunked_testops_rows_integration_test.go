@@ -24,6 +24,8 @@ const rowsRepoID = "c7198fbc-1945-3717-05d8-eb78866b4e79"
 
 type rowsPolicyHandler struct {
 	jobs, cases, failingPercent int
+	// bigMessageBytes, when set, gives the case in the middle of the emission a failure message of that many bytes.
+	bigMessageBytes int
 }
 
 func (handler rowsPolicyHandler) Collect(context.Context, Claim, providerfoundation.Credential, *providerfoundation.HTTPClient, time.Time) (CompleteRouteBatch, error) {
@@ -45,6 +47,10 @@ func (handler rowsPolicyHandler) CollectChunks(_ context.Context, claim Claim, _
 			class := "pkg/synthetic.Suite"
 			row := testCaseResultRow{OrgID: claim.OrgID, RepoID: rowsRepoID, RunID: "run-1", SuiteID: suite, CaseID: hashTestIdentifier(suite, name),
 				CaseName: name, ClassName: &class, Status: "passed", LastSynced: stamp}
+			if handler.bigMessageBytes > 0 && index == handler.cases/2 {
+				message := strings.Repeat("m", handler.bigMessageBytes)
+				row.Status, row.FailureMessage = "failed", &message
+			}
 			if index%100 < handler.failingPercent {
 				message, kind, trace := "expected 42 got 41 "+strings.Repeat("m", 120), "AssertionError", strings.Repeat("at synthetic.frame(file.go:123)\n", 200)[:4096]
 				row.Status, row.FailureMessage, row.FailureType, row.StackTrace = "failed", &message, &kind, &trace
@@ -269,4 +275,43 @@ func (sink *crashAfterWriteSink) WriteEffect(ctx context.Context, claim Claim, e
 		}
 	}
 	return err
+}
+
+// The window cell: one case with a failure message that puts its single-row chunk 40 KB over the split's reserved limit sits in the
+// MIDDLE of a 500-row emission of small cases, so main (100-row chunks, 2 MiB limit) accepts the chunk that holds it. The split halves the
+// emission-wide cap down to one row per chunk (a throughput loss, stated in the log line); every row is still written once to ClickHouse and the
+// store refuses nothing. This is the repro of the follow-up that splits per chunk instead of per emission.
+func TestTestOpsRouteBigRowInTheReserveWindowIsAllWrittenOnceWithNoRefusal(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	conn := startRowsClickHouse(t, ctx)
+	repository, session, pool := runsGroupPostgres(t, ctx)
+	sink := TestOpsClickHouseEffects{Conn: conn, Lease: session}
+	descriptor := cicdDescriptor(t)
+	descriptor.ChunkPolicy.MaxChunksPerAttempt = 1000
+	handler := rowsPolicyHandler{cases: 500, bigMessageBytes: splitPayloadLimit(TestOpsRouteChunkPolicy()) + 40_000 - 1_450}
+	var lastErr error
+	for attempt := 0; attempt < 60; attempt++ {
+		executor := runsGroupExecutor(time.Now().UTC(), handler, repository, newRunsGroupSink(), newRunsGroupDoer(t, 1, 1), nil)
+		executor.Committer.Sink, executor.Committer.Readback = sink, sink
+		_, lastErr = executor.Execute(ctx, session, descriptor)
+		if lastErr == nil || !errors.As(lastErr, new(ChunkContinuationError)) {
+			break
+		}
+	}
+	if lastErr != nil {
+		t.Fatalf("the emission did not complete without a store refusal: %v", lastErr)
+	}
+	var chunks, largest int
+	if err := pool.QueryRow(ctx, `SELECT count(*), COALESCE(max(payload_bytes), 0) FROM public.sync_run_unit_effect_chunks WHERE sync_run_unit_id=$1::uuid`, firstUnitID).Scan(&chunks, &largest); err != nil {
+		t.Fatal(err)
+	}
+	var rows, distinct uint64
+	if err := conn.QueryRow(ctx, `SELECT count(), uniqExact(case_id) FROM test_case_results WHERE org_id = ?`, session.Claim.OrgID).Scan(&rows, &distinct); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("window cell: 500 cases, one big row: %d stored chunks (incl. the final one), largest payload %d bytes, clickhouse rows=%d distinct=%d", chunks, largest, rows, distinct)
+	if rows != 500 || distinct != 500 {
+		t.Fatalf("clickhouse holds %d rows (%d distinct), want every one of the 500 cases written once", rows, distinct)
+	}
 }

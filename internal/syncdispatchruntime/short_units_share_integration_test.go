@@ -360,39 +360,70 @@ func TestShortUnitsShareFourLong(t *testing.T) {
 const (
 	denialL0 = "00000000-0000-4000-8000-00001c000000"
 	denialL1 = "00000000-0000-4000-8000-00001c000001"
+	denialL2 = "00000000-0000-4000-8000-00001c000002"
 	denialS0 = "00000000-0000-4000-8000-00001d000000"
+	denialS1 = "00000000-0000-4000-8000-00001d000001"
+	denialH0 = "00000000-0000-4000-8000-00001f000000"
 )
 
 type shortShareDenial struct {
-	t    *testing.T
-	ctx  context.Context
-	pool *pgxpool.Pool
-	svc  *NativeDispatchSyncRunService
+	t         *testing.T
+	ctx       context.Context
+	pool      *pgxpool.Pool
+	svc       *NativeDispatchSyncRunService
+	estimator *fakeBudgetEstimator
 }
 
 // newShortShareDenial seeds l0, l1 (cicd) and s0 (prs) with the given countdown, deferral and jitter (seconds).
 func newShortShareDenial(t *testing.T, ctx context.Context, pool *pgxpool.Pool, countdown, deferral, jitter string) *shortShareDenial {
+	return newShortShareDenialWith(t, ctx, pool, denialConfig{countdown: countdown, deferral: deferral, jitter: jitter})
+}
+
+// denialConfig: cooldown denies s0 by a rate-limit observation of its route family (retry_after = deferral) instead of by
+// the budget; l2 adds a third cicd unit; lateL1 leaves l1 out (the cell inserts it later).
+type denialConfig struct {
+	countdown, deferral, jitter string
+	cooldown, l2, lateL1        bool
+}
+
+func newShortShareDenialWith(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cfg denialConfig) *shortShareDenial {
 	t.Helper()
 	shortShareSeed(t, ctx, pool)
-	t.Setenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", countdown)
+	t.Setenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", cfg.countdown)
 	t.Setenv("SYNC_BUDGET_DEFAULT_LIMIT", "100")
 	t.Setenv("SYNC_BUDGET_BUCKET_LIMITS", "")
-	t.Setenv("SYNC_BUDGET_DEFERRAL_SECONDS", deferral)
-	t.Setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", jitter)
+	t.Setenv("SYNC_BUDGET_DEFERRAL_SECONDS", cfg.deferral)
+	t.Setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", cfg.jitter)
 	shortShareInsert(t, ctx, pool, denialL0, "cicd")
-	shortShareInsert(t, ctx, pool, denialL1, "cicd")
+	if !cfg.lateL1 {
+		shortShareInsert(t, ctx, pool, denialL1, "cicd")
+	}
+	if cfg.l2 {
+		shortShareInsert(t, ctx, pool, denialL2, "cicd")
+	}
 	shortShareInsert(t, ctx, pool, denialS0, "prs")
 	registry := &fakeJobRegistry{descriptors: map[string]jobruntime.Descriptor{jobcontract.KindSyncProviderUnit: providerUnitDescriptor("river")}}
 	producer, err := joboutbox.NewProducer(pool, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	estimator := &fakeBudgetEstimator{estimates: map[string][]budgetEstimate{denialS0: estimateFor(1000, "github", "rest_core", "prs")}}
+	estimate := estimateFor(1000, "github", "rest_core", "prs")
+	if cfg.cooldown {
+		estimate = estimateFor(10, "github", "rest_core", "prs")
+		if _, err := pool.Exec(ctx, `
+INSERT INTO public.provider_rate_limit_observations
+ (id, org_id, provider, integration_id, sync_run_id, sync_run_unit_id, route_family, dimension, retry_after_seconds, observed_at)
+VALUES ('00000000-0000-4000-8000-00001e000000', $1, 'github', $2::uuid, $3::uuid, $4::uuid, 'prs', 'rest_core', $5::text::float8, clock_timestamp())`,
+			discoveryTestOrg, discoveryTestIntegration, discoveryTestRun, denialS0, cfg.deferral); err != nil {
+			t.Fatal(err)
+		}
+	}
+	estimator := &fakeBudgetEstimator{estimates: map[string][]budgetEstimate{denialS0: estimate}}
 	service, err := NewNativeDispatchSyncRunService(pool, nil, estimator, producer, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &shortShareDenial{t: t, ctx: ctx, pool: pool, svc: service}
+	return &shortShareDenial{t: t, ctx: ctx, pool: pool, svc: service, estimator: estimator}
 }
 
 func (cell *shortShareDenial) exec(stmt string) {
@@ -404,11 +435,11 @@ func (cell *shortShareDenial) exec(stmt string) {
 
 func (cell *shortShareDenial) state() string {
 	var out []string
-	for _, id := range []string{denialL0, denialL1, denialS0} {
+	for _, id := range []string{denialL0, denialL1, denialL2, denialS0} {
 		var status string
 		var availableAt *time.Time
 		if err := cell.pool.QueryRow(cell.ctx, `SELECT status, available_at FROM sync_run_units WHERE id = $1::uuid`, id).Scan(&status, &availableAt); err != nil {
-			cell.t.Fatal(err)
+			continue
 		}
 		at := "-"
 		if availableAt != nil {
@@ -432,6 +463,36 @@ func (cell *shortShareDenial) status(id string) (string, bool) {
 		cell.t.Fatal(err)
 	}
 	return status, future
+}
+
+// armedAt is the available_at of the run's pending dispatch row, nil when no wake is armed.
+func (cell *shortShareDenial) armedAt() *time.Time {
+	var at time.Time
+	if err := cell.pool.QueryRow(cell.ctx, `SELECT available_at FROM sync_dispatch_outbox WHERE sync_run_id = $1 AND kind = 'dispatch_sync_run' AND status = 'pending'`, discoveryTestRun).Scan(&at); err != nil {
+		return nil
+	}
+	return &at
+}
+
+func (cell *shortShareDenial) availableAt(id string) time.Time {
+	cell.t.Helper()
+	var at *time.Time
+	if err := cell.pool.QueryRow(cell.ctx, `SELECT available_at FROM sync_run_units WHERE id = $1::uuid`, id).Scan(&at); err != nil || at == nil {
+		cell.t.Fatalf("%s has no available_at (err %v)", id[len(id)-8:], err)
+	}
+	return *at
+}
+
+// wantWakeBy fails unless the run has a pending wake at or before deadline.
+func (cell *shortShareDenial) wantWakeBy(name string, deadline time.Time) {
+	cell.t.Helper()
+	armed := cell.armedAt()
+	switch {
+	case armed == nil:
+		cell.t.Errorf("%s: no wake armed while s0 is deferred until %s", name, deadline.UTC().Format(time.RFC3339Nano))
+	case armed.After(deadline):
+		cell.t.Errorf("%s: wake armed at %s, after s0's available_at %s", name, armed.UTC().Format(time.RFC3339Nano), deadline.UTC().Format(time.RFC3339Nano))
+	}
 }
 
 // pass waits until the run's dispatch row is due, delivers it and runs the pass.
@@ -467,23 +528,21 @@ func (cell *shortShareDenial) want(name, l1Status string) {
 	}
 }
 
-// C1c (a), the re-arm is the one of main: a pass that queued l0, deferred s0 and capped l1 arms s0's available_at (the
-// deferral, 5 s), not the earlier countdown (2 s). The pass there finds s0 due again, so the slot is kept for it.
-func TestShortUnitsShareCappedPassArmsTheDeferralAsOnMain(t *testing.T) {
+// C1c (a), the arm order: a pass that queued l0, deferred s0 (5 s) and capped l1 arms the EARLIER of the countdown
+// (2 s) and the deferral (main armed the deferral, so the capped l1 waited for s0's due time and found s0 due again). The
+// countdown pass lands inside s0's deferral and admits l1.
+func TestShortUnitsShareCappedPassArmsTheCountdownInsideTheDeferral(t *testing.T) {
 	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		cell := newShortShareDenial(t, ctx, pool, "2", "5", "0")
 		cell.pass("pass 1")
 		cell.want("pass 1 (s0 kept the slot, the budget step denied it)", syncRunUnitStatusPlanned)
-		var armed, s0At time.Time
-		if err := pool.QueryRow(ctx, `SELECT (SELECT available_at FROM sync_dispatch_outbox WHERE sync_run_id = $1 AND kind = 'dispatch_sync_run' AND status = 'pending'),
-       (SELECT available_at FROM sync_run_units WHERE id = $2::uuid)`, discoveryTestRun, denialS0).Scan(&armed, &s0At); err != nil {
-			t.Fatal(err)
+		s0At := cell.availableAt(denialS0)
+		armed := cell.armedAt()
+		if armed == nil || !armed.Before(s0At) {
+			t.Fatalf("pass 1 armed %v, want the countdown, before s0's available_at %s", armed, s0At.UTC().Format(time.RFC3339Nano))
 		}
-		if !armed.Equal(s0At) {
-			t.Fatalf("pass 1 armed %s, want s0's available_at %s", armed.UTC().Format(time.RFC3339Nano), s0At.UTC().Format(time.RFC3339Nano))
-		}
-		cell.pass("pass 2 (the run's own armed pass, at s0's available_at)")
-		cell.want("pass 2 (s0 due again and denied again)", syncRunUnitStatusPlanned)
+		cell.pass("pass 2 (the countdown pass inside s0's deferral)")
+		cell.want("pass 2", syncRunUnitStatusDispatching)
 	})
 }
 
@@ -518,4 +577,103 @@ func TestShortUnitsShareBudgetDeniedShortUnitInTheIdleBackoff(t *testing.T) {
 		cell.pass("pass 2 (the run's own armed pass, at s0's available_at)")
 		cell.want("pass 2 (s0 due again and denied again)", syncRunUnitStatusPlanned)
 	})
+}
+
+// The P1-1 cells: s0 was deferred in an EARLIER pass (budget: a real enforceRun deferral; cooldown: a real rate-limit
+// observation of its route family), and a later pass that queued work must still wake the run no later than s0's
+// available_at. Countdown 3 s, deferral 4 s (between one and two countdowns), jitter 0. Pass 1 queues l0, defers s0 and
+// caps l1 (and l2), so it arms the countdown; pass 2 at the countdown admits l1. Capped: l2 is still capped after pass
+// 2; uncapped: nothing is.
+func runShortShareEarlierPassDeferral(t *testing.T, cooldown, capped bool) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		cell := newShortShareDenialWith(t, ctx, pool, denialConfig{countdown: "3", deferral: "4", jitter: "0", cooldown: cooldown, l2: capped})
+		cell.pass("pass 1")
+		cell.want("pass 1 (s0 kept the slot, the deferral step denied it)", syncRunUnitStatusPlanned)
+		s0At := cell.availableAt(denialS0)
+		cell.pass("pass 2 (the countdown pass inside s0's deferral)")
+		cell.want("pass 2", syncRunUnitStatusDispatching)
+		cell.wantWakeBy("after pass 2", s0At)
+	})
+}
+
+func TestShortUnitsShareEarlierBudgetDeferralCapped(t *testing.T) {
+	runShortShareEarlierPassDeferral(t, false, true)
+}
+
+func TestShortUnitsShareEarlierBudgetDeferralUncapped(t *testing.T) {
+	runShortShareEarlierPassDeferral(t, false, false)
+}
+
+func TestShortUnitsShareEarlierCooldownDeferralCapped(t *testing.T) {
+	runShortShareEarlierPassDeferral(t, true, true)
+}
+
+func TestShortUnitsShareEarlierCooldownDeferralUncapped(t *testing.T) {
+	runShortShareEarlierPassDeferral(t, true, false)
+}
+
+// The same hole through a unit-end wake inside the deferral window (present before this change too): pass 1 queues l0,
+// defers s0 and arms s0's available_at; a provider-unit-end wake then runs a pass that admits the newly planned l1 and
+// consumes the armed row. That pass must arm s0's available_at again.
+func TestShortUnitsShareUnitEndWakeInsideTheDeferral(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		cell := newShortShareDenialWith(t, ctx, pool, denialConfig{countdown: "60", deferral: "4", jitter: "0", lateL1: true})
+		cell.pass("pass 1")
+		s0At := cell.availableAt(denialS0)
+		cell.wantWakeBy("after pass 1", s0At)
+		shortShareInsert(t, ctx, pool, denialL1, "cicd")
+		if !syncrunrollup.WakeDispatch(ctx, pool, discoveryTestRun, time.Now().UTC(), syncrunrollup.DispatchWakePathProviderUnit) {
+			t.Fatal("wake not armed")
+		}
+		cell.pass("pass 2 (a unit-end wake inside the deferral window)")
+		cell.want("pass 2", syncRunUnitStatusDispatching)
+		cell.wantWakeBy("after pass 2", s0At)
+	})
+}
+
+// A deferral this same queued pass writes, later than the run's outstanding one: a unit-end wake inside s0's deferral
+// runs a pass that defers the newly planned s1 (its deferral ends after s0's), queues the heavy commit-stats unit h0
+// (another bucket) and, capped, holds the new l1 back. Main armed s1's later deferral (both forms); the pass must wake
+// the run no later than s0's available_at.
+func runShortShareLaterDeferralInTheSameQueuedPass(t *testing.T, capped bool) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		cell := newShortShareDenialWith(t, ctx, pool, denialConfig{countdown: "60", deferral: "4", jitter: "0", lateL1: true})
+		cell.pass("pass 1")
+		s0At := cell.availableAt(denialS0)
+		shortShareInsert(t, ctx, pool, denialS1, "prs")
+		cell.estimator.estimates[denialS1] = estimateFor(1000, "github", "rest_core", "prs")
+		cell.exec(`INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ('` + denialH0 + `','` + discoveryTestOrg + `','` + discoveryTestRun + `','github','commit-stats','` + dispatchTestSource + `','planned',now(),
+        (SELECT integration_id FROM sync_runs WHERE id = '` + discoveryTestRun + `'::uuid),'heavy','incremental',0,now())`)
+		if capped {
+			shortShareInsert(t, ctx, pool, denialL1, "cicd")
+		}
+		if !syncrunrollup.WakeDispatch(ctx, pool, discoveryTestRun, time.Now().UTC(), syncrunrollup.DispatchWakePathProviderUnit) {
+			t.Fatal("wake not armed")
+		}
+		cell.pass("pass 2 (a unit-end wake inside s0's deferral)")
+		if got, _ := cell.status(denialH0); got != syncRunUnitStatusDispatching {
+			t.Fatalf("pass 2: h0 %s, want dispatching (the pass must queue a unit)", got)
+		}
+		if got, future := cell.status(denialS1); got != syncRunUnitStatusRetrying || !future {
+			t.Fatalf("pass 2: s1 %s (future %v), want deferred", got, future)
+		}
+		if s1At := cell.availableAt(denialS1); !s1At.After(s0At) {
+			t.Fatalf("setup: s1's deferral %s does not end after s0's %s", s1At, s0At)
+		}
+		if capped {
+			if got, _ := cell.status(denialL1); got != syncRunUnitStatusPlanned {
+				t.Fatalf("pass 2: l1 %s, want capped (planned)", got)
+			}
+		}
+		cell.wantWakeBy("after pass 2", s0At)
+	})
+}
+
+func TestShortUnitsShareLaterDeferralInTheSameQueuedPassCapped(t *testing.T) {
+	runShortShareLaterDeferralInTheSameQueuedPass(t, true)
+}
+
+func TestShortUnitsShareLaterDeferralInTheSameQueuedPassUncapped(t *testing.T) {
+	runShortShareLaterDeferralInTheSameQueuedPass(t, false)
 }

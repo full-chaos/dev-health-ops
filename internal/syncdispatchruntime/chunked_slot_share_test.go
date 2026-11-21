@@ -272,3 +272,48 @@ func TestPlannedChunkedRouteKeysAreChunked(t *testing.T) {
 		}
 	}
 }
+
+// P1-1 and M9: a pass that queued units re-arms no later than the run's outstanding deferral from an earlier pass (a
+// budget and a cooldown deferral write the same retrying + future available_at state), and never arms nothing while one
+// is outstanding. Pass at t=60 s, countdown 60 s, older deferral due at t=90 s; this pass's own deferral none, later,
+// earlier or equal; capped = work still due now.
+func TestQueuedPassRearmKeepsAnEarlierPassDeferral(t *testing.T) {
+	t.Setenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", "60")
+	at := func(seconds int) time.Time { return admissionNow.Add(time.Duration(seconds) * time.Second) }
+	ptr := func(value time.Time) *time.Time { return &value }
+	now := at(60)
+	older := ptr(at(90))
+	for _, tc := range []struct {
+		name     string
+		pass     *time.Time
+		capped   bool
+		wantWake time.Time
+	}{
+		{"capped, no new deferral", nil, true, at(90)},
+		{"capped, later deferral", ptr(at(110)), true, at(90)},
+		{"capped, earlier deferral", ptr(at(75)), true, at(75)},
+		{"capped, equal deferral", ptr(at(90)), true, at(90)},
+		{"uncapped, no new deferral", nil, false, at(90)},
+		{"uncapped, later deferral", ptr(at(110)), false, at(90)},
+		{"uncapped, earlier deferral", ptr(at(75)), false, at(75)},
+		{"uncapped, equal deferral", ptr(at(90)), false, at(90)},
+	} {
+		counts := pendingUnitCounts{nextDeferredAt: older}
+		if tc.capped {
+			counts.dispatchable = 1
+		}
+		got, ok := queuedPassRearmAt(tc.pass, counts, false, now)
+		if !ok || got == nil || !got.Equal(tc.wantWake) {
+			t.Errorf("%s: wake %v (armed %v), want %s", tc.name, got, ok, tc.wantWake)
+		}
+	}
+	if got, ok := queuedPassRearmAt(nil, pendingUnitCounts{dispatchable: 1}, false, now); !ok || got == nil || !got.Equal(at(120)) {
+		t.Errorf("capped, nothing deferred: wake %v (armed %v), want the countdown %s", got, ok, at(120))
+	}
+	if got, ok := queuedPassRearmAt(nil, pendingUnitCounts{}, true, now); !ok || got == nil || !got.Equal(at(120)) {
+		t.Errorf("claimable after the snapshot: wake %v (armed %v), want the countdown %s", got, ok, at(120))
+	}
+	if got, ok := queuedPassRearmAt(nil, pendingUnitCounts{inFlight: 2}, false, now); ok {
+		t.Errorf("nothing deferred or due: wake %v, want none (the queued units' ends wake the run)", got)
+	}
+}

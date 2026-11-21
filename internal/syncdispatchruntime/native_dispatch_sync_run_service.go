@@ -622,26 +622,17 @@ WHERE id = $1::uuid`,
 	}
 
 	if riverQueued > 0 {
-		switch {
-		// CHAOS-4605: a unit left unclaimed because it became claimable
-		// after the guard's snapshot is due NOW -- it is not a deferral, it
-		// just missed this pass's capacity decision. Without an arm here the
-		// riverQueued > 0 path can commit with nothing scheduled (no
-		// nextDeferredAt, no capped ids) and strand it: the tail's
-		// computePendingUnitCounts re-arm only runs when riverQueued == 0.
-		//
-		// Arm the EARLIER of the default countdown and any budget deferral,
-		// so neither delays the other: scheduleRedispatch writes ONE wakeup
-		// and its second statement overwrites a pending row unconditionally,
-		// so picking the wrong one of the two would push the other back.
-		case len(deferredOutsideSnapshot) > 0:
-			armAt := service.nowUTC()
-			scheduleRedispatch(ctx, service.pool, service.logger, run.id,
-				dueNowRearmAt(nextDeferredAt, armAt), armAt)
-		case nextDeferredAt != nil:
-			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nextDeferredAt, service.nowUTC())
-		case len(cappedIDs) > 0:
-			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nil, service.nowUTC())
+		// The pass consumed the run's dispatch row, so it re-arms from the run's state after its writes, not only from
+		// this pass's deferrals: a retrying unit an earlier pass deferred keeps its wake, and work still due now
+		// (concurrency-capped units, a unit that became claimable after the guard's snapshot, CHAOS-4605) wants the
+		// countdown. scheduleRedispatch writes ONE wakeup and overwrites a pending row, so it takes the earlier of the two.
+		counts, err := service.pendingUnitCountsNow(ctx, run.id)
+		if err != nil {
+			return err
+		}
+		armAt := service.nowUTC()
+		if at, ok := queuedPassRearmAt(nextDeferredAt, counts, len(deferredOutsideSnapshot) > 0, armAt); ok {
+			scheduleRedispatch(ctx, service.pool, service.logger, run.id, at, armAt)
 		}
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunDispatched, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, riverQueued))
 		return nil
@@ -651,17 +642,9 @@ WHERE id = $1::uuid`,
 	// SECOND, separate transaction (Python's own second
 	// `with get_postgres_session_sync() as session:` block, opened only
 	// after the first one above already committed).
-	tailTx, err := service.pool.Begin(ctx)
+	counts, err := service.pendingUnitCountsNow(ctx, run.id)
 	if err != nil {
-		return ErrDispatchSyncRunUnavailable
-	}
-	counts, err := computePendingUnitCounts(ctx, tailTx, run.id, service.nowUTC())
-	if err != nil {
-		_ = tailTx.Rollback(ctx)
 		return err
-	}
-	if err := tailTx.Commit(ctx); err != nil {
-		return ErrDispatchSyncRunUnavailable
 	}
 
 	// a) Deferred work remains dispatchable now (a PLANNED unit, or a due

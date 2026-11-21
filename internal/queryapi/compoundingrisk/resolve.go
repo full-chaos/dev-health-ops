@@ -430,6 +430,11 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 	empty := func() *model.CompoundingRiskResult {
 		return &model.CompoundingRiskResult{OrgID: orgID, Breakout: breakout, Rows: []model.CompoundingRiskPoint{}, Trend: []model.CompoundingRiskTrendPoint{}, GeneratedAt: now}
 	}
+	// An explicit empty repoIds selects no repository on every path, named
+	// teams included.
+	if repoIDs != nil && len(repoIDs) == 0 {
+		return empty(), nil
+	}
 
 	var fallbackRepoIDs idList = repoIDs
 	var teamFilteredRepoIDs idList

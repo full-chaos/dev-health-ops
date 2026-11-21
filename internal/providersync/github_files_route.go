@@ -876,6 +876,10 @@ var gitHubFilesWidestInstant = time.Date(2026, 12, 31, 23, 59, 59, 999_999_999, 
 // gitHubFilesWidestOrdinal is the pre-check's ordinal: six digits, no fewer
 // than the real ordinal of any unit below a million prepared chunks (a unit of
 // more than 100,000 single-file emissions is possible, so 99999 was not).
+// Limit: at ordinal 1,000,000 and above a chunk the pre-check accepts within 1
+// byte of the edge is refused by the store (main refused from 100,000). A unit
+// that far needs <= 2 paths per chunk over its ~2,000,000 walked paths, about
+// 750 GB of eligible text in one repository.
 const gitHubFilesWidestOrdinal = 999_999
 
 // gitHubFilesPreparedChunk is the one prepared chunk the executor builds for a

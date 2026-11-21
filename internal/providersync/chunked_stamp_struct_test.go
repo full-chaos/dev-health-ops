@@ -358,3 +358,34 @@ func TestChunkStampLedgerSizeDoesNotGrowWithRows(t *testing.T) {
 			atCap, atMaxRows, maxEffectLedgerStateBytes)
 	}
 }
+
+// The ledger instant's width belongs to the clock read, as on main: an emission at exactly the limit for an 8-digit instant is stored by
+// the head and by MAIN at that instant, and refused by both at a 9-digit instant (two ledger timestamps, 1 byte each over).
+func TestChunkStampEqualClockEqualBytes(t *testing.T) {
+	t.Parallel()
+	claim := nativeTestClaim("github", "cicd")
+	eight := time.Date(2026, 10, 1, 12, 0, 0, 123_456_780, time.UTC)
+	nine := time.Date(2026, 10, 1, 12, 0, 0, 123_456_789, time.UTC)
+	build := func(pad int) []ChunkRouteEmission {
+		return stampScript(t, []stampShape{{cases: 1, filled: true, pads: map[int]int{0: pad}}}, false, 100, 0)
+	}
+	pad := tuneSinglePad(t, claim, eight, maxChunkPayloadBytes, build)
+	emission := build(pad)[0]
+	for _, at := range []time.Time{eight, nine} {
+		mainOut := oracleMain(t, claim, build(pad)[:1], at)
+		head, headErr := splitStampedEmission(emission.Batch, chunkStamps{Claim: claim, CursorAfter: emission.CursorAfter, StampAt: at}, TestOpsRouteChunkPolicy())
+		mainPayload, mainLedger := oracleStoredBytes(t, claim, mainOut[0].chunks[0], at)
+		stored := at.Equal(eight)
+		if (mainOut[0].err == nil) != stored || (headErr == nil) != stored {
+			t.Fatalf("%s: MAIN err=%v head err=%v, want both stored=%t", at.Format(time.RFC3339Nano), mainOut[0].err, headErr, stored)
+		}
+		if stored {
+			headPayload, headLedger := oracleStoredBytes(t, claim, head[0], at)
+			if len(head) != 1 || headPayload+headLedger != mainPayload+mainLedger {
+				t.Fatalf("%s: head %d chunks %d bytes, MAIN %d bytes", at.Format(time.RFC3339Nano), len(head), headPayload+headLedger, mainPayload+mainLedger)
+			}
+		} else if headErr.Error() != mainOut[0].err.Error() || mainPayload+mainLedger != maxChunkPayloadBytes+2 {
+			t.Fatalf("%s: head %v, MAIN %v at %d bytes", at.Format(time.RFC3339Nano), headErr, mainOut[0].err, mainPayload+mainLedger)
+		}
+	}
+}

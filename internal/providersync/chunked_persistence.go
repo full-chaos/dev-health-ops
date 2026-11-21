@@ -533,9 +533,25 @@ type chunkStamps struct {
 	StampAt time.Time
 }
 
-// splitStampedEmission splits an emission into the chunks the store writes, stamped and measured as stored.
+// splitStampedEmission splits an emission into the chunks the store writes, stamped and measured as stored. An emission that repeats
+// a natural key in one destination is split with the default policy's caps and halving: the sink refuses a repeated key inside one
+// write batch, so it must land in the chunks the default split gives it (stored where that split stores it, refused where it refuses).
 func splitStampedEmission(batch CompleteRouteBatch, stamps chunkStamps, policy ChunkPolicy) ([]PreparedProviderChunk, error) {
+	if emissionRepeatsANaturalKey(batch.Effects) {
+		fallback := DefaultChunkPolicy()
+		policy.MaxSourceItems, policy.MaxEffectRows, policy.HalvingStep = fallback.MaxSourceItems, fallback.MaxEffectRows, fallback.HalvingStep
+	}
 	return splitEmission(batch, stamps.Comparison, &stamps, policy)
+}
+
+// emissionRepeatsANaturalKey reports whether one destination of the emission holds a natural key twice (the sink's own rule).
+func emissionRepeatsANaturalKey(effects []EffectBatch) bool {
+	for _, effect := range effects {
+		if testOpsBatchKeyCollision(effect) != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // stampEmissionChunk is the one stamping of a stored chunk: position of count in its emission.

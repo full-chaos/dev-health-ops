@@ -26,7 +26,7 @@ func slotSharePass(t *testing.T, self runOrder, costClass string, waiting int, s
 	env := guardEnv{
 		lockBuckets: func([]dispatchBucket) error { return nil },
 		totalCap:    func() int { return 0 },
-		activeCount: func(dispatchBucket) (int, int, error) { return state.active, state.activeBackfill, nil },
+		activeCount: func(dispatchBucket) (int, int, int, error) { return state.active, state.activeBackfill, 0, nil },
 		emit:        func(dispatchBucket, int, int, int, int, int, int) {},
 		self:        self,
 		olderRuns: func(dispatchBucket) ([]olderRun, error) {

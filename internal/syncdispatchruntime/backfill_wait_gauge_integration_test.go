@@ -367,7 +367,7 @@ func TestBackfillWaitFoldedActiveEqualsTheGuardPerBucket(t *testing.T) {
 		sawLive := 0
 		for _, provider := range providers {
 			bucket := dispatchBucket{orgID: waitGaugeOrg, provider: provider, costClass: "medium"}
-			active, activeBackfill, err := countActiveBucketUnits(ctx, tx, bucket, cutoff, now)
+			active, activeBackfill, _, err := countActiveBucketUnits(ctx, tx, bucket, cutoff, now)
 			if err != nil {
 				t.Fatal(err)
 			}

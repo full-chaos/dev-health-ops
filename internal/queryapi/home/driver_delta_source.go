@@ -10,7 +10,7 @@ import "fmt"
 // organization.
 func driverDeltaSource(table, column, scopeFilter, startParam, endParam string) string {
 	if _, dedup := dedupByComputedAt[table]; dedup {
-		return metricFromClause(table, column, scopeFilter, startParam, endParam)
+		return metricFromClause(table, column, scopeFilter, startParam, endParam, false)
 	}
 	return fmt.Sprintf(`(
             SELECT *

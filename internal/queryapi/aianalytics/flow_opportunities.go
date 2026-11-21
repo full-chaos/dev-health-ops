@@ -256,22 +256,35 @@ LIMIT 500`
 
 // A retraction row (see package liverow) is left out: it is not a day of data
 // of its team, and the 0 it holds in wip_congestion_ratio is not a measured 0.
-var teamFlowStatement = `SELECT
+//
+// teamFlowStatement reads every team (or the active ones) in the org view: its
+// rows are one per team. oneTeamFlowStatement reads one named team in that
+// team's view of the stored rows (CHAOS-14379): one row per key, the newest row
+// of each view of the key, a live row first, then team, org, legacy
+// (rowview.ServedTeamSource).
+var (
+	teamFlowStatement    = teamFlowStatementFrom("work_item_metrics_daily FINAL", "\n  AND "+rowview.OrgPredicate("work_item_metrics_daily", ""))
+	oneTeamFlowStatement = teamFlowStatementFrom(rowview.ServedTeamSource("work_item_metrics_daily",
+		"day >= today() - {window_days:UInt32} AND team_id = {team_id:String}", "")+" AS work_item_metrics_daily", "")
+)
+
+func teamFlowStatementFrom(source, view string) string {
+	return `SELECT
     team_id AS entity_id,
     uniqExact(day) AS data_days,
     toNullable(avg(cycle_time_p50_hours)) AS cycle_time_p50_hours,
     toNullable(avg(wip_congestion_ratio)) AS wip_congestion_ratio,
     toNullable(toFloat64(sum(items_completed))) AS items_completed
-FROM work_item_metrics_daily FINAL
+FROM ` + source + `
 WHERE day >= today() - {window_days:UInt32}@@TEAM@@
   AND org_id = {org_id:String}
-  AND team_id != ''
-  AND ` + rowview.OrgPredicate("work_item_metrics_daily", "") + `
+  AND team_id != ''` + view + `
   AND ` + liverow.Predicate("work_item_metrics_daily", "") + `
 GROUP BY team_id
 HAVING data_days >= 5
 ORDER BY data_days DESC
 LIMIT 500`
+}
 
 // loadFlowRows reads the repository and team aggregates. Both reads are
 // always issued, and either failing fails the whole load.
@@ -329,7 +342,7 @@ func loadTeamFlowRows(ctx context.Context, client QueryClient, base []clickhouse
 	statement := strings.ReplaceAll(teamFlowStatement, "@@TEAM@@", "\n  AND "+activeteams.ListablePredicate("team_id"))
 	if teamID != "" {
 		bindings = append(bindings, clickhouse.Binding{Name: "team_id", Value: teamID})
-		statement = strings.ReplaceAll(teamFlowStatement, "@@TEAM@@", "\n  AND team_id = {team_id:String}")
+		statement = strings.ReplaceAll(oneTeamFlowStatement, "@@TEAM@@", "\n  AND team_id = {team_id:String}")
 	}
 	rs, err := client.Query(ctx, statement, bindings)
 	if err != nil {

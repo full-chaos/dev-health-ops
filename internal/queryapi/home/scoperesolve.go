@@ -19,6 +19,10 @@ func ResolveScope(ctx context.Context, client QueryClient, orgID string, f Filte
 		return f, nil
 	}
 	f.Scope.checked = true
+	// The scope ids are a SET (CHAOS-14379): each id once, in the order of its first use, compared as the scope
+	// predicates compare ids (exact strings). Every read of the request takes that set, so [t, t] is the one team t
+	// and [t, u, t] the team set [t, u].
+	f.Scope.IDs = distinctIDs(f.Scope.IDs)
 	unresolved, err := scoperesolve.Unresolved(ctx, client, orgID, f.Scope.Level, f.Scope.IDs)
 	if err != nil {
 		return f, err
@@ -28,3 +32,17 @@ func ResolveScope(ctx context.Context, client QueryClient, orgID string, f Filte
 }
 
 const unresolvedScopeFilter = " AND 1 = 0"
+
+// distinctIDs is a list of ids as a set: each id once, in the order of its first use.
+func distinctIDs(ids []string) []string {
+	var out []string
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, repeated := seen[id]; repeated {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}

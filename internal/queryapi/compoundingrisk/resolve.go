@@ -227,9 +227,12 @@ func assignUnowned(teamsOfRepo map[string][]string, repoRows []storedRow, labels
 // written for the day. Each is derived from the day's repository rows by the
 // same rule as the derived path. A team with a live stored row keeps it, and a
 // stored no-team row is kept as it is, and a day that holds one reads nothing
-// more (no current writer stores it). Ownership is read at the selected day,
-// the instant the daily writer resolves it at, never at request time.
-func withUnstoredTeamPoints(ctx context.Context, client QueryClient, orgID string, d time.Time, points []model.CompoundingRiskPoint, teams []string, labels map[string]string, selectedRows func() ([]storedRow, error), now time.Time) ([]model.CompoundingRiskPoint, error) {
+// more (no current writer stores it). When the stored team read may be cut at
+// its row cap (deriveTeams false), a team missing from it may still have a live
+// stored row, so only the no-team point is derived. Ownership is read at the
+// selected day, the instant the daily writer resolves it at, never at request
+// time.
+func withUnstoredTeamPoints(ctx context.Context, client QueryClient, orgID string, d time.Time, points []model.CompoundingRiskPoint, teams []string, labels map[string]string, selectedRows func() ([]storedRow, error), deriveTeams bool, now time.Time) ([]model.CompoundingRiskPoint, error) {
 	stored := map[string]bool{}
 	for _, p := range points {
 		if p.ScopeID == activeteams.UnassignedID {
@@ -249,7 +252,7 @@ func withUnstoredTeamPoints(ctx context.Context, client QueryClient, orgID strin
 	var missing []string
 	for _, r := range repoRows {
 		for _, team := range teamsOfRepo[r.scopeID] {
-			if !stored[team] {
+			if !stored[team] && (deriveTeams || team == activeteams.UnassignedID) {
 				stored[team] = true
 				missing = append(missing, team)
 			}
@@ -546,10 +549,12 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 			narrows = len(selected) < len(dayRows)
 		}
 		var teamRows []storedRow
+		storedReadCut := false
 		if !narrows {
 			if teamRows, err = latestRows(ctx, client, orgID, d, scopeTeam, teamIDs); err != nil {
 				return nil, err
 			}
+			storedReadCut = len(teamRows) >= maxRows
 		}
 		if len(teamIDs) == 0 && len(teamRows) > 0 {
 			// Which stored rows are rows of a team is a decision, not a label:
@@ -570,7 +575,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 				points = append(points, point(model.CompoundingRiskScopeTeam, d, r.scopeID, labelOr(labels, r.scopeID), r))
 			}
 			if len(teamIDs) == 0 {
-				if points, err = withUnstoredTeamPoints(ctx, client, orgID, d, points, order, labels, selectedRows, now); err != nil {
+				if points, err = withUnstoredTeamPoints(ctx, client, orgID, d, points, order, labels, selectedRows, !storedReadCut, now); err != nil {
 					return nil, err
 				}
 			}

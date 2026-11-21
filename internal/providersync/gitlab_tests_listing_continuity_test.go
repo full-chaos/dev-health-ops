@@ -152,6 +152,7 @@ type gitLabContinuityArm struct {
 type gitLabContinuityOptions struct {
 	handler GitLabTestsRouteHandler
 	gate    providerfoundation.BackoffGate
+	retry   *providerfoundation.RetryPolicy
 	// allowError ends the walk at the first invocation error and returns it instead of failing the test.
 	allowError bool
 	// yieldPhase, yieldAt: the first invocation stops after its yieldAt-th emission of yieldPhase; the next one resumes.
@@ -165,6 +166,7 @@ type gitLabContinuityOptions struct {
 type gitLabContinuityResult struct {
 	pipelines map[int]int
 	reports   map[int]int
+	rows      map[int]string
 	final     CompleteRouteBatch
 	done      gitLabTestsChunkCursor
 	cursors   []gitLabTestsChunkCursor
@@ -179,8 +181,11 @@ func gitLabContinuityWalk(t *testing.T, fake *gitLabContinuityFake, options gitL
 	if options.gate != nil {
 		client.Gate = options.gate
 	}
+	if options.retry != nil {
+		client.Retry = *options.retry
+	}
 	fake.reportGets = map[int]int{}
-	result := gitLabContinuityResult{pipelines: map[int]int{}}
+	result := gitLabContinuityResult{pipelines: map[int]int{}, rows: map[int]string{}}
 	stop := errors.New("yield")
 	resume, finalSeen := "", false
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -213,6 +218,7 @@ func gitLabContinuityWalk(t *testing.T, fake *gitLabContinuityFake, options gitL
 						}
 						id, _ := strconv.Atoi(row.RunID)
 						result.pipelines[id]++
+						result.rows[id] = string(raw)
 					}
 				}
 				before, err := decodeGitLabTestsChunkCursor(emission.CursorBefore)
@@ -952,5 +958,81 @@ func TestGitLabTestsListingAtThePageBudgetRequestObeysTheRateLimitPath(t *testin
 				t.Fatal("the 429 did not arm the gate")
 			}
 		})
+	}
+}
+
+// A pipeline that enters the listing past the listed offsets in a response the walk discards (a shrink above the boundary in the
+// same gap), and that updates past BeforeAt before the next request, is not read by this walk: its updated_at is now after the
+// window, so the next window (since = the stored watermark) lists it and reads it in its newer state. Across both windows it is
+// read exactly once per phase.
+func TestGitLabTestsListingAPipelineDroppedWithAStepBackIsReadByTheNextWindow(t *testing.T) {
+	const entrant = 1281
+	fake := newGitLabContinuityFake(t, gitLabContinuityFixture(250, 1002, 2))
+	outside := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	fake.pipelines = append(fake.pipelines, gitLabResumePipeline{id: entrant, started: outside, updated: outside})
+	newer := time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)
+	fake.every = func(request, _, _ int) {
+		switch request {
+		case 1:
+			// Two newer pipelines leave (the response is discarded) and the entrant enters at offset 108, past the 100 listed.
+			gitLabResumeUpdate(fake.gitLabResumeFake, entrant, time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC))
+			fake.remove(1500, 1498)
+		case 2:
+			for index := range fake.pipelines {
+				if fake.pipelines[index].id == entrant {
+					fake.pipelines[index].started, fake.pipelines[index].updated = newer, newer
+				}
+			}
+		}
+	}
+	first := gitLabContinuityWalk(t, fake, gitLabContinuityOptions{})
+	if fake.requests[1] != [2]int{2, 99} || fake.requests[2] != [2]int{1, 100} || first.final.Watermark == nil {
+		t.Fatalf("first window did not step back after (2,99): requests %v watermark %v", fake.requests, first.final.Watermark)
+	}
+	if offset := slices.Index(fake.snapshots[1], entrant); offset < 100 || offset >= 198 || slices.Contains(fake.snapshots[2], entrant) {
+		t.Fatalf("the entrant was not at an offset past the 100 listed in the discarded response (offset %d), or was still listed after", offset)
+	}
+	nextBefore := time.Date(2026, 8, 14, 11, 0, 0, 0, time.UTC)
+	watermark := gitLabEntryStored(fake.claim, first.final, nextBefore)
+	next := fake.claim
+	next.Mode, next.SinceAt, next.BeforeAt = "incremental", &watermark, &nextBefore
+	fake.claim, fake.every, fake.requests, fake.snapshots, fake.ends = next, nil, nil, nil, nil
+	second := gitLabContinuityWalk(t, fake, gitLabContinuityOptions{})
+	if got := first.pipelines[entrant] + second.pipelines[entrant]; got != 1 {
+		t.Fatalf("entrant read %d times in the pipelines phase across both windows (first %d, next %d), want 1", got, first.pipelines[entrant], second.pipelines[entrant])
+	}
+	if got := first.reports[entrant] + second.reports[entrant]; got != 1 {
+		t.Fatalf("entrant read %d times in the reports phase across both windows, want 1", got)
+	}
+	if !strings.Contains(second.rows[entrant], newer.Format("2006-01-02T15:04:05")) {
+		t.Fatalf("the next window did not read the newer state: %s", second.rows[entrant])
+	}
+}
+
+// The request past the page budget is ONE logical request under the client's shared retry policy (providerfoundation
+// DefaultRetryPolicy, 3 attempts): a 503 then a 200 is two wire sends, both counted, and the walk sends no other request
+// past the budget.
+func TestGitLabTestsListingAtThePageBudgetRequestRetriesUnderTheSharedPolicy(t *testing.T) {
+	fake := newGitLabContinuityFake(t, gitLabContinuityFixture(300, 1001, 1))
+	failed := false
+	fake.answer = func(_ *http.Request, listing int) *http.Response {
+		if listing != 1 || failed {
+			return nil
+		}
+		failed = true
+		return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"message":"unavailable"}`))}
+	}
+	retry := providerfoundation.RetryPolicy{MaxAttempts: 3, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}
+	result := gitLabContinuityWalk(t, fake, gitLabContinuityOptions{handler: GitLabTestsRouteHandler{MaxPages: 1}, retry: &retry})
+	// Pipelines phase: (1,100), then the one request past the budget sent twice (503, 200). Reports phase: (1,100) and its one.
+	want := [][2]int{{1, 100}, {1, 100}, {1, 100}, {1, 100}, {1, 100}}
+	if !failed || !slices.Equal(fake.requests, want) {
+		t.Fatalf("listing sends %v, want %v", fake.requests, want)
+	}
+	if requests := gitLabContinuityRequests(t, result); requests != fake.total {
+		t.Fatalf("requests counted %d, the provider answered %d (both sends of the retried request)", requests, fake.total)
+	}
+	if result.final.Watermark != nil || !slices.Contains(result.done.Truncated, gitLabPipelineInventoryComponent) || result.done.PipelinePages != 1 {
+		t.Fatalf("watermark=%v truncated=%v pipeline pages=%d", result.final.Watermark, result.done.Truncated, result.done.PipelinePages)
 	}
 }

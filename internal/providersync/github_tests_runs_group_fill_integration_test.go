@@ -64,13 +64,13 @@ func storedChunkCount(t *testing.T, ctx context.Context, pool *pgxpool.Pool) int
 	return stored
 }
 
-// TestGitHubTestsRunsPhaseFillsChunkGroups pins CHAOS-14408 on real Postgres: a runs page of 100 small runs (3 jobs
-// each) commits in fewer than 10 chunk groups, each run read once and written once. The base commits one group per run.
+// TestGitHubTestsRunsPhaseFillsChunkGroups pins CHAOS-14408 on real Postgres: a runs page of 100 small runs (12 jobs
+// each) commits in 3 chunk groups (41 + 41 + 18 at the 500-row bound), each run read once and written once. The base commits one group per run.
 func TestGitHubTestsRunsPhaseFillsChunkGroups(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	repository, session, pool := runsGroupPostgres(t, ctx)
-	doer, sink := newRunsGroupDoer(t, 100, 3), newRunsGroupSink()
+	doer, sink := newRunsGroupDoer(t, 100, 12), newRunsGroupSink()
 	stops := runUntilDone(t, runsGroupExecutor(time.Now().UTC(), GitHubTestsRouteHandler{CoalesceRuns: true}, repository, sink, doer, nil),
 		session, cicdDescriptor(t))
 	assertEachRunOnce(t, sink, doer, 100)
@@ -80,10 +80,10 @@ func TestGitHubTestsRunsPhaseFillsChunkGroups(t *testing.T) {
 		}
 	}
 	stored := storedChunkCount(t, ctx, pool)
-	t.Logf("GROUPS: 100 runs x 3 jobs -> %d chunk groups with pipeline rows, %d stored chunks, %d attempts",
+	t.Logf("GROUPS: 100 runs x 12 jobs -> %d chunk groups with pipeline rows, %d stored chunks, %d attempts",
 		sink.pipelineWrites, stored, len(stops))
-	if sink.pipelineWrites >= 10 {
-		t.Fatalf("a runs page of 100 small runs committed in %d chunk groups, want fewer than 10", sink.pipelineWrites)
+	if sink.pipelineWrites != 3 || stored != 4 {
+		t.Fatalf("a runs page of 100 runs x 12 jobs committed in %d chunk groups (%d stored chunks), want 3 (41 + 41 + 18) and 4 with the final chunk", sink.pipelineWrites, stored)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestGitHubTestsRunsPhaseCrashInsideACoalescedGroupDrainsOnce(t *testing.T) 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	repository, session, pool := runsGroupPostgres(t, ctx)
-	doer, sink := newRunsGroupDoer(t, 100, 3), newRunsGroupSink()
+	doer, sink := newRunsGroupDoer(t, 100, 12), newRunsGroupSink()
 	sink.failJobWrite = 2
 	executor := runsGroupExecutor(time.Now().UTC(), GitHubTestsRouteHandler{CoalesceRuns: true}, repository, sink, doer, nil)
 	if _, err := executor.Execute(ctx, session, cicdDescriptor(t)); err == nil || errors.As(err, new(ChunkContinuationError)) {
@@ -105,7 +105,7 @@ func TestGitHubTestsRunsPhaseCrashInsideACoalescedGroupDrainsOnce(t *testing.T) 
 		t.Fatal(err)
 	}
 	if checkpoint.PreparedChunks != 3 || checkpoint.NextOrdinal != 1 {
-		t.Fatalf("after the crash prepared=%d next=%d, want 3 1 (the second group prepared whole, not committed, and run 66 "+
+		t.Fatalf("after the crash prepared=%d next=%d, want 3 1 (the second group prepared whole, not committed, and run 82 "+
 			"whose arrival started its flush staged as its own group)", checkpoint.PreparedChunks, checkpoint.NextOrdinal)
 	}
 	runUntilDone(t, executor, session, cicdDescriptor(t))

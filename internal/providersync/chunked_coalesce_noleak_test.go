@@ -19,8 +19,9 @@ import (
 // sub-chunks. The digest reads every stored chunk (ordinal, totals, cursors, manifest, payload size, effects, ledger
 // statuses) and the final checkpoint; timestamps are left out.
 const (
-	noLeakFilesDigest     = "7c0114565ce2b851797b678d0661bca87efc6be9b299974aff947fcb8f0147a3"
-	noLeakSyntheticDigest = "f08668fd256956f220e0b590ba7beb6490d8d0128eeb72c40a9b71daba113e86"
+	noLeakFilesDigest        = "7c0114565ce2b851797b678d0661bca87efc6be9b299974aff947fcb8f0147a3"
+	noLeakSyntheticDigest    = "f08668fd256956f220e0b590ba7beb6490d8d0128eeb72c40a9b71daba113e86"
+	noLeakSyntheticDigest500 = "ce42e7bc67716b56ff95fd4ed13e4af5b1340b636a5394f1ad8d5039f4a5bd2c"
 )
 
 func noLeakChunkDigest(t *testing.T, chunks []PreparedProviderChunk, checkpoint ChunkCheckpoint) string {
@@ -114,6 +115,43 @@ func TestChunkedRouteThatMarksNothingKeepsTheBaseGroupSequence(t *testing.T) {
 		t.Logf("NOLEAK synthetic: %d chunks digest %s", len(chunks), got)
 		if got != noLeakSyntheticDigest {
 			t.Fatalf("synthetic route group sequence digest %s, want the base %s", got, noLeakSyntheticDigest)
+		}
+	})
+	t.Run("synthetic route at the TestOps row bound (500)", func(t *testing.T) {
+		now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+		claim, session := completeRouteSessionFor(t, now, false, "github", "cicd")
+		descriptor, ok := Descriptor("github", "cicd")
+		if !ok {
+			t.Fatal("descriptor")
+		}
+		// The descriptor policy as shipped (500 rows): the emissions below no longer split; the digest is this policy's own.
+		store := newChunkMemoryStore()
+		executor := completeRouteExecutor(now, &noLeakHandler{t: t, claim: claim}, store, &recoveryRowSink{})
+		executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
+		executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
+		for attempt := 1; ; attempt++ {
+			if attempt > 50 {
+				t.Fatal("no completion in 50 attempts")
+			}
+			_, err := executor.Execute(context.Background(), session, descriptor)
+			if err == nil {
+				break
+			}
+			if _, ok := ChunkContinuationDelay(err); !ok {
+				t.Fatalf("attempt %d: %v", attempt, err)
+			}
+		}
+		store.mu.Lock()
+		chunks := make([]PreparedProviderChunk, 0, len(store.chunks))
+		for ordinal := 0; ordinal < len(store.chunks); ordinal++ {
+			chunks = append(chunks, store.chunks[ordinal])
+		}
+		checkpoint := store.checkpoint
+		store.mu.Unlock()
+		got := noLeakChunkDigest(t, chunks, checkpoint)
+		t.Logf("NOLEAK synthetic500: %d chunks digest %s", len(chunks), got)
+		if got != noLeakSyntheticDigest500 {
+			t.Fatalf("synthetic route group sequence digest %s at the TestOps bound, want %s", got, noLeakSyntheticDigest500)
 		}
 	})
 }

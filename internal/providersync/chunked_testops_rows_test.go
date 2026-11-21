@@ -164,7 +164,7 @@ func TestTestOpsRouteAttemptCommitsFiveHundredRowSubchunks(t *testing.T) {
 
 func TestSplitPayloadLimitLeavesRoomForTheLedgerAndTheCursors(t *testing.T) {
 	t.Parallel()
-	want := maxChunkPayloadBytes - maxEffectLedgerStateBytes - 2*maxChunkCursorBytes
+	want := maxChunkPayloadBytes - maxEffectLedgerStateBytes - 12*maxChunkCursorBytes - 1<<10
 	if got := splitPayloadLimit(DefaultChunkPolicy()); got != want {
 		t.Fatalf("limit for a 2 MiB policy = %d, want %d", got, want)
 	}
@@ -305,5 +305,82 @@ func TestGitHubFilesPreCheckSharesTheReservedSplitLimit(t *testing.T) {
 	}
 	if !sawFit || !sawSplit {
 		t.Fatalf("the sweep did not cross the limit (fit=%t split=%t)", sawFit, sawSplit)
+	}
+}
+
+// Whatever the split accepts, the store accepts: a payload at the split's limit, then the executor's own steps after the split (cursors at
+// 4 KiB of characters that JSON escapes to 6 bytes each, a high ordinal, the manifest digest) and, for the final emission, a final result of
+// 60 KiB, then the store's builder with the real ledger of the seven TestOps effects. Both for a non-final and for a final sub-chunk.
+func TestSplitAcceptedSubchunkIsAcceptedByTheStoreAtWorstCaseCursorsAndFinalResult(t *testing.T) {
+	t.Parallel()
+	claim := nativeTestClaim("github", "cicd")
+	policy := TestOpsRouteChunkPolicy()
+	limit := splitPayloadLimit(policy)
+	for _, final := range []bool{false, true} {
+		var result map[string]any
+		if final {
+			result = map[string]any{"complete": true, "detail": strings.Repeat("r", 60<<10)}
+		}
+		build := func(pad int) CompleteRouteBatch {
+			rows := make([]json.RawMessage, 100)
+			for index := range rows {
+				size := 19_000
+				if index == 0 {
+					size += pad
+				}
+				rows[index] = json.RawMessage(`{"org_id":"org-acme","pad":"` + strings.Repeat("x", size) + `"}`)
+			}
+			effects := make([]EffectBatch, 0, 7)
+			for _, destination := range []string{"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks", "test_suite_results",
+				"test_case_results", "coverage_snapshots", testOpsRunReportCompletenessDestination} {
+				var destinationRows []json.RawMessage
+				if destination == "test_case_results" {
+					destinationRows = rows
+				}
+				effect, err := BuildEffectBatch(destination, EffectReadbackRequired, destinationRows)
+				if err != nil {
+					t.Fatal(err)
+				}
+				effects = append(effects, effect)
+			}
+			return CompleteRouteBatch{Effects: effects, Result: result}
+		}
+		measure := func(batch CompleteRouteBatch) int {
+			chunk := PreparedProviderChunk{SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion, TotalChunks: 1,
+				Effects: batch.Effects, InventoryComplete: true, Result: batch.Result}
+			encoded, err := encodedPreparedChunkPayload(chunk)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return len(encoded)
+		}
+		pad, target := 0, limit-200
+		for step := 0; step < 40 && abs(measure(build(pad))-target) > 40; step++ {
+			pad += target - measure(build(pad))
+		}
+		batch := build(pad)
+		if size := measure(batch); size > limit || size < limit-1000 {
+			t.Fatalf("final=%t: the synthetic sub-chunk is %d bytes, want it just under the split limit %d", final, size, limit)
+		}
+		chunks, err := splitCompleteRouteBatch(batch, ShadowComparison{}, policy)
+		if err != nil || len(chunks) != 1 {
+			t.Fatalf("final=%t: split = %d chunks, err=%v, want one sub-chunk under the limit", final, len(chunks), err)
+		}
+		worst := strings.Repeat("&", maxChunkCursorBytes)
+		resetEmissionChunks(chunks, ChunkRouteEmission{CursorBefore: worst, CursorAfter: worst})
+		if final {
+			chunks[0].InventoryComplete, chunks[0].Result = true, cloneChunkResult(batch.Result)
+		}
+		if err := sizeEmissionChunks(chunks); err != nil {
+			t.Fatal(err)
+		}
+		chunks[0].Ordinal = 999_999
+		chunks[0].ManifestDigest = preparedChunkDigest(chunks[0])
+		material, err := buildPreparedChunkMaterial(claim, chunks[0], time.Date(2026, 12, 31, 23, 59, 59, 999_999_999, time.UTC))
+		if err != nil {
+			t.Fatalf("final=%t: the store refuses what the split accepted: %v", final, err)
+		}
+		t.Logf("final=%t: payload %d + ledger %d = %d of %d", final, len(material.payloadRaw), len(material.ledgerRaw),
+			len(material.payloadRaw)+len(material.ledgerRaw), maxChunkPayloadBytes)
 	}
 }

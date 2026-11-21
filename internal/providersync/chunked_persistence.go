@@ -593,11 +593,16 @@ func splitCompleteRouteBatch(
 	return nil, ErrChunkPolicyExceeded
 }
 
+// splitReserveBytes is what the split does not measure of a stored chunk: the ledger column (bounded as a whole by
+// maxEffectLedgerStateBytes), the two cursors stamped after the split (maxChunkCursorBytes each, and the sidecar is JSON: a
+// character costs up to 6 bytes escaped), and about 1 KiB for the manifest digest, the executor's ordinal and the stamped
+// payload_bytes. Every other field of PreparedProviderChunk (rows, final result, watermark, evidence, comparison) is measured.
+const splitReserveBytes = maxEffectLedgerStateBytes + 2*6*maxChunkCursorBytes + 1<<10
+
 // splitPayloadLimit is the sidecar size a sub-chunk may have when the split decides. The store refuses a chunk whose payload and
-// ledger column together pass maxChunkPayloadBytes (buildPreparedChunkMaterial); the ledger is bounded as a whole by
-// maxEffectLedgerStateBytes (encodeEffectLedgerState) and the two cursors stamped after the split by maxChunkCursorBytes each.
+// ledger column together pass maxChunkPayloadBytes (buildPreparedChunkMaterial).
 func splitPayloadLimit(policy ChunkPolicy) int {
-	return min(policy.MaxPreparedBytes, maxChunkPayloadBytes-maxEffectLedgerStateBytes-2*maxChunkCursorBytes)
+	return min(policy.MaxPreparedBytes, maxChunkPayloadBytes-splitReserveBytes)
 }
 
 func preparedChunkDigest(chunk PreparedProviderChunk) string {

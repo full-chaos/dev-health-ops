@@ -128,6 +128,20 @@ const (
 )
 
 // The team-keyed daily tables that take the shared rule. All lists them.
+// TeamMetricsDailyPick is the whole version of one team_metrics_daily key: every
+// measure of the table, so a pick that takes it by TeamMetricsDailyNewestOrder
+// serves one version (its counts, its ratios and its liveness together).
+const TeamMetricsDailyPick = `tuple(team_metrics_daily.commits_count, team_metrics_daily.after_hours_commits_count,
+    team_metrics_daily.weekend_commits_count, team_metrics_daily.after_hours_commit_ratio,
+    team_metrics_daily.weekend_commit_ratio)`
+
+// TeamMetricsDailyNewestOrder is the version order of a team_metrics_daily key, the
+// second argument of argMax(TeamMetricsDailyPick, ...): the newest computed_at, and on
+// a tie the larger hash of the whole version. The served page (cognitiveload) and
+// the recommendations job read the table by this one order, so a computed_at tie
+// gives both the same version whatever the scan order.
+const TeamMetricsDailyNewestOrder = `(team_metrics_daily.computed_at, cityHash64(` + TeamMetricsDailyPick + `))`
+
 var (
 	WorkItemMetricsDaily = Table{
 		Table: "work_item_metrics_daily", Family: "work_item", DayColumn: "day",

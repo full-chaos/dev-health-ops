@@ -250,7 +250,8 @@ func driverDoubleHome(t *testing.T, metric string, linked, orgRows bool, ids []s
 			return scan([][]any{{driverDoubleTeam}, {driverDoubleNewTeam}})
 		case strings.Contains(q, "name AS display_name"):
 			return scan([][]any{{driverDoubleTeam, "Platform"}, {driverDoubleNewTeam, "New"}})
-		case !linked && (strings.Contains(q, "LIMIT 1 BY") || orgRows) && strings.Contains(q, "argMax("+column+",") && (strings.Contains(q, "AS value") || strings.Contains(q, "AS blocked_hours")):
+		// A Nullable value column is read with the tuple argMax (CHAOS-14424).
+		case !linked && (strings.Contains(q, "LIMIT 1 BY") || orgRows) && (strings.Contains(q, "argMax("+column+",") || strings.Contains(q, "argMax(tuple("+column+"),")) && (strings.Contains(q, "AS value") || strings.Contains(q, "AS blocked_hours")):
 			start, _ := time.Parse(time.DateOnly, bound("start_day"))
 			operation := "sum"
 			if strings.Contains(q, "avg("+column+") AS") || strings.Contains(q, "avg("+column+")) AS") {

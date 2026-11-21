@@ -34,11 +34,11 @@ import (
 // must stay OUTSIDE: it has to see the newest row, not skip it for an older
 // live one. The subquery is aliased as the table: the live-row and view
 // predicates name their columns table-qualified, and without the alias the
-// outer query has no such table. cityHash64(tuple(*)) breaks a computed_at tie
-// by row content, so equal versions never pick at random.
+// outer query has no such table. A computed_at tie is broken by the served order
+// (rowview.WorkItemMetricsNewestOrder), so the job stores what the pages serve.
 func capacityNewestRows(where string) string {
 	return "(SELECT * FROM work_item_metrics_daily WHERE " + where +
-		" ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY " +
+		" ORDER BY " + rowview.WorkItemMetricsNewestOrder + " DESC LIMIT 1 BY " +
 		strings.Join(capacityTableRequirements["work_item_metrics_daily"].sortingKey, ", ") + ") AS work_item_metrics_daily"
 }
 

@@ -1397,9 +1397,9 @@ type RepoCoverageBaseline struct {
 	LineBaselinePct *float64 `json:"lineBaselinePct,omitempty"`
 	// Counted days of the 30: days that store both line counts and more than 0 lines.
 	LineDays int `json:"lineDays"`
-	// Mean branch coverage, in percent, over the days of the 30 that hold a value. Null = fewer than 7 such days (``branchDays``). Never 0 for "none", never the current value.
+	// Pooled branch coverage, in percent (0 to 100): the branches covered over the branches total of the repository's stored branch counts, over the 30 days. A day with no stored branch counts, or with no branches, is in neither sum and is not a day with a value. Null = fewer than 7 such days (``branchDays``), or none. Never 0 for "none", never the current value.
 	BranchBaselinePct *float64 `json:"branchBaselinePct,omitempty"`
-	// Days of the 30 that hold a branch coverage value.
+	// Days of the 30 that store branch counts and more than 0 branches.
 	BranchDays int `json:"branchDays"`
 }
 
@@ -1539,9 +1539,9 @@ type ScopeCoverageBaseline struct {
 	LineBaselinePct *float64 `json:"lineBaselinePct,omitempty"`
 	// Days of the 30 on which at least one repository of the scope has a counted day.
 	LineDays int `json:"lineDays"`
-	// Mean, in percent, of the scope's branch coverage of each day that holds a value (the mean over its repositories), over the 30 days. Null = fewer than 7 such days (``branchDays``). Never 0 for "none", never the current value.
+	// Pooled branch coverage, in percent (0 to 100): the branches covered over the branches total of the stored branch counts of every repository and day of the scope in the 30 days, not the mean of the day values. A repository-day with no stored branch counts, or with no branches, is in neither sum. Null = fewer than 7 days with a value (``branchDays``), or none. Never 0 for "none", never the current value.
 	BranchBaselinePct *float64 `json:"branchBaselinePct,omitempty"`
-	// Days of the 30 on which at least one repository of the scope holds a branch coverage value.
+	// Days of the 30 on which at least one repository of the scope has stored branch counts and more than 0 branches.
 	BranchDays int `json:"branchDays"`
 }
 

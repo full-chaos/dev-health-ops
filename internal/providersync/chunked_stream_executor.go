@@ -34,6 +34,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
 	}
 	observer, _ := handler.(ChunkCommitObserver)
+	rule, _ := handler.(ChunkFinalWatermarkRule)
 	var result CompleteRouteExecutionResult
 	err := session.Run(ctx, executor.HeartbeatInterval, func(
 		workContext context.Context,
@@ -91,7 +92,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 			if checkpoint.TotalChunks < 1 || checkpoint.NextOrdinal != checkpoint.TotalChunks || checkpoint.PreparedChunks != checkpoint.TotalChunks {
 				return ErrChunkCheckpointConflict
 			}
-			return loadChunkedFinalResult(workContext, session.Claim, store, checkpoint.TotalChunks, &result, executor.now())
+			return loadChunkedFinalResult(workContext, session.Claim, store, rule, checkpoint.TotalChunks, &result, executor.now())
 		}
 		// A committed final sidecar means the inventory scan already finished
 		// on an earlier attempt and only MarkInventoryComplete is outstanding.
@@ -116,7 +117,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 					return ErrChunkCheckpointConflict
 				}
 				return loadChunkedFinalResult(
-					workContext, session.Claim, store, checkpoint.TotalChunks, &result, executor.now())
+					workContext, session.Claim, store, rule, checkpoint.TotalChunks, &result, executor.now())
 			}
 		}
 
@@ -367,7 +368,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 			return ErrChunkCheckpointConflict
 		}
 		result.Comparison = finalComparison
-		return loadChunkedFinalResult(workContext, session.Claim, store, checkpoint.TotalChunks, &result, executor.now())
+		return loadChunkedFinalResult(workContext, session.Claim, store, rule, checkpoint.TotalChunks, &result, executor.now())
 	})
 	return result, err
 }
@@ -410,11 +411,14 @@ func checkpointTime(checkpoint ChunkCheckpoint, fallback time.Time) time.Time {
 // comparison's record counts come from the checkpoint's cumulative committed
 // row count, NOT from the final chunk: that chunk carries only metadata and no
 // rows, so comparing against it reported zero records for a sync of any size
-// and could not detect an omitted or duplicated chunk (CHAOS-3823).
+// and could not detect an omitted or duplicated chunk (CHAOS-3823). Every
+// publish, fresh or recovered, passes the watermark through the route's rule
+// (publishedFinalWatermark; nil rule: the stored watermark).
 func loadChunkedFinalResult(
 	ctx context.Context,
 	claim Claim,
 	store ChunkedEffectStore,
+	rule ChunkFinalWatermarkRule,
 	total int,
 	result *CompleteRouteExecutionResult,
 	now time.Time,
@@ -433,7 +437,8 @@ func loadChunkedFinalResult(
 		}
 		return ErrChunkCheckpointConflict
 	}
-	result.Fetch, result.Result, result.Watermark = final.Evidence, final.Result, final.Watermark
+	result.Fetch, result.Result = final.Evidence, final.Result
+	result.Watermark = publishedFinalWatermark(claim, rule, final)
 	result.Comparison = final.Comparison
 	result.Comparison.NativeRecords = int(checkpoint.CommittedRows)
 	result.Comparison.PythonRecords = int(checkpoint.CommittedRows)

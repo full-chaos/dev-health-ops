@@ -70,6 +70,12 @@ func metricFromClause(table, column, scopeFilter, startParam, endParam string, o
 		}
 	}
 	for _, vc := range valueColumns {
+		if nullableValueColumns[vc] {
+			// argMax skips a NULL argument: while an older version sits in an unmerged part it would serve that
+			// version instead of the newest row's NULL. The tuple is never NULL, so the newest row wins (as explain).
+			valueProjections = append(valueProjections, fmt.Sprintf("tupleElement(argMax(tuple(%s), computed_at), 1) AS %s", vc, vc))
+			continue
+		}
 		valueProjections = append(valueProjections, fmt.Sprintf("argMax(%s, computed_at) AS %s", vc, vc))
 	}
 	return fmt.Sprintf(`(

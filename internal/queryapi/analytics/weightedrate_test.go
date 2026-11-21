@@ -37,11 +37,25 @@ func TestRateMeasuresAreWeightedAndNeverAnAverageOfStoredRates(t *testing.T) {
 
 // What has no stored denominator and no raw samples stays a mean of the stored values, and is named so.
 func TestMeasuresWithoutADenominatorStayAnAverage(t *testing.T) {
-	for _, measure := range []Measure{MeasureCoverageBranchPct, MeasureCoverageDeltaPct} {
+	for _, measure := range []Measure{MeasureCoverageDeltaPct} {
 		expr, err := dbExpression(measure, false, false)
 		if err != nil || !strings.HasPrefix(expr, "AVG(") {
 			t.Errorf("%s: %q err %v, want an AVG", measure, expr, err)
 		}
+	}
+}
+
+// Branch coverage is the branches covered over the branches total of the rows that carry both counts, never an AVG of
+// the stored percent.
+func TestBranchCoverageIsPooledOverTheStoredCounts(t *testing.T) {
+	expr, err := dbExpression(MeasureCoverageBranchPct, false, false)
+	counted := "branches_covered IS NOT NULL AND branches_total IS NOT NULL AND branches_total > 0"
+	want := "SUM(if(" + counted + ", branches_covered, 0)) / NULLIF(SUM(if(" + counted + ", branches_total, 0)), 0) * 100"
+	if err != nil || expr != want {
+		t.Errorf("%q err %v, want %q", expr, err, want)
+	}
+	if strings.Contains(expr, "branch_coverage_pct") {
+		t.Errorf("%q reads the stored branch_coverage_pct", expr)
 	}
 }
 

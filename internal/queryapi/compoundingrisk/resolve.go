@@ -20,6 +20,8 @@ const (
 	defaultTrendDays = 30
 	scopeRepo        = "repo"
 	scopeTeam        = "team"
+
+	unassignedTeamLabel = "Unassigned team"
 )
 
 func severityFrom(v string) model.CompoundingRiskSeverity {
@@ -287,7 +289,10 @@ func repoScopeForTeams(ctx context.Context, client QueryClient, orgID string, re
 	return out, nil
 }
 
-// Resolve answers compoundingRisk for the org.
+// Resolve answers compoundingRisk for the org. Breakout TEAM with no team named
+// means every team: rows and trend then cover every repository (a repository no
+// team owns is listed as "Unassigned team"). With teams named, rows and trend
+// cover only the repositories those teams own.
 func Resolve(ctx context.Context, client QueryClient, orgID string, filter *model.CompoundingRiskFilterInput, now time.Time) (*model.CompoundingRiskResult, error) {
 	if client == nil {
 		return nil, errNoClient
@@ -400,7 +405,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 					return nil, err
 				}
 			}
-			repoRows, err := latestRows(ctx, client, orgID, d, scopeRepo, fallbackRepoIDs)
+			repoRows, err := latestRowsLimit(ctx, client, orgID, d, scopeRepo, fallbackRepoIDs, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -420,6 +425,17 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 			}
 			for id := range teamsOfRepo {
 				sort.Strings(teamsOfRepo[id])
+			}
+			if len(teamIDs) == 0 {
+				// No team named = every team: the rows must cover every
+				// repository the trend covers, so a repository no team owns
+				// is listed under the no-team value.
+				for _, r := range repoRows {
+					if len(teamsOfRepo[r.scopeID]) == 0 {
+						teamsOfRepo[r.scopeID] = []string{activeteams.UnassignedID}
+					}
+				}
+				labels[activeteams.UnassignedID] = unassignedTeamLabel
 			}
 			points = teamPoints(d, repoRows, teamsOfRepo, labels, teamIDs, now)
 		}

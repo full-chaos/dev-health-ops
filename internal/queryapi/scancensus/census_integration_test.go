@@ -895,7 +895,27 @@ const nullableIntoPlainSites = `
 //	queries_metric_drivers_batch.go fetchMetricDriversBatch e7e8b7f8955e -> 281275fa72d7
 //	queries_metrics.go fetchMetricDriverDelta be0937cb6512 -> 96cabf4f5482
 //	queries_metrics.go fetchRateDriverDelta fef6e4dd8810 -> b365611c6c29
+//
+// CHAOS-14430 (one version per key on a computed_at tie): the Home, explain and aggflame dedup sources pick ONE version
+// of the measures (argMax(tuple(...), order) AS picked) and read the live-row rule from it. Select lists, column types
+// and scan targets of the served statements are unchanged; the statement source moved. fetchCycleBreakdown's inner
+// select list is now spliced (rowview.VersionPick), so the census cannot verify it: pinned. Re-pinned by hand,
+// digests copied from the failing local TestScanTypeCensus run (AFTER-MAIN-14430-1.log), not computed:
+//
+//	metrics.go fetchChangeFailureView 3bdc10632c75 -> f1de7f538dbf
+//	metrics.go fetchMetricContributors 21d612f437ea -> 0f1564c7d703
+//	metrics.go fetchMetricDriverDelta 69d32d6caccb -> e323d4521397
+//	metrics.go fetchMetricValue aff9d26238c0 -> 91d0bd625cba
+//	queries_metrics.go fetchBlockedHours 224ae017b462 -> f5f7d6db9c6c
+//	queries_metrics.go fetchChangeFailureView 02b9a54bef69 -> 5c69758db38b
+//	queries_metrics.go fetchMetricDriverDelta 96cabf4f5482 -> 5c30782ec285
+//	queries_metrics.go fetchMetricSeries 600ac24505e4 -> d260e9570730
+//	queries_metrics.go fetchMetricValue 32cfbee5d369 -> f3f0c40e81ae
+//	queries_metrics.go fetchPRReworkView f2e5aa5edd0b -> 1403432e956f
+//	queries_metrics.go fetchRateDriverDelta b365611c6c29 -> f2372ec26b43
+//	clickhouse.go fetchCycleBreakdown (new pin) 566971fe4c3c
 const unverifiedSites = `
+internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|566971fe4c3c|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|e67003e26fc2|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|e67003e26fc2|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadDocDrift|*string,*uint64,*uint64|3c8b7092e723|not-describable
@@ -927,19 +947,19 @@ internal/queryapi/datahealth/coverage.go|MetricLineage|**time.Time,*uint64|bb989
 internal/queryapi/datahealth/sourcehealth.go|SourceHealth|*string,**string,*bool,**time.Time,*bool,*string,*[]byte,**time.Time,**bool,*bool,**time.Time,**string,*bool,**time.Time,**time.Time,**string,**string|dabf0d087730|not-describable
 internal/queryapi/drilldown/issues.go|BuildIssuesResponse|*string,*string,*string,**string,**string,**float64,**float64,**time.Time,**time.Time|efc62e04415b|not-describable
 internal/queryapi/drilldown/issues.go|buildBlockedIssuesResponse|*string,*string,**string,**string,*uint64|0df7b140bb0b|not-describable
-internal/queryapi/explain/metrics.go|fetchChangeFailureView|[]any|3bdc10632c75|variadic-destinations
-internal/queryapi/explain/metrics.go|fetchMetricContributors|*string,**float64|21d612f437ea|spliced-select-list
-internal/queryapi/explain/metrics.go|fetchMetricDriverDelta|*string,**float64,*uint8,*uint8,**float64|69d32d6caccb|not-describable
-internal/queryapi/explain/metrics.go|fetchMetricValue|**float64,*uint64|aff9d26238c0|spliced-select-list
+internal/queryapi/explain/metrics.go|fetchChangeFailureView|[]any|f1de7f538dbf|variadic-destinations
+internal/queryapi/explain/metrics.go|fetchMetricContributors|*string,**float64|0f1564c7d703|spliced-select-list
+internal/queryapi/explain/metrics.go|fetchMetricDriverDelta|*string,**float64,*uint8,*uint8,**float64|e323d4521397|not-describable
+internal/queryapi/explain/metrics.go|fetchMetricValue|**float64,*uint64|91d0bd625cba|spliced-select-list
 internal/queryapi/explain/repositories.go|fetchWorkItemProviders|*string|cc6f1e4e4f8c|not-describable
 internal/queryapi/home/queries_metric_drivers_batch.go|fetchMetricDriversBatch|*string,*string|281275fa72d7|not-describable
-internal/queryapi/home/queries_metrics.go|fetchBlockedHours|*time.Time,*float64|224ae017b462|not-describable
-internal/queryapi/home/queries_metrics.go|fetchChangeFailureView|[]any|02b9a54bef69|variadic-destinations
-internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|96cabf4f5482|spliced-select-list
-internal/queryapi/home/queries_metrics.go|fetchMetricSeries|*time.Time,**float64|600ac24505e4|spliced-select-list
-internal/queryapi/home/queries_metrics.go|fetchMetricValue|*int64,**float64|32cfbee5d369|spliced-select-list
-internal/queryapi/home/queries_metrics.go|fetchPRReworkView|[]any|f2e5aa5edd0b|variadic-destinations
-internal/queryapi/home/queries_metrics.go|fetchRateDriverDelta|*string,**float64,**float64|b365611c6c29|spliced-select-list
+internal/queryapi/home/queries_metrics.go|fetchBlockedHours|*time.Time,*float64|f5f7d6db9c6c|not-describable
+internal/queryapi/home/queries_metrics.go|fetchChangeFailureView|[]any|5c69758db38b|variadic-destinations
+internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|5c30782ec285|spliced-select-list
+internal/queryapi/home/queries_metrics.go|fetchMetricSeries|*time.Time,**float64|d260e9570730|spliced-select-list
+internal/queryapi/home/queries_metrics.go|fetchMetricValue|*int64,**float64|f3f0c40e81ae|spliced-select-list
+internal/queryapi/home/queries_metrics.go|fetchPRReworkView|[]any|1403432e956f|variadic-destinations
+internal/queryapi/home/queries_metrics.go|fetchRateDriverDelta|*string,**float64,**float64|f2372ec26b43|spliced-select-list
 internal/queryapi/home/queries_signals.go|fetchRiskSignals|*string,*string,**float64,*string,*time.Time,**float64|06cb489933a0|not-describable
 internal/queryapi/home/queries_sync.go|FetchLatestSuccessfulSyncAt|**time.Time|9dfe899f0474|statement-not-static
 internal/queryapi/home/repolinked.go|readBasis|*string,*string,*uint8|ed45fd9e4470|spliced-select-list

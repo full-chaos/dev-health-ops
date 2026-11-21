@@ -292,10 +292,11 @@ type Metrics struct {
 	// syncRunRollupBumped intentionally does NOT live here -- see
 	// syncRunRollupBumpedMetrics's doc comment (codex round 1, P1,
 	// CHAOS-4586): it is a process-wide singleton, not a per-family field.
-	jiraSearchPages         map[string]uint64
-	chunkContinuation       map[string]uint64
-	rateLimitEpisodeRestart map[string]uint64
-	unitDeferred            map[string]uint64
+	jiraSearchPages                map[string]uint64
+	chunkContinuation              map[string]uint64
+	rateLimitEpisodeRestart        map[string]uint64
+	unitDeferred                   map[string]uint64
+	gitlabTestsWindowStartFallback map[string]uint64
 	// jiraDevStatus counts CHAOS-4757's dev-status (GitHub-for-Jira panel)
 	// fetches, by outcome -- see RecordJiraDevStatus.
 	jiraDevStatus map[string]uint64
@@ -359,6 +360,7 @@ func NewMetrics() *Metrics {
 		jiraSearchPages:                map[string]uint64{},
 		chunkContinuation:              map[string]uint64{},
 		rateLimitEpisodeRestart:        map[string]uint64{},
+		gitlabTestsWindowStartFallback: map[string]uint64{},
 		unitDeferred:                   map[string]uint64{},
 		jiraDevStatus:                  map[string]uint64{},
 		gitlabClosingMR:                map[string]uint64{},
@@ -1067,6 +1069,18 @@ func (m *Metrics) RecordRateLimitEpisodeRestart(provider, dataset string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.rateLimitEpisodeRestart[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
+}
+
+// RecordGitLabTestsWindowStartFallback counts one GitLab tests/cicd walk whose
+// window start fell back to our clock because the project read carried no
+// usable Date header (CHAOS-14383), by bounded dataset.
+func (m *Metrics) RecordGitLabTestsWindowStartFallback(dataset string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.gitlabTestsWindowStartFallback[metricProvider("gitlab")+":"+MetricDatasetLabel(dataset)]++
 }
 
 // metricUnitDeferralReasonVocabulary is the closed set of reasons a provider
@@ -2012,6 +2026,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_provider_rate_limit_episode_restart_total",
 		"Rate-limit deferral episodes restarted because the unit's chunk checkpoint moved since its last rate-limit deferral, by bounded provider and dataset (CHAOS-14252).",
 		m.rateLimitEpisodeRestart,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetCounter(
+		writer, "dev_health_provider_gitlab_tests_window_start_fallback_total",
+		"GitLab tests/cicd walks whose window start used our clock because the project read had no usable Date header, by bounded provider and dataset (CHAOS-14415).",
+		m.gitlabTestsWindowStartFallback,
 	); err != nil {
 		return err
 	}

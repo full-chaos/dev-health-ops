@@ -3829,12 +3829,14 @@ plan_integration_split_units() {
 }
 
 # plan_integration_place_split_unit WEIGHT KEY #PART: puts one part of a split-by-test package on the lightest open shard
-# (lowest number on a tie), the rule a whole package follows, and every name of that part with it. Reads closed_shards of
-# plan_integration_shards.
+# (lowest number on a tie), the rule a whole package follows, and every name of that part with it. A shard that already
+# holds a part of the same package is skipped (CHAOS-14453): two parts of one package run in one go test and add up, so the
+# shard's wall follows their sum. Reads closed_shards of plan_integration_shards.
 plan_integration_place_split_unit() {
   local weight="$1" key="$2" part="${3#\#}" shard selected_shard=0 selected_total=0 name
   for ((shard = 1; shard <= INTEGRATION_SHARD_COUNT; shard++)); do
     case "${closed_shards}" in *" ${shard} "*) continue ;; esac
+    case "${INTEGRATION_SPLIT_SHARDS[${key}]- }" in *" ${shard} "*) continue ;; esac
     if [ "${selected_shard}" -eq 0 ] || [ "${INTEGRATION_SHARD_TOTALS[${shard}]}" -lt "${selected_total}" ]; then
       selected_shard="${shard}"
       selected_total="${INTEGRATION_SHARD_TOTALS[${shard}]}"

@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
@@ -154,8 +155,9 @@ func (loader *RecommendationsLoader) teamMetricsSource() string {
 // (operating review, throughput forecast); it holds no pr_cycle_p75_hours, so the
 // latency pick hashes that column last. userMetricsReviewsPick is the served
 // reviews pick (aianalytics concentrationStatement). teamMetricsPick is every
-// liverow measure of team_metrics_daily: no served reader of the table breaks a
-// tie yet. compoundingRiskHash is the hash of the served compounding_risk_daily
+// liverow measure of team_metrics_daily; the order is
+// teamkeytables.TeamMetricsDailyNewestOrder, the one the served page
+// (cognitiveload) reads by. compoundingRiskHash is the hash of the served compounding_risk_daily
 // order (Home compoundingRiskNewestOrder).
 const repoMetricsServedHash = `cityHash64(tuple(
     repo_metrics_daily.prs_merged, repo_metrics_daily.pr_first_review_p50_hours,
@@ -165,9 +167,7 @@ const repoMetricsServedHash = `cityHash64(tuple(
 
 const userMetricsReviewsPick = `tuple(user_metrics_daily.reviews_given, user_metrics_daily.retracted)`
 
-const teamMetricsPick = `tuple(team_metrics_daily.commits_count, team_metrics_daily.after_hours_commits_count,
-    team_metrics_daily.weekend_commits_count, team_metrics_daily.after_hours_commit_ratio,
-    team_metrics_daily.weekend_commit_ratio)`
+const teamMetricsPick = teamkeytables.TeamMetricsDailyPick
 
 const compoundingRiskHash = `cityHash64(tuple(
     compounding_risk_daily.severity, compounding_risk_daily.w_churn, compounding_risk_daily.w_complexity,
@@ -439,7 +439,7 @@ func (loader *RecommendationsLoader) loadSustainabilitySignals(
                                 day,
                                 repo_id,
                                 argMax(` + teamMetricsPick + `,
-                                       (team_metrics_daily.computed_at, cityHash64(` + teamMetricsPick + `))) AS picked,
+                                       ` + teamkeytables.TeamMetricsDailyNewestOrder + `) AS picked,
                                 picked.1 AS commits_count,
                                 picked.2 AS after_hours_commits_count,
                                 picked.3 AS weekend_commits_count,

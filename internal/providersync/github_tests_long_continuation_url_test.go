@@ -78,8 +78,9 @@ func runLongContinuationFrom(t *testing.T, urlBytes int, resume string, stopAfte
 }
 
 // longContinuationURLBytes puts the widest cursor of the walk within 20 bytes of 4096 without its cut lists. It was 3790
-// until a cursor kept its resume anchor (CHAOS-14316: up to 15 more bytes in this walk).
-const longContinuationURLBytes = 3775
+// until a cursor kept its resume anchor (CHAOS-14316: up to 15 more bytes in this walk), and 3775 until a cursor kept the
+// count of pages its range entered (CHAOS-14385: `,"pe":N`, 8 bytes in this walk).
+const longContinuationURLBytes = 3767
 
 // A provider continuation URL near 3.8 KB plus the cut lists must not fail the chunk with a checkpoint conflict. At
 // longContinuationURLBytes the widest cursor of the whole walk is within 20 bytes of 4096 without its cut lists (main before

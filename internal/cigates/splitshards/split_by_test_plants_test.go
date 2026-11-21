@@ -269,6 +269,10 @@ func TestSplitByTestPartsAreExactAndPlantedDefectsAreCaught(t *testing.T) {
 		dir := copyManifest(t, filepath.Join(root, "ci/go_integration_shards.d"))
 		file := filepath.Join(dir, strings.ReplaceAll(c.key, "/", "__")+".tsv")
 		body := readText(t, file)
+		if i := strings.Index(body, "split-by-test\t"); i >= 0 {
+			// Drop the package's own measured rows: the plant writes its own for every name but one.
+			body = body[:i+strings.Index(body[i:], "\n")+1]
+		}
 		for n := range c.want {
 			if n != anyName {
 				body += n + "\t4\n"

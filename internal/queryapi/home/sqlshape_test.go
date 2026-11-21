@@ -262,7 +262,7 @@ func TestFetchMetricDriverDeltaScopesATableWithNoNaturalKey(t *testing.T) {
 		return &fixtureRowScanner{rows: nil}, nil
 	}}
 	if _, err := fetchMetricDriverDelta(context.Background(), client, table, "commits_count", "team_id",
-		day(2024, 1, 8), day(2024, 1, 15), day(2024, 1, 1), day(2024, 1, 8), "", nil, "org-1", 3); err != nil {
+		day(2024, 1, 8), day(2024, 1, 15), day(2024, 1, 1), day(2024, 1, 8), "", nil, "org-1", 3, "", false); err != nil {
 		t.Fatalf("fetchMetricDriverDelta: %v", err)
 	}
 	if len(captured) != 1 {

@@ -9,7 +9,6 @@ package home
 import (
 	"context"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"slices"
 	"strings"
@@ -403,37 +402,38 @@ type driverRow struct {
 // `previous` CTEs are inlined as FROM subqueries instead, matching
 // internal/analytics/flowmatrix.go's own identical fix for the same
 // guard (see that file's flowMatrixTeamActivitySelect doc comment).
-func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, column, groupBy string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string, limit int) ([]driverRow, error) {
+//
+// The drivers take the value's own reducer and status filter (driverValueSQL, driverStatusFilter); fromZero is a value
+// that rose from a measured 0, whose drivers rank by the absolute rise (driverRank). shareSQL is the share weight of a
+// repository sum under a team scope (scopeShareForMetric), "" otherwise.
+func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, column, groupBy string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string, limit int, shareSQL string, fromZero bool) ([]driverRow, error) {
+	scopeFilter += driverStatusFilter(table, column)
 	currentFrom := driverDeltaSource(table, column, scopeFilter, "start_day", "end_day")
 	previousFrom := driverDeltaSource(table, column, scopeFilter, "compare_start", "compare_end")
-	if isPRRework(table, column) {
-		return fetchRateDriverDelta(ctx, client, prrework.WindowRateSQL, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
+	value, rate := driverValueSQL(table, column, shareSQL)
+	if rate {
+		return fetchRateDriverDelta(ctx, client, value, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit, fromZero)
 	}
-	if table == changefailure.Table {
-		return fetchRateDriverDelta(ctx, client, changefailure.WindowRateSQL, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
-	}
-	if isPipelineSuccess(table, column) {
-		return fetchRateDriverDelta(ctx, client, pipelineSuccessWindowRateSQL, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
-	}
+	rank, alias, where := driverRank(fromZero, driverSums(table, column), false)
 	query := fmt.Sprintf(`
         SELECT
             current.id AS id,
             current.value AS value,
-            %s AS delta_pct
+            %s AS %s
         FROM (
-            SELECT %s AS id, avg(%s) AS value
+            SELECT %s AS id, %s AS value
             FROM %s
             GROUP BY %s
         ) AS current
         LEFT JOIN (
-            SELECT %s AS id, avg(%s) AS value, toUInt8(1) AS present
+            SELECT %s AS id, %s AS value, toUInt8(1) AS present
             FROM %s
             GROUP BY %s
         ) AS previous ON current.id = previous.id
-        WHERE delta_pct IS NOT NULL
-        ORDER BY delta_pct DESC
+        WHERE %s
+        ORDER BY %s
         LIMIT {limit_n:UInt32}
-    `, deltarule.DriverPercentSQL("current.value", "previous.value", "previous.present"), groupBy, column, currentFrom, groupBy, groupBy, column, previousFrom, groupBy)
+    `, rank, alias, groupBy, value, currentFrom, groupBy, groupBy, value, previousFrom, groupBy, where, driverOrder(alias))
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
@@ -463,6 +463,12 @@ func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, colu
 	return out, rows.Err()
 }
 
+// driverOrder is the ORDER BY of the summary's driver read: the rank, then the one tie key of every driver read
+// (driverTieKey), so the summary and the caption name the same drivers in the same order.
+func driverOrder(alias string) string {
+	return alias + " DESC, " + driverTieKey
+}
+
 // fetchRateDriverDelta is fetchMetricDriverDelta for a rate that is a ratio
 // of summed counts (change failure rate, the pull request rework ratio):
 // each group's value is the window rate of its own summed counts (rateSQL),
@@ -471,12 +477,13 @@ func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, colu
 // without a delta: a group with no row in the comparison window, or with no
 // defined previous rate, is not named as the driver of a percent it has no
 // part in (deltarule.DriverPercentSQL).
-func fetchRateDriverDelta(ctx context.Context, client QueryClient, rateSQL, groupBy, currentFrom, previousFrom string, startDay, endDay, compareStart, compareEnd time.Time, scopeBindings []dhclickhouse.Binding, orgID string, limit int) ([]driverRow, error) {
+func fetchRateDriverDelta(ctx context.Context, client QueryClient, rateSQL, groupBy, currentFrom, previousFrom string, startDay, endDay, compareStart, compareEnd time.Time, scopeBindings []dhclickhouse.Binding, orgID string, limit int, fromZero bool) ([]driverRow, error) {
+	rank, alias, where := driverRank(fromZero, false, true)
 	query := fmt.Sprintf(`
         SELECT
             current.id AS id,
             assumeNotNull(current.value) AS value,
-            %s AS delta_pct
+            %s AS %s
         FROM (
             SELECT %s AS id, %s AS value
             FROM %s
@@ -487,10 +494,10 @@ func fetchRateDriverDelta(ctx context.Context, client QueryClient, rateSQL, grou
             FROM %s
             GROUP BY %s
         ) AS previous ON current.id = previous.id
-        WHERE current.value IS NOT NULL AND delta_pct IS NOT NULL
-        ORDER BY delta_pct DESC
+        WHERE %s
+        ORDER BY %s
         LIMIT {limit_n:UInt32}
-    `, deltarule.DriverPercentSQL("current.value", "previous.value", "previous.present"), groupBy, rateSQL, currentFrom, groupBy, groupBy, rateSQL, previousFrom, groupBy)
+    `, rank, alias, groupBy, rateSQL, currentFrom, groupBy, groupBy, rateSQL, previousFrom, groupBy, where, driverOrder(alias))
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},

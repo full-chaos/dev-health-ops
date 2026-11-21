@@ -82,7 +82,8 @@ team's persisted review latency also covers a repository the team owns that
 merged pull requests in the window but has no repository row that day, while
 the trend covers only repositories with a row. A filter that leaves out a
 repository gives each team the mean of the scores of its selected
-repositories, and an empty filter gives no rows.
+repositories. An empty filter with no team named gives no rows and no trend;
+with teams named it means the same as no filter (the teams' own repositories).
 
 A team that owns a repository with a row that day but has no persisted team
 score for the day (not computed yet, or withdrawn) is listed with the mean of

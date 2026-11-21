@@ -1,5 +1,5 @@
 internal/goapiproof	600
-split-by-test	2
+split-by-test	3
 TestCandidateAccounting_EnumeratedAdmissionImpliesTheInvariantToFourRows	258
 TestPersonDrilldownPRs_EnumeratedCursorAdmissionImpliesTheInvariantToThreeRows	141
 TestTheEnablementRuleOverItsWholeInputSurface	76

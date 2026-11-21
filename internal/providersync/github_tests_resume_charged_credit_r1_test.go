@@ -604,3 +604,96 @@ func TestGitHubTestsResumeRunAppearingAheadEarnsNoDeletionCredit(t *testing.T) {
 		})
 	}
 }
+
+// chargedR1DeepWithWindow is a deep listing's claim with 60 window runs (one each 30 s from 23:01) besides its deep runs.
+func chargedR1DeepWithWindow(listing deletionShiftListing, deep int) []listingRun {
+	return append(listing.runs(1, deep), makeListingRuns(1000, 60, listing.claim.SinceAt.Add(time.Minute), 30*time.Second)...)
+}
+
+// A re-seek with no deletion (a run inserted ahead of the window listing's anchor, in its second) earns re-read credit
+// only. Two walks in a row, each with such a re-seek and a deep stop at the record bound: the deep stop advances the
+// watermark in both, as main (record credit is not a deletion; holding on it would stall an active repository).
+func TestGitHubTestsInsertReseekDeepStopAtTheRecordBoundAdvances(t *testing.T) {
+	chargedR1RaceSkip(t)
+	for _, listing := range deletionShiftListings() {
+		if !listing.deep {
+			continue
+		}
+		for _, coalesce := range []bool{false, true} {
+			t.Run(listing.name+"/"+deletionShiftFlag(coalesce), func(t *testing.T) {
+				bound := 120
+				if listing.reports {
+					bound = 300
+				}
+				handler := GitHubTestsRouteHandler{MaxWalkRecords: bound, CoalesceRuns: coalesce}
+				fake := newListingFake(t, chargedR1DeepWithWindow(listing, 200))
+				for walk := 1; walk <= 2; walk++ {
+					inserted := false
+					final := chargedResumeWalk(t, handler, listing.claim, deletionShiftDoer(t, fake, listing.reports),
+						func(c githubTestsChunkCursor) bool {
+							return !inserted && c.Phase == githubTestsRunsPhase && !c.LateRuns && c.Index > 0 && c.RangeItems == 30
+						},
+						func(c githubTestsChunkCursor) {
+							inserted = true
+							second, err := time.Parse(time.RFC3339, c.RangeOldest)
+							if err != nil {
+								t.Fatal(err)
+							}
+							fake.runs = append(fake.runs, listingRun{id: 5000 + walk, created: second, updated: second.Add(time.Minute),
+								status: "completed", conclusion: "success"})
+						})
+					batch, err := githubTestsFinalMetadataBatch(listing.claim, final)
+					if err != nil {
+						t.Fatal(err)
+					}
+					incomplete := deletionShiftIncomplete(t, batch.Result)
+					t.Logf("CELL insert_reseek/%s/%s walk=%d rc=%d watermark=%v incomplete=%v", listing.name, deletionShiftFlag(coalesce),
+						walk, final.RecordCredit, batch.Watermark != nil, incomplete)
+					if !inserted || final.RecordCredit == 0 || len(incomplete) == 0 {
+						t.Fatalf("premise: inserted=%v rc=%d incomplete=%v, want a re-seek and a deep stop", inserted, final.RecordCredit, incomplete)
+					}
+					if batch.Watermark == nil {
+						t.Errorf("walk %d: an insert re-seek and a deep stop at the record bound hold the watermark (no deletion)", walk)
+					}
+				}
+			})
+		}
+	}
+}
+
+// A deletion proven AT the record bound in a deep reports listing whose runs wrote no pipeline row earns no credit (the
+// average has no population): the survivor it leaves must not be skipped in silence: a recorded stop holds the watermark.
+func TestGitHubTestsResumeDeletionProvenWithoutCreditHoldsTheDeepStop(t *testing.T) {
+	chargedR1RaceSkip(t)
+	listing, fixture := chargedR1DeepReports(true)
+	for _, coalesce := range []bool{false, true} {
+		t.Run(deletionShiftFlag(coalesce), func(t *testing.T) {
+			const at = 130
+			handler := GitHubTestsRouteHandler{MaxWalkRecords: 3 * at, CoalesceRuns: coalesce}
+			fake := newListingFake(t, slices.Clone(fixture))
+			var checkpoint githubTestsChunkCursor
+			final := chargedResumeWalk(t, handler, listing.claim, deletionShiftDoer(t, fake, true),
+				func(c githubTestsChunkCursor) bool {
+					return checkpoint.AnchorID == "" && listing.in(c) && c.RangeItems == at
+				},
+				func(c githubTestsChunkCursor) { checkpoint = c; resumeDeletionDelete(fake, 250) })
+			if checkpoint.Pipelines != 0 || githubTestsWindowRecords(checkpoint) != handler.MaxWalkRecords {
+				t.Fatalf("premise: pipelines=%d charged=%d bound=%d", checkpoint.Pipelines, githubTestsWindowRecords(checkpoint), handler.MaxWalkRecords)
+			}
+			batch, err := githubTestsFinalMetadataBatch(listing.claim, final)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plain := newListingFake(t, slices.Clone(fake.runs))
+			deletionShiftPlainWalk(t, handler, listing.claim, deletionShiftDoer(t, plain, true))
+			unread := chargedR1Unread(listing, plain, fake)
+			incomplete := deletionShiftIncomplete(t, batch.Result)
+			t.Logf("CELL proven_no_credit/%s rc=%d unread=%v watermark=%v incomplete=%v", deletionShiftFlag(coalesce), final.RecordCredit,
+				unread, batch.Watermark != nil, incomplete)
+			held := batch.Watermark == nil && slices.Contains(incomplete, githubTestsArtifactInventoryComponent+"/"+githubTestsPageBudgetCause)
+			if len(unread) != 0 && !held {
+				t.Errorf("%v unread and the watermark advanced: a silent skip", unread)
+			}
+		})
+	}
+}

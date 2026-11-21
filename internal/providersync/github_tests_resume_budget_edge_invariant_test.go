@@ -614,3 +614,159 @@ func budgetEdgeUnfiltered(t *testing.T, coalesce bool) {
 		t.Errorf("unfiltered claim: rp=%d unread=%d, want rp 11 and no survivor unread", maxPages, unread)
 	}
 }
+
+// A range in flight at the workers roll: an older binary wrote its cursor (no PagesEntered) inside the range, this binary
+// resumes it, yields again, and a later move re-seeks. With 50-run pages, RangeItems/100 undercounts the pages entered, so
+// the first resume restores the count from the page number of the cursor's GitHub URL (page N mid-page: N entered; a
+// page-end cursor naming page N+1: N entered). The re-seek then gets every page the moved search entered and reads every
+// survivor an uninterrupted walk of the survivors reads.
+func TestGitHubTestsResumeOlderBinaryCursorWithShortPagesRestoresThePagesEntered(t *testing.T) {
+	for _, coalesce := range coalesceFlags {
+		for _, listing := range deletionShiftRaceListings() {
+			for _, cell := range []struct {
+				name     string
+				legacyAt func(githubTestsChunkCursor) bool
+			}{
+				{"mid_page_3", func(c githubTestsChunkCursor) bool { return c.RangeItems == 125 && c.Index > 0 }},
+				{"page_end_3", func(c githubTestsChunkCursor) bool { return c.RangeItems == 150 && c.Index == 0 }},
+			} {
+				t.Run(coalesceName(coalesce)+"/"+listing.name+"/"+cell.name, func(t *testing.T) {
+					handler := GitHubTestsRouteHandler{MaxRuns: 400, CoalesceRuns: coalesce}
+					if listing.deep {
+						handler = GitHubTestsRouteHandler{LateRerunMaxPages: 4, CoalesceRuns: coalesce}
+					}
+					// Runs 351..400 one a second, then 1..350 in one created second: the move at run 175 re-seeks that second,
+					// and the survivors' walk of 4 pages ends 151 runs into it (4 free pages, no more).
+					runs := listing.runs(1, 400)
+					for index := range 350 {
+						runs[index].created = runs[349].created
+						runs[index].updated = runs[349].updated
+					}
+					fake := newListingFake(t, runs)
+					fake.perPage = 50
+					client := githubTestsClient(t, fakehttp.Client(deletionShiftDoer(t, fake, listing.reports)))
+					resume, stop := "", errors.New("yield")
+					legacy, moved := false, false
+					for pass := 1; ; pass++ {
+						if pass > 100 {
+							t.Fatal("the walk never reached a final emission")
+						}
+						final := false
+						err := handler.CollectChunks(context.Background(), listing.claim, providerfoundation.Credential{}, client,
+							time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), resume, func(emission ChunkRouteEmission) error {
+								if emission.Barrier {
+									return nil
+								}
+								resume = emission.CursorAfter
+								if emission.Final {
+									final = true
+									return nil
+								}
+								after, decodeErr := decodeGitHubTestsChunkCursor(emission.CursorAfter)
+								if decodeErr != nil {
+									t.Fatal(decodeErr)
+								}
+								switch {
+								case !legacy && listing.in(after) && cell.legacyAt(after):
+									legacy = true
+									resume = budgetEdgeStripPages(t, resume) // the older binary's cursor
+									return stop
+								case legacy && !moved && listing.in(after) && after.RangeItems == 175:
+									moved = true
+									resumeDeletionDelete(fake, 400)
+									return stop
+								}
+								return nil
+							})
+						if final {
+							break
+						}
+						if !errors.Is(err, stop) {
+							t.Fatalf("pass %d: %v", pass, err)
+						}
+					}
+					if !legacy || !moved {
+						t.Fatalf("premise: legacy=%v moved=%v", legacy, moved)
+					}
+					survivors := newListingFake(t, slices.Clone(fake.runs))
+					survivors.perPage = 50
+					deletionShiftPlainWalk(t, handler, listing.claim, deletionShiftDoer(t, survivors, listing.reports))
+					var unread []int
+					for id := range listing.reads(survivors) {
+						if listing.reads(fake)[id] == 0 {
+							unread = append(unread, id)
+						}
+					}
+					sort.Ints(unread)
+					extra := 0
+					for id := range listing.reads(fake) {
+						if id != 400 && listing.reads(survivors)[id] == 0 {
+							extra++
+						}
+					}
+					t.Logf("CELL legacy_short/%s/%s/%s unread=%d first=%v extra=%d", coalesceName(coalesce), listing.name, cell.name, len(unread), unread[:min(3, len(unread))], extra)
+					if len(unread) != 0 {
+						t.Errorf("a range in flight at the roll with short pages: %d survivors unread, want 0", len(unread))
+					}
+					if extra >= 50 {
+						t.Errorf("the re-seek read %d runs past the survivors' walk: a free page more than the pages entered", extra)
+					}
+				})
+			}
+		}
+	}
+}
+
+// budgetEdgeStripPages is the cursor an older binary writes: no re-seek state and no count of the pages entered.
+func budgetEdgeStripPages(t *testing.T, raw string) string {
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"rp", "rc", "pe"} {
+		delete(fields, key)
+	}
+	out, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
+// Only a cursor of an older binary takes the restore: this binary counts a page before it lists a run of it, so every
+// cursor it writes inside a range carries PagesEntered, and a fresh range (no run listed) keeps zero whatever its URL.
+func TestGitHubTestsRestorePagesEnteredOnlyForAnOlderBinarysCursor(t *testing.T) {
+	fresh := githubTestsChunkCursor{Phase: githubTestsRunsPhase, NextURL: "https://api.github.com/repos/acme/api/actions/runs?page=3"}
+	if got := githubTestsRestorePagesEntered(fresh).PagesEntered; got != 0 {
+		t.Errorf("a fresh range restored %d pages entered, want 0", got)
+	}
+	counted := githubTestsChunkCursor{Phase: githubTestsRunsPhase, RangeItems: 125, Index: 25, PagesEntered: 3,
+		NextURL: "https://api.github.com/repos/acme/api/actions/runs?page=3"}
+	if got := githubTestsRestorePagesEntered(counted); got.PagesEntered != 3 {
+		t.Errorf("a counted cursor changed to %d pages entered", got.PagesEntered)
+	}
+	for _, coalesce := range coalesceFlags {
+		for _, listing := range deletionShiftRaceListings() {
+			t.Run(coalesceName(coalesce)+"/"+listing.name, func(t *testing.T) {
+				fake := newListingFake(t, listing.runs(1, 250))
+				fake.perPage = 50
+				_, emitted := budgetEdgeWalk(t, GitHubTestsRouteHandler{CoalesceRuns: coalesce}, listing.claim, fake,
+					func(githubTestsChunkCursor) bool { return false }, nil)
+				checked := 0
+				for _, raw := range emitted {
+					cursor, err := decodeGitHubTestsChunkCursor(raw)
+					if err != nil || !listing.in(cursor) || cursor.RangeItems == 0 {
+						continue
+					}
+					checked++
+					if cursor.PagesEntered == 0 {
+						t.Fatalf("this binary wrote a cursor inside a range with no pages entered: %s", raw)
+					}
+				}
+				if checked == 0 {
+					t.Fatal("premise: no cursor inside the listing")
+				}
+			})
+		}
+	}
+}

@@ -531,6 +531,29 @@ func githubTestsFreePages(cursor githubTestsChunkCursor) int {
 	return free
 }
 
+// githubTestsRestorePagesEntered gives a cursor of an older binary (inside a range with runs listed, but no PagesEntered:
+// this binary counts a page before it lists a run of it) the pages its range entered, from the page number GitHub's Link
+// URL carries: a cursor inside page N entered N pages, a page-end cursor naming page N+1 entered N. Short pages make
+// RangeItems/100 too low, so it is only the floor, and the count when the URL has no page number (the first page).
+func githubTestsRestorePagesEntered(cursor githubTestsChunkCursor) githubTestsChunkCursor {
+	if cursor.PagesEntered != 0 || cursor.RangeItems == 0 ||
+		cursor.Phase != githubTestsRunsPhase && cursor.Phase != githubTestsArtifactsPhase {
+		return cursor
+	}
+	entered := (cursor.RangeItems + nativePerPage - 1) / nativePerPage
+	if parsed, err := url.Parse(cursor.NextURL); err == nil && cursor.NextURL != "" {
+		query := parsed.Query()
+		if page, atoiErr := strconv.Atoi(query.Get("page")); atoiErr == nil && page >= 1 && len(query["page"]) == 1 {
+			if cursor.Index == 0 {
+				page--
+			}
+			entered = max(entered, page)
+		}
+	}
+	cursor.PagesEntered = entered
+	return cursor
+}
+
 // githubTestsEnterPage enters the next page of the active range (at index 0): it counts the page and charges it to the page
 // budget unless it is a free page of the range's re-seek.
 func githubTestsEnterPage(cursor githubTestsChunkCursor, charge func(*githubTestsChunkCursor)) githubTestsChunkCursor {
@@ -1501,6 +1524,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	if err != nil {
 		return err
 	}
+	cursor = githubTestsRestorePagesEntered(cursor)
 	cursor.OpenSkipEvent = nil
 	// invocationBaseRequests is the running total every PRIOR chunk
 	// invocation already persisted onto the cursor. requests below counts

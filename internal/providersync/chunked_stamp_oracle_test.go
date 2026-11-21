@@ -818,14 +818,17 @@ func TestNoChunkedDescriptorUsesPreparedManifestRecovery(t *testing.T) {
 func TestGitHubFilesPreCheckDominatesEveryOrdinalBelowAMillion(t *testing.T) {
 	t.Parallel()
 	claim := nativeTestClaim("github", "files")
-	low, high := 2_000_000, 2_100_000
-	accepted := 0
-	for pad := low; pad <= high; pad += 4999 {
-		effect := fitsTestEffect(t, pad)
-		if !gitHubFilesChunkFits(claim, effect, "before", "after") {
-			continue
+	edge := tuneFilesEdge(t, claim)
+	edgeBytes := len(edge.Rows[0])
+	// The largest chunk the pre-check accepts, and two below it.
+	for _, delta := range []int{0, -1, -4096} {
+		effect := edge
+		if delta != 0 {
+			effect = fitsTestEffectSized(t, edgeBytes+delta)
 		}
-		accepted++
+		if !gitHubFilesChunkFits(claim, effect, "before", "after") {
+			t.Fatalf("delta %d: the pre-check refuses a chunk at or under its own edge", delta)
+		}
 		chunk, ok := gitHubFilesPreparedChunk(effect, "before", "after")
 		if !ok {
 			t.Fatal("the pre-check chunk is not one chunk")
@@ -835,38 +838,50 @@ func TestGitHubFilesPreCheckDominatesEveryOrdinalBelowAMillion(t *testing.T) {
 			real.Ordinal = ordinal
 			real.ManifestDigest = preparedChunkDigest(real)
 			if _, err := buildPreparedChunkMaterial(claim, real, gitHubFilesWidestInstant); err != nil {
-				t.Fatalf("pad %d: the pre-check accepted a chunk the store refuses at ordinal %d: %v", pad, ordinal, err)
+				t.Fatalf("delta %d: the pre-check accepted a chunk the store refuses at ordinal %d: %v", delta, ordinal, err)
 			}
-		}
-	}
-	if accepted == 0 {
-		t.Fatal("the sweep never reached a chunk the pre-check accepts")
-	}
-	// The exact edge: a chunk tuned to the limit at the pre-check's own ordinal.
-	edge := tuneFilesEdge(t, claim)
-	if gitHubFilesChunkFits(claim, edge, "before", "after") {
-		chunk, _ := gitHubFilesPreparedChunk(edge, "before", "after")
-		chunk.Ordinal = 999_999
-		chunk.ManifestDigest = preparedChunkDigest(chunk)
-		if _, err := buildPreparedChunkMaterial(claim, chunk, gitHubFilesWidestInstant); err != nil {
-			t.Fatalf("at the edge the pre-check accepts a chunk the store refuses at ordinal 999,999: %v", err)
 		}
 	}
 }
 
-// tuneFilesEdge is the files effect whose pre-check chunk is the largest the pre-check accepts.
+var filesEdgeOnce struct {
+	sync.Once
+	length int
+}
+
+// tuneFilesEdge is the files effect whose pre-check chunk is the largest the pre-check accepts (searched once per test binary).
 func tuneFilesEdge(t *testing.T, claim Claim) EffectBatch {
 	t.Helper()
-	low, high := 1_900_000, 2_200_000
-	for low < high {
-		middle := (low + high + 1) / 2
-		if gitHubFilesChunkFits(claim, fitsTestEffect(t, middle), "before", "after") {
-			low = middle
-		} else {
-			high = middle - 1
-		}
+	filesEdgeOnce.Do(func() { filesEdgeOnce.length = searchFilesEdge(t, claim) })
+	if filesEdgeOnce.length == 0 {
+		t.Fatal("the files pre-check edge was not found")
 	}
-	return fitsTestEffect(t, low)
+	return fitsTestEffect(t, filesEdgeOnce.length)
+}
+
+func searchFilesEdge(t *testing.T, claim Claim) int {
+	t.Helper()
+	length := 2_080_000
+	for range 20 {
+		chunk, ok := gitHubFilesPreparedChunk(fitsTestEffect(t, length), "before", "after")
+		if !ok {
+			t.Errorf("no pre-check chunk at %d", length)
+			return 0
+		}
+		payload, ledger := oracleStoredBytes(t, claim, chunk, gitHubFilesWidestInstant)
+		gap := maxChunkPayloadBytes - (payload + ledger)
+		if gap == 0 {
+			if !gitHubFilesChunkFits(claim, fitsTestEffect(t, length), "before", "after") ||
+				gitHubFilesChunkFits(claim, fitsTestEffect(t, length+1), "before", "after") {
+				t.Errorf("the pre-check edge is not at %d", length)
+				return 0
+			}
+			return length
+		}
+		length += gap
+	}
+	t.Errorf("no files pre-check edge found")
+	return 0
 }
 
 // Every files emission the pre-check accepts is ONE stored chunk in the executor (count equality), around the edge.

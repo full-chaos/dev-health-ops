@@ -290,3 +290,71 @@ func TestChunkStampPolicyCaps(t *testing.T) {
 		}
 	}
 }
+
+// R1 mixed versions: a unit whose emission was prepared under one cap and stopped mid-emission resumes under the other cap (100 -> 500 and
+// 500 -> 100): the stored chunks are drained as stored, the next emissions split at the new cap, every row is written once in order.
+func TestChunkStampMixedCapResume(t *testing.T) {
+	t.Parallel()
+	for _, pair := range [][2]ChunkPolicy{
+		{DefaultChunkPolicy(), TestOpsRouteChunkPolicy()},
+		{TestOpsRouteChunkPolicy(), DefaultChunkPolicy()},
+	} {
+		first, second := pair[0], pair[1]
+		t.Run(fmt.Sprintf("%d to %d", first.MaxSourceItems, second.MaxSourceItems), func(t *testing.T) {
+			t.Parallel()
+			emissions := stampScript(t, []stampShape{{cases: 1200, filled: true}, {cases: 1200, filled: true}}, false, 4000, 0)
+			harness := newStampHarness(t, "github", "cicd", emissions, stampAt)
+			first.MaxChunksPerAttempt = 1
+			harness.descriptor.ChunkPolicy = first
+			if _, err := harness.executor.executeChunkedStreaming(context.Background(), harness.session, harness.descriptor, harness.handler); !errors.As(err, new(ChunkContinuationError)) {
+				t.Fatalf("first attempt: err=%v, want a continuation inside the first emission", err)
+			}
+			harness.descriptor.ChunkPolicy = second
+			if err := harness.run(t); err != nil {
+				t.Fatal(err)
+			}
+			checkRowsOnceInOrder(t, harness.sink, emissions)
+			groups := harness.store.groups
+			wantFirst := (1200 + first.MaxSourceItems - 1) / first.MaxSourceItems
+			wantSecond := (1200 + second.MaxSourceItems - 1) / second.MaxSourceItems
+			if len(groups) != 3 || len(groups[0]) != wantFirst || len(groups[1]) != wantSecond {
+				t.Fatalf("group sizes %d, %d (of %d groups), want %d under the first cap and %d under the second", len(groups[0]), len(groups[1]), len(groups), wantFirst, wantSecond)
+			}
+		})
+	}
+}
+
+// F5: the ledger's size does not depend on rows per chunk beyond the row_count digits: one entry per destination (index, destination,
+// 64-hex content digest, row_count, recovery, status) plus the claim fields and two instants. At the TestOps cap with all 7 destinations
+// filled, and even at the largest row_count an effect may carry, it stays far under maxEffectLedgerStateBytes, so the store's
+// ErrEffectRecoveryUnsafe for an over-bound ledger is not reachable by a bigger cap (a non-size refusal is right for it).
+func TestChunkStampLedgerSizeDoesNotGrowWithRows(t *testing.T) {
+	t.Parallel()
+	claim := nativeTestClaim("github", "cicd")
+	widest := time.Date(2026, 12, 31, 23, 59, 59, 999_999_999, time.UTC)
+	emissions := stampScript(t, []stampShape{{cases: 500, filled: true, verdicts: 500}}, false, 0, 0)
+	batch, stamps := stampsOf(t, claim, emissions[0], 0, widest)
+	chunks, err := splitStampedEmission(batch, stamps, TestOpsRouteChunkPolicy())
+	if err != nil || len(chunks) != 1 {
+		t.Fatalf("%d chunks err=%v, want the 500-row emission in one chunk", len(chunks), err)
+	}
+	for _, effect := range chunks[0].Effects {
+		if len(effect.Rows) == 0 {
+			t.Fatalf("%s is empty, want all 7 destinations filled", effect.Destination)
+		}
+	}
+	state, err := NewEffectLedgerState(claim, chunks[0].Effects, widest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	atCap := len(encodeEffectLedgerState(state))
+	for index := range state.Effects {
+		state.Effects[index].RowCount = maxEffectRows
+	}
+	atMaxRows := len(encodeEffectLedgerState(state))
+	t.Logf("ledger at 500 rows x 7 destinations: %d bytes; at %d rows each: %d bytes; bound %d", atCap, maxEffectRows, atMaxRows, maxEffectLedgerStateBytes)
+	if atCap < 1 || atMaxRows < 1 || atMaxRows-atCap > 7*5 || atMaxRows*8 > maxEffectLedgerStateBytes {
+		t.Fatalf("ledger %d bytes at the cap, %d at the largest row_count: want only row_count digits to differ and an 8x margin to %d",
+			atCap, atMaxRows, maxEffectLedgerStateBytes)
+	}
+}

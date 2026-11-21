@@ -171,8 +171,13 @@ func teamPoints(day time.Time, rows []storedRow, teamsOfRepo map[string][]string
 		}
 		out = append(out, p)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		a, b := out[i].Score, out[j].Score
+	sortByScore(out)
+	return out
+}
+
+func sortByScore(points []model.CompoundingRiskPoint) {
+	sort.SliceStable(points, func(i, j int) bool {
+		a, b := points[i].Score, points[j].Score
 		if (a == nil) != (b == nil) {
 			return b == nil
 		}
@@ -181,7 +186,73 @@ func teamPoints(day time.Time, rows []storedRow, teamsOfRepo map[string][]string
 		}
 		return *a > *b
 	})
-	return out
+}
+
+// teamsOwningRepos maps each repository the candidate teams own at asOf to
+// those teams, sorted.
+func teamsOwningRepos(ctx context.Context, client QueryClient, orgID string, candidates []string, asOf time.Time) (map[string][]string, error) {
+	teamsOfRepo := map[string][]string{}
+	for _, t := range candidates {
+		owned, err := ownedRepos(ctx, client, orgID, t, asOf)
+		if err != nil {
+			return nil, err
+		}
+		for id := range owned {
+			teamsOfRepo[id] = append(teamsOfRepo[id], t)
+		}
+	}
+	for id := range teamsOfRepo {
+		sort.Strings(teamsOfRepo[id])
+	}
+	return teamsOfRepo, nil
+}
+
+// assignUnowned is the one rule for a repository no team owns on a breakout
+// that names no team: it is listed under the no-team value, so the rows cover
+// every repository the trend covers. Both team paths (derived from repository
+// rows, and stored team rows) use it.
+func assignUnowned(teamsOfRepo map[string][]string, repoRows []storedRow, labels map[string]string) {
+	for _, r := range repoRows {
+		if len(teamsOfRepo[r.scopeID]) == 0 {
+			teamsOfRepo[r.scopeID] = []string{activeteams.UnassignedID}
+		}
+	}
+	labels[activeteams.UnassignedID] = unassignedTeamLabel
+}
+
+// withUnassignedPoint adds the no-team point to a breakout built from stored
+// team rows: the writer stores no team row for a repository no team owns, so
+// the point is derived from the day's repository rows of the unowned
+// repositories by the same rule as the derived path. A stored no-team row is
+// kept as it is. Ownership is read at the selected day, the instant the
+// daily writer resolves it at, never at request time.
+func withUnassignedPoint(ctx context.Context, client QueryClient, orgID string, d time.Time, points []model.CompoundingRiskPoint, teams []string, labels map[string]string, repoIDs idList, now time.Time) ([]model.CompoundingRiskPoint, error) {
+	for _, p := range points {
+		if p.ScopeID == activeteams.UnassignedID {
+			return points, nil
+		}
+	}
+	repoRows, err := latestRowsLimit(ctx, client, orgID, d, scopeRepo, repoIDs, 0)
+	if err != nil {
+		return nil, err
+	}
+	teamsOfRepo, err := teamsOwningRepos(ctx, client, orgID, teams, d)
+	if err != nil {
+		return nil, err
+	}
+	var unowned []storedRow
+	for _, r := range repoRows {
+		if len(teamsOfRepo[r.scopeID]) == 0 {
+			unowned = append(unowned, r)
+		}
+	}
+	if len(unowned) == 0 {
+		return points, nil
+	}
+	assignUnowned(teamsOfRepo, unowned, labels)
+	points = append(points, teamPoints(d, unowned, teamsOfRepo, labels, nil, now)...)
+	sortByScore(points)
+	return points, nil
 }
 
 // listedTeamRows is the team rows a breakout with no team filter may list:
@@ -403,8 +474,16 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 		}
 		labels, order := teamLabels(ctx, client, orgID)
 		if len(teamRows) > 0 {
+			if len(teamIDs) == 0 {
+				labels[activeteams.UnassignedID] = unassignedTeamLabel
+			}
 			for _, r := range teamRows {
 				points = append(points, point(model.CompoundingRiskScopeTeam, d, r.scopeID, labelOr(labels, r.scopeID), r))
+			}
+			if len(teamIDs) == 0 {
+				if points, err = withUnassignedPoint(ctx, client, orgID, d, points, order, labels, repoIDs, now); err != nil {
+					return nil, err
+				}
 			}
 		} else {
 			if len(teamIDs) > 0 && !teamFilteredSet {
@@ -420,29 +499,12 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 			if len(candidates) == 0 {
 				candidates = order
 			}
-			teamsOfRepo := map[string][]string{}
-			for _, t := range candidates {
-				owned, err := ownedRepos(ctx, client, orgID, t, now)
-				if err != nil {
-					return nil, err
-				}
-				for id := range owned {
-					teamsOfRepo[id] = append(teamsOfRepo[id], t)
-				}
-			}
-			for id := range teamsOfRepo {
-				sort.Strings(teamsOfRepo[id])
+			teamsOfRepo, err := teamsOwningRepos(ctx, client, orgID, candidates, now)
+			if err != nil {
+				return nil, err
 			}
 			if len(teamIDs) == 0 {
-				// No team named = every team: the rows must cover every
-				// repository the trend covers, so a repository no team owns
-				// is listed under the no-team value.
-				for _, r := range repoRows {
-					if len(teamsOfRepo[r.scopeID]) == 0 {
-						teamsOfRepo[r.scopeID] = []string{activeteams.UnassignedID}
-					}
-				}
-				labels[activeteams.UnassignedID] = unassignedTeamLabel
+				assignUnowned(teamsOfRepo, repoRows, labels)
 			}
 			points = teamPoints(d, repoRows, teamsOfRepo, labels, teamIDs, now)
 		}

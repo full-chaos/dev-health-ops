@@ -246,7 +246,8 @@ func TestRealClickHouse_TeamBreakout(t *testing.T) {
 	// t9 holds a stored row and no team row: it is not a team (an id that only
 	// survives in stored rows), so a breakout with no team named does not
 	// list it. The breakout that names it, below, still gets its row.
-	if fmt.Sprint(ids(all.Rows)) != "[t1]" || all.Rows[0].ScopeLabel != "Platform" || all.Rows[0].Scope != model.CompoundingRiskScopeTeam {
+	// rA has a repository row and no owner, so the no-team row is listed beside t1.
+	if fmt.Sprint(ids(all.Rows)) != "[t1 unassigned]" || all.Rows[0].ScopeLabel != "Platform" || all.Rows[0].Scope != model.CompoundingRiskScopeTeam {
 		t.Fatalf("stored rows %#v", all.Rows)
 	}
 	one, _ := Resolve(ctx, client, "org-1", teamIn("t9"), now)
@@ -314,14 +315,17 @@ func TestRealClickHouse_SameIDsInTwoOrgs(t *testing.T) {
 			t.Errorf("%s repo rows %#v", c.org, got.Rows)
 		}
 	}
+	// org-1 owns no repository (ownership of the shared repo id is org-2's), so
+	// its repository row is listed under the no-team value beside the team row.
 	for _, c := range []struct {
 		org, label, score string
-	}{{"org-1", "Platform", "0.3"}, {"org-2", "Second", "0.9"}} {
+		rows              int
+	}{{"org-1", "Platform", "0.3", 2}, {"org-2", "Second", "0.9", 1}} {
 		got, err := Resolve(ctx, client, c.org, &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TrendDays: 30}, now)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(got.Rows) != 1 || got.Rows[0].ScopeLabel != c.label || fmt.Sprint(*got.Rows[0].Score) != c.score {
+		if len(got.Rows) != c.rows || got.Rows[0].ScopeLabel != c.label || fmt.Sprint(*got.Rows[0].Score) != c.score {
 			t.Errorf("%s team rows %#v", c.org, got.Rows)
 		}
 	}
@@ -423,7 +427,18 @@ func TestRealClickHouse_TrendOverOwnedRepositoriesForASuppliedTeam(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(got.Rows) != 1 || got.Rows[0].ScopeID != "t1" || *got.Rows[0].Score != 0.5 {
+		// rB is unowned: with no team named the no-team row is listed beside t1.
+		want := 1
+		if len(teamIDs) == 0 {
+			want = 2
+		}
+		var t1 *float64
+		for _, r := range got.Rows {
+			if r.ScopeID == "t1" {
+				t1 = r.Score
+			}
+		}
+		if len(got.Rows) != want || t1 == nil || *t1 != 0.5 {
 			t.Fatalf("stored team row %#v", got.Rows)
 		}
 		out := map[string]float64{}

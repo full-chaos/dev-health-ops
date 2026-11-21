@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,9 @@ import (
 // was sent.
 
 const driverDoubleTeam = "jira:platform"
+
+// driverDoubleNewTeam has rows in the current window only (scenario "from-zero-absent").
+const driverDoubleNewTeam = "jira:new"
 const driverDoubleRepo = "2bb3aa60-06fb-4a00-af55-26ce6891dfaa"
 
 type driverDoubleRow struct {
@@ -48,14 +52,17 @@ type driverDoubleRead struct {
 	currentSQL, priorSQL string
 	dayFilter            bool
 	linked               bool
+	// zero is the rank of a rise from a measured 0 (delta_abs); absentIsZero is its rule for a group with no prior row.
+	zero, absentIsZero bool
+	ids                []string
 }
 
 func (r driverDoubleRead) String() string {
 	if r.currentSQL == "" {
 		return "skipped"
 	}
-	return fmt.Sprintf("%s/%s blocked-only=%t repository-filter=%t prior=%g current=%g",
-		r.priorSQL, r.currentSQL, r.dayFilter, r.linked, r.prior, r.current)
+	return fmt.Sprintf("%s/%s blocked-only=%t repository-filter=%t zero=%t absent-is-zero=%t prior=%g current=%g ids=%v",
+		r.priorSQL, r.currentSQL, r.dayFilter, r.linked, r.zero, r.absentIsZero, r.prior, r.current, r.ids)
 }
 
 // This query double replays one team and one metric at a time. For the daily
@@ -79,6 +86,10 @@ func driverDoubleHome(t *testing.T, metric string, linked, orgRows bool, ids []s
 		rows = []driverDoubleRow{{prev, "blocked", 4}, {prev, "in_progress", 20}, {cur, "blocked", 8}, {cur, "in_progress", 2}}
 	}
 
+	absent := len(scenarios) == 1 && scenarios[0] == "from-zero-absent"
+	if absent {
+		scenarios = []string{"from-zero"}
+	}
 	if len(scenarios) == 1 {
 		for i := range rows {
 			if rows[i].status != "" && rows[i].status != "blocked" {
@@ -100,6 +111,20 @@ func driverDoubleHome(t *testing.T, metric string, linked, orgRows bool, ids []s
 			}
 			rows = kept
 		}
+	}
+	byTeam := map[string][]driverDoubleRow{driverDoubleTeam: rows}
+	teams := []string{driverDoubleTeam}
+	allRows := rows
+	if absent {
+		// A team with no prior row beside the measured 0: a summed value counts it as 0, an average does not.
+		byTeam[driverDoubleNewTeam] = map[string][]driverDoubleRow{
+			"cycle_time":     {{cur, "", 6}},
+			"throughput":     {{cur, "", 10}},
+			"wip_saturation": {{cur, "", 0.75}},
+			"blocked_work":   {{cur, "blocked", 20}},
+		}[metric]
+		teams = append(teams, driverDoubleNewTeam)
+		allRows = append(append([]driverDoubleRow{}, rows...), byTeam[driverDoubleNewTeam]...)
 	}
 	var items, attributions, blocked [][]any
 	addItem := func(id, status string, start time.Time, done any) {
@@ -140,7 +165,7 @@ func driverDoubleHome(t *testing.T, metric string, linked, orgRows bool, ids []s
 			return s
 		}
 		batch := strings.Contains(q, "BY metric")
-		arms := regexp.MustCompile(`SELECT team_id AS id, (sum|avg)\(([a-z_0-9]+)\) AS value`).FindAllStringSubmatchIndex(q, -1)
+		arms := regexp.MustCompile(`SELECT team_id AS id, (?:toFloat64\()?(sum|avg)\(([a-z_0-9]+)\)\)? AS value`).FindAllStringSubmatchIndex(q, -1)
 		if len(arms) > 0 && q[arms[0][4]:arms[0][5]] == column {
 			if len(arms) != 2 {
 				return nil, fmt.Errorf("expected two driver arms for %s, got %d", metric, len(arms))
@@ -148,30 +173,69 @@ func driverDoubleHome(t *testing.T, metric string, linked, orgRows bool, ids []s
 			first, second := q[arms[0][0]:arms[1][0]], q[arms[1][0]:]
 			rule := driverDoubleRead{
 				currentSQL: q[arms[0][2]:arms[0][3]], priorSQL: q[arms[1][2]:arms[1][3]],
-				dayFilter: strings.Contains(first, "status = 'blocked'") && strings.Contains(second, "status = 'blocked'"),
-				linked:    strings.Contains(q, "work_graph_issue_pr"),
+				dayFilter:    strings.Contains(first, "status = 'blocked'") && strings.Contains(second, "status = 'blocked'"),
+				linked:       strings.Contains(q, "work_graph_issue_pr"),
+				zero:         strings.Contains(q, "AS delta_abs"),
+				absentIsZero: strings.Contains(q, "(previous.present = 0 OR previous.value = 0)"),
 			}
-			chosen := rows
-			if !strings.Contains(q, "LIMIT 1 BY") && !orgRows {
-				// The daily rows are team rows unless orgRows: the org form reads none of them.
-				chosen = nil
+			if rule.zero != strings.Contains(q, "current.value > 0") || rule.zero == strings.Contains(q, "AS delta_pct") {
+				return nil, fmt.Errorf("a driver read that is neither the percent form nor the absolute form:\n%s", q)
 			}
-			current, hasCurrent := driverDoubleReduce(chosen, bound("start_day"), rule.currentSQL, strings.Contains(first, "status = 'blocked'"))
-			prior, hasPrior := driverDoubleReduce(chosen, bound("compare_start"), rule.priorSQL, strings.Contains(second, "status = 'blocked'"))
-			rule.current, rule.prior = current, prior
+			// The daily rows are team rows unless orgRows: the org form reads none of them.
+			teamRows := !strings.Contains(q, "LIMIT 1 BY") && !orgRows
+			type ranked struct {
+				id            string
+				current, rank float64
+			}
+			var out []ranked
+			for _, team := range teams {
+				chosen := byTeam[team]
+				if teamRows {
+					chosen = nil
+				}
+				current, hasCurrent := driverDoubleReduce(chosen, bound("start_day"), rule.currentSQL, strings.Contains(first, "status = 'blocked'"))
+				prior, hasPrior := driverDoubleReduce(chosen, bound("compare_start"), rule.priorSQL, strings.Contains(second, "status = 'blocked'"))
+				if team == driverDoubleTeam {
+					rule.current, rule.prior = current, prior
+				}
+				if hasCurrent == 0 {
+					continue
+				}
+				if rule.zero {
+					measuredZero := hasPrior > 0 && prior == 0
+					if current > 0 && (measuredZero || hasPrior == 0 && rule.absentIsZero) {
+						out = append(out, ranked{team, current, current - prior})
+					}
+					continue
+				}
+				if delta := deltarule.Of(current, prior, true, hasPrior > 0).Pct; delta != nil {
+					out = append(out, ranked{team, current, *delta})
+				}
+			}
+			sort.SliceStable(out, func(i, j int) bool {
+				if out[i].rank != out[j].rank {
+					return out[i].rank > out[j].rank
+				}
+				return out[i].id < out[j].id
+			})
+			var result [][]any
+			for _, r := range out {
+				rule.ids = append(rule.ids, r.id)
+				if batch {
+					result = append(result, []any{metric, r.id})
+				} else {
+					result = append(result, []any{r.id, r.current, r.rank})
+				}
+			}
 			if batch {
 				caption = rule
 			} else {
 				summary = rule
 			}
-			delta := deltarule.Of(current, prior, hasCurrent > 0, hasPrior > 0).Pct
-			if delta == nil {
-				return scan(nil)
-			}
-			if batch {
-				return scan([][]any{{metric, driverDoubleTeam}})
-			}
-			return scan([][]any{{driverDoubleTeam, current, *delta}})
+			return scan(result)
+		}
+		if strings.Contains(q, "AS previous ON") {
+			return nil, fmt.Errorf("a driver read the double does not know:\n%s", q)
 		}
 		switch {
 		case linked && strings.Contains(q, "link_repo_ids") && strings.Contains(q, "SELECT toString(repo_id), last_synced"):
@@ -183,9 +247,9 @@ func driverDoubleHome(t *testing.T, metric string, linked, orgRows bool, ids []s
 		case linked && strings.Contains(q, "FROM repos FINAL") && (strings.Contains(q, "{held_repo_ids:") && strings.HasPrefix(strings.TrimSpace(q), "SELECT DISTINCT toString(id) AS repo_id") || strings.Contains(q, "WHERE repo = {repo_name:String}") && strings.HasPrefix(strings.TrimSpace(q), "SELECT toString(id) AS id")):
 			return scan([][]any{{driverDoubleRepo}})
 		case strings.HasPrefix(q, "SELECT id FROM teams FINAL"):
-			return scan([][]any{{driverDoubleTeam}})
+			return scan([][]any{{driverDoubleTeam}, {driverDoubleNewTeam}})
 		case strings.Contains(q, "name AS display_name"):
-			return scan([][]any{{driverDoubleTeam, "Platform"}})
+			return scan([][]any{{driverDoubleTeam, "Platform"}, {driverDoubleNewTeam, "New"}})
 		// A Nullable value column is read with the tuple argMax (CHAOS-14424).
 		case !linked && (strings.Contains(q, "LIMIT 1 BY") || orgRows) && (strings.Contains(q, "argMax("+column+",") || strings.Contains(q, "argMax(tuple("+column+"),")) && (strings.Contains(q, "AS value") || strings.Contains(q, "AS blocked_hours")):
 			start, _ := time.Parse(time.DateOnly, bound("start_day"))
@@ -193,7 +257,7 @@ func driverDoubleHome(t *testing.T, metric string, linked, orgRows bool, ids []s
 			if strings.Contains(q, "avg("+column+") AS") || strings.Contains(q, "avg("+column+")) AS") {
 				operation = "avg"
 			}
-			value, n := driverDoubleReduce(rows, bound("start_day"), operation, strings.Contains(q, "status = 'blocked'"))
+			value, n := driverDoubleReduce(allRows, bound("start_day"), operation, strings.Contains(q, "status = 'blocked'"))
 			if n == 0 {
 				return scan(nil)
 			}
@@ -270,39 +334,22 @@ func TestHomeOneTeamDriverIsTheValuesMove(t *testing.T) {
 	}
 }
 
-// One team and a value of the items linked to the named repositories (what.repos): no team-wide driver, for team rows
-// and for org rows. Two teams keep main's answer (pinned from main ef0758cf3a42): main names the team-wide driver of
-// the org rows (ticket 14425), and none for team rows.
+// A value of the items linked to the named repositories (what.repos) names no team-wide driver, for team rows and org
+// rows: one team (CHAOS-14379) and two teams (CHAOS-14425; main ef0758cf3a42 and b737db18f3b2 named "driven by
+// Platform" for org rows, log ops2a2-r1-repro-1.log 9a8fd350ae6f). No driver read is sent.
 func TestHomeOneTeamLinkedValueHasNoDriver(t *testing.T) {
 	for _, metric := range []string{"cycle_time", "throughput", "wip_saturation", "blocked_work"} {
 		for _, orgRows := range []bool{false, true} {
-			resp, summaryRead, _ := driverDoubleHome(t, metric, true, orgRows, []string{driverDoubleTeam})
-			text, _ := driverDoubleSummary(resp)
-			if strings.Contains(text, "driven by") || summaryRead.currentSQL != "" {
-				t.Errorf("%s org rows %v: one team linked summary %q (driver read %s), want no driver", metric, orgRows, text, summaryRead)
-			}
-			two, _, _ := driverDoubleHome(t, metric, true, orgRows, []string{driverDoubleTeam, "jira:other"})
-			twoText, _ := driverDoubleSummary(two)
-			if want := driverDoubleMainTwoTeamsLinked(metric, orgRows); twoText != want {
-				t.Errorf("%s org rows %v: two teams linked summary %q, want main's %q", metric, orgRows, twoText, want)
+			for _, ids := range [][]string{{driverDoubleTeam}, {driverDoubleTeam, "jira:other"}, nil} {
+				resp, summaryRead, captionRead := driverDoubleHome(t, metric, true, orgRows, ids)
+				text, captions := driverDoubleSummary(resp)
+				if strings.Contains(text, "driven by") || len(captions) > 0 || summaryRead.currentSQL != "" || captionRead.currentSQL != "" {
+					t.Errorf("%s org rows %v teams %d: linked summary %q captions %q (driver reads %s / %s), want no driver",
+						metric, orgRows, len(ids), text, captions, summaryRead, captionRead)
+				}
 			}
 		}
 	}
-}
-
-// driverDoubleMainTwoTeamsLinked is main's summary for two teams and a linked value (log ops2a2-r1-repro-1.log
-// 9a8fd350ae6f, main ef0758cf3a42, the control run R1_ORG_ROWS=1 for org rows).
-func driverDoubleMainTwoTeamsLinked(metric string, orgRows bool) string {
-	sentence := map[string]string{
-		"cycle_time":     "Cycle Time rose 300%",
-		"throughput":     "Throughput rose 100%",
-		"wip_saturation": "WIP Saturation rose 100%",
-		"blocked_work":   "Blocked Work rose 300%",
-	}[metric]
-	if orgRows {
-		return sentence + " driven by Platform."
-	}
-	return sentence + "."
 }
 
 // A move from a measured 0 (the prior window measured 0, the current not) is stated in absolute values and has no
@@ -355,8 +402,9 @@ func TestHomeOneTeamDriverOnAMoveFromAMeasuredZero(t *testing.T) {
 	}
 }
 
-// The controls of the one-team driver: one team ([t], [t,t]) names the team for a percent move, a linked value names
-// none; no team and a team set keep main's driver reads; a steady or a missing value names none.
+// The controls of the driver: one team ([t], [t,t]) names the team for a percent move with no driver read; no team and
+// a team set read the drivers of the org rows; a linked value names none in any form (CHAOS-14425); a steady or a
+// missing value names none.
 func TestHomeOneTeamDriverControls(t *testing.T) {
 	scopes := []struct {
 		name string
@@ -378,10 +426,10 @@ func TestHomeOneTeamDriverControls(t *testing.T) {
 						summary, captions := driverDoubleSummary(resp)
 						summaryNamed := strings.Contains(summary, "driven by Platform")
 						captionNamed := len(captions) == 1 && strings.Contains(captions[0], "Platform")
-						wantSummary := (isOne && !linked) || (!isOne && orgRows)
-						wantCaption := wantSummary && !linked
-						wantSummaryRead := !isOne && (orgRows || linked)
-						wantCaptionRead := !isOne && orgRows && !linked
+						wantSummary := !linked && (isOne || orgRows)
+						wantCaption := wantSummary
+						wantSummaryRead := !isOne && orgRows && !linked
+						wantCaptionRead := wantSummaryRead
 						gotSummaryRead, gotCaptionRead := summaryRead.currentSQL != "", captionRead.currentSQL != ""
 						t.Logf("%s org=%t linked=%t summary-name=%t caption-name=%t summary-SQL=%t caption-SQL=%t",
 							scope.name, orgRows, linked, summaryNamed, captionNamed, gotSummaryRead, gotCaptionRead)
@@ -403,27 +451,5 @@ func TestHomeOneTeamDriverControls(t *testing.T) {
 				t.Logf("%s summary=%q captions=%q", scenario, summary, captions)
 			}
 		})
-	}
-}
-
-// Main's answer on a move from a measured 0 for no team and a team set (org rows), pinned from main cd3c1b0339bd (log
-// ops2a2-r2-main-zero-1.log): no caption; the summary names a driver only for blocked_work (main's driver read takes
-// every status, ticket 14425). This PR keeps it.
-func TestHomeZeroPriorNoTeamAndTeamSetKeepMain(t *testing.T) {
-	for _, metric := range []string{"cycle_time", "throughput", "wip_saturation", "blocked_work"} {
-		for _, ids := range [][]string{nil, {driverDoubleTeam, "jira:other"}} {
-			resp, summaryRead, _ := driverDoubleHome(t, metric, false, true, ids, "from-zero")
-			summary, captions := driverDoubleSummary(resp)
-			want := map[string]string{
-				"cycle_time":     "Cycle Time rose from 0 days to 0.2 days.",
-				"throughput":     "Throughput rose from 0 items to 4 items.",
-				"wip_saturation": "WIP Saturation rose from 0 % to 50 %.",
-				"blocked_work":   "Blocked Work rose from 0 hours to 8 hours driven by Platform.",
-			}[metric]
-			if summary != want || len(captions) != 0 || summaryRead.currentSQL == "" {
-				t.Errorf("%s teams=%d: summary %q captions %q (driver read %s), want main's %q, no caption, a driver read",
-					metric, len(ids), summary, captions, summaryRead, want)
-			}
-		}
 	}
 }

@@ -633,13 +633,17 @@ func recordGitHubTestsWalkBound(
 // (DeletionProven) may stop before a survivor the deletion credit did not cover (CHAOS-14434). Its advancing stop then
 // also records a window-blocking truncation (run_inventory for the deep runs, artifact_inventory for the deep reports): the
 // watermark holds, and the next walk reads the deep range again. Re-seek credit alone (an inserted run) holds nothing.
+// The deep stop's recorder counts the stopped phase once; the blocking observation adds no metric.
 func githubTestsHoldDeepStopAfterDeletion(
-	cursor githubTestsChunkCursor, client *providerfoundation.HTTPClient, claim Claim, component string,
+	cursor githubTestsChunkCursor, _ *providerfoundation.HTTPClient, _ Claim, component string,
 ) githubTestsChunkCursor {
 	if cursor.DeletionProven == 0 {
 		return cursor
 	}
-	return markGitHubTestsInventoryTruncated(cursor, client, claim, component)
+	cursor.Incomplete = mergeGitHubTestsIncomplete(cursor.Incomplete, GitHubTestsIncomplete{
+		Component: component, Cause: githubTestsPageBudgetCause, Count: 1,
+	})
+	return cursor
 }
 
 // githubTestsOpenRunsWalkBoundComponent names the open phase in the walk-bound WARN line only; it is not an inventory component.

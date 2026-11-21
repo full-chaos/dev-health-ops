@@ -169,10 +169,10 @@ func startRowsClickHouse(t *testing.T, ctx context.Context) driver.Conn {
 	return conn
 }
 
-// S2: a failing-heavy emission (every case with a 4 KiB trace) through the real executor, store and ClickHouse sink: the 500-row
-// sub-chunks exceed 2 MiB, the split halves them, no chunk is refused, every stored chunk holds payload + ledger under 2 MiB, and
+// S2: a failing-heavy emission (every case with a 4 KiB trace) through the real executor, store and ClickHouse sink: 500 rows exceed 2 MiB,
+// the split packs fewer rows per chunk, no chunk is refused, every stored chunk holds payload + ledger under 2 MiB, and
 // ClickHouse holds each case once.
-func TestTestOpsRouteFailingHeavyEmissionHalvesUnderTwoMiBOnRealStores(t *testing.T) {
+func TestTestOpsRouteFailingHeavyEmissionPacksUnderTwoMiBOnRealStores(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	conn := startRowsClickHouse(t, ctx)
@@ -203,8 +203,8 @@ func TestTestOpsRouteFailingHeavyEmissionHalvesUnderTwoMiBOnRealStores(t *testin
 			t.Fatalf("stored chunk payload+ledger=%d status=%s, want <= %d and committed", withLedger, status, maxChunkPayloadBytes)
 		}
 	}
-	if chunks < 9 || chunks > 12 {
-		t.Fatalf("stored chunks=%d, want 2,000 failing rows (~5 KB each) halved from 500 to 250 per sub-chunk (8) plus the final chunk", chunks)
+	if chunks < 5 || chunks > 8 {
+		t.Fatalf("stored chunks=%d, want 2,000 failing rows (~5 KB each) packed about 400 to a chunk (5) plus the final chunk", chunks)
 	}
 	var stored uint64
 	if err := conn.QueryRow(ctx, `SELECT count() FROM test_case_results FINAL WHERE org_id = ?`, session.Claim.OrgID).Scan(&stored); err != nil || stored != 2000 {
@@ -277,10 +277,10 @@ func (sink *crashAfterWriteSink) WriteEffect(ctx context.Context, claim Claim, e
 	return err
 }
 
-// The window cell: one case with a failure message that puts its single-row chunk 40 KB over the split's reserved limit sits in the
-// MIDDLE of a 500-row emission of small cases, so main (100-row chunks, 2 MiB limit) accepts the chunk that holds it. The split halves the
-// emission-wide cap down to one row per chunk (a throughput loss, stated in the log line); every row is still written once to ClickHouse and the
-// store refuses nothing. This is the repro of the follow-up that splits per chunk instead of per emission.
+// The window cell: one case with a failure message that puts its single-row chunk 40 KB over the split's reserved limit sits among 500
+// small cases, so main (100-row chunks, 2 MiB limit) accepts the chunk that holds it. The greedy split closes the chunk before it, gives it a
+// chunk of its own and goes on with the rest (3 chunks plus the final one at most; the chunk count is in the log line); every row is
+// written once to ClickHouse and the store refuses nothing.
 func TestTestOpsRouteBigRowInTheReserveWindowIsAllWrittenOnceWithNoRefusal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -311,6 +311,9 @@ func TestTestOpsRouteBigRowInTheReserveWindowIsAllWrittenOnceWithNoRefusal(t *te
 		t.Fatal(err)
 	}
 	t.Logf("window cell: 500 cases, one big row: %d stored chunks (incl. the final one), largest payload %d bytes, clickhouse rows=%d distinct=%d", chunks, largest, rows, distinct)
+	if chunks > 4 {
+		t.Fatalf("stored chunks=%d, want at most 4 (rows before the big row, the big row alone, the rest, the final chunk)", chunks)
+	}
 	if rows != 500 || distinct != 500 {
 		t.Fatalf("clickhouse holds %d rows (%d distinct), want every one of the 500 cases written once", rows, distinct)
 	}

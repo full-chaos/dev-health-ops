@@ -85,6 +85,8 @@ func TestChunkedRouteThatMarksNothingKeepsTheBaseGroupSequence(t *testing.T) {
 		if !ok {
 			t.Fatal("descriptor")
 		}
+		// The digest pins the sequence at the 100-row bound: the large emissions below must still split.
+		descriptor.ChunkPolicy.MaxSourceItems = 100
 		store := newChunkMemoryStore()
 		executor := completeRouteExecutor(now, &noLeakHandler{t: t, claim: claim}, store, &recoveryRowSink{})
 		executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}

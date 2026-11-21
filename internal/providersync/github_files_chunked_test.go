@@ -890,7 +890,14 @@ func TestGitHubFilesChunkFitsNeverAcceptsWhatTheNanosecondClockStoreRefuses(t *t
 		window++
 	}
 	if window == 0 {
-		t.Fatal("no length is accepted with a millisecond clock and refused with a nanosecond clock: the test cannot fail")
+		// The split reserves the ledger and the cursors (splitPayloadLimit), so the pre-check ends well before the store's edge and the clock
+		// margin can no longer be reached: the invariant holds by a wider margin. Pin that margin instead.
+		if gitHubFilesChunkFits(claim, fitsTestEffect(t, guess-maxEffectLedgerStateBytes), "before", "after") {
+			t.Fatal("the pre-check accepts a chunk inside the ledger and cursor reserve below the store's edge")
+		}
+		if !gitHubFilesChunkFits(claim, fitsTestEffect(t, guess-2*maxEffectLedgerStateBytes), "before", "after") {
+			t.Fatal("the pre-check refuses a chunk 64 KiB under the store's edge")
+		}
 	}
 }
 

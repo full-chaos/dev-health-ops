@@ -156,6 +156,17 @@ type ChunkPolicy struct {
 // (MaxSourceItems, MaxEffectRows, MaxPreparedBytes), not per attempt.
 const defaultMaxChunksPerAttempt = 64
 
+// testOpsMaxSourceItems is the rows-per-destination bound of the TestOps routes: with MaxEffectRows (500) the split's
+// bound is min(500, 500) = 500, and both must stay at or above it. Measured 5x the rows per sub-chunk for about +8 % sub-chunk time.
+const testOpsMaxSourceItems = 500
+
+// TestOpsRouteChunkPolicy is the chunk policy of the github and gitlab cicd and tests routes: the default with 500 rows per destination.
+func TestOpsRouteChunkPolicy() ChunkPolicy {
+	policy := DefaultChunkPolicy()
+	policy.MaxSourceItems = testOpsMaxSourceItems
+	return policy
+}
+
 func DefaultChunkPolicy() ChunkPolicy {
 	return ChunkPolicy{
 		MaxSourceItems: 100, MaxEffectRows: 500,
@@ -506,6 +517,7 @@ func splitCompleteRouteBatch(
 	// emit several normalized effects for one source item, so using only the
 	// effect cap would allow one source page to grow without limit.
 	maxRows := min(policy.MaxEffectRows, policy.MaxSourceItems)
+	payloadLimit := splitPayloadLimit(policy)
 	for maxRows >= 1 {
 		count := 1
 		for _, effect := range ordered {
@@ -542,7 +554,7 @@ func splitCompleteRouteBatch(
 			for _, effect := range effects {
 				payloadBytes += effect.PayloadBytes
 			}
-			if payloadBytes > policy.MaxPreparedBytes {
+			if payloadBytes > payloadLimit {
 				valid = false
 				break
 			}
@@ -563,7 +575,7 @@ func splitCompleteRouteBatch(
 				return nil, encodeErr
 			}
 			chunk.PayloadBytes = len(encoded)
-			if chunk.PayloadBytes > policy.MaxPreparedBytes {
+			if chunk.PayloadBytes > payloadLimit {
 				valid = false
 				break
 			}
@@ -579,6 +591,13 @@ func splitCompleteRouteBatch(
 		maxRows /= 2
 	}
 	return nil, ErrChunkPolicyExceeded
+}
+
+// splitPayloadLimit is the sidecar size a sub-chunk may have when the split decides. The store refuses a chunk whose payload and
+// ledger column together pass maxChunkPayloadBytes (buildPreparedChunkMaterial); the ledger is bounded as a whole by
+// maxEffectLedgerStateBytes (encodeEffectLedgerState) and the two cursors stamped after the split by maxChunkCursorBytes each.
+func splitPayloadLimit(policy ChunkPolicy) int {
+	return min(policy.MaxPreparedBytes, maxChunkPayloadBytes-maxEffectLedgerStateBytes-2*maxChunkCursorBytes)
 }
 
 func preparedChunkDigest(chunk PreparedProviderChunk) string {

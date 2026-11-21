@@ -15,13 +15,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
 
-// 100 small runs (3 jobs each) fill chunk groups up to the 100-row cap of ci_job_runs: 33 + 33 + 33 + 1, each group one
+// 100 small runs (12 jobs each) fill chunk groups up to the 500-row cap of ci_job_runs: 41 + 41 + 18, each group one
 // sub-chunk, each run written once. The base committed 100 groups.
 func TestChunkedRunsPhaseFillsGroupsUpToTheRowCap(t *testing.T) {
 	now := time.Date(2026, 7, 22, 21, 0, 0, 0, time.UTC)
 	_, session := runsGroupSession(t, now)
 	descriptor := cicdDescriptor(t)
-	doer, sink, store := newRunsGroupDoer(t, 100, 3), newRunsGroupSink(), newChunkMemoryStore()
+	doer, sink, store := newRunsGroupDoer(t, 100, 12), newRunsGroupSink(), newChunkMemoryStore()
 	runUntilDone(t, runsGroupExecutor(now, GitHubTestsRouteHandler{CoalesceRuns: true}, store, sink, doer, nil), session, descriptor)
 	assertEachRunOnce(t, sink, doer, 100)
 	groups := storedRunGroups(t, store, descriptor.ChunkPolicy)
@@ -29,11 +29,11 @@ func TestChunkedRunsPhaseFillsGroupsUpToTheRowCap(t *testing.T) {
 	for _, group := range groups {
 		sizes = append(sizes, len(group))
 	}
-	if fmt.Sprint(sizes) != "[33 33 33 1]" || sink.pipelineWrites != 4 {
-		t.Fatalf("run groups %v (%d pipeline writes), want [33 33 33 1]", sizes, sink.pipelineWrites)
+	if fmt.Sprint(sizes) != "[41 41 18]" || sink.pipelineWrites != 3 {
+		t.Fatalf("run groups %v (%d pipeline writes), want [41 41 18]", sizes, sink.pipelineWrites)
 	}
-	if len(store.chunks) != 5 {
-		t.Fatalf("stored chunks=%d, want 4 run groups + the final chunk (a coalesced group is ONE sub-chunk)", len(store.chunks))
+	if len(store.chunks) != 4 {
+		t.Fatalf("stored chunks=%d, want 3 run groups + the final chunk (a coalesced group is ONE sub-chunk)", len(store.chunks))
 	}
 	for index, gets := range doer.jobGets {
 		if gets != 1 {
@@ -108,6 +108,8 @@ func TestChunkedRunsPhaseBigRunKeepsItsOwnGroupAndTheBounds(t *testing.T) {
 	_, session := runsGroupSession(t, now)
 	descriptor := cicdDescriptor(t)
 	descriptor.ChunkPolicy.MaxChunksPerAttempt = 2
+	// A run is capped at 500 jobs, so under the 500-row bound no run can split: the 100-row bound is pinned here to keep a split run.
+	descriptor.ChunkPolicy.MaxSourceItems = 100
 	doer, sink, store := newRunsGroupDoer(t, 100, 3), newRunsGroupSink(), newChunkMemoryStore()
 	doer.bigRun, doer.bigJobs = runsGroupRunID(50), 250
 	stops := runUntilDone(t, runsGroupExecutor(now, GitHubTestsRouteHandler{CoalesceRuns: true}, store, sink, doer, nil), session, descriptor)
@@ -263,11 +265,11 @@ func TestChunkedCoalescingJoinsOnlyContiguousEmissions(t *testing.T) {
 	}
 }
 
-// A group stops at the row cap: 60 + 40 rows fill one sub-chunk of 100, the next 1 row starts a new group.
+// A group stops at the row cap: 300 + 200 rows fill one sub-chunk of 500, the next 1 row starts a new group.
 func TestChunkedCoalescingStopsAtTheRowCap(t *testing.T) {
 	store := runSynthetic(t, []ChunkRouteEmission{
-		syntheticRunEmission(t, "a", "b", 60, EffectReadbackRequired),
-		syntheticRunEmission(t, "b", "c", 40, EffectReadbackRequired),
+		syntheticRunEmission(t, "a", "b", 300, EffectReadbackRequired),
+		syntheticRunEmission(t, "b", "c", 200, EffectReadbackRequired),
 		syntheticRunEmission(t, "c", "d", 1, EffectReadbackRequired),
 	})
 	if got := fmt.Sprint(storedCursors(store)); got != "[a>c c>d d>d]" {

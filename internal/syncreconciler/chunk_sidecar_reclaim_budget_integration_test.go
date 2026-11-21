@@ -290,3 +290,29 @@ func TestChunkSidecarReclaimStepAtFloorRunsOneTwoMiBStatement(t *testing.T) {
 	}
 	wantChunkSidecars(t, ctx, venue.direct, unit, 1, 8)
 }
+
+// A TestOps sub-chunk is up to 500 rows (about 300 KB): a statement then holds the 4 MiB byte cap, not the 64-row cap (13 rows at 300 KB),
+// every statement stays under the byte cap, and the 2 MiB floor row still goes alone.
+func TestChunkSidecarReclaimStatementsHoldTheByteCapForThreeHundredKiBSubchunks(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	venue := startChunkReclaimBudgetVenue(t, ctx, false)
+	now := time.Date(2026, 11, 20, 14, 0, 0, 0, time.UTC)
+	resetChunkReclaimVenue(t, ctx, chunkReclaimVenue{Admin: venue.direct})
+	unit := chunkReclaimUnitID(92)
+	const subchunkBytes = 300 << 10
+	seedChunkReclaimUnit(t, ctx, venue.direct, unit, "failed", 40, subchunkBytes, now)
+	reclaim, err := NewChunkSidecarReclaimWithConfig(venue.domain, DefaultChunkSidecarReclaimConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := reclaim.Step(ctx, now, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := DefaultChunkSidecarReclaimConfig()
+	if result.Statements < 1 || result.Rows < 1 || result.Rows > int64(result.Statements)*(int64(config.BytesPerStatement)/subchunkBytes) ||
+		result.Bytes > int64(result.Statements)*int64(config.BytesPerStatement) || result.Bytes != result.Rows*subchunkBytes {
+		t.Fatalf("step = %+v, want at most %d rows and %d bytes per statement", result, int64(config.BytesPerStatement)/subchunkBytes, config.BytesPerStatement)
+	}
+}

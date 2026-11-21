@@ -374,8 +374,10 @@ const githubTestsMaxSkippedArtifactRecords = 5
 // volume on a docker-build-heavy repository, and the sample only needs to be
 // large enough to identify the PATTERN, not every occurrence -- the total
 // count already lives on ExcludedNonReportSuffix/Prefix. 4 since CHAOS-14316: its fifth record paid for the resume anchor
-// (AnchorID) of an artifacts-phase cursor.
-const githubTestsMaxExcludedArtifactSampleRecords = 4
+// (AnchorID) of an artifacts-phase cursor. 3 since CHAOS-14385: its fourth record pays for the re-seek state (ReseekPages,
+// RecordCredit) and the deep range's record count (LateRecords) an artifacts-phase cursor carries. The summary log's
+// skipped-artifact sample (githubTestsSkippedArtifactLogSample) uses the same cap.
+const githubTestsMaxExcludedArtifactSampleRecords = 3
 
 const (
 	// githubTestsReportMemberComponent is the original vocabulary: one member

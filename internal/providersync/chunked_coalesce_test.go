@@ -493,19 +493,22 @@ func TestChunkedBarrierFlushesOnlyAHeldGroup(t *testing.T) {
 	}
 }
 
-// An emission kind the executor does not know fails the attempt loudly: a barrier that carries anything else, and a
-// final emission marked coalescable.
+// An emission kind the executor does not know fails the attempt loudly: a barrier that carries anything else (any
+// cursor, flag or batch field: the batch must be the zero CompleteRouteBatch), and a final emission marked coalescable.
 func TestChunkedExecutorRefusesAnUnknownEmissionKind(t *testing.T) {
 	barrierWithBatch := syntheticRunEmission(t, "a", "b", 1, EffectReadbackRequired)
 	barrierWithBatch.Barrier, barrierWithBatch.Coalescable = true, false
 	finalCoalescable := syntheticRunEmission(t, "a", "b", 1, EffectReadbackRequired)
 	finalCoalescable.Final = true
 	for name, emission := range map[string]ChunkRouteEmission{
-		"barrier and final":       {Barrier: true, Final: true},
-		"barrier and coalescable": {Barrier: true, Coalescable: true},
-		"barrier with a cursor":   {Barrier: true, CursorAfter: "x"},
-		"barrier with a batch":    barrierWithBatch,
-		"final and coalescable":   finalCoalescable,
+		"barrier and final":          {Barrier: true, Final: true},
+		"barrier and coalescable":    {Barrier: true, Coalescable: true},
+		"barrier with a cursor":      {Barrier: true, CursorAfter: "x"},
+		"barrier with a batch":       barrierWithBatch,
+		"final and coalescable":      finalCoalescable,
+		"barrier with evidence":      {Barrier: true, Batch: CompleteRouteBatch{Evidence: FetchEvidence{Provider: "github"}}},
+		"barrier with worklogs":      {Barrier: true, Batch: CompleteRouteBatch{WorklogObservations: []JiraWorklogFetchObservation{{}}}},
+		"barrier with empty effects": {Barrier: true, Batch: CompleteRouteBatch{Effects: []EffectBatch{}}},
 	} {
 		now := time.Date(2026, 7, 22, 21, 0, 0, 0, time.UTC)
 		_, session := runsGroupSession(t, now)
@@ -579,4 +582,115 @@ func (sink failingAfterSink) WriteEffect(ctx context.Context, claim Claim, effec
 		return sink.err
 	}
 	return sink.runsGroupSink.WriteEffect(ctx, claim, effect)
+}
+
+// prepareFailStore fails its failAt-th PrepareChunkGroup call once, before anything is stored.
+type prepareFailStore struct {
+	*chunkMemoryStore
+	failAt, calls int
+}
+
+func (store *prepareFailStore) PrepareChunkGroup(
+	ctx context.Context, claim Claim, chunks []PreparedProviderChunk, now time.Time,
+) ([]PreparedProviderChunk, error) {
+	store.calls++
+	if store.calls == store.failAt {
+		return nil, errors.New("store unavailable")
+	}
+	return store.chunkMemoryStore.PrepareChunkGroup(ctx, claim, chunks, now)
+}
+
+// A held group whose prepare fails is not durable, so nothing is staged after it: the attempt fails with the prepare
+// error, the checkpoint stays where it was, and the retry writes every run once (a staged successor would take the held
+// group's ordinal and move the cursor past runs never written).
+func TestChunkedRunsPhaseNothingIsStagedAfterAFailedPrepare(t *testing.T) {
+	now := time.Date(2026, 7, 22, 21, 0, 0, 0, time.UTC)
+	claim, session := runsGroupSession(t, now)
+	descriptor := cicdDescriptor(t)
+	doer, sink := newRunsGroupDoer(t, 100, 3), newRunsGroupSink()
+	store := &prepareFailStore{chunkMemoryStore: newChunkMemoryStore(), failAt: 1}
+	executor := runsGroupExecutor(now, GitHubTestsRouteHandler{CoalesceRuns: true}, store, sink, doer, nil)
+	if _, err := executor.Execute(context.Background(), session, descriptor); err == nil || errors.As(err, new(ChunkContinuationError)) {
+		t.Fatalf("attempt 1 err=%v, want the prepare failure", err)
+	}
+	checkpoint, err := store.LoadChunkCheckpoint(context.Background(), claim, now)
+	if err != nil && !errors.Is(err, ErrChunkCheckpointNotFound) {
+		t.Fatal(err)
+	}
+	if checkpoint.PreparedChunks != 0 || checkpoint.NextCursor != "" {
+		t.Fatalf("after the failed prepare: prepared=%d cursor set=%t, want 0 and unset", checkpoint.PreparedChunks, checkpoint.NextCursor != "")
+	}
+	runUntilDone(t, executor, session, descriptor)
+	assertEachRunOnce(t, sink, doer, 100)
+}
+
+// The source-error flush that commits the held group and reaches an attempt bound does not turn the source error into
+// a continuation: the worker sees the provider not-found and does not snooze into the same 404.
+func TestChunkedRunsPhaseSourceErrorFlushAtTheBoundKeepsTheSourceError(t *testing.T) {
+	since, before := listingSince, listingSince.Add(2*time.Hour)
+	now := before.Add(time.Hour)
+	claim, session := runsGroupWindowSession(t, now, since, before)
+	descriptor := cicdDescriptor(t)
+	descriptor.ChunkPolicy.MaxChunksPerAttempt = 1
+	fake := newListingFake(t, makeListingRuns(42, 3, since, time.Second))
+	sink := newRunsGroupSink()
+	executor := runsGroupExecutor(now, GitHubTestsRouteHandler{CoalesceRuns: true}, NewInProcessChunkLedger(claim), sink,
+		coalesceDoerFunc(func(request *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(request.URL.Path, "/42/jobs") {
+				return fake.respond(request, http.Header{}, `{"message":"Not Found"}`, http.StatusNotFound), nil
+			}
+			return fake.Do(request)
+		}), nil)
+	_, err := executor.Execute(context.Background(), session, descriptor)
+	var providerErr *providerfoundation.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorNotFound || errors.As(err, new(ChunkContinuationError)) {
+		t.Fatalf("err=%v, want the provider not-found alone (no continuation)", err)
+	}
+	if len(sink.pipelineRows) != 2 {
+		t.Fatalf("runs written %v, want the 2 held runs", sink.pipelineRows)
+	}
+}
+
+// Coalescing ships dark: the production wiring leaves CoalesceRuns unset, and an unset flag is the base path: every
+// run is its own chunk group, no emission is coalescable and no barrier is sent (0 held groups).
+func TestGitHubTestsCoalescingShipsDark(t *testing.T) {
+	for _, dataset := range []string{"cicd", "tests"} {
+		route, ok := SelectGitFamilyRoute("github", dataset, GitFamilyDeps{Conn: selectorConn{}})
+		handler, isTests := route.Handler.(GitHubTestsRouteHandler)
+		if !ok || !isTests || handler.CoalesceRuns {
+			t.Fatalf("production github/%s route: ok=%t tests handler=%t CoalesceRuns=%t, want true true false", dataset, ok, isTests, handler.CoalesceRuns)
+		}
+	}
+	now := time.Date(2026, 7, 22, 21, 0, 0, 0, time.UTC)
+	_, session := runsGroupSession(t, now)
+	doer, sink, store := newRunsGroupDoer(t, 100, 3), newRunsGroupSink(), newChunkMemoryStore()
+	counted := &emissionCountingHandler{}
+	runUntilDone(t, runsGroupExecutor(now, counted, store, sink, doer, nil), session, cicdDescriptor(t))
+	assertEachRunOnce(t, sink, doer, 100)
+	if sink.pipelineWrites != 100 || counted.coalescable != 0 || counted.barriers != 0 {
+		t.Fatalf("flag unset: %d run groups, %d coalescable emissions, %d barriers; want 100, 0, 0",
+			sink.pipelineWrites, counted.coalescable, counted.barriers)
+	}
+}
+
+// emissionCountingHandler is the tests route with its flag unset, counting coalescable and barrier emissions.
+type emissionCountingHandler struct {
+	GitHubTestsRouteHandler
+	coalescable, barriers int
+}
+
+func (handler *emissionCountingHandler) CollectChunks(
+	ctx context.Context, claim Claim, credential providerfoundation.Credential, client *providerfoundation.HTTPClient,
+	normalizedAt time.Time, resumeCursor string, emit func(ChunkRouteEmission) error,
+) error {
+	return handler.GitHubTestsRouteHandler.CollectChunks(ctx, claim, credential, client, normalizedAt, resumeCursor,
+		func(emission ChunkRouteEmission) error {
+			if emission.Coalescable {
+				handler.coalescable++
+			}
+			if emission.Barrier {
+				handler.barriers++
+			}
+			return emit(emission)
+		})
 }

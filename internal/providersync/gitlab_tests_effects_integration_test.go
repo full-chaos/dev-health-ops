@@ -37,8 +37,10 @@ func TestGitLabTestOpsAliasesShareCompleteReplacingRowOwnerInBothWriteOrders(t *
 		if err != nil || inspection != EffectExact {
 			t.Fatalf("%s newer full-row inspection=%s err=%v", runID, inspection, err)
 		}
+		// The newer stored version outranks the older batch: FINAL can never return the older row, so its write is settled
+		// (CHAOS-14412, the rule of inspectTestOpsRunReportCompleteness).
 		inspection, err = sink.InspectEffect(ctx, olderClaim, olderEffect)
-		if err != nil || inspection != EffectConflict {
+		if err != nil || inspection != EffectExact {
 			t.Fatalf("%s older row inspection=%s err=%v", runID, inspection, err)
 		}
 		var rows, nullNames uint64

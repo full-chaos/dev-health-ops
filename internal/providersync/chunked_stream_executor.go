@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -268,16 +269,23 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 		// CursorBefore, so a restart re-reads it: nothing is skipped or written twice.
 		var pending *ChunkRouteEmission
 		heldEmissions := 0
-		flush := func() error {
+		// flush commits the held group; prepared says the group became durable at its ordinals (its prepare succeeded),
+		// whatever the commit then did.
+		flush := func() (prepared bool, err error) {
 			if pending == nil {
-				return nil
+				return false, nil
 			}
 			group := *pending
 			pending, heldEmissions = nil, 0
-			return prepareAndCommit(group)
+			preparedGroup, err := prepareEmission(group)
+			if err != nil {
+				return false, err
+			}
+			return true, commitGroup(group, preparedGroup)
 		}
-		// stageAfterFlush keeps the emission whose arrival ended the held group: when that flush stops the attempt
-		// (continuation) or fails, the emission is prepared as its own group, not dropped, and the next attempt drains it.
+		// stageAfterFlush keeps the emission whose arrival ended a durable held group: when that flush stops the attempt
+		// (continuation) or fails after its prepare, the emission is prepared as its own group, not dropped, and the next
+		// attempt drains it. A held group whose prepare failed is not durable: nothing is staged after it.
 		stageAfterFlush := func(emission ChunkRouteEmission, flushErr error) error {
 			if _, stageErr := prepareEmission(emission); stageErr != nil {
 				if errors.As(flushErr, new(ChunkContinuationError)) {
@@ -291,7 +299,8 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 			pending = &group
 			heldEmissions++
 			if attemptElapsed() >= policy.MaxWallTime {
-				return flush()
+				_, err := flush()
+				return err
 			}
 			return nil
 		}
@@ -302,7 +311,8 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 					return err
 				}
 				if emission.Barrier {
-					return flush()
+					_, err := flush()
+					return err
 				}
 				if err := emission.Batch.validate(descriptor); err != nil {
 					return err
@@ -311,7 +321,10 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 					if merged, ok := coalesceChunkEmissions(session.Claim, policy, *pending, emission, executor.now()); ok {
 						return hold(merged)
 					}
-					if err := flush(); err != nil {
+					if prepared, err := flush(); err != nil {
+						if !prepared {
+							return err
+						}
 						return stageAfterFlush(emission, err)
 					}
 				}
@@ -332,7 +345,8 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 					"provider", session.Claim.Provider, "dataset", session.Claim.Dataset, "unit", session.Claim.ID,
 					"held_emissions", heldEmissions)
 				pending, heldEmissions = nil, 0
-			} else if flushErr := flush(); flushErr != nil {
+			} else if _, flushErr := flush(); flushErr != nil && !errors.As(flushErr, new(ChunkContinuationError)) {
+				// A continuation here means the group committed and reached a bound: the source error stays the result.
 				streamErr = errors.Join(streamErr, flushErr)
 			}
 		}
@@ -532,8 +546,7 @@ func coalescedEmissionFits(claim Claim, policy ChunkPolicy, emission ChunkRouteE
 // a coalescable emission is never final.
 func validateChunkEmissionKind(emission ChunkRouteEmission) error {
 	if emission.Barrier && (emission.Final || emission.Coalescable || emission.CursorBefore != "" ||
-		emission.CursorAfter != "" || len(emission.Batch.Effects) > 0 || emission.Batch.Result != nil ||
-		emission.Batch.Watermark != nil) {
+		emission.CursorAfter != "" || !reflect.DeepEqual(emission.Batch, CompleteRouteBatch{})) {
 		return fmt.Errorf("%w: a chunk barrier emission carries a batch, a cursor or another kind", ErrInvalidConfiguration)
 	}
 	if emission.Coalescable && emission.Final {

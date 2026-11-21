@@ -763,7 +763,7 @@ func TestGitHubTestsDeepStopCountsOnePageCapPerPhase(t *testing.T) {
 						client := githubTestsClient(t, fakehttp.Client(doer))
 						client.Metrics = providerfoundation.NewMetrics()
 						now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
-						yield := errors.New("checkpoint")
+						yield := errors.New("resume point at the bound")
 						var resume string
 						var charged int
 						err := handler.CollectChunks(context.Background(), listing.claim, providerfoundation.Credential{}, client, now, "", func(e ChunkRouteEmission) error {

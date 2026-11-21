@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -321,7 +322,14 @@ func peelReplayYieldingWalk(
 	observe func(githubTestsChunkCursor) bool, afterYield func(),
 ) CompleteRouteBatch {
 	t.Helper()
-	client := githubTestsClient(t, fakehttp.Client(doer))
+	return peelReplayYieldingWalkWith(t, handler, claim, githubTestsClient(t, fakehttp.Client(doer)), every, observe, afterYield)
+}
+
+func peelReplayYieldingWalkWith(
+	t *testing.T, handler GitHubTestsRouteHandler, claim Claim, client *providerfoundation.HTTPClient, every int,
+	observe func(githubTestsChunkCursor) bool, afterYield func(),
+) CompleteRouteBatch {
+	t.Helper()
 	resume, stop := "", errors.New("yield")
 	for pass := 1; pass < 2000; pass++ {
 		var final *CompleteRouteBatch
@@ -693,5 +701,58 @@ func TestGitHubTestsPeelReplayIsCountOnly(t *testing.T) {
 				t.Errorf("record_credit=%d deletion_proven=%d after a replay grant, want 0 and 0", credit, proven)
 			}
 		})
+	}
+}
+
+// A grant changes no metric: a deep listing that stops at its page budget after a replay grant counts one stopped
+// inventory phase on dev_health_provider_inventory_page_cap_total, as the walk without the replay does (deep runs and
+// deep reports, run groups off and on).
+func TestGitHubTestsPeelReplayDeepStopCountsOnePageCap(t *testing.T) {
+	peelReplaySkipRace(t)
+	const pages = 11
+	for _, listing := range []deletionShiftListing{deletionShiftListings()[1], deletionShiftListings()[3]} {
+		for _, coalesce := range []bool{false, true} {
+			name := fmt.Sprintf("%s/%s", listing.name, deletionShiftFlag(coalesce))
+			t.Run(name, func(t *testing.T) {
+				measure := func(replay bool) (string, int) {
+					handler := peelReplayHandler(listing, pages, coalesce)
+					handler.noListingReplay = !replay
+					fake := newListingFake(t, peelReplayRuns(listing, 1500, 0, 0))
+					client := githubTestsClient(t, fakehttp.Client(deletionShiftDoer(t, fake, listing.reports)))
+					client.Metrics = providerfoundation.NewMetrics()
+					deleted, highest := false, 0
+					peelReplayYieldingWalkWith(t, handler, listing.claim, client, 1<<30, func(c githubTestsChunkCursor) bool {
+						if listing.in(c) {
+							highest = max(highest, peelReplayCounter(listing, c))
+						}
+						if !deleted && listing.in(c) && peelReplaySecondRangeAt(c) {
+							deleted = true
+							return true
+						}
+						return false
+					}, func() { resumeDeletionDelete(fake, 1480) })
+					var metrics bytes.Buffer
+					if err := client.Metrics.WritePrometheus(&metrics); err != nil {
+						t.Fatal(err)
+					}
+					prefix := fmt.Sprintf("dev_health_provider_inventory_page_cap_total{provider=\"github\",dataset=%q} ", listing.claim.Dataset)
+					for _, line := range strings.Split(metrics.String(), "\n") {
+						if strings.HasPrefix(line, prefix) {
+							return strings.TrimPrefix(line, prefix), highest
+						}
+					}
+					return "", highest
+				}
+				on, granted := measure(true)
+				off, _ := measure(false)
+				t.Logf("CELL page_cap/%s on=%s off=%s counter=%d", name, on, off, granted)
+				if granted <= pages || off == "" {
+					t.Fatalf("premise: counter %d (want a grant), page cap without the replay %q", granted, off)
+				}
+				if on != off {
+					t.Errorf("page cap stops counted %s with the replay, %s without", on, off)
+				}
+			})
+		}
 	}
 }

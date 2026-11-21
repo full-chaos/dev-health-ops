@@ -389,9 +389,12 @@ const gitLabTestsMaxListingStepBacks = 30
 //     the phase starts again at offset 0 and reads every listed pipeline.
 //
 // Pages are charged on the 100-item grid, once each, by the grid page of the last offset a response holds: a stable walk of N
-// pipelines charges ceil(N/100) pages whatever per_page the requests use. A grid page at or before the phase's charged count is
+// pipelines charges ceil(N/100) pages whatever per_page the requests use, and an empty response charges none. A grid page at or before the phase's charged count is
 // free (an overlap, a step back, a resume re-read), even when the whole budget is spent; a phase with no position yet has no page
-// to re-read, so a spent budget stops it before any request. No request passes the last chargeable grid page.
+// to re-read, so a spent budget stops it before any request. No request passes the last chargeable grid page; at the budget
+// one request of the charged grid page that holds end-1 (at most one per phase per invocation) finds a
+// shrink or the end, so the watermark stays true at the cap. Every request goes through the client's backoff gate and is
+// counted by its doers, like any other.
 type gitLabTestsSeek struct {
 	seekID         int64
 	anchor         int64
@@ -502,19 +505,21 @@ func visitGitLabTestsListing(
 		recordGitLabTestsReseek(client, claim, repo, phase, "legacy cursor without a pipeline id: the phase starts again", seek.chargedThrough)
 	}
 	limit := (seek.chargedThrough + allowance) * nativePerPage
-	stepBack := 0
+	stepBack, budgetChecked := 0, false
 	for {
 		page, perPage, start, ok := stepBack, nativePerPage, (stepBack-1)*nativePerPage, true
 		if stepBack == 0 {
 			page, perPage, start, ok = gitLabTestsListingRequest(seek.end, limit)
 		}
 		// No request past end fits the budget: one free request of the grid page that holds end-1 still finds whether the
-		// listing shrank (step back) or ends there; only a listing that goes on past it stops at the budget.
+		// listing shrank (step back) or ends there; only a listing that goes on past it stops at the budget. One such request
+		// per visit.
 		atBudget := !ok
 		if atBudget {
-			if seek.end <= 0 {
+			if seek.end <= 0 || budgetChecked {
 				return gitLabTestsListingResult{PageBudgetExhausted: true}, nil
 			}
+			budgetChecked = true
 			page = (seek.end-1)/nativePerPage + 1
 			perPage, start = nativePerPage, (page-1)*nativePerPage
 		}
@@ -556,7 +561,8 @@ func visitGitLabTestsListing(
 				continue
 			}
 		}
-		reached := start/nativePerPage + 1
+		// An empty response holds no offset, so it charges no page; it is still a request (counted by the client's doers).
+		reached := seek.chargedThrough
 		if len(ids) > 0 {
 			reached = (start+len(ids)-1)/nativePerPage + 1
 		}

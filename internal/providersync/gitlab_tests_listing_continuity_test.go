@@ -33,11 +33,29 @@ type gitLabContinuityFake struct {
 	maxListings   int
 	// shortPages answers every listing request with at most that many items and an X-Next-Page (a misbehaving listing).
 	shortPages int
+	// total counts every request the fake answered; answer, when it returns a response, answers a request in place of the
+	// fake (listing is the 0-based listing request index, -1 for any other request).
+	total  int
+	answer func(request *http.Request, listing int) *http.Response
 }
 
 func (fake *gitLabContinuityFake) Do(request *http.Request) (*http.Response, error) {
+	fake.total++
 	if request.URL.Path != "/api/v4/projects/123/pipelines" {
+		if fake.answer != nil {
+			if response := fake.answer(request, -1); response != nil {
+				return response, nil
+			}
+		}
 		return fake.gitLabResumeFake.Do(request)
+	}
+	if fake.answer != nil {
+		if response := fake.answer(request, len(fake.requests)); response != nil {
+			page, _ := strconv.Atoi(request.URL.Query().Get("page"))
+			perPage, _ := strconv.Atoi(request.URL.Query().Get("per_page"))
+			fake.requests = append(fake.requests, [2]int{page, perPage})
+			return response, nil
+		}
 	}
 	if fake.maxListings > 0 && len(fake.requests) >= fake.maxListings {
 		fake.t.Fatalf("more than %d listing requests: the walk does not end", fake.maxListings)
@@ -133,10 +151,15 @@ type gitLabContinuityArm struct {
 
 type gitLabContinuityOptions struct {
 	handler GitLabTestsRouteHandler
+	gate    providerfoundation.BackoffGate
+	// allowError ends the walk at the first invocation error and returns it instead of failing the test.
+	allowError bool
 	// yieldPhase, yieldAt: the first invocation stops after its yieldAt-th emission of yieldPhase; the next one resumes.
 	yieldPhase string
 	yieldAt    int
 	arms       []gitLabContinuityArm
+	// now runs its changes at the emission itself, before any later request.
+	now []gitLabContinuityArm
 }
 
 type gitLabContinuityResult struct {
@@ -146,12 +169,16 @@ type gitLabContinuityResult struct {
 	done      gitLabTestsChunkCursor
 	cursors   []gitLabTestsChunkCursor
 	metrics   string
+	err       error
 }
 
 func gitLabContinuityWalk(t *testing.T, fake *gitLabContinuityFake, options gitLabContinuityOptions) gitLabContinuityResult {
 	t.Helper()
 	client := gitLabRepositoryClient(t, fake, "https://gitlab.example")
 	client.Metrics = providerfoundation.NewMetrics()
+	if options.gate != nil {
+		client.Gate = options.gate
+	}
 	fake.reportGets = map[int]int{}
 	result := gitLabContinuityResult{pipelines: map[int]int{}}
 	stop := errors.New("yield")
@@ -198,12 +225,21 @@ func gitLabContinuityWalk(t *testing.T, fake *gitLabContinuityFake, options gitL
 						fake.pending = append(fake.pending, arm.change)
 					}
 				}
+				for _, arm := range options.now {
+					if arm.phase == before.Phase && arm.invocation == invocation && arm.emission == emitted[before.Phase] {
+						arm.change()
+					}
+				}
 				if invocation == 1 && before.Phase == options.yieldPhase && emitted[before.Phase] == options.yieldAt {
 					return stop
 				}
 				return nil
 			})
 		if err != nil && !errors.Is(err, stop) {
+			if options.allowError {
+				result.err, result.reports = err, fake.reportGets
+				return result
+			}
 			t.Fatal(err)
 		}
 	}
@@ -736,6 +772,184 @@ func TestGitLabTestsListingResumeAfterGrowthReadsEachPipelineOnce(t *testing.T) 
 				if reads[id] != 1 {
 					t.Fatalf("pipeline %d read %d times in the %s phase, want once", id, reads[id], phase)
 				}
+			}
+		})
+	}
+}
+
+// gitLabContinuityRequests is the request count the unit reports, three ways: the cursor, the fetch evidence and the
+// provider_usage observation.
+func gitLabContinuityRequests(t *testing.T, result gitLabContinuityResult) int {
+	t.Helper()
+	usage, _ := result.final.Result["observations"].(map[string]any)["provider_usage"].([]any)
+	if len(usage) != 1 {
+		t.Fatalf("provider_usage %v", result.final.Result["observations"])
+	}
+	observed, _ := usage[0].(map[string]any)["request_count"].(int)
+	if observed != result.done.Requests || result.final.Evidence.Requests != result.done.Requests {
+		t.Fatalf("request counts differ: cursor %d evidence %d observation %d", result.done.Requests, result.final.Evidence.Requests, observed)
+	}
+	return result.done.Requests
+}
+
+// An empty response holds no offset, so it charges no page of the budget; it is still a request and is counted. Cells: an
+// empty project; an empty reports phase after a non-empty pipelines phase; and a listing that becomes empty at a later offset
+// (the last response is full and says more, the listing shrinks, the next response is empty): ceil(N/100) pages for the N
+// pipelines it holds.
+func TestGitLabTestsListingEmptyResponseChargesNoPageButCountsAsARequest(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		pipelines                []gitLabResumePipeline
+		change                   func(fake *gitLabContinuityFake, request int)
+		pipelinePages, reports   int
+		pipelineList, reportList int
+	}{
+		{"empty project", nil, nil, 0, 0, 1, 1},
+		{"empty reports phase", gitLabContinuityFixture(150, 1001, 1), func(fake *gitLabContinuityFake, request int) {
+			if request == 2 {
+				for id := 1001; id <= 1150; id++ {
+					fake.updatePast(id)
+				}
+			}
+		}, 2, 0, 2, 1},
+		{"empty at a later offset", gitLabContinuityFixture(200, 1001, 1), func(fake *gitLabContinuityFake, request int) {
+			if request == 2 {
+				fake.remove(1001, 1002, 1003, 1004, 1005)
+			}
+		}, 2, 2, 4, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newGitLabContinuityFake(t, tc.pipelines)
+			if tc.change != nil {
+				fake.every = func(request, _, _ int) { tc.change(fake, request) }
+			}
+			result := gitLabContinuityWalk(t, fake, gitLabContinuityOptions{})
+			requests := gitLabContinuityRequests(t, result)
+			if result.done.PipelinePages != tc.pipelinePages || result.done.ReportPages != tc.reports {
+				t.Fatalf("page charge pipelines/reports = %d/%d, want %d/%d", result.done.PipelinePages, result.done.ReportPages, tc.pipelinePages, tc.reports)
+			}
+			if len(fake.requests) != tc.pipelineList+tc.reportList {
+				t.Fatalf("listing requests %v, want %d + %d", fake.requests, tc.pipelineList, tc.reportList)
+			}
+			if requests != fake.total {
+				t.Fatalf("requests counted %d, the provider answered %d (every listing request, the empty ones too)", requests, fake.total)
+			}
+			if !gitLabContinuityComplete(result) {
+				t.Fatalf("complete=%v", gitLabContinuityComplete(result))
+			}
+		})
+	}
+}
+
+// At the page budget the walk sends at most ONE request past it per phase per invocation: the charged grid page that holds the
+// last listed offset, to find a shrink or the end. It is counted like every request. With a listing that goes on, the phase
+// ends at the budget (inventory component, no watermark). A listing that shrinks under that request makes the walk step back
+// and read on, and the next time no request fits it stops without a second one (the reports phase starts next: (1,100)).
+func TestGitLabTestsListingAtThePageBudgetSendsOneCountedRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		n        int
+		maxPages int
+		change   func(fake *gitLabContinuityFake, request int)
+		want     [][2]int
+	}{
+		{"steady", 300, 1, nil, [][2]int{{1, 100}, {1, 100}}},
+		{"shrinks under the request past the budget", 400, 2, func(fake *gitLabContinuityFake, request int) {
+			if request == 3 {
+				ids := []int{}
+				for id := 1400; id > 1299; id-- {
+					ids = append(ids, id)
+				}
+				fake.remove(ids...)
+			}
+		}, [][2]int{{1, 100}, {2, 99}, {2, 100}, {2, 100}, {1, 100}, {2, 99}, {2, 100}, {1, 100}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newGitLabContinuityFake(t, gitLabContinuityFixture(tc.n, 1001, 1))
+			if tc.change != nil {
+				fake.every = func(request, _, _ int) { tc.change(fake, request) }
+			}
+			result := gitLabContinuityWalk(t, fake, gitLabContinuityOptions{handler: GitLabTestsRouteHandler{MaxPages: tc.maxPages}})
+			if len(fake.requests) < len(tc.want) || !slices.Equal(fake.requests[:len(tc.want)], tc.want) {
+				t.Fatalf("pipelines phase listing requests %v, want %v first", fake.requests, tc.want)
+			}
+			if tc.change == nil && !slices.Equal(fake.requests[len(tc.want):], tc.want) {
+				t.Fatalf("reports phase listing requests %v, want %v", fake.requests[len(tc.want):], tc.want)
+			}
+			if result.final.Watermark != nil || !slices.Contains(result.done.Truncated, gitLabPipelineInventoryComponent) ||
+				result.done.PipelinePages != tc.maxPages {
+				t.Fatalf("watermark=%v truncated=%v pipeline pages=%d", result.final.Watermark, result.done.Truncated, result.done.PipelinePages)
+			}
+			if requests := gitLabContinuityRequests(t, result); requests != fake.total {
+				t.Fatalf("requests counted %d, the provider answered %d", requests, fake.total)
+			}
+		})
+	}
+}
+
+// gitLabContinuityGate is a backoff gate: armed, it tells every request to wait an hour (past GateWaitMax).
+type gitLabContinuityGate struct{ armed, penalized bool }
+
+func (gate *gitLabContinuityGate) Wait(context.Context) (time.Duration, error) {
+	if gate.armed {
+		return time.Hour, nil
+	}
+	return 0, nil
+}
+
+func (gate *gitLabContinuityGate) Penalize(context.Context, time.Duration) error {
+	gate.armed, gate.penalized = true, true
+	return nil
+}
+
+// The request past the page budget takes the client's rate-limit path like every request: with the backoff gate armed (another
+// request saw a 429 or RateLimit-Remaining 0), or with the last request before it answered 403 + RateLimit-Remaining 0, it is
+// not sent and the invocation ends rate limited; when it is answered 429 itself, the gate is armed and nothing follows it.
+func TestGitLabTestsListingAtThePageBudgetRequestObeysTheRateLimitPath(t *testing.T) {
+	limited := func(status int, header string) *http.Response {
+		response := &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"message":"rate limited"}`))}
+		response.Header.Set(header, "0")
+		return response
+	}
+	for _, tc := range []struct {
+		name   string
+		arm    bool
+		answer func(request *http.Request, listing int) *http.Response
+		want   int
+	}{
+		{"gate armed before it", true, nil, 1},
+		{"403 with RateLimit-Remaining 0 before it", false, func(request *http.Request, listing int) *http.Response {
+			if request.URL.Path == "/api/v4/projects/123/pipelines/1201/jobs" {
+				return limited(http.StatusForbidden, "RateLimit-Remaining")
+			}
+			return nil
+		}, 1},
+		{"429 on it", false, func(_ *http.Request, listing int) *http.Response {
+			if listing == 1 {
+				return limited(http.StatusTooManyRequests, "RateLimit-Remaining")
+			}
+			return nil
+		}, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newGitLabContinuityFake(t, gitLabContinuityFixture(300, 1001, 1))
+			fake.answer = tc.answer
+			gate := &gitLabContinuityGate{}
+			options := gitLabContinuityOptions{handler: GitLabTestsRouteHandler{MaxPages: 1}, gate: gate, allowError: true}
+			if tc.arm {
+				// The 100th pipeline is the last of the budgeted page: the next request is the one past the budget.
+				options.now = []gitLabContinuityArm{{"pipelines", 1, 100, func() { gate.armed = true }}}
+			}
+			result := gitLabContinuityWalk(t, fake, options)
+			var providerErr *providerfoundation.ProviderError
+			if !errors.As(result.err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited {
+				t.Fatalf("err=%v, want a rate-limited end", result.err)
+			}
+			if len(fake.requests) != tc.want {
+				t.Fatalf("listing requests %v, want %d: no request past the budget once rate limited", fake.requests, tc.want)
+			}
+			if tc.name == "429 on it" && !gate.penalized {
+				t.Fatal("the 429 did not arm the gate")
 			}
 		})
 	}

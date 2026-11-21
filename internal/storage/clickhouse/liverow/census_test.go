@@ -46,9 +46,8 @@ var unruledReads = map[string]string{
 		"(catalog.go lists ACTIVE teams only; the row count orders them)",
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamMetrics": "SQL pinned by the frozen golden; the rule is applied in Go after the read " +
 		"(fetchRetractedTeamDays reads the days that hold a team of retraction rows only, applyRetractedTeamDays replaces them)",
-	"internal/queryapi/cognitiveload/cognitiveload.go:repoNewestVersions": "the newest generation of the repository, one version per key, read by fetchRepoScopedTeamMetrics " +
-		"(SQL pinned by the frozen golden) and by retractedRepoDaysQuery; the rule is applied in Go after the read " +
-		"(fetchRetractedRepoDays reads the days whose picked versions hold no measurement, and they are dropped)",
+	"internal/queryapi/cognitiveload/cognitiveload.go:repoNewestVersions": "the newest generation of the repository, one version per key; its one reader, repoScopedTeamMetricsQuery, " +
+		"applies the rule in the same statement (HAVING max(rule) = 1 leaves out a day whose picked versions hold no measurement)",
 	"internal/queryapi/filteroptions/filteroptions.go": "distinct statuses and issue types: a retraction row holds the status or type of the row it retracts, never a new value",
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchUserMetrics": "SQL pinned by the frozen golden; a retraction row adds 0 to its sums, and the rule is applied in Go after the read " +
 		"(fetchRetractedUserDays reads the days whose every key is a retraction row, and they are dropped)",
@@ -71,7 +70,7 @@ var heldBy = map[string]string{
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamMetrics":       "retractedTeamDaysQuery",
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamCognitiveLoad": "retractedLoadDaysQuery",
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchUserMetrics":       "retractedUserDaysQuery",
-	"internal/queryapi/cognitiveload/cognitiveload.go:repoNewestVersions":     "retractedRepoDaysQuery",
+	"internal/queryapi/cognitiveload/cognitiveload.go:repoNewestVersions":     "repoScopedTeamMetricsQuery",
 }
 
 // namesOnly are the files that name a table with a live-row rule in code and

@@ -232,8 +232,8 @@ const StateDurationsNewestOrder = `(work_item_state_durations_daily.computed_at,
                 work_item_state_durations_daily.duration_hours, work_item_state_durations_daily.items_touched,
                 work_item_state_durations_daily.avg_wip)))`
 
-// versionColumns are the stored columns of a repository-keyed table, every column but the key and computed_at, in
-// table order. Every metric of the table hashes this one list, so all metrics of a response read one stored version
+// versionColumns are the stored columns of a table with no shared order (repository-keyed tables and the user metrics
+// table), every column but the sorting key and computed_at, in table order. Every metric of the table hashes this one list, so all metrics of a response read one stored version
 // of a tied key. A cell holds each list equal to the table's columns at the migration head.
 var versionColumns = map[string]string{
 	"repo_metrics_daily": `commits_count total_loc_touched avg_commit_size_loc large_commit_ratio prs_merged
@@ -251,11 +251,17 @@ var versionColumns = map[string]string{
 		failure_rate cancel_rate rerun_rate median_duration_seconds p95_duration_seconds avg_queue_seconds
 		p95_queue_seconds team_id service_id skipped_count unfinished_count other_count unfinished_stale_count
 		pooled_service_ids pooled_durations pooled_queues pooled_samples_stored retracted`,
+	"work_item_user_metrics_daily": `team_id team_name items_started items_completed wip_count_end_of_day
+		cycle_time_p50_hours cycle_time_p90_hours retracted team_split_team_ids team_split_is_primary
+		team_split_items_completed team_split_wip_end_of_day`,
 }
 
-// VersionColumns is the fixed hash list of a repository-keyed table (nil for another table).
+// VersionColumns is the fixed hash list of a table of versionColumns (nil for another table).
 func VersionColumns(table string) []string {
-	return strings.Fields(versionColumns[table])
+	if list, ok := versionColumns[table]; ok {
+		return strings.Fields(list)
+	}
+	return nil
 }
 
 // VersionOrder is the version order of a key of table: the shared order of a team table, else the newest

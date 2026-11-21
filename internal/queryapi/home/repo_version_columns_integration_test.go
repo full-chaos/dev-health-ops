@@ -24,6 +24,11 @@ func TestRepoVersionColumnsAreTheStoredColumnsAtTheMigrationHead(t *testing.T) {
 			tables[spec.Table] = true
 		}
 	}
+	for table := range dedupByComputedAt {
+		if rowview.VersionColumns(table) != nil {
+			tables[table] = true
+		}
+	}
 	for table := range tables {
 		var sortingKey string
 		if err := admin.QueryRow(ctx, "SELECT sorting_key FROM system.tables WHERE database = currentDatabase() AND name = ?", table).Scan(&sortingKey); err != nil {

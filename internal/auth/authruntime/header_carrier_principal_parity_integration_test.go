@@ -432,22 +432,20 @@ func (c *hpFakeClock) sleep(_ context.Context, d time.Duration) error {
 // request share a day; with no margin (the old behaviour) the same start crosses and the guard says so.
 func TestHeaderCarrierStartAcrossMidnight(t *testing.T) {
 	const span = 78 * time.Second
+	day := time.Now().UTC().Truncate(24 * time.Hour)
 	for _, c := range []struct {
 		name      string
-		start     string
+		start     time.Time
 		margin    time.Duration
 		wantSleep bool
 		wantCross bool
 	}{
-		{"the CI case, 23:59:22Z", "2026-11-20T23:59:22Z", hpDayMargin, true, false},
-		{"23:55:00Z needs no wait", "2026-11-20T23:55:00Z", hpDayMargin, false, false},
-		{"23:59:22Z with no margin crosses", "2026-11-20T23:59:22Z", 0, false, true},
+		{"the CI case, 23:59:22Z", day.Add(23*time.Hour + 59*time.Minute + 22*time.Second), hpDayMargin, true, false},
+		{"23:55:00Z needs no wait", day.Add(23*time.Hour + 55*time.Minute), hpDayMargin, false, false},
+		{"23:59:22Z with no margin crosses", day.Add(23*time.Hour + 59*time.Minute + 22*time.Second), 0, false, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			begin, err := time.Parse(time.RFC3339, c.start)
-			if err != nil {
-				t.Fatal(err)
-			}
+			begin := c.start
 			clock := &hpFakeClock{t: begin}
 			start, err := hpStartClock(context.Background(), clock.now, clock.sleep, c.margin)
 			if err != nil {

@@ -3,6 +3,8 @@
 package compoundingrisk
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -183,5 +185,62 @@ func TestRealClickHouse_TeamBreakoutNoTeamMoreRepositoriesThanRowCap(t *testing.
 	rowMean, trend := *got.Rows[0].Score, *got.Trend[0].Score
 	if rowMean-trend > 1e-9 || trend-rowMean > 1e-9 {
 		t.Errorf("rows cover other repositories than the trend: rows %v, trend %v", rowMean, trend)
+	}
+}
+
+const capRepoID = `concat('00000000-0000-4000-8000-', leftPad(toString(number), 12, '0'))`
+
+// seedCapWorld stores nRepos repositories (ids numbered from 0, score 1 below
+// ownedRepos, 0 from there on) and nTeams teams named t0..; team n owns
+// repository n for n < ownedRepos. Team nTeams-1 may own repository 0 as well
+// when sharedWith0 is set.
+func seedCapWorld(t *testing.T, nRepos, ownedRepos, nTeams int, sharedWith0 bool) (QueryClient, time.Time) {
+	t.Helper()
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	exec(t, ctx, conn, `INSERT INTO teams (id, name, org_id, updated_at) SELECT concat('t', toString(number)), concat('Team ', toString(number)), 'org-1', now64(6) FROM numbers(%d)`, nTeams)
+	exec(t, ctx, conn, `INSERT INTO repos (id, repo, org_id, created_at, last_synced) SELECT toUUID(`+capRepoID+`), concat('acme/r', toString(number)), 'org-1', now64(3), now64(3) FROM numbers(%d)`, nRepos)
+	exec(t, ctx, conn, `INSERT INTO compounding_risk_daily (org_id, day, scope, scope_id, compounding_risk, severity, w_churn, w_complexity, w_ownership, w_review, threshold_elevated, threshold_high)
+		SELECT 'org-1', toDate('%s'), 'repo', `+capRepoID+`, if(number < %d, 1.0, 0.0), 'low', 0.25, 0.25, 0.25, 0.25, 0.4, 0.7 FROM numbers(%d)`, day(now, 1).Format("2006-01-02"), ownedRepos, nRepos)
+	exec(t, ctx, conn, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, valid_from, updated_at)
+		SELECT 'org-1', 'github', concat('t', toString(number)), toUUID(`+capRepoID+`), concat('acme/r', toString(number)), 'exact', 'native', toDateTime64('2020-01-01 00:00:00', 3, 'UTC'), now64(3) FROM numbers(%d)`, ownedRepos)
+	if sharedWith0 {
+		exec(t, ctx, conn, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, valid_from, updated_at)
+			SELECT 'org-1', 'github', 't%d', toUUID('00000000-0000-4000-8000-000000000000'), 'acme/r0', 'exact', 'native', toDateTime64('2020-01-01 00:00:00', 3, 'UTC'), now64(3)`, nTeams-1)
+	}
+	return client, now
+}
+
+// 500 team buckets plus the unassigned bucket: the unassigned row stays in the
+// answer (a row cap on the derived points would cut its low score).
+func TestRealClickHouse_TeamBreakoutNoTeam500TeamsAndUnassignedRowPresent(t *testing.T) {
+	client, now := seedCapWorld(t, maxRows+1, maxRows, maxRows, false)
+	got, err := Resolve(context.Background(), client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TrendDays: 30}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unassigned bool
+	for _, r := range got.Rows {
+		unassigned = unassigned || r.ScopeID == "unassigned"
+	}
+	if len(got.Rows) != maxRows+1 || !unassigned {
+		t.Fatalf("rows=%d unassigned=%v, want %d rows with the unassigned row", len(got.Rows), unassigned, maxRows+1)
+	}
+}
+
+// 501 named teams over 500 repositories (one repository is shared): every
+// named team answers its row, as it did before the all-team change.
+func TestRealClickHouse_TeamBreakout501NamedTeamsAnswer501Rows(t *testing.T) {
+	client, now := seedCapWorld(t, maxRows, maxRows, maxRows+1, true)
+	ids := make([]string, 0, maxRows+1)
+	for n := 0; n <= maxRows; n++ {
+		ids = append(ids, fmt.Sprintf("t%d", n))
+	}
+	got, err := Resolve(context.Background(), client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TeamIds: ids, TrendDays: 30}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Rows) != maxRows+1 {
+		t.Fatalf("rows=%d, want %d (one per named team)", len(got.Rows), maxRows+1)
 	}
 }

@@ -139,7 +139,7 @@ func TestFetchMetricValueStoredZeroHasData(t *testing.T) {
 		"",
 		nil,
 		"sum",
-		"org-1", "")
+		"org-1", "", false)
 
 	if err != nil {
 		t.Fatalf("fetchMetricValue: %v", err)

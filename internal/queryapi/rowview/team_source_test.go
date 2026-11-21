@@ -5,6 +5,14 @@ import (
 	"testing"
 )
 
+// testOrders are a version order per team table, for the cells of TeamSource.
+var testOrders = map[string]string{
+	"work_item_metrics_daily":         WorkItemMetricsNewestOrder,
+	"work_item_state_durations_daily": "(work_item_state_durations_daily.computed_at, cityHash64(tuple(work_item_state_durations_daily.duration_hours, work_item_state_durations_daily.items_touched)))",
+}
+
+// TeamSource picks the newest row of each full key by the reader's order, without FINAL (CHAOS-14407), then one view
+// per key without row_view in the second LIMIT 1 BY (TeamPick).
 func TestTeamSourcePicksOneViewPerKeyWithoutTheViewColumn(t *testing.T) {
 	for table, key := range map[string]string{
 		"work_item_metrics_daily": "LIMIT 1 BY work_item_metrics_daily.org_id, work_item_metrics_daily.day, " +
@@ -13,10 +21,11 @@ func TestTeamSourcePicksOneViewPerKeyWithoutTheViewColumn(t *testing.T) {
 			"work_item_state_durations_daily.provider, work_item_state_durations_daily.work_scope_id, " +
 			"work_item_state_durations_daily.team_id, work_item_state_durations_daily.status\n",
 	} {
-		source := TeamSource(table, table+".org_id = {org_id:String}")
+		source := TeamSource(table, table+".org_id = {org_id:String}", testOrders[table])
+		newest := orderedNewest(mustTeamTable(table), "("+table+".org_id = {org_id:String})", testOrders[table])
 		for _, want := range []string{
-			"FROM " + table + " FINAL",
-			"WHERE (" + table + ".org_id = {org_id:String})",
+			newest,
+			"WHERE (" + table + ".org_id = {org_id:String}) ORDER BY " + testOrders[table] + " DESC LIMIT 1 BY ",
 			table + ".row_view IN ('', 'org', 'team')",
 			"multiIf(" + table + ".row_view = 'team', 2, " + table + ".row_view = 'org', 1, 0) DESC",
 			key,
@@ -25,28 +34,29 @@ func TestTeamSourcePicksOneViewPerKeyWithoutTheViewColumn(t *testing.T) {
 				t.Errorf("TeamSource(%s) lacks %q:\n%s", table, want, source)
 			}
 		}
-		if strings.Count(source, "LIMIT 1 BY") != 1 {
-			t.Errorf("TeamSource(%s) must pick in one LIMIT 1 BY:\n%s", table, source)
+		if strings.Count(source, "LIMIT 1 BY") != 2 || strings.Contains(source, " FINAL") {
+			t.Errorf("TeamSource(%s) must take the newest rows by order (no FINAL) and pick one view in one LIMIT 1 BY:\n%s", table, source)
 		}
 	}
 }
 
-func TestTeamSourceRefusesATableWithoutTeamRowsAndAnEmptyFilter(t *testing.T) {
+func TestTeamSourceRefusesATableWithoutTeamRowsAnEmptyFilterAndAnEmptyOrder(t *testing.T) {
 	for _, call := range []struct {
-		name         string
-		table, where string
+		name                string
+		table, where, order string
 	}{
-		{"person rows", "work_item_user_metrics_daily", "org_id = {org_id:String}"},
-		{"table without the view column", "team_metrics_daily", "org_id = {org_id:String}"},
-		{"empty filter", "work_item_metrics_daily", " "},
+		{"person rows", "work_item_user_metrics_daily", "org_id = {org_id:String}", "computed_at"},
+		{"table without the view column", "team_metrics_daily", "org_id = {org_id:String}", "computed_at"},
+		{"empty filter", "work_item_metrics_daily", " ", WorkItemMetricsNewestOrder},
+		{"empty order", "work_item_metrics_daily", "org_id = {org_id:String}", " "},
 	} {
 		func() {
 			defer func() {
 				if recover() == nil {
-					t.Errorf("%s: TeamSource(%q, %q) did not panic", call.name, call.table, call.where)
+					t.Errorf("%s: TeamSource(%q, %q, %q) did not panic", call.name, call.table, call.where, call.order)
 				}
 			}()
-			_ = TeamSource(call.table, call.where)
+			_ = TeamSource(call.table, call.where, call.order)
 		}()
 	}
 }

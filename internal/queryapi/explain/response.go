@@ -121,6 +121,9 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 	if !known {
 		return nil, ErrUnknownMetric
 	}
+	// The scope ids are a SET (CHAOS-14379): each id once, in the order of its first use. Every read below takes that
+	// set, so [t, t] is the one team t and [t, u, t] the team set [t, u].
+	params.ScopeIDs = distinctIDs(params.ScopeIDs)
 
 	// One instant for the whole response: the current and comparison windows
 	// below share one scope filter, so they must share one team membership.
@@ -145,6 +148,10 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 		scopeBindings = append(scopeBindings, shareBindings...)
 	}
 	scopeFilterSQL += metricStatusFilterSQL(config.StatusFilter)
+	// A team metric of exactly one team reads that team's view of the stored rows (CHAOS-14379). No team and a team
+	// set read the org view (a team set is CHAOS-10665's). The driver and contributor rows of one team read the same
+	// view, so the value, the contributor row and the driver row of that team are one answer.
+	oneTeam := !unresolved && config.Scope == "team" && params.ScopeLevel == "team" && len(params.ScopeIDs) == 1
 
 	var (
 		currentRaw, previousRaw float64
@@ -173,11 +180,11 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 		evidenceBasis = currentOutcome.BasisOrNil()
 	} else {
 		var err error
-		currentRaw, hasData, err = reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID, shareSQL)
+		currentRaw, hasData, err = reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID, shareSQL, oneTeam)
 		if err != nil {
 			return nil, err
 		}
-		previousRaw, hasPriorData, err = reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID, shareSQL)
+		previousRaw, hasPriorData, err = reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID, shareSQL, oneTeam)
 		if err != nil {
 			return nil, err
 		}
@@ -190,11 +197,11 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 		pctChange = &safe
 	}
 
-	drivers, err := reader.fetchMetricDriverDelta(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID, shareSQL)
+	drivers, err := reader.fetchMetricDriverDelta(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID, shareSQL, oneTeam)
 	if err != nil {
 		return nil, err
 	}
-	contributors, err := reader.fetchMetricContributors(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID, shareSQL)
+	contributors, err := reader.fetchMetricContributors(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID, shareSQL, oneTeam)
 	if err != nil {
 		return nil, err
 	}
@@ -356,4 +363,18 @@ func buildContributor(row metricRow, metric, scopeLevel, primaryID string, trans
 		HasPriorData: row.HasPriorData,
 		EvidenceLink: fmt.Sprintf("/api/v1/drilldown/prs?metric=%s&scope_type=%s&scope_id=%s", metric, scopeLevel, primaryID),
 	}
+}
+
+// distinctIDs is a list of ids as a set: each id once, in the order of its first use.
+func distinctIDs(ids []string) []string {
+	var out []string
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, repeated := seen[id]; repeated {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }

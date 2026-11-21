@@ -557,9 +557,10 @@ func TestGitLabTestsResumeStepBackIsCounted(t *testing.T) {
 // A pipeline that is NOT in the window when the walk starts (id > LastID, updated before SinceAt) and is updated between
 // two chunks: (a) updated past BeforeAt (any update after the plan): this window does not list it, the next window
 // lists and reads it. (b) updated INTO this window (GitLab's clock behind ours, or an explicit future before_at such as
-// a backfill): its id is above LastID, so this walk passes it, and the next window (updated_after = this BeforeAt) does
-// not list it either. (b) is the named residual, NOT closed (ticket 14383); a NEW pipeline listed inside the window after
-// the walk passed its id is the same class. The updated_at-ordered binary missed it the same way.
+// a backfill): its id is above LastID, so this walk passes it, and a next window that starts at this BeforeAt does not
+// list it either. The route closes (b) through its watermark, not its seek: the stored watermark stops at the walk start
+// on GitLab's clock, so the next window starts there and reads it
+// (TestGitLabTestsAPipelineThatEntersTheWindowDuringTheWalkIsReadByThisWalkOrTheNext). This cell pins only the seek.
 func TestGitLabTestsResumeAPipelineUpdatedIntoAWindowAfterTheWalkPassedItsID(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "tests")
 	next := claim
@@ -573,7 +574,7 @@ func TestGitLabTestsResumeAPipelineUpdatedIntoAWindowAfterTheWalkPassedItsID(t *
 		nextWalk  int
 	}{
 		{"updated past BeforeAt: read by the next window", claim.BeforeAt.Add(time.Hour), 0, 1},
-		{"updated into this window: missed by both (residual)", claim.BeforeAt.Add(-time.Second), 0, 0},
+		{"updated into this window: a next window from BeforeAt misses it (the watermark closes it)", claim.BeforeAt.Add(-time.Second), 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

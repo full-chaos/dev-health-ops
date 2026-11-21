@@ -122,7 +122,7 @@ func TestTeamSourcePrefersTeamThenOrgThenLegacy(t *testing.T) {
 		// A live legacy row beside a live org row: the org row is read, once.
 		{"S5", "P", 10, teamSourceT1, ""}, {"S5", "P", 4, teamSourceT2, "org"},
 	})
-	got := readKeys(ctx, t, conn, TeamSource("work_item_metrics_daily", metricsFilter), org)
+	got := readKeys(ctx, t, conn, TeamSource("work_item_metrics_daily", metricsFilter, testOrders["work_item_metrics_daily"]), org)
 	want := []string{"S1/C=2", "S1/P=7", "S2/P=3", "S3/P=5", "S5/P=4"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("team form = %v, want %v", got, want)
@@ -142,7 +142,7 @@ func TestTeamSourceLiveFirst(t *testing.T) {
 		{"S6", "P", 5, teamSourceT1, "org"}, {"S6", "P", 0, teamSourceT3, "org"},
 		{"S6", "P", 5, teamSourceT1, "team"}, {"S6", "P", 0, teamSourceT3, "team"},
 	})
-	got := readKeys(ctx, t, conn, TeamSource("work_item_metrics_daily", metricsFilter), org)
+	got := readKeys(ctx, t, conn, TeamSource("work_item_metrics_daily", metricsFilter, testOrders["work_item_metrics_daily"]), org)
 	want := []string{"S4/P=6"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("team form = %v, want %v (a retracted team row must not hide a live org row)", got, want)
@@ -164,7 +164,7 @@ func TestTeamSourceIsANoOpOnTodaysData(t *testing.T) {
 		{"S3", "P", 6, teamSourceT1, "org"}, {"S3", "P", 0, teamSourceT3, "org"},
 	})
 	orgKeys := readKeys(ctx, t, conn, orgForm(t, "work_item_metrics_daily"), org)
-	teamKeys := readKeys(ctx, t, conn, TeamSource("work_item_metrics_daily", metricsFilter), org)
+	teamKeys := readKeys(ctx, t, conn, TeamSource("work_item_metrics_daily", metricsFilter, testOrders["work_item_metrics_daily"]), org)
 	if want := []string{"S1/P=4", "S1/Q=3", "S2/P=3"}; !reflect.DeepEqual(orgKeys, want) {
 		t.Fatalf("org form = %v, want %v: the seed is wrong", orgKeys, want)
 	}
@@ -211,7 +211,8 @@ func TestTeamSourceIsANoOpOnTodaysData(t *testing.T) {
 	}
 	orgStates := readStates(orgForm(t, "work_item_state_durations_daily"))
 	teamStates := readStates(TeamSource("work_item_state_durations_daily",
-		"work_item_state_durations_daily.org_id = ? AND work_item_state_durations_daily.day = ?"))
+		"work_item_state_durations_daily.org_id = ? AND work_item_state_durations_daily.day = ?",
+		testOrders["work_item_state_durations_daily"]))
 	if want := []string{"P/blocked=4", "P/in_progress=5", "Q/blocked=2"}; !reflect.DeepEqual(orgStates, want) {
 		t.Fatalf("state org form = %v, want %v: the seed is wrong", orgStates, want)
 	}

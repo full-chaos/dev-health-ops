@@ -34,14 +34,19 @@ import (
 const gitLabTestsPerRunJobPages = githubTestsMaxJobsPerRun/nativePerPage + 1
 
 // gitLabTestsCursorNonRepoMaxBytes is the widest GitLab cursor without Repo: every counter at its type's maximum, the
-// whole truncation vocabulary, LastID and ProjectID at MaxInt64 encode in 641 bytes (a cell pins it).
-const gitLabTestsCursorNonRepoMaxBytes = 641
+// whole truncation vocabulary, LastID, ProjectID and WindowStart at MaxInt64 encode in 666 bytes (a cell pins it).
+const gitLabTestsCursorNonRepoMaxBytes = 666
 
 // gitLabTestsCursorRepoMaxBytes is the longest repository path the done cursor keeps: an eighth of the checkpoint budget
-// (maxChunkCursorBytes), so the widest done cursor is 1158 bytes (641 + 512 + the "repo" key) and keeps a margin of 2938 bytes of the
+// (maxChunkCursorBytes), so the widest done cursor is 1183 bytes (666 + 512 + the "repo" key) and keeps a margin of 2913 bytes of the
 // budget whatever the path length (GitLab allows deep groups). A longer path is dropped and the done resume reads the
 // project again.
 const gitLabTestsCursorRepoMaxBytes = maxChunkCursorBytes / 8
+
+// gitLabTestsWindowStartMargin is how far before GitLab's clock at the walk start the unit's coverage claim stops
+// (gitLabTestsWatermark). It covers the clock skew between the Date header (one-second resolution, possibly written by a
+// proxy in front of GitLab) and the clock that stamps updated_at, and an updated_at stamped before its row commits.
+const gitLabTestsWindowStartMargin = 60 * time.Second
 
 type gitLabTestsChunkCursor struct {
 	Phase      string `json:"phase"`
@@ -75,6 +80,10 @@ type gitLabTestsChunkCursor struct {
 	// LastID is the id of the last pipeline the active phase emitted: the resume key of the id-ordered listing
 	// (gitLabTestsSeek). Page and Index only say where to look for it. 0 = the phase has not emitted yet.
 	LastID int64 `json:"li,omitempty"`
+	// WindowStart is the unix second up to which the walk can claim coverage: GitLab's clock when the walk started (the
+	// Date of the project read, which comes before any listing) minus gitLabTestsWindowStartMargin. It is set once, by the
+	// invocation that starts the walk, and never changes. 0 = a cursor an older binary wrote (gitLabTestsWatermark).
+	WindowStart int64 `json:"ws,omitempty"`
 }
 
 const (
@@ -267,6 +276,40 @@ func recordGitLabTestsInventoryTruncation(
 	return cursor
 }
 
+// gitLabTestsWatermark is the coverage claim of a finished walk. The listing is read once, from the walk start on, so a
+// pipeline GitLab stamps after that start (a new one, or one updated again, with an id the walk has passed) may be
+// unread by the walk even when its updated_at is at or before BeforeAt: GitLab's clock behind ours, or an explicit future
+// BeforeAt (a backfill). The claim therefore stops at WindowStart when that is earlier than BeforeAt, and the next window
+// (updated_after = the stored watermark, inclusive) lists every such pipeline. Contract: a pipeline in the window is
+// never skipped by both windows; when a pipeline enters above the page boundary inside one invocation, a pipeline can be
+// read twice by that walk (gitLabTestsSeek), and the next window reads again what this walk read after WindowStart
+// (idempotent: every destination is a ReplacingMergeTree on its natural key).
+//
+// A window-blocking truncation withholds the claim (CHAOS-2587), as does a cursor without WindowStart (an older binary
+// started the walk, so its start is unknown): the next window walks the range again rather than skip a pipeline.
+//
+// The walk start is the Date of the project read only (GitLab sends Date on every response: RFC 9110, an origin server
+// with a clock sends it). NOT closed: when the project read carries no usable Date (none, unparseable, or less than the
+// margin after the epoch), WindowStart comes from our clock (normalizedAt), so a GitLab clock behind ours by more than the
+// margin still loses what it stamps between its walk-start time and ours; a Date written by a proxy whose clock is behind
+// GitLab's by more than the margin is the same case.
+func gitLabTestsWatermark(cursor gitLabTestsChunkCursor, claim Claim) *time.Time {
+	if gitLabTestsBlocksWatermark(cursor.Truncated) || claim.BeforeAt == nil {
+		return nil
+	}
+	if cursor.WindowStart == 0 {
+		slog.Warn("gitlab tests/cicd window start unknown",
+			"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+			"reason", "cursor without a window start: watermark withheld")
+		return nil
+	}
+	watermark := claim.BeforeAt.UTC()
+	if start := time.Unix(cursor.WindowStart, 0).UTC(); start.Before(watermark) {
+		watermark = start
+	}
+	return &watermark
+}
+
 // emitGitLabCursorPair publishes the terminal metadata emission, whose before
 // and after cursors are the same value because it advances no provider
 // position.
@@ -287,7 +330,7 @@ func decodeGitLabTestsChunkCursor(raw string) (gitLabTestsChunkCursor, error) {
 	var cursor gitLabTestsChunkCursor
 	if json.Unmarshal([]byte(raw), &cursor) != nil ||
 		(cursor.Phase != "pipelines" && cursor.Phase != "reports" && cursor.Phase != "done") ||
-		cursor.Page < 0 || cursor.Index < 0 || cursor.LastID < 0 ||
+		cursor.Page < 0 || cursor.Index < 0 || cursor.LastID < 0 || cursor.WindowStart < 0 ||
 		cursor.PipelinePages < 0 || cursor.ReportPages < 0 ||
 		len(cursor.Truncated) > len(gitLabTestsTruncationComponents) {
 		return gitLabTestsChunkCursor{}, ErrChunkCheckpointConflict
@@ -326,14 +369,18 @@ func encodeGitLabTestsChunkCursor(cursor gitLabTestsChunkCursor) (string, error)
 //   - resumed (LastID > 0 at invocation start = seekID): start on the page that held it (Page, or Page-1 after a page
 //     end). On the FIRST page of a visit, if the page is empty or its first id < seekID and it is not page 1, the
 //     boundary may sit on an earlier page: step back one page and visit again, until a page's first id >= seekID or
-//     page 1. Then skip every id >= seekID (only the resume-time id: inside one invocation every listed item is read).
+//     page 1. Then skip every id >= seekID (only the resume-time id: inside one invocation every listed item is read). A
+//     pipeline that enters the listing above the page boundary inside one invocation shifts the offset pages by one, so
+//     the last pipeline of a page is listed again first on the next page and read twice by the walk; its rows replace the
+//     stored ones (every destination is a ReplacingMergeTree on its natural key). Skipping it instead would defer an
+//     entering pipeline to the next window, where a listing that shrinks between two page requests can skip it.
 //   - legacy (Page > 0 with no LastID: a cursor written by the updated_at-ordered binary): its position names another
 //     order, so the phase starts again at page 1. Rows read twice replace the stored ones (every destination is a
 //     ReplacingMergeTree on its natural key); nothing is skipped.
 //
-// NOT closed (residual, ticket 14383): a pipeline that enters the window listing after the walk passed its id (a new
-// pipeline, or one updated into the window, with an id above LastID) is not read by this walk. It needs an updated_at at
-// or before BeforeAt after the walk started: GitLab's clock behind ours, or an explicit future before_at (a backfill).
+// A pipeline that enters the window listing after the walk passed its id (a new pipeline, or one updated again, with an
+// id above LastID) is not read by this walk; its updated_at is at or after the walk start, so the next window reads it:
+// the watermark stops at the walk start (gitLabTestsWatermark), not at BeforeAt.
 //
 // Pages are charged 1..N in order, once each, so on a resume (or a legacy restart) the phase's cumulative charged-page
 // count is the highest page charged: a page at or before it is free (a step back, a page-end re-read, a legacy restart),
@@ -530,13 +577,9 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 			// the window. Advancing the watermark over the unreached old end
 			// would make the gap permanent, so the phase that stopped short
 			// refuses it. A per-run truncation walked the whole window and
-			// does not (CHAOS-4142).
-			Watermark: func() *time.Time {
-				if gitLabTestsBlocksWatermark(cursor.Truncated) {
-					return nil
-				}
-				return claim.BeforeAt
-			}(),
+			// does not (CHAOS-4142). A whole walk claims coverage only up to
+			// its start (gitLabTestsWatermark).
+			Watermark: gitLabTestsWatermark(cursor, claim),
 			Evidence: FetchEvidence{
 				Provider: claim.Provider, Dataset: claim.Dataset,
 				Requests: cursor.Requests, Pages: cursor.Pages,
@@ -546,8 +589,9 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 		}, emit)
 	}
 	requests := cursor.Requests
+	var gitLabDate time.Time
 	counted := *client
-	counted.Doer = gitLabTestsCountingDoer{delegate: client.Doer, attempts: &requests}
+	counted.Doer = gitLabTestsCountingDoer{delegate: client.Doer, attempts: &requests, date: &gitLabDate}
 	root := providerRelativePath(client, "api", "v4", "projects", projectID)
 	fetchProject := func() (repositoryPayload, int64, error) {
 		var project repositoryPayload
@@ -585,6 +629,19 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 	project, parsedProjectID, err := fetchProject()
 	if err != nil {
 		return err
+	}
+	if strings.TrimSpace(resumeCursor) == "" {
+		// The walk starts here: the project read came before any listing, so its Date is GitLab's clock at or before the
+		// first listed page. normalizedAt (the attempt start, before any request) stands in when the project read had no
+		// usable Date; a window start below 1 s is not usable (it cannot be persisted: 0 means an older binary's cursor).
+		windowStart := gitLabDate.Add(-gitLabTestsWindowStartMargin).Unix()
+		if gitLabDate.IsZero() || windowStart < 1 {
+			windowStart = normalizedAt.Add(-gitLabTestsWindowStartMargin).Unix()
+			slog.Warn("gitlab tests/cicd window start unknown",
+				"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+				"reason", "no usable Date header on the project read: the window start uses our clock")
+		}
+		cursor.WindowStart = windowStart
 	}
 	fullName := gitLabProjectFullName(project)
 	cursor.Repo, cursor.ProjectID = fullName, parsedProjectID

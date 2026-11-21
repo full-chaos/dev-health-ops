@@ -456,10 +456,14 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 	empty := func() *model.CompoundingRiskResult {
 		return &model.CompoundingRiskResult{OrgID: orgID, Breakout: breakout, Rows: []model.CompoundingRiskPoint{}, Trend: []model.CompoundingRiskTrendPoint{}, GeneratedAt: now}
 	}
-	// An explicit empty repoIds selects no repository on every path, named
-	// teams included.
+	// An explicit empty repoIds selects no repository when no team is named.
+	// With teams named it means the same as an absent repoIds (the fallback's
+	// parity rule): the teams' own repositories.
 	if repoIDs != nil && len(repoIDs) == 0 {
-		return empty(), nil
+		if len(teamIDs) == 0 {
+			return empty(), nil
+		}
+		repoIDs = nil
 	}
 
 	var fallbackRepoIDs idList = repoIDs

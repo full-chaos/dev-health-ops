@@ -30,7 +30,7 @@ func dispatchOutboxAvailableAt(t *testing.T, ctx context.Context, pool *pgxpool.
 func TestScheduleRedispatchArmsANewWakeupWithTheDefaultCountdown(t *testing.T) {
 	withDispatchGatePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		now := pgNow()
-		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, nil, now)
+		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, 0, nil, now)
 
 		got := dispatchOutboxAvailableAt(t, ctx, pool, discoveryTestRun)
 		want := now.Add(60 * time.Second)
@@ -47,7 +47,7 @@ func TestScheduleRedispatchUsesTheExplicitAvailableAtWhenGiven(t *testing.T) {
 	withDispatchGatePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		now := pgNow()
 		explicit := now.Add(45 * time.Minute)
-		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, &explicit, now)
+		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, 0, &explicit, now)
 
 		got := dispatchOutboxAvailableAt(t, ctx, pool, discoveryTestRun)
 		if !got.Equal(explicit) {
@@ -78,7 +78,7 @@ VALUES ($1,$2,$3,$4,'pending',$5,0,now(),now())`,
 		}
 
 		later := now.Add(45 * time.Minute)
-		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, &later, now)
+		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, 0, &later, now)
 
 		got := dispatchOutboxAvailableAt(t, ctx, pool, discoveryTestRun)
 		if !got.Equal(earlier) {
@@ -106,7 +106,7 @@ VALUES ($1,$2,$3,$4,'pending',$5,0,'some-claim-token',$6,now(),now())`,
 		}
 
 		later := now.Add(45 * time.Minute)
-		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, &later, now)
+		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, 0, &later, now)
 
 		got := dispatchOutboxAvailableAt(t, ctx, pool, discoveryTestRun)
 		if !got.Equal(claimedAt) {
@@ -124,7 +124,7 @@ func TestScheduleRedispatchNeverPanicsOrPropagatesWhenTheTransactionFails(t *tes
 	withDispatchGatePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		pool.Close()
 		now := pgNow()
-		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, nil, now) // must not panic
+		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, 0, nil, now) // must not panic
 	})
 }
 

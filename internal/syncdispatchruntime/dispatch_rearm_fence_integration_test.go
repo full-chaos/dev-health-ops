@@ -407,3 +407,37 @@ func TestRearmFenceMatrixDispatchedLowerAttemptIsNotWritten(t *testing.T) {
 		assertRowUnchanged(t, before, after, "the pass does not own a row at another attempt")
 	})
 }
+
+// TestRearmFenceReferenceDiscoverySuccessKeepsItsOwnInstant: the wakeup upsert's other dispatch_sync_run caller,
+// reference discovery success, keeps its own instant: available_at, updated_at and the claim-liveness instant are its
+// completion time, so a relay claim live at that time stays.
+func TestRearmFenceReferenceDiscoverySuccessKeepsItsOwnInstant(t *testing.T) {
+	withDispatchGatePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		completedAt := pgNow()
+		if _, err := pool.Exec(ctx, `
+INSERT INTO sync_dispatch_outbox (id,org_id,sync_run_id,kind,status,available_at,attempts,claim_token,claim_expires_at,claim_transport,claim_route_generation,created_at,updated_at)
+VALUES ('00000000-0000-4000-8000-0000001447b0',$1,$2,'dispatch_sync_run','pending',$3,3,'relay-claim',$4,'river',$5,now(),now())`,
+			discoveryTestOrg, discoveryTestRun, completedAt.Add(10*time.Minute), completedAt.Add(30*time.Second), dispatchRouteGeneration); err != nil {
+			t.Fatal(err)
+		}
+		executor := &fakeDiscoveryExecutor{summary: map[string]any{"reference_team_keys": []string{"ENG"}}}
+		service, err := NewNativeReferenceDiscoveryService(pool, nil, executor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		service.now = func() time.Time { return completedAt }
+		if err := service.Discover(ctx, newDiscoveryArgs()); err != nil {
+			t.Fatalf("Discover: %v", err)
+		}
+		var status string
+		var availableAt, updatedAt time.Time
+		var claimToken *string
+		if err := pool.QueryRow(ctx, `SELECT status, available_at, updated_at, claim_token FROM sync_dispatch_outbox WHERE sync_run_id = $1 AND kind = 'dispatch_sync_run'`,
+			discoveryTestRun).Scan(&status, &availableAt, &updatedAt, &claimToken); err != nil {
+			t.Fatal(err)
+		}
+		if status != "pending" || !availableAt.Equal(completedAt) || !updatedAt.Equal(completedAt) || claimToken == nil || *claimToken != "relay-claim" {
+			t.Fatalf("row %s available_at=%s updated_at=%s claim=%v, want pending at %s, updated %s, claim kept", status, availableAt, updatedAt, claimToken, completedAt, completedAt)
+		}
+	})
+}

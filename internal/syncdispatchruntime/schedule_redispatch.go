@@ -182,7 +182,7 @@ func countdownForIdle(base, limit, idle time.Duration, syncRunID string) (time.D
 	}
 }
 
-func scheduleRedispatch(ctx context.Context, pool *pgxpool.Pool, logger *synclog.Logger, syncRunID string, availableAt *time.Time, now time.Time, extra ...synclog.Attr) {
+func scheduleRedispatch(ctx context.Context, pool *pgxpool.Pool, logger *synclog.Logger, syncRunID string, deliveryAttempt int64, availableAt *time.Time, now time.Time, extra ...synclog.Attr) {
 	countdown := redispatchCountdown()
 	redispatchAt := now.Add(countdown)
 	if availableAt != nil {
@@ -200,12 +200,22 @@ func scheduleRedispatch(ctx context.Context, pool *pgxpool.Pool, logger *synclog
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	rearmedByOther, err := dispatchWakeupAlreadyPending(ctx, tx, syncRunID)
+	wakeup, err := lockDispatchWakeup(ctx, tx, syncRunID)
 	if err != nil {
 		fail(err)
 		return
 	}
-	if err := upsertDiscoveryOutboxWakeup(ctx, tx, "", syncRunID, outboxKindDispatchSyncRun, redispatchAt); err != nil {
+	// A dispatched row at another attempt is a delivery this pass does not own: the relay delivered a newer wake
+	// while the pass ran. Moving it to pending would refuse that delivery at its start fence, so the row is left as it
+	// is and the delivery's own pass arms the next wake.
+	if wakeup.found && wakeup.status == "dispatched" && wakeup.attempts != deliveryAttempt {
+		logger.Info(ctx, synclog.MsgDispatchSyncRunRedispatchSkippedNotOwned, synclog.Run(synclog.ParseID(syncRunID)),
+			synclog.Text(synclog.KeyReason, synclog.ParseLabel("delivery_attempt_mismatch")))
+		return
+	}
+	rearmedByOther := wakeup.found && wakeup.status == "pending"
+	// The claim liveness the upsert judges is taken at now, not at the target: a relay claim live now must stay.
+	if err := upsertDiscoveryOutboxWakeup(ctx, tx, "", syncRunID, outboxKindDispatchSyncRun, redispatchAt, now); err != nil {
 		fail(err)
 		return
 	}
@@ -247,21 +257,28 @@ WHERE sync_run_id = $1::uuid AND kind = $4 AND status = 'pending' AND claim_toke
 	logger.Info(ctx, synclog.MsgDispatchSyncRunRedispatchRearmed, attrs...)
 }
 
-// dispatchWakeupAlreadyPending locks the run's dispatch_sync_run outbox row
-// and reports whether it is already 'pending'. The lock holds the row until
-// scheduleRedispatch commits, so a concurrent writer cannot slip a wake in
-// between this read and the overwrite it decides on. No row is not pending.
-func dispatchWakeupAlreadyPending(ctx context.Context, tx pgx.Tx, syncRunID string) (bool, error) {
-	var status string
+// dispatchWakeup is the run's dispatch_sync_run outbox row as scheduleRedispatch locked it.
+type dispatchWakeup struct {
+	found    bool
+	status   string
+	attempts int64
+}
+
+// lockDispatchWakeup locks the run's dispatch_sync_run outbox row and returns
+// its status and delivery attempt. The lock holds the row until
+// scheduleRedispatch commits, so a concurrent writer cannot slip a wake or a
+// delivery in between this read and the write it decides on.
+func lockDispatchWakeup(ctx context.Context, tx pgx.Tx, syncRunID string) (dispatchWakeup, error) {
+	wakeup := dispatchWakeup{found: true}
 	err := tx.QueryRow(ctx, `
-SELECT status FROM public.sync_dispatch_outbox
+SELECT status, attempts FROM public.sync_dispatch_outbox
 WHERE sync_run_id = $1::uuid AND kind = $2
-FOR UPDATE`, syncRunID, outboxKindDispatchSyncRun).Scan(&status)
+FOR UPDATE`, syncRunID, outboxKindDispatchSyncRun).Scan(&wakeup.status, &wakeup.attempts)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
+		return dispatchWakeup{}, nil
 	}
 	if err != nil {
-		return false, err
+		return dispatchWakeup{}, err
 	}
-	return status == "pending", nil
+	return wakeup, nil
 }

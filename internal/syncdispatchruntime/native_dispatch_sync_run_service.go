@@ -636,7 +636,7 @@ WHERE id = $1::uuid`,
 		}
 		armAt := service.nowUTC()
 		if at, ok := queuedPassRearmAt(nextDeferredAt, counts, len(deferredOutsideSnapshot) > 0, armAt); ok {
-			scheduleRedispatch(ctx, service.pool, service.logger, run.id, at, armAt)
+			scheduleRedispatch(ctx, service.pool, service.logger, run.id, args.Attempt(), at, armAt)
 		}
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunDispatched, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, riverQueued))
 		return nil
@@ -673,7 +673,7 @@ WHERE id = $1::uuid`,
 		// cap or a long unit; the re-arm backs off with the idle time and a
 		// unit end wakes the pass at once (CHAOS-10013).
 		backoff, backoffAttrs := rearmBackoff(ctx, service.pool, service.logger, run.id, armAt)
-		scheduleRedispatch(ctx, service.pool, service.logger, run.id, dueNowRearmAtAfter(counts.nextDeferredAt, armAt, backoff), armAt, backoffAttrs...)
+		scheduleRedispatch(ctx, service.pool, service.logger, run.id, args.Attempt(), dueNowRearmAtAfter(counts.nextDeferredAt, armAt, backoff), armAt, backoffAttrs...)
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunNoop, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Count(synclog.KeyPendingUnits, counts.dispatchable))
 		return nil
 	}
@@ -683,7 +683,7 @@ WHERE id = $1::uuid`,
 	// nothing. Also while units are in flight: this pass consumed the run's
 	// row, so without it the deferral would wait for the next unit end.
 	if counts.nextDeferredAt != nil {
-		scheduleRedispatch(ctx, service.pool, service.logger, run.id, counts.nextDeferredAt, service.nowUTC())
+		scheduleRedispatch(ctx, service.pool, service.logger, run.id, args.Attempt(), counts.nextDeferredAt, service.nowUTC())
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunDeferred, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Instant(synclog.KeyNextDeferredAt, *counts.nextDeferredAt))
 		return nil
 	}

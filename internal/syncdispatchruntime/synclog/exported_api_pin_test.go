@@ -226,6 +226,7 @@ var exportedAPI = []string{
 	"var synclog.MsgDispatchSyncRunRateLimitCooldownReconfirmed synclog.Msg",
 	"var synclog.MsgDispatchSyncRunRedispatchRearmFailed synclog.Msg",
 	"var synclog.MsgDispatchSyncRunRedispatchRearmed synclog.Msg",
+	"var synclog.MsgDispatchSyncRunRedispatchSkippedNotOwned synclog.Msg",
 	"var synclog.MsgDispatchSyncRunRedispatchBackoffReadFailed synclog.Msg",
 	"var synclog.MsgDispatchSyncRunTerminalDeliveryPublishes synclog.Msg",
 	"var synclog.MsgDispatchSyncRunTerminalVerdictRefused synclog.Msg",

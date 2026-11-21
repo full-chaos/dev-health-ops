@@ -229,7 +229,7 @@ VALUES ('00000000-0000-4000-8000-000000001100',$1,$2,'github','commits',$3,'plan
 		if woken.After(completedAt) {
 			t.Fatalf("precondition: wake available_at=%s is after the completion %s", woken, completedAt)
 		}
-		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, nil, completedAt.Add(200*time.Millisecond))
+		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, 0, nil, completedAt.Add(200*time.Millisecond))
 		if got := dispatchOutboxAvailableAt(t, ctx, pool, discoveryTestRun); !got.Equal(woken) {
 			t.Fatalf("available_at=%s want=%s: the pass's countdown re-arm overwrote a unit wake that landed while it ran", got, woken)
 		}
@@ -251,7 +251,7 @@ func TestScheduleRedispatchStillCountsDownFromItsOwnDeliveredRow(t *testing.T) {
 			t.Fatal(err)
 		}
 		now := pgNow()
-		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, nil, now)
+		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, 0, nil, now)
 		got := dispatchOutboxAvailableAt(t, ctx, pool, discoveryTestRun)
 		if want := now.Add(60 * time.Second); !got.Equal(want) {
 			t.Fatalf("available_at=%s want=%s: a re-arm of the pass's own delivered row must count down, not keep the stale %s", got, want, stale)

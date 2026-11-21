@@ -583,6 +583,8 @@ internal/synchandoff	trigger_writer_census_test.go	.	tree	*.go
 internal/syncreconciler	no_celery_test.go	unexpressed	-	-
 internal/syncrunrollup	arm_finalize_test.go	internal/syncreconciler	dir	*
 internal/syncrunrollup	cross_package_registry_test.go	unexpressed	-	-
+internal/syncrunrollup	status_writer_inventory_test.go	unexpressed	-	*.go
+internal/syncrunrollup	status_writer_inventory_test.go	unexpressed	-	-
 internal/teamactive	roster_census_test.go	unexpressed	-	*.go
 internal/teamattribution	is_primary_census_test.go	.	tree	*.go
 internal/teamattribution	is_primary_census_test.go	internal	tree	*.go

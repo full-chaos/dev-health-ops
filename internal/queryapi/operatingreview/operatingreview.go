@@ -1454,9 +1454,7 @@ func teamClauses(teams teamSelection) (teamFilter, teamGroup string, binding *cl
 // hash of the picked values (CHAOS-14355). The work_items read takes rowview.WorkItemMetricsNewestOrder, the one order
 // of work_item_metrics_daily. The one-team source picks each view's version by the same order as the org form
 // (rowview.ServedTeamSource, CHAOS-14405), so on a computed_at tie both forms serve one version.
-const stateDurationsVersionOrder = `(work_item_state_durations_daily.computed_at, cityHash64(tuple(
-                work_item_state_durations_daily.duration_hours, work_item_state_durations_daily.items_touched,
-                work_item_state_durations_daily.avg_wip)))`
+const stateDurationsVersionOrder = rowview.StateDurationsNewestOrder
 
 // workItemSource is the FROM source of a read of a work item daily table. No team
 // and a team set read the table (a team set is CHAOS-10665's). Exactly one team

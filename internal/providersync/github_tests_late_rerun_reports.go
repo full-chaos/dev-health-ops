@@ -194,8 +194,14 @@ func recordGitHubTestsRelistStop(
 	if client != nil {
 		client.Metrics.RecordInventoryPageCap(claim.Provider, claim.Dataset)
 	}
+	message := "late re-run re-list stopped before its oldest runs; the watermark advances"
+	for _, observation := range cursor.Incomplete {
+		if _, advancing := githubTestsWatermarkAdvancingPairs[observation.Component]; !advancing {
+			message = "late re-run re-list stopped before its oldest runs; the watermark holds"
+		}
+	}
 	slog.Warn(
-		"late re-run re-list stopped before its oldest runs; the watermark advances",
+		message,
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
 		"repository", logging.ProviderText(cursor.Repo), "component", githubTestsLateRerunReportsComponent, "cause", cause,
 		"range_hi", rangeHi, "items", items, "pages", cursor.ArtifactPages,

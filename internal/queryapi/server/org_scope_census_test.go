@@ -85,10 +85,10 @@ var orgScopeReadsScopedElsewhere = map[string]orgScopeElsewhere{
 		[]orgScopeSite{{"internal/queryapi/analytics/timeseries.go", "CompileTimeseries", "AND %s.org_id = {org_id:String}"}},
 	},
 	"internal/queryapi/home/queries_metrics.go:fetchRateDriverDelta": {
-		"both FROM sources are fetchMetricDriverDelta's driverDeltaSource, which scopes a table with no natural key itself and takes metricFromClause's scoped source for the others",
+		"both FROM sources are fetchMetricDriverDelta's driverDeltaSource, which scopes a table with no natural key itself and takes metricFromClause's scoped source (newestVersionSource) for the others",
 		[]orgScopeSite{
 			{"internal/queryapi/home/driver_delta_source.go", "driverDeltaSource", "AND org_id = {org_id:String}"},
-			{"internal/queryapi/home/queries_metrics.go", "metricFromClause", "AND org_id = {org_id:String}"},
+			{"internal/queryapi/home/queries_metrics.go", "newestVersionSource", "AND org_id = {org_id:String}"},
 		},
 	},
 	"internal/queryapi/featureflags/featureflags.go:Resolve": {

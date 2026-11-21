@@ -142,9 +142,9 @@ func TestRealClickHouse_TeamBreakoutNoUnassignedRowWhenOwnedOrNamed(t *testing.T
 	}
 }
 
-// Boundary: with a stored team row the answer is what main answered before
-// this change: the stored row only (no unassigned row), the trend over every
-// repository (including the unowned one), the stored row's own label.
+// Boundary: with a stored team row and a repository no team owns, the answer is
+// the stored row, the no-team row of that repository, the trend over every
+// repository (including the unowned one) and the stored row's own label.
 func TestRealClickHouse_StoredTeamRowPathUnchangedBoundary(t *testing.T) {
 	ctx, conn, client := startStore(t)
 	now := time.Now().UTC()
@@ -160,7 +160,7 @@ func TestRealClickHouse_StoredTeamRowPathUnchangedBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	tr := trendMap(got)
-	if len(got.Rows) != 1 || got.Rows[0].ScopeID != "t1" || got.Rows[0].ScopeLabel != "Platform" || *got.Rows[0].Score != 0.5 || len(tr) != 1 || tr[day(now, 1).Format("2006-01-02")] != 0.5 {
+	if len(got.Rows) != 2 || got.Rows[0].ScopeID != "unassigned" || *got.Rows[0].Score != 0.8 || got.Rows[1].ScopeID != "t1" || got.Rows[1].ScopeLabel != "Platform" || *got.Rows[1].Score != 0.5 || len(tr) != 1 || tr[day(now, 1).Format("2006-01-02")] != 0.5 {
 		t.Fatalf("stored-row path changed: rows %#v trend %v", got.Rows, tr)
 	}
 }

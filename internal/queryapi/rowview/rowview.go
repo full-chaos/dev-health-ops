@@ -225,6 +225,81 @@ const WorkItemMetricsNewestOrder = `(work_item_metrics_daily.computed_at, cityHa
     work_item_metrics_daily.lead_time_p90_hours, work_item_metrics_daily.wip_age_p50_hours,
     work_item_metrics_daily.wip_age_p90_hours)))`
 
+// StateDurationsNewestOrder is the version order of a work_item_state_durations_daily key, as
+// WorkItemMetricsNewestOrder is for work_item_metrics_daily: the newest computed_at, then the highest hash of the
+// version's three measures.
+const StateDurationsNewestOrder = `(work_item_state_durations_daily.computed_at, cityHash64(tuple(
+                work_item_state_durations_daily.duration_hours, work_item_state_durations_daily.items_touched,
+                work_item_state_durations_daily.avg_wip)))`
+
+// versionColumns are the stored columns of a table with no shared order (repository-keyed tables and the user metrics
+// table), every column but the sorting key and computed_at, in table order. Every metric of the table hashes this one list, so all metrics of a response read one stored version
+// of a tied key. A cell holds each list equal to the table's columns at the migration head.
+var versionColumns = map[string]string{
+	"repo_metrics_daily": `commits_count total_loc_touched avg_commit_size_loc large_commit_ratio prs_merged
+		median_pr_cycle_hours pr_cycle_p75_hours pr_cycle_p90_hours prs_with_first_review pr_first_review_p50_hours
+		pr_first_review_p90_hours pr_review_time_p50_hours pr_pickup_time_p50_hours large_pr_ratio pr_rework_ratio
+		mttr_hours change_failure_rate pr_size_p50_loc pr_size_p90_loc pr_comments_per_100_loc pr_reviews_per_100_loc
+		rework_churn_ratio_30d single_owner_file_ratio_30d review_load_top_reviewer_ratio bus_factor code_ownership_gini
+		change_failure_rate_incident revert_rate prs_merged_reviewed prs_merged_rework prs_merged_no_rework_signal
+		pr_rework_ratio_reviewed pooled_pr_size_loc pooled_bug_repair_hours pooled_samples_stored retracted`,
+	"deploy_metrics_daily": `deployments_count failed_deployments_count deploy_time_p50_hours lead_time_p50_hours
+		pooled_deploy_hours pooled_samples_stored retracted`,
+	"repo_change_failure_daily": `deployments_count failed_deployments_native failed_deployments_heuristic
+		incidents_direct incidents_via_deployment failed_deployments_status deployments_status_known`,
+	"testops_pipeline_metrics_daily": `pipelines_count success_count failure_count cancelled_count success_rate
+		failure_rate cancel_rate rerun_rate median_duration_seconds p95_duration_seconds avg_queue_seconds
+		p95_queue_seconds team_id service_id skipped_count unfinished_count other_count unfinished_stale_count
+		pooled_service_ids pooled_durations pooled_queues pooled_samples_stored retracted`,
+	"work_item_user_metrics_daily": `team_id team_name items_started items_completed wip_count_end_of_day
+		cycle_time_p50_hours cycle_time_p90_hours retracted team_split_team_ids team_split_is_primary
+		team_split_items_completed team_split_wip_end_of_day`,
+}
+
+// VersionColumns is the fixed hash list of a table of versionColumns (nil for another table).
+func VersionColumns(table string) []string {
+	if list, ok := versionColumns[table]; ok {
+		return strings.Fields(list)
+	}
+	return nil
+}
+
+// VersionOrder is the version order of a key of table: the shared order of a team table, else the newest
+// computed_at, then the highest hash of the table's fixed column list, the same for every metric of the table. It
+// panics for a table with no order. Columns are qualified by the table, so the order reads the stored row and not an
+// alias of the select list.
+func VersionOrder(table string) string {
+	switch table {
+	case "work_item_metrics_daily":
+		return WorkItemMetricsNewestOrder
+	case "work_item_state_durations_daily":
+		return StateDurationsNewestOrder
+	}
+	if _, ok := versionColumns[table]; !ok {
+		panic("rowview: no version order for " + table)
+	}
+	return "(" + table + ".computed_at, cityHash64(tuple(" + qualified(table, VersionColumns(table)) + ")))"
+}
+
+// VersionPick is the select list that picks ONE version of each key by VersionOrder: the tuple of the columns as
+// picked, then picked.N AS <column> for each. A Nullable column keeps the picked version's NULL (a tuple is never
+// NULL), so no column comes from another version. The caller groups by the key.
+func VersionPick(table string, columns []string) string {
+	items := []string{"argMax(tuple(" + qualified(table, columns) + "), " + VersionOrder(table) + ") AS picked"}
+	for i, column := range columns {
+		items = append(items, fmt.Sprintf("picked.%d AS %s", i+1, column))
+	}
+	return strings.Join(items, ",\n                ")
+}
+
+func qualified(table string, columns []string) string {
+	out := make([]string, len(columns))
+	for i, column := range columns {
+		out[i] = table + "." + column
+	}
+	return strings.Join(out, ", ")
+}
+
 // mustTeamTable panics for a table that holds no team rows.
 func mustTeamTable(table string) teamkeytables.Table {
 	if _, ok := teamTables[table]; !ok {

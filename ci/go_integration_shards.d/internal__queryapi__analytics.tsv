@@ -1,5 +1,5 @@
 internal/queryapi/analytics	549
-split-by-test	2
+split-by-test	3
 TestSankeyGrouped_SeededRealClickHouse_EqualsPerDimensionQueries	88
 TestInvestmentMetricsDailyReadersGiveRetractionRowsNoWeight	53
 TestInvestmentReadsGiveOneExactAnswerOnEveryRun	39

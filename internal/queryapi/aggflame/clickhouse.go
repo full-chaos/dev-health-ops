@@ -107,7 +107,7 @@ func fetchCycleBreakdown(ctx context.Context, client QueryClient, orgID string, 
 	// that row. No team reads the org view.
 	source, view := "work_item_state_durations_daily", "\n              AND "+rowview.OrgPredicate("work_item_state_durations_daily", "")
 	if teamID != "" {
-		source, view = rowview.ServedTeamSource("work_item_state_durations_daily", "day >= {start_day:Date} AND day < {end_day:Date}"+filter, "")+" AS work_item_state_durations_daily", ""
+		source, view = rowview.ServedTeamSource("work_item_state_durations_daily", "day >= {start_day:Date} AND day < {end_day:Date}"+filter, rowview.StateDurationsNewestOrder)+" AS work_item_state_durations_daily", ""
 	}
 
 	query := `
@@ -122,15 +122,14 @@ func fetchCycleBreakdown(ctx context.Context, client QueryClient, orgID string, 
                 work_scope_id,
                 team_id,
                 status,
-                argMax(duration_hours, computed_at) AS duration_hours,
-                argMax(items_touched, computed_at) AS items_touched
+                ` + rowview.VersionPick("work_item_state_durations_daily", []string{"duration_hours", "items_touched", "avg_wip"}) + `
             FROM ` + source + `
             WHERE org_id = {org_id:String}
               AND day >= {start_day:Date}
               AND day < {end_day:Date}` + filter + view + `
             GROUP BY day, provider, work_scope_id, team_id, status, row_view
-            HAVING ` + liverow.NewestPredicate("work_item_state_durations_daily", "") + `
-        )
+        ) AS newest
+        WHERE ` + liverow.Predicate("work_item_state_durations_daily", "newest") + `
         GROUP BY status
         ORDER BY total_hours DESC
     `

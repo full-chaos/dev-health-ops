@@ -124,7 +124,9 @@ func tieDoubleHome(t *testing.T, metric string, zero bool) (*Response, tieDouble
 				rows = append(rows, []any{id})
 			}
 			return scan(rows)
-		case strings.Contains(q, "argMax("+column+",") && strings.Contains(q, "AS value"):
+		// A value read picks one version of every measure (CHAOS-14430): it is the read of this metric when it aggregates
+		// this column.
+		case strings.Contains(q, "AS picked") && (strings.Contains(q, "avg("+column+")") || strings.Contains(q, "sum("+column)) && strings.Contains(q, "AS value"):
 			start, _ := time.Parse(time.DateOnly, bound("start_day"))
 			total := valueOf(bound("start_day")) * float64(len(ids))
 			if strings.Contains(q, "AS row_count") {

@@ -2,15 +2,19 @@ package providersync
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
 
 // Cells of the charged-deletion credit's edge shapes (CHAOS-14434): a resume that starts AT the record bound, the deep
@@ -285,7 +289,23 @@ func TestGitHubTestsResumeDeepReportsUnderCreditHoldsTheWatermark(t *testing.T) 
 							t.Fatal(err)
 						}
 						plain := newListingFake(t, slices.Clone(fake.runs))
-						next := deletionShiftPlainWalk(t, handler, listing.claim, deletionShiftDoer(t, plain, true))
+						// The next walk starts from an empty cursor (decodeGitHubTestsChunkCursor("")): no deletion mark, no credit.
+						firstMark := -1
+						nextCursor := chargedResumeWalk(t, handler, listing.claim, deletionShiftDoer(t, plain, true),
+							func(c githubTestsChunkCursor) bool {
+								if firstMark < 0 {
+									firstMark = c.DeletionProven
+								}
+								return false
+							}, func(githubTestsChunkCursor) {})
+						next, nextErr := githubTestsFinalMetadataBatch(listing.claim, nextCursor)
+						if nextErr != nil {
+							t.Fatal(nextErr)
+						}
+						if final.DeletionProven != 1 || firstMark != 0 || nextCursor.DeletionProven != 0 || nextCursor.RecordCredit != 0 {
+							t.Errorf("deletion mark: walk 1 ends %d (want 1), walk 2 starts %d and ends %d with credit %d (want 0, 0, 0)",
+								final.DeletionProven, firstMark, nextCursor.DeletionProven, nextCursor.RecordCredit)
+						}
 						unread := chargedR1Unread(listing, plain, fake)
 						incomplete := deletionShiftIncomplete(t, batch.Result)
 						t.Logf("CELL deep_reports_credit/%s/%s pause=%d bound=%d pipelines=%d rc=%d unread=%v watermark=%v incomplete=%v next_watermark=%v",
@@ -696,4 +716,153 @@ func TestGitHubTestsResumeDeletionProvenWithoutCreditHoldsTheDeepStop(t *testing
 			}
 		})
 	}
+}
+
+// One deep stop is one stopped inventory phase: dev_health_provider_inventory_page_cap_total goes up by one, also when a
+// proven deletion holds the stop (the blocking observation carries no metric of its own). The deep reports stop's WARN
+// names the watermark state it leaves: held after a proven deletion, else advancing.
+func TestGitHubTestsDeepStopCountsOnePageCapPerPhase(t *testing.T) {
+	chargedR1RaceSkip(t)
+	for _, scenario := range []struct {
+		name    string
+		reports bool
+		pause   int
+		bound   int
+	}{
+		{"deep_runs/visitor", false, 50, 130},
+		{"deep_runs/bound_entry", false, 130, 130},
+		{"deep_reports/visitor", true, 50, 390},
+		{"deep_reports/bound_entry", true, 130, 390},
+	} {
+		for _, coalesce := range []bool{false, true} {
+			for _, dataset := range []string{"tests", "cicd"} {
+				for _, deleted := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/%s/coalesce_%v/deleted_%v", scenario.name, dataset, coalesce, deleted), func(t *testing.T) {
+						listing := deletionShiftListings()[1]
+						fixture := listing.runs(1, 250)
+						deepComponent := githubTestsLateRerunRunsComponent
+						blockingComponent := githubTestsRunInventoryComponent
+						if scenario.reports {
+							listing, fixture = chargedR1DeepReports(true)
+							deepComponent = githubTestsLateRerunReportsComponent
+							blockingComponent = githubTestsArtifactInventoryComponent
+						}
+						capability, ok := Capability(listing.claim.Provider, dataset)
+						if !ok {
+							t.Fatal("missing capability")
+						}
+						listing.claim.Dataset, listing.claim.CostClass = dataset, capability.CostClass
+						fake := newListingFake(t, fixture)
+						handler := GitHubTestsRouteHandler{MaxWalkRecords: scenario.bound, CoalesceRuns: coalesce}
+						doer := deletionShiftDoer(t, fake, scenario.reports)
+						if scenario.name == "deep_runs/bound_entry" {
+							// The final run before the checkpoint writes three job rows.
+							// The two-record credit cannot bring this checkpoint below the bound.
+							doer = chargedJobsDoer{fake: fake, jobs: map[int]int{121: 3}}
+						}
+						client := githubTestsClient(t, fakehttp.Client(doer))
+						client.Metrics = providerfoundation.NewMetrics()
+						now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+						yield := errors.New("resume point at the bound")
+						var resume string
+						var charged int
+						err := handler.CollectChunks(context.Background(), listing.claim, providerfoundation.Credential{}, client, now, "", func(e ChunkRouteEmission) error {
+							if e.Barrier || e.Final {
+								return nil
+							}
+							after, err := decodeGitHubTestsChunkCursor(e.CursorAfter)
+							if err != nil {
+								return err
+							}
+							if !listing.in(after) || after.RangeItems != scenario.pause {
+								return nil
+							}
+							if after.AnchorID == "" {
+								t.Fatal("premise: missing checkpoint anchor")
+							}
+							resume = e.CursorAfter
+							charged = githubTestsWalkRecords(after) - after.RecordCredit
+							if scenario.reports {
+								charged = githubTestsWindowRecords(after) - after.RecordCredit
+							}
+							return yield
+						})
+						if !errors.Is(err, yield) || (charged >= scenario.bound) != strings.HasSuffix(scenario.name, "bound_entry") {
+							t.Fatalf("premise: err=%v charged=%d bound=%d", err, charged, scenario.bound)
+						}
+						if deleted {
+							resumeDeletionDelete(fake, 250)
+						}
+						gets := fake.listPages
+						logs := captureWalkLog(t)
+						var final ChunkRouteEmission
+						err = handler.CollectChunks(context.Background(), listing.claim, providerfoundation.Credential{}, client, now, resume, func(e ChunkRouteEmission) error {
+							if e.Final {
+								final = e
+							}
+							return nil
+						})
+						if err != nil || !final.Final {
+							t.Fatalf("resume err=%v final=%v", err, final.Final)
+						}
+						cursor, err := decodeGitHubTestsChunkCursor(final.CursorAfter)
+						if err != nil {
+							t.Fatal(err)
+						}
+						incomplete := deletionShiftIncomplete(t, final.Batch.Result)
+						want := []string{deepComponent + "/" + githubTestsPageBudgetCause}
+						if deleted {
+							want = append([]string{blockingComponent + "/" + githubTestsPageBudgetCause}, want...)
+						}
+						if !slices.Equal(incomplete, want) || (cursor.DeletionProven == 1) != deleted || (final.Batch.Watermark == nil) != deleted {
+							t.Fatalf("premise: deletion=%d rc=%d watermark=%v incomplete=%v", cursor.DeletionProven, cursor.RecordCredit, final.Batch.Watermark != nil, incomplete)
+						}
+						var metrics bytes.Buffer
+						if err := client.Metrics.WritePrometheus(&metrics); err != nil {
+							t.Fatal(err)
+						}
+						prefix := fmt.Sprintf("dev_health_provider_inventory_page_cap_total{provider=\"github\",dataset=%q} ", dataset)
+						for _, line := range strings.Split(metrics.String(), "\n") {
+							if strings.HasPrefix(line, prefix) {
+								t.Logf("charge=%d bound=%d after_resume_list_gets=%d watermark=%v incomplete=%v; %s", charged, scenario.bound, fake.listPages-gets, final.Batch.Watermark != nil, incomplete, line)
+								if line != prefix+"1" {
+									t.Errorf("one deep inventory phase stopped, got %s", line)
+								}
+								if scenario.reports {
+									state := "the watermark advances"
+									if deleted {
+										state = "the watermark holds"
+									}
+									if !strings.Contains(logs.String(), "late re-run re-list stopped before its oldest runs; "+state) {
+										t.Errorf("the re-list stop WARN does not say %q", state)
+									}
+								}
+								return
+							}
+						}
+						t.Fatal("inventory cap counter missing")
+					})
+				}
+			}
+		}
+	}
+}
+
+// The cursor decode ignores fields it does not know (json.Unmarshal, no DisallowUnknownFields): a binary without the
+// deletion mark reads a cursor that carries "d":1 and resumes it as main (rollback). The same cell runs on main's form.
+func TestGitHubTestsCursorWithTheDeletionMarkDecodesWithoutIt(t *testing.T) {
+	raw := `{"phase":"runs","next_url":"https://api.github.com/repos/acme/api/actions/runs?page=2","index":3,"pipelines":3,"jobs":0,"acceptance":0,"suites":0,"cases":0,"coverage":0,"requests":9,"pages":4,"run_pages":2,"artifact_pages":0,"repo":"acme/api","archives_seen":0,"archives_unreadable":0,"ra":"98","rc":4,"d":1}`
+	var withoutMark struct {
+		Phase string `json:"phase"`
+		Index int    `json:"index"`
+	}
+	if err := json.Unmarshal([]byte(raw), &withoutMark); err != nil || withoutMark.Phase != "runs" || withoutMark.Index != 3 {
+		t.Fatalf("a struct without the field: %+v %v", withoutMark, err)
+	}
+	cursor, err := decodeGitHubTestsChunkCursor(raw)
+	if err != nil || cursor.Phase != "runs" || cursor.Index != 3 || cursor.RecordCredit != 4 {
+		t.Fatalf("decode = %+v %v", cursor, err)
+	}
+	encoded, err := encodeGitHubTestsChunkCursor(cursor)
+	t.Logf("CELL decode_with_mark encoded=%s err=%v", encoded, err)
 }

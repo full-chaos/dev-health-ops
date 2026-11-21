@@ -48,7 +48,7 @@ func TestRealClickHouse_EmptyTeamListIsOmittedTeamList(t *testing.T) {
 	d1 := day(now, 1).Format("2006-01-02")
 	omitted := answer(nil, base())
 	t.Run("omitted_unchanged", func(t *testing.T) {
-		if want := fmt.Sprintf("row t1 0.75|trend %s 0.6|", d1); omitted != want {
+		if want := fmt.Sprintf("row unassigned 1|row t1 0.75|trend %s 0.6|", d1); omitted != want {
 			t.Fatalf("omitted teamIds changed: %q want %q", omitted, want)
 		}
 	})

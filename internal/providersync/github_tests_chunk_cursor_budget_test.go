@@ -119,7 +119,8 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	cursor.AnchorID = githubTestsWidestAnchorID
 	// And the re-seek state at its widest plus the deep range's record count, which stays in every cursor after the deep
 	// range (CHAOS-14385; one more fewer exclusion sample record pays for them).
-	cursor.ReseekPages, cursor.RecordCredit, cursor.LateRecords = githubTestsWidestReseekPages, githubTestsWidestRecordCredit, githubTestsMaxWalkRecords
+	cursor.ReseekPages, cursor.PagesEntered, cursor.RecordCredit = githubTestsWidestReseekPages, githubTestsWidestReseekPages, githubTestsWidestRecordCredit
+	cursor.LateRecords = githubTestsMaxWalkRecords
 
 	encoded, err := encodeGitHubTestsChunkCursor(cursor)
 	if err != nil {
@@ -167,9 +168,9 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	// githubTestsMaxSkippedArtifactRecords went 6 -> 5 to pay for them: one fewer per-artifact skip record is kept, while the
 	// per-cause counts stay exact. The canary stays 150.
 	//
-	// CHAOS-14385: the cell now carries the re-seek state (22 bytes) and the deep range's record count (14 bytes), which an
-	// artifacts-phase cursor holds; without the cut it left 146. githubTestsMaxExcludedArtifactSampleRecords went 4 -> 3
-	// to pay for them (one 56-byte sample record). The canary stays 150.
+	// CHAOS-14385: the cell now carries the re-seek state (rp, pe, rc: 32 bytes) and the deep range's record count (14 bytes),
+	// which an artifacts-phase cursor holds; with four sample records it left 136. githubTestsMaxExcludedArtifactSampleRecords
+	// went 4 -> 3 to pay for them (one 56-byte sample record). The canary stays 150.
 	const wantMargin = 150
 	if remaining := maxChunkCursorBytes - len(encoded); remaining < wantMargin {
 		t.Fatalf(
@@ -473,15 +474,15 @@ func githubTestsWidestCutKeys(t *testing.T) string {
 	return keys
 }
 
-// githubTestsWidestRunsCutKeys is a valid runs-phase cut key list of exactly githubTestsMaxRunsCutKeysBytes bytes: 30 of
-// the widest keys (27 bytes) and one of 24 bytes (a 20-digit id, attempt 999).
+// githubTestsWidestRunsCutKeys is a valid runs-phase cut key list of exactly githubTestsMaxRunsCutKeysBytes bytes: 31 of
+// the widest keys (27 bytes) and one of 14 digits.
 func githubTestsWidestRunsCutKeys(t *testing.T) string {
 	t.Helper()
-	keys := make([]string, 0, 31)
-	for index := range 30 {
+	keys := make([]string, 0, 33)
+	for index := range 31 {
 		keys = append(keys, "9999999999999999"+strconv.Itoa(9999-index)+".999999")
 	}
-	keys = append(keys, strings.Repeat("7", 20)+".999")
+	keys = append(keys, strings.Repeat("7", 14))
 	list := strings.Join(keys, ",")
 	if len(list) != githubTestsMaxRunsCutKeysBytes || !githubTestsCutKeyListValid(list, githubTestsMaxRunsCutKeysBytes) ||
 		githubTestsCutKeyListValid(list, githubTestsMaxCutKeysBytes) {
@@ -493,9 +494,10 @@ func githubTestsWidestRunsCutKeys(t *testing.T) string {
 // githubTestsWidestAnchorID is the widest resume anchor a cursor can carry: a 20-digit run id.
 const githubTestsWidestAnchorID = "99999999999999999999"
 
-// The widest re-seek state a cursor carries (CHAOS-14385): a search lists at most githubTestsSearchResultCap runs, so a
-// re-seek has at most that many pages free; the record credit is set at 8 digits, above the walk record bound.
+// The widest re-seek state a cursor carries (CHAOS-14385): a range enters at most nativeMaxPages pages (an unfiltered
+// claim's search has no 1,000-result cap), so the pages entered and a re-seek's free pages stay within it; the record
+// credit is set at 8 digits, above the walk record bound.
 const (
-	githubTestsWidestReseekPages  = githubTestsSearchResultCap / nativePerPage
+	githubTestsWidestReseekPages  = nativeMaxPages
 	githubTestsWidestRecordCredit = 99999999
 )

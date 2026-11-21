@@ -17,16 +17,15 @@ import (
 //     revisit reads as main.
 //
 // Each list costs at most 8 + 52 bytes of the cursor in the artifacts phase, whose worst-case cursor has no more room, and
-// 8 + 864 bytes in the runs phase, whose cursor carries no artifacts fields (CHAOS-14321): a cut second of a busy repo holds
-// tens of runs, so 52 bytes (four 11-digit keys) dropped every one of them. The runs cap is 896 less 14 less 18: the two
-// lists pay the 28 bytes of the widest AnchorID (CHAOS-14316) and the 36 bytes of the re-seek state and the deep range's
-// record count (CHAOS-14385), so the deep range's worst-case cursor keeps its 300-byte margin. A decoded runs list may hold
-// up to 896 bytes (githubTestsMaxRunsCutKeysReadBytes): a cursor written by a binary with a larger cap still resumes (read
-// old, write new); appending to such a list overflows it (its runs are read again).
+// 8 + 882 bytes in the runs phase, whose cursor carries no artifacts fields (CHAOS-14321): a cut second of a busy repo holds
+// tens of runs, so 52 bytes (four 11-digit keys) dropped every one of them. The runs cap is 896 less 14: the two lists pay
+// the 28 bytes of the widest AnchorID (CHAOS-14316), so the deep range's worst-case cursor keeps its 300-byte margin. A
+// decoded runs list may hold up to 896 bytes (githubTestsMaxRunsCutKeysReadBytes): a cursor written by a binary with the
+// 896-byte cap still resumes (read old, write new); appending to such a list overflows it (its runs are read again).
 // githubTestsFitCursor drops a list that does not fit the cursor budget.
 const (
 	githubTestsMaxCutKeysBytes     = 52
-	githubTestsMaxRunsCutKeysBytes = 864
+	githubTestsMaxRunsCutKeysBytes = 882
 	// githubTestsMaxRunsCutKeysReadBytes is the decode limit of a runs-phase cut list: the write cap before CHAOS-14316.
 	githubTestsMaxRunsCutKeysReadBytes = 896
 	githubTestsCutKeysOverflow         = "-"

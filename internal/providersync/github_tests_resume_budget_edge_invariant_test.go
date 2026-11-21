@@ -32,6 +32,9 @@ func budgetEdgeWalk(
 		final := false
 		err := handler.CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client,
 			time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), resume, func(emission ChunkRouteEmission) error {
+				if emission.Barrier { // the executor's flush request (CoalesceRuns); it carries no cursor
+					return nil
+				}
 				resume = emission.CursorAfter
 				emitted = append(emitted, emission.CursorAfter)
 				if emission.Final {
@@ -64,6 +67,23 @@ func budgetEdgeWalk(
 	}
 	t.Fatal("the walk never reached a final emission")
 	return walk, nil
+}
+
+// coalesceFlags are both values of GitHubTestsRouteHandler.CoalesceRuns (CHAOS-14408): off is the shipped default, so it
+// comes first; every budget-edge cell runs with each. Under -race only off runs (the race legs' time budget, as
+// cutDifferentialRace); the plain test legs run both.
+var coalesceFlags = func() []bool {
+	if cutDifferentialRace {
+		return []bool{false}
+	}
+	return []bool{false, true}
+}()
+
+func coalesceName(coalesce bool) string {
+	if coalesce {
+		return "coalesce_on"
+	}
+	return "coalesce_off"
 }
 
 // budgetEdgeStrip is the cursor an older binary writes: no re-seek pages, no record credit.
@@ -170,13 +190,16 @@ func budgetEdgeShapes() []budgetEdgeShape {
 // budgetEdgeRun walks one listing and shape with run 250 deleted at the first yield, then walks the survivors uninterrupted
 // under the same budget. It returns the survivors the resumed walk did not read, the runs it read that the survivors walk
 // did not (250 aside), and both walks.
-func budgetEdgeRun(t *testing.T, listing budgetEdgeListing, shape budgetEdgeShape, rewrite func(string) string) (unread, extra []int, walk, fresh listingWalk) {
+func budgetEdgeRun(
+	t *testing.T, listing budgetEdgeListing, shape budgetEdgeShape, coalesce bool, rewrite func(string) string,
+) (unread, extra []int, walk, fresh listingWalk) {
 	t.Helper()
 	handler := listing.pageBudget
 	runs := listing.multiPage()
 	if shape.five {
 		handler, runs = GitHubTestsRouteHandler{MaxWalkRecords: 230}, listing.fivePerSec()
 	}
+	handler.CoalesceRuns = coalesce
 	fake := newListingFake(t, runs)
 	first, second := false, false
 	walk, _ = budgetEdgeWalk(t, handler, listing.claim, fake, func(after githubTestsChunkCursor) bool {
@@ -221,27 +244,29 @@ func budgetEdgeRun(t *testing.T, listing budgetEdgeListing, shape budgetEdgeShap
 // or right after, the boundary second at the record bound. The over-read of the record shapes stays inside the boundary
 // second's five runs.
 func TestGitHubTestsResumeBudgetEdgeNeverAdvancesPastAnUnreadRun(t *testing.T) {
-	for _, listing := range budgetEdgeListings() {
-		for _, shape := range budgetEdgeShapes() {
-			if shape.five && listing.fivePerSec == nil {
-				continue
+	for _, coalesce := range coalesceFlags {
+		for _, listing := range budgetEdgeListings() {
+			for _, shape := range budgetEdgeShapes() {
+				if shape.five && listing.fivePerSec == nil {
+					continue
+				}
+				t.Run(fmt.Sprintf("%s/%s/%s", coalesceName(coalesce), listing.name, shape.name), func(t *testing.T) {
+					unread, extra, walk, fresh := budgetEdgeRun(t, listing, shape, coalesce, nil)
+					t.Logf("unread_survivors=%d first_unread=%v extra=%d resumed_watermark=%v fresh_watermark=%v passes=%d",
+						len(unread), unread[:min(3, len(unread))], len(extra), walk.final.Watermark != nil, fresh.final.Watermark != nil, walk.passes)
+					if len(unread) != 0 {
+						t.Errorf("the resumed walk skipped %d runs the uninterrupted walk of the survivors reads (watermark advanced=%v)",
+							len(unread), walk.final.Watermark != nil)
+					}
+					// The re-seek's free pages end with its range: the artifacts listing after it pays its pages as fresh.
+					if !listing.artifacts && walk.cursor.ArtifactPages != fresh.cursor.ArtifactPages {
+						t.Errorf("the artifacts listing after the re-sought one charged %d pages, the uninterrupted walk %d", walk.cursor.ArtifactPages, fresh.cursor.ArtifactPages)
+					}
+					if shape.five && len(extra) > 5 {
+						t.Errorf("the record credit read %d runs past the uninterrupted walk, want at most the boundary second's 5: %v", len(extra), extra)
+					}
+				})
 			}
-			t.Run(fmt.Sprintf("%s/%s", listing.name, shape.name), func(t *testing.T) {
-				unread, extra, walk, fresh := budgetEdgeRun(t, listing, shape, nil)
-				t.Logf("unread_survivors=%d first_unread=%v extra=%d resumed_watermark=%v fresh_watermark=%v passes=%d",
-					len(unread), unread[:min(3, len(unread))], len(extra), walk.final.Watermark != nil, fresh.final.Watermark != nil, walk.passes)
-				if len(unread) != 0 {
-					t.Errorf("the resumed walk skipped %d runs the uninterrupted walk of the survivors reads (watermark advanced=%v)",
-						len(unread), walk.final.Watermark != nil)
-				}
-				// The re-seek's free pages end with its range: the artifacts listing after it pays its pages as fresh.
-				if !listing.artifacts && walk.cursor.ArtifactPages != fresh.cursor.ArtifactPages {
-					t.Errorf("the artifacts listing after the re-sought one charged %d pages, the uninterrupted walk %d", walk.cursor.ArtifactPages, fresh.cursor.ArtifactPages)
-				}
-				if shape.five && len(extra) > 5 {
-					t.Errorf("the record credit read %d runs past the uninterrupted walk, want at most the boundary second's 5: %v", len(extra), extra)
-				}
-			})
 		}
 	}
 }
@@ -249,84 +274,91 @@ func TestGitHubTestsResumeBudgetEdgeNeverAdvancesPastAnUnreadRun(t *testing.T) {
 // The re-seek's free pages are the pages the moved search entered, no more: 350 runs, ids 101..250 in one second, a page
 // budget of 2. The move at 150 runs listed gives 2 free pages, so the re-seek reads down to run 51 and not run 50.
 func TestGitHubTestsResumeReseekFreePagesAreBounded(t *testing.T) {
-	for _, listing := range budgetEdgeListings() {
-		t.Run(listing.name, func(t *testing.T) {
-			var runs []listingRun
-			if listing.name == "deep" {
-				since := listing.claim.SinceAt.UTC()
-				runs = lateRerunRuns(1, 350, since)
-				for index := 100; index < 250; index++ {
-					runs[index].created = since.Add(-80 * time.Hour)
+	for _, coalesce := range coalesceFlags {
+		for _, listing := range budgetEdgeListings() {
+			t.Run(coalesceName(coalesce)+"/"+listing.name, func(t *testing.T) {
+				var runs []listingRun
+				if listing.name == "deep" {
+					since := listing.claim.SinceAt.UTC()
+					runs = lateRerunRuns(1, 350, since)
+					for index := 100; index < 250; index++ {
+						runs[index].created = since.Add(-80 * time.Hour)
+					}
+					for index := range 100 {
+						runs[index].created = since.Add(-80*time.Hour - time.Duration(100-index)*time.Second)
+					}
+				} else {
+					runs = makeListingRuns(1, 350, listingSince.Add(time.Hour), time.Second)
+					for index := 100; index < 250; index++ {
+						runs[index].created, runs[index].updated = listingSince.Add(30*time.Minute), listingSince.Add(31*time.Minute)
+					}
+					for index := range 100 {
+						runs[index].created = listingSince.Add(10*time.Minute + time.Duration(index)*time.Second)
+						runs[index].updated = runs[index].created.Add(time.Minute)
+					}
 				}
-				for index := range 100 {
-					runs[index].created = since.Add(-80*time.Hour - time.Duration(100-index)*time.Second)
-				}
-			} else {
-				runs = makeListingRuns(1, 350, listingSince.Add(time.Hour), time.Second)
-				for index := 100; index < 250; index++ {
-					runs[index].created, runs[index].updated = listingSince.Add(30*time.Minute), listingSince.Add(31*time.Minute)
-				}
-				for index := range 100 {
-					runs[index].created = listingSince.Add(10*time.Minute + time.Duration(index)*time.Second)
-					runs[index].updated = runs[index].created.Add(time.Minute)
-				}
-			}
-			fake := newListingFake(t, runs)
-			moved := false
-			budgetEdgeWalk(t, listing.pageBudget, listing.claim, fake, func(after githubTestsChunkCursor) bool {
-				if !moved && listing.in(after) && after.RangeItems == 150 {
-					moved = true
-					resumeDeletionDelete(fake, 350)
-					return true
-				}
-				return false
-			}, nil)
-			reads := listing.reads(fake)
-			t.Logf("run51=%d run50=%d", reads[51], reads[50])
-			if !moved || reads[51] == 0 || reads[50] != 0 {
-				t.Errorf("moved=%v run 51 read %d times, run 50 read %d times; want run 51 read (2 free pages) and run 50 not (no third)", moved, reads[51], reads[50])
-			}
-		})
-	}
-}
-
-// Without a move a walk with the same yields reads and charges exactly what an uninterrupted walk does, and its cursors
-// carry no re-seek pages and no record credit (no new bytes on the normal path).
-func TestGitHubTestsResumeWithoutAMoveChargesWhatAFreshWalkCharges(t *testing.T) {
-	for _, listing := range budgetEdgeListings() {
-		for _, shape := range budgetEdgeShapes() {
-			if shape.five && listing.fivePerSec == nil || shape.twice {
-				continue
-			}
-			t.Run(fmt.Sprintf("%s/%s", listing.name, shape.name), func(t *testing.T) {
-				handler, runs := listing.pageBudget, listing.multiPage()
-				if shape.five {
-					handler, runs = GitHubTestsRouteHandler{MaxWalkRecords: 230}, listing.fivePerSec()
-				}
-				fake := newListingFake(t, slices.Clone(runs))
-				yields := 0
-				walk, emitted := budgetEdgeWalk(t, handler, listing.claim, fake, func(after githubTestsChunkCursor) bool {
-					if listing.in(after) && after.RangeItems == shape.yieldAt && yields == 0 {
-						yields++
+				fake := newListingFake(t, runs)
+				moved := false
+				handler := listing.pageBudget
+				handler.CoalesceRuns = coalesce
+				budgetEdgeWalk(t, handler, listing.claim, fake, func(after githubTestsChunkCursor) bool {
+					if !moved && listing.in(after) && after.RangeItems == 150 {
+						moved = true
+						resumeDeletionDelete(fake, 350)
 						return true
 					}
 					return false
 				}, nil)
-				original := newListingFake(t, runs)
-				fresh := walkListing(t, handler, listing.claim, original, 0)
-				if yields != 1 || !maps.Equal(listing.reads(fake), listing.reads(original)) ||
-					walk.cursor.RunPages != fresh.cursor.RunPages || walk.cursor.LateRunPages != fresh.cursor.LateRunPages ||
-					walk.cursor.ArtifactPages != fresh.cursor.ArtifactPages {
-					t.Errorf("yields=%d reads %d vs %d, pages run %d/%d late %d/%d artifacts %d/%d", yields,
-						len(listing.reads(fake)), len(listing.reads(original)), walk.cursor.RunPages, fresh.cursor.RunPages,
-						walk.cursor.LateRunPages, fresh.cursor.LateRunPages, walk.cursor.ArtifactPages, fresh.cursor.ArtifactPages)
-				}
-				for _, raw := range emitted {
-					if strings.Contains(raw, `"rp":`) || strings.Contains(raw, `"rc":`) {
-						t.Fatalf("a walk without a move wrote re-seek state: %s", raw)
-					}
+				reads := listing.reads(fake)
+				t.Logf("run51=%d run50=%d", reads[51], reads[50])
+				if !moved || reads[51] == 0 || reads[50] != 0 {
+					t.Errorf("moved=%v run 51 read %d times, run 50 read %d times; want run 51 read (2 free pages) and run 50 not (no third)", moved, reads[51], reads[50])
 				}
 			})
+		}
+	}
+}
+
+// Without a move a walk with the same yields reads and charges exactly what an uninterrupted walk does, and its cursors
+// carry no re-seek pages and no record credit (the page count pe is the one field every mid-range cursor gains).
+func TestGitHubTestsResumeWithoutAMoveChargesWhatAFreshWalkCharges(t *testing.T) {
+	for _, coalesce := range coalesceFlags {
+		for _, listing := range budgetEdgeListings() {
+			for _, shape := range budgetEdgeShapes() {
+				if shape.five && listing.fivePerSec == nil || shape.twice {
+					continue
+				}
+				t.Run(fmt.Sprintf("%s/%s/%s", coalesceName(coalesce), listing.name, shape.name), func(t *testing.T) {
+					handler, runs := listing.pageBudget, listing.multiPage()
+					if shape.five {
+						handler, runs = GitHubTestsRouteHandler{MaxWalkRecords: 230}, listing.fivePerSec()
+					}
+					handler.CoalesceRuns = coalesce
+					fake := newListingFake(t, slices.Clone(runs))
+					yields := 0
+					walk, emitted := budgetEdgeWalk(t, handler, listing.claim, fake, func(after githubTestsChunkCursor) bool {
+						if listing.in(after) && after.RangeItems == shape.yieldAt && yields == 0 {
+							yields++
+							return true
+						}
+						return false
+					}, nil)
+					original := newListingFake(t, runs)
+					fresh := walkListing(t, handler, listing.claim, original, 0)
+					if yields != 1 || !maps.Equal(listing.reads(fake), listing.reads(original)) ||
+						walk.cursor.RunPages != fresh.cursor.RunPages || walk.cursor.LateRunPages != fresh.cursor.LateRunPages ||
+						walk.cursor.ArtifactPages != fresh.cursor.ArtifactPages {
+						t.Errorf("yields=%d reads %d vs %d, pages run %d/%d late %d/%d artifacts %d/%d", yields,
+							len(listing.reads(fake)), len(listing.reads(original)), walk.cursor.RunPages, fresh.cursor.RunPages,
+							walk.cursor.LateRunPages, fresh.cursor.LateRunPages, walk.cursor.ArtifactPages, fresh.cursor.ArtifactPages)
+					}
+					for _, raw := range emitted {
+						if strings.Contains(raw, `"rp":`) || strings.Contains(raw, `"rc":`) {
+							t.Fatalf("a walk without a move wrote re-seek state: %s", raw)
+						}
+					}
+				})
+			}
 		}
 	}
 }
@@ -337,31 +369,33 @@ func TestGitHubTestsResumeWithoutAMoveChargesWhatAFreshWalkCharges(t *testing.T)
 // uninterrupted walk. In the runs and artifacts listings that stop is recorded (truncation, no watermark): never a silent
 // skip. The deep listing's stop advances by design: TestGitHubTestsResumeOlderBinaryCursorTransitionResidualSameAsMain.
 func TestGitHubTestsResumeOlderBinaryCursorWithoutReseekState(t *testing.T) {
-	for _, listing := range budgetEdgeListings() {
-		for _, shape := range budgetEdgeShapes() {
-			if shape.five && listing.fivePerSec == nil || shape.twice {
-				continue
-			}
-			t.Run(fmt.Sprintf("move_on_resume/%s/%s", listing.name, shape.name), func(t *testing.T) {
-				move := shape
-				move.then = nil
-				unread, _, walk, _ := budgetEdgeRun(t, listing, move, budgetEdgeStrip(t))
-				t.Logf("unread_survivors=%d watermark=%v", len(unread), walk.final.Watermark != nil)
-				if len(unread) != 0 {
-					t.Errorf("an older binary's cursor at the move skipped %d survivors", len(unread))
+	for _, coalesce := range coalesceFlags {
+		for _, listing := range budgetEdgeListings() {
+			for _, shape := range budgetEdgeShapes() {
+				if shape.five && listing.fivePerSec == nil || shape.twice {
+					continue
 				}
-			})
-			if shape.then == nil || listing.name == "deep" {
-				continue
-			}
-			t.Run(fmt.Sprintf("inside_reseek/%s/%s", listing.name, shape.name), func(t *testing.T) {
-				unread, _, walk, _ := budgetEdgeRun(t, listing, shape, budgetEdgeStrip(t))
-				t.Logf("unread_survivors=%d watermark=%v incomplete=%v", len(unread), walk.final.Watermark != nil, walk.incompleteComponents())
-				if len(unread) != 0 && (walk.final.Watermark != nil || len(walk.cursor.Incomplete) == 0) {
-					t.Errorf("an older binary's cursor inside its re-seek skipped %d survivors without a recorded stop (watermark=%v)",
-						len(unread), walk.final.Watermark != nil)
+				t.Run(fmt.Sprintf("%s/move_on_resume/%s/%s", coalesceName(coalesce), listing.name, shape.name), func(t *testing.T) {
+					move := shape
+					move.then = nil
+					unread, _, walk, _ := budgetEdgeRun(t, listing, move, coalesce, budgetEdgeStrip(t))
+					t.Logf("unread_survivors=%d watermark=%v", len(unread), walk.final.Watermark != nil)
+					if len(unread) != 0 {
+						t.Errorf("an older binary's cursor at the move skipped %d survivors", len(unread))
+					}
+				})
+				if shape.then == nil || listing.name == "deep" {
+					continue
 				}
-			})
+				t.Run(fmt.Sprintf("%s/inside_reseek/%s/%s", coalesceName(coalesce), listing.name, shape.name), func(t *testing.T) {
+					unread, _, walk, _ := budgetEdgeRun(t, listing, shape, coalesce, budgetEdgeStrip(t))
+					t.Logf("unread_survivors=%d watermark=%v incomplete=%v", len(unread), walk.final.Watermark != nil, walk.incompleteComponents())
+					if len(unread) != 0 && (walk.final.Watermark != nil || len(walk.cursor.Incomplete) == 0) {
+						t.Errorf("an older binary's cursor inside its re-seek skipped %d survivors without a recorded stop (watermark=%v)",
+							len(unread), walk.final.Watermark != nil)
+					}
+				})
+			}
 		}
 	}
 }
@@ -373,26 +407,29 @@ func TestGitHubTestsResumeOlderBinaryCursorWithoutReseekState(t *testing.T) {
 func TestGitHubTestsResumeOlderBinaryCursorTransitionResidualSameAsMain(t *testing.T) {
 	mainUnread := map[string]int{"multi_page_yield_at_page_end": 1, "two_yields_inside": 3, "two_yields_after": 3}
 	deep := budgetEdgeListings()[1]
-	for _, shape := range budgetEdgeShapes() {
-		want, ok := mainUnread[shape.name]
-		if !ok {
-			continue
-		}
-		t.Run(shape.name, func(t *testing.T) {
-			unread, _, walk, _ := budgetEdgeRun(t, deep, shape, budgetEdgeStrip(t))
-			t.Logf("unread_survivors=%d watermark=%v", len(unread), walk.final.Watermark != nil)
-			if len(unread) != want || walk.final.Watermark == nil {
-				t.Errorf("deep residual: unread=%d watermark=%v, want main's %d unread with the watermark advanced", len(unread), walk.final.Watermark != nil, want)
+	for _, coalesce := range coalesceFlags {
+		for _, shape := range budgetEdgeShapes() {
+			want, ok := mainUnread[shape.name]
+			if !ok {
+				continue
 			}
-		})
+			t.Run(coalesceName(coalesce)+"/"+shape.name, func(t *testing.T) {
+				unread, _, walk, _ := budgetEdgeRun(t, deep, shape, coalesce, budgetEdgeStrip(t))
+				t.Logf("unread_survivors=%d watermark=%v", len(unread), walk.final.Watermark != nil)
+				if len(unread) != want || walk.final.Watermark == nil {
+					t.Errorf("deep residual: unread=%d watermark=%v, want main's %d unread with the watermark advanced", len(unread), walk.final.Watermark != nil, want)
+				}
+			})
+		}
 	}
 }
 
-// A negative re-seek page count or record credit is a corrupt cursor.
+// A negative re-seek page count, page count or record credit is a corrupt cursor.
 func TestGitHubTestsCursorRejectsNegativeReseekState(t *testing.T) {
 	for _, raw := range []string{
 		`{"phase":"runs","repo":"x","archives_seen":0,"archives_unreadable":0,"rp":-1}`,
 		`{"phase":"runs","repo":"x","archives_seen":0,"archives_unreadable":0,"rc":-1}`,
+		`{"phase":"runs","repo":"x","archives_seen":0,"archives_unreadable":0,"pe":-1}`,
 	} {
 		if _, err := decodeGitHubTestsChunkCursor(raw); !errors.Is(err, ErrChunkCheckpointConflict) {
 			t.Errorf("%s: err=%v, want ErrChunkCheckpointConflict", raw, err)
@@ -400,83 +437,125 @@ func TestGitHubTestsCursorRejectsNegativeReseekState(t *testing.T) {
 	}
 }
 
-// The invariant with the executor's run groups (CHAOS-14408): the attempts commit coalesced groups of several runs and
-// resume from the group's last cursor, so the re-seek state the route wrote on the group's last run is the state the next
-// attempt reads. Run 250 is deleted at the first attempt end past the yield point; a walk at the budget edge still reads
+// The invariant through the chunked executor, with the CHAOS-14408 run groups off (the shipped default: one run per group)
+// and on (the attempts commit groups of several runs and resume from the group's last cursor, so the re-seek state the
+// route wrote on the group's last run is the state the next attempt reads). Run 250 is deleted at the first attempt end past the yield point; a walk at the budget edge still reads
 // every run the uninterrupted walk of the survivors reads.
-func TestGitHubTestsResumeBudgetEdgeWithCoalescedGroups(t *testing.T) {
-	for _, listing := range budgetEdgeListings() {
-		for _, five := range []bool{false, true} {
-			if five && listing.fivePerSec == nil {
-				continue
-			}
-			name := fmt.Sprintf("%s/%s", listing.name, map[bool]string{false: "multi_page", true: "record_bound"}[five])
-			t.Run(name, func(t *testing.T) {
-				handler, runs, yieldAt := listing.pageBudget, listing.multiPage(), 150
-				if five {
-					handler, runs, yieldAt = GitHubTestsRouteHandler{MaxWalkRecords: 230}, listing.fivePerSec(), 52
+func TestGitHubTestsResumeBudgetEdgeThroughTheChunkedExecutor(t *testing.T) {
+	listings := budgetEdgeListings()
+	if cutDifferentialRace {
+		listings = listings[:1]
+	}
+	for _, coalesce := range coalesceFlags {
+		for _, listing := range listings {
+			for _, five := range []bool{false, true} {
+				if five && listing.fivePerSec == nil {
+					continue
 				}
-				handler.CoalesceRuns = true // as the production route (git_family_route.go)
-				now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
-				// The cicd unit (the same route and listing as tests) over the listing's window.
-				unit := nativeTestClaim("github", "cicd").Unit
-				unit.SinceAt, unit.BeforeAt, unit.Mode = listing.claim.SinceAt, listing.claim.BeforeAt, listing.claim.Mode
-				leases := newMemoryLeaseRepository(unit, "dispatching")
-				claim, err := leases.Claim(context.Background(), ClaimRequest{UnitID: listing.claim.ID, Owner: uuid.NewString(), Now: now, LeaseDuration: 15 * time.Minute})
-				if err != nil {
-					t.Fatal(err)
-				}
-				session := &LeaseSession{Repository: leases, Claim: claim, LeaseDuration: 15 * time.Minute,
-					Deadline: now.Add(48 * time.Hour), Now: func() time.Time { return now }}
-				descriptor, ok := Descriptor("github", unit.Dataset)
-				if !ok || !descriptor.Chunked {
-					t.Fatalf("descriptor=%+v", descriptor)
-				}
-				descriptor.ChunkPolicy.MaxEffectRows, descriptor.ChunkPolicy.MaxChunksPerAttempt = 8, 2
-				fake, sink, store := newListingFake(t, runs), newRunsGroupSink(), newChunkMemoryStore()
-				executor := completeRouteExecutor(now, handler, store, sink)
-				executor.Committer.Readback = sink
-				executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
-				executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
-				executor.Doer = fakehttp.Client(fake)
-				executor.BudgetLimits = map[CostClass]int{CostMedium: 100_000, CostHeavy: 100_000, CostLight: 100_000}
-				moved, attempts := false, 0
-				for ; attempts < 500; attempts++ {
-					_, execErr := executor.Execute(context.Background(), session, descriptor)
-					if execErr == nil {
-						break
+				name := fmt.Sprintf("%s/%s/%s", coalesceName(coalesce), listing.name, map[bool]string{false: "multi_page", true: "record_bound"}[five])
+				t.Run(name, func(t *testing.T) {
+					handler, runs, yieldAt := listing.pageBudget, listing.multiPage(), 150
+					if five {
+						handler, runs, yieldAt = GitHubTestsRouteHandler{MaxWalkRecords: 230}, listing.fivePerSec(), 52
 					}
-					if !errors.As(execErr, new(ChunkContinuationError)) {
-						t.Fatalf("attempt %d: %v", attempts+1, execErr)
+					handler.CoalesceRuns = coalesce
+					now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+					// The cicd unit (the same route and listing as tests) over the listing's window.
+					unit := nativeTestClaim("github", "cicd").Unit
+					unit.SinceAt, unit.BeforeAt, unit.Mode = listing.claim.SinceAt, listing.claim.BeforeAt, listing.claim.Mode
+					leases := newMemoryLeaseRepository(unit, "dispatching")
+					claim, err := leases.Claim(context.Background(), ClaimRequest{UnitID: listing.claim.ID, Owner: uuid.NewString(), Now: now, LeaseDuration: 15 * time.Minute})
+					if err != nil {
+						t.Fatal(err)
 					}
-					checkpoint, loadErr := store.LoadChunkCheckpoint(context.Background(), claim, now)
-					if loadErr != nil {
-						t.Fatal(loadErr)
+					session := &LeaseSession{Repository: leases, Claim: claim, LeaseDuration: 15 * time.Minute,
+						Deadline: now.Add(48 * time.Hour), Now: func() time.Time { return now }}
+					descriptor, ok := Descriptor("github", unit.Dataset)
+					if !ok || !descriptor.Chunked {
+						t.Fatalf("descriptor=%+v", descriptor)
 					}
-					cursor, decodeErr := decodeGitHubTestsChunkCursor(checkpoint.NextCursor)
-					if decodeErr != nil {
-						t.Fatal(decodeErr)
-					}
-					if !moved && listing.in(cursor) && cursor.RangeItems >= yieldAt {
-						moved = true
-						resumeDeletionDelete(fake, 250)
-					}
-				}
-				grouped := 0
-				store.mu.Lock()
-				for _, chunk := range store.chunks {
-					for _, effect := range chunk.Effects {
-						if effect.Destination == "ci_pipeline_runs" && len(effect.Rows) > 1 {
-							grouped++
+					descriptor.ChunkPolicy.MaxEffectRows, descriptor.ChunkPolicy.MaxChunksPerAttempt = 8, 2
+					fake, sink, store := newListingFake(t, runs), newRunsGroupSink(), newChunkMemoryStore()
+					executor := completeRouteExecutor(now, handler, store, sink)
+					executor.Committer.Readback = sink
+					executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
+					executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
+					executor.Doer = fakehttp.Client(fake)
+					executor.BudgetLimits = map[CostClass]int{CostMedium: 100_000, CostHeavy: 100_000, CostLight: 100_000}
+					moved, attempts := false, 0
+					for ; attempts < 500; attempts++ {
+						_, execErr := executor.Execute(context.Background(), session, descriptor)
+						if execErr == nil {
+							break
+						}
+						if !errors.As(execErr, new(ChunkContinuationError)) {
+							t.Fatalf("attempt %d: %v", attempts+1, execErr)
+						}
+						checkpoint, loadErr := store.LoadChunkCheckpoint(context.Background(), claim, now)
+						if loadErr != nil {
+							t.Fatal(loadErr)
+						}
+						cursor, decodeErr := decodeGitHubTestsChunkCursor(checkpoint.NextCursor)
+						if decodeErr != nil {
+							t.Fatal(decodeErr)
+						}
+						if !moved && listing.in(cursor) && cursor.RangeItems >= yieldAt {
+							moved = true
+							resumeDeletionDelete(fake, 250)
 						}
 					}
+					grouped := 0
+					store.mu.Lock()
+					for _, chunk := range store.chunks {
+						for _, effect := range chunk.Effects {
+							if effect.Destination == "ci_pipeline_runs" && len(effect.Rows) > 1 {
+								grouped++
+							}
+						}
+					}
+					store.mu.Unlock()
+					if !moved || coalesce != (grouped > 0) {
+						t.Fatalf("premise: moved=%v coalesced groups=%d attempts=%d", moved, grouped, attempts)
+					}
+					survivors := newListingFake(t, slices.Clone(fake.runs))
+					walkListing(t, handler, listing.claim, survivors, 0)
+					var unread []int
+					for id := range listing.reads(survivors) {
+						if listing.reads(fake)[id] == 0 {
+							unread = append(unread, id)
+						}
+					}
+					sort.Ints(unread)
+					t.Logf("attempts=%d coalesced_groups=%d unread_survivors=%d first=%v", attempts, grouped, len(unread), unread[:min(3, len(unread))])
+					if len(unread) != 0 {
+						t.Errorf("with coalesced groups the resumed walk skipped %d runs the uninterrupted walk of the survivors reads", len(unread))
+					}
+				})
+			}
+		}
+	}
+}
+
+// GitHub may serve fewer runs than per_page on a page that is not the last. The re-seek's free pages count the pages the
+// moved search entered, not its runs divided by 100: two 50-run pages entered before a move at run 51 give two free pages,
+// so a walk at the page budget edge still reads every survivor.
+func TestGitHubTestsResumeReseekCountsShortPagesItEntered(t *testing.T) {
+	for _, coalesce := range coalesceFlags {
+		for _, listing := range deletionShiftListings() {
+			t.Run(coalesceName(coalesce)+"/"+listing.name, func(t *testing.T) {
+				handler := GitHubTestsRouteHandler{MaxRuns: 200}
+				if listing.deep {
+					handler = GitHubTestsRouteHandler{LateRerunMaxPages: 2}
 				}
-				store.mu.Unlock()
-				if !moved || grouped == 0 {
-					t.Fatalf("premise: moved=%v coalesced groups=%d attempts=%d", moved, grouped, attempts)
-				}
+				handler.CoalesceRuns = coalesce
+				fake := newListingFake(t, listing.runs(1, 250))
+				fake.perPage = 50
+				deletionShiftWalk(t, handler, listing.claim, deletionShiftDoer(t, fake, listing.reports), func(c githubTestsChunkCursor) bool {
+					return listing.in(c) && c.RangeItems == 51
+				}, func(githubTestsChunkCursor) { resumeDeletionDelete(fake, 250) }, nil)
 				survivors := newListingFake(t, slices.Clone(fake.runs))
-				walkListing(t, handler, listing.claim, survivors, 0)
+				survivors.perPage = 50
+				deletionShiftPlainWalk(t, handler, listing.claim, deletionShiftDoer(t, survivors, listing.reports))
 				var unread []int
 				for id := range listing.reads(survivors) {
 					if listing.reads(fake)[id] == 0 {
@@ -484,11 +563,54 @@ func TestGitHubTestsResumeBudgetEdgeWithCoalescedGroups(t *testing.T) {
 					}
 				}
 				sort.Ints(unread)
-				t.Logf("attempts=%d coalesced_groups=%d unread_survivors=%d first=%v", attempts, grouped, len(unread), unread[:min(3, len(unread))])
+				t.Logf("CELL short_pages/%s/%s unread=%d first=%v", coalesceName(coalesce), listing.name, len(unread), unread[:min(3, len(unread))])
 				if len(unread) != 0 {
-					t.Errorf("with coalesced groups the resumed walk skipped %d runs the uninterrupted walk of the survivors reads", len(unread))
+					t.Errorf("short pages: %d survivors unread, want 0", len(unread))
 				}
 			})
 		}
+	}
+}
+
+// A claim with no window edges (a full resync) lists without a created range, so GitHub's 1,000-result cap does not bound a
+// search: a move after run 1,001 gives a re-seek 11 free pages. The free pages only let the re-seek list again what the
+// moved search listed (an over-read, idempotent rows); the walk reads every survivor and completes.
+func TestGitHubTestsResumeUnfilteredClaimReseekPagesOverReadOnly(t *testing.T) {
+	for _, coalesce := range coalesceFlags {
+		t.Run(coalesceName(coalesce), func(t *testing.T) { budgetEdgeUnfiltered(t, coalesce) })
+	}
+}
+
+func budgetEdgeUnfiltered(t *testing.T, coalesce bool) {
+	claim := nativeTestClaim("github", "tests")
+	claim.SinceAt, claim.BeforeAt = nil, nil
+	fake := newListingFake(t, makeListingRuns(1, 1100, listingSince.Add(time.Minute), time.Second))
+	maxPages := 0
+	_, emitted := budgetEdgeWalk(t, GitHubTestsRouteHandler{CoalesceRuns: coalesce}, claim, fake, func(c githubTestsChunkCursor) bool {
+		if c.Phase == githubTestsRunsPhase && c.RangeItems == 1001 && len(fake.runs) == 1100 {
+			resumeDeletionDelete(fake, 1100)
+			return true
+		}
+		return false
+	}, nil)
+	for _, raw := range emitted {
+		if cursor, err := decodeGitHubTestsChunkCursor(raw); err == nil {
+			maxPages = max(maxPages, cursor.ReseekPages)
+		}
+	}
+	survivors := newListingFake(t, slices.Clone(fake.runs))
+	walkListing(t, GitHubTestsRouteHandler{CoalesceRuns: coalesce}, claim, survivors, 0)
+	unread, twice := 0, 0
+	for id := range survivors.jobGets {
+		if fake.jobGets[id] == 0 {
+			unread++
+		}
+		if fake.jobGets[id] > 1 {
+			twice++
+		}
+	}
+	t.Logf("CELL unfiltered rp=%d unread=%d read_again=%d read=%d", maxPages, unread, twice, len(fake.jobGets))
+	if maxPages != 11 || unread != 0 {
+		t.Errorf("unfiltered claim: rp=%d unread=%d, want rp 11 and no survivor unread", maxPages, unread)
 	}
 }

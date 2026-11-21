@@ -50,6 +50,9 @@ func resumeDeletionWalkDoer(
 		var at githubTestsChunkCursor
 		err := handler.CollectChunks(ctx, claim, providerfoundation.Credential{}, client, normalizedAt, resume,
 			func(emission ChunkRouteEmission) error {
+				if emission.Barrier { // the executor's flush request (CoalesceRuns): no cursor
+					return nil
+				}
 				last = emission.CursorAfter
 				for _, effect := range emission.Batch.Effects {
 					if effect.Destination == "ci_pipeline_runs" {
@@ -733,12 +736,18 @@ func TestGitHubTestsResumeReseekCreditStaysInItsListing(t *testing.T) {
 // A boundary second that spans more than one page: the re-seek gets as many free pages as the moved search entered
 // (CHAOS-14385), so a walk at the page budget edge reads every survivor an uninterrupted walk of the survivors reads.
 func TestGitHubTestsResumeMultiPageBoundarySecondReadsEverySurvivor(t *testing.T) {
+	for _, coalesce := range coalesceFlags {
+		t.Run(coalesceName(coalesce), func(t *testing.T) { resumeMultiPageBoundarySecond(t, coalesce) })
+	}
+}
+
+func resumeMultiPageBoundarySecond(t *testing.T, coalesce bool) {
 	claim := listingClaim(listingSince, listingSince.Add(6*time.Hour))
 	runs := makeListingRuns(1, 250, listingSince.Add(time.Hour), time.Second)
 	for index := range 150 { // ids 1..150 share one second: the second spans pages 2 and 3
 		runs[index].created, runs[index].updated = listingSince.Add(30*time.Minute), listingSince.Add(31*time.Minute)
 	}
-	handler := GitHubTestsRouteHandler{MaxRuns: 200}
+	handler := GitHubTestsRouteHandler{MaxRuns: 200, CoalesceRuns: coalesce}
 	fake := newListingFake(t, runs)
 	resumeDeletionWalk(t, handler, claim, fake, func(c githubTestsChunkCursor) bool {
 		return c.Phase == githubTestsRunsPhase && c.RangeItems == 150
@@ -759,13 +768,19 @@ func TestGitHubTestsResumeMultiPageBoundarySecondReadsEverySurvivor(t *testing.T
 // The re-seek's record credit is in the cursor (CHAOS-14385): a worker yield inside the re-seek's second keeps it, so the
 // re-read runs after the yield are not charged to the record bound and no run an uninterrupted walk reads is skipped.
 func TestGitHubTestsResumeRecordCreditSurvivesYields(t *testing.T) {
+	for _, coalesce := range coalesceFlags {
+		t.Run(coalesceName(coalesce), func(t *testing.T) { resumeRecordCreditAcrossYields(t, coalesce) })
+	}
+}
+
+func resumeRecordCreditAcrossYields(t *testing.T, coalesce bool) {
 	claim := listingClaim(listingSince, listingSince.Add(6*time.Hour))
 	runs := makeListingRuns(1, 250, listingSince.Add(time.Minute), time.Minute)
 	for index := range runs { // five runs share each second
 		runs[index].created = listingSince.Add(time.Minute + time.Duration(index/5)*time.Second)
 		runs[index].updated = runs[index].created.Add(time.Minute)
 	}
-	handler := GitHubTestsRouteHandler{MaxWalkRecords: 230}
+	handler := GitHubTestsRouteHandler{MaxWalkRecords: 230, CoalesceRuns: coalesce}
 	original := newListingFake(t, slices.Clone(runs))
 	walkListing(t, handler, claim, original, 0)
 	fake := newListingFake(t, runs)
@@ -776,6 +791,9 @@ func TestGitHubTestsResumeRecordCreditSurvivesYields(t *testing.T) {
 		final := false
 		err := handler.CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client,
 			time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), resume, func(emission ChunkRouteEmission) error {
+				if emission.Barrier {
+					return nil
+				}
 				resume = emission.CursorAfter
 				if emission.Final {
 					final = true

@@ -266,7 +266,10 @@ func stampScript(t *testing.T, bodies []stampShape, finalRows bool, cursorPad, r
 	})
 }
 
-type stampScriptHandler struct{ emissions []ChunkRouteEmission }
+type stampScriptHandler struct {
+	emissions []ChunkRouteEmission
+	nows      *[]time.Time
+}
 
 func (stampScriptHandler) Collect(
 	context.Context, Claim, providerfoundation.Credential, *providerfoundation.HTTPClient, time.Time,
@@ -276,8 +279,11 @@ func (stampScriptHandler) Collect(
 
 func (handler stampScriptHandler) CollectChunks(
 	_ context.Context, _ Claim, _ providerfoundation.Credential, _ *providerfoundation.HTTPClient,
-	_ time.Time, resumeCursor string, emit func(ChunkRouteEmission) error,
+	now time.Time, resumeCursor string, emit func(ChunkRouteEmission) error,
 ) error {
+	if handler.nows != nil {
+		*handler.nows = append(*handler.nows, now)
+	}
 	start := -1
 	if resumeCursor == "" {
 		start = 0
@@ -302,22 +308,26 @@ func (handler stampScriptHandler) CollectChunks(
 // stampRecordingStore is the in-process chunk store that also keeps every group it prepared, as it received it.
 type stampRecordingStore struct {
 	*InProcessChunkLedger
-	mu     sync.Mutex
-	groups [][]PreparedProviderChunk
+	mu        sync.Mutex
+	groups    [][]PreparedProviderChunk
+	stampAts  []time.Time
+	leaseNows []time.Time
 }
 
-func (store *stampRecordingStore) recordGroup(chunks []PreparedProviderChunk) {
+func (store *stampRecordingStore) recordGroup(chunks []PreparedProviderChunk, stampAt, leaseNow time.Time) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	store.groups = append(store.groups, append([]PreparedProviderChunk(nil), chunks...))
+	store.stampAts = append(store.stampAts, stampAt)
+	store.leaseNows = append(store.leaseNows, leaseNow)
 }
 
 func (store *stampRecordingStore) PrepareChunkGroup(
-	ctx context.Context, claim Claim, chunks []PreparedProviderChunk, now time.Time,
+	ctx context.Context, claim Claim, chunks []PreparedProviderChunk, stampAt, leaseNow time.Time,
 ) ([]PreparedProviderChunk, error) {
-	prepared, err := store.InProcessChunkLedger.PrepareChunkGroup(ctx, claim, chunks, now)
+	prepared, err := store.InProcessChunkLedger.PrepareChunkGroup(ctx, claim, chunks, stampAt, leaseNow)
 	if err == nil {
-		store.recordGroup(chunks)
+		store.recordGroup(chunks, stampAt, leaseNow)
 	}
 	return prepared, err
 }
@@ -355,7 +365,7 @@ func newStampHarness(t *testing.T, provider, dataset string, emissions []ChunkRo
 	}
 	store := &stampRecordingStore{InProcessChunkLedger: NewInProcessChunkLedger(claim)}
 	sink := &stampOrderedSink{}
-	handler := stampScriptHandler{emissions: emissions}
+	handler := stampScriptHandler{emissions: emissions, nows: &[]time.Time{}}
 	executor := completeRouteExecutor(at, handler, store, sink)
 	executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: provider}
 	executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
@@ -632,7 +642,8 @@ func TestChunkStampCountOfA13875CaseReport(t *testing.T) {
 
 func edgeEmissions(t *testing.T, final bool, cursorPad int) func(pad int) []ChunkRouteEmission {
 	return func(pad int) []ChunkRouteEmission {
-		return stampScript(t, []stampShape{{cases: 2, pads: map[int]int{1: pad}}}, final, cursorPad, 0)
+		// Row 0 (30 KB) leaves the big row's chunk when the emission halves: more than either size band is over the limit.
+		return stampScript(t, []stampShape{{cases: 2, pads: map[int]int{0: 30_000, 1: pad}}}, final, cursorPad, 0)
 	}
 }
 

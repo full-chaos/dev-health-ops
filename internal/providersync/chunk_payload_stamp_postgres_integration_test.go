@@ -58,7 +58,7 @@ func TestChunkedPostgresStoresACrossingChunkWithAConsistentPayloadBytes(t *testi
 		chunk.Ordinal = ordinal
 		chunk.ManifestDigest = preparedChunkDigest(chunk)
 		at := now.Add(time.Duration(ordinal+1) * time.Second)
-		group, err := repository.PrepareChunkGroup(ctx, claim, []PreparedProviderChunk{chunk}, at)
+		group, err := repository.PrepareChunkGroup(ctx, claim, []PreparedProviderChunk{chunk}, at, at)
 		if err != nil {
 			t.Fatalf("length %d: prepare: %v", target, err)
 		}

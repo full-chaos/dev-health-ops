@@ -342,11 +342,13 @@ func stampPayloadBytes(measure func(payloadBytes int) int) (int, bool) {
 // transition; no provider payload enters queue arguments or logs.
 type ChunkedEffectStore interface {
 	LoadChunkCheckpoint(context.Context, Claim, time.Time) (ChunkCheckpoint, error)
-	PrepareChunk(context.Context, Claim, PreparedProviderChunk, time.Time) (PreparedProviderChunk, error)
+	PrepareChunk(ctx context.Context, claim Claim, chunk PreparedProviderChunk, stampAt, leaseNow time.Time) (PreparedProviderChunk, error)
 	// PrepareChunkGroup must persist every sub-chunk of one provider emission
 	// atomically. A partially prepared emission is unrecoverable without
 	// refetching the provider item, which duplicates rows (CHAOS-3821).
-	PrepareChunkGroup(context.Context, Claim, []PreparedProviderChunk, time.Time) ([]PreparedProviderChunk, error)
+	// stampAt is the effect-ledger instant the split measured the chunks
+	// with; leaseNow is a fresh clock read for the lease fence.
+	PrepareChunkGroup(ctx context.Context, claim Claim, chunks []PreparedProviderChunk, stampAt, leaseNow time.Time) ([]PreparedProviderChunk, error)
 	LoadPreparedChunk(context.Context, Claim, int, time.Time) (PreparedProviderChunk, error)
 	BeginChunkEffect(context.Context, Claim, int, int, string, time.Time) error
 	CommitChunkEffect(context.Context, Claim, int, int, string, time.Time) error
@@ -496,6 +498,75 @@ func splitCompleteRouteBatch(
 	comparison ShadowComparison,
 	policy ChunkPolicy,
 ) ([]PreparedProviderChunk, error) {
+	return splitEmission(batch, comparison, nil, policy)
+}
+
+// chunkStamps is everything the executor decides about the stored chunks of one emission. The split stamps every candidate chunk
+// with them and measures it with the store's own refusal, so the bytes it measures are the bytes the store writes.
+type chunkStamps struct {
+	Claim        Claim
+	CursorBefore string
+	CursorAfter  string
+	// Final puts the inventory completion and the final metadata below on the emission's last chunk.
+	Final               bool
+	Result              map[string]any
+	Watermark           *time.Time
+	Evidence            FetchEvidence
+	Comparison          ShadowComparison
+	WorklogObservations []JiraWorklogFetchObservation
+	OrdinalBase         int
+	// StampAt is the instant of the chunks' effect ledger: the store must be handed the same one (PrepareChunkGroup stampAt).
+	StampAt time.Time
+}
+
+// splitStampedEmission splits an emission into the chunks the store writes, stamped and measured as stored.
+func splitStampedEmission(batch CompleteRouteBatch, stamps chunkStamps, policy ChunkPolicy) ([]PreparedProviderChunk, error) {
+	return splitEmission(batch, stamps.Comparison, &stamps, policy)
+}
+
+// stampEmissionChunk is the one stamping of a stored chunk: position of count in its emission.
+func stampEmissionChunk(effects []EffectBatch, position, count int, stamps chunkStamps) (PreparedProviderChunk, error) {
+	chunk := PreparedProviderChunk{
+		SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion,
+		Ordinal: stamps.OrdinalBase + position, Effects: effects,
+	}
+	if position == 0 {
+		chunk.CursorBefore = stamps.CursorBefore
+	}
+	if position == count-1 {
+		chunk.CursorAfter = stamps.CursorAfter
+		if stamps.Final {
+			chunk.InventoryComplete = true
+			chunk.Result = cloneChunkResult(stamps.Result)
+			chunk.Watermark = stamps.Watermark
+			chunk.Evidence = stamps.Evidence
+			chunk.Comparison = stamps.Comparison
+			chunk.WorklogObservations = append([]JiraWorklogFetchObservation(nil), stamps.WorklogObservations...)
+		}
+	}
+	chunk.ManifestDigest = preparedChunkDigest(chunk)
+	encoded, err := encodedPreparedChunkPayload(chunk)
+	if err != nil {
+		return PreparedProviderChunk{}, err
+	}
+	chunk.PayloadBytes = len(encoded)
+	return chunk, nil
+}
+
+// nextSplitCap is the next row cap of the split's halving loop.
+func nextSplitCap(maxRows int, _ ChunkPolicy) int {
+	return maxRows / 2
+}
+
+// splitEmission is main's halving loop. Without stamps (nil) a chunk is measured as provisionally stamped by the split; with stamps it
+// is stamped as stored and the store's own refusal decides: a size refusal halves, any other refusal is returned. At one row the store's
+// size refusal is returned as the store returns it.
+func splitEmission(
+	batch CompleteRouteBatch,
+	comparison ShadowComparison,
+	stamps *chunkStamps,
+	policy ChunkPolicy,
+) ([]PreparedProviderChunk, error) {
 	if policy.Validate() != nil || len(batch.Effects) == 0 {
 		return nil, ErrInvalidConfiguration
 	}
@@ -515,6 +586,7 @@ func splitCompleteRouteBatch(
 		}
 		chunks := make([]PreparedProviderChunk, 0, count)
 		valid := true
+		var storeRefusal error
 		for ordinal := 0; ordinal < count; ordinal++ {
 			effects := make([]EffectBatch, 0, len(ordered))
 			for _, effect := range ordered {
@@ -546,6 +618,25 @@ func splitCompleteRouteBatch(
 				valid = false
 				break
 			}
+			if stamps != nil {
+				chunk, stampErr := stampEmissionChunk(effects, ordinal, count, *stamps)
+				if stampErr != nil {
+					return nil, stampErr
+				}
+				if chunk.PayloadBytes > policy.MaxPreparedBytes {
+					valid = false
+					break
+				}
+				if kind, refusal := preparedChunkStoreRefusal(stamps.Claim, chunk, stamps.StampAt); refusal != nil {
+					if kind != chunkRefusalSize {
+						return nil, refusal
+					}
+					storeRefusal, valid = refusal, false
+					break
+				}
+				chunks = append(chunks, chunk)
+				continue
+			}
 			chunk := PreparedProviderChunk{
 				SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion,
 				Ordinal: ordinal, TotalChunks: count, Effects: effects,
@@ -574,9 +665,12 @@ func splitCompleteRouteBatch(
 			return chunks, nil
 		}
 		if maxRows == 1 {
+			if storeRefusal != nil {
+				return nil, storeRefusal
+			}
 			break
 		}
-		maxRows /= 2
+		maxRows = nextSplitCap(maxRows, policy)
 	}
 	return nil, ErrChunkPolicyExceeded
 }

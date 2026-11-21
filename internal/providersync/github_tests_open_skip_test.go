@@ -790,13 +790,13 @@ func (s *openSkipFaultStore) targets(chunk PreparedProviderChunk) bool {
 	return openSkipCursorHasSkip(chunk.CursorAfter)
 }
 
-func (s *openSkipFaultStore) PrepareChunkGroup(ctx context.Context, claim Claim, chunks []PreparedProviderChunk, now time.Time) ([]PreparedProviderChunk, error) {
+func (s *openSkipFaultStore) PrepareChunkGroup(ctx context.Context, claim Claim, chunks []PreparedProviderChunk, now, leaseNow time.Time) ([]PreparedProviderChunk, error) {
 	fault := s.targets(chunks[0]) || s.targets(chunks[len(chunks)-1])
 	if fault && s.mode == "before-prepare" {
 		s.seen = true
 		return nil, s.fault
 	}
-	group, err := s.chunkMemoryStore.PrepareChunkGroup(ctx, claim, chunks, now)
+	group, err := s.chunkMemoryStore.PrepareChunkGroup(ctx, claim, chunks, now, leaseNow)
 	if err == nil && s.skipOrdinal < 0 {
 		for _, chunk := range group {
 			if openSkipCursorHasSkip(chunk.CursorAfter) {

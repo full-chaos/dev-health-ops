@@ -75,7 +75,7 @@ func TestChunkedPostgresFinalizeOfManyChunksKeepsTheLease(t *testing.T) {
 		if final {
 			chunk.Result = map[string]any{"complete": true}
 		}
-		prepared, err := repository.PrepareChunk(ctx, claim, chunk, time.Now())
+		prepared, err := repository.PrepareChunk(ctx, claim, chunk, time.Now(), time.Now())
 		if err != nil {
 			t.Fatalf("prepare ordinal=%d: %v", ordinal, err)
 		}

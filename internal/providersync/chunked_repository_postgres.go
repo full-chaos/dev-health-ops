@@ -95,10 +95,10 @@ func (repository *PostgresRepository) LoadChunkCheckpoint(
 // PrepareChunk prepares one chunk. It is PrepareChunkGroup of one, so both
 // paths share every guard.
 func (repository *PostgresRepository) PrepareChunk(
-	ctx context.Context, claim Claim, chunk PreparedProviderChunk, now time.Time,
+	ctx context.Context, claim Claim, chunk PreparedProviderChunk, stampAt, leaseNow time.Time,
 ) (PreparedProviderChunk, error) {
 	group, err := repository.PrepareChunkGroup(
-		ctx, claim, []PreparedProviderChunk{chunk}, now)
+		ctx, claim, []PreparedProviderChunk{chunk}, stampAt, leaseNow)
 	if err != nil {
 		return PreparedProviderChunk{}, err
 	}
@@ -119,16 +119,20 @@ func (repository *PostgresRepository) PrepareChunk(
 // committed to the sink. Recovery re-fetched that item and wrote its rows a
 // second time under fresh ordinals with pending ledgers, bypassing readback
 // entirely (CHAOS-3821).
+//
+// stampAt is the instant of the chunks' effect ledger (the instant the split measured them with); leaseNow is a fresh clock read for
+// the lease fence and the row times.
 func (repository *PostgresRepository) PrepareChunkGroup(
-	ctx context.Context, claim Claim, chunks []PreparedProviderChunk, now time.Time,
+	ctx context.Context, claim Claim, chunks []PreparedProviderChunk, stampAt, leaseNow time.Time,
 ) ([]PreparedProviderChunk, error) {
 	if repository == nil || repository.Pool == nil || ctx == nil ||
-		claim.Validate() != nil || now.IsZero() || len(chunks) == 0 {
+		claim.Validate() != nil || stampAt.IsZero() || leaseNow.IsZero() || len(chunks) == 0 {
 		return nil, ErrInvalidConfiguration
 	}
+	now := leaseNow
 	materials := make([]preparedChunkMaterial, 0, len(chunks))
 	for _, chunk := range chunks {
-		material, err := buildPreparedChunkMaterial(claim, chunk, now)
+		material, err := buildPreparedChunkMaterial(claim, chunk, stampAt)
 		if err != nil {
 			return nil, err
 		}
@@ -165,15 +169,39 @@ type preparedChunkMaterial struct {
 	aggregate  []byte
 }
 
+// chunkRefusalKind is the cause of a store refusal: size (halving the chunk can cure it) or any other.
+type chunkRefusalKind int
+
+const (
+	chunkRefusalNone chunkRefusalKind = iota
+	chunkRefusalSize
+	chunkRefusalOther
+)
+
 func buildPreparedChunkMaterial(
-	claim Claim, chunk PreparedProviderChunk, now time.Time,
+	claim Claim, chunk PreparedProviderChunk, stampAt time.Time,
 ) (preparedChunkMaterial, error) {
+	material, _, err := prepareChunkMaterial(claim, chunk, stampAt)
+	return material, err
+}
+
+// preparedChunkStoreRefusal is the store's own refusal of a chunk (the error PrepareChunkGroup returns for it) and its cause. The kind
+// comes from the measured bytes, not from the error: Validate's whole-chunk size check (an error "chunk_invalid") encodes the sidecar
+// with the ledger in place of the empty one, so it can trip only when payload plus ledger is already over the limit: it is a size refusal.
+func preparedChunkStoreRefusal(claim Claim, chunk PreparedProviderChunk, stampAt time.Time) (chunkRefusalKind, error) {
+	_, kind, err := prepareChunkMaterial(claim, chunk, stampAt)
+	return kind, err
+}
+
+func prepareChunkMaterial(
+	claim Claim, chunk PreparedProviderChunk, stampAt time.Time,
+) (preparedChunkMaterial, chunkRefusalKind, error) {
 	if chunk.Ordinal < 0 || chunk.TotalChunks < 0 || chunk.RouteVersion == "" {
-		return preparedChunkMaterial{}, ErrInvalidConfiguration
+		return preparedChunkMaterial{}, chunkRefusalOther, ErrInvalidConfiguration
 	}
-	state, err := NewEffectLedgerState(claim, chunk.Effects, now.UTC())
+	state, err := NewEffectLedgerState(claim, chunk.Effects, stampAt.UTC())
 	if err != nil {
-		return preparedChunkMaterial{}, err
+		return preparedChunkMaterial{}, chunkRefusalOther, err
 	}
 	chunk.Ledger = state
 	if chunk.ManifestDigest == "" {
@@ -183,18 +211,27 @@ func buildPreparedChunkMaterial(
 	payload.Ledger = EffectLedgerState{}
 	payloadRaw, err := encodedPreparedChunkPayload(payload)
 	if err != nil || len(payloadRaw) > maxChunkPayloadBytes {
-		return preparedChunkMaterial{}, ErrChunkPolicyExceeded
+		kind := chunkRefusalSize
+		if err != nil && !errors.Is(err, errChunkPayloadStamp) {
+			kind = chunkRefusalOther
+		}
+		return preparedChunkMaterial{}, kind, ErrChunkPolicyExceeded
 	}
 	chunk.PayloadBytes = len(payloadRaw)
 	ledgerRaw := encodeEffectLedgerState(state)
 	if len(ledgerRaw) == 0 {
-		return preparedChunkMaterial{}, ErrEffectRecoveryUnsafe
+		return preparedChunkMaterial{}, chunkRefusalOther, ErrEffectRecoveryUnsafe
 	}
+	oversize := len(payloadRaw)+len(ledgerRaw) > maxChunkPayloadBytes
 	if chunk.Validate(claim, DefaultChunkPolicy()) != nil {
-		return preparedChunkMaterial{}, chunkConflictBecause("chunk_invalid")
+		kind := chunkRefusalOther
+		if oversize {
+			kind = chunkRefusalSize
+		}
+		return preparedChunkMaterial{}, kind, chunkConflictBecause("chunk_invalid")
 	}
-	if len(payloadRaw)+len(ledgerRaw) > maxChunkPayloadBytes {
-		return preparedChunkMaterial{}, chunkConflictBecause("payload_and_ledger_size")
+	if oversize {
+		return preparedChunkMaterial{}, chunkRefusalSize, chunkConflictBecause("payload_and_ledger_size")
 	}
 	// A chunk with no aggregate must store SQL NULL, not the JSONB scalar
 	// `null`. Only the final chunk of a route carries a Result, so marshalling
@@ -206,12 +243,12 @@ func buildPreparedChunkMaterial(
 	if chunk.Result != nil {
 		var marshalErr error
 		if aggregateRaw, marshalErr = json.Marshal(chunk.Result); marshalErr != nil {
-			return preparedChunkMaterial{}, ErrChunkCheckpointConflict
+			return preparedChunkMaterial{}, chunkRefusalOther, ErrChunkCheckpointConflict
 		}
 	}
 	return preparedChunkMaterial{
 		chunk: chunk, payloadRaw: payloadRaw, ledgerRaw: ledgerRaw, aggregate: aggregateRaw,
-	}, nil
+	}, chunkRefusalNone, nil
 }
 
 // prepareChunkInTx performs one chunk's insert and checkpoint advance inside a

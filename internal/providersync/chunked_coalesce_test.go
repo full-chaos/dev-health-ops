@@ -591,13 +591,13 @@ type prepareFailStore struct {
 }
 
 func (store *prepareFailStore) PrepareChunkGroup(
-	ctx context.Context, claim Claim, chunks []PreparedProviderChunk, now time.Time,
+	ctx context.Context, claim Claim, chunks []PreparedProviderChunk, now, leaseNow time.Time,
 ) ([]PreparedProviderChunk, error) {
 	store.calls++
 	if store.calls == store.failAt {
 		return nil, errors.New("store unavailable")
 	}
-	return store.chunkMemoryStore.PrepareChunkGroup(ctx, claim, chunks, now)
+	return store.chunkMemoryStore.PrepareChunkGroup(ctx, claim, chunks, now, leaseNow)
 }
 
 // A held group whose prepare fails is not durable, so nothing is staged after it: the attempt fails with the prepare

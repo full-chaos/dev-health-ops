@@ -188,39 +188,29 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 				batch.Evidence = FetchEvidence{}
 				batch.WorklogObservations = nil
 			}
-			chunks, splitErr := splitCompleteRouteBatch(batch, finalComparison, policy)
+			// ONE instant stamps the chunks' ledger: the split measures with it and the store writes with it. The lease fence
+			// reads a fresh clock after the split.
+			stampAt := executor.now()
+			chunks, splitErr := splitStampedEmission(batch, chunkStamps{
+				Claim: session.Claim, CursorBefore: emission.CursorBefore, CursorAfter: emission.CursorAfter,
+				Final: emission.Final, Result: batch.Result, Watermark: batch.Watermark, Evidence: batch.Evidence,
+				Comparison: finalComparison, WorklogObservations: batch.WorklogObservations,
+				OrdinalBase: nextOrdinal, StampAt: stampAt,
+			}, policy)
 			if splitErr != nil {
 				return nil, splitErr
 			}
-			last := len(chunks) - 1
-			if last < 0 {
+			if len(chunks) == 0 {
 				return nil, ErrChunkPolicyExceeded
-			}
-			resetEmissionChunks(chunks, emission)
-			if emission.Final {
-				chunks[last].InventoryComplete = true
-				chunks[last].Result = cloneChunkResult(batch.Result)
-				chunks[last].Watermark = batch.Watermark
-				chunks[last].Evidence = batch.Evidence
-				chunks[last].Comparison = finalComparison
-				chunks[last].WorklogObservations = append([]JiraWorklogFetchObservation(nil), batch.WorklogObservations...)
-			}
-			if err := sizeEmissionChunks(chunks); err != nil {
-				return nil, err
 			}
 			// The whole emission is made durable BEFORE any of it reaches
 			// the sink. Preparing and committing one sub-chunk at a time
 			// left a window where committed rows existed for an emission
 			// the cursor had not advanced past, so recovery refetched the
-			// item and wrote those rows again (CHAOS-3821).
-			group := make([]PreparedProviderChunk, 0, len(chunks))
-			for _, candidate := range chunks {
-				candidate.Ordinal = nextOrdinal + len(group)
-				candidate.ManifestDigest = preparedChunkDigest(candidate)
-				group = append(group, candidate)
-			}
+			// item and wrote those rows again (CHAOS-3821). The chunks reach
+			// the store exactly as the split measured them.
 			preparedGroup, prepareErr := store.PrepareChunkGroup(
-				workContext, session.Claim, group, executor.now())
+				workContext, session.Claim, chunks, stampAt, executor.now())
 			if prepareErr != nil {
 				return nil, prepareErr
 			}
@@ -319,7 +309,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 					return err
 				}
 				if pending != nil {
-					if merged, ok := coalesceChunkEmissions(session.Claim, policy, *pending, emission, executor.now()); ok {
+					if merged, ok := coalesceChunkEmissions(session.Claim, policy, *pending, emission, nextOrdinal, executor.now()); ok {
 						return hold(merged)
 					}
 					if prepared, err := flush(); err != nil {
@@ -329,7 +319,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 						return stageAfterFlush(emission, err)
 					}
 				}
-				if emission.Coalescable && !emission.Final && coalescedEmissionFits(session.Claim, policy, emission, executor.now()) {
+				if emission.Coalescable && !emission.Final && coalescedEmissionFits(session.Claim, policy, emission, nextOrdinal, executor.now()) {
 					return hold(emission)
 				}
 				return prepareAndCommit(emission)
@@ -447,44 +437,13 @@ func loadChunkedFinalResult(
 	return nil
 }
 
-// resetEmissionChunks clears the per-emission metadata a split inherits and
-// stamps the emission's cursors on its first and last sub-chunk. The streaming
-// executor and the routes that pre-check a chunk's persisted size share it.
-func resetEmissionChunks(chunks []PreparedProviderChunk, emission ChunkRouteEmission) {
-	for index := range chunks {
-		chunks[index].TotalChunks = 0
-		chunks[index].CursorBefore = ""
-		chunks[index].CursorAfter = ""
-		chunks[index].InventoryComplete = false
-		chunks[index].Result = nil
-		chunks[index].Watermark = nil
-		chunks[index].Evidence = FetchEvidence{}
-		chunks[index].Comparison = ShadowComparison{}
-		chunks[index].WorklogObservations = nil
-	}
-	chunks[0].CursorBefore = emission.CursorBefore
-	chunks[len(chunks)-1].CursorAfter = emission.CursorAfter
-}
-
-// sizeEmissionChunks stamps each sub-chunk with its encoded payload size.
-func sizeEmissionChunks(chunks []PreparedProviderChunk) error {
-	for index := range chunks {
-		encoded, err := encodedPreparedChunkPayload(chunks[index])
-		if err != nil {
-			return err
-		}
-		chunks[index].PayloadBytes = len(encoded)
-	}
-	return nil
-}
-
 // coalesceChunkEmissions merges next into the pending coalesced group when both
 // are coalescable and non-final, next starts at the cursor the group ends at,
 // every shared destination has one recovery policy, and the merged rows still
 // fit ONE sub-chunk of the policy. The merged emission keeps the group's
 // CursorBefore and takes next's CursorAfter.
 func coalesceChunkEmissions(
-	claim Claim, policy ChunkPolicy, pending, next ChunkRouteEmission, now time.Time,
+	claim Claim, policy ChunkPolicy, pending, next ChunkRouteEmission, ordinalBase int, now time.Time,
 ) (ChunkRouteEmission, bool) {
 	if !pending.Coalescable || !next.Coalescable || pending.Final || next.Final ||
 		next.CursorBefore == "" || next.CursorBefore != pending.CursorAfter {
@@ -518,33 +477,26 @@ func coalesceChunkEmissions(
 		Batch: CompleteRouteBatch{Effects: effects}, CursorBefore: pending.CursorBefore,
 		CursorAfter: next.CursorAfter, Coalescable: true,
 	}
-	if !coalescedEmissionFits(claim, policy, merged, now) {
+	if !coalescedEmissionFits(claim, policy, merged, ordinalBase, now) {
 		return ChunkRouteEmission{}, false
 	}
 	return merged, true
 }
 
 // coalescedEmissionFits reports whether a non-final emission is ONE sub-chunk
-// of the policy that the chunk store accepts: the split, the size stamp and the
-// store's own material builder run on it, so no estimate decides.
-func coalescedEmissionFits(claim Claim, policy ChunkPolicy, emission ChunkRouteEmission, now time.Time) bool {
+// of the policy that the chunk store accepts: the stamped split (the store's
+// own refusal) runs on it at the next ordinal, so no estimate decides. The
+// group is prepared later at its own instant; if that changes the verdict the
+// prepare's split halves the group into more chunks (nothing is refused).
+func coalescedEmissionFits(claim Claim, policy ChunkPolicy, emission ChunkRouteEmission, ordinalBase int, now time.Time) bool {
 	if len(emission.Batch.Effects) == 0 {
 		return false
 	}
-	batch := emission.Batch
-	batch.Result, batch.Watermark = nil, nil
-	batch.Evidence = FetchEvidence{}
-	batch.WorklogObservations = nil
-	chunks, err := splitCompleteRouteBatch(batch, ShadowComparison{}, policy)
-	if err != nil || len(chunks) != 1 {
-		return false
-	}
-	resetEmissionChunks(chunks, emission)
-	if sizeEmissionChunks(chunks) != nil || chunks[0].PayloadBytes > policy.MaxPreparedBytes {
-		return false
-	}
-	_, err = buildPreparedChunkMaterial(claim, chunks[0], now)
-	return err == nil
+	chunks, err := splitStampedEmission(CompleteRouteBatch{Effects: emission.Batch.Effects}, chunkStamps{
+		Claim: claim, CursorBefore: emission.CursorBefore, CursorAfter: emission.CursorAfter,
+		OrdinalBase: ordinalBase, StampAt: now,
+	}, policy)
+	return err == nil && len(chunks) == 1
 }
 
 // validateChunkEmissionKind refuses an emission kind the executor does not know: a barrier carries nothing else, and

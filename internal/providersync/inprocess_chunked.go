@@ -121,9 +121,9 @@ func (store *InProcessChunkLedger) loadCheckpointLocked(claim Claim) (ChunkCheck
 
 // PrepareChunk is PrepareChunkGroup of one, so both paths share every guard.
 func (store *InProcessChunkLedger) PrepareChunk(
-	ctx context.Context, claim Claim, chunk PreparedProviderChunk, now time.Time,
+	ctx context.Context, claim Claim, chunk PreparedProviderChunk, stampAt, leaseNow time.Time,
 ) (PreparedProviderChunk, error) {
-	group, err := store.PrepareChunkGroup(ctx, claim, []PreparedProviderChunk{chunk}, now)
+	group, err := store.PrepareChunkGroup(ctx, claim, []PreparedProviderChunk{chunk}, stampAt, leaseNow)
 	if err != nil {
 		return PreparedProviderChunk{}, err
 	}
@@ -137,14 +137,15 @@ func (store *InProcessChunkLedger) PrepareChunk(
 // it (CHAOS-3821): the work is done on a copy of the state and swapped in on
 // success, the way one transaction commits or rolls back.
 func (store *InProcessChunkLedger) PrepareChunkGroup(
-	ctx context.Context, claim Claim, chunks []PreparedProviderChunk, now time.Time,
+	ctx context.Context, claim Claim, chunks []PreparedProviderChunk, stampAt, leaseNow time.Time,
 ) ([]PreparedProviderChunk, error) {
-	if ctx == nil || claim.Validate() != nil || now.IsZero() || len(chunks) == 0 {
+	if ctx == nil || claim.Validate() != nil || stampAt.IsZero() || leaseNow.IsZero() || len(chunks) == 0 {
 		return nil, ErrInvalidConfiguration
 	}
+	now := leaseNow
 	materials := make([]preparedChunkMaterial, 0, len(chunks))
 	for _, chunk := range chunks {
-		material, err := buildPreparedChunkMaterial(claim, chunk, now)
+		material, err := buildPreparedChunkMaterial(claim, chunk, stampAt)
 		if err != nil {
 			return nil, err
 		}

@@ -75,6 +75,15 @@ also stores the pull requests merged in the window, how many of them had a first
 review, and that share (no share when nothing merged). The share is stored, not
 scored.
 
+On the team breakout, the rows and the trend point of the selected day cover
+the same repositories. With no repository filter, or a filter that keeps every
+repository with a row that day, each team row is the persisted team score. A
+team's persisted review latency also covers a repository the team owns that
+merged pull requests in the window but has no repository row that day, while
+the trend covers only repositories with a row. A filter that leaves out a
+repository gives each team the mean of the scores of its selected
+repositories, and an empty filter gives no rows.
+
 Every definition publishes its unit, aggregation, display precision, null and
 zero semantics, supported scopes and dimensions, range limits, comparison
 rule, definition version, query version, source version, and freshness policy.

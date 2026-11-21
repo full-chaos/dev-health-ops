@@ -360,6 +360,28 @@ func repoScopeForTeams(ctx context.Context, client QueryClient, orgID string, re
 	return out, nil
 }
 
+// repoFilterNarrows reports whether a repository filter leaves out a
+// repository with a measured row of the day. The filter is resolved by id or
+// full name as the row read resolves it. An absent filter keeps every
+// repository; an empty one keeps none.
+func repoFilterNarrows(ctx context.Context, client QueryClient, orgID string, d time.Time, repoIDs idList) (bool, error) {
+	if repoIDs == nil {
+		return false, nil
+	}
+	if repoIDs.excludesEverything() {
+		return true, nil
+	}
+	all, err := latestRowsLimit(ctx, client, orgID, d, scopeRepo, nil, 0)
+	if err != nil {
+		return false, err
+	}
+	selected, err := latestRowsLimit(ctx, client, orgID, d, scopeRepo, repoIDs, 0)
+	if err != nil {
+		return false, err
+	}
+	return len(selected) < len(all), nil
+}
+
 // Resolve answers compoundingRisk for the org. Breakout TEAM with no team named
 // means every team: rows and trend then cover every repository (a repository no
 // team owns is listed as "Unassigned team"). With teams named, rows and trend
@@ -458,9 +480,18 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 			points = append(points, point(model.CompoundingRiskScopeRepo, d, r.scopeID, labelOr(labels, r.scopeID), r))
 		}
 	} else {
-		teamRows, err := latestRows(ctx, client, orgID, d, scopeTeam, teamIDs)
+		// A stored team row covers every repository of its team, so it is
+		// served only when the filter keeps every repository of the day;
+		// otherwise the teams are derived from the selected repository rows.
+		narrows, err := repoFilterNarrows(ctx, client, orgID, d, repoIDs)
 		if err != nil {
 			return nil, err
+		}
+		var teamRows []storedRow
+		if !narrows {
+			if teamRows, err = latestRows(ctx, client, orgID, d, scopeTeam, teamIDs); err != nil {
+				return nil, err
+			}
 		}
 		if len(teamIDs) == 0 && len(teamRows) > 0 {
 			// Which stored rows are rows of a team is a decision, not a label:

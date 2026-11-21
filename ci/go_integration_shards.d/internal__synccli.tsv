@@ -1,5 +1,5 @@
 internal/synccli	666
-split-by-test	2
+split-by-test	3
 TestLocalSyncMatchesFrozenPython	413
 TestSyncTeamsGitHubMatchesFrozenPython	23
 TestSyncTeamsGitLabMatchesFrozenPython	20

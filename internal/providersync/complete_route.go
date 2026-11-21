@@ -63,6 +63,17 @@ type ChunkRouteEmission struct {
 	CursorBefore string
 	CursorAfter  string
 	Final        bool
+	// Coalescable lets the streaming executor hold this non-final emission and
+	// commit it in ONE chunk group with the next contiguous coalescable
+	// emissions (each CursorBefore equal to the previous CursorAfter), while
+	// the merged rows still fit one sub-chunk of the chunk policy. A route sets
+	// it only where a restart from CursorBefore re-reads the held emissions.
+	Coalescable bool
+	// Barrier asks the executor to make its held coalesced group durable
+	// before the route reads anything those rows feed (no batch, no cursors;
+	// nothing is held = no-op). A route emits it only after it emitted
+	// coalescable emissions.
+	Barrier bool
 }
 
 // ChunkedCompleteRouteHandler is the opt-in streaming contract for routes

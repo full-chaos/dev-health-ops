@@ -40,6 +40,15 @@ func (l *LazyProbeCheck) build(name string, run func(context.Context) error, opt
 	})
 }
 
+// Close stops the check (CachedPostureCheck.Close). A check that was never built is never built
+// after Close: its probes are ErrUnavailable.
+func (l *LazyProbeCheck) Close() {
+	l.once.Do(func() {})
+	if l.check != nil {
+		l.check.Close()
+	}
+}
+
 // Answered reports whether the check has produced any state a probe can be answered from.
 func (l *LazyProbeCheck) Answered() bool { return l.check != nil && l.check.Answered() }
 
@@ -52,6 +61,9 @@ func (l *LazyProbeCheck) Check(ctx context.Context, name string, run func(contex
 // the FIRST call (or Warm) are kept.
 func (l *LazyProbeCheck) CheckWith(ctx context.Context, name string, run func(context.Context) error, options PostureCheckOptions) error {
 	l.build(name, run, options)
+	if l.check == nil {
+		return fmt.Errorf("%w: %s check closed", ErrUnavailable, name)
+	}
 	var err error
 	if l.check.Answered() {
 		err = l.check.CheckNoWait()

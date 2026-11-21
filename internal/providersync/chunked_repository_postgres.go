@@ -685,11 +685,14 @@ SET next_ordinal=GREATEST(next_ordinal,$4),
     updated_at=$6
 WHERE org_id=$1 AND sync_run_unit_id=$2::uuid AND generation=$3`
 
+// Only the final chunk's total_chunks is ever read (loadChunkedFinalResult, the chunked executor's final check), and the
+// manifest digest leaves it out. Stamping every chunk ran O(chunks) under the unit row lock MarkInventoryComplete holds,
+// which blocked the heartbeat's lease renewal on that row until the lease expired (CHAOS-14242).
 const finalizePreparedChunksSQL = `
 UPDATE public.sync_run_unit_effect_chunks
 SET total_chunks=$4, updated_at=$5
 WHERE org_id=$1 AND sync_run_unit_id=$2::uuid AND generation=$3
-  AND ordinal < $4`
+  AND ordinal = $4 - 1`
 
 const finalizeChunkCheckpointSQL = `
 UPDATE public.sync_run_unit_chunk_checkpoints
@@ -711,7 +714,7 @@ func deletePreparedChunkStateTx(ctx context.Context, tx pgx.Tx, claim Claim) err
 	if err := tx.QueryRow(ctx,
 		`SELECT to_regclass('public.sync_run_unit_effect_chunks') IS NOT NULL`,
 	).Scan(&present); err != nil {
-		return ErrInvalidConfiguration
+		return err
 	}
 	if !present {
 		return nil
@@ -719,12 +722,12 @@ func deletePreparedChunkStateTx(ctx context.Context, tx pgx.Tx, claim Claim) err
 	if _, err := tx.Exec(ctx, deletePreparedEffectChunksSQL,
 		claim.OrgID, claim.ID, claim.GenerationKey(),
 	); err != nil {
-		return ErrInvalidConfiguration
+		return err
 	}
 	if _, err := tx.Exec(ctx, deletePreparedCheckpointSQL,
 		claim.OrgID, claim.ID, claim.GenerationKey(),
 	); err != nil {
-		return ErrInvalidConfiguration
+		return err
 	}
 	return nil
 }

@@ -164,6 +164,45 @@ func hpVolatilePaths() map[string]map[string]string {
 	}
 }
 
+// hpDayMargin is the time before the next UTC midnight under which the test waits for it: the served answers take
+// their dates from the request-time clock, so a run that crosses midnight compares answers of two days. The run takes
+// about 80 s, so the margin leaves room for a slower one.
+const (
+	hpDayMargin = 180 * time.Second
+	hpDayPad    = 5 * time.Second
+)
+
+// hpStartClock returns the run's start time, after waiting past the next UTC midnight when less than margin remains.
+func hpStartClock(ctx context.Context, now func() time.Time, sleep func(context.Context, time.Duration) error, margin time.Duration) (time.Time, error) {
+	t := now().UTC()
+	if wait := t.Truncate(24 * time.Hour).Add(24 * time.Hour).Sub(t); wait < margin {
+		if err := sleep(ctx, wait+hpDayPad); err != nil {
+			return time.Time{}, err
+		}
+	}
+	return now(), nil
+}
+
+func hpSleep(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// hpSameDay is nil when the first and last request of a run are on one UTC day.
+func hpSameDay(first, last time.Time) error {
+	if first.UTC().Format(time.DateOnly) != last.UTC().Format(time.DateOnly) {
+		return fmt.Errorf("crossed UTC midnight despite the start guard (span > margin): first request %s, last request %s",
+			first.UTC().Format(time.RFC3339), last.UTC().Format(time.RFC3339))
+	}
+	return nil
+}
+
 // hpWindow is the test-only date window of every dated variable: two weeks that end today, over the seeded days.
 func hpWindow(now time.Time) (start, end string) {
 	day := now.UTC().Truncate(24 * time.Hour)
@@ -381,10 +420,56 @@ func TestHeaderCarrierRootCases(t *testing.T) {
 	t.Logf("%d registered roots in %s, %d RC10 cases", len(flipped), hpHeaderCells, len(cases))
 }
 
+type hpFakeClock struct{ t time.Time }
+
+func (c *hpFakeClock) now() time.Time { return c.t }
+func (c *hpFakeClock) sleep(_ context.Context, d time.Duration) error {
+	c.t = c.t.Add(d)
+	return nil
+}
+
+// TestHeaderCarrierStartAcrossMidnight: a run that starts near UTC midnight waits past it, so its first and last
+// request share a day; with no margin (the old behaviour) the same start crosses and the guard says so.
+func TestHeaderCarrierStartAcrossMidnight(t *testing.T) {
+	const span = 78 * time.Second
+	day := time.Now().UTC().Truncate(24 * time.Hour)
+	for _, c := range []struct {
+		name      string
+		start     time.Time
+		margin    time.Duration
+		wantSleep bool
+		wantCross bool
+	}{
+		{"the CI case, 23:59:22Z", day.Add(23*time.Hour + 59*time.Minute + 22*time.Second), hpDayMargin, true, false},
+		{"23:55:00Z needs no wait", day.Add(23*time.Hour + 55*time.Minute), hpDayMargin, false, false},
+		{"23:59:22Z with no margin crosses", day.Add(23*time.Hour + 59*time.Minute + 22*time.Second), 0, false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			begin := c.start
+			clock := &hpFakeClock{t: begin}
+			start, err := hpStartClock(context.Background(), clock.now, clock.sleep, c.margin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if slept := !start.Equal(begin); slept != c.wantSleep {
+				t.Errorf("waited = %v, want %v (start %s)", slept, c.wantSleep, start.Format(time.RFC3339))
+			}
+			first := clock.now()
+			clock.t = clock.t.Add(span)
+			if crossed := hpSameDay(first, clock.now()) != nil; crossed != c.wantCross {
+				t.Errorf("crossed = %v, want %v (first %s, last %s)", crossed, c.wantCross, first.Format(time.RFC3339), clock.now().Format(time.RFC3339))
+			}
+		})
+	}
+}
+
 func TestHeaderCarrierPrincipalParity(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	now := time.Now()
+	now, err := hpStartClock(ctx, time.Now, hpSleep, hpDayMargin)
+	if err != nil {
+		t.Fatalf("wait for the next UTC day: %v", err)
+	}
 	h := newHPVenue(t, ctx, now)
 	v, b := h.v, h.after
 	roots := hpRoots(t, v.orgA.String(), now)
@@ -397,6 +482,7 @@ func TestHeaderCarrierPrincipalParity(t *testing.T) {
 	// The differential (P1-e): every user answer with org A's rows only. Org B's decoys are written after this pass,
 	// and every org A answer must stay byte-equal: a leak that both paths share changes it.
 	alone := map[string]qpAnswer{}
+	firstRequest := time.Now()
 	for _, c := range callers {
 		for _, root := range roots {
 			alone[c.name+"|"+root.op.key] = send(b, c.name, c.userToken, "public", "/graphql", root.op)
@@ -519,6 +605,9 @@ func TestHeaderCarrierPrincipalParity(t *testing.T) {
 				}
 			}
 		}
+	}
+	if err := hpSameDay(firstRequest, time.Now()); err != nil {
+		t.Error(err)
 	}
 	t.Logf("%d cells over %d callers and %d roots; %d carrier requests checked against their document's actions; %d served cells byte-equal; %d roots served with seeded rows",
 		cells, len(callers), len(roots), carrierDecisions, servedSame, seeded)

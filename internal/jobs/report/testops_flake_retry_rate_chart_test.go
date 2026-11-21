@@ -12,7 +12,7 @@ import (
 // The failure recurrence score is the bucket's recurrent failed names over its distinct failed names, the same way.
 func TestFlakeAndRetryRateChartsAreTheCaseWeightedRuleOverTheCounts(t *testing.T) {
 	t.Parallel()
-	const source = "FROM (SELECT * FROM testops_test_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_test_metrics_daily"
+	const source = "FROM (SELECT * FROM testops_test_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day) AS testops_test_metrics_daily"
 	for metric, expression := range map[string]string{
 		"flake_rate":               testops.TestFlakeRateWindowSQL,
 		"retry_dependency_rate":    testops.TestRetryDependencyRateWindowSQL,

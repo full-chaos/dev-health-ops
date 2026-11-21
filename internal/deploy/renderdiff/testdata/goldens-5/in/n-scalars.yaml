@@ -1,0 +1,12 @@
+kind: ConfigMap
+metadata: {name: n}
+data:
+  i1: !!int '１２'
+  i2: !!int ' 123 '
+  i3: !!int '١٢'
+  f1: !!float ' 1.5 '
+  f2: !!float '１.5'
+  b1: !!binary "Zg==="
+  b2: !!binary "Zm9v=YmFy"
+  b3: !!binary "=Zg=="
+  b4: !!binary "Z m 9 v"

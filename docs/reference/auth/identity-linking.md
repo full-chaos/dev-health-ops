@@ -10,7 +10,6 @@ source_of_truth:
   - internal/auth/identity/oidc/service.go
   - internal/auth/identity/saml/service.go
   - internal/api/session/social.go
-  - internal/api/sso/provision.go
 applicability: current
 lifecycle: active
 ---
@@ -22,9 +21,10 @@ is created, and which outcomes an administrator sees. Federated sign-in means
 a social provider (GitHub, GitLab, Google) or an organization's enterprise SSO
 provider (OIDC, OAuth or SAML).
 
-SSO sign-in is served by go-api today. auth-service also carries an SSO
-implementation that is mounted but not in use; a new path is planned. The
-behaviour below holds for the path in use unless a line says otherwise.
+SSO sign-in (OIDC, OAuth and SAML) is served by auth-service: go-api forwards
+the sign-in routes to it (`AUTH_PROXY_OIDC` for OIDC and OAuth, `AUTH_PROXY_SAML`
+for SAML) and has no sign-in of its own. Lines below that name go-api describe
+its earlier sign-in, which auth-service keeps byte for byte.
 
 ## How a sign-in finds its account
 
@@ -134,8 +134,11 @@ SAML providers the identity provider's response is the source of the email.
 
 ## What an administrator sees
 
-**go-api (OIDC and social sign-in).** SAML sign-in goes through auth-service.
-With `AUTH_PROXY_SAML` off, go-api answers 503 `config_missing` after body validation.
+**go-api (social sign-in; the SSO routes forward).** OIDC, OAuth and SAML sign-in go
+through auth-service. With the forward off, go-api answers each SSO sign-in route
+503 `config_missing`, in this order: `SSO_STATE_SECRET` not set (before any body
+check); sessions off (`AUTH_PROXY_SESSIONS`); else the body's 422, then the
+forward flag (`AUTH_PROXY_OIDC` or `AUTH_PROXY_SAML`).
 A refusal answers with an HTTP
 status and a message. `membership_required` and
 `oauth_domain_not_allowed` are also carried as response codes. An OIDC

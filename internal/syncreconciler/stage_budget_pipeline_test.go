@@ -64,6 +64,7 @@ func TestRunStageBudgetIsIndependentOfItsSiblings(t *testing.T) {
 			nil,
 			noopTerminalOutboxClose(),
 			noopOrphanedUnitRepair(),
+			noopChunkSidecarReclaim(),
 			pipelineConfigWithBudget(StageMaterializer, 5*time.Millisecond),
 		)
 		if err != nil {
@@ -121,6 +122,7 @@ func TestObserverExceedingItsBudgetDegradesRatherThanFails(t *testing.T) {
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
+		noopChunkSidecarReclaim(),
 		pipelineConfigWithBudget(StageObserver, 5*time.Millisecond),
 	)
 	if err != nil {
@@ -167,6 +169,7 @@ func TestStageFailureIsTelemetered(t *testing.T) {
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
+		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -243,6 +246,7 @@ func TestRollupBumpsAreTelemetered(t *testing.T) {
 		staticSweep{result: UnreclaimableSweepResult{Mode: SweepModeActive, Candidates: 3, Terminalized: 3}},
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
+		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -304,6 +308,7 @@ func TestRollupBumpsRecordsLeaseRepairFailures(t *testing.T) {
 		staticSweep{result: UnreclaimableSweepResult{Mode: SweepModeActive, Candidates: 0, Terminalized: 0}},
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
+		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -363,6 +368,7 @@ func TestStageCancellationSQLStateIsTelemetered(t *testing.T) {
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
+		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -445,6 +451,7 @@ func TestRunStageDoesNotTelemeterParentCancellation(t *testing.T) {
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
+		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -500,6 +507,7 @@ func TestStageDegradesReadinessAfterThreeConsecutiveFailuresAndClearsOnSuccess(t
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
+		noopChunkSidecarReclaim(),
 		config,
 	)
 	if err != nil {
@@ -600,6 +608,7 @@ func TestExplicitOuterEnvelopeBelowStageSumDegradesRatherThanKillsTheProcess(t *
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
+		noopChunkSidecarReclaim(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -691,6 +700,7 @@ func TestStageIgnoringContextFlipsReadinessAndClearsOnReturn(t *testing.T) {
 		nil,
 		noopTerminalOutboxClose(),
 		noopOrphanedUnitRepair(),
+		noopChunkSidecarReclaim(),
 		config,
 	)
 	if err != nil {

@@ -129,16 +129,15 @@ VALUES ($1, $2, 'Existing GitHub', 'oauth_github', 'active', false, false, false
 	}
 }
 
-// An OAuth provider row that already exists still signs in after the retirement: the full GitLab round trip through
-// the same mux that answers the retired routes 404.
-func TestRetiredOAuthProviderRoutesLeaveSignInThroughAnExistingRow(t *testing.T) {
+// An OAuth provider row that already exists is not changed by the retired routes, and its sign-in through go-api with the
+// OIDC forward off answers 503 config_missing naming AUTH_PROXY_OIDC with no provider write: go-api has no own OAuth
+// sign-in; auth-service serves it (CHAOS-14131).
+func TestRetiredOAuthProviderRoutesLeaveAnExistingRowAndSignInIsForwardOnly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	st := startStack(t, ctx)
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	gitlab := startFakeGitLab(t)
-	gitlab.email = "existing.row@allowed.example"
-	seedMember(t, ctx, st.pool, orgID, gitlab.email, "gitlab", gitlab.userID)
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "oauth_gitlab", status: "active", config: gitlabConfig(gitlab.server.URL), autoProvision: true,
 		clientSecretEncryptedFallback: "gitlab-secret",
@@ -163,15 +162,20 @@ func TestRetiredOAuthProviderRoutesLeaveSignInThroughAnExistingRow(t *testing.T)
 		}
 	}
 
-	client := newCookieClient(t)
-	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
-	if status != http.StatusOK || authResp["state"] == nil || authResp["authorization_url"] == nil {
-		t.Fatalf("authorize through the existing row: %d %v", status, authResp)
+	for _, verb := range []string{"authorize", "callback"} {
+		status, body := postJSON(t, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/"+verb, map[string]any{"code": "c", "state": "s"})
+		detail, _ := body["detail"].(map[string]any)
+		if status != http.StatusServiceUnavailable || detail["reason_code"] != "config_missing" || detail["message"] != "AUTH_PROXY_OIDC is not set" {
+			t.Errorf("%s through the existing row: %d %v, want 503 config_missing AUTH_PROXY_OIDC", verb, status, body)
+		}
 	}
-	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
-		map[string]any{"code": "c", "state": authResp["state"]})
-	if status != http.StatusOK || body["access_token"] == nil || body["access_token"] == "" || body["email"] != gitlab.email {
-		t.Fatalf("callback through the existing row: %d %v", status, body)
+	var stamped int
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM sso_providers WHERE id = $1 AND (last_login_at IS NOT NULL OR last_error IS NOT NULL)`,
+		providerID).Scan(&stamped); err != nil {
+		t.Fatal(err)
+	}
+	if stamped != 0 {
+		t.Error("go-api recorded a sign-in or a failure on the provider row")
 	}
 	var name string
 	if err := st.pool.QueryRow(ctx, `SELECT name FROM sso_providers WHERE id = $1`, providerID).Scan(&name); err != nil {

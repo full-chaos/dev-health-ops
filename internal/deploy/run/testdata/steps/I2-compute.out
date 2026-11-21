@@ -1,0 +1,7 @@
+NODE cpu 3012m/12981m mem 9Gi/48Gi
+NODE cpu 2709m/11099m mem 12Gi/32Gi
+NODE cpu 1572m/14075m mem 6Gi/41Gi
+ROLL acme-app-api +1 surge
+ROLL acme-app-query +1 surge
+ROLL acme-app-worker-batch +1 surge
+IMG-STEP WITHIN headroom (surge 3 pods)

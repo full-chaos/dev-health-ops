@@ -6,10 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
 	"testing"
 	"time"
 
@@ -20,7 +16,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 // stageCase is one OAuth callback: the provider's answer, the account stores, and how the state and cookie come back.
@@ -204,39 +199,68 @@ func TestOAuthStageRowWriteFailureIsThe500(t *testing.T) {
 	}
 }
 
-// The messages are go-api's own error texts, byte for byte: the exported ones by value, the unexported ones as the
-// literal go-api declares (internal/api/sso).
-func TestOAuthStageMessagesAreGoAPIsErrorTexts(t *testing.T) {
+// goAPILastServedOAuthRefusals is the frozen golden of go-api's own OAuth sign-in refusals as go-api last served them
+// (ops main 65db3e62, before go-api's own sign-in was removed, CHAOS-14131): the audit stage and the error text of each
+// audited refusal, byte for byte, with the go-api source line it was read from. It is a literal on purpose: no constant
+// of this package feeds it.
+var goAPILastServedOAuthRefusals = []struct{ stage, message, source string }{
+	{"state_auth", "OAuth state expired", "internal/api/sso/oauth.go:671, audited :537-538"},
+	{"state_auth", "OAuth state mismatch", "internal/api/sso/oauth.go:673/:676/:691, audited :537-538"},
+	{"provider_profile", "oauthprovider: provider response raised an uncaught exception: the profile has no user id",
+		"internal/api/oauthprovider/oauthprovider.go:107+:111, audited internal/api/sso/oauth.go:518-521"},
+	{"provisioning", "sso: the identity provider returned an unusable email address", "internal/api/sso/provision.go:138, audited oauth.go:524-527"},
+	{"email_verification", "no verified email address is available from this OAuth provider", "internal/api/sso/oauth.go:356, audited :530-532"},
+	{"provisioning", "identity: a non-local provider user needs a valid provider id",
+		"internal/auth/identity/providerid.go:7, audited internal/api/sso/oauth.go:623-626"},
+	{"provisioning", "user not found and auto-provisioning is disabled", "internal/api/sso/oauth.go:640, audited :593-605"},
+	{"provisioning", "identity conflict", "internal/api/sso/provision.go:195, audited oauth.go:608-610"},
+	{"provisioning", "membership required", "internal/api/sso/provision.go:276, audited oauth.go:613-615"},
+}
+
+// The audit rows auth-service writes for the OAuth refusals carry exactly go-api's last-served stage and text
+// (goAPILastServedOAuthRefusals): every row one of the golden pairs, every golden pair written by some refusal. The
+// exported texts also equal their go-api values.
+func TestOAuthStageMessagesAreGoAPIsLastServedTexts(t *testing.T) {
 	if msgMissingProviderID != oauthprovider.ErrMissingProviderID.Error() {
 		t.Errorf("missing provider id %q, go-api %q", msgMissingProviderID, oauthprovider.ErrMissingProviderID.Error())
 	}
 	if msgInvalidProviderID != identity.ErrInvalidProviderID.Error() {
 		t.Errorf("invalid provider id %q, go-api %q", msgInvalidProviderID, identity.ErrInvalidProviderID.Error())
 	}
-	root, err := moduleroot.Root()
-	if err != nil {
-		t.Fatal(err)
+	golden := map[[2]string]bool{}
+	for _, row := range goAPILastServedOAuthRefusals {
+		golden[[2]string{row.stage, row.message}] = false
 	}
-	var source strings.Builder
-	for _, f := range []string{"oauth.go", "provision.go"} {
-		raw, err := os.ReadFile(filepath.Join(root, "internal", "api", "sso", f))
-		if err != nil {
-			t.Fatal(err)
-		}
-		source.Write(raw)
-	}
-	declared := func(pattern string) bool { return regexp.MustCompile(pattern).MatchString(source.String()) }
-	for name, pattern := range map[string]string{
-		"invalid provider email": `var errInvalidProviderEmail = errors\.New\(` + regexp.QuoteMeta(`"`+msgInvalidProviderEmail+`"`) + `\)`,
-		"no verified email":      `var errOAuthNoVerifiedEmail = errors\.New\(` + regexp.QuoteMeta(`"`+msgNoVerifiedEmail+`"`) + `\)`,
-		"auto-provisioning off":  `var errOAuthAutoProvisionDisabled = errors\.New\(` + regexp.QuoteMeta(`"`+provisioningMessages[ReasonProvisioningDisabled]+`"`) + `\)`,
-		"identity conflict":      `var errIdentityConflict = errors\.New\(` + regexp.QuoteMeta(`"`+provisioningMessages[ReasonIdentityConflict]+`"`) + `\)`,
-		"membership required":    `var errMembershipRequired = errors\.New\(` + regexp.QuoteMeta(`"`+provisioningMessages[ReasonMembershipRequired]+`"`) + `\)`,
-		"state expired":          `ssoAuthErr\(` + regexp.QuoteMeta(`"`+msgStateExpired+`"`) + `\)`,
-		"state mismatch":         `ssoAuthErr\(` + regexp.QuoteMeta(`"`+msgStateMismatch+`"`) + `\)`,
+	other := uuid.New()
+	for name, c := range map[string]stageCase{
+		"state expired":                 {email: "u@example.test", confirmed: true, late: 11 * time.Minute},
+		"state of another org":          {email: "u@example.test", confirmed: true, stateOrg: &other},
+		"login cookie wrong":            {email: "u@example.test", confirmed: true, cookie: "other"},
+		"profile without an id":         {email: "u@example.test", confirmed: true, noID: true},
+		"unusable email":                {email: "u\x00@example.test", confirmed: true},
+		"unverified email":              {email: "u@example.test", confirmed: false},
+		"subject not a key":             {email: "u@example.test", confirmed: true, badSubject: true},
+		"auto-provisioning off":         {email: "u@example.test", confirmed: true, identities: &resolveIdentities{err: ErrIdentityNotFound}},
+		"identity conflict":             {email: "u@example.test", confirmed: true, autoProvision: true, identities: &resolveIdentities{err: ErrIdentityAmbiguous}},
+		"not an org member":             {email: "u@example.test", confirmed: true, autoProvision: true, identities: &resolveIdentities{err: ErrNotOrgMember}},
+		"email held by another account": {email: "u@example.test", confirmed: true, autoProvision: true, identities: &resolveIdentities{err: ErrIdentityNotFound, inUse: true}},
 	} {
-		if !declared(pattern) {
-			t.Errorf("%s: go-api declares no %s", name, pattern)
+		denials := &recordedDenials{}
+		runStage(t, c, denials)
+		if len(denials.rows) != 1 {
+			t.Errorf("%s: %d audit rows, want 1", name, len(denials.rows))
+			continue
+		}
+		key := [2]string{denials.rows[0].Stage, denials.rows[0].ErrorMessage}
+		if _, ok := golden[key]; !ok {
+			t.Errorf("%s: auth-service audits stage %q text %q, which go-api never served", name, key[0], key[1])
+			continue
+		}
+		golden[key] = true
+	}
+	for key, seen := range golden {
+		if !seen {
+			t.Errorf("go-api's refusal stage %q text %q is written by no auth-service refusal", key[0], key[1])
 		}
 	}
 }

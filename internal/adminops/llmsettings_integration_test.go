@@ -335,12 +335,12 @@ VALUES ('%s', 'team-org', 'Team', 'team', 'manual', true, now(), now())`, teamOr
 	}
 }
 
-// TestLLMSettingsDeleteClearsDerivedRows is CHAOS-6975 on the operator path:
+// TestAdminopsLLMSettingsDeleteClearsDerivedRows is CHAOS-6975 on the operator path:
 // `admin llm-settings delete` must remove the readiness record and the per-role
 // certification rows with the credentials, and leave every other row (the
 // platform role key, llm_budget, other categories, other orgs) alone. Go-only:
 // the Python verb left the derived rows behind, which is the defect.
-func TestLLMSettingsDeleteClearsDerivedRows(t *testing.T) {
+func TestAdminopsLLMSettingsDeleteClearsDerivedRows(t *testing.T) {
 	db := startDatabase(t)
 	db.reset(t)
 	ctx := context.Background()

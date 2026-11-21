@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"log/slog"
@@ -765,7 +766,10 @@ func TestGitHubTestsChunkRouteWalkBoundInsideTheArtifactsPhase(t *testing.T) {
 	if len(full.Incomplete) != 0 || full.Phase != "done" || fullFinal.Watermark == nil {
 		t.Fatalf("unbounded walk incomplete=%+v phase=%q watermark=%v, want a complete walk", full.Incomplete, full.Phase, fullFinal.Watermark)
 	}
-	if fullChunks != 4 || full.Pipelines != 2 || full.Cases == 0 || full.Cases%2 != 0 {
+	// The fake answers every listing with the same two runs, so the deep ranges of the claim (it holds a UTC midnight; one in
+	// the runs phase, one in the artifacts phase) list them once more each: four more chunks, no row (neither changed late,
+	// and the artifacts deep range skips runs created at or after its floor).
+	if fullChunks != 8 || full.Pipelines != 2 || full.Cases == 0 || full.Cases%2 != 0 {
 		t.Fatalf("premise broken: chunks=%d pipelines=%d cases=%d, want 2 runs in each phase and the same report on both",
 			fullChunks, full.Pipelines, full.Cases)
 	}
@@ -776,8 +780,8 @@ func TestGitHubTestsChunkRouteWalkBoundInsideTheArtifactsPhase(t *testing.T) {
 	if bounded.Cases != full.Cases/2 || bounded.Suites != full.Suites/2 {
 		t.Fatalf("cases=%d suites=%d, want the first run's reports only (%d, %d)", bounded.Cases, bounded.Suites, full.Cases/2, full.Suites/2)
 	}
-	if boundedChunks != 3 {
-		t.Fatalf("chunks=%d, want 2 runs-phase runs and 1 artifacts-phase run", boundedChunks)
+	if boundedChunks != 5 {
+		t.Fatalf("chunks=%d, want 2 runs-phase runs, 2 deep-range runs and 1 artifacts-phase run", boundedChunks)
 	}
 	if githubTestsHasPageBudgetObservation(bounded, githubTestsRunInventoryComponent) ||
 		!githubTestsHasPageBudgetObservation(bounded, githubTestsArtifactInventoryComponent) {
@@ -914,9 +918,13 @@ func TestGitHubTestsChunkRouteListingEndingExactlyAtTheBoundIsComplete(t *testin
 
 	artifactsEnd := collectGitHubTestsOnePass(t, GitHubTestsRouteHandler{MaxWalkRecords: githubTestsWalkRecords(full)}, claim,
 		githubTestsPagedReportDoer{githubTestsPagedDoer: &githubTestsPagedDoer{t: t, pages: 3, perPage: 2}, archive: archive})
-	if len(artifactsEnd.Incomplete) != 0 || githubTestsWalkRecords(artifactsEnd) != githubTestsWalkRecords(full) {
-		t.Fatalf("artifacts listing ended at the bound: incomplete=%+v records=%d, want a complete walk of %d",
-			artifactsEnd.Incomplete, githubTestsWalkRecords(artifactsEnd), githubTestsWalkRecords(full))
+	// The regular listing is complete; the bound stops the late re-run deep range before it starts, which is its own advancing
+	// observation.
+	deepStop := []GitHubTestsIncomplete{{Component: githubTestsLateRerunReportsComponent, Cause: githubTestsPageBudgetCause, Count: 1}}
+	if fmt.Sprint(githubTestsSaturatedObservations(artifactsEnd)) != fmt.Sprint(deepStop) || len(artifactsEnd.Incomplete) != 0 ||
+		githubTestsWalkRecords(artifactsEnd) != githubTestsWalkRecords(full) {
+		t.Fatalf("artifacts listing ended at the bound: incomplete=%+v derived=%+v records=%d, want a complete regular walk of %d and only the deep-range stop",
+			artifactsEnd.Incomplete, githubTestsSaturatedObservations(artifactsEnd), githubTestsWalkRecords(artifactsEnd), githubTestsWalkRecords(full))
 	}
 }
 

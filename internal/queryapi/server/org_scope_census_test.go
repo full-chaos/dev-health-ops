@@ -78,6 +78,8 @@ var orgScopeReadsScopedElsewhere = map[string]orgScopeElsewhere{
 			{"internal/queryapi/capacityforecast/clickhouse.go", "capacityScopeFilters", "org_id = {org_id:String}"},
 		},
 	},
+	"internal/queryapi/rowview/rowview.go:TeamSource": orgScopeTeamViewCallers,
+	"internal/queryapi/rowview/rowview.go:TeamPick":   orgScopeTeamViewCallers,
 	"internal/queryapi/analytics/timeseries.go:dedupFromMeasureSource": {
 		"its dedup key holds org_id, and the compiled statement filters the alias it returns",
 		[]orgScopeSite{{"internal/queryapi/analytics/timeseries.go", "CompileTimeseries", "AND %s.org_id = {org_id:String}"}},
@@ -97,9 +99,15 @@ var orgScopeReadsScopedElsewhere = map[string]orgScopeElsewhere{
 		"one eventWhere clause, the org_id predicate first, is the WHERE of both statements",
 		[]orgScopeSite{{"internal/queryapi/featureflags/events.go", "eventWhere", "org_id = {org_id:String}"}},
 	},
-	"internal/queryapi/throughputforecast/clickhouse.go:loadWorkItemOverlay": {
-		"one scopeFilter WHERE is spliced into both reads and the newest-row predicate",
-		[]orgScopeSite{{"internal/queryapi/throughputforecast/clickhouse.go", "scopeFilter", "org_id = {org_id:String}"}},
+}
+
+// orgScopeTeamViewCallers is the scope of the team view helpers (CHAOS-14353). LIMIT: no served (queryapi) caller may
+// rely on this row: the served readers decide self-scoping in their own plan before the first one lands.
+var orgScopeTeamViewCallers = orgScopeElsewhere{
+	"its where is the caller's filter, which holds the org_id predicate; callers today: jobs only (capacity, recommendations loader)",
+	[]orgScopeSite{
+		{"internal/jobs/metrics/remaining/capacity_native_clickhouse.go", "capacityScopeFilters", "org_id = {org_id:String}"},
+		{"internal/jobs/metrics/remaining/recommendations_loader.go", "orgClause", "AND org_id = {org_id:String}"},
 	},
 }
 

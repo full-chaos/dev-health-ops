@@ -188,7 +188,7 @@ func (handler LaunchDarklyRouteHandler) Collect(
 	}
 	codeReferences, err := parseLaunchDarklyCodeReferences(codeReferencePayload)
 	if err != nil {
-		return CompleteRouteBatch{}, err
+		return CompleteRouteBatch{}, providerfoundation.RouteFailure(launchDarklyCodeRefsRoute, providerfoundation.ReasonBodyDecode, err)
 	}
 	flags, err := normalizeLaunchDarklyFlags(
 		flagsPage.Items, claim.OrgID, environment, normalizedAt,
@@ -293,7 +293,7 @@ func fetchLaunchDarklyCodeReferences(
 	response, err := client.DoRoute(
 		ctx,
 		http.MethodGet,
-		"/api/v2/code-refs/repositories",
+		launchDarklyCodeRefsRoute,
 		"/api/v2/code-refs/repositories?"+query.Encode(),
 		nil,
 	)

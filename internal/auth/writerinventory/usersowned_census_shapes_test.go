@@ -108,17 +108,14 @@ func TestUsersOwnedCensusKeepsAcceptingTheCleanShapes(t *testing.T) {
 // runs the code with the switch on and proves it writes nothing to
 // public.users. The census is the inventory; these tests are the proof.
 var behaviourTests = map[string]string{
-	"internal/api/session/changepassword.go|handlers.changePassword":    "internal/api/session/usersowned_test.go|TestUsersOwnedRefusesEverySessionWriterBeforeTouchingTheDatabase",
-	"internal/api/session/social.go|handlers.createSocialUser":          "internal/api/session/usersowned_test.go|TestUsersOwnedRefusesTheSocialAccountCreate",
-	"internal/api/sso/provision.go|handlers.createAccountAndMembership": "internal/api/sso/usersowned_test.go|TestUsersOwnedRefusesTheSSOAccountCreate",
-	"internal/apiservice/admin/userstore.go|pgStore.insertUser":         "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedRefusesEveryAdminUsersWriter",
-	"internal/apiservice/admin/userstore.go|pgStore.updateUser":         "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedRefusesEveryAdminUsersWriter",
-	"internal/apiservice/admin/userstore.go|pgStore.setUserPassword":    "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedRefusesEveryAdminUsersWriter",
-	"internal/apiservice/admin/userdelete.go|pgStore.softDeleteUser":    "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedRefusesEveryAdminUsersWriter",
-	"internal/apiservice/admin/userdelete.go|pgStore.forceDeleteUser":   "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedRefusesEveryAdminUsersWriter",
-	"internal/api/session/store.go|touchLastLogin":                      "internal/api/session/usersowned_test.go|TestTouchLastLoginWritesNothingWhileUsersOwned",
-	"internal/api/sso/provision.go|handlers.provisionOrGetUser":         "internal/api/sso/usersowned_signin_integration_test.go|TestUsersOwnedSignInOfAnExistingAccountWritesNoUsersRow",
-	"internal/api/sso/oauth.go|handlers.oauthProvisionUser":             "internal/api/sso/usersowned_signin_integration_test.go|TestUsersOwnedSignInOfAnExistingAccountWritesNoUsersRow",
+	"internal/api/session/changepassword.go|handlers.changePassword":  "internal/api/session/usersowned_test.go|TestUsersOwnedRefusesEverySessionWriterBeforeTouchingTheDatabase",
+	"internal/api/session/social.go|handlers.createSocialUser":        "internal/api/session/usersowned_test.go|TestUsersOwnedRefusesTheSocialAccountCreate",
+	"internal/apiservice/admin/userstore.go|pgStore.insertUser":       "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedRefusesEveryAdminUsersWriter",
+	"internal/apiservice/admin/userstore.go|pgStore.updateUser":       "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedRefusesEveryAdminUsersWriter",
+	"internal/apiservice/admin/userstore.go|pgStore.setUserPassword":  "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedRefusesEveryAdminUsersWriter",
+	"internal/apiservice/admin/userdelete.go|pgStore.softDeleteUser":  "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedRefusesEveryAdminUsersWriter",
+	"internal/apiservice/admin/userdelete.go|pgStore.forceDeleteUser": "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedRefusesEveryAdminUsersWriter",
+	"internal/api/session/store.go|touchLastLogin":                    "internal/api/session/usersowned_test.go|TestTouchLastLoginWritesNothingWhileUsersOwned",
 
 	"internal/apiservice/admin/users.go|handlers.createUser":      "internal/apiservice/admin/users_owned_forward_test.go|TestUsersOwnedPlatformCreateForwardsToAuth",
 	"internal/apiservice/admin/users.go|handlers.updateUser":      "internal/apiservice/admin/users_owned_forward_test.go|TestUsersOwnedPatchVerifiedForwardsToAuth",

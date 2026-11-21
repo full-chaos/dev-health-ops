@@ -24,14 +24,15 @@ func (c Credentials) LogValue() slog.Value { return secrets.LogRedacted(c.redact
 type orgSettings map[string]string
 
 // redacted hides every api_key row and every base_url row (the default's and
-// each purpose override's) and drops the reserved key-in-base_url mark. A
+// each purpose override's) and drops the reserved key-in-base_url mark and the
+// sealed categorize key. A
 // base_url is hidden whatever it holds: no print can tell a clean url from one
 // that carries a key the map does not hold (skipped or projected away).
 func (s orgSettings) redacted() map[string]string {
 	out := make(map[string]string, len(s))
 	for key, value := range s {
 		switch {
-		case key == keyInBaseURLMark:
+		case key == keyInBaseURLMark, key == sealedCategorizeKey:
 			continue
 		case key == keyAPIKey || strings.HasSuffix(key, ":"+keyAPIKey),
 			key == keyBaseURL || strings.HasSuffix(key, ":"+keyBaseURL):

@@ -21,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncbudget"
+	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
@@ -212,6 +213,77 @@ func runConcurrentDispatches(ctx context.Context, service *NativeDispatchSyncRun
 	return errs
 }
 
+// maxCommitSnapshotRetries bounds how often a cell retries the same delivery of a pass that gave up at the commit
+// fence, the way River retries a job that returned an error.
+const maxCommitSnapshotRetries = 3
+
+// gaveUpAtCommitSnapshot: the pass gave up because another transaction held its outbox row past the fence's bound
+// (CHAOS-14265). Nothing of the pass committed and the error is retryable.
+func gaveUpAtCommitSnapshot(err error) bool {
+	return errors.Is(err, ErrDispatchSyncRunUnavailable) && strings.Contains(err.Error(), commitSnapshotBusyReason)
+}
+
+// retryCommitSnapshotGiveUps is River retrying the same delivery of every pass that gave up at the commit fence, at
+// most maxCommitSnapshotRetries times each; errs holds the last try's error.
+func retryCommitSnapshotGiveUps(ctx context.Context, service *NativeDispatchSyncRunService, args []DispatchSyncRunArgs, errs []error) {
+	for index := range args {
+		for try := 0; try < maxCommitSnapshotRetries && gaveUpAtCommitSnapshot(errs[index]); try++ {
+			errs[index] = service.Dispatch(ctx, args[index])
+		}
+	}
+}
+
+// assertEveryRunReachesDispatching settles the passes' outcome: every pass returned nil; a run not yet dispatching is
+// legal only when its delivery named delivery_not_current on a re-armed ('pending') row, and then the relay's next
+// delivery must dispatch it; in the end every run is dispatching.
+func assertEveryRunReachesDispatching(t *testing.T, ctx context.Context, pool *pgxpool.Pool, service *NativeDispatchSyncRunService, logs *lockedLogBuffer, args []DispatchSyncRunArgs, errs []error) {
+	t.Helper()
+	for index, err := range errs {
+		if err != nil {
+			t.Errorf("dispatch pass %d: %v want nil: the pass stalled on the pool or the bucket lock", index, err)
+			if errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("dispatch pass %d hit its deadline", index)
+			}
+		}
+	}
+	lines := logs.lines()
+	for index, arg := range args {
+		runID := arg.RunID
+		var runStatus, unitStatus string
+		var availableAt *time.Time
+		if err := pool.QueryRow(ctx, `
+SELECT r.status, u.status, u.available_at
+FROM sync_runs r JOIN sync_run_units u ON u.sync_run_id = r.id
+WHERE r.id = $1::uuid`, runID).Scan(&runStatus, &unitStatus, &availableAt); err != nil {
+			t.Errorf("run %d (%s): read state: %v", index, runID, err)
+			continue
+		}
+		if runStatus == syncRunStatusDispatching {
+			continue
+		}
+		reason, own := passOutcome(lines, runID)
+		outboxStatus := dispatchOutboxStatus(t, ctx, pool, arg.DispatchOutbox)
+		if reason == "delivery_not_current" && outboxStatus == "pending" {
+			if err := redeliver(t, ctx, pool, service, arg); err != nil {
+				t.Errorf("run %d (%s): the pass of the re-armed delivery: %v", index, runID, err)
+			}
+			continue
+		}
+		t.Errorf("run %d (%s) did not reach dispatching: reason=%s pass error=%v run status=%s unit status=%s unit available_at=%v outbox status=%s pool acquired=%d\ncaptured lines of this run:\n%s",
+			index, runID, reason, errs[index], runStatus, unitStatus, availableAt, outboxStatus, pool.Stat().AcquiredConns(), strings.Join(own, "\n"))
+		if reason == "unknown" {
+			t.Errorf("run %d (%s): no named reason in its log lines; all captured lines:\n%s", index, runID, strings.Join(lines, "\n"))
+		}
+	}
+	var dispatching int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sync_runs WHERE status = $1`, syncRunStatusDispatching).Scan(&dispatching); err != nil {
+		t.Fatal(err)
+	}
+	if dispatching != len(args) {
+		t.Errorf("%d of %d runs reached dispatching", dispatching, len(args))
+	}
+}
+
 // TestConcurrentDispatchOnOneBucketDoesNotStarveASmallPool is the production
 // stall of CHAOS-6889, reproduced: with a 4-connection domain pool, four
 // Dispatch passes on ONE bucket. Each opens a transaction (one connection). The
@@ -225,63 +297,144 @@ func runConcurrentDispatches(ctx context.Context, service *NativeDispatchSyncRun
 // RED CONTROL: on the code this replaces, at least one pass returns a deadline
 // error and the pool sits at 4/4 acquired for the whole budget.
 //
-// A pass may legitimately end without dispatching: a newer run's pass that holds
-// slots back for the oldest run wakes it (CHAOS-8880), which re-arms that run's
-// outbox row to 'pending' while its own delivery may not have read the row yet.
-// That delivery is then not the current one and its pass is a no-op that names
-// delivery_not_current; the relay's next delivery of the re-armed row dispatches
-// the run. Any other way of not dispatching fails the test.
+// A pass may legitimately end without dispatching in two ways. (1) A newer run's
+// pass that holds slots back for the oldest run wakes it (CHAOS-8880), which
+// re-arms that run's outbox row to 'pending' while its own delivery may not have
+// read the row yet. That delivery is then not the current one and its pass is a
+// no-op that names delivery_not_current; the relay's next delivery of the
+// re-armed row dispatches the run. (2) That wake holds the row when the run's
+// pass reaches its commit snapshot, past the fence's bound: the pass gives up
+// with a retryable error (CHAOS-14265) and River retries the same delivery,
+// which then ends as (1). Any other way of not dispatching fails the test.
 func TestConcurrentDispatchOnOneBucketDoesNotStarveASmallPool(t *testing.T) {
 	withSmallDispatchPool(t, 4, func(ctx context.Context, pool *pgxpool.Pool) {
 		args := seedContentionRuns(t, ctx, pool, 4)
 		service, logs := newLoggedContentionDispatchService(t, pool)
 
 		errs := runConcurrentDispatches(ctx, service, args, 12*time.Second)
-		for index, err := range errs {
-			if err != nil {
-				t.Errorf("dispatch pass %d: %v want nil: the pass stalled on the pool or the bucket lock", index, err)
-				if errors.Is(err, context.DeadlineExceeded) {
-					t.Errorf("dispatch pass %d hit its deadline", index)
-				}
-			}
-		}
-		lines := logs.lines()
-		for index, arg := range args {
-			runID := arg.RunID
-			var runStatus, unitStatus string
-			var availableAt *time.Time
-			if err := pool.QueryRow(ctx, `
-SELECT r.status, u.status, u.available_at
-FROM sync_runs r JOIN sync_run_units u ON u.sync_run_id = r.id
-WHERE r.id = $1::uuid`, runID).Scan(&runStatus, &unitStatus, &availableAt); err != nil {
-				t.Errorf("run %d (%s): read state: %v", index, runID, err)
-				continue
-			}
-			if runStatus == syncRunStatusDispatching {
-				continue
-			}
-			reason, own := passOutcome(lines, runID)
-			outboxStatus := dispatchOutboxStatus(t, ctx, pool, arg.DispatchOutbox)
-			if reason == "delivery_not_current" && outboxStatus == "pending" {
-				if err := redeliver(t, ctx, pool, service, arg); err != nil {
-					t.Errorf("run %d (%s): the pass of the re-armed delivery: %v", index, runID, err)
-				}
-				continue
-			}
-			t.Errorf("run %d (%s) did not reach dispatching: reason=%s pass error=%v run status=%s unit status=%s unit available_at=%v outbox status=%s pool acquired=%d\ncaptured lines of this run:\n%s",
-				index, runID, reason, errs[index], runStatus, unitStatus, availableAt, outboxStatus, pool.Stat().AcquiredConns(), strings.Join(own, "\n"))
-			if reason == "unknown" {
-				t.Errorf("run %d (%s): no named reason in its log lines; all captured lines:\n%s", index, runID, strings.Join(lines, "\n"))
-			}
-		}
-		var dispatching int
-		if err := pool.QueryRow(ctx, `SELECT count(*) FROM sync_runs WHERE status = $1`, syncRunStatusDispatching).Scan(&dispatching); err != nil {
-			t.Fatal(err)
-		}
-		if dispatching != len(args) {
-			t.Errorf("%d of %d runs reached dispatching", dispatching, len(args))
-		}
+		retryCommitSnapshotGiveUps(ctx, service, args, errs)
+		assertEveryRunReachesDispatching(t, ctx, pool, service, logs, args, errs)
 	})
+}
+
+// releaseAtGiveUpTracer ends the holder of the delivery's outbox row on the LAST 55P03 read of the commit snapshot,
+// inside that read's trace: the pass gives up for sure, and the row is free (and re-armed) right after.
+type releaseAtGiveUpTracer struct {
+	mu      sync.Mutex
+	busy    int
+	release func()
+}
+
+func (tracer *releaseAtGiveUpTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	return context.WithValue(ctx, commitLockSQLKey{}, data.SQL)
+}
+
+func (tracer *releaseAtGiveUpTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
+	sql, _ := ctx.Value(commitLockSQLKey{}).(string)
+	if !isCommitCheck(sql) || !isLockNotAvailable(data.Err) {
+		return
+	}
+	tracer.mu.Lock()
+	tracer.busy++
+	last, release := tracer.busy == len(commitSnapshotLockBackoff)+1, tracer.release
+	tracer.mu.Unlock()
+	if last && release != nil {
+		release()
+	}
+}
+
+func (tracer *releaseAtGiveUpTracer) busyReads() int {
+	tracer.mu.Lock()
+	defer tracer.mu.Unlock()
+	return tracer.busy
+}
+
+// TestConcurrentDispatchRecoversARunWhoseCommitSnapshotGaveUp is the CI failure of the cell above in a fixed order:
+// a hold-back wake of the oldest run (the real syncrunrollup.WakeDispatch upsert, left open in a transaction on a
+// second pool) holds that run's dispatch outbox row while its pass reaches the commit snapshot. The pass gives up at
+// the bound (an injected snapshot clock, so no wall time decides it) and the wake commits on the last busy read. The
+// newer runs' passes then run concurrently, River retries the given-up delivery, and the relay delivers the re-armed
+// row: the oldest run must reach dispatching, its unit must leave 'planned' and its row must be delivered again.
+//
+// RED CONTROL: with the settle step of the cell above as it was (no retry of a given-up delivery), the given-up pass
+// fails the cell and the oldest run stays 'running' with its unit 'planned'.
+func TestConcurrentDispatchRecoversARunWhoseCommitSnapshotGaveUp(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance := pgschema.Start(ctx, t)
+	defer instance.Close(context.Background())
+	other, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	config, err := pgxpool.ParseConfig(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MaxConns = 4
+	tracer := &releaseAtGiveUpTracer{}
+	config.ConnConfig.Tracer = tracer
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	pgseed.Org(ctx, t, other, discoveryTestOrg, "community")
+	args := seedContentionRuns(t, ctx, other, 4)
+	oldest := args[0]
+	service, logs := newLoggedContentionDispatchService(t, pool)
+	installFakeSnapshotClock(t)
+
+	holder, err := other.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(context.Background()) }()
+	if !syncrunrollup.WakeDispatch(ctx, holder, oldest.RunID, time.Now().UTC(), syncrunrollup.DispatchWakePathHoldBack) {
+		t.Fatal("the hold-back wake of the oldest run armed nothing (the row is not held)")
+	}
+	var released error
+	tracer.release = func() { released = holder.Commit(ctx) }
+
+	errs := make([]error, len(args))
+	errs[0] = service.Dispatch(ctx, oldest)
+	if !gaveUpAtCommitSnapshot(errs[0]) {
+		t.Fatalf("oldest run's pass on a held row: %v, want %v naming %s", errs[0], ErrDispatchSyncRunUnavailable, commitSnapshotBusyReason)
+	}
+	if want := len(commitSnapshotLockBackoff) + 1; tracer.busyReads() != want {
+		t.Fatalf("commit snapshot 55P03 reads = %d, want %d (the wake held the row through the whole window)", tracer.busyReads(), want)
+	}
+	if released != nil {
+		t.Fatalf("end the wake's hold: %v", released)
+	}
+	if got := runStatus(t, ctx, other, oldest.RunID); got == syncRunStatusDispatching {
+		t.Fatal("the given-up pass committed")
+	}
+	if got := dispatchOutboxStatus(t, ctx, other, oldest.DispatchOutbox); got != "pending" {
+		t.Fatalf("oldest run's outbox row after the wake ended = %s, want pending (re-armed, deliverable)", got)
+	}
+
+	copy(errs[1:], runConcurrentDispatches(ctx, service, args[1:], 12*time.Second))
+	retryCommitSnapshotGiveUps(ctx, service, args, errs)
+	assertEveryRunReachesDispatching(t, ctx, pool, service, logs, args, errs)
+
+	var unitStatus, outboxStatus string
+	var outboxTransport *string
+	var attempts int64
+	if err := other.QueryRow(ctx, `
+SELECT u.status, o.status, o.dispatched_transport, o.attempts
+FROM sync_run_units u JOIN sync_dispatch_outbox o ON o.sync_run_id = u.sync_run_id AND o.kind = 'dispatch_sync_run'
+WHERE u.sync_run_id = $1::uuid`, oldest.RunID).Scan(&unitStatus, &outboxStatus, &outboxTransport, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if unitStatus == "planned" {
+		t.Errorf("oldest run's unit is still planned after the hold ended, want it claimed by the redelivered pass")
+	}
+	if outboxStatus != "dispatched" || outboxTransport == nil || *outboxTransport != "river" || attempts != oldest.Attempt()+1 {
+		t.Errorf("oldest run's outbox row = status %s transport %v attempts %d, want dispatched on river at attempt %d (delivered again)",
+			outboxStatus, outboxTransport, attempts, oldest.Attempt()+1)
+	}
 }
 
 // TestDispatchOfADeliveryAHoldBackWakeReArmedNamesDeliveryNotCurrent is the race

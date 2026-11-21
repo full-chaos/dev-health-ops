@@ -1,0 +1,3 @@
+kind: X
+metadata: {name: sm4}
+a: &a [{<<: {}}, {k: *a}]

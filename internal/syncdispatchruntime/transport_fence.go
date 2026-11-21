@@ -3,9 +3,17 @@ package syncdispatchruntime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 )
 
 // transportReferencePredicate is the start guard: the row is dispatched to
@@ -103,7 +111,70 @@ type transportFence struct {
 	args        Args
 	kind        string
 	unavailable error
+	logger      *synclog.Logger
 }
+
+// commitSnapshotWindow is the retry window of a fenced commit whose outbox row
+// another transaction holds (55P03). The usual holder is a wake of the same run
+// (an autocommit upsert of the row, CHAOS-14265), whose wall time measured
+// p99 = 5.2 ms (bigboy PG, 4-connection pool, 3 concurrent wakers, 200
+// samples). The window, 315 ms, is k = 60 times that p99. It is a deadline on
+// one monotonic clock, from the moment the first snapshot query is sent (after
+// its savepoint opened, so a slow first savepoint does not spend it); later
+// round trips, savepoints included, spend it. No query is sent at or after the
+// deadline; a query sent before it counts even when it returns after it, so
+// the true bound is "deadline + one in-flight read round trip". A variable so the tests can change it;
+// production never does.
+var commitSnapshotWindow = 315 * time.Millisecond
+
+// commitSnapshotLockBackoff is the wait before each re-read (cut short at the
+// deadline). Its sum, 310 ms, is below the window, so with fast reads the cap
+// of len(commitSnapshotLockBackoff)+1 = 7 reads ends the window first. A
+// variable so the tests can change it; production never does.
+var commitSnapshotLockBackoff = []time.Duration{
+	5 * time.Millisecond, 10 * time.Millisecond, 20 * time.Millisecond,
+	40 * time.Millisecond, 80 * time.Millisecond, 155 * time.Millisecond,
+}
+
+// commitSnapshotClock is the retry window's clock (Go's time.Now carries a
+// monotonic reading). A variable so the tests can inject one; production never
+// changes it.
+var commitSnapshotClock = struct {
+	now   func() time.Time
+	sleep func(ctx context.Context, wait time.Duration) error
+}{now: time.Now, sleep: sleepContext}
+
+func sleepContext(ctx context.Context, wait time.Duration) error {
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// commitSnapshotReadMayStart is the deadline rule: a read is sent only when it
+// starts before the deadline.
+func commitSnapshotReadMayStart(start, deadline time.Time) bool {
+	return start.Compare(deadline) < 0
+}
+
+// commitSnapshotReadCounts is the in-flight rule, in this one place: a
+// successful read counts when it STARTED before the deadline, even when it
+// finished after it (a NOWAIT read is not cut mid-flight).
+func commitSnapshotReadCounts(started, _ /* finished */, deadline time.Time) bool {
+	return commitSnapshotReadMayStart(started, deadline)
+}
+
+// FenceCommitSnapshotBusyCounter counts fenced commits that gave up because
+// the delivery's outbox row stayed held to the end of the retry window, with
+// the attributes kind (the outbox kind) and reason.
+const FenceCommitSnapshotBusyCounter = "sync_fence_commit_snapshot_busy_total"
+
+// commitSnapshotBusyReason names a fenced commit that gave up on a held row.
+const commitSnapshotBusyReason = "outbox_row_held_past_bound"
 
 // commitOutcome is a fenced commit's result: a refusal carries the reason and
 // the route generation from the same snapshot that refused it.
@@ -123,15 +194,16 @@ func (fence *transportFence) current(ctx context.Context, tx pgx.Tx) (bool, erro
 // commit commits tx only while the delivery is not superseded. A refusal
 // (committed false, nil error) commits nothing: the caller's deferred Rollback
 // discards the pass and releases the row. A row held by another transaction
-// (SQLSTATE 55P03) or any read error returns the service's unavailable error,
-// so River retries the same delivery.
+// (SQLSTATE 55P03) is read again within commitSnapshotLockBackoff; a row still
+// held after it, or any other read error, returns the service's unavailable
+// error, so River retries the same delivery.
 func (fence *transportFence) commit(ctx context.Context, tx pgx.Tx) (commitOutcome, error) {
 	if fence == nil {
 		return commitOutcome{committed: true}, tx.Commit(ctx)
 	}
-	snapshot, err := readCommitSnapshot(ctx, tx, fence.args, fence.kind)
+	snapshot, err := fence.lockCommitSnapshot(ctx, tx)
 	if err != nil {
-		return commitOutcome{}, fence.unavailable
+		return commitOutcome{}, err
 	}
 	commit, reason := decideCommit(snapshot, fence.args.RouteGeneration(), fence.args.Attempt())
 	if !commit {
@@ -141,6 +213,94 @@ func (fence *transportFence) commit(ctx context.Context, tx pgx.Tx) (commitOutco
 		return commitOutcome{}, fence.unavailable
 	}
 	return commitOutcome{committed: true}, nil
+}
+
+// lockCommitSnapshot reads the commit snapshot inside a savepoint. A 55P03
+// aborts only the savepoint: it is rolled back, and after the next backoff step
+// the snapshot is read again, never reused. NOWAIT stays, so the pass still
+// adds no wait-for edge; it only polls. The deadline is checked after each
+// savepoint opens, right before its query: a savepoint that opens at or after
+// it is rolled back and no query is sent. On success the savepoint is released
+// and the row lock stays with the pass to its COMMIT. The window ends at the
+// read cap or at the deadline, whichever comes first; then the pass gives up.
+func (fence *transportFence) lockCommitSnapshot(ctx context.Context, tx pgx.Tx) (commitSnapshot, error) {
+	clock := commitSnapshotClock
+	var deadline time.Time
+	var lastErr error
+	maxReads := len(commitSnapshotLockBackoff) + 1
+	for read := 1; ; read++ {
+		savepoint, err := tx.Begin(ctx)
+		if err != nil {
+			return commitSnapshot{}, fence.unavailable
+		}
+		queryStart := clock.now()
+		if read == 1 {
+			deadline = queryStart.Add(commitSnapshotWindow)
+		} else if !commitSnapshotReadMayStart(queryStart, deadline) {
+			if rollbackErr := savepoint.Rollback(ctx); rollbackErr != nil {
+				return commitSnapshot{}, fence.unavailable
+			}
+			return commitSnapshot{}, fence.commitSnapshotBusy(ctx, read-1, lastErr)
+		}
+		snapshot, err := readCommitSnapshot(ctx, savepoint, fence.args, fence.kind)
+		if err == nil {
+			if !commitSnapshotReadCounts(queryStart, clock.now(), deadline) {
+				if rollbackErr := savepoint.Rollback(ctx); rollbackErr != nil {
+					return commitSnapshot{}, fence.unavailable
+				}
+				return commitSnapshot{}, fence.commitSnapshotBusy(ctx, read, nil)
+			}
+			if err := savepoint.Commit(ctx); err != nil {
+				return commitSnapshot{}, fence.unavailable
+			}
+			return snapshot, nil
+		}
+		if !isLockNotAvailable(err) {
+			return commitSnapshot{}, fence.unavailable
+		}
+		if rollbackErr := savepoint.Rollback(ctx); rollbackErr != nil {
+			return commitSnapshot{}, fence.unavailable
+		}
+		if read >= maxReads {
+			return commitSnapshot{}, fence.commitSnapshotBusy(ctx, read, err)
+		}
+		lastErr = err
+		if remaining := deadline.Sub(clock.now()); remaining > 0 {
+			if clock.sleep(ctx, min(commitSnapshotLockBackoff[read-1], remaining)) != nil {
+				return commitSnapshot{}, fence.unavailable
+			}
+		}
+	}
+}
+
+// commitSnapshotBusy reports a fenced commit that gave up on a held outbox row and returns its error: the service's
+// unavailable error naming the reason.
+func (fence *transportFence) commitSnapshotBusy(ctx context.Context, reads int, err error) error {
+	fence.reportCommitSnapshotBusy(ctx, reads, commitSnapshotWindow, err)
+	return fmt.Errorf("%w: commit snapshot: %s (SQLSTATE 55P03 after %d reads in a %s window)",
+		fence.unavailable, commitSnapshotBusyReason, reads, commitSnapshotWindow)
+}
+
+// reportCommitSnapshotBusy counts and logs one fenced commit that gave up on a held outbox row.
+func (fence *transportFence) reportCommitSnapshotBusy(ctx context.Context, tries int, bound time.Duration, err error) {
+	if counter, counterErr := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime").Int64Counter(
+		FenceCommitSnapshotBusyCounter,
+		metric.WithUnit("{delivery}"),
+		metric.WithDescription("fenced commits that gave up because another transaction held the delivery's outbox row past the retry bound, by outbox kind and reason")); counterErr == nil {
+		counter.Add(ctx, 1, metric.WithAttributes(attribute.String("kind", fence.kind), attribute.String("reason", commitSnapshotBusyReason)))
+	}
+	fence.logger.Warn(ctx, synclog.MsgSyncDispatchCommitSnapshotBusy,
+		synclog.Run(synclog.ParseID(fence.args.SyncRunID())),
+		synclog.Text(synclog.KeyOutboxKind, synclog.ParseLabel(fence.kind)),
+		synclog.Text(synclog.KeyReason, synclog.ParseLabel(commitSnapshotBusyReason)),
+		synclog.Count(synclog.KeyTries, tries),
+		synclog.Elapsed(synclog.KeyLockWaitBudget, bound),
+		synclog.Failure(err))
+}
+
+func isLockNotAvailable(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "55P03"
 }
 
 // readCommitSnapshot runs commitSnapshotSQL for one delivery: it locks the outbox row and returns the images

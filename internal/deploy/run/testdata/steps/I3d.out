@@ -1,0 +1,6 @@
+DEPLOY acme-app -n acme from /srv/example/deploy-a at acbb07b7df1d
+values pair sha ok
+helm upgrade started
+fork done marker set
+wait for the done marker in the wait phase
+pid 889029 log /srv/example/work/acme-app-s7/deploy.log

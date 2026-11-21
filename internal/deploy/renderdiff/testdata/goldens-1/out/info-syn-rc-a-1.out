@@ -1,0 +1,3 @@
+render A: helm rc=1 docs=4
+render B: helm rc=0 docs=4
+FULL RENDER DIFF: STOP (render floor: render A: helm rc=1)

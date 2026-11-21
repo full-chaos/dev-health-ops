@@ -3242,8 +3242,8 @@ const registeredInvestmentBreakdownDocument = `query InvestmentBreakdown($orgId:
 // TEAM or REPO, exactly one id), so each needs its own name and therefore its own digest. Neither has a legacy text:
 // no client ever sent the V1 text under these names.
 //
-// Since CHAOS-12999 each also selects evidenceQualityStats.sizedUnitCount; the text before it is kept as a V1 legacy
-// document (below) so acr's pinned digest keeps working. Nothing else differs. The analytics resolver already applies the batch scope: TEAM weights each repository by the
+// Since CHAOS-12999 each also selects evidenceQualityStats.sizedUnitCount; the text before it is retired (a request
+// with it gets 404 UNREGISTERED_DOCUMENT). Nothing else differs. The analytics resolver already applies the batch scope: TEAM weights each repository by the
 // team's owner share (teamscope.RepoShare), REPO filters on repo_id. These documents add no resolver, schema, scope or
 // class-gate behaviour: the root is `analytics`, so the MCP class row is mcp:analytics, as for investmentBreakdown.
 //
@@ -3276,33 +3276,6 @@ const registeredInvestmentBreakdownTeamDocument = `query InvestmentBreakdownTeam
   }
 }`
 
-// registeredInvestmentBreakdownTeamV1Document is the InvestmentBreakdownTeam text before CHAOS-12999 (no sizedUnitCount). acr pinned
-// it by digest, so it stays accepted under the same operation until acr has refreshed its catalogue.
-const registeredInvestmentBreakdownTeamV1Document = `query InvestmentBreakdownTeam($orgId: String!, $batch: AnalyticsRequestInput!) {
-  analytics(orgId: $orgId, batch: $batch) {
-    breakdowns {
-      dimension
-      measure
-      items {
-        key
-        value
-        __typename
-      }
-      __typename
-    }
-    evidenceQualityDistribution
-    evidenceQualityStats {
-      mean
-      stddev
-      total
-      bandCounts
-      uncategorizedCount
-      __typename
-    }
-    __typename
-  }
-}`
-
 // registeredInvestmentBreakdownRepositoryDocument: see registeredInvestmentBreakdownTeamDocument above.
 const registeredInvestmentBreakdownRepositoryDocument = `query InvestmentBreakdownRepository($orgId: String!, $batch: AnalyticsRequestInput!) {
   analytics(orgId: $orgId, batch: $batch) {
@@ -3324,33 +3297,6 @@ const registeredInvestmentBreakdownRepositoryDocument = `query InvestmentBreakdo
       bandCounts
       uncategorizedCount
       sizedUnitCount
-      __typename
-    }
-    __typename
-  }
-}`
-
-// registeredInvestmentBreakdownRepositoryV1Document is the InvestmentBreakdownRepository text before CHAOS-12999 (no sizedUnitCount). acr pinned
-// it by digest, so it stays accepted under the same operation until acr has refreshed its catalogue.
-const registeredInvestmentBreakdownRepositoryV1Document = `query InvestmentBreakdownRepository($orgId: String!, $batch: AnalyticsRequestInput!) {
-  analytics(orgId: $orgId, batch: $batch) {
-    breakdowns {
-      dimension
-      measure
-      items {
-        key
-        value
-        __typename
-      }
-      __typename
-    }
-    evidenceQualityDistribution
-    evidenceQualityStats {
-      mean
-      stddev
-      total
-      bandCounts
-      uncategorizedCount
       __typename
     }
     __typename
@@ -3385,34 +3331,6 @@ const registeredTeamWorkItemBreakdownDocument = `query TeamWorkItemBreakdown($or
       bandCounts
       uncategorizedCount
       sizedUnitCount
-      __typename
-    }
-    __typename
-  }
-}`
-
-// registeredTeamWorkItemBreakdownV1Document is the TeamWorkItemBreakdown text before it selected sizedUnitCount (as
-// registered by CHAOS-13017 and sent by web's TEAM_WORK_ITEM_BREAKDOWN_QUERY). It stays accepted under the same
-// operation until every client sends the current text.
-const registeredTeamWorkItemBreakdownV1Document = `query TeamWorkItemBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) {
-  analytics(orgId: $orgId, batch: $batch) {
-    breakdowns {
-      dimension
-      measure
-      items {
-        key
-        value
-        __typename
-      }
-      __typename
-    }
-    evidenceQualityDistribution
-    evidenceQualityStats {
-      mean
-      stddev
-      total
-      bandCounts
-      uncategorizedCount
       __typename
     }
     __typename
@@ -6591,7 +6509,12 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 
 	// One posture check per process: it proves the role in the background from here
 	// on, and both the combined check and the per-class probes read its last answer.
-	posture := queryAPIPostureCheck(getenv, pgPool)
+	posture, stopPosture := queryAPIPostureCheck(getenv, pgPool)
+	// closeRoute stops the posture check (its running execution ends and logs) before the pool it runs on closes.
+	closeRoute := func() {
+		stopPosture()
+		pgPool.Close()
+	}
 	// CHAOS-7831: ONE class-row switch for the MCP listener and the named-operation route (:8091), so a root's class row is one decision.
 	classSwitch := newClassRowSwitch(pgPool)
 	// CHAOS-6263 PR (a): /query's edge-access-token carrier, built once
@@ -6604,12 +6527,12 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	// JWKS check in buildQueryRoute.
 	edgeAuth, edgeStore, err := buildQueryEdgeAuthenticatorFromEnv(getenv, pgPool)
 	if err != nil {
-		pgPool.Close()
+		closeRoute()
 		return queryRouteHandlers{}, nil, nil, fmt.Errorf("query-api: edge authenticator: %w", err)
 	}
 	handler, proofHandler, proofWriteHandler, registryHandler, err := newQueryHandlerWithEdge(analytics.PinInvestmentMembershipScope(chClient), pgPool, verifier, schemaDigest, getenv, edgeAuth, edgeStore, classSwitch)
 	if err != nil {
-		pgPool.Close()
+		closeRoute()
 		return queryRouteHandlers{}, nil, nil, err
 	}
 	// CHAOS-7085/CHAOS-7091: the MCP caller class gets its OWN ClickHouse
@@ -6617,7 +6540,7 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	// its OWN routing rows (one class row per allowlisted root field).
 	mcpClient, err := newMCPClickHouseClient(cfg.ClickHouseURI)
 	if err != nil {
-		pgPool.Close()
+		closeRoute()
 		return queryRouteHandlers{}, nil, nil, fmt.Errorf("query-api: build the MCP caller-class ClickHouse client: %w", err)
 	}
 	mcpHandler := newMCPHandler(mcpClient, pgPool, classSwitch, getenv)
@@ -6635,7 +6558,7 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	handlers.RegistryPool = pgPool
 	// Set outside the literal for the same reason (the literal's shape is pinned): the class-gated alias of the serving handler.
 	handlers.RunOperation = markClassGated(handler)
-	cleanup := func() { pgPool.Close() }
+	cleanup := closeRoute
 	// CHAOS-6803/CHAOS-6804: a deployment that names query-api's role
 	// (QUERY_API_DATABASE_ROLE) is not ready until the pool logs in AS that role
 	// and the role holds exactly the query-api manifest the migration leg
@@ -6737,7 +6660,8 @@ func readinessProbes(chClient readinessPinger, pgPool readinessPinger, verifier 
 // queryAPIPostureCheck returns the readiness check for query-api's Postgres role
 // posture, or nil when the deployment names no query-api role
 // (QUERY_API_DATABASE_ROLE unset or blank): such a deployment has not opted in
-// and is checked for nothing extra.
+// and is checked for nothing extra. The second result stops the background
+// check; the owner calls it before it closes pgPool.
 //
 // The whole-catalog posture query takes 1.4-1.9 s on the production catalog
 // (CHAOS-6765), longer than the kubelet's 2 s probe timeout, and the readiness
@@ -6746,7 +6670,7 @@ func readinessProbes(chClient readinessPinger, pgPool readinessPinger, verifier 
 // the role in the BACKGROUND at construction (process start, before readiness
 // can flip: an unproven role is not ready) and /readyz reads the last answer
 // without waiting (CachedPostureCheck.CheckNoWait).
-func queryAPIPostureCheck(getenv getenvFunc, pgPool *pgxpool.Pool) func(context.Context) error {
+func queryAPIPostureCheck(getenv getenvFunc, pgPool *pgxpool.Pool) (func(context.Context) error, func()) {
 	return queryAPIPostureCheckWith(getenv, pgPool, postgresstore.PostureCheckOptions{})
 }
 
@@ -6758,22 +6682,22 @@ func queryAPIPostureCheck(getenv getenvFunc, pgPool *pgxpool.Pool) func(context.
 // no-wait read).
 func queryAPIPostureCheckWith(
 	getenv getenvFunc, pgPool *pgxpool.Pool, options postgresstore.PostureCheckOptions,
-) func(context.Context) error {
+) (func(context.Context) error, func()) {
 	role := strings.TrimSpace(getenv("QUERY_API_DATABASE_ROLE"))
 	if role == "" {
-		return nil
+		return nil, func() {}
 	}
 	options.Logger = slog.Default()
 	sessions, err := queryAPISessionRead(getenv)
 	if err != nil {
 		// An unreadable flag or schema must never weaken the proof: not ready.
-		return func(context.Context) error { return err }
+		return func(context.Context) error { return err }, func() {}
 	}
 	cached := postgresstore.NewCachedQueryAPIPostureCheckWithSessions(
 		pgPool, role, queryAPIRiverSchema(getenv), sessions, options,
 	)
 	cached.Warm()
-	return func(context.Context) error { return cached.CheckNoWait() }
+	return func(context.Context) error { return cached.CheckNoWait() }, cached.Close
 }
 
 // queryAPISessionRead is the auth read the role must hold while auth-service
@@ -7563,32 +7487,29 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 // digestByOperation. The literal below is cmd/registrydump's second parse target: keep its exact shape
 // (`"<operation>": {digestHex(<constIdent>), ...}`). Empty = every operation accepts one text.
 var legacyDigestsByOperation = map[string][]string{
-	"testOpsPipeline":               {digestHex(registeredTestOpsPipelineV1Document), digestHex(registeredTestOpsPipelineV2Document)},
-	"testOpsCoverage":               {digestHex(registeredTestOpsCoverageV1Document), digestHex(registeredTestOpsCoverageV2Document)},
-	"testopsJobFailures":            {digestHex(registeredTestopsJobFailuresV1Document)},
-	"testopsTestWindow":             {digestHex(registeredTestopsTestWindowV1Document), digestHex(registeredTestopsTestWindowV2Document)},
-	"testopsRisk":                   {digestHex(registeredTestopsRiskV1Document), digestHex(registeredTestopsRiskV2Document)},
-	"dataHealthIdentity":            {digestHex(registeredDataHealthIdentityV1Document)},
-	"aiGovernanceSummary":           {digestHex(registeredAiGovernanceSummaryV1Document)},
-	"aiAttributionOverview":         {digestHex(registeredAiAttributionOverviewV1Document)},
-	"aiAttributedPrs":               {digestHex(registeredAiAttributedPrsV1Document)},
-	"aiImpactSummary":               {digestHex(registeredAiImpactSummaryV1Document)},
-	"aiOpportunities":               {digestHex(registeredAiOpportunitiesV1Document)},
-	"aiWorkflowDrilldown":           {digestHex(registeredAiWorkflowDrilldownV1Document)},
-	"capacityForecast":              {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
-	"compoundingRisk":               {digestHex(registeredCompoundingRiskV1Document)},
-	"coverageScopeBaseline":         {digestHex(registeredCoverageScopeBaselineV1Document)},
-	"hotspots":                      {digestHex(registeredHotspotsV1Document)},
-	"home":                          {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document), digestHex(registeredHomeV5Document), digestHex(registeredHomeV6Document), digestHex(registeredHomeV7Document), digestHex(registeredHomeV8Document), digestHex(registeredHomeV9Document), digestHex(registeredHomeV10Document), digestHex(registeredHomeV11Document), digestHex(registeredHomeV12Document), digestHex(registeredHomeV13Document)},
-	"improveOpportunities":          {digestHex(registeredImproveOpportunitiesV1Document), digestHex(registeredImproveOpportunitiesV2Document)},
-	"operatingReview":               {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document), digestHex(registeredOperatingReviewV3Document), digestHex(registeredOperatingReviewV4Document), digestHex(registeredOperatingReviewV5Document), digestHex(registeredOperatingReviewV6Document)},
-	"reviewEdges":                   {digestHex(registeredReviewEdgesV1Document)},
-	"investmentFull":                {digestHex(registeredInvestmentFullV1Document)},
-	"investmentBreakdown":           {digestHex(registeredInvestmentBreakdownV1Document)},
-	"investmentBreakdownTeam":       {digestHex(registeredInvestmentBreakdownTeamV1Document)},
-	"investmentBreakdownRepository": {digestHex(registeredInvestmentBreakdownRepositoryV1Document)},
-	"teamWorkItemBreakdown":         {digestHex(registeredTeamWorkItemBreakdownV1Document)},
-	"throughputForecast":            {digestHex(registeredThroughputForecastV1Document), digestHex(registeredThroughputForecastV2Document)},
+	"testOpsPipeline":       {digestHex(registeredTestOpsPipelineV1Document), digestHex(registeredTestOpsPipelineV2Document)},
+	"testOpsCoverage":       {digestHex(registeredTestOpsCoverageV1Document), digestHex(registeredTestOpsCoverageV2Document)},
+	"testopsJobFailures":    {digestHex(registeredTestopsJobFailuresV1Document)},
+	"testopsTestWindow":     {digestHex(registeredTestopsTestWindowV1Document), digestHex(registeredTestopsTestWindowV2Document)},
+	"testopsRisk":           {digestHex(registeredTestopsRiskV1Document), digestHex(registeredTestopsRiskV2Document)},
+	"dataHealthIdentity":    {digestHex(registeredDataHealthIdentityV1Document)},
+	"aiGovernanceSummary":   {digestHex(registeredAiGovernanceSummaryV1Document)},
+	"aiAttributionOverview": {digestHex(registeredAiAttributionOverviewV1Document)},
+	"aiAttributedPrs":       {digestHex(registeredAiAttributedPrsV1Document)},
+	"aiImpactSummary":       {digestHex(registeredAiImpactSummaryV1Document)},
+	"aiOpportunities":       {digestHex(registeredAiOpportunitiesV1Document)},
+	"aiWorkflowDrilldown":   {digestHex(registeredAiWorkflowDrilldownV1Document)},
+	"capacityForecast":      {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
+	"compoundingRisk":       {digestHex(registeredCompoundingRiskV1Document)},
+	"coverageScopeBaseline": {digestHex(registeredCoverageScopeBaselineV1Document)},
+	"hotspots":              {digestHex(registeredHotspotsV1Document)},
+	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document), digestHex(registeredHomeV5Document), digestHex(registeredHomeV6Document), digestHex(registeredHomeV7Document), digestHex(registeredHomeV8Document), digestHex(registeredHomeV9Document), digestHex(registeredHomeV10Document), digestHex(registeredHomeV11Document), digestHex(registeredHomeV12Document), digestHex(registeredHomeV13Document)},
+	"improveOpportunities":  {digestHex(registeredImproveOpportunitiesV1Document), digestHex(registeredImproveOpportunitiesV2Document)},
+	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document), digestHex(registeredOperatingReviewV3Document), digestHex(registeredOperatingReviewV4Document), digestHex(registeredOperatingReviewV5Document), digestHex(registeredOperatingReviewV6Document)},
+	"reviewEdges":           {digestHex(registeredReviewEdgesV1Document)},
+	"investmentFull":        {digestHex(registeredInvestmentFullV1Document)},
+	"investmentBreakdown":   {digestHex(registeredInvestmentBreakdownV1Document)},
+	"throughputForecast":    {digestHex(registeredThroughputForecastV1Document), digestHex(registeredThroughputForecastV2Document)},
 }
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's

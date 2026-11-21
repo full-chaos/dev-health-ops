@@ -7,7 +7,7 @@ import (
 
 // CHAOS-8863: the work item metric source of /explain takes the org view with row_view in its natural key.
 func TestMetricFromClauseOfWorkItemMetricsTakesTheOrgView(t *testing.T) {
-	clause := metricFromClause("work_item_metrics_daily", "items_completed", "AND team_id = {team_id:String}", "start_day", "end_day")
+	clause := metricFromClause("work_item_metrics_daily", "items_completed", "AND team_id = {team_id:String}", "start_day", "end_day", false)
 	if !strings.Contains(clause, "(work_item_metrics_daily.row_view IN ('', 'org'))") {
 		t.Errorf("no org view predicate in the source: %s", clause)
 	}
@@ -17,7 +17,7 @@ func TestMetricFromClauseOfWorkItemMetricsTakesTheOrgView(t *testing.T) {
 }
 
 func TestMetricFromClauseOfStateDurationsTakesTheOrgView(t *testing.T) {
-	clause := metricFromClause("work_item_state_durations_daily", "duration_hours", "AND team_id = {team_id:String}", "start_day", "end_day")
+	clause := metricFromClause("work_item_state_durations_daily", "duration_hours", "AND team_id = {team_id:String}", "start_day", "end_day", false)
 	if !strings.Contains(clause, "(work_item_state_durations_daily.row_view IN ('', 'org'))") {
 		t.Errorf("no org view predicate in the source: %s", clause)
 	}

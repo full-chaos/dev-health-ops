@@ -1,2 +1,21 @@
-internal/fixturescli	539
-split-by-test	2
+# CHAOS-14432: rows = ceil of the largest measured elapsed of 3 main runs (tests >= 5 s). The weight is the rows + the unlisted tests + 190 s per part (3 parts): every part runs the untagged names (tag-only hook) and pays the setup, which the rows do not show (observed part 460-640 s against 260 s of its own rows). This makes the three parts weigh about 515 s each so the plan does not put a second heavy unit beside one.
+internal/fixturescli	1474
+split-by-test	3
+TestProviderWorldsAreWhatTheProducersWrite	213
+TestLoadSyntheticIncidentsIntoAHeadSchema	203
+TestCrossProviderAttributionMatrix	145
+TestLoadWorldReproducesTheRecordedCapture	114
+TestLoadWorldStampsServerStampedColumnsAtLoadTime	32
+TestGitHubIssueTakesItsLinkedPullRequestsRepoOwnerInTheRealWorld	26
+TestGenerateVerbLoadsTheWorldForTheCallersOrganization	25
+TestGenerateVerbRefusesANonUTCServer	18
+TestAfterCaptureRulesCatchPlantedDefectsOnALiveClickHouse	14
+TestDemoWorldEveryTeamHasInvestmentStages	13
+TestStopMergesStopsOnlyTheRefreshesOfItsOwnDatabase	10
+TestFinalizeSyntheticWritesTheFrozenPythonRows	9
+TestDemoWorldIssueSizeIsTheSumOfTheUnitIssuesStoryPoints	8
+TestLoadSyntheticInsertsTheFrozenRows	8
+TestFinalizeSyntheticVerbFinalizesARunFromTheEnvironment	7
+TestStopMergesStopsOnlyTheMergesOfItsOwnDatabase	7
+TestDemoWorldHoldsTheO4OracleShapes	6
+TestDemoWorldOnlyTheTerseStoriesFallToTheEvidenceGate	6

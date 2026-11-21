@@ -34,7 +34,13 @@ func newLinkChangeOrg(t *testing.T, conn driver.Conn) *linkChangeOrg {
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
-	now := time.Now().UTC()
+	// Noon of a UTC day that has already started: every offset of a few
+	// minutes or an hour from org.now stays inside the same org day, whatever
+	// the wall clock reads (a run between 00:00Z and 01:00Z included).
+	now := time.Now().UTC().Truncate(24 * time.Hour).Add(12 * time.Hour)
+	if now.After(time.Now().UTC()) {
+		now = now.Add(-24 * time.Hour)
+	}
 	org := &linkChangeOrg{
 		t: t, ctx: context.Background(), conn: conn, writer: writer,
 		orgID: "org-link-change-" + uuid.NewString(), now: now, setup: now.Add(-72 * time.Hour),

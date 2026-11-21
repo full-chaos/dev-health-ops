@@ -1,0 +1,4 @@
+render A: helm rc=0 docs=4
+render B: helm rc=0 docs=1
+DUPLICATE name A in Deployment/svc .spec.template.spec.containers[0].env (render B)
+FULL RENDER DIFF: STOP (duplicate names)

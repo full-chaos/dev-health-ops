@@ -192,9 +192,9 @@ func (handler GitLabPullRequestRouteHandler) Collect(
 		reviews = append(reviews, reviewFetch.Rows...)
 		// The same list item feeds the detector the work-items route runs
 		// over merge requests, so no extra request is made.
-		var workItemPayload gitlabMergeRequestWorkItemPayload
-		if json.Unmarshal(raw, &workItemPayload) != nil {
-			return providerfoundation.ErrNormalizationInvalid
+		workItemPayload, err := decodeGitLabMergeRequestWorkItem(raw)
+		if err != nil {
+			return providerfoundation.RouteFailure(gitlabMergeRequestsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		mergeRequestAttributions, err := normalizeGitLabMRAIAttributions(
 			claim, repoUUID, workItemPayload, normalizedAt,

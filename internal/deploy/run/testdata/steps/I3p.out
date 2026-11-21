@@ -1,0 +1,4 @@
+docs (non-Secret): A 64, B 64; mode r7; expected image rows 1; added docs expected 0
+ROW Deployment/acme-app-web .spec.template.spec.containers[0].image ec964d3d4496 -> eba592913bcb
+EXTRA rows: 0; MISSING rows: 0
+RENDER PATHS: PASS

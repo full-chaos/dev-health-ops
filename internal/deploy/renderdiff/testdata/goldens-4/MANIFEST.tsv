@@ -1,0 +1,1 @@
+rows-oldint	1	a96bde3f5d49f6a9877872179e0edef4ef70d419ab17930b24d495e1436a18f7	a556b64e3a41d6f0f68c95b90e9bc8af3badfcc020834c0c039f5523db570f4e	d-a.yaml d-b.yaml --rc-a 0 --rc-b 0 --expect-rows rows-oldint.json	TypeError@sig

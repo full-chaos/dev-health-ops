@@ -14,9 +14,12 @@ import (
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 )
 
 type ReportDefinition struct {
@@ -59,7 +62,11 @@ WHERE report.id = $1::uuid AND run.id = $2::uuid
 	if err != nil {
 		return ReportDefinition{}, fmt.Errorf("load saved report: %w", ErrDependencyUnavailable)
 	}
-	return decodeReportDefinition(input.ReportID, organizationID, planJSON, parametersJSON, loader.now().UTC())
+	definition, err := decodeReportDefinition(input.ReportID, organizationID, planJSON, parametersJSON, loader.now().UTC())
+	if err == nil {
+		warnUnknownConfidence(ctx, definition.Plan.PlanID, definition.Plan.ConfidenceThreshold)
+	}
+	return definition, err
 }
 
 type wirePlan struct {
@@ -92,6 +99,50 @@ type wireChartSpec struct {
 	TimeRangeEnd   string   `json:"time_range_end"`
 	Title          *string  `json:"title"`
 	OrganizationID string   `json:"org_id"`
+}
+
+// confidenceLevels are the confidence thresholds a plan names. A stored plan with another value still runs and the
+// footer shows it as stored (escaped); warnUnknownConfidence only tells an operator.
+var confidenceLevels = map[string]bool{"direct_fact": true, "inferred": true, "hypothesis": true}
+
+const unknownConfidenceCounterName = "dev_health_report_plan_unknown_confidence_total"
+
+var unknownConfidenceCounter = func() metric.Int64Counter {
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/jobs/report").Int64Counter(
+		unknownConfidenceCounterName,
+		metric.WithDescription("Report runs whose stored plan names a confidence level outside the known set."))
+	if err != nil {
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(unknownConfidenceCounterName)
+	}
+	return counter
+}()
+
+const unchartedStoredSpecCounterName = "dev_health_report_plan_uncharted_stored_spec_total"
+
+var unchartedStoredSpecCounter = func() metric.Int64Counter {
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/jobs/report").Int64Counter(
+		unchartedStoredSpecCounterName,
+		metric.WithDescription("Stored chart specs dropped at decode because their metric is not a registry key."))
+	if err != nil {
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(unchartedStoredSpecCounterName)
+	}
+	return counter
+}()
+
+// warnUnchartedStoredSpec logs one WARN (plan id and the reason, never the metric name) and counts a stored chart spec
+// whose metric is not an exact registry key. The run goes on and the report lists the name as uncharted.
+func warnUnchartedStoredSpec(planID string) {
+	slog.Warn("stored chart spec dropped", "plan_id", planID, "reason", unchartedNoMetric)
+	unchartedStoredSpecCounter.Add(context.Background(), 1)
+}
+
+// warnUnknownConfidence logs one WARN (plan id, never the value) and counts a stored plan whose confidence level is unknown.
+func warnUnknownConfidence(ctx context.Context, planID, level string) {
+	if confidenceLevels[level] {
+		return
+	}
+	slog.WarnContext(ctx, "unknown confidence level", "plan_id", planID)
+	unknownConfidenceCounter.Add(ctx, 1)
 }
 
 func decodeReportDefinition(
@@ -137,7 +188,7 @@ func decodeReportDefinition(
 	}
 	result := ReportDefinition{Plan: Plan{
 		PlanID: plan.PlanID, ReportType: plan.ReportType, Audience: plan.Audience,
-		ScopeTeams: append([]string(nil), plan.ScopeTeams...), ScopeRepos: append([]string(nil), plan.ScopeRepos...),
+		ScopeTeams: distinctTeamIDs(plan.ScopeTeams), ScopeRepos: append([]string(nil), plan.ScopeRepos...),
 		ScopeServices: append([]string(nil), plan.ScopeServices...), TimeRangeStart: plan.TimeRangeStart,
 		TimeRangeEnd: plan.TimeRangeEnd, ComparisonPeriod: plan.ComparisonPeriod,
 		Sections: append([]string(nil), plan.Sections...), RequestedMetrics: append([]string(nil), plan.RequestedMetrics...),
@@ -146,6 +197,10 @@ func decodeReportDefinition(
 	}}
 	if result.Plan.ConfidenceThreshold == "" {
 		result.Plan.ConfidenceThreshold = "direct_fact"
+	}
+	named := map[string]bool{}
+	for _, entry := range uncharted {
+		named[entry.Label] = true
 	}
 	for _, chart := range plan.ChartSpecs {
 		groupBy, title := "", ""
@@ -164,15 +219,48 @@ func decodeReportDefinition(
 		if chart.OrganizationID != organizationID {
 			return ReportDefinition{}, ErrContractMismatch
 		}
+		if _, registered := supportedMetrics[chart.Metric]; !registered {
+			warnUnchartedStoredSpec(chart.PlanID)
+			if strings.TrimSpace(chart.Metric) != "" && !named[chart.Metric] {
+				named[chart.Metric] = true
+				result.Plan.UnchartedMetrics = append(result.Plan.UnchartedMetrics, UnchartedMetric{Label: chart.Metric, Reason: unchartedNoMetric})
+			}
+			continue
+		}
 		result.Charts = append(result.Charts, ChartSpec{
 			ChartID: chart.ChartID, PlanID: chart.PlanID, ChartType: chart.ChartType, Metric: chart.Metric,
-			GroupBy: groupBy, FilterTeams: append([]string(nil), chart.FilterTeams...),
+			GroupBy: groupBy, FilterTeams: distinctTeamIDs(chart.FilterTeams),
 			FilterRepos: append([]string(nil), chart.FilterRepos...), TimeRangeStart: chart.TimeRangeStart,
 			TimeRangeEnd: chart.TimeRangeEnd, Title: title, OrganizationID: chart.OrganizationID,
 		})
 	}
 	return result, nil
 }
+
+// distinctTeamIDs is a team filter as a set: each id once, in the order of its
+// first use, compared as the team_id IN predicate compares ids (exact strings; a
+// blank id is an id). The request's team filter is built here once, so the
+// one-team view gate, the SQL and the scope read the same set (CHAOS-14353).
+func distinctTeamIDs(ids []string) []string {
+	var out []string
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, repeated := seen[id]; repeated {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+const (
+	reportTypeWeeklyHealth  = "weekly_health"
+	reportTypeMonthlyReview = "monthly_review"
+)
+
+// builtinReportTypes holds every report type the product builds (defaultWirePlan); only these keys show title-cased.
+var builtinReportTypes = map[string]struct{}{reportTypeWeeklyHealth: {}, reportTypeMonthlyReview: {}}
 
 func defaultWirePlan(reportID, organizationID string, parameters map[string]any, now time.Time) wirePlan {
 	days := 7
@@ -186,9 +274,9 @@ func defaultWirePlan(reportID, organizationID string, parameters map[string]any,
 	}
 	end := now.Format(time.DateOnly)
 	start := now.AddDate(0, 0, -days).Format(time.DateOnly)
-	reportType, comparison := "weekly_health", "prior_week"
+	reportType, comparison := reportTypeWeeklyHealth, "prior_week"
 	if days > 7 {
-		reportType, comparison = "monthly_review", "prior_month"
+		reportType, comparison = reportTypeMonthlyReview, "prior_month"
 	}
 	plan := wirePlan{
 		PlanID: "auto-" + reportID, ReportType: reportType, Audience: "team_lead",
@@ -488,9 +576,15 @@ func (adapter *ClickHouseQueryAdapter) executeChart(ctx context.Context, spec Ch
 				return ChartResult{}, fmt.Errorf("scan report chart: %w", ErrDependencyUnavailable)
 			}
 			x = instant.Format(time.DateOnly)
-		} else if err := rows.Scan(&x, &group, &y); err != nil {
-			logChartFailure(ctx, spec, definition, "scan", err)
-			return ChartResult{}, fmt.Errorf("scan report chart: %w", ErrDependencyUnavailable)
+		} else {
+			var xValue *string
+			if err := rows.Scan(&xValue, &group, &y); err != nil {
+				logChartFailure(ctx, spec, definition, "scan", err)
+				return ChartResult{}, fmt.Errorf("scan report chart: %w", ErrDependencyUnavailable)
+			}
+			if xValue != nil {
+				x = *xValue
+			}
 		}
 		if y == nil {
 			continue
@@ -752,6 +846,9 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 	// alongside its earlier generation. A table with no known re-drive risk
 	// passes through unchanged.
 	source := sourceFrom(spec.Metric, definition)
+	if teamChart(spec, definition) {
+		source = teamDedupFromSource(definition.SourceTable)
+	}
 	if wholePersonLandscapeMetric(spec, definition) {
 		// A landscape point holds no repository (its repo_id is a constant
 		// placeholder), so a repository filter selects the person's user rows
@@ -933,6 +1030,20 @@ func sourceFrom(metric string, definition metricDefinition) string {
     ) AS %s`,
 		definition.Denominator, definition.Numerator, definition.Denominator,
 		metric, dedupSource, definition.SourceTable)
+}
+
+// teamChart reports whether a chart reads the team view (CHAOS-14353): a chart
+// filtered to exactly ONE team, of a table that holds team rows, whose team filter
+// is the stored team_id (no owner join), for one organization, of a metric read
+// straight from the table. A chart of several teams sums a team set and a chart
+// grouped by team shows a row per team: both stay on the org view here. The
+// filter is a set of distinct ids (decodeReportDefinition, distinctTeamIDs), so
+// a filter that repeats one id asks for one team.
+func teamChart(spec ChartSpec, definition metricDefinition) bool {
+	return len(spec.FilterTeams) == 1 && spec.GroupBy != "team" && spec.OrganizationID != "" &&
+		rowview.HasTeamRows(definition.SourceTable) && definition.hasDimension("team") &&
+		definition.ownersAsOf == nil && definition.pooled == nil &&
+		definition.Numerator == "" && definition.Denominator == ""
 }
 
 // dayColumn is the Date column of the metric's source table that time ranges

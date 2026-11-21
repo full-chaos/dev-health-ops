@@ -65,11 +65,11 @@ func postureLines(out string) (base string, pkgs []string) {
 	return base, pkgs
 }
 
-func TestPostureIntegrationListsTheFifteenPackagesOnATrigger(t *testing.T) {
+func TestPostureIntegrationListsTheSixteenPackagesOnATrigger(t *testing.T) {
 	root := repoRoot(t)
 	keys := postureKeys(t, root)
-	if len(keys) != 15 {
-		t.Fatalf("the posture list has %d packages, want 15", len(keys))
+	if len(keys) != 16 {
+		t.Fatalf("the posture list has %d packages, want 16", len(keys))
 	}
 	triggers := []string{
 		"internal/pgmigrate/sql/0158_x.sql", "internal/pgmigrate/baseline/head.json", "internal/pgmigrate/archive/sql/0139_x.sql", "internal/rivermigrate/x.go",
@@ -92,7 +92,7 @@ func TestPostureIntegrationListsTheFifteenPackagesOnATrigger(t *testing.T) {
 		}
 		sort.Strings(got)
 		if strings.Join(got, ",") != strings.Join(keys, ",") {
-			t.Fatalf("%s: listed %v, want all 15 %v", p, got, keys)
+			t.Fatalf("%s: listed %v, want all 16 %v", p, got, keys)
 		}
 	}
 }
@@ -153,8 +153,8 @@ func TestPostureIntegrationDefaultModePrintsTheBaseSha(t *testing.T) {
 		t.Fatalf("exit %d stderr=%q", res.code, res.stderr)
 	}
 	gotBase, pkgs := postureLines(res.stdout)
-	if gotBase != base || len(pkgs) != 15 {
-		t.Fatalf("BASE %q (want %q), %d packages (want 15)", gotBase, base, len(pkgs))
+	if gotBase != base || len(pkgs) != 16 {
+		t.Fatalf("BASE %q (want %q), %d packages (want 16)", gotBase, base, len(pkgs))
 	}
 }
 
@@ -325,7 +325,7 @@ func TestPostureIntegrationRunIgnoresARunnerOverrideInTheEnvironment(t *testing.
 	res := cmdSpec{dir: repo, env: []string{shimBasePath(), "POSTURE_CAPPED_SH=/bin/true"}}.run("bash", filepath.Join(repoRoot(t), "ci", "posture_integration.sh"), "--run")
 	missing := res.code == 3 && (strings.Contains(res.stderr, "runner not found") || strings.Contains(res.stderr, "go not found") || strings.Contains(res.stderr, "not the one committed at HEAD"))
 	named := strings.Contains(res.stdout, "runner=/home/ubuntu/devhealth/scripts/capped.sh sha256=")
-	if res.code == 0 || strings.Contains(res.stdout, " PASS ") || strings.Contains(res.stdout, "pass=15") || !(missing || named) {
+	if res.code == 0 || strings.Contains(res.stdout, " PASS ") || strings.Contains(res.stdout, "pass=16") || !(missing || named) {
 		t.Fatalf("env runner override: exit %d stdout=%q stderr=%q, want non-zero, no PASS, and either the missing-runner exit 3 or the real capped.sh named with its sha256", res.code, res.stdout, res.stderr)
 	}
 }
@@ -363,8 +363,8 @@ func TestPostureIntegrationListsAFileMovedOutOfAPosturePath(t *testing.T) {
 	git("mv", "internal/storage/postgres/posture_probe.go", "internal/storage/clickhouse/probe.go")
 	git("commit", "-q", "-m", "move out")
 	res := cmdSpec{dir: repo, env: []string{shimBasePath()}}.run("bash", filepath.Join(repoRoot(t), "ci", "posture_integration.sh"))
-	if _, pkgs := postureLines(res.stdout); res.code != 0 || len(pkgs) != 15 {
-		t.Fatalf("a file moved out of a posture path: exit %d stdout=%q, want the 15 packages", res.code, res.stdout)
+	if _, pkgs := postureLines(res.stdout); res.code != 0 || len(pkgs) != 16 {
+		t.Fatalf("a file moved out of a posture path: exit %d stdout=%q, want the 16 packages", res.code, res.stdout)
 	}
 }
 
@@ -1068,4 +1068,166 @@ func TestPostureIntegrationStubRunHandlesADashRelativeTmpdir(t *testing.T) {
 		t.Fatalf("no go on PATH: exit %d stderr=%q, want exit 3 and go not found", res.code, res.stderr)
 	}
 	requireEmptyDir(t, scratch, "a dash-relative TMPDIR after a failing exit")
+}
+
+// The host go-guard shim is first on PATH and is not a toolchain: --run must find the real go behind it by identity (the shim
+// file says "# go-guard shim" on line 2) and must refuse an un-capped run only while the shim is in play.
+func postureFakeShim(t *testing.T) (shimDir string) {
+	t.Helper()
+	shimDir = t.TempDir()
+	body := "#!/usr/bin/env bash\n# go-guard shim: test double, it must never run\necho \"fake go-guard ran\" >&2\nexit 96\n"
+	if err := os.WriteFile(filepath.Join(shimDir, "go"), []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return shimDir
+}
+
+func postureShimRun(t *testing.T, f postureFixture, path string, extraArgs []string, extraEnv ...string) cmdResult {
+	t.Helper()
+	paths := filepath.Join(t.TempDir(), "changed.txt")
+	if err := os.WriteFile(paths, []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := append(append(isolatedGoEnv(t), "PATH="+path), extraEnv...)
+	return cmdSpec{dir: f.dir, env: env}.run("bash", append([]string{filepath.Join(f.dir, "ci", "posture_integration.sh"), "--run", "--paths", paths}, extraArgs...)...)
+}
+
+func TestPostureIntegrationShimFirstOnPathResolvesTheRealGo(t *testing.T) {
+	f := postureDemo(t)
+	pass := filepath.Join(t.TempDir(), "runner.sh")
+	if err := os.WriteFile(pass, []byte("#!/bin/sh\nshift 5\nexec \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := postureFakeShim(t) + string(os.PathListSeparator) + filepath.Dir(goBinary(t)) + string(os.PathListSeparator) + "/usr/bin:/bin"
+	res := postureShimRun(t, f, path, []string{"--test-runner", pass})
+	if res.code != 5 || strings.Contains(res.stderr, "fake go-guard ran") || strings.Contains(res.stderr, "cannot resolve the go toolchain") || postureRow(res, "SIMULATED-HEAD ") == "" {
+		t.Fatalf("shim first on PATH: exit %d stdout=%q stderr=%q, want the real go resolved and a simulated head", res.code, res.stdout, res.stderr)
+	}
+}
+
+func TestPostureIntegrationShimWithoutCappedIsRefused(t *testing.T) {
+	f := postureDemo(t)
+	path := postureFakeShim(t) + string(os.PathListSeparator) + filepath.Dir(goBinary(t)) + string(os.PathListSeparator) + "/usr/bin:/bin"
+	res := postureShimRun(t, f, path, nil)
+	if res.code != 2 || !strings.Contains(res.stderr, "go-slot.sh") || postureRow(res, "RECEIPT") != "" || strings.Contains(res.stdout, "POSTURE ") {
+		t.Fatalf("shim without GO_GUARD_CAPPED: exit %d stdout=%q stderr=%q, want exit 2, the go-slot.sh form, no verdict line", res.code, res.stdout, res.stderr)
+	}
+}
+
+func TestPostureIntegrationWithoutTheShimBehavesAsBefore(t *testing.T) {
+	f := postureDemo(t)
+	path := filepath.Dir(goBinary(t)) + string(os.PathListSeparator) + "/usr/bin:/bin"
+	res := postureShimRun(t, f, path, []string{"--only", "internal/empty"})
+	if res.code == 2 || strings.Contains(res.stderr, "go-guard") {
+		t.Fatalf("no shim: exit %d stderr=%q, want no go-guard refusal", res.code, res.stderr)
+	}
+}
+
+func postureCmd(t *testing.T, f postureFixture, path string, args ...string) cmdResult {
+	t.Helper()
+	env := append(isolatedGoEnv(t), "PATH="+path)
+	return cmdSpec{dir: f.dir, env: env}.run("bash", append([]string{filepath.Join(f.dir, "ci", "posture_integration.sh")}, args...)...)
+}
+
+func postureShimPath(t *testing.T, extra ...string) string {
+	t.Helper()
+	return strings.Join(append([]string{postureFakeShim(t)}, extra...), string(os.PathListSeparator))
+}
+
+func TestPostureIntegrationShimRefusalFollowsTheRunnersOwnArgumentParse(t *testing.T) {
+	f := postureDemo(t)
+	paths := filepath.Join(t.TempDir(), "changed.txt")
+	if err := os.WriteFile(paths, []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := postureShimPath(t, filepath.Dir(goBinary(t)), "/usr/bin:/bin")
+	for name, args := range map[string][]string{
+		"empty runner value":          {"--run", "--paths", paths, "--test-runner", ""},
+		"empty final runner value":    {"--run", "--paths", paths, "--test-runner", "/bin/true", "--test-runner", ""},
+		"--test-runner as a filename": {"--run", "--paths", "--test-runner"},
+		"--test-runner as a package":  {"--run", "--paths", paths, "--only", "--test-runner"},
+	} {
+		res := postureCmd(t, f, path, args...)
+		if res.code != 2 || !strings.Contains(res.stderr, "go-slot.sh") || strings.Contains(res.stdout, "RECEIPT") {
+			t.Fatalf("%s: exit %d stdout=%q stderr=%q, want exit 2 and the go-slot.sh form", name, res.code, res.stdout, res.stderr)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(f.dir, "--run"), []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, args := range map[string][]string{
+		"--run as a filename":      {"--paths", "--run"},
+		"--run as a package value": {"--paths", paths, "--only", "--run"},
+		"--run as a runner value":  {"--paths", paths, "--test-runner", "--run"},
+	} {
+		res := postureCmd(t, f, path, args...)
+		if res.code != 0 || strings.Contains(res.stderr, "go-slot.sh") || !strings.Contains(res.stdout, "BASE paths-file") {
+			t.Fatalf("%s: exit %d stdout=%q stderr=%q, want a plain listing", name, res.code, res.stdout, res.stderr)
+		}
+	}
+}
+
+func TestPostureIntegrationRelativeAndEmptyPathEntriesAreAnchoredToTheCallerDirectory(t *testing.T) {
+	f := postureDemo(t)
+	if err := os.MkdirAll(filepath.Join(f.dir, "local-go", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, link := range []string{filepath.Join(f.dir, "local-go", "bin", "go"), filepath.Join(f.dir, "go")} {
+		if err := os.Symlink(goBinary(t), link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(f.dir, ".git", "info", "exclude"), []byte("/go\n/local-go/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pass := filepath.Join(t.TempDir(), "runner.sh")
+	if err := os.WriteFile(pass, []byte("#!/bin/sh\nshift 5\nexec \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	paths := filepath.Join(t.TempDir(), "changed.txt")
+	if err := os.WriteFile(paths, []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shim := postureFakeShim(t)
+	for name, path := range map[string]string{
+		"relative dir":         shim + ":local-go/bin",
+		"dot":                  shim + ":.",
+		"trailing empty field": shim + ":",
+		"middle empty field":   shim + "::" + "/nonexistent",
+	} {
+		res := postureCmd(t, f, path, "--run", "--paths", paths, "--test-runner", pass)
+		if res.code != 5 || postureRow(res, "SIMULATED-HEAD ") == "" || strings.Contains(res.stderr, "cannot resolve") {
+			t.Fatalf("%s: exit %d stdout=%q stderr=%q, want the caller-relative go resolved", name, res.code, res.stdout, res.stderr)
+		}
+	}
+}
+
+func TestPostureIntegrationShimMarkerOnAnUnterminatedLineIsStillTheShim(t *testing.T) {
+	f := postureDemo(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go"), []byte("#!/usr/bin/env bash\n# go-guard shim: test double, no newline at the end"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := dir + string(os.PathListSeparator) + filepath.Dir(goBinary(t)) + string(os.PathListSeparator) + "/usr/bin:/bin"
+	paths := filepath.Join(t.TempDir(), "changed.txt")
+	if err := os.WriteFile(paths, []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := postureCmd(t, f, path, "--run", "--paths", paths)
+	if res.code != 2 || !strings.Contains(res.stderr, "go-slot.sh") {
+		t.Fatalf("unterminated marker: exit %d stdout=%q stderr=%q, want the refusal", res.code, res.stdout, res.stderr)
+	}
+}
+
+func TestPostureIntegrationCdpathDoesNotBreakTheSelfPath(t *testing.T) {
+	f := postureDemo(t)
+	paths := filepath.Join(t.TempDir(), "changed.txt")
+	if err := os.WriteFile(paths, []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := append(isolatedGoEnv(t), "PATH="+postureShimPath(t, filepath.Dir(goBinary(t)), "/usr/bin:/bin"), "CDPATH=.")
+	res := cmdSpec{dir: f.dir, env: env}.run("bash", "ci/posture_integration.sh", "--run", "--paths", paths)
+	if res.code != 2 || !strings.Contains(res.stderr, "go-slot.sh") {
+		t.Fatalf("CDPATH=. with a relative script path: exit %d stdout=%q stderr=%q, want the exit-2 slot refusal", res.code, res.stdout, res.stderr)
+	}
 }

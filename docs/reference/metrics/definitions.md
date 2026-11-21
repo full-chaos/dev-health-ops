@@ -523,6 +523,20 @@ lower than the not-applicable reading.
 
 Residual: a repository whose last test report is older than 29 days reads as not applicable.
 
+## TestOps release confidence: coverage
+
+Release confidence weighs pipeline success 0.4, test pass rate 0.3, line coverage 0.2 and flake 0.1. Coverage is
+**unknown** when the day has no coverage snapshot, or the snapshot's line coverage is NULL or not a finite number. Unknown
+coverage is not 0:
+
+- The coverage factor is left out and the other weights are renormalized: the base score is the sum of the other three
+  terms divided by 0.8. A measured 0% keeps its weight and scores 0 for coverage.
+- `coverage_pct` is null in `factors_json`, and `coverage_delta_pct` is null when the delta is unknown (no earlier
+  snapshot in the 30 days before, or a percentage that is not known). An unknown delta adds no regression penalty.
+- The stored `coverage_factor` is 0 for such a day.
+
+The pipeline, test and flake factors keep their own rule: an absent pipeline or test rate and an unknown flake rate add 0.
+
 ## Pull request rework ratio
 
 The pull request rework ratio is, of the merged pull requests that have

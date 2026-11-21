@@ -121,6 +121,8 @@ type sankeyGroupedQuery struct {
 	path            []Dimension
 	limitPerDim     int
 	maxEdgesPerPair int
+	// healthPath is a read off the investment path: its SQL keeps NULL node keys out.
+	healthPath bool
 }
 
 // sankeyKeyAlias names the i-th path dimension's group key. The prefix
@@ -152,6 +154,7 @@ func CompileSankeyGrouped(req SankeyRequest, orgID string, timeoutSeconds int, u
 
 	keys := make([]string, n)
 	keyExprs := make([]string, n)
+	outKeys := make([]string, n)
 	for i, dim := range req.Path {
 		dimCol, dimErr := dbColumn(dim, useInvestment)
 		if dimErr != nil {
@@ -160,6 +163,11 @@ func CompileSankeyGrouped(req SankeyRequest, orgID string, timeoutSeconds int, u
 		dimCol = shape.owner.column(dim, dimCol)
 		keys[i] = sankeyKeyAlias(i)
 		keyExprs[i] = fmt.Sprintf("toString(%s) AS %s", dimCol, keys[i])
+		outKeys[i] = keys[i]
+		if keyProjection(dim, useInvestment, dimCol) != dimCol {
+			// A key outside the grouping set is NULL and stays NULL: only the empty stored team is renamed.
+			outKeys[i] = fmt.Sprintf("if(%s = '', 'unassigned', %s) AS %s_out", keys[i], keys[i], keys[i])
+		}
 	}
 
 	// Node sets first, then edge sets: the order here does not reach the
@@ -173,13 +181,20 @@ func CompileSankeyGrouped(req SankeyRequest, orgID string, timeoutSeconds int, u
 	// post-aggregation filter on the edge set: toString(col) is NULL
 	// exactly when col is NULL, and a group whose keys are non-NULL holds
 	// exactly the rows the pre-aggregation filter kept, so every
-	// remaining edge aggregates the same rows. Node sets keep NULL keys,
-	// as the node arms never filtered them (executeSankeyGrouped reads a
-	// NULL node key as "", as the per-dimension scan did).
-	var edgeNullFilters []string
+	// remaining edge aggregates the same rows. On the health path a node
+	// set drops its NULL key the same way (groupKeyNotNull: a work item
+	// with no repository is no repository node); the other dimensions'
+	// nodes keep those rows, as the per-dimension node arms do.
+	var nullKeyFilters []string
+	if !useInvestment {
+		for i := 0; i < n; i++ {
+			nullKeyFilters = append(nullKeyFilters, fmt.Sprintf(
+				"NOT (grouping_set = %d AND %s IS NULL)", sankeyNodeSetID(n, i), keys[i]))
+		}
+	}
 	for i := 0; i < n-1; i++ {
 		sets = append(sets, "("+keys[i]+", "+keys[i+1]+")")
-		edgeNullFilters = append(edgeNullFilters, fmt.Sprintf(
+		nullKeyFilters = append(nullKeyFilters, fmt.Sprintf(
 			"NOT (grouping_set = %d AND (%s IS NULL OR %s IS NULL))",
 			sankeyEdgeSetID(n, i), keys[i], keys[i+1]))
 	}
@@ -217,13 +232,13 @@ WHERE %s
 ORDER BY grouping_set ASC, value DESC, %s
 LIMIT {per_set_limit:UInt32} BY grouping_set
 %s, force_grouping_standard_compatibility = 1
-`, strings.Join(keys, ", "),
+`, strings.Join(outKeys, ", "),
 		strings.Join(keys, ", "),
 		strings.Join(keyExprs, ",\n    "),
 		shape.measureExpr,
 		shape.source, shape.extraClauses, shape.dateFilter, shape.alias, shape.fc.sql,
 		strings.Join(sets, ", "),
-		strings.Join(edgeNullFilters, "\n  AND "),
+		strings.Join(nullKeyFilters, "\n  AND "),
 		strings.Join(orderKeys, ", "),
 		statementSettings(shape.source, timeoutSeconds))
 
@@ -241,6 +256,7 @@ LIMIT {per_set_limit:UInt32} BY grouping_set
 		path:            req.Path,
 		limitPerDim:     shape.limitPerDim,
 		maxEdgesPerPair: shape.maxEdgesPerPair,
+		healthPath:      !useInvestment,
 	}, nil
 }
 
@@ -286,15 +302,15 @@ func executeSankeyGrouped(ctx context.Context, client QueryClient, q sankeyGroup
 			return nil, nil, fmt.Errorf("scan: %w", scanErr)
 		}
 		if i, ok := nodeSet[set]; ok {
-			// A NULL node key (e.g. a NULL team_id on
-			// investment_metrics_daily) reads as "": the per-dimension
-			// node query scans node_id into a plain string, and the
-			// driver leaves a plain string destination untouched on a
-			// NULL cell. Node sets are not NULL-filtered, as the node
-			// arms never were.
+			// A NULL node key reaches here only on the investment path,
+			// whose keys dbColumn never leaves NULL; it reads as "", as
+			// queryNodes reads it. The health path's SQL drops NULL node
+			// keys, so one here means that filter and this router disagree.
 			nodeKey := ""
 			if keys[i] != nil {
 				nodeKey = *keys[i]
+			} else if q.healthPath {
+				return nil, nil, fmt.Errorf("scan: NULL node key in grouping set %d", set)
 			}
 			if len(nodesByDim[i]) < q.limitPerDim {
 				nodesByDim[i] = append(nodesByDim[i], model.SankeyNode{

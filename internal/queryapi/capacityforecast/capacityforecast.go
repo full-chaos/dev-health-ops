@@ -56,7 +56,8 @@
 //     Python's query and it is reproduced rather than improved on -- note the
 //     table's ORDER BY is (forecast_id) and every row carries a fresh uuid4, so
 //     nothing ever collapses and FINAL would change no result while changing
-//     the cost. The SIBLING path in this same package DOES use FINAL, because
+//     the cost. The SIBLING path in this same package DOES collapse versions
+//     (the newest version of each key, see capacitySource), because
 //     work_item_metrics_daily genuinely replaces rows.
 //
 //  5. THE CONNECTION IS RELAY-SHAPED BUT NOT PAGINATED. The cursor is the
@@ -474,7 +475,9 @@ func ResolveForecasts(
 	}
 
 	// LIMIT 1 BY keeps the newest row of each forecast slice before the page
-	// LIMIT applies. forecast_id is a fresh uuid per write and the table is
+	// LIMIT applies. Two copies of a slice at one computed_at serve the one with
+	// the highest hash of the selected columns (forecast_id included), whatever
+	// the insert order (CHAOS-14406). forecast_id is a fresh uuid per write and the table is
 	// ordered by it, so a retried partition re-inserts forecasts that nothing
 	// can collapse (FINAL would not help); without this the copies fill the
 	// page and push real forecasts out of it. The key is the slice a run
@@ -514,7 +517,11 @@ func ResolveForecasts(
             completion_items_counts
         FROM capacity_forecasts
         WHERE %s
-        ORDER BY computed_at DESC
+        ORDER BY computed_at DESC, cityHash64(tuple(
+            forecast_id, computed_at, team_id, work_scope_id, backlog_size, target_items, target_date,
+            p50_date, p85_date, p95_date, p50_days, p85_days, p95_days, p50_items, p85_items, p95_items,
+            throughput_mean, throughput_stddev, history_days, insufficient_history, high_variance,
+            completion_days_values, completion_days_counts, completion_items_values, completion_items_counts)) DESC
         LIMIT 1 BY team_id, work_scope_id, toDate(computed_at),
             history_days, simulation_count, target_items, target_date
         LIMIT %d

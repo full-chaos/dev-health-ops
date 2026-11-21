@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"regexp"
@@ -180,7 +181,11 @@ func (f *fixtureClientD) Query(_ context.Context, st string, b []clickhouse.Bind
 	case strings.Contains(st, "title_prefix"):
 		var rows [][]any
 		for _, m := range c.Rep {
-			rows = append(rows, []any{m["repo_id"].(string), m["title_prefix"].(string), uint64(m["prs_total"].(float64)), strList(m["pr_refs"])})
+			// The recorded Python rows carry no cluster_work_type or cluster_anchor (the Python read did not select
+			// them): they read as "" and 0.
+			workType, _ := m["cluster_work_type"].(string)
+			anchor, _ := m["cluster_anchor"].(float64)
+			rows = append(rows, []any{m["repo_id"].(string), m["title_prefix"].(string), uint64(m["prs_total"].(float64)), strList(m["pr_refs"]), workType, uint32(anchor)})
 		}
 		return &scriptedRows{rows: rows}, nil
 	case strings.Contains(st, "LEFT ANTI JOIN"):
@@ -331,6 +336,9 @@ func TestOpportunityDetectors_MatchPythonDetectors(t *testing.T) {
 			declareTitleNaming(t, gotMap, c.Expected, c.Kind)
 			declareFlakyRationale(t, gotMap, c.Expected, c.Kind)
 			declareDrilldownRoots(t, gotMap, c.Expected)
+			for _, problem := range declareRepetitiveIDs(gotMap, c.Expected, c) {
+				t.Error(problem)
+			}
 			g, w := normalizeD(gotMap), normalizeD(c.Expected)
 			if !reflect.DeepEqual(g, w) {
 				gj, _ := json.MarshalIndent(g, "", " ")
@@ -553,6 +561,69 @@ func declareDrilldownRoots(t *testing.T, got, expected map[string]any) {
 			opportunity["workGraphDrilldowns"] = served
 		}
 	}
+}
+
+var recordedRepetitiveRationale = regexp.MustCompile(`^([0-9]+) AI-assisted PRs shared the title prefix '(.*)' with the same author/work type over the last 30 days\.$`)
+
+// declareRepetitiveIDs is the DECLARED divergence of CHAOS-14266: the recorded Python id of a REPETITIVE_CHANGE
+// recommendation is stableOpportunityID("repetitive_change", repo, ""), one id per repository, so two clusters of
+// one repository shared it. Go hashes the cluster's title prefix, work type and anchor (its oldest pull request). The
+// declaration is path-scoped: ONLY the opportunityId of REPETITIVE_CHANGE recommendations. For each it requires (1)
+// the recorded id is the Python form, (2) exactly one of the case's cluster rows has the recorded repository, count
+// and prefix, and (3) the Go id is the new form of that row; then it sets the recorded id to that id, so every other
+// field, and every other kind's id, is still compared whole. It returns the problems; the frozen file is not edited.
+func declareRepetitiveIDs(got, expected map[string]any, c oracleDCase) []string {
+	if c.Kind != "ai" {
+		return nil
+	}
+	gotList, _ := got["recommendations"].([]any)
+	wantList, _ := expected["recommendations"].([]any)
+	if len(gotList) != len(wantList) {
+		return nil
+	}
+	var problems []string
+	for i := range wantList {
+		g, _ := gotList[i].(map[string]any)
+		w, _ := wantList[i].(map[string]any)
+		if k, _ := w["kind"].(string); k != "REPETITIVE_CHANGE" {
+			continue
+		}
+		repo, _ := w["repoId"].(string)
+		if py, _ := w["opportunityId"].(string); py != stableOpportunityID("repetitive_change", repo, "") {
+			problems = append(problems, fmt.Sprintf("recommendations[%d]: the recorded id %q is not the Python form: the declaration does not apply", i, py))
+			continue
+		}
+		m := recordedRepetitiveRationale.FindStringSubmatch(fmt.Sprint(w["rationale"]))
+		if m == nil {
+			problems = append(problems, fmt.Sprintf("recommendations[%d]: the recorded rationale %q is not the repetitive form", i, w["rationale"]))
+			continue
+		}
+		var keys []string
+		for _, row := range c.Rep {
+			rowRepo, ok := canonicalRepo(fmt.Sprint(row["repo_id"]))
+			prefix, _ := row["title_prefix"].(string)
+			shown := prefix
+			if shown == "" {
+				shown = "similar"
+			}
+			if !ok || rowRepo != repo || strconv.Itoa(int(row["prs_total"].(float64))) != m[1] || shown != m[2] || len(strList(row["pr_refs"])) == 0 {
+				continue
+			}
+			workType, _ := row["cluster_work_type"].(string)
+			anchor, _ := row["cluster_anchor"].(float64)
+			keys = append(keys, repetitiveClusterKey(prefix, workType, uint32(anchor)))
+		}
+		if len(keys) != 1 {
+			problems = append(problems, fmt.Sprintf("recommendations[%d]: %d cluster rows match the recorded repository, count and prefix, want exactly 1", i, len(keys)))
+			continue
+		}
+		want := stableOpportunityID("repetitive_change", repo, keys[0])
+		if goID, _ := g["opportunityId"].(string); goID != want {
+			problems = append(problems, fmt.Sprintf("recommendations[%d]: opportunityId = %q, want %q (the cluster's key)", i, goID, want))
+		}
+		w["opportunityId"] = want
+	}
+	return problems
 }
 
 var recordedFlakyRationale = regexp.MustCompile(`^Test cases flaked at ([0-9]+\.[0-9]) ?% across ([0-9]+) executions over the last 30 days\.$`)

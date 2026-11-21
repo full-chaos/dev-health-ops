@@ -12,8 +12,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// Over a real, migrated Postgres, a provider id uuid.UUID() refuses gets exactly the answer a well-formed id with no
-// row gets on the same route: status, headers and body.
+// Over a real, migrated Postgres with the OIDC forward off, a provider id uuid.UUID() refuses gets exactly the answer a
+// well-formed id with no row gets on the same route (status, headers and body): the 503 config_missing naming
+// AUTH_PROXY_OIDC (CHAOS-14131).
 func TestSignInRoutesAnswerAMalformedProviderIDAsAnUnknownOne(t *testing.T) {
 	ctx := context.Background()
 	st := startStack(t, ctx)
@@ -44,8 +45,8 @@ func TestSignInRoutesAnswerAMalformedProviderIDAsAnUnknownOne(t *testing.T) {
 	} {
 		t.Run(route.name, func(t *testing.T) {
 			wantStatus, wantHeader, wantBody := send(t, route.method, "/api/v1/auth/"+route.family+"/"+unknown+"/"+route.verb, route.body)
-			if wantStatus != http.StatusNotFound {
-				t.Fatalf("unknown id: %d %s, want 404", wantStatus, wantBody)
+			if wantStatus != http.StatusServiceUnavailable || !strings.Contains(wantBody, "AUTH_PROXY_OIDC is not set") {
+				t.Fatalf("unknown id: %d %s, want 503 config_missing AUTH_PROXY_OIDC", wantStatus, wantBody)
 			}
 			status, header, body := send(t, route.method, "/api/v1/auth/"+route.family+"/not-a-uuid/"+route.verb, route.body)
 			if status != wantStatus || body != wantBody || len(header) != len(wantHeader) {

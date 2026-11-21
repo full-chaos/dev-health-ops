@@ -141,6 +141,11 @@ type filterColumns struct {
 	TeamByOwnership bool
 	TeamScopeOnJoin bool
 
+	// StoredTeamKey says the chart this filter belongs to groups by the stored team key (health path, a read that is
+	// not a TestOps daily reader): a team scope id "unassigned" then also selects the empty stored team. Its one source
+	// is testopsOwner.filterColumns; the sankey coverage takes it from there too.
+	StoredTeamKey bool
+
 	// WorkCategorySelectsUnits opts a caller into the UNIT-SELECTING form of
 	// the work-category predicate instead of the default row-multiplying one
 	// (CHAOS-5498). Default false, so every existing caller is byte-identical.
@@ -220,7 +225,11 @@ func translateFilters(orgID string, filters *model.FilterInput, useInvestment bo
 				"scope.level=developer filtering requires an investment query; "+
 					"pass useInvestment=true or remove the developer scope.")
 		default:
-			clause := translateScopeFilter(filters.Scope.Level, filters.Scope.Ids, cols.Team, cols.Repo, cols.Author)
+			scopeIDs := filters.Scope.Ids
+			if cols.StoredTeamKey && filters.Scope.Level == model.ScopeLevelInputTeam {
+				scopeIDs = storedTeamIDs(scopeIDs)
+			}
+			clause := translateScopeFilter(filters.Scope.Level, scopeIDs, cols.Team, cols.Repo, cols.Author)
 			if useInvestment && filters.Scope.Level == model.ScopeLevelInputRepo {
 			}
 			sql += clause.sql

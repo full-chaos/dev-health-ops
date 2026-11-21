@@ -86,10 +86,17 @@ func TestGitLabTestsRouteSignalsArtifactJobsOverTheCap(t *testing.T) {
 			if len(warns) != len(cell.wantWarns) {
 				t.Fatalf("got %d cap WARN lines %q, want %d", len(warns), warns, len(cell.wantWarns))
 			}
+			// The chunked listing is newest id first, so the WARN lines come in that order: match each run by its id.
 			for index, run := range cell.wantWarns {
+				line := ""
+				for _, warn := range warns {
+					if strings.Contains(warn, "run="+run+" ") {
+						line = warn
+					}
+				}
 				for _, want := range []string{"run=" + run, "jobs=" + strconv.Itoa(cell.counts[index]), "cap=" + strconv.Itoa(gitLabTestsMaxArtifacts)} {
-					if !strings.Contains(warns[index], want) {
-						t.Fatalf("WARN %q lacks %q", warns[index], want)
+					if !strings.Contains(line, want) {
+						t.Fatalf("WARN %q lacks %q", line, want)
 					}
 				}
 			}

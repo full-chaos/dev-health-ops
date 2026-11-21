@@ -156,7 +156,7 @@ INTEGRATION_CONTAINER_HARNESS="${ROOT}/internal/testsupport/containers/harness.g
 # able to change which suite a verb runs.
 # CHAOS-11745: GO_TEST_LEG_JSON_DIR and DEV_HEALTH_GO_FRESH_SECURITY belong to the leg: a test that starts check_go.sh as a child
 # must not empty the leg's -json file (its receipt reads it) or run in the leg's merge_group mode.
-GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u GOFLAGS -u GOEXPERIMENT -u CHECK_GO_FRESH -u GO_TEST_LEG_JSON_DIR -u DEV_HEALTH_GO_FRESH_SECURITY)
+GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u GOFLAGS -u GOEXPERIMENT -u CHECK_GO_FRESH -u GO_TEST_LEG_JSON_DIR -u GO_TEST_COVER_DIR -u DEV_HEALTH_GO_FRESH_SECURITY)
 
 # INTEGRATION_TEST_ENV (CHAOS-6634): environment for the MULTI-PACKAGE
 # `go test -tags=integration pkgA pkgB ...` invocations below (integration and
@@ -961,6 +961,18 @@ leg_json_file() {
   printf '%s\n' "${dir}/$1-$2-of-$3.json"
 }
 
+# go_test_cover_args ARG...: CHAOS-13767: the -coverprofile flag of one go test call of a non-race test leg, or nothing. The workflow sets
+# GO_TEST_COVER_DIR on main pushes of the test legs only; each call writes its own file (the split parts run in parallel), which the
+# go-quality-coverage job merges. Unset dir, or a -race call: no flag (the call is as before). Never fails the call.
+go_test_cover_args() {
+  local a f
+  [ -n "${GO_TEST_COVER_DIR:-}" ] || return 0
+  for a in "$@"; do [ "${a}" != -race ] || return 0; done
+  mkdir -p -- "${GO_TEST_COVER_DIR}" 2>/dev/null || return 0
+  f="$(mktemp "${GO_TEST_COVER_DIR}/cover-XXXXXX.out" 2>/dev/null)" || return 0
+  printf -- '-coverprofile=%s\n' "${f}"
+}
+
 # go_test_leg LOG LEGJSON ARG...: `go test -json ARG...` of one stage of a test or race leg (run it from the module directory).
 # The plain log, on stdout and in LOG, is every Output field of the event stream verbatim, whole lines per package (GO_TEST_LEG_JQ; the -v form: more
 # lines than plain go test, never fewer). A line that is not a JSON event passes through raw. The raw stream is kept in a stage
@@ -997,12 +1009,13 @@ foreach ((inputs | ((fromjson? | select(type == "object" and ((.Action | type) =
     .out)'
 go_test_leg() {
   local log="$1" legjson="$2" rc raw problem=0
-  local -a ps fb
+  local -a ps fb cov
   shift 2
+  mapfile -t cov < <(go_test_cover_args "$@")
   command -v jq >/dev/null 2>&1 || die "the test and race legs need jq to read go test -json"
   raw="$(mktemp "${TMPDIR:-/tmp}/dev-health-leg-raw.XXXXXX")" || die "go_test_leg: no temp file for the raw go test -json stream"
   set +e
-  "${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath ${MERGE_GROUP_FRESH:+-count=1} -json "$@" 2>&1 \
+  "${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath ${MERGE_GROUP_FRESH:+-count=1} ${cov[@]+"${cov[@]}"} -json "$@" 2>&1 \
     | tee "${raw}" \
     | { jq -nR --unbuffered -rj "${GO_TEST_LEG_JQ}"; jqrc=$?; [ "${jqrc}" -eq 0 ] || cat >/dev/null; exit "${jqrc}"; } \
     | tee -a "${log}"
@@ -1076,8 +1089,10 @@ go_test_json_run() {
 go_test_json_run_t() {
   local timeout="$1" json="$2" log="$3"
   shift 3
+  local -a cov
+  mapfile -t cov < <(go_test_cover_args "$@")
   command -v jq >/dev/null 2>&1 || die "the race-excluded receipts need jq to read go test -json events"
-  "${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath -json -count=1 -timeout "${timeout}" "$@" \
+  "${GO_ENV_OFF[@]}" GOFLAGS="${LEG_TEST_GOFLAGS}" GOWORK=off go test -mod=readonly -trimpath -json -count=1 -timeout "${timeout}" ${cov[@]+"${cov[@]}"} "$@" \
     | tee -a "${json}" \
     | jq -nR --unbuffered -rj "${GO_TEST_LEG_JQ}" \
     | tee -a "${log}"
@@ -1250,6 +1265,9 @@ GO_TEST_SPLITS="${GO_TEST_SPLITS:-${ROOT}/ci/go_test_splits.tsv}"
 # ci/go_test_split_weights.tsv (CHAOS-13668): package<TAB>TestName<TAB>seconds, the measured tests of the split packages. A test
 # leg cuts a split package's names by them (ci/go_race_shard.awk cut()), and the plan derives each part's weight from them.
 GO_TEST_SPLIT_WEIGHTS="${GO_TEST_SPLIT_WEIGHTS:-${ROOT}/ci/go_test_split_weights.tsv}"
+# ci/go_test_apart.tsv (CHAOS-14334): split packages whose parts the test plan keeps off the shards of each other's parts
+# (ci/go_race_shard.awk tapart=).
+GO_TEST_APART="${GO_TEST_APART:-${ROOT}/ci/go_test_apart.tsv}"
 # CHAOS-13664: the test-leg split is chain-aware (ci/go_race_shard.awk chain=1). check_test_shard runs the split-package jobs one
 # after another beside one go test of the shard's other packages, then the serial package alone, so a leg's wall is about
 # max(chain, rest / 2) + serial (+6..+34 s over the 50 legs of 5 main runs); the split places the chain and the serial package
@@ -1270,6 +1288,7 @@ check_test_shard_args() {
   [ -f "${GO_TEST_PINS}" ] || die "test shards need ${GO_TEST_PINS}"
   [ -f "${GO_TEST_SPLITS}" ] || die "test shards need ${GO_TEST_SPLITS}"
   [ -f "${GO_TEST_SPLIT_WEIGHTS}" ] || die "test shards need ${GO_TEST_SPLIT_WEIGHTS}"
+  [ -f "${GO_TEST_APART}" ] || die "test shards need ${GO_TEST_APART}"
 }
 
 # check_test_shard_plan SHARD COUNT: one "module<TAB>package<TAB>key" line per package of the shard, key = import path relative
@@ -1284,7 +1303,7 @@ check_test_shard_plan() {
     listing="$(test_leg_listed "go-list-all|${module_dir}" module_go "${module_dir}" list -mod=readonly -f '{{.ImportPath}}' ./... \
       | quality_filter "${module_dir}" "${modpath}" \
       | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_TEST_WEIGHTS}" -v pin="${GO_TEST_PINS}" \
-          -v splits="${GO_TEST_SPLITS}" -v tests="${GO_TEST_SPLIT_WEIGHTS}" \
+          -v splits="${GO_TEST_SPLITS}" -v tests="${GO_TEST_SPLIT_WEIGHTS}" -v tapart="$(if [ "${module_dir}" = "." ]; then printf '%s' "${GO_TEST_APART}"; fi)" \
           -v serial="${SERIAL_HEAVY_TEST_PACKAGE#"${modpath}/"}" -v chain=1 -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")" \
       || die "test shard ${shard}/${count}: the package list or its split (ci/go_race_shard.awk) failed in ${module_dir}"
     while IFS=$'\t' read -r pkg spart sparts; do
@@ -1788,8 +1807,8 @@ GO_RACE_SOLO="${GO_RACE_SOLO:-${ROOT}/ci/go_race_solo.tsv}"
 # CHAOS-13833: race-leg test-name parts. ci/go_race_splits.tsv (package<TAB>parts) cuts a package into parts by
 # ci/go_race_split_weights.tsv (package<TAB>TestName<TAB>seconds: the largest hosted race time of each top-level test), with the
 # cutter of the test legs; a listed test with no row goes to the last part (never dropped). A part runs alone after the leg's
-# other packages and before its solo packages, and a top-level test of 30 s or more with no row fails the leg
-# (ci/go_race_unweighted_slow.awk).
+# other packages and before its solo packages, and a top-level test of 45 s or more with no row fails the leg (30 s up to 45 s warns
+# and prints the row to add; DEV_HEALTH_GO_RACE_UNWEIGHTED_FAIL_SECONDS, CHAOS-14277) (ci/go_race_unweighted_slow.awk).
 GO_RACE_SPLITS="${GO_RACE_SPLITS:-${ROOT}/ci/go_race_splits.tsv}"
 GO_RACE_SPLIT_WEIGHTS="${GO_RACE_SPLIT_WEIGHTS:-${ROOT}/ci/go_race_split_weights.tsv}"
 # CHAOS-13958: the race plan weighs a leg's race parts and solo packages as serial time after its parallel batch (ci/go_race_shard.awk
@@ -1873,7 +1892,7 @@ check_providersync_race_shard() {
       | tee "${json}" \
       | jq -rj 'select(.Action == "output") | .Output'
   ) || run_rc=$?
-  awk -v weights="${weights}" -v thresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${weights#"${ROOT}/"}" \
+  awk -v weights="${weights}" -v thresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS:-30}" -v failthresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_FAIL_SECONDS:-45}" -v summary="${GITHUB_STEP_SUMMARY:-}" -v label="${weights#"${ROOT}/"}" \
     -f "${GO_RACE_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_race_unweighted_slow.awk}" "${json}" || guard_rc=$?
   [ "${run_rc}" -ge "${guard_rc}" ] || run_rc="${guard_rc}"
   return "${run_rc}"
@@ -2046,7 +2065,7 @@ check_race_shard() {
         go_test_leg "${racelog}" "${partjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" -run "^($(printf '%s\n' "${names}" | paste -sd'|' -))\$" "${pkg}"
       ) || { cat -- "${partjson}" >>"${legjson}"; rm -f -- "${racelog}" "${partjson}"; return 1; }
       awk -v weights=<(awk -F'\t' -v k="${key}" '!/^#/ && $1 == k { print $2 "\t" $3 }' "${GO_RACE_SPLIT_WEIGHTS}") \
-        -v thresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${GO_RACE_SPLIT_WEIGHTS#"${ROOT}/"} (${key})" \
+        -v thresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS:-30}" -v failthresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_FAIL_SECONDS:-45}" -v summary="${GITHUB_STEP_SUMMARY:-}" -v rowprefix="${key}"$'\t' -v rowunit=s -v label="${GO_RACE_SPLIT_WEIGHTS#"${ROOT}/"} (${key})" \
         -f "${GO_RACE_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_race_unweighted_slow.awk}" "${partjson}" \
         || { cat -- "${partjson}" >>"${legjson}"; rm -f -- "${racelog}" "${partjson}"; return 1; }
       cat -- "${partjson}" >>"${legjson}" || die "cannot append the race part's go test -json to ${legjson}"

@@ -40,7 +40,16 @@ func githubTestsCommitReportWindowPassMode(
 	claim.ID = uuid.NewString()
 	claim.SyncRunID = uuid.NewString()
 	claim.SinceAt, claim.BeforeAt = &since, &before
+	return githubTestsCommitReportWindowPassClaim(t, ctx, sink, doer, claim, normalizedAt)
+}
 
+// githubTestsCommitReportWindowPassClaim is githubTestsCommitReportWindowPassMode
+// for a claim the caller built.
+func githubTestsCommitReportWindowPassClaim(
+	t *testing.T, ctx context.Context, sink GitHubTestsClickHouseEffects,
+	doer providerfoundation.HTTPDoer, claim Claim, normalizedAt time.Time,
+) int {
+	t.Helper()
 	order := make([]string, 0, 6)
 	rowsByDestination := map[string][]json.RawMessage{}
 	recoveryByDestination := map[string]EffectRecoveryPolicy{}

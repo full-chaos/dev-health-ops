@@ -14,9 +14,13 @@ func TestWorkItemScopeFilterTakesTheOrgViewAndScopeFilterDoesNot(t *testing.T) {
 		}
 		return false
 	}
-	workItem, _ := workItemScopeFilter("org", []string{"t1"}, nil)
+	workItem, _ := workItemScopeFilter("org", []string{"t1", "t2"}, nil)
 	if !has(workItem) {
-		t.Errorf("workItemScopeFilter lacks the org view predicate: %v", workItem)
+		t.Errorf("workItemScopeFilter of a team set lacks the org view predicate: %v", workItem)
+	}
+	// One team reads the team view (CHAOS-14376): no view predicate in the filter, the served team view as the source.
+	if oneTeam, _ := workItemScopeFilter("org", []string{"t1"}, nil); has(oneTeam) {
+		t.Errorf("workItemScopeFilter of one team holds the org view predicate: %v", oneTeam)
 	}
 	plain, _ := scopeFilter("org", []string{"t1"}, nil)
 	if has(plain) {

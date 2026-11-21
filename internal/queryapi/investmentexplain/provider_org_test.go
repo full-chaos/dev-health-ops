@@ -578,9 +578,10 @@ func TestNewProviderForOrg_CallsFallbackTelemetryHook(t *testing.T) {
 }
 
 // TestLogOrgBaseURLSSRFFallback_LogContent proves the REAL log line (not
-// a capturing swap) carries the org id and the URL's scheme/host ONLY --
-// never the full URL, its path/query, or any credential value, even one
-// embedded directly in the base_url (userinfo or a query-string token).
+// a capturing swap) carries the org id, the URL's scheme and a hash of its
+// host ONLY -- never the host text, the full URL, its path/query, or any
+// credential value, even one embedded directly in the base_url (userinfo or a
+// query-string token).
 func TestLogOrgBaseURLSSRFFallback_LogContent(t *testing.T) {
 	const secretPathSegment = "canary-secret-path-segment-must-never-appear-in-any-log"
 	const secretQueryToken = "canary-secret-query-token-must-never-appear-in-any-log"
@@ -607,8 +608,11 @@ func TestLogOrgBaseURLSSRFFallback_LogContent(t *testing.T) {
 	if !strings.Contains(output, "org-canary-42") {
 		t.Errorf("log output missing the org id: %q", output)
 	}
-	if !strings.Contains(output, "169.254.169.254") {
-		t.Errorf("log output missing the rejected host: %q", output)
+	if strings.Contains(output, "169.254.169.254") {
+		t.Fatalf("log output leaked the HOST text: %q", output)
+	}
+	if !strings.Contains(output, "host_hash="+hashedLogValue("169.254.169.254")) {
+		t.Errorf("log output missing the rejected host's hash: %q", output)
 	}
 	if strings.Contains(output, secretPathSegment) {
 		t.Fatalf("log output leaked the URL PATH: %q", output)
@@ -908,5 +912,34 @@ func assertResolvedModelMatchesWire(
 	}
 	if resolvedModel != wireModel {
 		t.Errorf("kind %q: resolvedModel = %q, but the ACTUAL outgoing request's model = %q -- report/actual mismatch", kind, resolvedModel, wireModel)
+	}
+}
+
+// The SSRF-fallback log line never holds the host text, for any host: a key the
+// Store does not know (StoredBaseURLCarriesKey=false) may sit in a host label.
+func TestLogOrgBaseURLSSRFFallbackNeverPrintsTheHost(t *testing.T) {
+	for _, host := range []string{
+		"sk-unknown-categorize-0123456789abcdef.internal.example",
+		"llm.internal.example",
+		"10.0.0.7",
+	} {
+		previous := validateRawBaseURL
+		validateRawBaseURL = func(context.Context, string) (bool, string) { return false, "non-public" }
+		var buf bytes.Buffer
+		origOutput := log.Writer()
+		log.SetOutput(&buf)
+		logOrgBaseURLSSRFFallback(context.Background(), &fakeOrgResolver{rawBaseURL: "https://" + host + "/v1", rawConfigured: true}, "org-1", "openai")
+		log.SetOutput(origOutput)
+		validateRawBaseURL = previous
+		output := strings.ToLower(buf.String())
+		if output == "" {
+			t.Fatalf("%s: no log line", host)
+		}
+		if strings.Contains(output, strings.ToLower(host)) {
+			t.Errorf("%s: the log line holds the host text: %q", host, output)
+		}
+		if !strings.Contains(output, "host_hash="+hashedLogValue(host)) {
+			t.Errorf("%s: the log line has no host hash: %q", host, output)
+		}
 	}
 }

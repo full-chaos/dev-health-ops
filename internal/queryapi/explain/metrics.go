@@ -117,8 +117,7 @@ func metricFromClause(table, column, scopeFilterSQL, startParam, endParam string
 		scopeFilterSQL += "\n      AND " + rowview.OrgPredicate(table, "")
 	}
 	return newestVersionSource(table, sourceColumns(table, column), source, fmt.Sprintf(`WHERE day >= {%s:Date} AND day < {%s:Date}
-    %s
-      AND org_id = {org_id:String}`, startParam, endParam, scopeFilterSQL), strings.Join(keys, ", "))
+    %s`, startParam, endParam, scopeFilterSQL), "GROUP BY "+strings.Join(keys, ", "))
 }
 
 // newestVersionSource is one row per key of table: ONE version picked by rowview.VersionOrder (the newest computed_at,
@@ -126,7 +125,10 @@ func metricFromClause(table, column, scopeFilterSQL, startParam, endParam string
 // columns and the live-row columns of that version. A Nullable column keeps the picked version's NULL (a tuple is never
 // NULL). The live-row rule is read from the picked row: a key whose picked version is a retraction row leaves the
 // result, so it is not a sample of an average, a contributor or a driver.
-func newestVersionSource(table string, valueColumns []string, source, where, key string) string {
+// where is the reader's filter (a WHERE clause); the organization predicate is added here. groupBy is the GROUP BY
+// clause of the key.
+func newestVersionSource(table string, valueColumns []string, source, where, groupBy string) string {
+	key := strings.TrimPrefix(groupBy, "GROUP BY ")
 	columns := append([]string(nil), valueColumns...)
 	live := ""
 	if liverow.Registered(table) {
@@ -144,9 +146,10 @@ func newestVersionSource(table string, valueColumns []string, source, where, key
             %s
         FROM %s
         %s
-        GROUP BY %s
+          AND org_id = {org_id:String}
+        %s
     ) AS newest%s
-)`, strings.ReplaceAll(key, ", ", ",\n            "), rowview.VersionPick(table, columns), source, where, key, live)
+)`, strings.ReplaceAll(key, ", ", ",\n            "), rowview.VersionPick(table, columns), source, where, groupBy, live)
 }
 
 // teamViewSource is the served team view of a table with team rows (CHAOS-14379), aliased as the table: one row per

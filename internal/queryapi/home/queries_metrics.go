@@ -64,15 +64,17 @@ func metricFromClause(table, column, scopeFilter, startParam, endParam string, o
 		valueColumns = prrework.CountColumns
 	}
 	return newestVersionSource(table, valueColumns, source, fmt.Sprintf(`WHERE day >= {%s:Date} AND day < {%s:Date}
-            %s
-              AND org_id = {org_id:String}`, startParam, endParam, scopeFilter), strings.Join(naturalKey, ", "))
+            %s`, startParam, endParam, scopeFilter), "GROUP BY "+strings.Join(naturalKey, ", "))
 }
 
 // newestVersionSource is one row per key of table: ONE version picked by rowview.VersionOrder (the newest computed_at,
 // then the hash of the measures, so a computed_at tie serves one version whatever the insert order), with the value
 // columns and the live-row columns of that version. A Nullable column keeps the picked version's NULL. The live-row rule
 // is read from the picked row: a key whose picked version is a retraction row leaves the result.
-func newestVersionSource(table string, valueColumns []string, source, where, key string) string {
+// where is the reader's filter (a WHERE clause); the organization predicate is added here. groupBy is the GROUP BY
+// clause of the key.
+func newestVersionSource(table string, valueColumns []string, source, where, groupBy string) string {
+	key := strings.TrimPrefix(groupBy, "GROUP BY ")
 	columns := append([]string(nil), valueColumns...)
 	live := ""
 	if liverow.Registered(table) {
@@ -90,9 +92,10 @@ func newestVersionSource(table string, valueColumns []string, source, where, key
                 %s
             FROM %s
             %s
-            GROUP BY %s
+              AND org_id = {org_id:String}
+            %s
         ) AS newest%s
-    )`, strings.ReplaceAll(key, ", ", ",\n                "), rowview.VersionPick(table, columns), source, where, key, live)
+    )`, strings.ReplaceAll(key, ", ", ",\n                "), rowview.VersionPick(table, columns), source, where, groupBy, live)
 }
 
 // teamViewSource is the served team view of a table with team rows (CHAOS-14379), aliased as the table: one row per
@@ -357,8 +360,7 @@ func fetchBlockedHours(ctx context.Context, client QueryClient, startDay, endDay
         ORDER BY day
     `, newestVersionSource("work_item_state_durations_daily", []string{"duration_hours"}, source, fmt.Sprintf(`WHERE day >= {start_day:Date} AND day < {end_day:Date}
               AND status = 'blocked'
-            %s
-              AND org_id = {org_id:String}%s`, scopeFilter, view), "day, provider, work_scope_id, team_id, status, row_view"))
+            %s%s`, scopeFilter, view), "GROUP BY day, provider, work_scope_id, team_id, status, row_view"))
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},

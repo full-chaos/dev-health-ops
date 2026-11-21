@@ -295,8 +295,7 @@ func tieSites() []tieSite {
 				}
 				return fmt.Sprintf("after_hours=%g known=%v", ratio, known)
 			},
-			// No served reader of the table breaks a tie: the cell holds the loader to
-			// one whole version by its own order.
+			// The served page (cognitiveload) reads by the same order, teamkeytables.TeamMetricsDailyNewestOrder.
 			served: "(team_metrics_daily.computed_at, cityHash64(" + teamMetricsPick + "))", marker: "commits_count", filter: "1",
 		},
 		{
@@ -539,6 +538,7 @@ func TestRecommendationsLoaderServedOrdersAreTheServedText(t *testing.T) {
 		"../../../queryapi/aianalytics/loaders.go":           {servedReviewsOrder},
 		"../../../queryapi/home/queries_signals.go":          {strings.TrimSuffix(strings.TrimPrefix(compoundingRiskHash, "cityHash64("), ")")},
 		"../../../queryapi/throughputforecast/clickhouse.go": {"rowview.ServedTeamSource(\"work_item_metrics_daily\", where, rowview.WorkItemMetricsNewestOrder)"},
+		"../../../queryapi/cognitiveload/cognitiveload.go":   {"teamkeytables.TeamMetricsDailyPick", "teamkeytables.TeamMetricsDailyNewestOrder"},
 	} {
 		raw, err := os.ReadFile(path)
 		if err != nil {

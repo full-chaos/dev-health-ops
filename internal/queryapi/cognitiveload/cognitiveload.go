@@ -67,6 +67,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // QueryClient is the read-only ClickHouse query boundary this package
@@ -407,6 +408,11 @@ func fetchRetractedUserDays(ctx context.Context, client QueryClient, innerWhere 
 // docstring: "_fetch_team_metrics does not (yet) accept a repo_id
 // filter"), so the team+repo-combined path's repoID narrows
 // fetchUserMetrics only, never this function.
+//
+// Each (day, team, repo) key is read as ONE whole version: the newest
+// computed_at, and on a tie the hash of the version
+// (teamkeytables.TeamMetricsDailyNewestOrder, the order the recommendations job
+// reads by). retractedTeamDaysQuery reads the same version.
 func fetchTeamMetrics(ctx context.Context, client QueryClient, orgID, sinceDate, untilDate string, teamID *string) ([]teamRatioRow, error) {
 	innerWhere := `
             WHERE org_id = {org_id:String}
@@ -447,9 +453,10 @@ func fetchTeamMetrics(ctx context.Context, client QueryClient, orgID, sinceDate,
                         day,
                         team_id,
                         repo_id,
-                        argMax(commits_count,             computed_at) AS commits_count,
-                        argMax(after_hours_commits_count, computed_at) AS after_hours_commits_count,
-                        argMax(weekend_commits_count,      computed_at) AS weekend_commits_count,
+                        argMax(` + teamkeytables.TeamMetricsDailyPick + `, ` + teamkeytables.TeamMetricsDailyNewestOrder + `) AS picked,
+                        picked.1 AS commits_count,
+                        picked.2 AS after_hours_commits_count,
+                        picked.3 AS weekend_commits_count,
                         countIf(repo_id != '') OVER (PARTITION BY day, team_id) AS real_repo_count
                     FROM team_metrics_daily
                     ` + innerWhere + `
@@ -537,14 +544,26 @@ func retractedTeamDaysQuery(innerWhere string) string {
                         day,
                         team_id,
                         repo_id,
-                        argMax(commits_count,             computed_at) AS commits_count,
-                        argMax(after_hours_commits_count, computed_at) AS after_hours_commits_count,
-                        argMax(weekend_commits_count,      computed_at) AS weekend_commits_count,
-                        ` + liverow.NewestPredicate("team_metrics_daily", "") + ` AS live,
+                        commits_count,
+                        after_hours_commits_count,
+                        weekend_commits_count,
+                        ` + liverow.Predicate("team_metrics_daily", "newest") + ` AS live,
                         countIf(repo_id != '') OVER (PARTITION BY day, team_id) AS real_repo_count
-                    FROM team_metrics_daily
-                    ` + innerWhere + `
-                    GROUP BY day, team_id, repo_id
+                    FROM (
+                        SELECT
+                            day,
+                            team_id,
+                            repo_id,
+                            argMax(` + teamkeytables.TeamMetricsDailyPick + `, ` + teamkeytables.TeamMetricsDailyNewestOrder + `) AS picked,
+                            picked.1 AS commits_count,
+                            picked.2 AS after_hours_commits_count,
+                            picked.3 AS weekend_commits_count,
+                            picked.4 AS after_hours_commit_ratio,
+                            picked.5 AS weekend_commit_ratio
+                        FROM team_metrics_daily
+                        ` + innerWhere + `
+                        GROUP BY day, team_id, repo_id
+                    ) AS newest
                 )
                 WHERE repo_id != '' OR real_repo_count = 0
             )

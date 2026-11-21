@@ -146,7 +146,7 @@ func activeBucketUnitsNow(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	count, _, err := countActiveBucketUnits(ctx, tx, claimSnapshotBucket(), now.Add(-staleDispatchSeconds()), now)
+	count, _, _, err := countActiveBucketUnits(ctx, tx, claimSnapshotBucket(), now.Add(-staleDispatchSeconds()), now)
 	if err != nil {
 		t.Fatalf("countActiveBucketUnits: %v", err)
 	}

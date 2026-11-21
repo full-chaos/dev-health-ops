@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/jackc/pgx/v5"
 	"go.opentelemetry.io/otel/attribute"
@@ -47,6 +48,27 @@ type dispatchGuardUnit struct {
 	costClass   string
 	updatedAt   time.Time
 	availableAt *time.Time
+	datasetKey  string
+	// chunked is guardUnitChunked(provider, datasetKey): the unit keeps its slot through every chunk continuation.
+	chunked bool
+}
+
+// guardUnitChunked is the executor's own Chunked flag for the pair. A key the descriptor does not know is not chunked,
+// so it gets no share limit (the behavior before CHAOS-14468).
+func guardUnitChunked(provider, datasetKey string) bool {
+	descriptor, known := providersync.Descriptor(provider, datasetKey)
+	return known && descriptor.Chunked
+}
+
+// chunkedDatasetKeys lists the provider's dataset keys guardUnitChunked reports as chunked, for the active read.
+func chunkedDatasetKeys(provider string) []string {
+	keys := []string{}
+	for _, capability := range providersync.Capabilities(provider) {
+		if guardUnitChunked(provider, capability.Dataset) {
+			keys = append(keys, capability.Dataset)
+		}
+	}
+	return keys
 }
 
 // guardDecision ports guard.py's GuardDecision dataclass verbatim. Three
@@ -258,7 +280,7 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, orgID,
 		// The total cap is opt-in (SYNC_RUN_MAX_UNITS; unset or 0 = none) and is the
 		// same value the materializer reads; the org's tier limit no longer sets it.
 		totalCap: scheduledsync.UnitCapFromEnv,
-		activeCount: func(bucket dispatchBucket) (int, int, error) {
+		activeCount: func(bucket dispatchBucket) (int, int, int, error) {
 			return countActiveBucketUnits(ctx, tx, bucket, staleCutoff, now)
 		},
 		emit: func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, heldBack int) {
@@ -279,8 +301,9 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, orgID,
 type guardEnv struct {
 	lockBuckets func([]dispatchBucket) error
 	totalCap    func() int
-	// activeCount returns the bucket's active units and, of those, the units of backfill runs, from one read.
-	activeCount func(dispatchBucket) (active, activeBackfill int, err error)
+	// activeCount returns the bucket's active units and, of those, the units of backfill runs and the chunked units, from
+	// one read.
+	activeCount func(dispatchBucket) (active, activeBackfill, activeChunked int, err error)
 	emit        func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, heldBack int)
 	// self is the deciding run's admission position; olderRuns lists the bucket's older open runs with waiting units
 	// (CHAOS-8880).
@@ -300,9 +323,19 @@ type guardBucketFold struct {
 	reclaims       reclaimHeap
 	reclaimCount   int
 	newCount       int
-	newKept        []string
-	newOverflow    []string
+	news           []guardNewUnit
 	cappedReclaims []dispatchGuardUnit
+	// chunkedShare is chunkedSlotLimit's bound on new chunked units, or -1 for none. It applies only when plainWaiting:
+	// the run has a non-chunked candidate of this pass in the bucket (planned, due retrying or stale dispatching; a
+	// retrying unit whose available_at is still ahead is no candidate). The budget and cooldown steps run after the guard,
+	// so a candidate they deny in this pass leaves the kept slot empty until the next pass.
+	chunkedShare int
+	plainWaiting bool
+}
+
+type guardNewUnit struct {
+	id      string
+	chunked bool
 }
 
 // reclaimHeap is a max-heap on reclaim priority: the worst-priority kept reclaim sits on top.
@@ -328,6 +361,9 @@ func (heap *reclaimHeap) Pop() any {
 
 func (fold *guardBucketFold) addReclaim(unit dispatchGuardUnit) {
 	fold.reclaimCount++
+	if !unit.chunked {
+		fold.plainWaiting = true
+	}
 	if fold.slots == 0 {
 		fold.cappedReclaims = append(fold.cappedReclaims, unit)
 		return
@@ -338,31 +374,49 @@ func (fold *guardBucketFold) addReclaim(unit dispatchGuardUnit) {
 	}
 }
 
-func (fold *guardBucketFold) addNew(id string) {
+func (fold *guardBucketFold) addNew(unit dispatchGuardUnit) {
 	fold.newCount++
-	if len(fold.newKept) < fold.slots {
-		fold.newKept = append(fold.newKept, id)
-		return
+	fold.news = append(fold.news, guardNewUnit{id: unit.id, chunked: unit.chunked})
+	if !unit.chunked {
+		fold.plainWaiting = true
 	}
-	fold.newOverflow = append(fold.newOverflow, id)
 }
 
-// cappedIDs is the old prioritized[allowedSlots:] in the old order: the capped reclaims (sorted), then capped new work by id.
+// cappedIDs lists the capped reclaims (sorted), then the capped new work by id. New work is claimable by id up to the
+// slots the reclaims leave; while the run has a non-chunked unit waiting, new chunked units take at most chunkedShare
+// of them and the rest go to the non-chunked units.
 func (fold *guardBucketFold) cappedIDs() []string {
 	sort.Slice(fold.cappedReclaims, func(i, j int) bool { return reclaimBefore(fold.cappedReclaims[i], fold.cappedReclaims[j]) })
-	ids := make([]string, 0, len(fold.cappedReclaims)+len(fold.newKept)+len(fold.newOverflow))
+	ids := make([]string, 0, len(fold.cappedReclaims)+len(fold.news))
 	for _, unit := range fold.cappedReclaims {
 		ids = append(ids, unit.id)
 	}
-	claimableNew := fold.slots - fold.reclaimCount
-	if claimableNew < 0 {
-		claimableNew = 0
+	claimableNew := max(fold.slots-fold.reclaimCount, 0)
+	chunkedLimit := claimableNew
+	if fold.plainWaiting && fold.chunkedShare >= 0 {
+		// A kept stale chunked reclaim is not in activeChunked (the active read counts fresh dispatching only), so it
+		// uses up the share here. The share never refuses the reclaim itself: held back, an idle stale unit is what the
+		// unreclaimable sweep fails.
+		keptChunkedReclaims := 0
+		for _, unit := range fold.reclaims {
+			if unit.chunked {
+				keptChunkedReclaims++
+			}
+		}
+		chunkedLimit = min(chunkedLimit, max(fold.chunkedShare-keptChunkedReclaims, 0))
 	}
-	if claimableNew > len(fold.newKept) {
-		claimableNew = len(fold.newKept)
+	admitted, admittedChunked := 0, 0
+	for _, unit := range fold.news {
+		if admitted < claimableNew && (!unit.chunked || admittedChunked < chunkedLimit) {
+			admitted++
+			if unit.chunked {
+				admittedChunked++
+			}
+			continue
+		}
+		ids = append(ids, unit.id)
 	}
-	ids = append(ids, fold.newKept[claimableNew:]...)
-	return append(ids, fold.newOverflow...)
+	return ids
 }
 
 // decideDispatchGuard is the guard decision, folded over keyset pages (each read returns at most unitPageSize rows;
@@ -449,7 +503,7 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 	livenessBound := admissionLivenessBound()
 	var heldBackRunIDs []string
 	for _, bucket := range allBuckets {
-		activeCount, activeBackfill, err := env.activeCount(bucket)
+		activeCount, activeBackfill, activeChunked, err := env.activeCount(bucket)
 		if err != nil {
 			return guardDecision{}, err
 		}
@@ -477,7 +531,7 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 		if slots > 0 {
 			slots = min(slots, backfillSlotLimit(env.self, capValue, activeBackfill, older, now, livenessBound))
 		}
-		folds[bucket] = &guardBucketFold{slots: slots}
+		folds[bucket] = &guardBucketFold{slots: slots, chunkedShare: chunkedSlotLimit(capValue, activeChunked)}
 	}
 
 	// The authorized set is every candidate of a locked, cap-checked bucket and nothing else.
@@ -495,7 +549,7 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 		if unit.status == syncRunUnitStatusDispatching {
 			fold.addReclaim(unit)
 		} else {
-			fold.addNew(unit.id)
+			fold.addNew(unit)
 		}
 		return nil
 	}); err != nil {
@@ -546,7 +600,7 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 // routes into is the identical one round 3 fixed for reference_discovery.
 func forEachDispatchGuardUnit(ctx context.Context, tx pgx.Tx, runID string, fold func(dispatchGuardUnit) error) error {
 	load := func(afterID string, limit int) ([]dispatchGuardUnit, error) {
-		const columns = `SELECT id::text, status, provider, cost_class, updated_at, available_at FROM public.sync_run_units`
+		const columns = `SELECT id::text, status, provider, cost_class, updated_at, available_at, dataset_key FROM public.sync_run_units`
 		var rows pgx.Rows
 		var err error
 		if afterID == "" {
@@ -561,9 +615,10 @@ func forEachDispatchGuardUnit(ctx context.Context, tx pgx.Tx, runID string, fold
 		var units []dispatchGuardUnit
 		for rows.Next() {
 			var unit dispatchGuardUnit
-			if err := rows.Scan(&unit.id, &unit.status, &unit.provider, &unit.costClass, &unit.updatedAt, &unit.availableAt); err != nil {
+			if err := rows.Scan(&unit.id, &unit.status, &unit.provider, &unit.costClass, &unit.updatedAt, &unit.availableAt, &unit.datasetKey); err != nil {
 				return nil, fmt.Errorf("%w: scan dispatch guard unit: %w", ErrDiscoveryTransientFailure, err)
 			}
+			unit.chunked = guardUnitChunked(unit.provider, unit.datasetKey)
 			units = append(units, unit)
 		}
 		if err := rows.Err(); err != nil {
@@ -603,6 +658,18 @@ func backfillSlotLimit(self runOrder, capValue, activeBackfill int, older []olde
 	return share - held
 }
 
+// chunkedSlotLimit is the most slots of a bucket new chunked units may hold while the deciding run has a non-chunked
+// unit waiting there (CHAOS-14468): a chunked unit keeps its slot through every chunk continuation, so chunked units hold
+// at most cap-1 slots and one slot stays for the run's short units. activeChunked is bucket-wide (every run), like the
+// active count. A bucket with cap 1 (a reserve there would stop the chunked route) has no limit (-1). Under a backfill
+// share too, the smaller bound wins: both cut the slots of the fold.
+func chunkedSlotLimit(capValue, activeChunked int) int {
+	if capValue < 2 {
+		return -1
+	}
+	return max(capValue-1-activeChunked, 0)
+}
+
 // The pieces of the active-count statement, named so the backfill wait gauge (backfill_wait_gauge.go) reads the same
 // capacity-consumer set in one grouped statement. Parameters $4..$7 are the status and time arguments of the live clause.
 const (
@@ -623,25 +690,28 @@ LEFT JOIN public.sync_runs AS run ON run.id = unit.sync_run_id`
 // never consumes capacity. Consumer and candidate sets are disjoint by
 // construction; no subtraction is performed. The second count is the part
 // of that set whose run is a backfill (readRunOrder's rule), from the same
-// read (CHAOS-14211).
+// read (CHAOS-14211); the third is the part whose dataset key is chunked
+// (chunkedDatasetKeys, CHAOS-14468).
 //
 // Error classification: same as loadDispatchGuardUnits -- a bare query
 // execution failure, retryable.
-func countActiveBucketUnits(ctx context.Context, tx pgx.Tx, bucket dispatchBucket, staleCutoff, now time.Time) (int, int, error) {
-	var count, backfill int
+func countActiveBucketUnits(ctx context.Context, tx pgx.Tx, bucket dispatchBucket, staleCutoff, now time.Time) (int, int, int, error) {
+	var count, backfill, chunked int
 	err := tx.QueryRow(ctx, `
-SELECT `+activeBucketUnitsCounts+`
+SELECT `+activeBucketUnitsCounts+`,
+       count(*) FILTER (WHERE lower(btrim(unit.dataset_key)) = ANY($8::text[]))
 `+activeBucketUnitsFrom+`
 WHERE unit.org_id = $1 AND unit.provider = $2 AND unit.cost_class = $3
   AND `+activeBucketUnitsLive,
 		bucket.orgID, bucket.provider, bucket.costClass,
 		syncRunUnitStatusDispatching, staleCutoff,
 		syncRunUnitStatusRunning, now,
-	).Scan(&count, &backfill)
+		chunkedDatasetKeys(bucket.provider),
+	).Scan(&count, &backfill, &chunked)
 	if err != nil {
-		return 0, 0, fmt.Errorf("%w: count active bucket units: %w", ErrDiscoveryTransientFailure, err)
+		return 0, 0, 0, fmt.Errorf("%w: count active bucket units: %w", ErrDiscoveryTransientFailure, err)
 	}
-	return count, backfill, nil
+	return count, backfill, chunked, nil
 }
 
 // sortBucketList ports guard.py's `sorted(set(...))` -- deterministic ordering is what makes the advisory

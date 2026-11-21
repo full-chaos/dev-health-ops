@@ -262,6 +262,10 @@ type githubTestsChunkCursor struct {
 	// part, runs read again, and the record bounds do not charge them. It stays for the whole walk. A credit earned in the deep
 	// range is also taken off LateRecords, so the window records less this credit leave the deep range out as before.
 	RecordCredit int `json:"rc,omitempty"`
+	// DeletionProven is 1 once a resume of this walk proved a run deleted before its anchor (githubTestsResumeDeleted), with
+	// or without credit: a deep stop at the record bound then holds the watermark (githubTestsHoldDeepStopAfterDeletion).
+	// It stays for the whole walk; an older binary ignores it and behaves as main (CHAOS-14434).
+	DeletionProven int `json:"d,omitempty"`
 }
 
 // markGitHubTestsSkippedArtifactCauseOverflow returns a NEW map with cause
@@ -625,14 +629,14 @@ func recordGitHubTestsWalkBound(
 	return cursor
 }
 
-// githubTestsHoldDeepStopAfterCredit: a deep listing stopped at the record bound in a walk that earned record credit (a
-// re-seek, the only path to a credited deletion) may stop before a survivor the credit did not cover (CHAOS-14434). Its
-// advancing stop then also records a window-blocking truncation: the watermark holds, and the next walk (credit 0) reads
-// the deep range again.
-func githubTestsHoldDeepStopAfterCredit(
+// githubTestsHoldDeepStopAfterDeletion: a deep listing stopped at the record bound in a walk that proved a deletion
+// (DeletionProven) may stop before a survivor the deletion credit did not cover (CHAOS-14434). Its advancing stop then
+// also records a window-blocking truncation (run_inventory for the deep runs, artifact_inventory for the deep reports): the
+// watermark holds, and the next walk reads the deep range again. Re-seek credit alone (an inserted run) holds nothing.
+func githubTestsHoldDeepStopAfterDeletion(
 	cursor githubTestsChunkCursor, client *providerfoundation.HTTPClient, claim Claim, component string,
 ) githubTestsChunkCursor {
-	if cursor.RecordCredit == 0 {
+	if cursor.DeletionProven == 0 {
 		return cursor
 	}
 	return markGitHubTestsInventoryTruncated(cursor, client, claim, component)
@@ -1266,7 +1270,7 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 		cursor.OpenSkipEvent != nil && (cursor.OpenSkipEvent.RunID == "" || cursor.OpenSkipEvent.Reason == "") ||
 		cursor.Index < 0 || cursor.NextURL == "" && cursor.Index != 0 ||
 		cursor.AnchorID != "" && !githubTestsCutRunDigits(cursor.AnchorID, 20) ||
-		cursor.RunPages < 0 || cursor.ArtifactPages < 0 || cursor.ReseekPages < 0 || cursor.PagesEntered < 0 || cursor.RecordCredit < 0 || cursor.Relist < 0 || cursor.Relist > githubTestsRelistStoppedSaturated ||
+		cursor.RunPages < 0 || cursor.ArtifactPages < 0 || cursor.ReseekPages < 0 || cursor.PagesEntered < 0 || cursor.RecordCredit < 0 || cursor.DeletionProven < 0 || cursor.DeletionProven > 1 || cursor.Relist < 0 || cursor.Relist > githubTestsRelistStoppedSaturated ||
 		// The counter pair is either both known or both unknown, never split:
 		// a cursor carrying exactly one is corrupt, not a legacy shape (a
 		// legacy cursor predates the field entirely, so it is missing BOTH).
@@ -1736,7 +1740,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	// also comes off LateRecords, as creditRecords does (CHAOS-14434).
 	deletionCeiling := maxWalkRecords / 20
 	creditDeletion := func(deleted int, phase string) {
-		if deleted <= 0 || cursor.Pipelines <= 0 {
+		if deleted <= 0 {
+			return
+		}
+		cursor.DeletionProven = 1
+		if cursor.Pipelines <= 0 {
 			return
 		}
 		records := cursor.Pipelines + cursor.Jobs + cursor.Acceptance
@@ -1797,8 +1805,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		return action == githubTestsResumeReseek, nil
 	}
 	// creditAtBound checks the anchor of a resume that starts at the record bound, before the bound stop: the stop would
-	// otherwise keep the charge of a run deleted before the anchor. A proven deletion is credited and the listing is sought
-	// again (true); anything else stops at the bound as before (false). Only the invocation's first listing call resumes.
+	// otherwise keep the charge of a run deleted before the anchor. A proven deletion that earns credit is credited and the
+	// listing is sought again (true); a proven deletion without credit (no population, or the ceiling spent) only marks the
+	// walk (DeletionProven) and stops at the bound; anything else stops at the bound as before (false). Only the
+	// invocation's first listing call resumes.
 	creditAtBound := func(phase string) (bool, error) {
 		if !firstPage || cursor.NextURL == "" || cursor.AnchorID == "" {
 			return false, nil
@@ -1823,12 +1833,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			}
 			pageEnd = end
 		}
-		deleted := githubTestsResumeDeleted(cursor, page, pageEnd)
-		if deleted == 0 {
+		credit := cursor.RecordCredit
+		creditDeletion(githubTestsResumeDeleted(cursor, page, pageEnd), phase)
+		if cursor.RecordCredit == credit {
 			return false, nil
 		}
 		githubTestsResumeStart(cursor, page, true, pageEnd, client, claim, phase)
-		creditDeletion(deleted, phase)
 		return true, nil
 	}
 	// coalesceHeld: the last emission was coalescable, so the executor may still hold it.
@@ -2160,7 +2170,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		if walkBoundHit() && cursor.LateRuns {
 			logGitHubTestsWalkBound(cursor, claim, githubTestsLateRerunRunsComponent, maxWalkRecords)
-			cursor = githubTestsHoldDeepStopAfterCredit(cursor, client, claim, githubTestsRunInventoryComponent)
+			cursor = githubTestsHoldDeepStopAfterDeletion(cursor, client, claim, githubTestsRunInventoryComponent)
 			cursor = recordGitHubTestsLateRerunRunsStop(cursor, client, claim, githubTestsPageBudgetCause, cursor.LateRunPages)
 			cursor = nextRunsListing(cursor)
 			cursor.NextURL, cursor.Index = "", 0
@@ -2199,7 +2209,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				}
 				if errors.Is(visitErr, errGitHubTestsWalkBound) {
 					logGitHubTestsWalkBound(cursor, claim, githubTestsLateRerunRunsComponent, maxWalkRecords)
-					cursor = githubTestsHoldDeepStopAfterCredit(cursor, client, claim, githubTestsRunInventoryComponent)
+					cursor = githubTestsHoldDeepStopAfterDeletion(cursor, client, claim, githubTestsRunInventoryComponent)
 					visitErr, exhausted = nil, true
 				}
 				if visitErr != nil {

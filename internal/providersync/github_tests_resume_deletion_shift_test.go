@@ -461,6 +461,9 @@ func deletionShiftCheck(t *testing.T, name string, outcome deletionShiftOutcome)
 		}
 	case strings.HasPrefix(name, "charged/") && len(outcome.unread) != 0:
 		t.Errorf("%s: %d survivors unread, want 0 (watermark advanced=%v)", name, len(outcome.unread), outcome.watermark)
+	case strings.HasPrefix(name, "charged/deep_") && outcome.watermark:
+		// A deep stop at the record bound in a walk that proved a deletion holds the watermark.
+		t.Errorf("%s: the deep stop after a proven deletion advanced the watermark (incomplete=%v)", name, outcome.incomplete)
 	}
 }
 

@@ -517,8 +517,13 @@ func splitCompleteRouteBatch(
 	// emit several normalized effects for one source item, so using only the
 	// effect cap would allow one source page to grow without limit.
 	maxRows := min(policy.MaxEffectRows, policy.MaxSourceItems)
-	payloadLimit := splitPayloadLimit(policy)
 	for maxRows >= 1 {
+		// The reserved limit is the HALVING threshold. A chunk that cannot shrink further (one row per destination) is judged on the
+		// plain policy limit: the store's own sizing decides, as before the reserve existed.
+		payloadLimit := splitPayloadLimit(policy)
+		if maxRows == 1 {
+			payloadLimit = policy.MaxPreparedBytes
+		}
 		count := 1
 		for _, effect := range ordered {
 			if rows := (len(effect.Rows) + maxRows - 1) / maxRows; rows > count {
@@ -599,8 +604,8 @@ func splitCompleteRouteBatch(
 // payload_bytes. Every other field of PreparedProviderChunk (rows, final result, watermark, evidence, comparison) is measured.
 const splitReserveBytes = maxEffectLedgerStateBytes + 2*6*maxChunkCursorBytes + 1<<10
 
-// splitPayloadLimit is the sidecar size a sub-chunk may have when the split decides. The store refuses a chunk whose payload and
-// ledger column together pass maxChunkPayloadBytes (buildPreparedChunkMaterial).
+// splitPayloadLimit is the sidecar size above which the split halves its rows. The store refuses a chunk whose payload and
+// ledger column together pass maxChunkPayloadBytes (buildPreparedChunkMaterial). A one-row chunk falls back to MaxPreparedBytes.
 func splitPayloadLimit(policy ChunkPolicy) int {
 	return min(policy.MaxPreparedBytes, maxChunkPayloadBytes-splitReserveBytes)
 }

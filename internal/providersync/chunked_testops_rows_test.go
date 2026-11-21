@@ -384,3 +384,168 @@ func TestSplitAcceptedSubchunkIsAcceptedByTheStoreAtWorstCaseCursorsAndFinalResu
 			len(material.payloadRaw)+len(material.ledgerRaw), maxChunkPayloadBytes)
 	}
 }
+
+// A chunk that cannot shrink any further (one row per destination) is judged on the plain policy limit, so a single row in the reserve
+// margin is accepted by the split and by the store, as before the reserve existed. The reserve is the HALVING threshold only.
+func marginRow(t *testing.T, pad int) json.RawMessage {
+	t.Helper()
+	return json.RawMessage(`{"org_id":"org-acme","pad":"` + strings.Repeat("x", pad) + `"}`)
+}
+
+func marginBatch(t *testing.T, caseRows []json.RawMessage) CompleteRouteBatch {
+	t.Helper()
+	effects := make([]EffectBatch, 0, 7)
+	for _, destination := range []string{"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks", "test_suite_results",
+		"test_case_results", "coverage_snapshots", testOpsRunReportCompletenessDestination} {
+		rows := []json.RawMessage{json.RawMessage(`{"org_id":"org-acme","d":"` + destination + `"}`)}
+		if destination == "test_case_results" {
+			rows = caseRows
+		}
+		effect, err := BuildEffectBatch(destination, EffectReplaySafe, rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		effects = append(effects, effect)
+	}
+	return CompleteRouteBatch{Effects: effects}
+}
+
+// tunedMarginPad returns the row pad that makes ONE case row's chunk payload land `above` bytes over the reserved limit.
+func tunedMarginPad(t *testing.T, above int) int {
+	t.Helper()
+	measure := func(pad int) int {
+		chunk := PreparedProviderChunk{SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion, TotalChunks: 1,
+			Effects: marginBatch(t, []json.RawMessage{marginRow(t, pad)}).Effects, InventoryComplete: true}
+		encoded, err := encodedPreparedChunkPayload(chunk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(encoded)
+	}
+	target := splitPayloadLimit(TestOpsRouteChunkPolicy()) + above
+	pad := target - 2000
+	for step := 0; step < 40 && abs(measure(pad)-target) > 8; step++ {
+		pad += target - measure(pad)
+	}
+	if got := measure(pad); abs(got-target) > 64 {
+		t.Fatalf("pad %d gives %d bytes, want about %d", pad, got, target)
+	}
+	return pad
+}
+
+func storeAcceptsChunks(t *testing.T, chunks []PreparedProviderChunk) error {
+	t.Helper()
+	claim := nativeTestClaim("github", "cicd")
+	resetEmissionChunks(chunks, ChunkRouteEmission{CursorBefore: "before", CursorAfter: "after"})
+	for index := range chunks {
+		if err := sizeEmissionChunks(chunks[index : index+1]); err != nil {
+			t.Fatal(err)
+		}
+		chunks[index].Ordinal = 40 + index
+		chunks[index].ManifestDigest = preparedChunkDigest(chunks[index])
+		if _, err := buildPreparedChunkMaterial(claim, chunks[index], time.Date(2026, 12, 31, 23, 59, 59, 999_999_999, time.UTC)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func TestSingleRowInTheReserveMarginIsAcceptedOnEveryTestOpsRoute(t *testing.T) {
+	t.Parallel()
+	pad := tunedMarginPad(t, 3000)
+	for _, route := range testOpsRoutePairs {
+		descriptor, ok := Descriptor(route[0], route[1])
+		if !ok {
+			t.Fatalf("%s/%s has no descriptor", route[0], route[1])
+		}
+		chunks, err := SplitCompleteRouteBatch(marginBatch(t, []json.RawMessage{marginRow(t, pad)}), descriptor.ChunkPolicy)
+		if err != nil || len(chunks) != 1 {
+			t.Fatalf("%s/%s: a single row in the margin split into %d chunks, err=%v, want 1 and nil", route[0], route[1], len(chunks), err)
+		}
+		written := 0
+		for _, effect := range chunks[0].Effects {
+			written += len(effect.Rows)
+		}
+		if written != 7 {
+			t.Fatalf("%s/%s: the chunk holds %d rows, want the 7 rows of the 7 destinations", route[0], route[1], written)
+		}
+		if err := storeAcceptsChunks(t, chunks); err != nil {
+			t.Fatalf("%s/%s: the store refuses a single-row chunk in the margin: %v", route[0], route[1], err)
+		}
+	}
+}
+
+// Above what the store takes the refusal stays: the split refuses a one-row payload over 2 MiB, and the store refuses payload + ledger
+// over 2 MiB. Both are the behaviour on main before the reserve existed, not a change of this PR.
+func TestSingleRowAboveWhatTheStoreAcceptsIsRefusedAsOnMain(t *testing.T) {
+	t.Parallel()
+	over := tunedMarginPad(t, maxChunkPayloadBytes-splitPayloadLimit(TestOpsRouteChunkPolicy())+4000)
+	if _, err := SplitCompleteRouteBatch(marginBatch(t, []json.RawMessage{marginRow(t, over)}), TestOpsRouteChunkPolicy()); !errors.Is(err, ErrChunkPolicyExceeded) {
+		t.Fatalf("a one-row payload over 2 MiB: err=%v, want the policy refusal", err)
+	}
+	between := tunedMarginPad(t, maxChunkPayloadBytes-splitPayloadLimit(TestOpsRouteChunkPolicy())-300)
+	chunks, err := SplitCompleteRouteBatch(marginBatch(t, []json.RawMessage{marginRow(t, between)}), TestOpsRouteChunkPolicy())
+	if err != nil || len(chunks) != 1 {
+		t.Fatalf("a one-row payload just under 2 MiB: %d chunks, err=%v, want the split to accept it", len(chunks), err)
+	}
+	if err := storeAcceptsChunks(t, chunks); err == nil {
+		t.Fatal("the store accepted payload + ledger over 2 MiB")
+	}
+}
+
+// Rows that are each in the margin halve down to one row per chunk and every row is written.
+func TestRowsEachInTheReserveMarginHalveToSingleRowsAndAreAllKept(t *testing.T) {
+	t.Parallel()
+	pad := tunedMarginPad(t, 3000)
+	rows := []json.RawMessage{marginRow(t, pad), marginRow(t, pad+1), marginRow(t, pad+2)}
+	chunks, err := SplitCompleteRouteBatch(marginBatch(t, rows), TestOpsRouteChunkPolicy())
+	if err != nil || len(chunks) != 3 {
+		t.Fatalf("3 rows each in the margin split into %d chunks, err=%v, want 3 single-row chunks", len(chunks), err)
+	}
+	kept := 0
+	for _, chunk := range chunks {
+		for _, effect := range chunk.Effects {
+			if effect.Destination == "test_case_results" {
+				kept += len(effect.Rows)
+			}
+		}
+	}
+	if kept != 3 {
+		t.Fatalf("the chunks keep %d of 3 rows", kept)
+	}
+	if err := storeAcceptsChunks(t, chunks); err != nil {
+		t.Fatalf("the store refuses a chunk of the halved emission: %v", err)
+	}
+}
+
+// github/files: one row in the margin is one sub-chunk the store accepts, so the route keeps its contents (the pre-check shares the split).
+func TestGitHubFilesSingleRowInTheReserveMarginKeepsItsContents(t *testing.T) {
+	t.Parallel()
+	claim := nativeTestClaim("github", "files")
+	build := func(length int) EffectBatch {
+		text := strings.Repeat("x", length)
+		row := gitFileRow{RepoID: "r", Path: "src/a.go", Contents: &text, LastSynced: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC), OrgID: claim.OrgID}
+		effect, err := effectBatchFromValues("git_files", EffectReadbackRequired, []gitFileRow{row})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return effect
+	}
+	limit := splitPayloadLimit(GitHubFilesChunkPolicy())
+	length := limit + 3000
+	for step := 0; step < 40; step++ {
+		chunk := PreparedProviderChunk{SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion, TotalChunks: 1,
+			Effects: []EffectBatch{build(length)}, InventoryComplete: true}
+		encoded, err := encodedPreparedChunkPayload(chunk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if abs(len(encoded)-(limit+3000)) <= 8 {
+			break
+		}
+		length += limit + 3000 - len(encoded)
+	}
+	if !gitHubFilesChunkFits(claim, build(length), "before", "after") {
+		t.Fatalf("a single file row %d bytes over the reserved limit is refused by the pre-check although the store takes it", 3000)
+	}
+}

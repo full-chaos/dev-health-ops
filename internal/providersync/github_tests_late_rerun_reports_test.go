@@ -202,8 +202,9 @@ func TestGitHubTestsLateRerunDeepStopAdvances(t *testing.T) {
 	}{
 		{"page budget", GitHubTestsRouteHandler{LateRerunMaxPages: 1}, append([]listingRun{late}, makeListingRuns(2000, 150, time.Date(2026, 6, 28, 0, 0, 0, 0, time.UTC), time.Minute)...), githubTestsPageBudgetCause},
 		{"saturated second", GitHubTestsRouteHandler{}, append([]listingRun{late}, saturating...), githubTestsListingSaturatedCause},
-		// 1,000 runs fill the first deep range and a 10-page budget exactly; the peeled next range finds the budget spent.
-		{"page budget at a peel", GitHubTestsRouteHandler{LateRerunMaxPages: 10}, append([]listingRun{late}, makeListingRuns(3000, 1000, time.Date(2026, 6, 28, 0, 0, 0, 0, time.UTC), time.Minute)...), githubTestsPageBudgetCause},
+		// 1,000 runs fill the first deep range and a 10-page budget exactly; the peeled next range reads its free first page
+		// (CHAOS-14435: it lists the cut second again) and then finds the budget spent with 100 runs left.
+		{"page budget at a peel", GitHubTestsRouteHandler{LateRerunMaxPages: 10}, append([]listingRun{late}, makeListingRuns(3000, 1200, time.Date(2026, 6, 28, 0, 0, 0, 0, time.UTC), time.Minute)...), githubTestsPageBudgetCause},
 	} {
 		t.Run(cell.name, func(t *testing.T) {
 			fake := newListingFake(t, cell.runs)
@@ -277,13 +278,14 @@ func TestGitHubTestsLateRerunCursorState(t *testing.T) {
 	}
 }
 
-// The default deep budget is 1,000 pages. A deep range of 102 pages (over the regular range's 100) is walked in many chunks:
-// each continuation resumes the deep listing where the last one stopped, and the walk ends with no observation.
+// The default deep budget is 1,000 pages. A deep range of 113 pages (102 charged: each of its 11 peels' first page is free,
+// CHAOS-14435; over the regular range's 100) is walked in many chunks: each continuation resumes the deep listing where the
+// last one stopped, and the walk ends with no observation.
 func TestGitHubTestsLateRerunDeepRangeResumesAcrossChunks(t *testing.T) {
 	since, before := time.Date(2026, 7, 4, 23, 0, 0, 0, time.UTC), time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC)
 	late := listingRun{id: 1, created: time.Date(2026, 7, 1, 0, 50, 0, 0, time.UTC), startedAt: time.Date(2026, 7, 4, 1, 0, 0, 0, time.UTC), status: "completed", conclusion: "success"}
 	late.updated = late.startedAt.Add(time.Hour)
-	old := makeListingRuns(100000, 10100, time.Date(2026, 6, 27, 0, 0, 0, 0, time.UTC), 30*time.Second)
+	old := makeListingRuns(100000, 11200, time.Date(2026, 6, 27, 0, 0, 0, 0, time.UTC), 27*time.Second)
 	fake := newListingFake(t, append([]listingRun{late}, old...))
 	walk := walkListing(t, GitHubTestsRouteHandler{}, lateRerunClaim(since, before), fake, 2000)
 	if walk.passes < 3 {

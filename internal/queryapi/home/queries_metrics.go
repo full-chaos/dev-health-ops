@@ -417,12 +417,13 @@ type driverRow struct {
 // guard (see that file's flowMatrixTeamActivitySelect doc comment).
 //
 // The drivers take the value's own reducer and status filter (driverValueSQL, driverStatusFilter); fromZero is a value
-// that rose from a measured 0, whose drivers rank by the absolute rise (driverRank).
-func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, column, groupBy string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string, limit int, fromZero bool) ([]driverRow, error) {
+// that rose from a measured 0, whose drivers rank by the absolute rise (driverRank). shareSQL is the share weight of a
+// repository sum under a team scope (scopeShareForMetric), "" otherwise.
+func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, column, groupBy string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string, limit int, shareSQL string, fromZero bool) ([]driverRow, error) {
 	scopeFilter += driverStatusFilter(table, column)
 	currentFrom := driverDeltaSource(table, column, scopeFilter, "start_day", "end_day")
 	previousFrom := driverDeltaSource(table, column, scopeFilter, "compare_start", "compare_end")
-	value, rate := driverValueSQL(table, column)
+	value, rate := driverValueSQL(table, column, shareSQL)
 	if rate {
 		return fetchRateDriverDelta(ctx, client, value, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit, fromZero)
 	}

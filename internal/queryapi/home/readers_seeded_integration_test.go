@@ -494,7 +494,7 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		// fake client, which never runs the real guard.
 		compareStart := time.Date(2025, 12, 24, 0, 0, 0, 0, time.UTC)
 		compareEnd := time.Date(2025, 12, 26, 0, 0, 0, 0, time.UTC)
-		got, err := fetchMetricDriverDelta(ctx, client, "repo_metrics_daily", "total_loc_touched", "repo_id", startDay, endDay, compareStart, compareEnd, "", nil, seededOrgID, 3, false)
+		got, err := fetchMetricDriverDelta(ctx, client, "repo_metrics_daily", "total_loc_touched", "repo_id", startDay, endDay, compareStart, compareEnd, "", nil, seededOrgID, 3, "", false)
 		if err != nil {
 			t.Fatalf("fetchMetricDriverDelta: %v", err)
 		}

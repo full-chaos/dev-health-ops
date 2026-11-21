@@ -9,7 +9,6 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
-	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 )
 
@@ -20,6 +19,8 @@ type driverBatchMetric struct {
 	ScopeFilter string
 	// FromZero is a value that rose from a measured 0: its drivers rank by the absolute rise (driverRank).
 	FromZero bool
+	// ShareSQL is the team's share of each repository that weighs the value of a repository sum (scopeShareForMetric).
+	ShareSQL string
 }
 
 // fetchMetricDriversBatch is fetchMetricDriverDelta for several metrics in ONE
@@ -86,7 +87,7 @@ func metricDriverSelect(m driverBatchMetric) string {
 	scopeFilter := m.ScopeFilter + driverStatusFilter(table, column)
 	currentFrom := metricFromClause(table, column, scopeFilter, "start_day", "end_day", false)
 	previousFrom := metricFromClause(table, column, scopeFilter, "compare_start", "compare_end", false)
-	value, rate := driverValueSQL(table, column)
+	value, rate := driverValueSQL(table, column, m.ShareSQL)
 	rank, alias, where := driverRank(m.FromZero, driverSums(table, column), rate)
 	return fmt.Sprintf(`            SELECT metric, id, %s AS rank_value FROM (
                 SELECT
@@ -107,32 +108,38 @@ func metricDriverSelect(m driverBatchMetric) string {
             )`, alias, m.Metric, rank, alias, groupBy, value, currentFrom, groupBy, groupBy, value, previousFrom, groupBy, where)
 }
 
-// driverValueSQL is the value of one driver group in a window, by the reducer of the metric's own value: the window
-// rate of a rate metric (rate is true: the value can be NULL), the sum of a summed metric (cast: a sum of an integer
-// column is UInt64, which does not scan into a float), else the average.
-func driverValueSQL(table, column string) (value string, rate bool) {
-	switch {
-	case isPRRework(table, column):
-		return prrework.WindowRateSQL, true
-	case table == changefailure.Table:
-		return changefailure.WindowRateSQL, true
-	case isPipelineSuccess(table, column):
-		return pipelineSuccessWindowRateSQL, true
-	case driverSums(table, column):
-		return "toFloat64(sum(" + column + "))", false
-	}
-	return "avg(" + column + ")", false
+// driverValueSQL is the value of one driver group in a window: the value's own expression (metricValueExpression),
+// with the metric's reducer and, for a repository sum under a team scope, the same share weight (shareSQL). rate is
+// true for a rate metric, whose value can be NULL.
+func driverValueSQL(table, column, shareSQL string) (value string, rate bool) {
+	rate = isPRRework(table, column) || table == changefailure.Table || isPipelineSuccess(table, column)
+	return metricValueExpression(table, column, driverAggregator(table, column), shareSQL), rate
 }
 
-// driverSums says whether the Home value of this table and column is a sum (metricSpec.Aggregator): its drivers sum
-// too, as the value does.
-func driverSums(table, column string) bool {
+// driverAggregator is the reducer of the Home value of this table and column (metricSpec.Aggregator); avg for a table
+// and column no metric reads.
+func driverAggregator(table, column string) string {
 	for _, m := range metrics {
 		if m.Table == table && m.Column == column {
-			return m.Aggregator == "sum"
+			return m.Aggregator
 		}
 	}
-	return false
+	return "avg"
+}
+
+// driverSums says whether the Home value of this table and column is a sum: its drivers sum too, as the value does.
+func driverSums(table, column string) bool {
+	return driverAggregator(table, column) == "sum"
+}
+
+// driverShareSQL is the share weight of a metric's value for the request (scopeShareForMetric), for its driver read.
+func driverShareSQL(metric string, f Filters, orgID string, asOf time.Time) (string, []dhclickhouse.Binding) {
+	for _, spec := range metrics {
+		if spec.Metric == metric {
+			return scopeShareForMetric(spec, f, orgID, "repo_id", asOf)
+		}
+	}
+	return "", nil
 }
 
 // driverStatusFilter is the status predicate of the value: Blocked Work sums the hours in the blocked status only

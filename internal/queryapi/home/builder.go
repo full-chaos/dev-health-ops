@@ -422,7 +422,8 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 				if err != nil {
 					return nil, err
 				}
-				driverRows, err = fetchMetricDriverDelta(ctx, chClient, metricTable(topDelta.Metric), metricColumn(topDelta.Metric), metricGroup(topDelta.Metric), startDay, endDay, compareStart, compareEnd, scopeFilter, scopeBindings, orgID, 3, topDelta.FromZero())
+				shareSQL, shareBindings := driverShareSQL(topDelta.Metric, f, orgID, now)
+				driverRows, err = fetchMetricDriverDelta(ctx, chClient, metricTable(topDelta.Metric), metricColumn(topDelta.Metric), metricGroup(topDelta.Metric), startDay, endDay, compareStart, compareEnd, scopeFilter, append(scopeBindings, shareBindings...), orgID, 3, shareSQL, topDelta.FromZero())
 				if err != nil {
 					return nil, err
 				}

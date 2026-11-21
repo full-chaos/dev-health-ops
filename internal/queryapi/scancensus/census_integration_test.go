@@ -881,6 +881,12 @@ const nullableIntoPlainSites = `
 //	queries_metrics.go fetchMetricValue 271ec8ba88d7 -> 32cfbee5d369
 //	queries_metrics.go fetchPRReworkView a0f9dc8a97b2 -> f2e5aa5edd0b
 //	queries_metrics.go fetchRateDriverDelta 58589d38e782 -> fef6e4dd8810 (not-describable -> spliced-select-list)
+//
+// CHAOS-14441 (the driver of a repository sum under a team scope takes the value's share weight): fetchMetricDriverDelta
+// takes shareSQL. Scan targets unchanged. Re-pinned by hand from the failing local TestScanTypeCensus run
+// (logs/l14441-censuses-2.log 706932d1bfc2), not computed:
+//
+//	queries_metrics.go fetchMetricDriverDelta 1d471ff67adb -> be0937cb6512
 const unverifiedSites = `
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|e67003e26fc2|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|e67003e26fc2|not-describable
@@ -921,7 +927,7 @@ internal/queryapi/explain/repositories.go|fetchWorkItemProviders|*string|cc6f1e4
 internal/queryapi/home/queries_metric_drivers_batch.go|fetchMetricDriversBatch|*string,*string|e7e8b7f8955e|not-describable
 internal/queryapi/home/queries_metrics.go|fetchBlockedHours|*time.Time,*float64|224ae017b462|not-describable
 internal/queryapi/home/queries_metrics.go|fetchChangeFailureView|[]any|02b9a54bef69|variadic-destinations
-internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|1d471ff67adb|spliced-select-list
+internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|be0937cb6512|spliced-select-list
 internal/queryapi/home/queries_metrics.go|fetchMetricSeries|*time.Time,**float64|600ac24505e4|spliced-select-list
 internal/queryapi/home/queries_metrics.go|fetchMetricValue|*int64,**float64|32cfbee5d369|spliced-select-list
 internal/queryapi/home/queries_metrics.go|fetchPRReworkView|[]any|f2e5aa5edd0b|variadic-destinations

@@ -68,6 +68,7 @@ func attachDriverCaptions(ctx context.Context, client QueryClient, f Filters, or
 	labels := map[string]string{}
 	var scopeFilters = map[string]string{}
 	var bindings []dhclickhouse.Binding
+	shareBound := false
 	for _, d := range deltas {
 		scope := metricScope(d.Metric)
 		if oneTeamScope(scope, f) {
@@ -101,7 +102,13 @@ func attachDriverCaptions(ctx context.Context, client QueryClient, f Filters, or
 			}
 			scopeFilters[scope] = filter
 		}
-		batch = append(batch, driverBatchMetric{Metric: d.Metric, ScopeFilter: filter, FromZero: d.FromZero()})
+		shareSQL, shareBindings := driverShareSQL(d.Metric, f, orgID, now)
+		if shareSQL != "" && !shareBound {
+			// One share map per request: every repository sum of a team scope binds the same names and values.
+			bindings = append(bindings, shareBindings...)
+			shareBound = true
+		}
+		batch = append(batch, driverBatchMetric{Metric: d.Metric, ScopeFilter: filter, FromZero: d.FromZero(), ShareSQL: shareSQL})
 		labels[d.Metric] = d.Label
 	}
 	if len(batch) == 0 && len(oneTeamRows) == 0 {

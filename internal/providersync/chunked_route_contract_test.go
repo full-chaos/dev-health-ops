@@ -11,8 +11,8 @@ func TestTestOpsRoutesOptIntoBoundedChunkPolicy(t *testing.T) {
 		if !ok || !descriptor.RouteReady || !descriptor.Chunked {
 			t.Fatalf("%s/%s descriptor=%+v ok=%t", route[0], route[1], descriptor, ok)
 		}
-		if descriptor.ChunkPolicy != DefaultChunkPolicy() {
-			t.Fatalf("%s/%s policy=%+v want=%+v", route[0], route[1], descriptor.ChunkPolicy, DefaultChunkPolicy())
+		if descriptor.ChunkPolicy != TestOpsRouteChunkPolicy() {
+			t.Fatalf("%s/%s policy=%+v want=%+v", route[0], route[1], descriptor.ChunkPolicy, TestOpsRouteChunkPolicy())
 		}
 	}
 	for _, route := range [][2]string{

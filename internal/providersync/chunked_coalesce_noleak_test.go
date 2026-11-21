@@ -85,6 +85,8 @@ func TestChunkedRouteThatMarksNothingKeepsTheBaseGroupSequence(t *testing.T) {
 		if !ok {
 			t.Fatal("descriptor")
 		}
+		// The base digest is the group sequence at the 100-row cap (CHAOS-14411 moved the route to 500).
+		descriptor.ChunkPolicy = DefaultChunkPolicy()
 		store := newChunkMemoryStore()
 		executor := completeRouteExecutor(now, &noLeakHandler{t: t, claim: claim}, store, &recoveryRowSink{})
 		executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}

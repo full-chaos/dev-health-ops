@@ -140,6 +140,8 @@ type ChunkPolicy struct {
 	MaxPreparedBytes    int
 	MaxChunksPerAttempt int
 	MaxWallTime         time.Duration
+	// HalvingStep is a row cap the split's halving loop passes through on its way down (0: plain halving).
+	HalvingStep int
 }
 
 // defaultMaxChunksPerAttempt is the chunk-count bound of one attempt. The wall
@@ -164,6 +166,17 @@ func DefaultChunkPolicy() ChunkPolicy {
 	}
 }
 
+// TestOpsRouteChunkPolicy is the chunk policy of the github and gitlab cicd and
+// tests routes: 500 rows per destination per sub-chunk (the default is 100), so a
+// big test report is about 5x fewer sub-chunks, inserts and ledger transactions
+// (CHAOS-14411). The bytes stay bounded by the store's own refusal in the split.
+func TestOpsRouteChunkPolicy() ChunkPolicy {
+	policy := DefaultChunkPolicy()
+	policy.MaxSourceItems, policy.MaxEffectRows = 500, 500
+	policy.HalvingStep = min(DefaultChunkPolicy().MaxEffectRows, DefaultChunkPolicy().MaxSourceItems)
+	return policy
+}
+
 // maxChunkPayloadBytes mirrors ck_sync_chunk_payload_bytes in migration 0102.
 // A policy that allows a larger sidecar than the column check accepts would
 // only fail at INSERT, after the provider page has already been fetched.
@@ -174,7 +187,8 @@ func (policy ChunkPolicy) Validate() error {
 		policy.MaxEffectRows < 1 || policy.MaxEffectRows > maxEffectRows ||
 		policy.MaxPreparedBytes < 1 || policy.MaxPreparedBytes > maxChunkPayloadBytes ||
 		policy.MaxChunksPerAttempt < 1 || policy.MaxChunksPerAttempt > 1024 ||
-		policy.MaxWallTime <= 0 || policy.MaxWallTime > 15*time.Minute {
+		policy.MaxWallTime <= 0 || policy.MaxWallTime > 15*time.Minute ||
+		policy.HalvingStep < 0 {
 		return ErrInvalidConfiguration
 	}
 	return nil
@@ -553,9 +567,16 @@ func stampEmissionChunk(effects []EffectBatch, position, count int, stamps chunk
 	return chunk, nil
 }
 
-// nextSplitCap is the next row cap of the split's halving loop.
-func nextSplitCap(maxRows int, _ ChunkPolicy) int {
-	return maxRows / 2
+// nextSplitCap is the next row cap of the split's halving loop. A policy with a
+// HalvingStep passes through it: the TestOps policy halves 500, 250, 125, 100,
+// 50, ..., so its sequence holds every cap of the default policy's and never
+// splits finer than the default would.
+func nextSplitCap(maxRows int, policy ChunkPolicy) int {
+	next := maxRows / 2
+	if step := policy.HalvingStep; maxRows > step && next < step {
+		next = step
+	}
+	return next
 }
 
 // splitEmission is main's halving loop. Without stamps (nil) a chunk is measured as provisionally stamped by the split; with stamps it

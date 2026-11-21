@@ -260,14 +260,29 @@ func TestChunkStampPolicyCaps(t *testing.T) {
 	if got := min(GitHubFilesChunkPolicy().MaxEffectRows, GitHubFilesChunkPolicy().MaxSourceItems); got != 500 {
 		t.Fatalf("files cap %d, want 500", got)
 	}
-	for _, policy := range []ChunkPolicy{DefaultChunkPolicy(), GitHubFilesChunkPolicy()} {
+	if got := min(TestOpsRouteChunkPolicy().MaxEffectRows, TestOpsRouteChunkPolicy().MaxSourceItems); got != 500 {
+		t.Fatalf("TestOps cap %d, want 500", got)
+	}
+	for _, policy := range []struct {
+		policy ChunkPolicy
+		want   string
+	}{
+		{DefaultChunkPolicy(), "[100 50 25 12 6 3 1]"},
+		{GitHubFilesChunkPolicy(), "[500 250 125 62 31 15 7 3 1]"},
+		{TestOpsRouteChunkPolicy(), "[500 250 125 100 50 25 12 6 3 1]"},
+	} {
 		got := []int{}
-		for rows := min(policy.MaxEffectRows, policy.MaxSourceItems); rows >= 1; rows = nextSplitCap(rows, policy) {
+		for rows := min(policy.policy.MaxEffectRows, policy.policy.MaxSourceItems); rows >= 1; rows = nextSplitCap(rows, policy.policy) {
 			got = append(got, rows)
 		}
-		want := map[int]string{100: "[100 50 25 12 6 3 1]", 500: "[500 250 125 62 31 15 7 3 1]"}[got[0]]
-		if fmt.Sprint(got) != want {
-			t.Fatalf("cap sequence %v, want %s (main's halving)", got, want)
+		if fmt.Sprint(got) != policy.want {
+			t.Fatalf("cap sequence %v, want %s", got, policy.want)
+		}
+	}
+	for _, route := range [][2]string{{"github", "files"}} {
+		descriptor, _ := Descriptor(route[0], route[1])
+		if descriptor.ChunkPolicy != GitHubFilesChunkPolicy() {
+			t.Fatalf("%s/%s policy %+v", route[0], route[1], descriptor.ChunkPolicy)
 		}
 	}
 }

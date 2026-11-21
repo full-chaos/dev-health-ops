@@ -93,7 +93,9 @@ func TestGitHubTestsResumeInsertedRunMoveEarnsNoDeletionCredit(t *testing.T) {
 
 // The deletion credit has a ceiling (CHAOS-14434): many deletions in one walk at the record bound credit at most
 // maxWalkRecords/20 records in all, so the walk writes at most the bound plus that ceiling plus the re-seeks' re-reads.
-// 250 runs, bound 200 (ceiling 10), a processed run deleted at 20 yields: at most 210 runs read.
+// 250 runs, bound 200 (ceiling 10), at 20 yields the run listed just before the anchor (read, charged, inside the active
+// range) is deleted, so each resume proves a deletion: the credit reaches the ceiling and more than main's 200 runs are
+// read, at most 210.
 func TestGitHubTestsResumeDeletionCreditStopsAtItsCeiling(t *testing.T) {
 	for _, coalesce := range coalesceFlags {
 		t.Run(coalesceName(coalesce), func(t *testing.T) {
@@ -103,14 +105,19 @@ func TestGitHubTestsResumeDeletionCreditStopsAtItsCeiling(t *testing.T) {
 				yields[listed] = true
 			}
 			deleted := 0
-			chargedCreditWalk(t, GitHubTestsRouteHandler{MaxWalkRecords: 200, CoalesceRuns: coalesce}, fake, yields, func(githubTestsChunkCursor) {
+			last := chargedCreditWalk(t, GitHubTestsRouteHandler{MaxWalkRecords: 200, CoalesceRuns: coalesce}, fake, yields, func(at githubTestsChunkCursor) {
+				anchor, err := strconv.Atoi(at.AnchorID)
+				if err != nil {
+					t.Fatal(err)
+				}
 				deleted++
-				resumeDeletionDelete(fake, 251-deleted) // the newest run still listed: read, charged, before the anchor
+				resumeDeletionDelete(fake, anchor+1) // listed just before the anchor: read, charged, in the active range
 			})
 			read := len(fake.jobGets)
-			t.Logf("CELL ceiling/%s deleted=%d read=%d", coalesceName(coalesce), deleted, read)
-			if read > 200+200/20 {
-				t.Errorf("%d deletions: %d runs read, want at most 210 (the bound 200 plus the ceiling 10)", deleted, read)
+			t.Logf("CELL ceiling/%s deleted=%d read=%d rc=%d", coalesceName(coalesce), deleted, read, last.RecordCredit)
+			if last.RecordCredit < 200/20 || read <= 202 || read > 200+200/20 {
+				t.Errorf("%d deletions: %d runs read, record credit %d; want the credit at the ceiling 10 and 203..210 runs read (the bound 200 plus at most the ceiling)",
+					deleted, read, last.RecordCredit)
 			}
 		})
 	}

@@ -518,12 +518,6 @@ func splitCompleteRouteBatch(
 	// effect cap would allow one source page to grow without limit.
 	maxRows := min(policy.MaxEffectRows, policy.MaxSourceItems)
 	for maxRows >= 1 {
-		// The reserved limit is the HALVING threshold. A chunk that cannot shrink further (one row per destination) is judged on the
-		// plain policy limit: the store's own sizing decides, as before the reserve existed.
-		payloadLimit := splitPayloadLimit(policy)
-		if maxRows == 1 {
-			payloadLimit = policy.MaxPreparedBytes
-		}
 		count := 1
 		for _, effect := range ordered {
 			if rows := (len(effect.Rows) + maxRows - 1) / maxRows; rows > count {
@@ -555,9 +549,17 @@ func splitCompleteRouteBatch(
 				}
 				effects = append(effects, part)
 			}
-			payloadBytes := 0
+			payloadBytes, largestSlice := 0, 0
 			for _, effect := range effects {
 				payloadBytes += effect.PayloadBytes
+				largestSlice = max(largestSlice, len(effect.Rows))
+			}
+			// The reserved limit is the HALVING threshold, chosen per candidate chunk: a chunk whose largest destination slice is one
+			// row cannot shrink further (a singleton tail of a larger emission included) and is judged on the plain policy limit, so the
+			// store's own sizing decides, as before the reserve existed.
+			payloadLimit := splitPayloadLimit(policy)
+			if largestSlice <= 1 {
+				payloadLimit = policy.MaxPreparedBytes
 			}
 			if payloadBytes > payloadLimit {
 				valid = false

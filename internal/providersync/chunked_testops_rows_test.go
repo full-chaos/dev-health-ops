@@ -549,3 +549,90 @@ func TestGitHubFilesSingleRowInTheReserveMarginKeepsItsContents(t *testing.T) {
 		t.Fatalf("a single file row %d bytes over the reserved limit is refused by the pre-check although the store takes it", 3000)
 	}
 }
+
+// A singleton TAIL of a larger emission is judged on the plain policy limit too: the limit follows the candidate chunk's own largest
+// destination slice, not the emission-wide row cap. 500 small cases and a 501st in the reserve margin give two chunks under the 500-row
+// policy (the cap does not collapse to one row) and six under the 100-row policy; the tail is accepted by the store at a low and at a high ordinal.
+func TestSingletonTailInTheReserveMarginDoesNotHalveTheEmission(t *testing.T) {
+	t.Parallel()
+	pad := tunedMarginPad(t, 3000)
+	rows := make([]json.RawMessage, 0, 501)
+	for index := 0; index < 500; index++ {
+		rows = append(rows, marginRow(t, 50))
+	}
+	rows = append(rows, marginRow(t, pad))
+	for _, policy := range []struct {
+		name   string
+		policy ChunkPolicy
+		chunks int
+	}{{"the TestOps policy (500 rows)", TestOpsRouteChunkPolicy(), 2}, {"the default policy (100 rows, as on main)", DefaultChunkPolicy(), 6}} {
+		chunks, err := SplitCompleteRouteBatch(marginBatch(t, rows), policy.policy)
+		if err != nil || len(chunks) != policy.chunks {
+			t.Fatalf("%s: 501 cases with a singleton tail in the margin gave %d chunks, err=%v, want %d", policy.name, len(chunks), err, policy.chunks)
+		}
+		tail := chunks[len(chunks)-1]
+		tailRows := 0
+		for _, effect := range tail.Effects {
+			if effect.Destination == "test_case_results" {
+				tailRows = len(effect.Rows)
+			}
+		}
+		if tailRows != 1 {
+			t.Fatalf("%s: the tail holds %d case rows, want the one big row", policy.name, tailRows)
+		}
+		if err := storeAcceptsChunks(t, chunks); err != nil {
+			t.Fatalf("%s: the store refuses a chunk of the emission: %v", policy.name, err)
+		}
+		resetEmissionChunks(chunks, ChunkRouteEmission{CursorBefore: strings.Repeat("&", maxChunkCursorBytes), CursorAfter: strings.Repeat("&", maxChunkCursorBytes)})
+		last := len(chunks) - 1
+		if err := sizeEmissionChunks(chunks[last : last+1]); err != nil {
+			t.Fatal(err)
+		}
+		chunks[last].Ordinal = 999_999
+		chunks[last].ManifestDigest = preparedChunkDigest(chunks[last])
+		if _, err := buildPreparedChunkMaterial(nativeTestClaim("github", "cicd"), chunks[last], time.Date(2026, 12, 31, 23, 59, 59, 999_999_999, time.UTC)); err != nil {
+			t.Fatalf("%s: the store refuses the tail at ordinal 999,999 with 4 KiB escaped cursors: %v", policy.name, err)
+		}
+	}
+}
+
+// A chunk whose largest destination slice is one row can only be the LAST chunk (or any chunk when the cap is one row): every other chunk
+// holds a full cap of rows in the destination that defines the chunk count. So the per-candidate limit never gives a singleton in the
+// middle of an emission the plain limit by accident.
+func TestOnlyTheLastChunkCanHoldASingleRowWhenTheCapIsAboveOne(t *testing.T) {
+	t.Parallel()
+	policy := ChunkPolicy{MaxSourceItems: 3, MaxEffectRows: 3, MaxPreparedBytes: 1 << 20, MaxChunksPerAttempt: 8, MaxWallTime: time.Minute}
+	for cases := 1; cases <= 40; cases++ {
+		for verdict := 0; verdict <= 1; verdict++ {
+			rows := make([]json.RawMessage, 0, cases)
+			for index := 0; index < cases; index++ {
+				rows = append(rows, marginRow(t, 5))
+			}
+			batch := marginBatch(t, rows)
+			if verdict == 0 {
+				for index := range batch.Effects {
+					if batch.Effects[index].Destination == testOpsRunReportCompletenessDestination {
+						empty, err := BuildEffectBatch(testOpsRunReportCompletenessDestination, EffectReplaySafe, nil)
+						if err != nil {
+							t.Fatal(err)
+						}
+						batch.Effects[index] = empty
+					}
+				}
+			}
+			chunks, err := SplitCompleteRouteBatch(batch, policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for ordinal, chunk := range chunks[:len(chunks)-1] {
+				largest := 0
+				for _, effect := range chunk.Effects {
+					largest = max(largest, len(effect.Rows))
+				}
+				if largest < 2 {
+					t.Fatalf("%d cases, verdict=%d: chunk %d of %d holds a largest slice of %d row(s), only the last chunk may hold one", cases, verdict, ordinal, len(chunks), largest)
+				}
+			}
+		}
+	}
+}

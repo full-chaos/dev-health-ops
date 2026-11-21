@@ -40,6 +40,7 @@ func TestChunkStampStoreGetsTheChunksTheSplitMeasured(t *testing.T) {
 		{cases: 501, filled: true, basePad: 1500},
 		{cases: 3, filled: true, pads: map[int]int{1: 2_000_000}},
 		{cases: 120, filled: true},
+		{cases: 1200, filled: true, basePad: 1500},
 	}, true, 4000, 60<<10)
 	start := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	harness := newStampHarness(t, "github", "cicd", emissions, start)
@@ -49,6 +50,9 @@ func TestChunkStampStoreGetsTheChunksTheSplitMeasured(t *testing.T) {
 	}
 	if len(harness.store.groups) != len(emissions) {
 		t.Fatalf("%d groups for %d emissions", len(harness.store.groups), len(emissions))
+	}
+	if last := harness.store.groups[len(emissions)-1]; len(last) < 3 || last[0].CursorBefore == "" {
+		t.Fatalf("the last emission is %d chunks, want a group of three or more after a cursor (the shape that pins the stamps)", len(last))
 	}
 	policy := harness.descriptor.ChunkPolicy
 	ordinal := 0

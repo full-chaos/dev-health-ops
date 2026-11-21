@@ -905,3 +905,33 @@ func TestShortUnitsShareQueuedPassReadFailureArmsFromThePass(t *testing.T) {
 func TestShortUnitsShareDeferralExpiresDuringTheNoQueueCappedPass(t *testing.T) {
 	runShortShareDeferralExpiresDuringThePass(t, "no_queue_capped")
 }
+
+// M15: a deferral-only queued pass (l0 queued, s0 budget-deferred 5 s, nothing concurrency-capped) whose post-commit
+// read fails arms s0's deferral, not the countdown (2 s): the pass's deferred ids are deferrals, not due work.
+func TestShortUnitsShareQueuedPassReadFailureArmsTheDeferral(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, base *pgxpool.Pool) {
+		tracer := &failCountsTracer{}
+		cfg := base.Config().Copy()
+		cfg.ConnConfig.Tracer = tracer
+		pool, err := pgxpool.NewWithConfig(ctx, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		cell := newShortShareDenialWith(t, ctx, pool, denialConfig{countdown: "2", deferral: "5", jitter: "0", lateL1: true})
+		tracer.armed.Store(true)
+		cell.pass("pass 1 (l0 queued, s0 deferred, the read fails)")
+		tracer.armed.Store(false)
+		if !tracer.failed.Load() {
+			t.Fatal("the pending-counts read was not reached")
+		}
+		if got, _ := cell.status(denialL0); got != syncRunUnitStatusDispatching {
+			t.Fatalf("l0 %s, want queued", got)
+		}
+		s0At := cell.availableAt(denialS0)
+		armed := cell.armedAt()
+		if armed == nil || !armed.Equal(s0At) {
+			t.Fatalf("wake %v, want s0's deferral %s (not the countdown)", armed, s0At.UTC().Format(time.RFC3339Nano))
+		}
+	})
+}

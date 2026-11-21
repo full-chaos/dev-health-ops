@@ -47,6 +47,9 @@ WHERE sync_run_id = $1::uuid AND status IN ($2, $3, $4, $5)`,
 	return counts, nil
 }
 
+// pendingCountsReadReason is the reason label of the WARN a queued pass logs when its pending-counts read fails.
+const pendingCountsReadReason = "pending_counts_read"
+
 // pendingUnitCountsNow reads computePendingUnitCounts in its own transaction, after the pass committed; admittedAt is
 // the pass's admission time.
 func (service *NativeDispatchSyncRunService) pendingUnitCountsNow(ctx context.Context, syncRunID string, admittedAt time.Time) (pendingUnitCounts, error) {

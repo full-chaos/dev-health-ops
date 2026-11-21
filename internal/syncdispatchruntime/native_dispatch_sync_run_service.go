@@ -627,11 +627,12 @@ WHERE id = $1::uuid`,
 		// (concurrency-capped units, a unit that became claimable after the guard's snapshot, CHAOS-4605) wants the
 		// countdown. scheduleRedispatch writes ONE wakeup and overwrites a pending row, so it takes the earlier of the two.
 		// On a failed read the pass arms from its own values (only an earlier pass's deferral is not carried) and does not
-		// return the error: a retried delivery would run admission again under the same attempt.
+		// return the error: a retried delivery would run admission again under the same attempt. Due work is the guard's
+		// concurrency-capped units; the pass's budget-deferred and cooldown-excluded units are in nextDeferredAt.
 		counts, err := service.pendingUnitCountsNow(ctx, run.id, now)
 		if err != nil {
-			service.logger.Warn(ctx, synclog.MsgDispatchSyncRunRedispatchBackoffReadFailed, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel("pending_counts_read")))
-			counts = pendingUnitCounts{dispatchable: len(cappedIDs)}
+			service.logger.Warn(ctx, synclog.MsgDispatchSyncRunRedispatchBackoffReadFailed, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(pendingCountsReadReason)))
+			counts = pendingUnitCounts{dispatchable: len(decision.cappedUnitIDs)}
 		}
 		armAt := service.nowUTC()
 		if at, ok := queuedPassRearmAt(nextDeferredAt, counts, len(deferredOutsideSnapshot) > 0, armAt); ok {

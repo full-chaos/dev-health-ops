@@ -129,3 +129,41 @@ func TestRealClickHouse_StoredTeamRowsNoUnassignedRowWhenNamedOrAllOwned(t *test
 		}
 	})
 }
+
+// The no-team row is classified by ownership at the selected day (the instant
+// the daily writer uses), not at request time: a repository owned on the
+// selected day whose ownership ended since is still the team's, not unowned.
+func TestRealClickHouse_StoredTeamRowsUnassignedUsesOwnershipOfSelectedDay(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	seedRepos(seedCtx{ctx, conn}, t, now, false, true)
+	exec(t, ctx, conn, `INSERT INTO teams (id, name, org_id, repo_patterns, updated_at) VALUES ('t1', 'Platform', 'org-1', [], now64(6))`)
+	exec(t, ctx, conn, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, valid_from, valid_to, updated_at)
+      SELECT 'org-1', 'github', 't1', '%s', 'acme/web', 'exact', 'native', toDateTime64('2020-01-01 00:00:00', 3, 'UTC'), toDateTime64('%s 00:00:00', 3, 'UTC'), now64(3)`, rA, day(now, 0).Format("2006-01-02"))
+	got, err := Resolve(ctx, client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TrendDays: 30}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Rows) != 2 || got.Rows[0].ScopeID != "unassigned" || got.Rows[0].Score == nil || *got.Rows[0].Score != 0.8 {
+		t.Fatalf("rows %v, want [unassigned t1] with unassigned = 0.8 (repository B only; A was owned on the selected day)", ids(got.Rows))
+	}
+}
+
+// A stored no-team row keeps its stored values and gets the canonical label.
+func TestRealClickHouse_StoredUnassignedRowKeepsScoreAndGetsCanonicalLabel(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	seedRepos(seedCtx{ctx, conn}, t, now, true, true)
+	put(t, ctx, conn, risk{org: "org-1", scope: "team", id: "unassigned", day: day(now, 1), score: "0.75", sev: "high"})
+	got, err := Resolve(ctx, client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TrendDays: 30}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Rows) != 2 || got.Rows[0].ScopeID != "unassigned" {
+		t.Fatalf("rows %v, want [unassigned t1]", ids(got.Rows))
+	}
+	u := got.Rows[0]
+	if u.ScopeLabel != unassignedTeamLabel || u.ScopeEntity == nil || u.ScopeEntity.DisplayName != unassignedTeamLabel || u.Score == nil || *u.Score != 0.75 {
+		t.Fatalf("stored unassigned row label %q entity %v score %v, want %q and 0.75", u.ScopeLabel, u.ScopeEntity, u.Score, unassignedTeamLabel)
+	}
+}

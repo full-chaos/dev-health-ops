@@ -224,7 +224,8 @@ func assignUnowned(teamsOfRepo map[string][]string, repoRows []storedRow, labels
 // team rows: the writer stores no team row for a repository no team owns, so
 // the point is derived from the day's repository rows of the unowned
 // repositories by the same rule as the derived path. A stored no-team row is
-// kept as it is.
+// kept as it is. Ownership is read at the selected day, the instant the
+// daily writer resolves it at, never at request time.
 func withUnassignedPoint(ctx context.Context, client QueryClient, orgID string, d time.Time, points []model.CompoundingRiskPoint, teams []string, labels map[string]string, repoIDs idList, now time.Time) ([]model.CompoundingRiskPoint, error) {
 	for _, p := range points {
 		if p.ScopeID == activeteams.UnassignedID {
@@ -235,7 +236,7 @@ func withUnassignedPoint(ctx context.Context, client QueryClient, orgID string, 
 	if err != nil {
 		return nil, err
 	}
-	teamsOfRepo, err := teamsOwningRepos(ctx, client, orgID, teams, now)
+	teamsOfRepo, err := teamsOwningRepos(ctx, client, orgID, teams, d)
 	if err != nil {
 		return nil, err
 	}
@@ -473,6 +474,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 		}
 		labels, order := teamLabels(ctx, client, orgID)
 		if len(teamRows) > 0 {
+			labels[activeteams.UnassignedID] = unassignedTeamLabel
 			for _, r := range teamRows {
 				points = append(points, point(model.CompoundingRiskScopeTeam, d, r.scopeID, labelOr(labels, r.scopeID), r))
 			}

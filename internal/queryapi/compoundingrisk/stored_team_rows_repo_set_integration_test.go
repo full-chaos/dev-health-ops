@@ -12,7 +12,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 )
 
-const rUnknown = "55555555-5555-5555-5555-555555555555"
+const (
+	rUnknown = "55555555-5555-5555-5555-555555555555"
+	rD       = "66666666-6666-6666-6666-666666666666"
+)
 
 type scored struct {
 	id    string
@@ -34,25 +37,68 @@ func answerText(rows []scored) string {
 // path does. Team t1 owns A (0.25) and C (0.75), t2 owns X (0.625), B (0.875)
 // has no owner. The stored t1 row is 0.55 on the "stored" seed, not the 0.5
 // mean of A and C, so a stored row and a derived row read apart.
+// With no narrowing filter, a team that owns a repository row of the day and
+// has no live stored row is derived from its repository rows; a team with a
+// live stored row keeps it.
 func TestRealClickHouse_StoredTeamRowsCoverTheSelectedRepositorySet(t *testing.T) {
 	type seedFn func(seedCtx, *testing.T, time.Time)
-	seedAll := func(t1Score string) seedFn {
+	type world struct {
+		t1, t2, teamComputed string
+		cMovedToT2           bool
+	}
+	seedWorld := func(w world) seedFn {
 		return func(c seedCtx, t *testing.T, now time.Time) {
 			for id, name := range map[string]string{rA: "acme/web", rB: "acme/api", rC: "acme/lib", rX: "acme/ops"} {
 				repo(t, c.ctx, c.conn, "org-1", id, name)
 			}
 			exec(t, c.ctx, c.conn, `INSERT INTO teams (id, name, org_id, repo_patterns, updated_at) VALUES ('t1', 'Platform', 'org-1', [], now64(6)), ('t2', 'Infra', 'org-1', [], now64(6))`)
 			own(t, c.ctx, c.conn, "org-1", "t1", rA, "acme/web")
-			own(t, c.ctx, c.conn, "org-1", "t1", rC, "acme/lib")
+			if w.cMovedToT2 {
+				own(t, c.ctx, c.conn, "org-1", "t2", rC, "acme/lib")
+			} else {
+				own(t, c.ctx, c.conn, "org-1", "t1", rC, "acme/lib")
+			}
 			own(t, c.ctx, c.conn, "org-1", "t2", rX, "acme/ops")
 			for id, score := range map[string]string{rA: "0.25", rB: "0.875", rC: "0.75", rX: "0.625"} {
 				put(t, c.ctx, c.conn, risk{org: "org-1", scope: "repo", id: id, day: day(now, 1), score: score, sev: "low"})
 			}
-			put(t, c.ctx, c.conn, risk{org: "org-1", scope: "team", id: "t1", day: day(now, 1), score: t1Score, sev: "elevated"})
-			put(t, c.ctx, c.conn, risk{org: "org-1", scope: "team", id: "t2", day: day(now, 1), score: "0.625", sev: "elevated"})
+			put(t, c.ctx, c.conn, risk{org: "org-1", scope: "team", id: "t1", day: day(now, 1), score: w.t1, sev: "elevated", computed: w.teamComputed})
+			put(t, c.ctx, c.conn, risk{org: "org-1", scope: "team", id: "t2", day: day(now, 1), score: w.t2, sev: "elevated", computed: w.teamComputed})
 		}
 	}
-	full, stored := seedAll("0.5"), seedAll("0.55")
+	then := func(first, second seedFn) seedFn {
+		return func(c seedCtx, t *testing.T, now time.Time) { first(c, t, now); second(c, t, now) }
+	}
+	full := seedWorld(world{t1: "0.5", t2: "0.625"})
+	stored := seedWorld(world{t1: "0.55", t2: "0.625"})
+	// t2's newest row of the day is a retraction marker (weights and
+	// thresholds 0, no score): t2 has no live stored row.
+	retracted := then(seedWorld(world{t1: "0.55", t2: "0.7", teamComputed: "now() - INTERVAL 1 HOUR"}),
+		func(c seedCtx, t *testing.T, now time.Time) {
+			exec(t, c.ctx, c.conn, `INSERT INTO compounding_risk_daily (org_id, day, scope, scope_id, computed_at) VALUES ('org-1', '%s', 'team', 't2', now())`, day(now, 1).Format("2006-01-02"))
+		})
+	// Every team has a live stored row, written before the newest repository
+	// rows of the day (a run between its partitions and its finalize).
+	olderTeamRows := seedWorld(world{t1: "0.55", t2: "0.7", teamComputed: "now() - INTERVAL 1 HOUR"})
+	// C moved from t1 to t2 after both stored rows were written.
+	moved := seedWorld(world{t1: "0.55", t2: "0.7", teamComputed: "now() - INTERVAL 1 HOUR", cMovedToT2: true})
+	// t3 owns D, which has no repository row and no t3 row on the day (only
+	// two days before).
+	idleTeam := then(stored, func(c seedCtx, t *testing.T, now time.Time) {
+		repo(t, c.ctx, c.conn, "org-1", rD, "acme/docs")
+		exec(t, c.ctx, c.conn, `INSERT INTO teams (id, name, org_id, repo_patterns, updated_at) VALUES ('t3', 'Docs', 'org-1', [], now64(6))`)
+		own(t, c.ctx, c.conn, "org-1", "t3", rD, "acme/docs")
+		put(t, c.ctx, c.conn, risk{org: "org-1", scope: "repo", id: rD, day: day(now, 2), score: "0.125", sev: "low"})
+		put(t, c.ctx, c.conn, risk{org: "org-1", scope: "team", id: "t3", day: day(now, 2), score: "0.125", sev: "low"})
+	})
+	// Another organization holds a team t2 that owns B (unowned in org-1) and
+	// a repository row of B on the same day.
+	otherOrg := then(stored, func(c seedCtx, t *testing.T, now time.Time) {
+		repo(t, c.ctx, c.conn, "org-2", rB, "acme/api")
+		exec(t, c.ctx, c.conn, `INSERT INTO teams (id, name, org_id, repo_patterns, updated_at) VALUES ('t2', 'Other', 'org-2', [], now64(6))`)
+		own(t, c.ctx, c.conn, "org-2", "t2", rB, "acme/api")
+		put(t, c.ctx, c.conn, risk{org: "org-2", scope: "repo", id: rB, day: day(now, 1), score: "0.125", sev: "low"})
+	})
 	// The stored t1 aggregate also took a repository with merged pull requests
 	// and no repository row of the day (C): its 0.6 is not over A alone. It is
 	// served as stored: a team's review latency covers every repository it
@@ -67,6 +113,20 @@ func TestRealClickHouse_StoredTeamRowsCoverTheSelectedRepositorySet(t *testing.T
 		put(t, c.ctx, c.conn, risk{org: "org-1", scope: "repo", id: rA, day: day(now, 1), score: "0.25", sev: "low"})
 		put(t, c.ctx, c.conn, risk{org: "org-1", scope: "repo", id: rB, day: day(now, 1), score: "0.875", sev: "high"})
 		put(t, c.ctx, c.conn, risk{org: "org-1", scope: "team", id: "t1", day: day(now, 1), score: "0.6", sev: "elevated"})
+	}
+	// The team rows were finalized before X got its owner t2 and its
+	// repository row: the day holds a stored row for t1 only.
+	rowsAhead := func(c seedCtx, t *testing.T, now time.Time) {
+		repo(t, c.ctx, c.conn, "org-1", rA, "acme/web")
+		repo(t, c.ctx, c.conn, "org-1", rB, "acme/api")
+		repo(t, c.ctx, c.conn, "org-1", rX, "acme/ops")
+		exec(t, c.ctx, c.conn, `INSERT INTO teams (id, name, org_id, repo_patterns, updated_at) VALUES ('t1', 'Platform', 'org-1', [], now64(6)), ('t2', 'Infra', 'org-1', [], now64(6))`)
+		own(t, c.ctx, c.conn, "org-1", "t1", rA, "acme/web")
+		own(t, c.ctx, c.conn, "org-1", "t2", rX, "acme/ops")
+		put(t, c.ctx, c.conn, risk{org: "org-1", scope: "team", id: "t1", day: day(now, 1), score: "0.25", sev: "low", computed: "now() - INTERVAL 1 HOUR"})
+		for id, score := range map[string]string{rA: "0.25", rB: "0.875", rX: "0.625"} {
+			put(t, c.ctx, c.conn, risk{org: "org-1", scope: "repo", id: id, day: day(now, 1), score: score, sev: "low"})
+		}
 	}
 	cases := []struct {
 		name      string
@@ -102,6 +162,18 @@ func TestRealClickHouse_StoredTeamRowsCoverTheSelectedRepositorySet(t *testing.T
 			nil, math.NaN()},
 		{"stored: a named team and a subset of its repositories", stored, []string{rA}, []string{"t1"},
 			[]scored{{"t1", 0.25}}, 0.25},
+		{"repository rows newer than the team aggregate: the team with no stored row is derived", rowsAhead, nil, nil,
+			[]scored{{"unassigned", 0.875}, {"t2", 0.625}, {"t1", 0.25}}, (0.25 + 0.875 + 0.625) / 3},
+		{"a retraction marker is no live stored row: the team is derived", retracted, nil, nil,
+			[]scored{{"unassigned", 0.875}, {"t2", 0.625}, {"t1", 0.55}}, 0.625},
+		{"teams with live stored rows stay stored under newer repository rows", olderTeamRows, nil, nil,
+			[]scored{{"unassigned", 0.875}, {"t2", 0.7}, {"t1", 0.55}}, 0.625},
+		{"a repository moved between two stored teams: both stay stored until the finalize", moved, nil, nil,
+			[]scored{{"unassigned", 0.875}, {"t2", 0.7}, {"t1", 0.55}}, 0.625},
+		{"a team with no repository row and no stored row of the day is not listed", idleTeam, nil, nil,
+			[]scored{{"unassigned", 0.875}, {"t2", 0.625}, {"t1", 0.55}}, 0.625},
+		{"a team of another organization is never derived", otherOrg, nil, nil,
+			[]scored{{"unassigned", 0.875}, {"t2", 0.625}, {"t1", 0.55}}, 0.625},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -105,6 +105,14 @@ type ChunkCommitObserver interface {
 	ObserveUnconfirmedChunk(Claim, PreparedProviderChunk)
 }
 
+// ChunkFinalWatermarkRule derives the watermark of a durable final chunk (its CursorAfter and Result) with the running
+// binary's rule. The streaming executor publishes the stored watermark clamped by it, so a final chunk an older binary
+// prepared cannot publish a watermark the current rule withholds or lowers (CHAOS-14422; publishedFinalWatermark). The
+// rule must give the watermark the route emits for the same chunk.
+type ChunkFinalWatermarkRule interface {
+	FinalWatermark(Claim, PreparedProviderChunk) (*time.Time, error)
+}
+
 // RecoveringCompleteRouteHandler lets a route rebuild an in-flight provider
 // batch from durable effect identity before ordinary source reselection. Most
 // routes only need the stable normalization instant above. Bounded routes

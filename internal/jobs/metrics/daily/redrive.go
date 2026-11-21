@@ -398,6 +398,190 @@ LIMIT $2`, now, limit)
 	return runIDs, nil
 }
 
+// finalizeStrandHorizon is how long a run with every partition succeeded may
+// wait in finalization 'pending' before the nightly sweep treats its finalize
+// job as gone. A pending finalize normally waits seconds (the org-day gate
+// snoozes at most 30 s a refusal); TestFinalizeStrandHorizonExceedsTheRetryBudget
+// keeps this above River's attempt budget for metrics.daily_finalize.
+const finalizeStrandHorizon = 24 * time.Hour
+
+// finalizeSweepMaxPages bounds one nightly pass to this many pages of
+// defaultFinalizeSweepLimit runs; a larger backlog continues on the next pass.
+const finalizeSweepMaxPages = 4
+
+// SweepStrandedFinalizeForOrg redrives the never-attempted stranded finalizes of
+// one organization: status 'running', every partition succeeded, finalization
+// 'pending' with no write for finalizeStrandHorizon, and no open redrive event.
+// Its finalize job is gone (River deletes a finished job after its retention),
+// so nothing else would ever claim it. Only the never-attempted subset
+// (RedriveStrandedFinalize with allowPriorAttempt false): a 'failed' or
+// expired-'running' finalization may already have written rows and stays with
+// an operator. A run that still has a finalize job a worker can run (an
+// undelivered outbox row, or a River job available, pending, scheduled,
+// running or retryable) is left alone, so the sweep never adds a second job
+// beside a live one.
+func (store *PostgresStore) SweepStrandedFinalizeForOrg(
+	ctx context.Context, publisher redriveFinalizePublisher, orgID string,
+) (int, error) {
+	if !store.valid() || publisher == nil || !validUUID(orgID) {
+		return 0, ErrUnavailable
+	}
+	if store.sweepQueuePool == nil || !riverSchemaPattern.MatchString(store.sweepRiverSchema) {
+		store.observeFinalizeSweep("failed", 1)
+		return 0, ErrUnavailable
+	}
+	redriven, err := store.sweepStrandedFinalizeForOrg(ctx, publisher, orgID)
+	if err != nil {
+		store.observeFinalizeSweep("failed", 1)
+	}
+	return redriven, err
+}
+
+func (store *PostgresStore) sweepStrandedFinalizeForOrg(
+	ctx context.Context, publisher redriveFinalizePublisher, orgID string,
+) (int, error) {
+	now := store.now().UTC()
+	cutoff := now.Add(-finalizeStrandHorizon)
+	nonce := uuid.NewString()
+	redriven := 0
+	defer func() { store.observeFinalizeSweep("finalized", redriven) }()
+	// Keyset pages over (updated_at, id): a run refused under its lock is not
+	// read again, and a redriven run's updated_at moves to now, past the cutoff.
+	var afterUpdated time.Time
+	afterID := ""
+	for page := 0; page < finalizeSweepMaxPages; page++ {
+		rows, err := store.pool.Query(ctx, `
+SELECT run.id::text, run.updated_at
+FROM public.daily_metrics_runs AS run
+WHERE run.org_id = $1::uuid
+  AND run.status = 'running'
+  AND run.finalization_status = 'pending'
+  AND run.updated_at <= $2
+  AND (run.updated_at, run.id) > ($3::timestamptz, COALESCE(NULLIF($4, '')::uuid, '00000000-0000-0000-0000-000000000000'::uuid))
+  AND EXISTS (
+      SELECT 1 FROM public.daily_metrics_partitions AS partition
+      WHERE partition.run_id = run.id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM public.daily_metrics_partitions AS partition
+      WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM public.daily_metrics_partitions AS partition
+      WHERE partition.run_id = run.id AND partition.updated_at > $2
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM public.daily_metrics_finalize_redrive_events AS redrive_event
+      WHERE redrive_event.run_id = run.id AND redrive_event.status = 'open'
+  )
+ORDER BY run.updated_at, run.id
+LIMIT $5`, orgID, cutoff, afterUpdated, afterID, defaultFinalizeSweepLimit)
+		if err != nil {
+			return redriven, ErrUnavailable
+		}
+		var runIDs []string
+		for rows.Next() {
+			var runID string
+			if err := rows.Scan(&runID, &afterUpdated); err != nil {
+				rows.Close()
+				return redriven, ErrUnavailable
+			}
+			runIDs = append(runIDs, runID)
+			afterID = runID
+		}
+		rowsErr := rows.Err()
+		rows.Close()
+		if rowsErr != nil {
+			return redriven, ErrUnavailable
+		}
+		store.observeFinalizeSweep("detected", len(runIDs))
+		live, err := store.runsWithLiveFinalizeJob(ctx, runIDs)
+		if err != nil {
+			return redriven, err
+		}
+		for _, runID := range runIDs {
+			if live[runID] {
+				continue
+			}
+			finalized, err := store.redriveOneStrandedFinalize(ctx, publisher, runID, nonce, now, false, &cutoff)
+			if err != nil {
+				return redriven, err
+			}
+			if finalized {
+				redriven++
+			}
+		}
+		if len(runIDs) < defaultFinalizeSweepLimit {
+			return redriven, nil
+		}
+	}
+	return redriven, nil
+}
+
+// runsWithLiveFinalizeJob names the runs that still have a metrics.daily_finalize
+// job that a worker can run: an outbox row the relay has not delivered yet, or a
+// delivered one whose River job is available, pending, scheduled, running or
+// retryable. The sweep leaves such a run alone, so a run never has two live
+// finalize jobs and its compute count is that of the one job alone.
+func (store *PostgresStore) runsWithLiveFinalizeJob(ctx context.Context, runIDs []string) (map[string]bool, error) {
+	live := make(map[string]bool, len(runIDs))
+	if len(runIDs) == 0 {
+		return live, nil
+	}
+	rows, err := store.pool.Query(ctx, `
+SELECT outbox.args #>> '{domain,id}', outbox.status, outbox.river_job_id
+FROM public.worker_job_outbox AS outbox
+WHERE outbox.job_kind = 'metrics.daily_finalize'
+  AND outbox.args #>> '{domain,id}' = ANY($1::text[])`, runIDs)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	jobRun := map[int64]string{}
+	var jobIDs []int64
+	for rows.Next() {
+		var runID, status string
+		var jobID *int64
+		if err := rows.Scan(&runID, &status, &jobID); err != nil {
+			rows.Close()
+			return nil, ErrUnavailable
+		}
+		switch {
+		case status == "pending" || status == "claimed":
+			live[runID] = true
+		case status == "delivered" && jobID != nil:
+			jobRun[*jobID] = runID
+			jobIDs = append(jobIDs, *jobID)
+		}
+	}
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		return nil, ErrUnavailable
+	}
+	if len(jobIDs) == 0 {
+		return live, nil
+	}
+	jobTable := pgx.Identifier{store.sweepRiverSchema, "river_job"}.Sanitize()
+	riverRows, err := store.sweepQueuePool.Query(ctx,
+		"SELECT id FROM "+jobTable+" WHERE id = ANY($1) AND state::text IN ('available', 'pending', 'scheduled', 'running', 'retryable')",
+		jobIDs)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	defer riverRows.Close()
+	for riverRows.Next() {
+		var jobID int64
+		if err := riverRows.Scan(&jobID); err != nil {
+			return nil, ErrUnavailable
+		}
+		live[jobRun[jobID]] = true
+	}
+	if riverRows.Err() != nil {
+		return nil, ErrUnavailable
+	}
+	return live, nil
+}
+
 // FinalizeRedriveOutcome summarizes one CHAOS-4389 stranded-finalize redrive
 // pass.
 type FinalizeRedriveOutcome struct {
@@ -454,7 +638,7 @@ func (store *PostgresStore) RedriveStrandedFinalize(
 		if !validUUID(runID) {
 			return outcome, ErrInvalidState
 		}
-		finalized, err := store.redriveOneStrandedFinalize(ctx, publisher, runID, nonce, now, allowPriorAttempt)
+		finalized, err := store.redriveOneStrandedFinalize(ctx, publisher, runID, nonce, now, allowPriorAttempt, nil)
 		if err != nil {
 			return outcome, err
 		}
@@ -470,19 +654,40 @@ func (store *PostgresStore) RedriveStrandedFinalize(
 // redriveOneStrandedFinalize re-verifies and, if still eligible, redrives
 // exactly one run's finalize inside its own transaction, so one run's
 // dedupe/policy rejection cannot roll back an otherwise-successful batch.
+// sweepRollbackReserve is the part of the sweep's budget kept back for the
+// rollbacks of its transactions: the sweep's operations end this long before
+// the sweep's own deadline and a rollback may use the rest.
+const sweepRollbackReserve = 500 * time.Millisecond
+
+// rollbackContext bounds a transaction rollback. The operator path keeps a
+// fresh 5 s. The nightly sweep is best-effort and isolated from the dispatch
+// result, so its rollback ends at the sweep's own deadline (the operations'
+// deadline plus the reserve taken off the sweep's budget up front) and never
+// outlives it.
+func rollbackContext(ctx context.Context, sweep bool) (context.Context, context.CancelFunc) {
+	base := context.WithoutCancel(ctx)
+	if sweep {
+		if deadline, ok := ctx.Deadline(); ok {
+			return context.WithDeadline(base, deadline.Add(sweepRollbackReserve))
+		}
+	}
+	return context.WithTimeout(base, 5*time.Second)
+}
+
 func (store *PostgresStore) redriveOneStrandedFinalize(
 	ctx context.Context,
-	publisher *PostgresPublisher,
+	publisher redriveFinalizePublisher,
 	runID, nonce string,
 	now time.Time,
 	allowPriorAttempt bool,
+	sweepCutoff *time.Time,
 ) (bool, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return false, ErrUnavailable
 	}
 	defer func() {
-		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		rollbackCtx, cancel := rollbackContext(ctx, sweepCutoff != nil)
 		defer cancel()
 		_ = tx.Rollback(rollbackCtx)
 	}()
@@ -490,10 +695,11 @@ func (store *PostgresStore) redriveOneStrandedFinalize(
 	var run Run
 	var targetDay, finalizationStatus string
 	var leaseExpiresAt *time.Time
-	var hasPartitions, allPartitionsSucceeded bool
+	var hasPartitions, allPartitionsSucceeded, openRedriveEvent, freshPartition bool
+	var updatedAt time.Time
 	err = tx.QueryRow(ctx, `
 SELECT run.id::text, run.org_id::text, run.generation, run.status, run.target_day::text,
-  run.finalization_status, run.finalization_lease_expires_at,
+  run.finalization_status, run.finalization_lease_expires_at, run.updated_at,
   EXISTS (
       SELECT 1 FROM public.daily_metrics_partitions AS partition
       WHERE partition.run_id = run.id
@@ -501,12 +707,21 @@ SELECT run.id::text, run.org_id::text, run.generation, run.status, run.target_da
   NOT EXISTS (
       SELECT 1 FROM public.daily_metrics_partitions AS partition
       WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
-  )
+  ),
+  EXISTS (
+      SELECT 1 FROM public.daily_metrics_finalize_redrive_events AS redrive_event
+      WHERE redrive_event.run_id = run.id AND redrive_event.status = 'open'
+  ),
+  ($2::timestamptz IS NOT NULL AND EXISTS (
+      SELECT 1 FROM public.daily_metrics_partitions AS partition
+      WHERE partition.run_id = run.id AND partition.updated_at > $2::timestamptz
+  ))
 FROM public.daily_metrics_runs AS run
 WHERE run.id = $1::uuid
-FOR UPDATE OF run`, runID).Scan(
+FOR UPDATE OF run`, runID, sweepCutoff).Scan(
 		&run.ID, &run.OrganizationID, &run.Generation, &run.Status, &targetDay,
-		&finalizationStatus, &leaseExpiresAt, &hasPartitions, &allPartitionsSucceeded,
+		&finalizationStatus, &leaseExpiresAt, &updatedAt, &hasPartitions, &allPartitionsSucceeded,
+		&openRedriveEvent, &freshPartition,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
@@ -529,11 +744,25 @@ FOR UPDATE OF run`, runID).Scan(
 	if !eligible {
 		return false, nil
 	}
+	// The nightly sweep re-reads its whole predicate under the lock: between
+	// its selection and this lock the run can have been reopened (a recompute,
+	// a range redrive with its open event) and be fresh again.
+	if sweepCutoff != nil && (updatedAt.After(*sweepCutoff) || openRedriveEvent || freshPartition) {
+		return false, nil
+	}
 	if run.TargetDay, err = time.Parse(dailyTargetDayLayout, targetDay); err != nil {
 		return false, ErrInvalidState
 	}
 	if err := publisher.PublishRedriveFinalizeTx(ctx, tx, run, nonce); err != nil {
 		return false, err
+	}
+	// The sweep restarts the run's horizon at the publish, read after the
+	// outbox insert (not the pass start): a later pass redrives it again only
+	// if this job, too, is gone a full horizon later.
+	if sweepCutoff != nil {
+		if _, err := tx.Exec(ctx, `UPDATE public.daily_metrics_runs SET updated_at = $2 WHERE id = $1::uuid`, run.ID, store.now().UTC()); err != nil {
+			return false, ErrUnavailable
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, ErrUnavailable

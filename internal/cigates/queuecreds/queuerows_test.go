@@ -215,6 +215,8 @@ var queueRowReadTable = map[string]queueRowRead{
 		"dedupe_key", roleInternal, "", "", "EXISTS on a key built from the run id; only the boolean is read, never logged"},
 	"internal/jobs/metrics/daily/redrive.go#ReconcileOrphanedFinalizeRedriveRuns": {
 		"dedupe_key", roleInternal, "", "", "join key for the abandonment check; never logged"},
+	"internal/jobs/metrics/daily/redrive.go#runsWithLiveFinalizeJob": {
+		"args#>>domain,id", roleInternal, "", "", "filter and map key for the live-job check of the sweep; the run ids come from the candidate query and the value is never logged or returned"},
 	"internal/jobs/metrics/remaining/redrive.go#deadHandoffReasonSQL": {
 		"dedupe_key", roleInternal, "", "", "equality with a key built from a partition id"},
 	"internal/syncreconciler/orphaned_unit_repair.go#readOrphanedSourceRowSQL": {

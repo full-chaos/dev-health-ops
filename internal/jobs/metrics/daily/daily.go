@@ -481,9 +481,10 @@ func SupportsBlockedRunReconcile(store Store) bool {
 //
 // This is the periodic tick. The daily fan-out is genuinely scheduled
 // (fixed-scheduler entry daily_metrics_fanout, DailyAt(1, 0), per
-// organization), whereas the stranded-finalize sweep it might otherwise have
-// hung off is NOT periodic -- FindStrandedFinalizeRuns has exactly one
-// non-test caller, the workerctl CLI, so hanging this off it would mean a
+// organization), whereas FindStrandedFinalizeRuns (the operator sweep it might
+// otherwise have hung off) is NOT periodic -- its only caller is the workerctl
+// CLI (the nightly sweepStrandedFinalize uses its own org-scoped query), so
+// hanging this off it would mean a
 // wedged run only becomes visible once an operator already went looking,
 // which is the situation the marker exists to end.
 func (handler *Dispatcher) reconcileBlockedRuns(ctx context.Context, organizationID string) {
@@ -510,6 +511,55 @@ func (handler *Dispatcher) reconcileBlockedRuns(ctx context.Context, organizatio
 	_ = handler.blockedObserver.ObserveDailyMetricsBlockedRun("marked", outcome.Marked)
 	_ = handler.blockedObserver.ObserveDailyMetricsBlockedRun("cleared", outcome.Cleared)
 }
+
+// strandedFinalizeSweeper is the optional store capability behind
+// sweepStrandedFinalize.
+type strandedFinalizeSweeper interface {
+	SweepStrandedFinalizeForOrg(ctx context.Context, publisher redriveFinalizePublisher, orgID string) (int, error)
+}
+
+// sweepStrandedFinalize redrives this organization's stranded finalizes. A run
+// whose partitions all succeeded and whose finalize job is gone is reached by
+// nothing else: the strand repair needs the River job row. Fail-open: an error
+// is logged at Warn, counted (the sweep's "failed" outcome), and the dispatch
+// result does not change.
+func (handler *Dispatcher) sweepStrandedFinalize(ctx context.Context, organizationID string) {
+	sweeper, ok := handler.store.(strandedFinalizeSweeper)
+	if !ok {
+		return
+	}
+	publisher, ok := handler.publisher.(redriveFinalizePublisher)
+	if !ok {
+		return
+	}
+	// Half of the remaining dispatch deadline, less the reserve for the
+	// rollbacks: every operation of the sweep, its rollbacks included, ends
+	// inside that budget (a rollback ends at the budget's end, see
+	// rollbackContext), so a slow or stuck sweep never spends the time that the
+	// dispatch result and its adapter still need.
+	if deadline, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Until(deadline)/2-sweepRollbackReserve)
+		defer cancel()
+	}
+	redriven, err := sweeper.SweepStrandedFinalizeForOrg(ctx, publisher, organizationID)
+	if err != nil {
+		slog.WarnContext(ctx, StrandedFinalizeSweepFailedLogMessage,
+			"organization_id", organizationID, "redriven", redriven, "error", err)
+		return
+	}
+	if redriven > 0 {
+		slog.InfoContext(ctx, StrandedFinalizeSweepLogMessage,
+			"organization_id", organizationID, "redriven", redriven)
+	}
+}
+
+// StrandedFinalizeSweepLogMessage and StrandedFinalizeSweepFailedLogMessage are
+// the lines of the nightly stranded-finalize sweep.
+const (
+	StrandedFinalizeSweepLogMessage       = "daily metrics stranded finalize redriven"
+	StrandedFinalizeSweepFailedLogMessage = "daily metrics stranded finalize sweep failed"
+)
 
 func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.DailyMetricsDispatchArgs]) error {
 	if handler == nil || handler.store == nil || handler.publisher == nil || handler.discoverer == nil || execution == nil {
@@ -550,6 +600,14 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 	// A defer covers every exit including the panic path, and keeps the
 	// "cannot affect the job's outcome" property: reconcileBlockedRuns is
 	// fail-open and returns nothing.
+	// The organization's never-attempted stranded finalizes, on the same
+	// nightly tick and fail-open for the same reason. THE RULE: the sweep is
+	// best-effort and isolated. It runs after every other hook has finished,
+	// every operation in it (rollbacks included) is bounded by its own budget,
+	// and its outcome never changes the job's result or the adapter's category:
+	// an error or a timeout is one WARN line and one counter, nothing else.
+	// Registered FIRST so it runs LAST (sweepStrandedFinalize sets its budget).
+	defer handler.sweepStrandedFinalize(ctx, run.OrganizationID)
 	defer handler.reconcileBlockedRuns(ctx, run.OrganizationID)
 	// The floor of the touched-day drain (CHAOS-8846): the nightly run is the
 	// one periodic event of every active organization, so a pending day is

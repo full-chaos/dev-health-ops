@@ -1242,6 +1242,22 @@ an automatic reconciler sweep) invokes the same Go functions. The
 `ledger_repair` field in this command's own JSON result (above) is the
 actual audit trail for a manual invocation today.
 
+**Nightly sweep**: the daily dispatch of each organization also runs this
+sweep on its own, for the never-attempted subset only: finalization `pending`,
+every partition succeeded, and no write for 24 hours (a finalize job that long
+gone was deleted by River's cleaner, so the strand repair cannot reach it).
+A `failed` or expired-`running` finalization stays for an operator. The sweep
+re-checks each run under its lock, pages through the whole backlog (at most
+2000 runs a pass), and restarts a redriven run's 24 hours, so a run is
+redriven again only if that job, too, is gone a day later. A finalize job
+that is still queued can get a redriven twin: the redrive twin adds at most ONE
+compute over the first job's own computes (worst case 4 + 1 = 5); readers
+keep the latest computed_at, so there is no answer change. The worker
+reports the first two series above, and
+`dev_health_daily_metrics_stranded_finalize_sweep_failed_total` counts sweep
+passes that failed; the pass is fail-open, so the dispatch does not fail with
+it.
+
 #### `metrics finalize-redrive`
 
 Historical backfill: re-run `metrics.daily_finalize` for one organization

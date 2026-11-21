@@ -113,6 +113,8 @@ type PostgresStore struct {
 	discoveryObserver          jobruntime.DailyMetricsDiscoveryObserver
 	redriveObserver            jobruntime.DailyMetricsRedriveObserver
 	finalizeSweepObserver      jobruntime.DailyMetricsFinalizeSweepObserver
+	sweepQueuePool             *pgxpool.Pool
+	sweepRiverSchema           string
 	finalizeRedriveObserver    jobruntime.DailyMetricsFinalizeRedriveObserver
 	partitionRecomputeObserver jobruntime.DailyMetricsPartitionRecomputeObserver
 	// markerWriter and markerObserver are the CHAOS-8710 ClickHouse run
@@ -152,6 +154,18 @@ func (store *PostgresStore) SetFinalizeSweepObserver(observer jobruntime.DailyMe
 		return
 	}
 	store.finalizeSweepObserver = observer
+}
+
+// SetFinalizeSweepQueueReader gives the nightly stranded-finalize sweep its
+// read of River's job table (queue-control pool; the domain pool has no grant
+// on the river schema). Without it the sweep refuses to run: it never
+// redrives a run whose finalize job it cannot see.
+func (store *PostgresStore) SetFinalizeSweepQueueReader(queuePool *pgxpool.Pool, riverSchema string) {
+	if store == nil {
+		return
+	}
+	store.sweepQueuePool = queuePool
+	store.sweepRiverSchema = riverSchema
 }
 
 func (store *PostgresStore) observeFinalizeSweep(outcome string, count int) {

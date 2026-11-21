@@ -143,6 +143,7 @@ func buildDailyWorker(
 		if finalizeSweepObserver, ok := observer.(jobruntime.DailyMetricsFinalizeSweepObserver); ok {
 			store.SetFinalizeSweepObserver(finalizeSweepObserver)
 		}
+		store.SetFinalizeSweepQueueReader(postgresDatabase.pools.QueueControl, postgresDatabase.riverSchema)
 		if finalizeRedriveObserver, ok := observer.(jobruntime.DailyMetricsFinalizeRedriveObserver); ok {
 			store.SetFinalizeRedriveObserver(finalizeRedriveObserver)
 		}

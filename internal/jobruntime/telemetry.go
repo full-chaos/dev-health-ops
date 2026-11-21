@@ -1166,8 +1166,9 @@ var dailyMetricsRedriveReasons = []string{"failed_permanent_reset", "dispatch_re
 // never reaching a terminal state; "finalized" counts runs a fresh
 // metrics.daily_finalize job was actually enqueued for (a subset of
 // detected -- a run whose finalize lease is still live is left alone this
-// pass and only becomes eligible on a later one).
-var dailyMetricsFinalizeSweepOutcomes = []string{"detected", "finalized"}
+// pass and only becomes eligible on a later one). "failed" counts nightly
+// sweep passes that failed; the pass is fail-open, so this is its only signal.
+var dailyMetricsFinalizeSweepOutcomes = []string{"detected", "finalized", "failed"}
 
 // dailyMetricsRunMarkerStates and dailyMetricsRunMarkerOutcomes are the closed
 // vocabularies of the CHAOS-8710 ClickHouse run-marker write: the state
@@ -4276,6 +4277,8 @@ func (collector *MetricsCollector) writeDailyMetricsFinalizeSweep(output *string
 	writeUintSample(output, "dev_health_daily_metrics_stranded_finalize_runs_detected_total", nil, collector.dailyMetricsFinalizeSweep["detected"])
 	writeMetadata(output, "dev_health_daily_metrics_runs_finalized_by_sweep_total", "Daily-metrics runs whose metrics.daily_finalize job was freshly (re-)enqueued by a CHAOS-4389 stranded-finalize sweep, outside the outbox's normal per-run dedupe.", "counter")
 	writeUintSample(output, "dev_health_daily_metrics_runs_finalized_by_sweep_total", nil, collector.dailyMetricsFinalizeSweep["finalized"])
+	writeMetadata(output, "dev_health_daily_metrics_stranded_finalize_sweep_failed_total", "Nightly stranded-finalize sweep passes that failed. The pass is fail-open, so this is the only signal that it stopped working.", "counter")
+	writeUintSample(output, "dev_health_daily_metrics_stranded_finalize_sweep_failed_total", nil, collector.dailyMetricsFinalizeSweep["failed"])
 	writeMetadata(output, "dev_health_daily_metrics_runs_blocked_marked_total", "Daily metrics runs newly marked blocked (a failed_permanent partition with nothing dispatchable left, so the completion fence can never be written).", "counter")
 	writeUintSample(output, "dev_health_daily_metrics_runs_blocked_marked_total", nil, collector.dailyMetricsBlockedRun["marked"])
 	writeMetadata(output, "dev_health_daily_metrics_runs_blocked_cleared_total", "Daily metrics runs whose blocked marker was cleared because the predicate stopped holding.", "counter")

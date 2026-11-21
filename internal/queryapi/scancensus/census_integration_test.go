@@ -887,6 +887,14 @@ const nullableIntoPlainSites = `
 // (logs/l14441-censuses-2.log 706932d1bfc2), not computed:
 //
 //	queries_metrics.go fetchMetricDriverDelta 1d471ff67adb -> be0937cb6512
+//
+// CHAOS-14441 (one tie key in every driver read): the summary reads order a tie on the rank by toString(id), as the
+// caption batch does (a repository id is a UUID, ordered apart from its string form). Scan targets unchanged.
+// Re-pinned by hand from the failing local TestScanTypeCensus run (logs/l14441-scan-3.log 6afdcbc254b7), not computed:
+//
+//	queries_metric_drivers_batch.go fetchMetricDriversBatch e7e8b7f8955e -> 281275fa72d7
+//	queries_metrics.go fetchMetricDriverDelta be0937cb6512 -> 96cabf4f5482
+//	queries_metrics.go fetchRateDriverDelta fef6e4dd8810 -> b365611c6c29
 const unverifiedSites = `
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|e67003e26fc2|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*uint64,*[]string|e67003e26fc2|not-describable
@@ -924,14 +932,14 @@ internal/queryapi/explain/metrics.go|fetchMetricContributors|*string,**float64|2
 internal/queryapi/explain/metrics.go|fetchMetricDriverDelta|*string,**float64,*uint8,*uint8,**float64|69d32d6caccb|not-describable
 internal/queryapi/explain/metrics.go|fetchMetricValue|**float64,*uint64|aff9d26238c0|spliced-select-list
 internal/queryapi/explain/repositories.go|fetchWorkItemProviders|*string|cc6f1e4e4f8c|not-describable
-internal/queryapi/home/queries_metric_drivers_batch.go|fetchMetricDriversBatch|*string,*string|e7e8b7f8955e|not-describable
+internal/queryapi/home/queries_metric_drivers_batch.go|fetchMetricDriversBatch|*string,*string|281275fa72d7|not-describable
 internal/queryapi/home/queries_metrics.go|fetchBlockedHours|*time.Time,*float64|224ae017b462|not-describable
 internal/queryapi/home/queries_metrics.go|fetchChangeFailureView|[]any|02b9a54bef69|variadic-destinations
-internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|be0937cb6512|spliced-select-list
+internal/queryapi/home/queries_metrics.go|fetchMetricDriverDelta|*string,**float64,**float64|96cabf4f5482|spliced-select-list
 internal/queryapi/home/queries_metrics.go|fetchMetricSeries|*time.Time,**float64|600ac24505e4|spliced-select-list
 internal/queryapi/home/queries_metrics.go|fetchMetricValue|*int64,**float64|32cfbee5d369|spliced-select-list
 internal/queryapi/home/queries_metrics.go|fetchPRReworkView|[]any|f2e5aa5edd0b|variadic-destinations
-internal/queryapi/home/queries_metrics.go|fetchRateDriverDelta|*string,**float64,**float64|fef6e4dd8810|spliced-select-list
+internal/queryapi/home/queries_metrics.go|fetchRateDriverDelta|*string,**float64,**float64|b365611c6c29|spliced-select-list
 internal/queryapi/home/queries_signals.go|fetchRiskSignals|*string,*string,**float64,*string,*time.Time,**float64|06cb489933a0|not-describable
 internal/queryapi/home/queries_sync.go|FetchLatestSuccessfulSyncAt|**time.Time|9dfe899f0474|statement-not-static
 internal/queryapi/home/repolinked.go|readBasis|*string,*string,*uint8|ed45fd9e4470|spliced-select-list

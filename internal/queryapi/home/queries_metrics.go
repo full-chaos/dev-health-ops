@@ -482,13 +482,10 @@ func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, colu
 	return out, rows.Err()
 }
 
-// driverOrder is the ORDER BY of the summary's driver read: the percent rank orders ties by nothing (as main did), the
-// absolute rise of a move from a measured 0 by id.
+// driverOrder is the ORDER BY of the summary's driver read: the rank, then the one tie key of every driver read
+// (driverTieKey), so the summary and the caption name the same drivers in the same order.
 func driverOrder(alias string) string {
-	if alias == "delta_abs" {
-		return "delta_abs DESC, id"
-	}
-	return alias + " DESC"
+	return alias + " DESC, " + driverTieKey
 }
 
 // fetchRateDriverDelta is fetchMetricDriverDelta for a rate that is a ratio

@@ -12,6 +12,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 )
 
+// driverTieKey breaks a tie on the rank in every driver read, summary and caption, percent and absolute: the id as a
+// string. A repository id is a UUID, and ClickHouse orders a UUID column apart from its string form, so the reads would
+// otherwise name different drivers on a tie.
+const driverTieKey = "toString(id)"
+
 // driverBatchMetric is one metric of the batched driver read with the scope
 // filter of its scope level (scopeFilterForMetric).
 type driverBatchMetric struct {
@@ -29,8 +34,8 @@ type driverBatchMetric struct {
 // limit rows per metric (LIMIT n BY metric). The row count is bounded in the
 // SQL by limit times the number of metrics, so the 1,000-row cap of the query
 // client is never reached. A metric without a driver row is absent from the
-// result. Ties on the rank break by id, so one request names the same
-// drivers twice.
+// result. Ties on the rank break by driverTieKey, so one request names the
+// same drivers twice.
 //
 // fetchMetricDriverDelta is left as it is: its caller (the summary sentence)
 // reads one metric and orders ties by nothing.
@@ -47,9 +52,9 @@ func fetchMetricDriversBatch(ctx context.Context, client QueryClient, batch []dr
         FROM (
 %s
         )
-        ORDER BY metric, rank_value DESC, id
+        ORDER BY metric, rank_value DESC, %s
         LIMIT {limit_n:UInt32} BY metric
-    `, strings.Join(parts, "\n            UNION ALL\n"))
+    `, strings.Join(parts, "\n            UNION ALL\n"), driverTieKey)
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},

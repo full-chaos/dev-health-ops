@@ -640,6 +640,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 			slog.Warn("gitlab tests/cicd window start unknown",
 				"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
 				"reason", "no usable Date header on the project read: the window start uses our clock")
+			client.Metrics.RecordGitLabTestsWindowStartFallback(claim.Dataset)
 		}
 		cursor.WindowStart = windowStart
 	}

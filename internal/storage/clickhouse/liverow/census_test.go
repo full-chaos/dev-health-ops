@@ -53,7 +53,6 @@ var unruledReads = map[string]string{
 		"(fetchRetractedUserDays reads the days whose every key is a retraction row, and they are dropped)",
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamCognitiveLoad": "SQL pinned by the frozen golden; the rule is applied in Go after the read " +
 		"(fetchRetractedLoadDays reads the days whose newest row is a retraction row, and they are dropped)",
-	"internal/queryapi/sankey/queries.go:fetchExpenseCounts": "three sums over the whole scope, one row, no list: a retraction row adds 0",
 	"internal/jobs/metrics/remaining/recommendations_loader.go:loadCompoundingRiskPersisted": "the newest row of ONE team over the window, whole: a retraction row is that row, " +
 		"and it reads as the read answers for no row at all (no score, severity unknown)",
 	"internal/jobs/metrics/remaining/capacity_native_clickhouse.go:capacityNewestRows": "the newest-version subquery of the capacity reads; the throughput and scope reads apply the rule after it, and the backlog sums the WIP on the newest day of the scope: a retraction row adds 0 and must stay in the newest-day pick",
@@ -79,12 +78,19 @@ var heldBy = map[string]string{
 // the declaration of the same package that builds the read from the table
 // name: the census holds that it applies the rule.
 var namesOnly = map[string]struct{ reader, why string }{
-	"internal/providersync/":                                    {"", "sync writers and destinations"},
-	"internal/jobs/metrics/daily/":                              {"", "daily family writers"},
-	"internal/cigates/metricsproof/proof.go":                    {"", "executed-proof readback of the rows one CI run wrote: table names of its family maps, no product read"},
-	"internal/jobs/metrics/workitemengine/":                     {"", "compute and insert of the work item engine rows (writer)"},
-	"internal/teamkeytables/teamkeytables.go":                   {"", "the registry of the tables and their measures"},
-	"internal/queryapi/rowview/rowview.go":                      {"", "the reader side of the view column: table names of its registry, no query"},
+	"internal/providersync/":                  {"", "sync writers and destinations"},
+	"internal/jobs/metrics/daily/":            {"", "daily family writers"},
+	"internal/cigates/metricsproof/proof.go":  {"", "executed-proof readback of the rows one CI run wrote: table names of its family maps, no product read"},
+	"internal/jobs/metrics/workitemengine/":   {"", "compute and insert of the work item engine rows (writer)"},
+	"internal/teamkeytables/teamkeytables.go": {"", "the registry of the tables and their measures"},
+	"internal/queryapi/rowview/rowview.go":    {"", "the reader side of the view column: table names of its registry, no query"},
+	"internal/queryapi/sankey/queries.go": {"", "reads work_item_metrics_daily and work_item_state_durations_daily FROM a run-time source (the org view FINAL, " +
+		"or the served team view of one team, CHAOS-14379): fetchStateStatusCounts applies the rule after it; fetchExpenseCounts makes three sums " +
+		"over the whole scope, one row, no list: a retraction row adds 0"},
+	"internal/queryapi/aggflame/clickhouse.go": {"", "fetchCycleBreakdown reads work_item_state_durations_daily FROM a run-time source (the table, or the served " +
+		"team view of one team, CHAOS-14379) and applies the rule in its HAVING"},
+	"internal/queryapi/home/queries_metrics.go": {"", "reads FROM a run-time source (metricFromClause: the table, or the served team view of one team, CHAOS-14379; " +
+		"fetchBlockedHours the same): both apply the rule in the HAVING of liveRowHaving"},
 	"internal/storage/clickhouse/liverow/liverow.go":            {"", "the reader side of the rule"},
 	"internal/testsupport/":                                     {"", "test seeds"},
 	"internal/jobruntime/telemetry.go":                          {"", "table names in telemetry labels"},

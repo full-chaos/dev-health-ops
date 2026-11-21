@@ -54,7 +54,7 @@ func TestReplacingMergeTreeReadsAreFinalWithOrgIDInStatement(t *testing.T) {
 
 	t.Run("fetchExpenseCounts", func(t *testing.T) {
 		c := &capturingClient{}
-		_, _ = fetchExpenseCounts(ctx, c, now, now, "", nil, "org-1")
+		_, _ = fetchExpenseCounts(ctx, c, now, now, "", nil, "org-1", false)
 		assertNoLimit1By(t, c.queries[0])
 		if !strings.Contains(c.queries[0], "FROM work_item_metrics_daily FINAL") {
 			t.Fatalf("expected FROM work_item_metrics_daily FINAL:\n%s", c.queries[0])
@@ -72,7 +72,7 @@ func TestReplacingMergeTreeReadsAreFinalWithOrgIDInStatement(t *testing.T) {
 
 	t.Run("fetchStateStatusCounts", func(t *testing.T) {
 		c := &capturingClient{}
-		_, _ = fetchStateStatusCounts(ctx, c, now, now, "", nil, "org-1")
+		_, _ = fetchStateStatusCounts(ctx, c, now, now, "", nil, "org-1", false)
 		assertNoLimit1By(t, c.queries[0])
 		if !strings.Contains(c.queries[0], "FROM work_item_state_durations_daily FINAL") {
 			t.Fatalf("expected FROM work_item_state_durations_daily FINAL:\n%s", c.queries[0])

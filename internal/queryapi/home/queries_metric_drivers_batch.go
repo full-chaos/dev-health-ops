@@ -80,8 +80,8 @@ func fetchMetricDriversBatch(ctx context.Context, client QueryClient, batch []dr
 // column. Only the metric's own spec (table, column, group) shapes it.
 func metricDriverSelect(m driverBatchMetric) string {
 	table, column, groupBy := metricTable(m.Metric), metricColumn(m.Metric), metricGroup(m.Metric)
-	currentFrom := metricFromClause(table, column, m.ScopeFilter, "start_day", "end_day")
-	previousFrom := metricFromClause(table, column, m.ScopeFilter, "compare_start", "compare_end")
+	currentFrom := metricFromClause(table, column, m.ScopeFilter, "start_day", "end_day", false)
+	previousFrom := metricFromClause(table, column, m.ScopeFilter, "compare_start", "compare_end", false)
 	pct := deltarule.DriverPercentSQL("current.value", "previous.value", "previous.present")
 	value, where := "avg("+column+")", "delta_pct IS NOT NULL"
 	switch {

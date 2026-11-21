@@ -151,6 +151,13 @@ func scopeFilterForMetric(ctx context.Context, client QueryClient, metricScope s
 	return "", nil, nil
 }
 
+// oneTeamScope reports that a team-keyed metric is read for exactly one team: that team's view of the stored rows
+// (CHAOS-14379). No team and a team set read the org view (a team set is CHAOS-10665's). The ids are a set by then
+// (ResolveScope), so [t, t] is the one team t.
+func oneTeamScope(metricScope string, f Filters) bool {
+	return !f.Scope.unresolved && metricScope == "team" && f.Scope.Level == "team" && len(f.Scope.IDs) == 1
+}
+
 // scopeShareForMetric is the weight of a summed repository metric under a team scope: the share of each repository the
 // team holds (teamscope.RepoShare, CHAOS-9413, D5988), so a co-owner reads its own share of the repository's total and
 // the teams of one repository together read it once. Only a sum is weighed: an average, a median or a ratio is a

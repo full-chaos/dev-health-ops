@@ -677,3 +677,76 @@ func TestShortUnitsShareLaterDeferralInTheSameQueuedPassCapped(t *testing.T) {
 func TestShortUnitsShareLaterDeferralInTheSameQueuedPassUncapped(t *testing.T) {
 	runShortShareLaterDeferralInTheSameQueuedPass(t, false)
 }
+
+// F1: a unit-end wake inside s0's deferral runs a pass that queues nothing while l0 is still in flight. The tail must
+// still arm s0's available_at (main armed nothing while a unit was in flight, so the deferral waited for the next unit
+// end).
+func TestShortUnitsShareUnitEndWakeInsideTheDeferralQueuesNothing(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		cell := newShortShareDenialWith(t, ctx, pool, denialConfig{countdown: "60", deferral: "4", jitter: "0", lateL1: true})
+		cell.pass("pass 1")
+		s0At := cell.availableAt(denialS0)
+		cell.wantWakeBy("after pass 1", s0At)
+		if !syncrunrollup.WakeDispatch(ctx, pool, discoveryTestRun, time.Now().UTC(), syncrunrollup.DispatchWakePathProviderUnit) {
+			t.Fatal("wake not armed")
+		}
+		cell.pass("pass 2 (a unit-end wake inside the deferral window, nothing due)")
+		if got, _ := cell.status(denialL0); got != syncRunUnitStatusDispatching {
+			t.Fatalf("pass 2: l0 %s, want still in flight (dispatching)", got)
+		}
+		cell.wantWakeBy("after pass 2", s0At)
+	})
+}
+
+// A retried delivery after a committed queued pass (the shape of a failed post-commit read): the delivery's outbox row
+// is set back to 'dispatched' with the same attempts and the same job runs again. It claims nothing new, publishes
+// nothing new, and arms a wake.
+func TestShortUnitsShareRetriedDeliveryAfterAQueuedPass(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		cell := newShortShareDenialWith(t, ctx, pool, denialConfig{countdown: "60", deferral: "4", jitter: "0"})
+		delete(cell.estimator.estimates, denialS0)
+		outboxID, _, ok := shortShareRelay(t, ctx, pool, nil)
+		if !ok {
+			t.Fatal("no due dispatch row")
+		}
+		args := DispatchSyncRunArgs{TransportArgs: TransportArgs{
+			Version: ContractVersionV1, OrgID: discoveryTestOrg, RunID: discoveryTestRun,
+			DispatchOutbox: outboxID, RouteGeneration: dispatchRouteGeneration,
+		}}
+		if err := cell.svc.Dispatch(ctx, args); err != nil {
+			t.Fatalf("Dispatch: %v", err)
+		}
+		snapshot := func() string {
+			var units, publishes string
+			if err := pool.QueryRow(ctx, `SELECT string_agg(id::text || ':' || status || ':' || updated_at::text, ',' ORDER BY id) FROM sync_run_units WHERE sync_run_id = $1::uuid`, discoveryTestRun).Scan(&units); err != nil {
+				t.Fatal(err)
+			}
+			if err := pool.QueryRow(ctx, `SELECT count(*)::text || ':' || coalesce(string_agg(dedupe_key, ',' ORDER BY dedupe_key), '') FROM worker_job_outbox`).Scan(&publishes); err != nil {
+				t.Fatal(err)
+			}
+			return units + " | " + publishes
+		}
+		if got, _ := cell.status(denialL0); got != syncRunUnitStatusDispatching {
+			t.Fatalf("pass 1: l0 %s, want queued (dispatching)", got)
+		}
+		if got, _ := cell.status(denialS0); got != syncRunUnitStatusDispatching {
+			t.Fatalf("pass 1: s0 %s, want queued (dispatching)", got)
+		}
+		before := snapshot()
+		if _, err := pool.Exec(ctx, `
+UPDATE sync_dispatch_outbox SET status = 'dispatched', dispatched_at = now(), dispatched_transport = 'river',
+    dispatched_route_generation = $2, claim_token = NULL, updated_at = now()
+WHERE id = $1::uuid`, outboxID, dispatchRouteGeneration); err != nil {
+			t.Fatal(err)
+		}
+		if err := cell.svc.Dispatch(ctx, args); err != nil {
+			t.Fatalf("retried Dispatch: %v", err)
+		}
+		if after := snapshot(); after != before {
+			t.Errorf("the retried delivery changed units or publishes:\n before %s\n after  %s", before, after)
+		}
+		if cell.armedAt() == nil {
+			t.Error("the retried delivery armed no wake while l1 is capped")
+		}
+	})
+}

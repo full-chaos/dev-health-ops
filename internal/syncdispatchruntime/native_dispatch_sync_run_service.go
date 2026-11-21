@@ -673,20 +673,21 @@ WHERE id = $1::uuid`,
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunNoop, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Count(synclog.KeyPendingUnits, counts.dispatchable))
 		return nil
 	}
-	// b) Nothing dispatchable, but something is genuinely in flight
-	// (DISPATCHING not yet stale, or RUNNING) -- wait for it; no wakeup to
-	// arm, this pass's job here is done.
-	if counts.inFlight > 0 {
-		service.logger.Info(ctx, synclog.MsgDispatchSyncRunWaitingInflight, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Count(synclog.KeyInFlightUnits, counts.inFlight))
-		return nil
-	}
-	// c) Nothing dispatchable or in flight, but a RETRYING unit has a
-	// future available_at -- arm a redispatch for exactly that time rather
-	// than the default countdown, so a long backoff is honored instead of
-	// being polled early for nothing.
+	// b) Nothing dispatchable, but a RETRYING unit has a future available_at
+	// -- arm a redispatch for exactly that time rather than the default
+	// countdown, so a long backoff is honored instead of being polled early for
+	// nothing. Also while units are in flight: this pass consumed the run's
+	// row, so without it the deferral would wait for the next unit end.
 	if counts.nextDeferredAt != nil {
 		scheduleRedispatch(ctx, service.pool, service.logger, run.id, counts.nextDeferredAt, service.nowUTC())
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunDeferred, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Instant(synclog.KeyNextDeferredAt, *counts.nextDeferredAt))
+		return nil
+	}
+	// c) Nothing dispatchable or deferred, but something is genuinely in
+	// flight (DISPATCHING not yet stale, or RUNNING) -- wait for it; its end
+	// wakes the pass, no wakeup to arm.
+	if counts.inFlight > 0 {
+		service.logger.Info(ctx, synclog.MsgDispatchSyncRunWaitingInflight, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Count(synclog.KeyInFlightUnits, counts.inFlight))
 		return nil
 	}
 	// d) No pending work of any kind (a zero-unit run, or every unit

@@ -685,7 +685,7 @@ const (
 // sync_dispatch_outbox, which waits on a route mutation's SHARE ROW EXCLUSIVE barrier (syncroute/control.go
 // routeMutationLockSQL) while the pass holds its dispatch row, units and bucket locks. Transaction-local: the body
 // and the commit snapshot keep their own rules. A timeout rolls the pass back and River redelivers it.
-const dispatchTailLockTimeoutSQL = `SET LOCAL lock_timeout = '1000ms'`
+const dispatchTailLockTimeoutSQL = `SET LOCAL lock_timeout = '1ms'` // MUTANT M7b
 
 // armPassWake is the pass's tail (passTail): it reads the run's pending units on the pass transaction and re-arms
 // the run's dispatch row there. Any error is returned and the pass commits nothing.

@@ -726,7 +726,13 @@ func (service *NativeDispatchSyncRunService) armPassWake(ctx context.Context, tx
 		// CHAOS-8459: this pass claimed nothing, so the run is waiting on a
 		// cap or a long unit; the re-arm backs off with the idle time and a
 		// unit end wakes the pass at once (CHAOS-10013).
-		backoff, backoffAttrs := rearmBackoff(ctx, tx, service.logger, runID, armAt)
+		// MUTANT M6: the back-off read on service.pool, outside the pass tx.
+		backoffTx, err := service.pool.Begin(ctx)
+		if err != nil {
+			return 0, pendingUnitCounts{}, err
+		}
+		backoff, backoffAttrs := rearmBackoff(ctx, backoffTx, service.logger, runID, armAt)
+		_ = backoffTx.Rollback(ctx)
 		if err := scheduleRedispatch(ctx, tx, service.logger, runID, dueNowRearmAtAfter(counts.nextDeferredAt, armAt, backoff), armAt, backoffAttrs...); err != nil {
 			return 0, pendingUnitCounts{}, err
 		}

@@ -473,6 +473,25 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 		return empty(), nil
 	}
 	d := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.UTC)
+	// CHAOS-14473: on the TEAM breakout the rows group repositories by their
+	// owners on the selected day, as the writer of the stored team rows does.
+	// The day pick and the trend keep the ownership of now.
+	rowsAsOf := now
+	if breakout == model.CompoundingRiskScopeTeam {
+		rowsAsOf = d
+	}
+	var rowScope idList
+	rowScopeSet := false
+	namedRowScope := func() (idList, error) {
+		if !rowScopeSet {
+			ids, err := repoScopeForTeams(ctx, client, orgID, repoIDs, teamIDs, rowsAsOf)
+			if err != nil {
+				return nil, err
+			}
+			rowScope, rowScopeSet = ids, true
+		}
+		return rowScope, nil
+	}
 
 	var points []model.CompoundingRiskPoint
 	if breakout == model.CompoundingRiskScopeRepo {
@@ -517,15 +536,12 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 			if !narrows {
 				var scope, selected idList = nil, repoIDs
 				if len(teamIDs) > 0 {
-					if !teamFilteredSet {
-						if err = narrow(); err != nil {
-							return nil, err
-						}
-					}
-					if scope, err = repoScopeForTeams(ctx, client, orgID, nil, teamIDs, now); err != nil {
+					if selected, err = namedRowScope(); err != nil {
 						return nil, err
 					}
-					selected = teamFilteredRepoIDs
+					if scope, err = repoScopeForTeams(ctx, client, orgID, nil, teamIDs, rowsAsOf); err != nil {
+						return nil, err
+					}
 				}
 				dayRows, err := latestRowsLimit(ctx, client, orgID, d, scopeRepo, scope, 0)
 				if err != nil {
@@ -572,7 +588,13 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 					return nil, err
 				}
 			}
-			repoRows, err := latestRowsLimit(ctx, client, orgID, d, scopeRepo, fallbackRepoIDs, 0)
+			rowRepoIDs := fallbackRepoIDs
+			if breakout == model.CompoundingRiskScopeTeam && len(teamIDs) > 0 {
+				if rowRepoIDs, err = namedRowScope(); err != nil {
+					return nil, err
+				}
+			}
+			repoRows, err := latestRowsLimit(ctx, client, orgID, d, scopeRepo, rowRepoIDs, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -580,7 +602,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 			if len(candidates) == 0 {
 				candidates = order
 			}
-			teamsOfRepo, err := teamsOwningRepos(ctx, client, orgID, candidates, now)
+			teamsOfRepo, err := teamsOwningRepos(ctx, client, orgID, candidates, rowsAsOf)
 			if err != nil {
 				return nil, err
 			}

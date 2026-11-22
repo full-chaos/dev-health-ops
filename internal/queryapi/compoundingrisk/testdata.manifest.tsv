@@ -1,5 +1,5 @@
 # Every file under internal/queryapi/compoundingrisk/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-3df5e89543a160aef3744893443f74256f8301c53d25c0092884cfde0138bab1	hand-written	equality_sweep.declared
-434512532f0fbc1ef7ba7a3bee4275c768ac279c9c797dae724e0662927a74e7	go-generated	equality_sweep.golden
+a4e096daeb17344205da676d57f9909217f9e0960588b355aa0ccd328cace71f	hand-written	equality_sweep.declared
+b0600abc84fdaf55475d981382fa7edc67e214fec8d61d5177a9fcbd36b74c68	go-generated	equality_sweep.golden

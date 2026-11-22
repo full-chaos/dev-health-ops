@@ -550,6 +550,11 @@ lower than the not-applicable reading.
 
 Residual: a repository whose last test report is older than 29 days reads as not applicable.
 
+The queue part of quality drag has the same unknown form. A pipeline group with runs but no queue sample (for example,
+a group whose only runs are re-runs) stores `avg_queue_seconds` as null in `factors_json` and `queue_wait_hours` as
+NULL, so `drag_hours` is the sum of the known parts and the served drag of the day is marked partial. A group with no
+runs keeps a queue wait of 0.
+
 ## TestOps release confidence: coverage
 
 Release confidence weighs pipeline success 0.4, test pass rate 0.3, line coverage 0.2 and flake 0.1. Coverage is

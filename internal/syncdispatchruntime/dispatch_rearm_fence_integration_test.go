@@ -4,6 +4,7 @@ package syncdispatchruntime
 
 import (
 	"context"
+	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 )
 
@@ -331,6 +333,89 @@ func TestRearmFenceOlderPassKeepsALiveRelayClaim(t *testing.T) {
 		if row.status != "pending" || row.attempts != 2 || row.claimToken == nil || *row.claimToken != *claimed.claimToken {
 			t.Errorf("row %s/%d claim=%v, want pending/2 with the relay's claim kept: the re-arm cleared a claim that is live now",
 				row.status, row.attempts, row.claimToken != nil)
+		}
+	})
+}
+
+// onLogMessage is a slog handler that runs fn once, at the first record with the given message.
+type onLogMessage struct {
+	message string
+	fired   *atomic.Bool
+	fn      func()
+}
+
+func (handler onLogMessage) Enabled(context.Context, slog.Level) bool { return true }
+func (handler onLogMessage) Handle(_ context.Context, record slog.Record) error {
+	if record.Message == handler.message && handler.fired.CompareAndSwap(false, true) {
+		handler.fn()
+	}
+	return nil
+}
+func (handler onLogMessage) WithAttrs([]slog.Attr) slog.Handler { return handler }
+func (handler onLogMessage) WithGroup(string) slog.Handler      { return handler }
+
+// TestRearmFenceOlderPassOwnWakeAloneUndoesNoNewerDelivery isolates the pass's deferred own wake
+// (syncrunrollup.WakeDispatch, path dispatch_pass, native_dispatch_sync_run_service.go:616) from its re-arm: the
+// interleave of TestRearmFenceOlderPassWakeKeepsANewerDelivery, and at the pass's dispatch_sync_run.noop line (after
+// scheduleRedispatch returned, before the deferred wake runs) the row is put back to dispatched/2 if the re-arm moved
+// it. Only the own wake can then write the row; it must leave the row the attempt-2 delivery owns.
+func TestRearmFenceOlderPassOwnWakeAloneUndoesNoNewerDelivery(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		seedDispatchRoute(t, ctx, pool)
+		markReferenceDiscoverySucceeded(t, ctx, pool)
+		t.Setenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", "60")
+		if _, err := pool.Exec(ctx, `UPDATE sync_dispatch_outbox SET attempts = 1 WHERE id = $1`, dispatchServiceTestOutbox); err != nil {
+			t.Fatal(err)
+		}
+		for _, unit := range []struct{ id, dataset string }{
+			{"00000000-0000-4000-8000-0000001447c0", "unroutable-dataset"},
+			{"00000000-0000-4000-8000-0000001447c1", "unroutable-dataset"},
+			{"00000000-0000-4000-8000-0000001447c2", "commits"},
+		} {
+			if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github',$4,$5,'planned',now(),(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'medium','incremental',0,now())`,
+				unit.id, discoveryTestOrg, discoveryTestRun, unit.dataset, dispatchTestSource); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		old := newTestDispatchService(t, pool)
+		var newerAttempt int64
+		hook := installAfterPassCommit(t, old, func() {
+			wakeRun(t, ctx, pool, time.Now().UTC())
+			newerAttempt = relayDelivers(t, ctx, pool)
+		})
+		var afterRearm rearmFenceRow
+		var noopSeen atomic.Bool
+		old.logger = synclog.New(slog.New(onLogMessage{message: "dispatch_sync_run.noop", fired: &noopSeen, fn: func() {
+			afterRearm = readRearmFenceRow(t, ctx, pool)
+			if afterRearm.status == "dispatched" && afterRearm.attempts == 2 {
+				return
+			}
+			if _, err := pool.Exec(ctx, `
+UPDATE sync_dispatch_outbox SET status = 'dispatched', dispatched_at = now(), dispatched_transport = 'river',
+    dispatched_route_generation = $2, claim_token = NULL, claim_expires_at = NULL, claim_transport = NULL,
+    claim_route_generation = NULL, last_error = NULL, updated_at = now()
+WHERE sync_run_id = $1 AND kind = 'dispatch_sync_run' AND attempts = 2`, discoveryTestRun, dispatchRouteGeneration); err != nil {
+				t.Errorf("put the row back to dispatched/2: %v", err)
+			}
+		}}))
+		if err := old.Dispatch(ctx, rearmFenceArgs(1)); err != nil {
+			t.Fatalf("old pass: %v, want nil", err)
+		}
+		if !hook.fired.Load() || newerAttempt != 2 || !noopSeen.Load() {
+			t.Fatalf("precondition: interleave fired=%v newer attempt=%d noop line seen=%v, want true/2/true", hook.fired.Load(), newerAttempt, noopSeen.Load())
+		}
+		if failed := unitIDsInStatus(t, ctx, pool, "failed"); len(failed) != 2 {
+			t.Fatalf("precondition: %d units terminalized in the old pass, want the 2 unroutable ones (%v)", len(failed), failed)
+		}
+		t.Logf("row after the re-arm (before put-back): %s/%d", afterRearm.status, afterRearm.attempts)
+
+		row := readRearmFenceRow(t, ctx, pool)
+		t.Logf("row after the own wake: status=%s attempts=%d available_at=%s", row.status, row.attempts, row.availableAt)
+		if row.status != "dispatched" || row.attempts != 2 {
+			t.Errorf("row status=%s attempts=%d, want dispatched/2: the attempt-1 pass's own deferred wake moved the row the attempt-2 delivery owns", row.status, row.attempts)
 		}
 	})
 }

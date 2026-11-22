@@ -75,6 +75,30 @@ also stores the pull requests merged in the window, how many of them had a first
 review, and that share (no share when nothing merged). The share is stored, not
 scored.
 
+On the team breakout, the rows and the trend point of the selected day cover
+the same repositories. With no repository filter, or a filter that keeps every
+repository with a row that day (with teams named: every repository of those
+teams with a row that day), a team that has a persisted team score is listed
+with that score. A team's persisted review latency also covers a repository the
+team owns that merged pull requests in the window but has no repository row
+that day, while the trend covers only repositories with a row. A filter that
+leaves out a repository with a row that day gives each team the mean of the
+scores of its selected repositories. An empty filter with no team named gives
+no rows and no trend; with teams named it means the same as no filter (the
+teams' own repositories).
+
+A team that owns a repository with a row that day but has no persisted team
+score for the day (not computed yet, or withdrawn) is listed with the mean of
+the scores of those repositories, the same rule as the filtered case. With no
+team named this applies to the active teams; with teams named, to those teams.
+It does not apply when the answer reads 500 persisted team scores, the most one
+answer reads: a team missing from them may still have a score. A mean of
+repository scores is a plain mean, while a persisted team score is computed
+again from the team's inputs weighted by ownership share, so the two can
+differ for the same repositories. A team that has a persisted score keeps it
+until the next daily run replaces it, also when newer repository rows of the
+day exist.
+
 Every definition publishes its unit, aggregation, display precision, null and
 zero semantics, supported scopes and dimensions, range limits, comparison
 rule, definition version, query version, source version, and freshness policy.

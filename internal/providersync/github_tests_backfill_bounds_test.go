@@ -100,6 +100,12 @@ func TestGitHubTestsBackfillWalksPastTheScheduledBounds(t *testing.T) {
 			}
 		}
 	}
+	window := boundsCollect(t, GitHubTestsRouteHandler{}, "backfill", boundsWindowCursor(t))
+	t.Logf("CELL i-window listed=%v final=%v incomplete=%+v", window.listed(), window.final != nil, window.cursor.Incomplete)
+	if window.final != nil || window.artifactLists == 0 || len(window.cursor.Incomplete) != 0 {
+		t.Errorf("backfill artifacts at %d window records: final=%v artifactLists=%d incomplete=%+v; want it to list on",
+			scheduledWalkRecordsPin, window.final != nil, window.artifactLists, window.cursor.Incomplete)
+	}
 	for _, phase := range []string{githubTestsArtifactsPhase, githubTestsRunsPhase} {
 		for _, pages := range []int{scheduledRunsPin / nativePerPage, backfillRunsPin/nativePerPage - 1} {
 			attempt := boundsCollect(t, GitHubTestsRouteHandler{}, "backfill", boundsSpentPagesCursor(t, phase, pages))
@@ -114,6 +120,14 @@ func TestGitHubTestsBackfillWalksPastTheScheduledBounds(t *testing.T) {
 			}
 		}
 	}
+}
+
+// boundsWindowCursor is an artifacts-phase cursor whose window records (the walk's records less the deep range's) are at
+// the scheduled bound, 1,000,000 of them deep range records: the artifacts phase checks the bound on the window.
+func boundsWindowCursor(t *testing.T) string {
+	return boundsStoredCursor(t, githubTestsArtifactsPhase, scheduledWalkRecordsPin+1_000_000, func(cursor *githubTestsChunkCursor) {
+		cursor.LateRecords = 1_000_000
+	})
 }
 
 // boundsSpentPagesCursor is a cursor at a page end of its phase's listing with the given pages spent, 2,002,076 records.
@@ -144,6 +158,13 @@ func TestGitHubTestsScheduledModesKeepTheWalkBounds(t *testing.T) {
 			under := boundsCollect(t, GitHubTestsRouteHandler{}, mode, boundsStoredCursor(t, phase, scheduledWalkRecordsPin-1, nil))
 			if under.final != nil || !under.listed() {
 				t.Errorf("%s %s one record under the bound: final=%v listed=%v, want it to list", mode, phase, under.final != nil, under.listed())
+			}
+			if phase == githubTestsArtifactsPhase {
+				window := boundsCollect(t, GitHubTestsRouteHandler{}, mode, boundsWindowCursor(t))
+				if window.final == nil || window.listed() || !githubTestsHasPageBudgetObservation(window.cursor, githubTestsArtifactInventoryComponent) {
+					t.Errorf("%s artifacts at %d window records: final=%v listed=%v incomplete=%+v; want a stop without listing",
+						mode, scheduledWalkRecordsPin, window.final != nil, window.listed(), window.cursor.Incomplete)
+				}
 			}
 			spent := boundsCollect(t, GitHubTestsRouteHandler{}, mode, boundsSpentPagesCursor(t, phase, scheduledRunsPin/nativePerPage))
 			component := githubTestsArtifactInventoryComponent
@@ -195,6 +216,19 @@ func TestGitHubTestsWalkBoundCeilingFollowsTheClaimMode(t *testing.T) {
 	for _, handler := range []GitHubTestsRouteHandler{{MaxWalkRecords: backfillWalkRecordsPin + 1}, {MaxRuns: backfillRunsPin + 1}} {
 		if err := boundsConfigErr(t, handler, "backfill"); !errors.Is(err, ErrInvalidConfiguration) {
 			t.Errorf("backfill MaxWalkRecords=%d MaxRuns=%d: err=%v, want ErrInvalidConfiguration", handler.MaxWalkRecords, handler.MaxRuns, err)
+		}
+	}
+}
+
+// An empty or unknown mode never reaches the bounds: Claim.Validate (lease.go:114-118) refuses it before the first
+// provider call, and the backfill bounds key on mode == "backfill" only, so a mode added to Validate later keeps the
+// scheduled bounds unless it is named there.
+func TestGitHubTestsUnknownModesNeverReachTheBounds(t *testing.T) {
+	for _, mode := range []string{"", "hourly", "Backfill"} {
+		for _, handler := range []GitHubTestsRouteHandler{{}, {MaxWalkRecords: backfillWalkRecordsPin}} {
+			if err := boundsConfigErr(t, handler, mode); !errors.Is(err, ErrInvalidConfiguration) {
+				t.Errorf("mode %q MaxWalkRecords=%d: err=%v, want ErrInvalidConfiguration", mode, handler.MaxWalkRecords, err)
+			}
 		}
 	}
 }

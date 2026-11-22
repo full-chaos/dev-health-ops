@@ -1728,6 +1728,9 @@ type TestOpsRiskBreakdownItem struct {
 type TestOpsRiskInput struct {
 	StartDate graphqldate.Date `json:"startDate"`
 	EndDate   graphqldate.Date `json:"endDate"`
+	RepoIds   []string         `json:"repoIds,omitempty"`
+	// Team ids. Narrows to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. With ``repoIds`` both apply.
+	TeamIds []string `json:"teamIds,omitempty"`
 }
 
 type TestOpsRiskQuadrantPoint struct {

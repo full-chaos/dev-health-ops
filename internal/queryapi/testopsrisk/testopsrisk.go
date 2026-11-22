@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
@@ -19,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/latestrow"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
@@ -47,6 +49,10 @@ type dailyRow struct {
 	pipelineStability       *float64
 }
 
+// stabilityLiveRows is the one read of stability values. The statement builder names it through this variable:
+// the org-scope census follows a package-level name to its literals, and the shared statement is read only by reference.
+var stabilityLiveRows = testops.StabilityLiveRowsSQL
+
 // dailyQuery reads, per day, the mean over repositories of the latest
 // release confidence and pipeline stability and the sums of the latest
 // quality-drag hours, outer-joined on the day. Stability is read only through
@@ -56,7 +62,8 @@ type dailyRow struct {
 // row stays NULL and a merge never changes the answer. A repo-day whose newest
 // row of a table retires the day (package liverow) is left out of that table's
 // aggregate: the day reads as absent, never 0.
-var dailyQuery = `SELECT
+func dailyStatement(scope scopeFilter) string {
+	return `SELECT
     day AS day,
     release_confidence,
     quality_drag_hours,
@@ -78,7 +85,7 @@ FROM (
         FROM testops_release_confidence
         WHERE org_id = {org_id:String}
           AND day >= {start:Date}
-          AND day <= {end:Date}
+          AND day <= {end:Date}` + scope.and("          ") + `
         GROUP BY day, repo_id
         HAVING ` + liverow.NewestPredicate("testops_release_confidence", "") + `
     )
@@ -100,7 +107,7 @@ FULL OUTER JOIN (
     FROM testops_quality_drag FINAL
     WHERE org_id = {org_id:String}
       AND day >= {start:Date}
-      AND day <= {end:Date}
+      AND day <= {end:Date}` + scope.and("      ") + `
       AND ` + liverow.Predicate("testops_quality_drag", "") + `
     GROUP BY day
 ) AS drag_daily USING (day)
@@ -109,12 +116,15 @@ FULL OUTER JOIN (
         day,
         avg(stability_index) AS pipeline_stability
     FROM (
-` + testops.StabilityLiveRowsSQL + `
-    )
+` + stabilityLiveRows + `
+    )` + scope.where("    ") + `
     GROUP BY day
 ) AS stability_daily USING (day)
 ORDER BY day ASC
 SETTINGS join_use_nulls = 1`
+}
+
+var dailyQuery = dailyStatement(scopeFilter{})
 
 // quadrantQuery reads, per repository, the pipeline success rate and test
 // pass rate of its latest release-confidence row, least confident first: the
@@ -124,7 +134,8 @@ SETTINGS join_use_nulls = 1`
 // NULL, not 0. The Nullable value is wrapped in a tuple because argMax skips
 // NULL values, which would let an older row's factor stand in for the latest
 // row's missing one.
-var quadrantQuery = fmt.Sprintf(`SELECT
+func quadrantStatement(scope scopeFilter) string {
+	return fmt.Sprintf(`SELECT
     coalesce(nullIf(repos.repo, ''), toString(latest.repo_id)) AS repo_label,
     nullIf(repos.repo, '') AS repo_name,
     latest.pipeline_success_rate,
@@ -151,7 +162,7 @@ FROM (
         FROM testops_release_confidence
         WHERE org_id = {org_id:String}
           AND day >= {start:Date}
-          AND day <= {end:Date}
+          AND day <= {end:Date}%s
         GROUP BY repo_id, day
         HAVING %s
     )
@@ -165,10 +176,63 @@ LEFT JOIN (
 ) AS repos
   ON repos.id = latest.repo_id
 ORDER BY latest.confidence_score ASC
-LIMIT 50`, liverow.NewestPredicate("testops_release_confidence", ""), latestrow.ArgMaxKeepNullBy("repo", "last_synced"))
+LIMIT 50`, scope.and("          "), liverow.NewestPredicate("testops_release_confidence", ""), latestrow.ArgMaxKeepNullBy("repo", "last_synced"))
+}
 
-func readDaily(ctx context.Context, client QueryClient, bindings []clickhouse.Binding) ([]dailyRow, error) {
-	rs, err := client.Query(ctx, dailyQuery, bindings)
+var quadrantQuery = quadrantStatement(scopeFilter{})
+
+// scopeFilter is the repository scope of a request: the AND-joined conditions on a repo_id column and their
+// bindings. The zero value is no scope, and renders nothing, so a statement with no scope is the text it was
+// before the scope existed.
+type scopeFilter struct {
+	conditions []string
+	bindings   []clickhouse.Binding
+}
+
+// newScopeFilter builds the scope of repoIds (ids or full names) and teamIds (the repositories these teams
+// own, teamscope.RepoCondition). A nil or empty list is no scope. A blank team id is dropped by teamscope, so a
+// list of blank ids is no team scope; a list of blank repository ids matches no repository.
+func newScopeFilter(orgID string, repoIDs, teamIDs []string, asOf time.Time) scopeFilter {
+	var f scopeFilter
+	if len(repoIDs) > 0 {
+		f.conditions = append(f.conditions, `repo_id IN (
+              SELECT id FROM repos
+              WHERE org_id = {org_id:String}
+                AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
+          )`)
+		f.bindings = append(f.bindings, clickhouse.Binding{Name: "repo_ids", Value: repoIDs})
+	}
+	if condition, bindings := teamscope.RepoCondition(orgID, "toString(repo_id)", teamIDs, asOf); condition != "" {
+		f.conditions = append(f.conditions, condition)
+		f.bindings = append(f.bindings, bindings...)
+	}
+	return f
+}
+
+// and renders the conditions as AND clauses, each on a line of its own.
+func (f scopeFilter) and(indent string) string {
+	var b strings.Builder
+	for _, c := range f.conditions {
+		b.WriteString("\n" + indent + "AND " + c)
+	}
+	return b.String()
+}
+
+// where renders the conditions as one WHERE clause.
+func (f scopeFilter) where(indent string) string {
+	if len(f.conditions) == 0 {
+		return ""
+	}
+	return "\n" + indent + "WHERE " + strings.Join(f.conditions, "\n"+indent+"  AND ")
+}
+
+func readDaily(ctx context.Context, client QueryClient, scope scopeFilter, bindings []clickhouse.Binding) ([]dailyRow, error) {
+	statement := dailyQuery
+	if len(scope.conditions) > 0 {
+		statement = dailyStatement(scope)
+		bindings = append(bindings[:len(bindings):len(bindings)], scope.bindings...)
+	}
+	rs, err := client.Query(ctx, statement, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("testopsrisk: daily query: %w", err)
 	}
@@ -193,8 +257,13 @@ func readDaily(ctx context.Context, client QueryClient, bindings []clickhouse.Bi
 	return out, nil
 }
 
-func readQuadrant(ctx context.Context, client QueryClient, bindings []clickhouse.Binding) ([]model.TestOpsRiskQuadrantPoint, error) {
-	rs, err := client.Query(ctx, quadrantQuery, bindings)
+func readQuadrant(ctx context.Context, client QueryClient, scope scopeFilter, bindings []clickhouse.Binding) ([]model.TestOpsRiskQuadrantPoint, error) {
+	statement := quadrantQuery
+	if len(scope.conditions) > 0 {
+		statement = quadrantStatement(scope)
+		bindings = append(bindings[:len(bindings):len(bindings)], scope.bindings...)
+	}
+	rs, err := client.Query(ctx, statement, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("testopsrisk: quadrant query: %w", err)
 	}
@@ -281,7 +350,9 @@ func breakdownItems(parts ...breakdownPart) []model.TestOpsRiskBreakdownItem {
 	return items
 }
 
-// Resolve answers testopsRisk for the org over the inclusive date range.
+// Resolve answers testopsRisk for the org over the inclusive date range, narrowed to the repositories of
+// input.RepoIds and the repositories input.TeamIds own (as of now). A scope never widens: the org_id predicate of
+// every read stays.
 func Resolve(ctx context.Context, client QueryClient, orgID string, input model.TestOpsRiskInput) (*model.TestOpsRiskResult, error) {
 	if client == nil {
 		return nil, errors.New("testopsrisk: clickhouse client is required")
@@ -291,11 +362,12 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, input model.
 		{Name: "start", Value: input.StartDate.Time().Format(dateLayout)},
 		{Name: "end", Value: input.EndDate.Time().Format(dateLayout)},
 	}
-	rows, err := readDaily(ctx, client, bindings)
+	scope := newScopeFilter(orgID, input.RepoIds, input.TeamIds, time.Now().UTC())
+	rows, err := readDaily(ctx, client, scope, bindings)
 	if err != nil {
 		return nil, err
 	}
-	quadrant, err := readQuadrant(ctx, client, bindings)
+	quadrant, err := readQuadrant(ctx, client, scope, bindings)
 	if err != nil {
 		return nil, err
 	}

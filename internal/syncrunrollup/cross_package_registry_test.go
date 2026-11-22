@@ -221,12 +221,14 @@ var crossPackageRollupSeamRegistry = []crossPackageWriteSite{
 		// CHAOS-8459: the dispatch re-arm back-off reads the newest
 		// success/failed unit end of a run (lastRunProgressAt) to measure idle
 		// time. It passes the same two status constants as a write, so the
-		// heuristic flags it. It writes nothing; it is registered, not hidden
-		// behind SQL literals, so the guard still sees every status reader.
+		// heuristic flags it. It writes nothing. CHAOS-14479: the SQL text is
+		// the mutable package var lastRunProgressSQL (a test seam that plants
+		// a statement error; production never assigns it), so the guard sees
+		// this call site and its arguments, not the SQL text.
 		pkgDir:       "../syncdispatchruntime",
 		file:         "schedule_redispatch.go",
 		snippet:      `syncRunID, syncRunUnitStatusSuccess, syncRunUnitStatusFailed).Scan(&at)`,
-		exemptReason: "read-only progress SELECT (MAX(updated_at) of success/failed units of one run, for the dispatch re-arm idle back-off) -- writes nothing; matches the heuristic only because it passes the two terminal status constants as query arguments",
+		exemptReason: "read-only progress SELECT (MAX(updated_at) of success/failed units of one run, for the dispatch re-arm idle back-off) held in the mutable package var lastRunProgressSQL, a test seam production never assigns -- writes nothing; matches the heuristic only because it passes the two terminal status constants as query arguments",
 	},
 	{
 		// The finalize checkpoint pass reads the run's successful units in keyset pages. It passes the

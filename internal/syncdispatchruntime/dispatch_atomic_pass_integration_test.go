@@ -330,6 +330,15 @@ func TestAtomicPassTailWaitsAtMostTheBoundOnARouteMutationBarrier(t *testing.T) 
 		if err == nil || !errors.Is(err, ErrDispatchSyncRunUnavailable) {
 			t.Fatalf("Dispatch returned %v, want ErrDispatchSyncRunUnavailable from the tail's lock timeout", err)
 		}
+		// The tail wraps every error as Unavailable; only lock_not_available after a real wait proves the lock bound.
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "55P03" {
+			t.Fatalf("Dispatch returned %v, want the cause lock_not_available (55P03) of the tail's lock_timeout", err)
+		}
+		//abstime:allow lower bound: lock_timeout fires only after 1 s of waiting on the barrier held before the wait began, so load can only lengthen this; it fails only a tail that did not wait
+		if waited < 900*time.Millisecond {
+			t.Fatalf("the pass gave up after %s on the barrier, want a wait of the 1 s tail bound", waited)
+		}
 		//abstime:allow hang ceiling: without the tail bound the pass waits on the barrier to its 10 s ctx deadline
 		if waited > 4*time.Second {
 			t.Fatalf("the pass waited %s on the barrier, want the 1 s tail bound", waited)
@@ -458,6 +467,10 @@ func TestAtomicPassUsesOneConnection(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer single.Close()
+				var before, after string
+				if err := single.QueryRow(ctx, `SELECT current_setting('lock_timeout')`).Scan(&before); err != nil {
+					t.Fatal(err)
+				}
 				passCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 				defer cancel()
 				if err := newTestDispatchService(t, single).Dispatch(passCtx, atomicPassArgs()); err != nil {
@@ -465,6 +478,13 @@ func TestAtomicPassUsesOneConnection(t *testing.T) {
 				}
 				if status, _ := atomicPassRow(t, ctx, pool); status != "pending" {
 					t.Fatalf("row status=%s, want pending", status)
+				}
+				// The pass's only connection goes back to the pool: the tail's lock bound must end with the pass tx.
+				if err := single.QueryRow(ctx, `SELECT current_setting('lock_timeout')`).Scan(&after); err != nil {
+					t.Fatal(err)
+				}
+				if after != before {
+					t.Fatalf("lock_timeout on the pooled connection after the pass = %q, want %q (the tail bound leaked past its transaction)", after, before)
 				}
 			})
 		})

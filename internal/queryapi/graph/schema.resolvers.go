@@ -1114,7 +1114,11 @@ func (r *queryResolver) TestopsRisk(ctx context.Context, orgID string, input mod
 	if err := requireOwnOrg(ctx, orgID); err != nil {
 		return nil, err
 	}
-	result, err := testopsrisk.Resolve(ctx, r.ClickHouse, orgID, input)
+	input, opts, err := refuseTeamsUnderCeiling(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	result, err := testopsrisk.ResolveWith(ctx, r.ClickHouse, orgID, input, opts)
 	if err != nil {
 		return nil, fmt.Errorf("testopsRisk: %w", err)
 	}

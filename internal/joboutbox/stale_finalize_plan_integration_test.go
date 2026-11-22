@@ -4,6 +4,7 @@ package joboutbox
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -19,8 +20,11 @@ import (
 // rows (49,014 metrics.daily_finalize), daily_metrics_runs 49,009, daily_metrics_partitions 95,410, river_job 6,104.
 //
 // WANT at base 0: statement 0 is false, so the survey reads no outbox and no river_job (pinned by the reconciler cell
-// TestStaleFinalizeBaseZeroReadsNoOutboxAndNoRiver). WANT at base 100: statements A and B read the outbox through
-// ix_worker_job_outbox_finalize_domain_id (revision 0167) and never with a Seq Scan, and A returns the 100 candidates.
+// TestStaleFinalizeBaseZeroReadsNoOutboxAndNoRiver). WANT at base 7 x perClass (seedBaseClasses: every class, k = 2
+// finalize outbox rows per run): statements A and B read the outbox through ix_worker_job_outbox_finalize_domain_id
+// (revision 0167) and never with a Seq Scan; every outbox and river_job node runs; an outbox node probed per base run
+// reads at most k x base rows, one run once (a hashed subplan) at most the index's entries; A returns the perClass
+// candidates and the survey counts each class.
 // Timings are logged as INFO only (D6418: no wall-time assertion).
 func TestStaleFinalizeSurveyPlanAtProdSizes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -62,7 +66,9 @@ func TestStaleFinalizeSurveyPlanAtProdSizes(t *testing.T) {
 		runs          = 49009
 		partitionRows = 95410
 		riverRows     = 6104
-		base          = 100
+		perClass      = 15
+		base          = 7 * perClass
+		k             = 2
 	)
 	seed := func(what, query string, args ...any) {
 		t.Helper()
@@ -83,7 +89,7 @@ INSERT INTO public.daily_metrics_partitions (id, run_id, ordinal, repo_ids, stat
 SELECT gen_random_uuid(), run.id, ordinal, '[]'::json, 'succeeded', 1, $1, $1, $1
 FROM (SELECT id, row_number() OVER (ORDER BY id) AS rank FROM public.daily_metrics_runs) AS run
 CROSS JOIN generate_series(0, 1) AS ordinal
-WHERE run.rank * 2 - (1 - ordinal) <= $2::int`, old, partitionRows-base)
+WHERE run.rank * 2 - (1 - ordinal) <= $2::int`, old, partitionRows-2*6*perClass)
 	seed("outbox", `
 INSERT INTO public.worker_job_outbox
     (id, dedupe_key, job_kind, contract_version, args, payload_hash, queue, priority, max_attempts, scheduled_at,
@@ -152,48 +158,187 @@ FROM generate_series(1, $2::int) AS n`, old, riverRows)
 		t.Fatalf("base 0: %+v, want no candidate and exact zero levels", result)
 	}
 
-	// Base 100: shape-D runs, every partition succeeded, nothing of theirs in the outbox or River.
-	seedBase(t, ctx, admin, base, old)
+	// The base: perClass runs of each class, with k finalize outbox rows per run where the class has outbox rows, so every
+	// outbox and River sub-plan of A and B runs (fcc F4: a node that never ran meets any rows bound).
+	seedBaseClasses(t, ctx, admin, perClass, old, now)
 	analyze()
-	explain("statement 0 at base 100", baseSQL, cutoff)
+	var finalizeEntries float64
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM public.worker_job_outbox WHERE job_kind = 'metrics.daily_finalize'`).Scan(&finalizeEntries); err != nil {
+		t.Fatal(err)
+	}
+	explain("statement 0 at base", baseSQL, cutoff)
 	for name, query := range map[string]string{"statement A": candidatesSQL, "statement B": levelsSQL} {
 		args := []any{cutoff, base, nil, nil}
 		if name == "statement B" {
 			args = []any{cutoff, staleFinalizeLevelCap + 1}
 		}
-		plan := explain(name+" at base 100", query, args...)
+		plan := explain(name+" at base", query, args...)
 		if strings.Contains(plan, "Seq Scan on worker_job_outbox") {
-			t.Fatalf("%s at base 100 scans the whole outbox:\n%s", name, plan)
+			t.Fatalf("%s at base scans the whole outbox:\n%s", name, plan)
 		}
 		if !strings.Contains(plan, "ix_worker_job_outbox_finalize_domain_id") {
-			t.Fatalf("%s at base 100 does not read the outbox through ix_worker_job_outbox_finalize_domain_id:\n%s", name, plan)
+			t.Fatalf("%s at base does not read the outbox through ix_worker_job_outbox_finalize_domain_id:\n%s", name, plan)
 		}
+		checkSubplanReads(t, ctx, admin, name, query, args, float64(k*base), finalizeEntries)
 	}
 	var candidates int
 	if err := admin.QueryRow(ctx, "SELECT count(*) FROM ("+candidatesSQL+") AS a", cutoff, base, nil, nil).Scan(&candidates); err != nil {
 		t.Fatal(err)
 	}
-	if candidates != base {
-		t.Fatalf("statement A returned %d candidates at base 100, want %d", candidates, base)
+	if candidates != perClass {
+		t.Fatalf("statement A returned %d candidates, want %d", candidates, perClass)
 	}
-	survey("base 100")
+	result := survey("base")
+	want := StaleFinalizeLevels{Live: 2 * perClass, StrandShape: perClass, Recent: 2 * perClass, NoPartitions: perClass}
+	if len(result.candidates) != perClass || result.levels == nil || *result.levels != want {
+		t.Fatalf("survey at base: %d candidates, levels %+v, want %d and %+v", len(result.candidates), result.levels, perClass, want)
+	}
 }
 
-// seedBase writes n runs in the base: running, finalize pending, written before the horizon, with two succeeded
-// partitions each and nothing in the outbox or River.
-func seedBase(t *testing.T, ctx context.Context, admin *pgxpool.Pool, n int, at time.Time) {
+// planNode is one node of EXPLAIN (ANALYZE, FORMAT JSON). Actual Rows is the average per loop.
+type planNode struct {
+	NodeType         string     `json:"Node Type"`
+	RelationName     string     `json:"Relation Name"`
+	IndexName        string     `json:"Index Name"`
+	ActualRows       float64    `json:"Actual Rows"`
+	ActualLoops      float64    `json:"Actual Loops"`
+	RemovedByFilter  float64    `json:"Rows Removed by Filter"`
+	RemovedByRecheck float64    `json:"Rows Removed by Index Recheck"`
+	Plans            []planNode `json:"Plans"`
+}
+
+// checkSubplanReads walks the analyzed plan of the statement. Every node on worker_job_outbox or river_job must have
+// run (loops > 0). An outbox node probed per base run (loops > 1) reads at most perProbeBound rows in all (k rows per
+// base run); an outbox node run once (a hashed subplan, allowed) reads at most the partial index's entries. A Seq Scan
+// on the outbox is refused by the caller's plan-text WANT.
+func checkSubplanReads(t *testing.T, ctx context.Context, admin *pgxpool.Pool, name, query string, args []any, perProbeBound, indexEntries float64) {
 	t.Helper()
-	if _, err := admin.Exec(ctx, `
-WITH base AS (
-    INSERT INTO public.daily_metrics_runs (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at)
-    SELECT gen_random_uuid(), '00000000-0000-4000-8000-000000014091'::uuid, DATE '2026-01-01' + n, 'plan-base:' || n,
-           'running', 'pending', $1, $1
-    FROM generate_series(1, $2::int) AS n
-    RETURNING id
-)
-INSERT INTO public.daily_metrics_partitions (id, run_id, ordinal, repo_ids, status, attempt_count, completed_at, created_at, updated_at)
-SELECT gen_random_uuid(), base.id, ordinal, '[]'::json, 'succeeded', 1, $1, $1, $1
-FROM base CROSS JOIN generate_series(0, 1) AS ordinal`, at, n); err != nil {
-		t.Fatalf("seed the base: %v", err)
+	var raw []byte
+	if err := admin.QueryRow(ctx, "EXPLAIN (ANALYZE, FORMAT JSON) "+query, args...).Scan(&raw); err != nil {
+		t.Fatalf("EXPLAIN JSON %s: %v", name, err)
 	}
+	var plans []struct {
+		Plan planNode `json:"Plan"`
+	}
+	if err := json.Unmarshal(raw, &plans); err != nil || len(plans) != 1 {
+		t.Fatalf("EXPLAIN JSON %s: %v, %d plans", name, err, len(plans))
+	}
+	var outboxNodes, riverNodes int
+	var walk func(node planNode)
+	walk = func(node planNode) {
+		switch node.RelationName {
+		case "worker_job_outbox", "river_job":
+			if node.ActualLoops == 0 {
+				t.Fatalf("%s: the %s node on %s never executed: the seed does not reach it", name, node.NodeType, node.RelationName)
+			}
+		}
+		if node.RelationName == "river_job" {
+			riverNodes++
+		}
+		if node.RelationName == "worker_job_outbox" {
+			outboxNodes++
+			read := (node.ActualRows + node.RemovedByFilter + node.RemovedByRecheck) * node.ActualLoops
+			form, bound := "per-probe", perProbeBound
+			if node.ActualLoops == 1 {
+				form, bound = "once", indexEntries
+			}
+			t.Logf("INFO %s: outbox %s (%s) loops %.0f read %.0f, bound %.0f (%s)", name, node.NodeType, node.IndexName, node.ActualLoops, read, bound, form)
+			if read > bound {
+				t.Fatalf("%s: the %s outbox node read %.0f rows over %.0f loops, bound %.0f (%s)", name, node.NodeType, read, node.ActualLoops, bound, form)
+			}
+		}
+		for _, child := range node.Plans {
+			walk(child)
+		}
+	}
+	walk(plans[0].Plan)
+	if outboxNodes == 0 || riverNodes == 0 {
+		t.Fatalf("%s: %d outbox and %d river_job nodes in the plan, want both > 0", name, outboxNodes, riverNodes)
+	}
+}
+
+// seedBaseClasses writes perClass base runs (running, finalize pending, written before the horizon) of each class, one
+// org per class. k = 2 finalize outbox rows per run where the class has outbox rows: the canonical row and a redrive-key
+// row. River job ids of dangling rows (the River job was pruned) start at 2,000,000,000, above every real id.
+//
+//	candidate      2 partitions, 2 delivered outbox rows whose River jobs are gone          -> redrive
+//	live_river     2 partitions, a River job still available                                 -> live
+//	live_outbox    2 partitions, 2 pending outbox rows                                       -> live
+//	strand         2 partitions, 2 delivered outbox rows, each with its completed River job  -> strand_shape
+//	recent_river   2 partitions, a River job created after the cutoff                        -> recent
+//	recent_outbox  2 partitions, 2 delivered outbox rows created after the cutoff, jobs gone -> recent
+//	no_partitions  no partition, 2 delivered outbox rows whose River jobs are gone            -> no_partitions
+func seedBaseClasses(t *testing.T, ctx context.Context, admin *pgxpool.Pool, perClass int, at, now time.Time) {
+	t.Helper()
+	recent := now.Add(-time.Hour)
+	classes := []string{"candidate", "live_river", "live_outbox", "strand", "recent_river", "recent_outbox", "no_partitions"}
+	exec := func(what, query string, args ...any) {
+		t.Helper()
+		if _, err := admin.Exec(ctx, query, args...); err != nil {
+			t.Fatalf("seed %s: %v", what, err)
+		}
+	}
+	for index, class := range classes {
+		exec(class+" runs", `
+INSERT INTO public.daily_metrics_runs (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at)
+SELECT gen_random_uuid(), ('00000000-0000-4000-8000-0000001409' || $3)::uuid, DATE '2026-01-01' + n,
+       'plan-' || $4 || ':' || n, 'running', 'pending', $1, $1
+FROM generate_series(1, $2::int) AS n`, at, perClass, fmt.Sprintf("%02d", index), class)
+	}
+	runsOf := `SELECT id FROM public.daily_metrics_runs WHERE generation LIKE 'plan-' || $1 || ':%'`
+	exec("partitions", `
+INSERT INTO public.daily_metrics_partitions (id, run_id, ordinal, repo_ids, status, attempt_count, completed_at, created_at, updated_at)
+SELECT gen_random_uuid(), run.id, ordinal, '[]'::json, 'succeeded', 1, $1, $1, $1
+FROM public.daily_metrics_runs AS run CROSS JOIN generate_series(0, 1) AS ordinal
+WHERE run.generation LIKE 'plan-%' AND run.generation NOT LIKE 'plan-no_partitions:%'`, at)
+	outbox := func(class, status string, created time.Time, riverJobID string) {
+		t.Helper()
+		delivered := "NULL"
+		if status == "delivered" {
+			delivered = "$2"
+		}
+		exec(class+" outbox", `
+INSERT INTO public.worker_job_outbox
+    (id, dedupe_key, job_kind, contract_version, args, payload_hash, queue, priority, max_attempts, scheduled_at,
+     status, attempt_count, next_attempt_at, river_job_id, delivered_at, created_at, updated_at)
+SELECT gen_random_uuid(), 'plan-' || $1 || ':' || run.id || ':' || copy, 'metrics.daily_finalize', 1,
+       json_build_object('contract_version', 1, 'domain', json_build_object('type', 'daily_metrics_run', 'id', run.id::text)),
+       'sha256:' || repeat('0', 64), 'metrics', 2, 4, $2, $3, 1, $2, `+riverJobID+`, `+delivered+`, $2, $2
+FROM (`+runsOf+`) AS run CROSS JOIN generate_series(1, 2) AS copy`, class, created, status)
+	}
+	dangling := "2000000000 + (abs(hashtext(run.id::text || copy)) % 1000000000)"
+	outbox("candidate", "delivered", at, dangling)
+	outbox("live_outbox", "pending", at, "NULL")
+	outbox("recent_outbox", "delivered", recent, dangling)
+	outbox("no_partitions", "delivered", at, dangling)
+	river := func(class, state string, created time.Time) {
+		t.Helper()
+		finalized := "NULL"
+		attempt := "0"
+		if state == "completed" {
+			finalized, attempt = "$3", "1"
+		}
+		exec(class+" river jobs", `
+INSERT INTO river.river_job (args, attempt, created_at, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at)
+SELECT jsonb_build_object('domain', jsonb_build_object('type', 'daily_metrics_run', 'id', run.id::text)),
+       `+attempt+`, $3, `+finalized+`, 'metrics.daily_finalize', 4, '{}'::jsonb, 2, 'metrics', $2::river.river_job_state, $3
+FROM (`+runsOf+`) AS run`, class, state, created)
+	}
+	river("live_river", "available", at)
+	river("recent_river", "completed", recent)
+	exec("strand River jobs and outbox rows", `
+WITH job AS (
+    INSERT INTO river.river_job (args, attempt, created_at, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at)
+    SELECT jsonb_build_object('domain', jsonb_build_object('type', 'daily_metrics_run', 'id', run.id::text), 'copy', copy),
+           1, $1, $1, 'metrics.daily_finalize', 4, '{}'::jsonb, 2, 'metrics', 'completed', $1
+    FROM (SELECT id FROM public.daily_metrics_runs WHERE generation LIKE 'plan-strand:%') AS run CROSS JOIN generate_series(1, 2) AS copy
+    RETURNING id, args #>> '{domain,id}' AS run_id, args ->> 'copy' AS copy
+)
+INSERT INTO public.worker_job_outbox
+    (id, dedupe_key, job_kind, contract_version, args, payload_hash, queue, priority, max_attempts, scheduled_at,
+     status, attempt_count, next_attempt_at, river_job_id, delivered_at, created_at, updated_at)
+SELECT gen_random_uuid(), 'plan-strand:' || job.run_id || ':' || job.copy, 'metrics.daily_finalize', 1,
+       json_build_object('contract_version', 1, 'domain', json_build_object('type', 'daily_metrics_run', 'id', job.run_id)),
+       'sha256:' || repeat('0', 64), 'metrics', 2, 4, $1, 'delivered', 1, $1, job.id, $1, $1, $1
+FROM job`, at)
 }

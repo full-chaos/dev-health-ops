@@ -323,10 +323,19 @@ func TestReconcilerRedrivesAFinalizePendingRunWithNoJobAndNoOutboxRow(t *testing
 		t.Fatalf("reconciler Step: %v", err)
 	}
 
-	outboxRows, riverJobs := venue.finalizeTrace(t, ctx, runID)
-	if outboxRows != 1 || riverJobs != 1 {
-		t.Fatalf("after one reconciler Step the shape-D run has %d finalize outbox rows and %d River "+
-			"finalize jobs, want 1 and 1: no stage redrove the stranded finalize", outboxRows, riverJobs)
+	if outboxRows, _ := venue.finalizeTrace(t, ctx, runID); outboxRows != 1 {
+		t.Fatalf("after one reconciler Step the shape-D run has %d finalize outbox rows, want 1: "+
+			"no stage redrove the stranded finalize", outboxRows)
+	}
+	// The redrive is stamped with the publisher's own clock, after the Step's
+	// now, so the relay delivers it on the next tick. That tick must deliver it
+	// and must not publish a second one.
+	if _, err := venue.relay.Step(ctx, time.Now().UTC().Add(time.Second), 10); err != nil {
+		t.Fatalf("second reconciler Step: %v", err)
+	}
+	if outboxRows, riverJobs := venue.finalizeTrace(t, ctx, runID); outboxRows != 1 || riverJobs != 1 {
+		t.Fatalf("after the next Step: %d finalize outbox rows and %d River finalize jobs, want 1 and 1",
+			outboxRows, riverJobs)
 	}
 	if computes := venue.workRiverFinalizes(t, ctx, runID); computes != 1 {
 		t.Fatalf("the redriven finalize computed %d times, want 1", computes)
@@ -388,7 +397,8 @@ func TestAQueuedOldFinalizeAndItsRedriveComputeOnce(t *testing.T) {
 	if len(outcome.FinalizedRunIDs) != 1 {
 		t.Fatalf("redrive published for %v, want the run", outcome.FinalizedRunIDs)
 	}
-	if _, err := venue.relay.Step(ctx, now, 10); err != nil {
+	// After the publish: the redrive row is stamped with the publisher's clock.
+	if _, err := venue.relay.Step(ctx, time.Now().UTC().Add(time.Second), 10); err != nil {
 		t.Fatalf("reconciler Step: %v", err)
 	}
 	if outboxRows, riverJobs := venue.finalizeTrace(t, ctx, runID); outboxRows != 1 || riverJobs != 2 {

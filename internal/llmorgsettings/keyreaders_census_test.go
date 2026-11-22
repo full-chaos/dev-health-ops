@@ -25,7 +25,8 @@ var keyReaders = []struct{ reader, dir, function, via string }{
 	{"spend: own model active", "internal/apiservice/admin", "orgLLMActive", "scopeKey"},
 	{"status", "internal/apiservice/admin", "evaluateOrgLLMStatus", "scopeKey"},
 	{"GET default + purpose (masked)", "internal/apiservice/admin", "llmSettingValue", "scopeKey"},
-	{"write: base_url leak check of a purpose key", "internal/apiservice/admin", "storedPurposeAPIKey", "scopeKey"},
+	{"write: base_url leak check of the default key", "internal/apiservice/admin", "storedDefaultKeyOn", "scopeKey"},
+	{"write: base_url leak check of a purpose key", "internal/apiservice/admin", "storedPurposeAPIKeyOn", "scopeKey"},
 	{"write: provider/base_url rule and purpose key need", "internal/apiservice/admin", "keyStepFor", "scopeKey"},
 	{"write: provider/base_url rule and purpose key need", "internal/apiservice/admin", "purposeNeedsKey", "scopeKey"},
 	{"GET default (masked)", "internal/apiservice/admin", "llmSettingsResponse", "llmSettingValue"},
@@ -36,9 +37,10 @@ var keyReaders = []struct{ reader, dir, function, via string }{
 // binding (ScopeKey.ForChecks): the masked display, the base_url leak checks.
 // Every other reader takes ScopeKey.Served.
 var forChecksUsers = map[string]bool{
-	"internal/apiservice/admin.llmSettingValue":     true,
-	"internal/apiservice/admin.storedPurposeAPIKey": true,
-	"internal/apiservice/admin.bindDefaultKey":      true,
+	"internal/apiservice/admin.llmSettingValue":       true,
+	"internal/apiservice/admin.storedDefaultKeyOn":    true,
+	"internal/apiservice/admin.storedPurposeAPIKeyOn": true,
+	"internal/apiservice/admin.bindDefaultKey":        true,
 }
 
 // ruleUsers are the two entry points of the accessor, the only callers of the

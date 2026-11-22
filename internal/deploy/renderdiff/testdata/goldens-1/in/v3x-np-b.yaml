@@ -1,0 +1,391 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/component: jc-pzjxdpwwm-vzewyrocqzp
+    app.kubernetes.io/instance: qbh-rpfmgp
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: ner
+    app.kubernetes.io/part-of: qbh-rpfmgp
+    app.kubernetes.io/version: 8.3.7
+    helm.sh/chart: gln-3.7.8
+  name: pyr-jzqfao-yiw-sn-crshpivyu-mprgdxziobn
+  namespace: qbh-rpfmgp
+spec:
+  egress:
+  - ports:
+    - port: 5432
+      protocol: TCP
+    to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/component: hkpgjqodur
+          app.kubernetes.io/instance: qbh-rpfmgp
+          app.kubernetes.io/name: ner
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/component: gm-lgkpdl
+          app.kubernetes.io/instance: qbh-rpfmgp
+          app.kubernetes.io/name: ner
+    ports:
+    - port: 6432
+      protocol: TCP
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/component: mawboklcr
+          app.kubernetes.io/instance: qbh-rpfmgp
+          app.kubernetes.io/name: jbrd-vvghbpubr
+    ports:
+    - port: 9127
+      protocol: TCP
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: szgq
+    ports:
+    - port: 6432
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: jc-pzjxdpwwm-vzewyrocqzp
+      app.kubernetes.io/instance: qbh-rpfmgp
+      app.kubernetes.io/name: ner
+  policyTypes:
+  - Jmkjwxw
+  - Mbhygw
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/component: rp-zhoufviby-matux-lcyhiju
+    app.kubernetes.io/instance: qbh-rpfmgp
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: ner
+    app.kubernetes.io/part-of: qbh-rpfmgp
+    app.kubernetes.io/version: 8.3.7
+    helm.sh/chart: gln-3.7.8
+  name: reb-rpfywq-cgy-fi-yvptvnczv-zsoxw-odkcmuz
+  namespace: qbh-rpfmgp
+spec:
+  egress:
+  - ports:
+    - port: 5432
+      protocol: TCP
+    to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/component: hkpgjqodur
+          app.kubernetes.io/instance: qbh-rpfmgp
+          app.kubernetes.io/name: ner
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/component: gm-lgkpdl
+          app.kubernetes.io/instance: qbh-rpfmgp
+          app.kubernetes.io/name: ner
+    ports:
+    - port: 6433
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: rp-zhoufviby-matux-lcyhiju
+      app.kubernetes.io/instance: qbh-rpfmgp
+      app.kubernetes.io/name: ner
+  policyTypes:
+  - Jmkjwxw
+  - Mbhygw
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/component: tl-tnodeehcf-jdzxisnowly-zbyvsxa
+    app.kubernetes.io/instance: qbh-rpfmgp
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: ner
+    app.kubernetes.io/part-of: qbh-rpfmgp
+    app.kubernetes.io/version: 8.3.7
+    helm.sh/chart: gln-3.7.8
+  name: moc-eloowi-gsg-ql-tyhsdsvst-hjjqnukebsi-jyoiixd
+  namespace: qbh-rpfmgp
+spec:
+  egress:
+  - ports:
+    - port: 5432
+      protocol: TCP
+    to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/component: hkpgjqodur
+          app.kubernetes.io/instance: qbh-rpfmgp
+          app.kubernetes.io/name: ner
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/component: gm-lgkpdl
+          app.kubernetes.io/instance: qbh-rpfmgp
+          app.kubernetes.io/name: ner
+    ports:
+    - port: 6434
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: tl-tnodeehcf-jdzxisnowly-zbyvsxa
+      app.kubernetes.io/instance: qbh-rpfmgp
+      app.kubernetes.io/name: ner
+  policyTypes:
+  - Jmkjwxw
+  - Mbhygw
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: qbh-rpfmgp
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: ner
+    app.kubernetes.io/part-of: qbh-rpfmgp
+    app.kubernetes.io/version: 8.3.7
+    helm.sh/chart: gln-3.7.8
+  name: xbx-veldcr-fyx
+  namespace: qbh-rpfmgp
+spec:
+  egress:
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - namespaceSelector: {}
+  - to:
+    - podSelector: {}
+  - ports:
+    - port: 443
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 0.9.8.9/1
+  - ports:
+    - port: 4317
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 74.4.7.693/98
+  - ports:
+    - port: 9440
+      protocol: TCP
+  - ports:
+    - port: 80
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: vgzmebi-rmbzw
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/component: wwogyeqeux
+          app.kubernetes.io/name: vgzmebi-rmbzw
+  ingress:
+  - from:
+    - podSelector: {}
+  podSelector:
+    matchExpressions:
+    - key: vua.qfcismqgnj.dk/semlvmkqq
+      operator: KdoUv
+      values:
+      - qi-utz
+      - fzijl-hbg
+      - fotb-jzjnctg
+      - mgym-nljkbax
+    matchLabels:
+      app.kubernetes.io/instance: qbh-rpfmgp
+      app.kubernetes.io/name: ner
+  policyTypes:
+  - Jmkjwxw
+  - Mbhygw
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/component: otf-qawxhhy
+    app.kubernetes.io/instance: qbh-rpfmgp
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: ner
+    app.kubernetes.io/part-of: qbh-rpfmgp
+    app.kubernetes.io/version: 8.3.7
+    helm.sh/chart: gln-3.7.8
+  name: xsf-sgwmlq-dfn-xnmqkql-eou
+  namespace: qbh-rpfmgp
+spec:
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: vgzmebi-rmbzw
+    ports:
+    - port: 3000
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: yog
+      app.kubernetes.io/instance: qbh-rpfmgp
+      app.kubernetes.io/name: ner
+  policyTypes:
+  - Jmkjwxw
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/component: gtjrw-hze-ytazzjt
+    app.kubernetes.io/instance: qbh-rpfmgp
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: ner
+    app.kubernetes.io/part-of: qbh-rpfmgp
+    app.kubernetes.io/version: 8.3.7
+    helm.sh/chart: gln-3.7.8
+  name: ejj-jqkghf-aau-dlwlwfl-cvevd-bvs
+  namespace: qbh-rpfmgp
+spec:
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: vgzmebi-rmbzw
+    ports:
+    - port: 8090
+      protocol: TCP
+  - from:
+    - podSelector: {}
+    ports:
+    - port: 8090
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: fzijl-hbg
+      app.kubernetes.io/instance: qbh-rpfmgp
+      app.kubernetes.io/name: ner
+  policyTypes:
+  - Jmkjwxw
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: qbh-rpfmgp
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: ner
+    app.kubernetes.io/part-of: qbh-rpfmgp
+    app.kubernetes.io/version: 8.3.7
+    helm.sh/chart: gln-3.7.8
+  name: dso-hcnrym-rdh-ki-lxk-ydrbwp
+  namespace: qbh-rpfmgp
+spec:
+  egress:
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - namespaceSelector: {}
+  - to:
+    - podSelector: {}
+  - ports:
+    - port: 443
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 0.9.8.9/1
+  - ports:
+    - port: 4317
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 74.4.7.693/98
+  - ports:
+    - port: 9440
+      protocol: TCP
+  - ports:
+    - port: 80
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: vgzmebi-rmbzw
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/component: wwogyeqeux
+          app.kubernetes.io/name: vgzmebi-rmbzw
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: qi-utz
+      app.kubernetes.io/instance: qbh-rpfmgp
+      app.kubernetes.io/name: ner
+  policyTypes:
+  - Mbhygw
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: qbh-rpfmgp
+    app.kubernetes.io/managed-by: Nyca
+    app.kubernetes.io/name: ner
+    app.kubernetes.io/part-of: qbh-rpfmgp
+    app.kubernetes.io/version: 8.3.7
+    helm.sh/chart: gln-3.7.8
+  name: xsg-iyhmdk-lxk-stsjt-spa-tmwnvz
+  namespace: qbh-rpfmgp
+spec:
+  egress:
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - namespaceSelector: {}
+  - to:
+    - podSelector: {}
+  - ports:
+    - port: 443
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 0.9.8.9/1
+  - ports:
+    - port: 4317
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 74.4.7.693/98
+  - ports:
+    - port: 9440
+      protocol: TCP
+  - ports:
+    - port: 80
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: vgzmebi-rmbzw
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/component: wwogyeqeux
+          app.kubernetes.io/name: vgzmebi-rmbzw
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: fzijl-hbg
+      app.kubernetes.io/instance: qbh-rpfmgp
+      app.kubernetes.io/name: ner
+  policyTypes:
+  - Mbhygw

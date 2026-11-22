@@ -34,7 +34,7 @@ func FailureClass(err error) string {
 		return "config_not_found"
 	case errors.Is(err, ErrPoolUnavailable):
 		return "pool_unavailable"
-	case errors.As(err, &limit):
+	case errors.As(err, &limit) && limit != nil:
 		return limit.Bound + "_limit"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "deadline_exceeded"
@@ -56,6 +56,34 @@ func FailureClass(err error) string {
 	}
 }
 
+// IsDeterministicFailure reports whether a rebuild failure repeats on every retry: ErrInvalidProcessorFlags,
+// ErrConfigNotFound or a *LimitError. An errors.Join (or multi-%w) node counts only when every branch does, so one
+// transient cause keeps the failure retryable. nil and every other error are not deterministic.
+func IsDeterministicFailure(err error) bool {
+	switch err := err.(type) {
+	case nil:
+		return false
+	case *LimitError:
+		return err != nil
+	}
+	if err == ErrInvalidProcessorFlags || err == ErrConfigNotFound {
+		return true
+	}
+	switch node := err.(type) {
+	case interface{ Unwrap() []error }:
+		branches := node.Unwrap()
+		for _, branch := range branches {
+			if !IsDeterministicFailure(branch) {
+				return false
+			}
+		}
+		return len(branches) > 0
+	case interface{ Unwrap() error }:
+		return IsDeterministicFailure(node.Unwrap())
+	}
+	return false
+}
+
 // LimitError is a projection larger than one of the projector's bounds (maxCompactWindows and the others). Its text
 // holds only the bound's name and two counts, so it is safe to log, unlike the other rebuild errors.
 type LimitError struct {
@@ -75,7 +103,7 @@ func (limit *LimitError) Error() string {
 // FailureDetail is the loggable text of a rebuild failure: a LimitError's text, else "".
 func FailureDetail(err error) string {
 	var limit *LimitError
-	if errors.As(err, &limit) {
+	if errors.As(err, &limit) && limit != nil {
 		return limit.Error()
 	}
 	return ""

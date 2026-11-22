@@ -1,0 +1,3 @@
+render A: helm rc=0 docs=3
+render B: helm rc=0 docs=3
+GATE rows-syn-exact.json: HOLD (render floor: render A: docs=3 below --min-docs 4; render B: docs=3 below --min-docs 4)

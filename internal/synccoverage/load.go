@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 )
 
 var requestedStatuses = []string{"success", "failed", "planned", "dispatching", "running", "retrying"}
@@ -287,6 +290,9 @@ WHERE run.org_id = $1 AND run.integration_id = $2
 	return pairs, nil
 }
 
+// loadBackfillRanges reads the config's backfill jobs that this projection can use and counts them per projection
+// read: a config with no enabled scope source reads no job, and a job whose before_date is older than the history
+// cutoff is not read; neither is counted nor warned about.
 func loadBackfillRanges(ctx context.Context, tx pgx.Tx, config syncConfig, scope effectiveScope, truncatedBefore time.Time) ([]coverageInterval, error) {
 	if len(scope.Sources) == 0 {
 		return nil, nil
@@ -317,14 +323,39 @@ WHERE org_id = $1 AND sync_config_id = $2 AND before_date >= $3::date`, config.O
 	for _, item := range scope.Sources {
 		scopeSources = append(scopeSources, item.ID.String())
 	}
+	runIDs := make([]uuid.UUID, len(jobs))
+	markers := make([]string, len(jobs))
+	derived := make([]uuid.UUID, 0)
+	for index, job := range jobs {
+		runIDs[index], markers[index] = backfillRunID(job.TaskID)
+		if markers[index] == backfillMarkerOccurrence {
+			derived = append(derived, runIDs[index])
+		}
+	}
+	planned, err := plannedRunIDs(ctx, tx, config.OrgID, derived)
+	if err != nil {
+		return nil, err
+	}
+	outcomes := make(map[string]int, len(backfillResolutionOutcomes))
 	result := make([]coverageInterval, 0)
-	for _, job := range jobs {
+	for index, job := range jobs {
 		since := maxTime(job.SinceDate.UTC(), truncatedBefore)
 		beforeDate := job.BeforeDate.UTC()
 		before := time.Date(beforeDate.Year(), beforeDate.Month(), beforeDate.Day()+1, 0, 0, 0, 0, time.UTC).Add(-time.Microsecond)
 		base := coverageInterval{Since: since, Before: before, RunIDs: []string{job.ID.String()}}
-		runID, resolved := backfillRunID(job.TaskID)
-		if !resolved {
+		runID := runIDs[index]
+		switch markers[index] {
+		case backfillMarkerSyncRun:
+			outcomes[backfillOutcomeSyncRun]++
+		case backfillMarkerOccurrence:
+			if _, ok := planned[runID]; !ok {
+				// No run planned for the occurrence (yet, or ever): neither covered nor requested by this job.
+				outcomes[backfillOutcomeOccurrenceUnplanned]++
+				continue
+			}
+			outcomes[backfillOutcomeOccurrence]++
+		default:
+			outcomes[backfillOutcomeUnresolved]++
 			base.SourceIDs = uniqueSorted(scopeSources)
 			result = append(result, base)
 			continue
@@ -347,19 +378,81 @@ WHERE org_id = $1 AND sync_config_id = $2 AND before_date >= $3::date`, config.O
 			return nil, newLimitError("backfill_pair", len(result), maxBackfillPairs)
 		}
 	}
+	backfillResolutionMetrics.observe(outcomes)
+	if waiting := outcomes[backfillOutcomeOccurrenceUnplanned] + outcomes[backfillOutcomeUnresolved]; waiting > 0 {
+		slog.WarnContext(ctx, "sync coverage: backfill jobs without a planned run",
+			slog.Any("sync_config_id", config.ID),
+			slog.Int(backfillOutcomeOccurrenceUnplanned, outcomes[backfillOutcomeOccurrenceUnplanned]),
+			slog.Int(backfillOutcomeUnresolved, outcomes[backfillOutcomeUnresolved]))
+	}
 	return result, nil
 }
 
-func backfillRunID(taskID *string) (uuid.UUID, bool) {
+const (
+	backfillMarkerSyncRun    = "sync_run"
+	backfillMarkerOccurrence = "occurrence"
+	syncRunMarker            = "sync_run:"
+	occurrenceMarker         = "occurrence:"
+)
+
+// backfillRunID is the run a backfill_jobs row names. "sync_run:<uuid>" names it. An admin backfill keeps
+// "occurrence:<id>" (or "idem:<hash>;occurrence:<id>") for ever, so its run is the materializer's deterministic
+// run of that occurrence, the same derivation finalize uses to close the job. The marker is "" when neither applies.
+func backfillRunID(taskID *string) (uuid.UUID, string) {
 	if taskID == nil {
-		return uuid.Nil, false
+		return uuid.Nil, ""
 	}
-	index := strings.LastIndex(*taskID, "sync_run:")
+	if index := strings.LastIndex(*taskID, syncRunMarker); index >= 0 {
+		parsed, err := uuid.Parse((*taskID)[index+len(syncRunMarker):])
+		if err != nil {
+			return uuid.Nil, ""
+		}
+		return parsed, backfillMarkerSyncRun
+	}
+	index := strings.LastIndex(*taskID, occurrenceMarker)
 	if index < 0 {
-		return uuid.Nil, false
+		return uuid.Nil, ""
 	}
-	parsed, err := uuid.Parse((*taskID)[index+len("sync_run:"):])
-	return parsed, err == nil
+	occurrence := (*taskID)[index+len(occurrenceMarker):]
+	if end := strings.IndexByte(occurrence, ';'); end >= 0 {
+		occurrence = occurrence[:end]
+	}
+	if occurrence == "" {
+		return uuid.Nil, ""
+	}
+	derived, err := schedulersync.DeterministicSyncRunID(occurrence)
+	if err != nil {
+		return uuid.Nil, ""
+	}
+	parsed, err := uuid.Parse(derived)
+	if err != nil {
+		return uuid.Nil, ""
+	}
+	return parsed, backfillMarkerOccurrence
+}
+
+// plannedRunIDs is the subset of runIDs that exist as the org's sync runs.
+func plannedRunIDs(ctx context.Context, tx pgx.Tx, orgID string, runIDs []uuid.UUID) (map[uuid.UUID]struct{}, error) {
+	planned := make(map[uuid.UUID]struct{}, len(runIDs))
+	if len(runIDs) == 0 {
+		return planned, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT id FROM public.sync_runs WHERE org_id = $1 AND id = ANY($2::uuid[])`, orgID, runIDs)
+	if err != nil {
+		return nil, fmt.Errorf("query sync coverage backfill runs: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan sync coverage backfill run: %w", err)
+		}
+		planned[id] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sync coverage backfill runs: %w", err)
+	}
+	return planned, nil
 }
 
 // scopeDatasetKeys narrows which effective keys are accepted into the

@@ -28,6 +28,7 @@ type listingRun struct {
 	status     string
 	conclusion string
 	branch     string
+	attempt    int // run_attempt; zero means 1
 }
 
 // listingFake is a GitHub that honours created ranges, branch, paging, the documented cap of 1,000 results for a
@@ -50,6 +51,8 @@ type listingFake struct {
 	listRanges     []string
 	jobGets        map[int]int
 	artifactGets   map[int]int
+	// perPage is the page size the fake serves (0: 100, GitHub's per_page maximum).
+	perPage int
 }
 
 func newListingFake(t *testing.T, runs []listingRun) *listingFake {
@@ -86,9 +89,9 @@ func (run listingRun) json() string {
 	if branch == "" {
 		branch = "main"
 	}
-	return fmt.Sprintf(`{"id":%d,"name":"CI","status":%q,"conclusion":%s,"created_at":%q,"run_started_at":%q,"updated_at":%q,"run_attempt":1,"event":"push","head_sha":"abc","head_branch":%q,"html_url":"https://github.com/acme/api/actions/runs/%d","pull_requests":[]}`,
+	return fmt.Sprintf(`{"id":%d,"name":"CI","status":%q,"conclusion":%s,"created_at":%q,"run_started_at":%q,"updated_at":%q,"run_attempt":%d,"event":"push","head_sha":"abc","head_branch":%q,"html_url":"https://github.com/acme/api/actions/runs/%d","pull_requests":[]}`,
 		run.id, run.status, conclusion, run.created.UTC().Format(time.RFC3339), started.UTC().Format(time.RFC3339),
-		run.updated.UTC().Format(time.RFC3339), branch, run.id)
+		run.updated.UTC().Format(time.RFC3339), max(1, run.attempt), branch, run.id)
 }
 
 func (fake *listingFake) respond(request *http.Request, header http.Header, body string, status int) *http.Response {
@@ -182,7 +185,11 @@ func (fake *listingFake) list(request *http.Request, header http.Header) *http.R
 	if raw := query.Get("page"); raw != "" {
 		page, _ = strconv.Atoi(raw)
 	}
-	from, to := min((page-1)*100, len(matched)), min(page*100, len(matched))
+	per := 100
+	if fake.perPage > 0 {
+		per = fake.perPage
+	}
+	from, to := min((page-1)*per, len(matched)), min(page*per, len(matched))
 	if to < len(matched) {
 		next := *request.URL
 		forward := next.Query()
@@ -582,11 +589,12 @@ func TestArtifactsListingPeelsPastTheSearchCap(t *testing.T) {
 }
 
 // Fewer than 1,000 runs is one range per phase and no peel; 1,000 fills the cap, so each phase lists one more range;
-// 1,001 loses nothing.
+// 1,001 loses nothing. The claim holds a UTC midnight, so the runs phase and the artifacts phase also list their deep range
+// once each (no run there).
 func TestPeelStartsOnlyWhenARangeFillsTheCap(t *testing.T) {
 	for _, tc := range []struct {
 		runs, wantRanges int
-	}{{999, 2}, {1000, 4}, {1001, 4}} {
+	}{{999, 4}, {1000, 6}, {1001, 6}} {
 		fake := newListingFake(t, makeListingRuns(1, tc.runs, listingSince, 20*time.Second))
 		claim := listingClaim(listingSince, listingSince.Add(24*time.Hour))
 		walk := walkListing(t, GitHubTestsRouteHandler{}, claim, fake, 0)
@@ -832,19 +840,50 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 	maxID := strings.Repeat("9", githubTestsMaxArtifactIDBytes)
 	for _, tc := range []struct {
 		name  string
+		floor int
 		apply func(c *githubTestsChunkCursor)
 	}{
-		{"runs peel", func(c *githubTestsChunkCursor) {
+		{"runs peel", 300, func(c *githubTestsChunkCursor) {
 			c.Phase = githubTestsRunsPhase
 			c.RangeHi, c.RangeOldest, c.RangeItems = "2026-07-20T23:59:59Z", "2026-07-20T00:00:00Z", githubTestsSearchResultCap
 			c.SaturatedRuns, c.SaturatedArtifacts = true, true
+			c.ActiveCutKeys, c.CarriedCutKeys = githubTestsWidestRunsCutKeys(t), githubTestsWidestRunsCutKeys(t)
+			c.RangeOldestItems = githubTestsSearchResultCap
+			c.AnchorID = githubTestsWidestAnchorID
+			c.ReseekPages, c.PagesEntered, c.RecordCredit = githubTestsWidestReseekPages, githubTestsWidestReseekPages, githubTestsWidestRecordCredit
+			c.DeletionProven = 1
 		}},
-		{"artifacts peel", func(c *githubTestsChunkCursor) {
+		// The deep range's floor is 250 (CHAOS-14385, acp ruling): its runs cut lists keep the 882 bytes main writes (a smaller
+		// cap re-read a dense cut second and read fewer runs than main at the record bound), and its cursor holds the re-seek
+		// state and its record count; it has no diagnostic-only sample to cut. Its 256 bytes are the tightest point of this
+		// cursor: a later field pays for itself.
+		{"runs deep range peel", 250, func(c *githubTestsChunkCursor) {
+			c.Phase = githubTestsRunsPhase
+			c.LateRuns, c.LateRunPages = true, githubTestsLateRerunMaxPages
+			c.RangeHi, c.RangeOldest, c.RangeItems = "2026-07-20T23:59:59Z", "2026-07-20T00:00:00Z", githubTestsSearchResultCap
+			c.SaturatedRuns, c.SaturatedArtifacts = true, true
+			c.LateRunsBudget, c.LateRunsSaturated = true, true
+			c.ActiveCutKeys, c.CarriedCutKeys = githubTestsWidestRunsCutKeys(t), githubTestsWidestRunsCutKeys(t)
+			c.RangeOldestItems = githubTestsSearchResultCap
+			c.AnchorID = githubTestsWidestAnchorID
+			// The deep range's own record count rides its cursor too (CHAOS-14385: it was missing from this worst case). A deep
+			// search is a created range under GitHub's 1,000-result cap: at most 10 pages entered, at most 10 free.
+			deepPages := githubTestsSearchResultCap / nativePerPage
+			c.ReseekPages, c.PagesEntered, c.RecordCredit = deepPages, deepPages, githubTestsWidestRecordCredit
+			c.DeletionProven = 1
+			c.LateRecords = githubTestsMaxWalkRecords
+		}},
+		{"artifacts peel", 300, func(c *githubTestsChunkCursor) {
 			c.Phase = githubTestsArtifactsPhase
 			c.RangeHi, c.RangeOldest, c.RangeItems = "2026-07-20T23:59:59Z", "2026-07-20T00:00:00Z", githubTestsSearchResultCap
 			c.SaturatedRuns, c.SaturatedArtifacts = true, true
+			c.ActiveCutKeys, c.CarriedCutKeys = githubTestsWidestCutKeys(t), githubTestsWidestCutKeys(t)
+			c.AnchorID = githubTestsWidestAnchorID
+			c.ReseekPages, c.PagesEntered, c.RecordCredit = githubTestsWidestReseekPages, githubTestsWidestReseekPages, githubTestsWidestRecordCredit
+			c.DeletionProven = 1
+			c.LateRecords = githubTestsMaxWalkRecords
 		}},
-		{"open phase", func(c *githubTestsChunkCursor) {
+		{"open phase", 300, func(c *githubTestsChunkCursor) {
 			c.Phase = githubTestsOpenPhase
 			c.NextURL, c.Index = "", 0
 			c.OpenAfterStarted, c.OpenAfterRunID = "2026-07-20T23:59:59.999999999Z", maxID
@@ -855,19 +894,27 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			c.SaturatedRuns, c.SaturatedArtifacts = true, true
 		}},
 	} {
-		cursor := githubTestsRealisticCursorBase()
-		cursor.SkippedArtifactsOverflow = 999999
-		tc.apply(&cursor)
-		encoded, err := encodeGitHubTestsChunkCursor(cursor)
-		if err != nil {
-			t.Fatalf("%s: %v", tc.name, err)
-		}
-		if remaining := maxChunkCursorBytes - len(encoded); remaining < 300 {
-			t.Fatalf("%s: worst-case cursor %d bytes leaves %d under maxChunkCursorBytes, want at least 300", tc.name, len(encoded), remaining)
-		}
-		decoded, decodeErr := decodeGitHubTestsChunkCursor(encoded)
-		if decodeErr != nil || decoded.Phase != cursor.Phase {
-			t.Fatalf("%s: decode = %v %v", tc.name, decoded.Phase, decodeErr)
+		for _, backfill := range []bool{false, true} {
+			name, floor := tc.name, tc.floor
+			cursor := githubTestsRealisticCursorBase()
+			cursor.SkippedArtifactsOverflow = 999999
+			tc.apply(&cursor)
+			if backfill {
+				name, floor = tc.name+" (backfill)", backfillCursorFloor(tc.name, tc.floor)
+				boundsWidestBackfillCounters(&cursor)
+			}
+			encoded, err := encodeGitHubTestsChunkCursor(cursor)
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			t.Logf("%s: worst-case cursor %d bytes", name, len(encoded))
+			if remaining := maxChunkCursorBytes - len(encoded); remaining < floor {
+				t.Fatalf("%s: worst-case cursor %d bytes leaves %d under maxChunkCursorBytes, want at least %d", name, len(encoded), remaining, floor)
+			}
+			decoded, decodeErr := decodeGitHubTestsChunkCursor(encoded)
+			if decodeErr != nil || decoded.Phase != cursor.Phase {
+				t.Fatalf("%s: decode = %v %v", name, decoded.Phase, decodeErr)
+			}
 		}
 	}
 }
@@ -932,8 +979,7 @@ func TestOpenPhaseCapAndBacklogAreFixedAtThePhaseStartAcrossInvocations(t *testi
 }
 
 // The 8,000-run split resumed in the middle of pages (the walk yields every 37 chunks) writes the same rows as the
-// unbroken walk: no run is lost and a resume adds no duplicate. (The one run at each cut second is written by two
-// ranges, so the rows exceed the runs by the number of peels in both walks alike.)
+// unbroken walk: no run is lost and a resume adds no duplicate.
 func TestRunsListingPeelResumesMidPageWithoutLoss(t *testing.T) {
 	runs := makeListingRuns(1, 8000, listingSince, 10*time.Second)
 	claim := listingClaim(listingSince, listingSince.Add(24*time.Hour))

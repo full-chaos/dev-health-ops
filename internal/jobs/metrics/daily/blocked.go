@@ -2,11 +2,13 @@ package daily
 
 import (
 	"context"
+	"log/slog"
 	"time"
 )
 
-// A run is BLOCKED when it holds at least one 'failed_permanent' partition and
-// every one of its other partitions has already succeeded -- nothing left can
+// A run is BLOCKED when it holds at least one partition that ended for good
+// ('failed_permanent', or 'failed' past failedPartitionRetryHorizon) and every
+// one of its other partitions has already succeeded or ended -- nothing left can
 // advance, so CompletePartition's "zero non-succeeded partitions" gate can
 // never open, finalize is never published, and the run's completion fence is
 // never written. Everything handed off behind that fence (workgraph.build,
@@ -19,9 +21,12 @@ import (
 // is claimed again by the retry of its River job, so both can still advance
 // while that job lives. Once the job is gone (cancelled, or discarded after
 // its last attempt) nothing re-publishes a 'failed' partition: the dispatch
-// key is per run and the partition key is permanent. That is why a partition
-// that ends for good is written 'failed_permanent' (PartitionHandler.Work),
-// the one state this marker, its counter and the redrive reset read. A
+// key is per run and the partition key is permanent. A partition that ends for
+// good is written 'failed_permanent' (PartitionHandler.Work), but a 'failed'
+// row can still outlive its job: rows written before CHAOS-13863, and a job
+// cancelled after a release. This marker cannot see River (the domain role has
+// no grant on its schema), so a 'failed' row nobody has touched for
+// failedPartitionRetryHorizon counts as ended too. A
 // 'running' partition under a LIVE lease is being worked on right now. But a
 // 'running' partition whose lease has EXPIRED is stranded: ClaimPartition
 // would reclaim that exact row, yet only a metrics.daily_partition job ever
@@ -63,16 +68,38 @@ const (
 	// operator action differs: the partition reasons mean recompute some
 	// partitions, this one means the partitions are fine and only the
 	// cross-partition finalize needs re-running.
+	//
+	// No tool moves a 'failed' run back: the recovery is a new run of the day
+	// (`metrics daily-start --rerun-tag`). The marker clears once a later run
+	// of the same org-day covers the failed run (finalizeCoveredByLaterRunSQL).
 	BlockedReasonFinalizeFailed = "finalize_failed"
+	// BlockedReasonPartitionsFailedNoRetry marks a run whose only ended
+	// partitions are 'failed' rows past failedPartitionRetryHorizon: their River
+	// job is gone and no failed_permanent was ever written.
+	BlockedReasonPartitionsFailedNoRetry = "partitions_failed_no_retry"
 )
 
+// failedPartitionRetryHorizon is how long a 'failed' partition may go without a
+// write before the marker treats its retry as gone. No setting bounds the wait
+// for a retry (queue wait and snoozes are open-ended); the River run time of
+// metrics.daily_partition is bounded, and TestFailedPartitionRetryHorizonExceedsTheRetryBudget
+// keeps this above it. A retry queued longer than this is marked, and the next
+// pass after its claim clears the marker.
+const failedPartitionRetryHorizon = 24 * time.Hour
+
+// BlockedReasonChangedLogMessage is the Info line of a run that stays blocked
+// while its reason changes. That change is neither a mark nor a clear, so it
+// moves no counter; this line is its only trace.
+const BlockedReasonChangedLogMessage = "daily metrics blocked run reason changed"
+
 // dailyMetricsRunBlockedReasons is the closed vocabulary the marker accepts,
-// mirroring dailyMetricsPartitionFailureReasons' shape. Both values fit the
+// mirroring dailyMetricsPartitionFailureReasons' shape. Every value fits the
 // column's 64-character bound.
 var dailyMetricsRunBlockedReasons = map[string]struct{}{
 	BlockedReasonAllPartitionsPermanent:     {},
 	BlockedReasonPartialPartitionsPermanent: {},
 	BlockedReasonFinalizeFailed:             {},
+	BlockedReasonPartitionsFailedNoRetry:    {},
 }
 
 // BlockedReconcileOutcome summarizes one reconciliation pass.
@@ -90,6 +117,70 @@ type BlockedReconcileOutcome struct {
 	Blocked int
 }
 
+// finalizeCoveredByLaterRunSQL is true when a LATER run (created_at) of the
+// same org-day covers the failed run `run`, so its finalize_failed marker
+// clears. The later run is succeeded, or is a succeeded run that an operator
+// reopened (a finalize-redrive or partition-recompute provenance row with prior
+// status 'succeeded'): a reopen alone must not mark the old run again. It
+// covers when it is full-org, or when the failed run is repository-scoped and
+// every repository id of the failed run is in a later partition that succeeded
+// -- on a reopened later run, one that is not failed_permanent, because the
+// recompute window sets its partitions back to pending. An older success, a
+// later run that never succeeded, a no_repositories run and a narrower scope do
+// not cover. The clear is not sticky: a reopened later run that ends failed
+// stops covering, and the next pass marks the old run again.
+const finalizeCoveredByLaterRunSQL = `EXISTS (
+                   SELECT 1 FROM public.daily_metrics_runs AS later
+                   WHERE later.org_id = run.org_id
+                     AND later.target_day = run.target_day
+                     AND later.created_at > run.created_at
+                     AND (
+                         (later.status = 'succeeded' AND later.finalization_status = 'succeeded')
+                         OR (
+                             later.status = 'running'
+                             AND (
+                                 EXISTS (
+                                     SELECT 1 FROM public.daily_metrics_finalize_redrive_events AS reopen
+                                     WHERE reopen.run_id = later.id AND reopen.prior_status = 'succeeded'
+                                 )
+                                 OR EXISTS (
+                                     SELECT 1 FROM public.daily_metrics_partition_recompute_events AS reopen
+                                     WHERE reopen.run_id = later.id AND reopen.prior_status = 'succeeded'
+                                 )
+                             )
+                         )
+                     )
+                     AND (
+                         later.full_org
+                         OR (
+                             NOT run.full_org
+                             AND EXISTS (
+                                 SELECT 1
+                                 FROM public.daily_metrics_partitions AS failed_partition,
+                                      json_array_elements_text(failed_partition.repo_ids) AS failed_repo(repo_id)
+                                 WHERE failed_partition.run_id = run.id
+                             )
+                             AND NOT EXISTS (
+                                 SELECT 1
+                                 FROM public.daily_metrics_partitions AS failed_partition,
+                                      json_array_elements_text(failed_partition.repo_ids) AS failed_repo(repo_id)
+                                 WHERE failed_partition.run_id = run.id
+                                   AND NOT EXISTS (
+                                       SELECT 1
+                                       FROM public.daily_metrics_partitions AS later_partition,
+                                            json_array_elements_text(later_partition.repo_ids) AS later_repo(repo_id)
+                                       WHERE later_partition.run_id = later.id
+                                         AND later_repo.repo_id = failed_repo.repo_id
+                                         AND (
+                                             later_partition.status = 'succeeded'
+                                             OR (later.status = 'running' AND later_partition.status <> 'failed_permanent')
+                                         )
+                                   )
+                             )
+                         )
+                     )
+               )`
+
 // reconcileBlockedRunsSQL applies the predicate in BOTH directions in one
 // statement. Writing set and clear as two statements would be two places for
 // the definition of "blocked" to live, and they would drift; here the CASE
@@ -97,16 +188,21 @@ type BlockedReconcileOutcome struct {
 // the same `blocked` column computed once in `decided`.
 //
 // The WHERE clause at the end restricts the UPDATE to rows whose stored state
-// DISAGREES with the predicate, which makes the pass idempotent: a steady
+// (marker or reason) DISAGREES with the predicate, which makes the pass idempotent: a steady
 // state writes zero rows, so this can run on every tick without churning
 // updated_at or generating write load proportional to the number of runs.
 const reconcileBlockedRunsSQL = `
-WITH decided AS (
-    SELECT run.id,
+WITH shaped AS (
+    SELECT run.id, run.org_id, run.target_day, run.created_at, run.full_org,
            EXISTS (
                SELECT 1 FROM public.daily_metrics_partitions AS partition
                WHERE partition.run_id = run.id
-                 AND partition.status = 'failed_permanent'
+                 AND (
+                     partition.status = 'failed_permanent'
+                     -- A 'failed' row with no write inside the horizon: its
+                     -- retry is gone (failedPartitionRetryHorizon).
+                     OR (partition.status = 'failed' AND partition.updated_at <= $6::timestamptz)
+                 )
            )
            AND NOT EXISTS (
                SELECT 1 FROM public.daily_metrics_partitions AS partition
@@ -128,7 +224,16 @@ WITH decided AS (
                      partition.status = 'running'
                      AND partition.lease_expires_at <= $2::timestamptz
                  )
+                 AND NOT (
+                     partition.status = 'failed'
+                     AND partition.updated_at <= $6::timestamptz
+                 )
            ) AS blocked,
+           EXISTS (
+               SELECT 1 FROM public.daily_metrics_partitions AS partition
+               WHERE partition.run_id = run.id
+                 AND partition.status = 'failed_permanent'
+           ) AS has_permanent,
            -- CHAOS-4290 #2241 r3 F2, CORRECTED by the confirmation pass.
            --
            -- The first version keyed on finalization_status='failed' alone and
@@ -156,12 +261,15 @@ WITH decided AS (
                    SELECT 1 FROM public.daily_metrics_partitions AS partition
                    WHERE partition.run_id = run.id
                )
-           ) AS finalize_blocked,
+           ) AS finalize_terminal,
            NOT EXISTS (
                SELECT 1 FROM public.daily_metrics_partitions AS partition
                WHERE partition.run_id = run.id
                  AND partition.status = 'succeeded'
-           ) AS none_succeeded
+           ) AS none_succeeded,
+           run.blocked_at IS NOT NULL AS was_blocked,
+           run.blocked_at AS read_blocked_at,
+           run.blocked_reason AS read_reason
     FROM public.daily_metrics_runs AS run
     -- Widened from status='running' (CHAOS-4290 confirmation pass): a
     -- terminally failed finalize has status='failed', so the old scope excluded
@@ -182,24 +290,60 @@ WITH decided AS (
     --
     -- The guards are what make this correct, not the absence of overlap.
     WHERE run.org_id = $1::uuid AND run.status IN ('running', 'failed')
+),
+covered AS (
+    SELECT run.*, (run.finalize_terminal AND ` + finalizeCoveredByLaterRunSQL + `) AS finalize_covered
+    FROM shaped AS run
+),
+decided AS (
+    SELECT covered.id, covered.blocked, covered.has_permanent, covered.none_succeeded,
+           covered.finalize_covered, covered.was_blocked, covered.read_blocked_at, covered.read_reason,
+           covered.finalize_terminal AND NOT covered.finalize_covered AS finalize_blocked
+    FROM covered
+),
+wanted AS (
+    SELECT decided.id, decided.was_blocked, decided.read_blocked_at, decided.read_reason,
+           decided.finalize_covered,
+           decided.blocked OR decided.finalize_blocked AS want_blocked,
+           CASE
+               -- No failed_permanent row: the run ended only through stale
+               -- 'failed' rows, which a redrive re-publishes as they are.
+               WHEN decided.blocked AND NOT decided.has_permanent THEN $7
+               WHEN decided.blocked AND decided.none_succeeded THEN $3
+               WHEN decided.blocked THEN $4
+               -- Checked AFTER the partition reasons: a run with a
+               -- failed_permanent partition AND a failed finalize is a
+               -- partition problem first, and reporting the finalize would send
+               -- an operator to recompute the wrong thing.
+               WHEN decided.finalize_blocked THEN $5
+               ELSE NULL
+           END AS want_reason
+    FROM decided
 )
 UPDATE public.daily_metrics_runs AS run
-SET blocked_at = CASE WHEN decided.blocked OR decided.finalize_blocked THEN $2::timestamptz ELSE NULL END,
-    blocked_reason = CASE
-        WHEN decided.blocked AND decided.none_succeeded THEN $3
-        WHEN decided.blocked THEN $4
-        -- Checked AFTER the partition reasons: a run with a failed_permanent
-        -- partition AND a failed finalize is a partition problem first, and
-        -- reporting the finalize would send an operator to recompute the wrong
-        -- thing.
-        WHEN decided.finalize_blocked THEN $5
-        ELSE NULL
-    END,
-    updated_at = $2
-FROM decided
-WHERE run.id = decided.id
-  AND (decided.blocked OR decided.finalize_blocked) <> (run.blocked_at IS NOT NULL)
-RETURNING (decided.blocked OR decided.finalize_blocked)`
+-- A run that stays blocked keeps its blocked_at; only its reason follows the
+-- partitions (a redriven stale 'failed' row can end failed_permanent, or
+-- succeed beside one, between two passes).
+SET blocked_at = CASE WHEN wanted.want_blocked THEN COALESCE(run.blocked_at, $2::timestamptz) ELSE NULL END,
+    blocked_reason = wanted.want_reason,
+    -- A covered finalize clear changes only the marker: the failed run keeps
+    -- its updated_at. Every other transition stamps it.
+    updated_at = CASE WHEN wanted.finalize_covered THEN run.updated_at ELSE $2 END
+FROM wanted
+WHERE run.id = wanted.id
+  AND (
+      wanted.want_blocked <> (run.blocked_at IS NOT NULL)
+      OR wanted.want_reason IS DISTINCT FROM run.blocked_reason
+  )
+  -- Only over the marker this pass read. A concurrent writer (a redrive clears
+  -- the marker of every run it resets) leaves the row for the next pass: under
+  -- Read Committed this UPDATE re-checks its WHERE on the committed row but
+  -- keeps the partition state it read before.
+  AND run.blocked_at IS NOT DISTINCT FROM wanted.read_blocked_at
+  AND run.blocked_reason IS NOT DISTINCT FROM wanted.read_reason
+-- was_blocked is the state the pass read: a reason-only change is neither a
+-- mark nor a clear.
+RETURNING wanted.want_blocked, wanted.was_blocked, run.id::text, wanted.read_reason, wanted.want_reason`
 
 // ReconcileBlockedRuns marks and unmarks this organization's wedged runs from
 // live partition state. It is the ONLY writer of the marker, in either
@@ -217,24 +361,41 @@ func (store *PostgresStore) ReconcileBlockedRuns(
 	now := store.now().UTC()
 	rows, err := store.pool.Query(ctx, reconcileBlockedRunsSQL, orgID, now,
 		BlockedReasonAllPartitionsPermanent, BlockedReasonPartialPartitionsPermanent,
-		BlockedReasonFinalizeFailed)
+		BlockedReasonFinalizeFailed, now.Add(-failedPartitionRetryHorizon),
+		BlockedReasonPartitionsFailedNoRetry)
 	if err != nil {
 		return outcome, ErrUnavailable
 	}
 	defer rows.Close()
+	type reasonChange struct{ runID, oldReason, newReason string }
+	var changes []reasonChange
 	for rows.Next() {
-		var blocked bool
-		if err := rows.Scan(&blocked); err != nil {
+		var blocked, wasBlocked bool
+		var runID string
+		var oldReason, newReason *string
+		if err := rows.Scan(&blocked, &wasBlocked, &runID, &oldReason, &newReason); err != nil {
 			return BlockedReconcileOutcome{}, ErrUnavailable
 		}
-		if blocked {
+		switch {
+		case blocked && !wasBlocked:
 			outcome.Marked++
-		} else {
+		case !blocked && wasBlocked:
 			outcome.Cleared++
+		case blocked && wasBlocked:
+			changes = append(changes, reasonChange{runIDPrefix(runID), reasonText(oldReason), reasonText(newReason)})
 		}
 	}
 	if rows.Err() != nil {
 		return BlockedReconcileOutcome{}, ErrUnavailable
+	}
+	// Only rows the UPDATE returned, and only once the statement has completed:
+	// a run whose compare-and-set lost returns no row and logs nothing.
+	for _, change := range changes {
+		slog.InfoContext(ctx, BlockedReasonChangedLogMessage,
+			"run", change.runID,
+			"old_reason", change.oldReason,
+			"new_reason", change.newReason,
+		)
 	}
 	// Counted separately rather than derived as (previous + Marked - Cleared):
 	// the pass only touches DISAGREEING rows, so a run already correctly
@@ -258,6 +419,20 @@ WHERE org_id = $1::uuid AND status IN ('running', 'failed') AND blocked_at IS NO
 	return outcome, nil
 }
 
+func runIDPrefix(runID string) string {
+	if len(runID) > 8 {
+		return runID[:8]
+	}
+	return runID
+}
+
+func reasonText(reason *string) string {
+	if reason == nil {
+		return ""
+	}
+	return *reason
+}
+
 // BlockedRun is one row of the operator readback.
 type BlockedRun struct {
 	RunID     string
@@ -273,6 +448,9 @@ type BlockedRun struct {
 	// much real output a redrive would recompute.
 	PermanentPartitions int
 	SucceededPartitions int
+	// FailedPartitions counts 'failed' rows, the ones a
+	// BlockedReasonPartitionsFailedNoRetry run is blocked on.
+	FailedPartitions int
 }
 
 // BlockedRuns lists an organization's currently-marked runs for the workerctl
@@ -299,7 +477,9 @@ SELECT run.id::text, run.target_day, run.blocked_at, run.blocked_reason,
        (SELECT count(*) FROM public.daily_metrics_partitions AS partition
         WHERE partition.run_id = run.id AND partition.status = 'failed_permanent'),
        (SELECT count(*) FROM public.daily_metrics_partitions AS partition
-        WHERE partition.run_id = run.id AND partition.status = 'succeeded')
+        WHERE partition.run_id = run.id AND partition.status = 'succeeded'),
+       (SELECT count(*) FROM public.daily_metrics_partitions AS partition
+        WHERE partition.run_id = run.id AND partition.status = 'failed')
 FROM public.daily_metrics_runs AS run
 -- status IN ('running', 'failed'), not status = 'running' (r2 finding #2,
 -- CHAOS-4290): a finalize_blocked run's status is 'failed', matching
@@ -317,7 +497,8 @@ LIMIT $2::int`, orgID, limit)
 	for rows.Next() {
 		var row BlockedRun
 		if err := rows.Scan(&row.RunID, &row.TargetDay, &row.BlockedAt, &row.Reason,
-			&row.FailureReasons, &row.PermanentPartitions, &row.SucceededPartitions); err != nil {
+			&row.FailureReasons, &row.PermanentPartitions, &row.SucceededPartitions,
+			&row.FailedPartitions); err != nil {
 			return nil, ErrUnavailable
 		}
 		blocked = append(blocked, row)

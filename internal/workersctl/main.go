@@ -703,6 +703,8 @@ func dispatch(ctx context.Context, runtime *operatorRuntime, args []string, stdo
 		return dispatchProvidersync(ctx, runtime, args[1:], stdout, stderr)
 	case "sync-dispatch-outbox":
 		return dispatchSyncDispatchOutbox(ctx, runtime, args[1:], stdout, stderr)
+	case "sync-runs":
+		return dispatchSyncRuns(ctx, runtime, args[1:], stdout, stderr)
 	case "streams":
 		if len(args) != 2 || args[1] != "status" {
 			return writeError(stderr, "invalid_request")
@@ -1222,6 +1224,7 @@ func dispatchMetricsDailyBlocked(
 			// decides whether a redrive is safe.
 			"failed_permanent_partitions": run.PermanentPartitions,
 			"succeeded_partitions":        run.SucceededPartitions,
+			"failed_partitions":           run.FailedPartitions,
 		})
 	}
 	return writeResult(stdout, stderr, map[string]any{
@@ -2721,6 +2724,13 @@ func manualBackstopTriggerReadbackHint(family, org string) (string, bool) {
 			"ClickHouse: SELECT team_id, rule_id, fired, computed_at FROM recommendations_daily FINAL WHERE org_id = '%s' ORDER BY computed_at DESC LIMIT 5",
 			org,
 		), true
+	case "membership_backfill":
+		// work_unit_membership_runs IS ReplacingMergeTree(completed_at); a
+		// run is visible to readers only once its marker row is written.
+		return fmt.Sprintf(
+			"ClickHouse: SELECT run_id, completed_at FROM work_unit_membership_runs FINAL WHERE org_id = '%s' ORDER BY completed_at DESC LIMIT 5",
+			org,
+		), true
 	default:
 		return "", false
 	}
@@ -2990,6 +3000,12 @@ func dispatchMetricsRemainingTriggerBackstop(
 			outcome, startErr = store.StartManualCapacityTriggerRun(ctx, *org, dayString, generation, teamID, *allTeams, publisher)
 		case "recommendations":
 			outcome, startErr = store.StartManualRecommendationsTriggerRun(ctx, *org, dayString, generation, teamID, *window, publisher)
+		case "membership_backfill":
+			graphBuild, err := newManualMembershipGraphBuild(runtime.registry, *org)
+			if err != nil {
+				return writeError(stderr, "operator_backend_unavailable")
+			}
+			outcome, startErr = store.StartManualMembershipTriggerRun(ctx, *org, dayString, generation, graphBuild, publisher)
 		default:
 			outcome, startErr = store.StartManualBackfillRun(ctx, *family, *org, dayString, generation, publisher)
 		}
@@ -3006,11 +3022,17 @@ func dispatchMetricsRemainingTriggerBackstop(
 		case outcome.AlreadyRan:
 			status = "already_ran"
 		}
+		// A ":retry-N" run carries its own generation; print the one the run
+		// (and, for membership, its graph build) is stored under.
+		printedGeneration := generation
+		if outcome.Generation != "" {
+			printedGeneration = outcome.Generation
+		}
 		result := map[string]any{
 			"family":          *family,
 			"org":             *org,
 			"day":             dayString,
-			"generation":      generation,
+			"generation":      printedGeneration,
 			"review_evidence": *reviewEvidence,
 			"status":          status,
 			"run_id":          outcome.RunID,
@@ -3679,6 +3701,7 @@ var orgStdinVerbNames = map[string]bool{
 	"providersync carry-team-ids":              true,
 	"providersync compact-ownership-intervals": true,
 	"providersync drain-removed-dependencies":  true,
+	"sync-runs cancel":                         true,
 }
 
 // orgStdinVerb reports whether args (after the optional leading "workers")

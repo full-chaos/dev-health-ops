@@ -1,0 +1,4 @@
+ConfigMap/cfg
+Deployment/svc
+Secret/sec
+Service/gone-svc

@@ -49,6 +49,9 @@ func aiPRFiles(bindings *[]clickhouse.Binding, repoID string, repoIDs []string, 
         AND cs.org_id = {org_id:String}`
 }
 
+// The newest row of a file is the one with the newest computed_at; on a tie the
+// newer day, then a hash of the value, so the read serves one row whatever the
+// scan order (the window spans days and one run writes one day).
 const hotspotOverlapTail = `hotspots AS (
     SELECT repo_id, file_path, risk_score
     FROM (
@@ -65,7 +68,7 @@ const hotspotOverlapTail = `hotspots AS (
             SELECT
                 hs.repo_id AS repo_id,
                 hs.file_path AS file_path,
-                argMax(hs.risk_score, hs.computed_at) AS risk_score
+                argMax(hs.risk_score, (hs.computed_at, hs.day, cityHash64(tuple(hs.risk_score)))) AS risk_score
             FROM file_hotspot_daily AS hs
             WHERE hs.day >= {start_day:Date}
               AND hs.day <= {end_day:Date}
@@ -93,6 +96,8 @@ LEFT JOIN hotspots AS h
 GROUP BY bucket
 ORDER BY bucket`
 
+// The newest snapshot of a file is ordered as hotspotOverlapTail orders a
+// hotspot row: computed_at, then as_of_day, then a hash of the counts.
 const complexityOverlapTail = `complex_files AS (
     SELECT
         fc.repo_id AS repo_id,
@@ -103,7 +108,8 @@ const complexityOverlapTail = `complex_files AS (
     GROUP BY fc.repo_id, fc.file_path
     HAVING argMax(
         fc.high_complexity_functions + fc.very_high_complexity_functions,
-        fc.computed_at
+        (fc.computed_at, fc.as_of_day,
+            cityHash64(tuple(fc.high_complexity_functions, fc.very_high_complexity_functions)))
     ) > 0
 )
 SELECT
@@ -176,9 +182,19 @@ type attributedPR struct {
 // item id alone, exactly as the reference does: an attribution record pinned
 // to one repository also attributes the pull requests of another repository
 // that the same work item links to.
+//
+// A pull request reaches the page once: the linked arm can give it once per
+// linked issue and the direct arm once per id form, so one row per
+// (repository, number) is kept before the page is cut (the linked arm first,
+// then kind and work type, for a fixed choice), and LIMIT/OFFSET count pull
+// requests. The candidates are filtered first (the AI kinds in each arm, the
+// requested work type), then one is picked, then the page is cut: a pick
+// before the filter could keep a candidate the filter then drops.
 const attributedPRsStatement = `SELECT
     repo_id_str, number, kind, work_type, title, merged_at
 FROM (
+    SELECT repo_id_str, repo_id, number, kind, work_type, title, merged_at
+    FROM (
     SELECT
         toString(pr.repo_id) AS repo_id_str,
         pr.repo_id AS repo_id,
@@ -186,9 +202,10 @@ FROM (
         attr.kind AS kind,
         coalesce(nullIf(wi.type, ''), 'pull_request') AS work_type,
         pr.title AS title,
-        pr.merged_at AS merged_at
-    FROM git_pull_requests AS pr
-    INNER JOIN work_graph_issue_pr AS link
+        pr.merged_at AS merged_at,
+        0 AS arm
+    FROM git_pull_requests AS pr FINAL
+    INNER JOIN work_graph_issue_pr AS link FINAL
         ON link.repo_id = pr.repo_id AND link.pr_number = pr.number
         AND link.org_id = {org_id:String}
     INNER JOIN ai_attribution_resolved AS attr
@@ -211,8 +228,9 @@ FROM (
         attr.kind AS kind,
         'pull_request' AS work_type,
         pr.title AS title,
-        pr.merged_at AS merged_at
-    FROM git_pull_requests AS pr
+        pr.merged_at AS merged_at,
+        1 AS arm
+    FROM git_pull_requests AS pr FINAL
     INNER JOIN ai_attribution_resolved AS attr
         ON attr.subject_type = 'pull_request'
         AND attr.repo_id = pr.repo_id
@@ -223,13 +241,17 @@ FROM (
         OR (pr.merged_at IS NOT NULL AND pr.merged_at >= {start:DateTime64(3, 'UTC')} AND pr.merged_at < {end:DateTime64(3, 'UTC')}))
       %[1]s
       AND pr.org_id = {org_id:String}
+    )
+    WHERE 1 = 1%[2]s
+    ORDER BY repo_id, number, arm, kind, work_type
+    LIMIT 1 BY repo_id, number
 )
 ORDER BY merged_at DESC NULLS LAST, repo_id, number DESC
 LIMIT {limit_n:UInt32} OFFSET {offset_n:UInt32}`
 
 // loadAttributedPRs reads one page of AI-attributed pull requests, first
 // occurrence of each (repository, number) kept.
-func loadAttributedPRs(ctx context.Context, client QueryClient, orgID string, startDay, endDay time.Time, repoID string, repoIDs []string, useIDs bool, limit, offset int) ([]attributedPR, error) {
+func loadAttributedPRs(ctx context.Context, client QueryClient, orgID string, startDay, endDay time.Time, repoID string, repoIDs []string, useIDs bool, workType string, limit, offset int) ([]attributedPR, error) {
 	start, end := dayBounds(startDay, endDay)
 	bindings := []clickhouse.Binding{
 		{Name: "start", Value: start},
@@ -237,10 +259,15 @@ func loadAttributedPRs(ctx context.Context, client QueryClient, orgID string, st
 		{Name: "org_id", Value: orgID},
 	}
 	sf := scopeFilter(&bindings, repoID, repoIDs, useIDs)
+	wf := ""
+	if workType != "" {
+		bindings = append(bindings, clickhouse.Binding{Name: "work_type", Value: workType})
+		wf = "\n      AND work_type = {work_type:String}"
+	}
 	bindings = append(bindings,
 		clickhouse.Binding{Name: "limit_n", Value: uint32(limit)},
 		clickhouse.Binding{Name: "offset_n", Value: uint32(offset)})
-	rs, err := client.Query(ctx, fmt.Sprintf(attributedPRsStatement, sf), bindings)
+	rs, err := client.Query(ctx, fmt.Sprintf(attributedPRsStatement, sf, wf), bindings)
 	if err != nil {
 		return nil, fmt.Errorf("aianalytics: attributed pull requests query: %w", err)
 	}

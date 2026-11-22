@@ -23,7 +23,7 @@ func recordingGuardEnv(totalCap int, active map[dispatchBucket]int) (guardEnv, *
 			return nil
 		},
 		totalCap:    func() int { return totalCap },
-		activeCount: func(bucket dispatchBucket) (int, int, error) { return active[bucket], 0, nil },
+		activeCount: func(bucket dispatchBucket) (int, int, int, error) { return active[bucket], 0, 0, nil },
 		emit: func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, _ int) {
 			record.emitted = append(record.emitted, fmt.Sprintf("%v %d %d %d %d %d", bucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom))
 		},
@@ -89,7 +89,7 @@ func referenceGuardDecision(units []dispatchGuardUnit, env guardEnv, orgID strin
 	var cappedUnitIDs []string
 	slotHeadroom := make(map[dispatchBucket]int, len(allBuckets))
 	for _, bucket := range allBuckets {
-		activeCount, _, err := env.activeCount(bucket)
+		activeCount, _, _, err := env.activeCount(bucket)
 		if err != nil {
 			return guardDecision{}, err
 		}

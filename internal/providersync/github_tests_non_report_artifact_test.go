@@ -6,6 +6,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -371,5 +372,28 @@ func TestGitHubTestsShardTimingJUnitPartAndSBOMArtifactsExcluded(t *testing.T) {
 		if selected, reason := githubTestsArtifactSelectionSeam(name); !selected {
 			t.Fatalf("%s was excluded (reason=%s), want selected", name, reason)
 		}
+	}
+}
+
+// Cutting the exclusion sample (CHAOS-14385: 3 records) cuts only the sample: five excluded artifacts are all counted,
+// in the cursor and in the unit result, while the sample names the first three.
+func TestGitHubTestsExclusionCountIsExactWhenTheSampleIsCut(t *testing.T) {
+	doer := &githubTestsNonReportArtifactDoer{
+		t:     t,
+		names: []string{"a1.dockerbuild", "a2.dockerbuild", "a3.dockerbuild", "a4.dockerbuild", "a5.dockerbuild", "integration-junit"},
+	}
+	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, fakehttp.Client(doer)), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"a1.dockerbuild (non_report_artifact_suffix)", "a2.dockerbuild (non_report_artifact_suffix)", "a3.dockerbuild (non_report_artifact_suffix)"}
+	if walk.cursor.ExcludedNonReportSuffix != 5 || walk.final.Result["excluded_non_report_suffix"] != 5 {
+		t.Errorf("excluded count cursor=%d result=%v, want 5 and 5", walk.cursor.ExcludedNonReportSuffix, walk.final.Result["excluded_non_report_suffix"])
+	}
+	if !slices.Equal(walk.cursor.ExcludedArtifactSample, want) {
+		t.Errorf("sample=%v, want the first 3: %v", walk.cursor.ExcludedArtifactSample, want)
+	}
+	if sample, ok := walk.final.Result["excluded_artifact_sample"].([]string); !ok || !slices.Equal(sample, want) {
+		t.Errorf("result sample=%v, want %v", walk.final.Result["excluded_artifact_sample"], want)
 	}
 }

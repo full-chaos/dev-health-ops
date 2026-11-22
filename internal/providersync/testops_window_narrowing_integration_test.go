@@ -16,7 +16,7 @@ import (
 
 // CHAOS-13827: TestOpsBudgetBlockedUnitsSQL reads the budget block off the unit result the route writes. Each result is
 // built by the production producer (githubTestsFinalMetadataBatch, then the completion metadata Complete adds before it
-// persists), never hand-written JSON. Only the RUN inventory page budget counts.
+// persists), never hand-written JSON. The RUN and the ARTIFACT inventory page budgets count (CHAOS-13801), the artifact walk bound included.
 func TestTestOpsBudgetBlockedUnitsSQLReadsTheRouteResult(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -61,6 +61,7 @@ func TestTestOpsBudgetBlockedUnitsSQLReadsTheRouteResult(t *testing.T) {
 	base := githubTestsChunkCursor{Phase: "done", Repo: "acme/api"}
 	runBudget := recordGitHubTestsInventoryTruncation(base, nil, claim, githubTestsRunInventoryComponent, 100)
 	artifactBudget := recordGitHubTestsInventoryTruncation(base, nil, claim, githubTestsArtifactInventoryComponent, 100)
+	walkBound := recordGitHubTestsArtifactsWalkBound(base, nil, claim, githubTestsMaxWalkRecords)
 	perRun := recordGitHubTestsPerRunTruncation(base, nil, claim, githubTestsRunJobsComponent, githubTestsPerRunPageBudgetCause, "77", 1000)
 	saturated := recordGitHubTestsSaturated(base, nil, claim, githubTestsRunInventorySaturatedComponent, githubTestsRunsPhase, "2026-11-12T00:00:00Z", 1000)
 
@@ -73,7 +74,8 @@ func TestTestOpsBudgetBlockedUnitsSQLReadsTheRouteResult(t *testing.T) {
 	units := []unit{
 		{"cicd", "success", produce(t, base), false},
 		{"cicd", "success", produce(t, runBudget), true},
-		{"cicd", "success", produce(t, artifactBudget), false},
+		{"cicd", "success", produce(t, artifactBudget), true},
+		{"cicd", "success", produce(t, walkBound), true},
 		{"cicd", "success", produce(t, perRun), false},
 		{"cicd", "success", produce(t, saturated), false},
 		{"cicd", "failed", `{"cause_class":"rate_limited"}`, false},
@@ -117,7 +119,7 @@ VALUES ($1, 'org-acme', $2, $3, $4, 'github', $5, 'medium', 'incremental', $6, $
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("budget_blocked newest first = %v, want %v", got, want)
 	}
-	if count := TestOpsBudgetBlockedCount(got); count != 1 {
-		t.Fatalf("blocked count = %d, want 1 (the run inventory budget only)", count)
+	if count := TestOpsBudgetBlockedCount(got); count != 3 {
+		t.Fatalf("blocked count = %d, want 3 (the run and artifact inventory budgets, the artifact walk bound)", count)
 	}
 }

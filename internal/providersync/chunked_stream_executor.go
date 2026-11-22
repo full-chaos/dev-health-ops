@@ -2,7 +2,11 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
+	"reflect"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -30,6 +34,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
 	}
 	observer, _ := handler.(ChunkCommitObserver)
+	rule, _ := handler.(ChunkFinalWatermarkRule)
 	var result CompleteRouteExecutionResult
 	err := session.Run(ctx, executor.HeartbeatInterval, func(
 		workContext context.Context,
@@ -87,7 +92,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 			if checkpoint.TotalChunks < 1 || checkpoint.NextOrdinal != checkpoint.TotalChunks || checkpoint.PreparedChunks != checkpoint.TotalChunks {
 				return ErrChunkCheckpointConflict
 			}
-			return loadChunkedFinalResult(workContext, session.Claim, store, checkpoint.TotalChunks, &result, executor.now())
+			return loadChunkedFinalResult(workContext, session.Claim, store, rule, checkpoint.TotalChunks, &result, executor.now())
 		}
 		// A committed final sidecar means the inventory scan already finished
 		// on an earlier attempt and only MarkInventoryComplete is outstanding.
@@ -112,7 +117,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 					return ErrChunkCheckpointConflict
 				}
 				return loadChunkedFinalResult(
-					workContext, session.Claim, store, checkpoint.TotalChunks, &result, executor.now())
+					workContext, session.Claim, store, rule, checkpoint.TotalChunks, &result, executor.now())
 			}
 		}
 
@@ -158,101 +163,184 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 		finalSeen := false
 		var finalComparison ShadowComparison
 		var callbackErr error
+		// prepareEmission makes a whole emission durable as one group BEFORE any of it reaches the sink.
+		prepareEmission := func(emission ChunkRouteEmission) ([]PreparedProviderChunk, error) {
+			batch := emission.Batch
+			if emission.Final {
+				batch.Result, batch.Watermark, callbackErr = applyGitHubWorkItemsIncompletePolicy(
+					session.Claim.Provider, session.Claim.Dataset, batch.Result, batch.Watermark,
+				)
+				if callbackErr != nil {
+					return nil, callbackErr
+				}
+				finalComparison, callbackErr = executor.Comparator.CompareCompleteRoute(workContext, session.Claim, batch)
+				if callbackErr != nil {
+					return nil, callbackErr
+				}
+				if !finalComparison.Match {
+					return nil, ErrShadowMismatch
+				}
+				finalSeen = true
+			} else {
+				// Non-final pages cannot publish unit metadata. Keep the
+				// evidence in the final emission only.
+				batch.Result, batch.Watermark = nil, nil
+				batch.Evidence = FetchEvidence{}
+				batch.WorklogObservations = nil
+			}
+			// ONE instant stamps the chunks' ledger: the split measures with it and the store writes with it. The lease fence
+			// reads a fresh clock after the split.
+			stampAt := executor.now()
+			chunks, splitErr := splitStampedEmission(batch, chunkStamps{
+				Claim: session.Claim, CursorBefore: emission.CursorBefore, CursorAfter: emission.CursorAfter,
+				Final: emission.Final, Result: batch.Result, Watermark: batch.Watermark, Evidence: batch.Evidence,
+				Comparison: finalComparison, WorklogObservations: batch.WorklogObservations,
+				OrdinalBase: nextOrdinal, StampAt: stampAt,
+			}, policy)
+			if splitErr != nil {
+				return nil, splitErr
+			}
+			if len(chunks) == 0 {
+				return nil, ErrChunkPolicyExceeded
+			}
+			// The whole emission is made durable BEFORE any of it reaches
+			// the sink. Preparing and committing one sub-chunk at a time
+			// left a window where committed rows existed for an emission
+			// the cursor had not advanced past, so recovery refetched the
+			// item and wrote those rows again (CHAOS-3821). The chunks reach
+			// the store exactly as the split measured them.
+			preparedGroup, prepareErr := store.PrepareChunkGroup(
+				workContext, session.Claim, chunks, stampAt, executor.now())
+			if prepareErr != nil {
+				return nil, prepareErr
+			}
+			nextOrdinal += len(preparedGroup)
+			return preparedGroup, nil
+		}
+		commitGroup := func(emission ChunkRouteEmission, preparedGroup []PreparedProviderChunk) error {
+			for position, prepared := range preparedGroup {
+				commitResult, commitErr := commitPreparedChunk(
+					workContext, session.Claim, prepared, executor.Committer.Sink,
+					executor.Committer.Readback, executor.Committer.Now, store,
+				)
+				result.Effects.Written += commitResult.Written
+				result.Effects.Skipped += commitResult.Skipped
+				result.Effects.MarkedCommitted += commitResult.MarkedCommitted
+				result.Effects.ResetForReplay += commitResult.ResetForReplay
+				result.Effects.IdempotentReplay += commitResult.IdempotentReplay
+				if commitErr != nil {
+					return commitErr
+				}
+				if err := executor.markChunkCommitted(workContext, session.Claim, store, observer, prepared.Ordinal, prepared); err != nil {
+					return err
+				}
+				committedThisAttempt++
+				// The bounds are checked after EVERY sub-chunk, also inside this emission (CHAOS-8328): one emission can hold
+				// hundreds of sub-chunks. The rest of the group is already durable (prepared as one group above), so the
+				// continuation costs nothing: the next attempt drains the prepared chunks before it asks the provider for anything.
+				// After the LAST sub-chunk of the FINAL emission there is nothing left to hand over.
+				more := position+1 < len(preparedGroup) || !emission.Final
+				if more && (committedThisAttempt >= policy.MaxChunksPerAttempt || attemptElapsed() >= policy.MaxWallTime) {
+					return newChunkContinuation(policy, executor.now().Add(time.Second), committedThisAttempt, attemptElapsed())
+				}
+			}
+			return nil
+		}
+		prepareAndCommit := func(emission ChunkRouteEmission) error {
+			preparedGroup, err := prepareEmission(emission)
+			if err != nil {
+				return err
+			}
+			return commitGroup(emission, preparedGroup)
+		}
+		// pending is a coalesced group of contiguous coalescable emissions that is
+		// not durable yet. It is committed (flushed) before any emission that
+		// cannot join it, at the wall bound, and before the final emission. A
+		// pending group that never flushes leaves the durable cursor at its first
+		// CursorBefore, so a restart re-reads it: nothing is skipped or written twice.
+		var pending *ChunkRouteEmission
+		heldEmissions := 0
+		// flush commits the held group; prepared says the group became durable at its ordinals (its prepare succeeded),
+		// whatever the commit then did.
+		flush := func() (prepared bool, err error) {
+			if pending == nil {
+				return false, nil
+			}
+			group := *pending
+			pending, heldEmissions = nil, 0
+			preparedGroup, err := prepareEmission(group)
+			if err != nil {
+				return false, err
+			}
+			return true, commitGroup(group, preparedGroup)
+		}
+		// stageAfterFlush keeps the emission whose arrival ended a durable held group: when that flush stops the attempt
+		// (continuation) or fails after its prepare, the emission is prepared as its own group, not dropped, and the next
+		// attempt drains it. A held group whose prepare failed is not durable: nothing is staged after it.
+		stageAfterFlush := func(emission ChunkRouteEmission, flushErr error) error {
+			if _, stageErr := prepareEmission(emission); stageErr != nil {
+				if errors.As(flushErr, new(ChunkContinuationError)) {
+					return stageErr
+				}
+				return errors.Join(flushErr, stageErr)
+			}
+			return flushErr
+		}
+		hold := func(group ChunkRouteEmission) error {
+			pending = &group
+			heldEmissions++
+			if attemptElapsed() >= policy.MaxWallTime {
+				_, err := flush()
+				return err
+			}
+			return nil
+		}
 		streamErr := handler.CollectChunks(
 			workContext, session.Claim, credential, client, checkpointTime(checkpoint, now), checkpoint.NextCursor,
 			func(emission ChunkRouteEmission) error {
+				if err := validateChunkEmissionKind(emission); err != nil {
+					return err
+				}
+				if emission.Barrier {
+					_, err := flush()
+					return err
+				}
 				if err := emission.Batch.validate(descriptor); err != nil {
 					return err
 				}
-				batch := emission.Batch
-				if emission.Final {
-					batch.Result, batch.Watermark, callbackErr = applyGitHubWorkItemsIncompletePolicy(
-						session.Claim.Provider, session.Claim.Dataset, batch.Result, batch.Watermark,
-					)
-					if callbackErr != nil {
-						return callbackErr
+				if pending != nil {
+					if merged, ok := coalesceChunkEmissions(session.Claim, policy, *pending, emission, nextOrdinal, executor.now()); ok {
+						return hold(merged)
 					}
-					finalComparison, callbackErr = executor.Comparator.CompareCompleteRoute(workContext, session.Claim, batch)
-					if callbackErr != nil {
-						return callbackErr
-					}
-					if !finalComparison.Match {
-						return ErrShadowMismatch
-					}
-					finalSeen = true
-				} else {
-					// Non-final pages cannot publish unit metadata. Keep the
-					// evidence in the final emission only.
-					batch.Result, batch.Watermark = nil, nil
-					batch.Evidence = FetchEvidence{}
-					batch.WorklogObservations = nil
-				}
-				chunks, splitErr := splitCompleteRouteBatch(batch, finalComparison, policy)
-				if splitErr != nil {
-					return splitErr
-				}
-				last := len(chunks) - 1
-				if last < 0 {
-					return ErrChunkPolicyExceeded
-				}
-				resetEmissionChunks(chunks, emission)
-				if emission.Final {
-					chunks[last].InventoryComplete = true
-					chunks[last].Result = cloneChunkResult(batch.Result)
-					chunks[last].Watermark = batch.Watermark
-					chunks[last].Evidence = batch.Evidence
-					chunks[last].Comparison = finalComparison
-					chunks[last].WorklogObservations = append([]JiraWorklogFetchObservation(nil), batch.WorklogObservations...)
-				}
-				if err := sizeEmissionChunks(chunks); err != nil {
-					return err
-				}
-				// The whole emission is made durable BEFORE any of it reaches
-				// the sink. Preparing and committing one sub-chunk at a time
-				// left a window where committed rows existed for an emission
-				// the cursor had not advanced past, so recovery refetched the
-				// item and wrote those rows again (CHAOS-3821).
-				group := make([]PreparedProviderChunk, 0, len(chunks))
-				for _, candidate := range chunks {
-					candidate.Ordinal = nextOrdinal + len(group)
-					candidate.ManifestDigest = preparedChunkDigest(candidate)
-					group = append(group, candidate)
-				}
-				preparedGroup, prepareErr := store.PrepareChunkGroup(
-					workContext, session.Claim, group, executor.now())
-				if prepareErr != nil {
-					return prepareErr
-				}
-				for position, prepared := range preparedGroup {
-					commitResult, commitErr := commitPreparedChunk(
-						workContext, session.Claim, prepared, executor.Committer.Sink,
-						executor.Committer.Readback, executor.Committer.Now, store,
-					)
-					result.Effects.Written += commitResult.Written
-					result.Effects.Skipped += commitResult.Skipped
-					result.Effects.MarkedCommitted += commitResult.MarkedCommitted
-					result.Effects.ResetForReplay += commitResult.ResetForReplay
-					result.Effects.IdempotentReplay += commitResult.IdempotentReplay
-					if commitErr != nil {
-						return commitErr
-					}
-					if err := executor.markChunkCommitted(workContext, session.Claim, store, observer, prepared.Ordinal, prepared); err != nil {
-						return err
-					}
-					nextOrdinal++
-					committedThisAttempt++
-					// The bounds are checked after EVERY sub-chunk, also inside this emission (CHAOS-8328): one emission can hold
-					// hundreds of sub-chunks. The rest of the group is already durable (prepared as one group above), so the
-					// continuation costs nothing: the next attempt drains the prepared chunks before it asks the provider for anything.
-					// After the LAST sub-chunk of the FINAL emission there is nothing left to hand over.
-					more := position+1 < len(preparedGroup) || !emission.Final
-					if more && (committedThisAttempt >= policy.MaxChunksPerAttempt || attemptElapsed() >= policy.MaxWallTime) {
-						return newChunkContinuation(policy, executor.now().Add(time.Second), committedThisAttempt, attemptElapsed())
+					if prepared, err := flush(); err != nil {
+						if !prepared {
+							return err
+						}
+						return stageAfterFlush(emission, err)
 					}
 				}
-				return nil
+				if emission.Coalescable && !emission.Final && coalescedEmissionFits(session.Claim, policy, emission, nextOrdinal, executor.now()) {
+					return hold(emission)
+				}
+				return prepareAndCommit(emission)
 			},
 		)
+		if streamErr == nil && pending != nil {
+			streamErr = ErrChunkCheckpointConflict
+		}
+		if streamErr != nil && pending != nil {
+			// A source error ended the walk with a held group of runs that were read whole: commit it under the live
+			// lease, as a group per run would already have been. A lost lease writes nothing; those runs are read again.
+			if leaseErr := guard.Assert(workContext); leaseErr != nil || errors.Is(streamErr, providerfoundation.ErrLeaseLost) || errors.Is(streamErr, ErrLeaseLost) {
+				slog.Warn("held coalesced runs not written: the lease is lost; the next attempt reads them again",
+					"provider", session.Claim.Provider, "dataset", session.Claim.Dataset, "unit", session.Claim.ID,
+					"held_emissions", heldEmissions)
+				pending, heldEmissions = nil, 0
+			} else if _, flushErr := flush(); flushErr != nil && !errors.As(flushErr, new(ChunkContinuationError)) {
+				// A continuation here means the group committed and reached a bound: the source error stays the result.
+				streamErr = errors.Join(streamErr, flushErr)
+			}
+		}
 		if streamErr != nil {
 			return streamErr
 		}
@@ -270,7 +358,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 			return ErrChunkCheckpointConflict
 		}
 		result.Comparison = finalComparison
-		return loadChunkedFinalResult(workContext, session.Claim, store, checkpoint.TotalChunks, &result, executor.now())
+		return loadChunkedFinalResult(workContext, session.Claim, store, rule, checkpoint.TotalChunks, &result, executor.now())
 	})
 	return result, err
 }
@@ -313,11 +401,14 @@ func checkpointTime(checkpoint ChunkCheckpoint, fallback time.Time) time.Time {
 // comparison's record counts come from the checkpoint's cumulative committed
 // row count, NOT from the final chunk: that chunk carries only metadata and no
 // rows, so comparing against it reported zero records for a sync of any size
-// and could not detect an omitted or duplicated chunk (CHAOS-3823).
+// and could not detect an omitted or duplicated chunk (CHAOS-3823). Every
+// publish, fresh or recovered, passes the watermark through the route's rule
+// (publishedFinalWatermark; nil rule: the stored watermark).
 func loadChunkedFinalResult(
 	ctx context.Context,
 	claim Claim,
 	store ChunkedEffectStore,
+	rule ChunkFinalWatermarkRule,
 	total int,
 	result *CompleteRouteExecutionResult,
 	now time.Time,
@@ -336,7 +427,8 @@ func loadChunkedFinalResult(
 		}
 		return ErrChunkCheckpointConflict
 	}
-	result.Fetch, result.Result, result.Watermark = final.Evidence, final.Result, final.Watermark
+	result.Fetch, result.Result = final.Evidence, final.Result
+	result.Watermark = publishedFinalWatermark(claim, rule, final)
 	result.Comparison = final.Comparison
 	result.Comparison.NativeRecords = int(checkpoint.CommittedRows)
 	result.Comparison.PythonRecords = int(checkpoint.CommittedRows)
@@ -345,33 +437,77 @@ func loadChunkedFinalResult(
 	return nil
 }
 
-// resetEmissionChunks clears the per-emission metadata a split inherits and
-// stamps the emission's cursors on its first and last sub-chunk. The streaming
-// executor and the routes that pre-check a chunk's persisted size share it.
-func resetEmissionChunks(chunks []PreparedProviderChunk, emission ChunkRouteEmission) {
-	for index := range chunks {
-		chunks[index].TotalChunks = 0
-		chunks[index].CursorBefore = ""
-		chunks[index].CursorAfter = ""
-		chunks[index].InventoryComplete = false
-		chunks[index].Result = nil
-		chunks[index].Watermark = nil
-		chunks[index].Evidence = FetchEvidence{}
-		chunks[index].Comparison = ShadowComparison{}
-		chunks[index].WorklogObservations = nil
+// coalesceChunkEmissions merges next into the pending coalesced group when both
+// are coalescable and non-final, next starts at the cursor the group ends at,
+// every shared destination has one recovery policy, and the merged rows still
+// fit ONE sub-chunk of the policy. The merged emission keeps the group's
+// CursorBefore and takes next's CursorAfter.
+func coalesceChunkEmissions(
+	claim Claim, policy ChunkPolicy, pending, next ChunkRouteEmission, ordinalBase int, now time.Time,
+) (ChunkRouteEmission, bool) {
+	if !pending.Coalescable || !next.Coalescable || pending.Final || next.Final ||
+		next.CursorBefore == "" || next.CursorBefore != pending.CursorAfter {
+		return ChunkRouteEmission{}, false
 	}
-	chunks[0].CursorBefore = emission.CursorBefore
-	chunks[len(chunks)-1].CursorAfter = emission.CursorAfter
+	rows := map[string][]json.RawMessage{}
+	recovery := map[string]EffectRecoveryPolicy{}
+	order := make([]string, 0, len(pending.Batch.Effects)+len(next.Batch.Effects))
+	for _, effect := range append(append([]EffectBatch(nil), pending.Batch.Effects...), next.Batch.Effects...) {
+		if len(effect.MembershipRejections) > 0 {
+			return ChunkRouteEmission{}, false
+		}
+		known, seen := recovery[effect.Destination]
+		if !seen {
+			recovery[effect.Destination] = effect.Recovery
+			order = append(order, effect.Destination)
+		} else if known != effect.Recovery {
+			return ChunkRouteEmission{}, false
+		}
+		rows[effect.Destination] = append(rows[effect.Destination], effect.Rows...)
+	}
+	effects := make([]EffectBatch, 0, len(order))
+	for _, destination := range order {
+		effect, err := BuildEffectBatch(destination, recovery[destination], rows[destination])
+		if err != nil {
+			return ChunkRouteEmission{}, false
+		}
+		effects = append(effects, effect)
+	}
+	merged := ChunkRouteEmission{
+		Batch: CompleteRouteBatch{Effects: effects}, CursorBefore: pending.CursorBefore,
+		CursorAfter: next.CursorAfter, Coalescable: true,
+	}
+	if !coalescedEmissionFits(claim, policy, merged, ordinalBase, now) {
+		return ChunkRouteEmission{}, false
+	}
+	return merged, true
 }
 
-// sizeEmissionChunks stamps each sub-chunk with its encoded payload size.
-func sizeEmissionChunks(chunks []PreparedProviderChunk) error {
-	for index := range chunks {
-		encoded, err := encodedPreparedChunkPayload(chunks[index])
-		if err != nil {
-			return err
-		}
-		chunks[index].PayloadBytes = len(encoded)
+// coalescedEmissionFits reports whether a non-final emission is ONE sub-chunk
+// of the policy that the chunk store accepts: the stamped split (the store's
+// own refusal) runs on it at the next ordinal, so no estimate decides. The
+// group is prepared later at its own instant; if that changes the verdict the
+// prepare's split halves the group into more chunks (nothing is refused).
+func coalescedEmissionFits(claim Claim, policy ChunkPolicy, emission ChunkRouteEmission, ordinalBase int, now time.Time) bool {
+	if len(emission.Batch.Effects) == 0 {
+		return false
+	}
+	chunks, err := splitStampedEmission(CompleteRouteBatch{Effects: emission.Batch.Effects}, chunkStamps{
+		Claim: claim, CursorBefore: emission.CursorBefore, CursorAfter: emission.CursorAfter,
+		OrdinalBase: ordinalBase, StampAt: now,
+	}, policy)
+	return err == nil && len(chunks) == 1
+}
+
+// validateChunkEmissionKind refuses an emission kind the executor does not know: a barrier carries nothing else, and
+// a coalescable emission is never final.
+func validateChunkEmissionKind(emission ChunkRouteEmission) error {
+	if emission.Barrier && (emission.Final || emission.Coalescable || emission.CursorBefore != "" ||
+		emission.CursorAfter != "" || !reflect.DeepEqual(emission.Batch, CompleteRouteBatch{})) {
+		return fmt.Errorf("%w: a chunk barrier emission carries a batch, a cursor or another kind", ErrInvalidConfiguration)
+	}
+	if emission.Coalescable && emission.Final {
+		return fmt.Errorf("%w: a final chunk emission is marked coalescable", ErrInvalidConfiguration)
 	}
 	return nil
 }

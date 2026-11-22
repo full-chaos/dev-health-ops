@@ -31,17 +31,31 @@ func driverCaption(label string, names []string) *string {
 	return &s
 }
 
-// statesDriverMove says whether a delta is a stated move with a driver to
-// name: a percent between two measured values that is not exactly 0 %. Not a
-// work-item metric under a repository filter: its value is the repo-linked
-// calculation, while the team daily table that names its drivers has no
-// repository dimension, so the teams named would not be the filtered ones.
-func statesDriverMove(d MetricDelta) bool {
+// statesMove says whether the value of a metric states a move with a driver to name (CHAOS-14379, CHAOS-14441): a
+// percent between two measured values that is not exactly 0 %, or a rise from a measured 0, which is stated in absolute
+// values and has no percent. Not a steady value, not a value missing in a window, and not a work-item metric under a
+// repository filter: its value is the repo-linked calculation, while the team daily rows that name drivers have no
+// repository dimension (CHAOS-14425). The summary sentence and the signal captions take this one predicate, in every
+// form.
+func statesMove(d MetricDelta) bool {
 	if d.RepoFilterApplied != nil && *d.RepoFilterApplied && metricScope(d.Metric) == "team" {
 		return false
 	}
+	if d.FromZero() {
+		return true
+	}
 	_, ok := d.Percent()
 	return ok && d.HasData && namesDrivers(d)
+}
+
+// oneTeamDriverRows is the driver of a metric of a one-team request (CHAOS-14379): the team itself when the metric's
+// value states a move (statesMove), so the driver has the value's own source, predicates and reducer; none
+// otherwise.
+func oneTeamDriverRows(d MetricDelta, f Filters) []driverRow {
+	if !statesMove(d) {
+		return nil
+	}
+	return []driverRow{{ID: f.Scope.IDs[0]}}
 }
 
 // attachDriverCaptions sets Signal.Driver on the metric signals whose delta
@@ -50,14 +64,23 @@ func statesDriverMove(d MetricDelta) bool {
 // leaves the caption out (logged). Risk and recommendation signals carry none.
 func attachDriverCaptions(ctx context.Context, client QueryClient, f Filters, orgID string, now, startDay, endDay, compareStart, compareEnd time.Time, deltas []MetricDelta, signals []Signal) error {
 	var batch []driverBatchMetric
+	oneTeamRows := map[string][]driverRow{}
 	labels := map[string]string{}
 	var scopeFilters = map[string]string{}
 	var bindings []dhclickhouse.Binding
+	shareBound := false
 	for _, d := range deltas {
-		if !statesDriverMove(d) {
+		scope := metricScope(d.Metric)
+		if oneTeamScope(scope, f) {
+			if rows := oneTeamDriverRows(d, f); rows != nil {
+				oneTeamRows[d.Metric] = rows
+				labels[d.Metric] = d.Label
+			}
 			continue
 		}
-		scope := metricScope(d.Metric)
+		if !statesMove(d) {
+			continue
+		}
 		filter, ok := scopeFilters[scope]
 		if !ok {
 			var b []dhclickhouse.Binding
@@ -79,15 +102,27 @@ func attachDriverCaptions(ctx context.Context, client QueryClient, f Filters, or
 			}
 			scopeFilters[scope] = filter
 		}
-		batch = append(batch, driverBatchMetric{Metric: d.Metric, ScopeFilter: filter})
+		shareSQL, shareBindings := driverShareSQL(d.Metric, f, orgID, now)
+		if shareSQL != "" && !shareBound {
+			// One share map per request: every repository sum of a team scope binds the same names and values.
+			bindings = append(bindings, shareBindings...)
+			shareBound = true
+		}
+		batch = append(batch, driverBatchMetric{Metric: d.Metric, ScopeFilter: filter, FromZero: d.FromZero(), ShareSQL: shareSQL})
 		labels[d.Metric] = d.Label
 	}
-	if len(batch) == 0 {
+	if len(batch) == 0 && len(oneTeamRows) == 0 {
 		return nil
 	}
-	rowsByMetric, err := fetchMetricDriversBatch(ctx, client, batch, startDay, endDay, compareStart, compareEnd, bindings, orgID, driverCaptionLimit)
-	if err != nil {
-		return err
+	rowsByMetric := map[string][]driverRow{}
+	if len(batch) > 0 {
+		var err error
+		if rowsByMetric, err = fetchMetricDriversBatch(ctx, client, batch, startDay, endDay, compareStart, compareEnd, bindings, orgID, driverCaptionLimit); err != nil {
+			return err
+		}
+	}
+	for metric, rows := range oneTeamRows {
+		rowsByMetric[metric] = rows
 	}
 	names := driverNamesByMetric(ctx, client, orgID, rowsByMetric)
 	for i := range signals {

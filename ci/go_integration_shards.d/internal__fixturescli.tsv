@@ -1,2 +1,21 @@
-internal/fixturescli	539
-split-by-test	2
+# CHAOS-14453: weight = sum of the rows plus the unlisted tests; rows = mean of the top-level elapsed of two main push runs (44865234137, 44863477073), tests >= 5 s.
+internal/fixturescli	994
+split-by-test	4
+TestLoadSyntheticIncidentsIntoAHeadSchema	264
+TestProviderWorldsAreWhatTheProducersWrite	220
+TestCrossProviderAttributionMatrix	158
+TestLoadWorldReproducesTheRecordedCapture	103
+TestLoadWorldStampsServerStampedColumnsAtLoadTime	43
+TestGenerateVerbLoadsTheWorldForTheCallersOrganization	28
+TestGitHubIssueTakesItsLinkedPullRequestsRepoOwnerInTheRealWorld	22
+TestGenerateVerbRefusesANonUTCServer	15
+TestLoadSyntheticInsertsTheFrozenRows	14
+TestGenerateVerbStartsTheRecommendationsBackstop	12
+TestServerStampProblemsHoldEveryStampedColumnToTheRunsWindow	12
+TestStopMergesStopsOnlyTheRefreshesOfItsOwnDatabase	12
+TestAfterCaptureRulesCatchPlantedDefectsOnALiveClickHouse	11
+TestDemoWorldEveryTeamHasInvestmentStages	11
+TestStopMergesStopsOnlyTheMergesOfItsOwnDatabase	9
+TestFinalizeSyntheticWritesTheFrozenPythonRows	8
+TestDemoWorldHoldsTheO4OracleShapes	7
+TestGeneratedRowsAreNeverLaterThanTheClock	6

@@ -282,6 +282,7 @@ type Metrics struct {
 	unitClaimed                    map[string]uint64
 	unitFailed                     map[string]uint64
 	treeWalkNearCeiling            map[string]uint64
+	cursorCutListDropped           map[string]uint64
 	cicdPartialSuccess             map[string]uint64
 	duplicateTestCase              map[string]uint64
 	duplicateTestSuite             map[string]uint64
@@ -291,9 +292,11 @@ type Metrics struct {
 	// syncRunRollupBumped intentionally does NOT live here -- see
 	// syncRunRollupBumpedMetrics's doc comment (codex round 1, P1,
 	// CHAOS-4586): it is a process-wide singleton, not a per-family field.
-	jiraSearchPages   map[string]uint64
-	chunkContinuation map[string]uint64
-	unitDeferred      map[string]uint64
+	jiraSearchPages                map[string]uint64
+	chunkContinuation              map[string]uint64
+	rateLimitEpisodeRestart        map[string]uint64
+	unitDeferred                   map[string]uint64
+	gitlabTestsWindowStartFallback map[string]uint64
 	// jiraDevStatus counts CHAOS-4757's dev-status (GitHub-for-Jira panel)
 	// fetches, by outcome -- see RecordJiraDevStatus.
 	jiraDevStatus map[string]uint64
@@ -347,6 +350,7 @@ func NewMetrics() *Metrics {
 		unitClaimed:                    map[string]uint64{},
 		unitFailed:                     map[string]uint64{},
 		treeWalkNearCeiling:            map[string]uint64{},
+		cursorCutListDropped:           map[string]uint64{},
 		cicdPartialSuccess:             map[string]uint64{},
 		duplicateTestCase:              map[string]uint64{},
 		duplicateTestSuite:             map[string]uint64{},
@@ -355,6 +359,8 @@ func NewMetrics() *Metrics {
 		duplicateNaturalKey:            map[string]uint64{},
 		jiraSearchPages:                map[string]uint64{},
 		chunkContinuation:              map[string]uint64{},
+		rateLimitEpisodeRestart:        map[string]uint64{},
+		gitlabTestsWindowStartFallback: map[string]uint64{},
 		unitDeferred:                   map[string]uint64{},
 		jiraDevStatus:                  map[string]uint64{},
 		gitlabClosingMR:                map[string]uint64{},
@@ -900,10 +906,11 @@ func (m *Metrics) RecordPreparedSnapshotDiscarded(provider, dataset, reason stri
 }
 
 // metricResumePhaseVocabulary is the closed set of paginated phases whose
-// resume cursor carries a positional index. An unknown phase collapses to
-// "other" so a route cannot open an unbounded label dimension (CHAOS-4177).
+// resume cursor can find its listing moved: github runs/artifacts, gitlab
+// pipelines/reports (CHAOS-14374). An unknown phase collapses to "other" so a
+// route cannot open an unbounded label dimension (CHAOS-4177).
 var metricResumePhaseVocabulary = map[string]struct{}{
-	"runs": {}, "artifacts": {},
+	"runs": {}, "artifacts": {}, "pipelines": {}, "reports": {},
 }
 
 // MetricResumePhaseLabel bounds the resume phase label.
@@ -1052,6 +1059,30 @@ func (m *Metrics) RecordChunkContinuation(provider, dataset string) {
 	m.chunkContinuation[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
 }
 
+// RecordRateLimitEpisodeRestart counts one rate-limit episode restarted because
+// the unit's chunk checkpoint moved since its last rate-limit deferral
+// (CHAOS-14252), by bounded provider and dataset.
+func (m *Metrics) RecordRateLimitEpisodeRestart(provider, dataset string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rateLimitEpisodeRestart[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
+}
+
+// RecordGitLabTestsWindowStartFallback counts one GitLab tests/cicd walk whose
+// window start fell back to our clock because the project read carried no
+// usable Date header (CHAOS-14383), by bounded dataset.
+func (m *Metrics) RecordGitLabTestsWindowStartFallback(dataset string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.gitlabTestsWindowStartFallback[metricProvider("gitlab")+":"+MetricDatasetLabel(dataset)]++
+}
+
 // metricUnitDeferralReasonVocabulary is the closed set of reasons a provider
 // unit attempt ended in an attempt-neutral deferral (a River snooze). The three
 // producers are internal/jobs/providerunit/providerunit.go's chunk-continuation,
@@ -1194,6 +1225,21 @@ func (m *Metrics) RecordTreeWalkNearCeiling(limit string) {
 	m.treeWalkNearCeiling[limit]++
 }
 
+// RecordCursorCutListDropped counts ONE chunk cursor emission that dropped a cut list to stay under the cursor byte budget
+// (CHAOS-14315), by the dropped list: "active" or "carried". The cut lists only dedup reads of a peeled range, so a drop
+// costs a repeated read, never a failed chunk.
+func (m *Metrics) RecordCursorCutListDropped(list string) {
+	if m == nil {
+		return
+	}
+	if list != "active" && list != "carried" {
+		list = "other"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cursorCutListDropped[list]++
+}
+
 // RecordAllArtifactsUnreadable counts ONE provider unit that failed because
 // every cicd/tests artifact it observed was unreadable (CHAOS-4185). The
 // condition terminalizes on its first attempt (deterministicTerminalCategory
@@ -1217,6 +1263,9 @@ func (m *Metrics) RecordAllArtifactsUnreadable(provider, dataset string) {
 var metricSyncRunRollupBumpedOutcomeVocabulary = map[string]bool{
 	"success": true,
 	"failed":  true,
+	// A terminal unit write whose COMMIT only a read-back confirmed: the bump
+	// happened, its counts were not re-read (providersync).
+	"ambiguous_commit": true,
 }
 
 // metricSyncRunRollupBumpedPathVocabulary is the closed set of path labels:
@@ -1863,7 +1912,7 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	}
 	if err := writeProviderDatasetReasonCounter(
 		writer, "dev_health_provider_artifact_skipped_total",
-		"Provider artifacts skipped as unreadable while the rest of the inventory continued, by bounded provider, dataset, and reason.",
+		"Provider artifact skips while the rest of the inventory continued, by bounded provider, dataset, and reason. Counts skipped looks, not distinct artifacts; artifact_unavailable counts per failed look.",
 		"reason", m.artifactSkipped,
 	); err != nil {
 		return err
@@ -1973,6 +2022,20 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	); err != nil {
 		return err
 	}
+	if err := writeProviderDatasetCounter(
+		writer, "dev_health_provider_rate_limit_episode_restart_total",
+		"Rate-limit deferral episodes restarted because the unit's chunk checkpoint moved since its last rate-limit deferral, by bounded provider and dataset (CHAOS-14252).",
+		m.rateLimitEpisodeRestart,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetCounter(
+		writer, "dev_health_provider_gitlab_tests_window_start_fallback_total",
+		"GitLab tests/cicd walks whose window start used our clock because the project read had no usable Date header, by bounded provider and dataset (CHAOS-14415).",
+		m.gitlabTestsWindowStartFallback,
+	); err != nil {
+		return err
+	}
 	if err := writeProviderDatasetReasonCounter(
 		writer, "dev_health_provider_unit_deferred_total",
 		"Provider-unit attempts that ended in an attempt-neutral deferral (River snooze), by bounded provider, dataset, and reason (CHAOS-7434).",
@@ -1991,6 +2054,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_github_tree_walk_near_ceiling_total",
 		"GitHub tree walks that passed half of a ceiling, by the ceiling (CHAOS-8829).",
 		"limit", m.treeWalkNearCeiling,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_github_tests_cursor_cut_list_dropped_total",
+		"Chunk cursor emissions that dropped a cut list to fit the cursor byte budget, by the dropped list (CHAOS-14315).",
+		"list", m.cursorCutListDropped,
 	); err != nil {
 		return err
 	}

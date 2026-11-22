@@ -3,6 +3,7 @@ package explain
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,19 +31,6 @@ var dedupNaturalKeys = map[string][]string{
 	"work_item_metrics_daily":         {"day", "provider", "work_scope_id", "team_id", "row_view"},
 	"deploy_metrics_daily":            {"day", "repo_id"},
 	changefailure.Table:               {"day", "repo_id"},
-}
-
-// nullableMetricColumns names every metricConfigs column that is
-// Nullable(Float64) in its own table's CREATE TABLE (001_metrics_v2.sql):
-// work_item_metrics_daily.cycle_time_p50_hours and
-// repo_metrics_daily.pr_first_review_p50_hours. The other six columns
-// metricConfigs reaches are all non-nullable (UInt32 or a bare Float64,
-// confirmed against the same migration), so a plain argMax is correct
-// for them.
-var nullableMetricColumns = map[string]bool{
-	"cycle_time_p50_hours":      true,
-	"pr_first_review_p50_hours": true,
-	"revert_rate":               true,
 }
 
 // sourceColumns are the columns metricFromClause deduplicates for a metric:
@@ -92,27 +80,6 @@ func aggregateSQL(aggregator, column, shareSQL string) (value, known string) {
 // other side holds one). Dropping in SQL, before the LIMIT, keeps a no-data
 // group from taking one of the few places.
 
-// metricValueProjection applies the class ruling (b) dedup fix for a
-// Nullable metric column: `argMax(col, version)` on a Nullable column can
-// return a STALE non-null version instead of the row with the true
-// maximal version, if that latest version's own value happens to be
-// NULL -- argMax's candidate selection skips a NULL `arg`, it does not
-// track "the value at the max version" the way a non-nullable column
-// does. The fix is `(argMax(tuple(col), version)).1`: wrapping the
-// Nullable column in a tuple makes argMax compare candidates by
-// (value IS NOT NULL, value) tuples instead, so the TRUE latest version
-// always wins, NULL included. Python's own reader
-// (api/queries/metrics.py's _metric_from_clause) is NOT a correct
-// exemplar here (bare argMax on a Nullable column) -- this is a
-// declared, required divergence under the class ruling, not a
-// data-semantics choice.
-func metricValueProjection(column string) string {
-	if nullableMetricColumns[column] {
-		return fmt.Sprintf("(argMax(tuple(%s), computed_at)).1 AS %s", column, column)
-	}
-	return fmt.Sprintf("argMax(%s, computed_at) AS %s", column, column)
-}
-
 // metricFromClause ports _metric_from_clause (api/queries/metrics.py:
 // 61-104), restricted to the dedup branch: every table metricConfigs
 // names IS in dedupNaturalKeys (see that map's own doc comment), so
@@ -124,47 +91,78 @@ func metricValueProjection(column string) string {
 // WHERE, before the GROUP BY that collapses to one row per natural key --
 // never a filter applied after a cross-tenant scan.
 //
-// DEDUP + class ruling (b): the value projection is
-// metricValueProjection's own argMax/tuple-argMax choice, never a bare
-// argMax on a Nullable column (see that function's own doc comment).
+// DEDUP + class ruling (b): newestVersionSource picks one version per key
+// with a tuple argMax, so a Nullable column keeps the picked version's NULL.
 //
 // startParam/endParam name the bound query params so one function serves
 // both the current window (start_day/end_day) and the comparison window
 // (compare_start/compare_end), matching Python's own start_param/
 // end_param default-override parameters.
-func metricFromClause(table, column, scopeFilterSQL, startParam, endParam string) string {
+//
+// oneTeam is a read for exactly one team: a table with team rows is then read
+// through the served team view (CHAOS-14379), one row per key, and the
+// argMax/GROUP BY below runs over that row.
+func metricFromClause(table, column, scopeFilterSQL, startParam, endParam string, oneTeam bool) string {
 	keys := dedupNaturalKeys[table]
-	if rowview.Has(table) {
+	source, teamView := "", false
+	if oneTeam {
+		source, teamView = teamViewSource(table, fmt.Sprintf("day >= {%s:Date} AND day < {%s:Date}%s", startParam, endParam, scopeFilterSQL))
+	}
+	if !teamView {
+		source = table
+	}
+	if !teamView && rowview.Has(table) {
 		// Each item once in the organization (CHAOS-8863): legacy rows and the org view. row_view is in the natural
 		// key, so a legacy retraction row never merges with an org row under argMax.
 		scopeFilterSQL += "\n      AND " + rowview.OrgPredicate(table, "")
 	}
-	keyColumns := strings.Join(keys, ",\n        ")
-	projections := make([]string, 0, 2)
-	for _, source := range sourceColumns(table, column) {
-		projections = append(projections, metricValueProjection(source))
-	}
-	return fmt.Sprintf(`(
-    SELECT
-        %s,
-        %s
-    FROM %s
-    WHERE day >= {%s:Date} AND day < {%s:Date}
-    %s
-      AND org_id = {org_id:String}
-    GROUP BY %s%s
-)`, keyColumns, strings.Join(projections, ",\n        "), table, startParam, endParam, scopeFilterSQL, keyColumns, liveRowHaving(table))
+	return newestVersionSource(table, sourceColumns(table, column), source, fmt.Sprintf(`WHERE day >= {%s:Date} AND day < {%s:Date}
+    %s`, startParam, endParam, scopeFilterSQL), "GROUP BY "+strings.Join(keys, ", "))
 }
 
-// liveRowHaving keeps a key of a team-keyed daily table only when its newest
-// row is a measurement (see package liverow). A retraction row is the newest
-// row of a key the compute no longer produces: it is not a sample of an
-// average, and its team is not a contributor or a driver.
-func liveRowHaving(table string) string {
-	if !liverow.Registered(table) {
-		return ""
+// newestVersionSource is one row per key of table: ONE version picked by rowview.VersionOrder (the newest computed_at,
+// then the hash of the measures, so a computed_at tie serves one version whatever the insert order), with the source
+// columns and the live-row columns of that version. A Nullable column keeps the picked version's NULL (a tuple is never
+// NULL). The live-row rule is read from the picked row: a key whose picked version is a retraction row leaves the
+// result, so it is not a sample of an average, a contributor or a driver.
+// where is the reader's filter (a WHERE clause); the organization predicate is added here. groupBy is the GROUP BY
+// clause of the key.
+func newestVersionSource(table string, valueColumns []string, source, where, groupBy string) string {
+	key := strings.TrimPrefix(groupBy, "GROUP BY ")
+	columns := append([]string(nil), valueColumns...)
+	live := ""
+	if liverow.Registered(table) {
+		for _, column := range liverow.Columns(table) {
+			if !slices.Contains(columns, column) {
+				columns = append(columns, column)
+			}
+		}
+		live = "\n    WHERE " + liverow.Predicate(table, "newest")
 	}
-	return "\n    HAVING " + liverow.NewestPredicate(table, "")
+	return fmt.Sprintf(`(
+    SELECT * FROM (
+        SELECT
+            %s,
+            %s
+        FROM %s
+        %s
+          AND org_id = {org_id:String}
+        %s
+    ) AS newest%s
+)`, strings.ReplaceAll(key, ", ", ",\n            "), rowview.VersionPick(table, columns), source, where, groupBy, live)
+}
+
+// teamViewSource is the served team view of a table with team rows (CHAOS-14379), aliased as the table: one row per
+// key, the newest row of each view of the key, a live row first, then team, org, legacy (rowview.ServedTeamSource). ok
+// is false for a table without team rows. Each call names its table as a literal, so a census reads the table.
+func teamViewSource(table, where string) (source string, ok bool) {
+	switch table {
+	case "work_item_metrics_daily":
+		return rowview.ServedTeamSource("work_item_metrics_daily", where, rowview.WorkItemMetricsNewestOrder) + " AS work_item_metrics_daily", true
+	case "work_item_state_durations_daily":
+		return rowview.ServedTeamSource("work_item_state_durations_daily", where, rowview.StateDurationsNewestOrder) + " AS work_item_state_durations_daily", true
+	}
+	return "", false
 }
 
 // fetchMetricValue ports fetch_metric_value (api/queries/metrics.py:
@@ -174,12 +172,12 @@ func liveRowHaving(table string) string {
 // two-layer None-then-NaN/Inf handling (fetch_metric_value's inner
 // `float(value or 0.0)`, then build_explain_response's own outer
 // safe_float call).
-func (reader *Reader) fetchMetricValue(ctx context.Context, table, column, aggregator string, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID, shareSQL string) (float64, bool, error) {
+func (reader *Reader) fetchMetricValue(ctx context.Context, table, column, aggregator string, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID, shareSQL string, oneTeam bool) (float64, bool, error) {
 	if reader == nil || reader.client == nil {
 		return 0, false, ErrUnavailable
 	}
 
-	fromClause := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day")
+	fromClause := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day", oneTeam)
 	// toFloat64(...) around the outer aggregator: a
 	// sum-aggregator metric over an integer column (deploy_freq's
 	// deployments_count, churn's total_loc_touched) makes ClickHouse's
@@ -244,7 +242,7 @@ func (reader *Reader) fetchChangeFailureView(ctx context.Context, startDay, endD
 SELECT %s
 FROM %s
 %s
-`, changefailure.ViewSumsSQL, metricFromClause(changefailure.Table, "change_failure_rate", scopeFilterSQL, "start_day", "end_day"), settingsMaxExecutionTime())
+`, changefailure.ViewSumsSQL, metricFromClause(changefailure.Table, "change_failure_rate", scopeFilterSQL, "start_day", "end_day", false), settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},
 		{Name: "end_day", Value: dateBindingValue(endDay)},
@@ -296,13 +294,13 @@ type metricRow struct {
 // metric's ranking there silently averages a quantity its own headline
 // and label present as a total. This is a declared, required divergence,
 // not a data-semantics choice.
-func (reader *Reader) fetchMetricContributors(ctx context.Context, table, column, groupBy, aggregator string, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID, shareSQL string) ([]metricRow, error) {
+func (reader *Reader) fetchMetricContributors(ctx context.Context, table, column, groupBy, aggregator string, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID, shareSQL string, oneTeam bool) ([]metricRow, error) {
 	if reader == nil || reader.client == nil {
 		return nil, ErrUnavailable
 	}
 	const limit = 6
 
-	fromClause := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day")
+	fromClause := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day", oneTeam)
 	// toFloat64(...) around the outer aggregator: same fix as
 	// fetchMetricValue's own doc comment -- a sum-aggregated integer
 	// column returns UInt64, which this binary's native driver refuses to
@@ -361,14 +359,14 @@ LIMIT {limit_n:UInt64}
 // in would change which branch the CASE takes for a NULL current/previous
 // pairing (see this package's own PR RISK-NOTES for the worked example
 // this avoids).
-func (reader *Reader) fetchMetricDriverDelta(ctx context.Context, table, column, groupBy, aggregator string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID, shareSQL string) ([]metricRow, error) {
+func (reader *Reader) fetchMetricDriverDelta(ctx context.Context, table, column, groupBy, aggregator string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID, shareSQL string, oneTeam bool) ([]metricRow, error) {
 	if reader == nil || reader.client == nil {
 		return nil, ErrUnavailable
 	}
 	const limit = 3
 
-	currentFrom := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day")
-	previousFrom := metricFromClause(table, column, scopeFilterSQL, "compare_start", "compare_end")
+	currentFrom := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day", oneTeam)
+	previousFrom := metricFromClause(table, column, scopeFilterSQL, "compare_start", "compare_end", oneTeam)
 	valueSQL, _ := aggregateSQL(aggregator, column, shareSQL)
 	// current/previous were a `WITH current AS (...), previous AS (...)`
 	// CTE pair until this fix: dev-health-go's client-side read-only

@@ -1,0 +1,4 @@
+kind: ConfigMap
+metadata: {name: cm}
+data:
+  .nan: SNTNANA1Z

@@ -98,8 +98,9 @@ func TestHeldBackPassesArmOneWakeRowForTheOlderRun(t *testing.T) {
 }
 
 // TestOlderRunsInBucketReadUsesTheActiveRunIndex (CHAOS-8880): the older-run read runs once per bucket per dispatch
-// pass, under the bucket lock. It must not read the org's finished history: 3,000 finished runs with 10 units each,
-// one open run deciding, and no Seq Scan on sync_runs or sync_run_units.
+// pass, under the bucket lock. It must not read the org's finished history: 3,000 finished runs with 10 units each and a
+// pending dispatch row each (CHAOS-14394), one open run deciding, and no Seq Scan on sync_runs, sync_run_units or
+// sync_dispatch_outbox.
 func TestOlderRunsInBucketReadUsesTheActiveRunIndex(t *testing.T) {
 	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		now := pgNow()
@@ -119,6 +120,9 @@ func TestOlderRunsInBucketReadUsesTheActiveRunIndex(t *testing.T) {
 			if _, err := pool.Exec(ctx, statement, guardTestOrg, guardTestRun); err != nil {
 				t.Fatalf("seed history: %v", err)
 			}
+		}
+		if _, err := pool.Exec(ctx, historyOutboxSQL, guardTestOrg); err != nil {
+			t.Fatalf("seed history outbox: %v", err)
 		}
 		if _, err := pool.Exec(ctx, `ANALYZE`); err != nil {
 			t.Fatal(err)
@@ -162,10 +166,16 @@ func TestOlderRunsInBucketReadUsesTheActiveRunIndex(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Logf("older runs in bucket read, 3000 finished runs x 10 units:\n%s", plan.String())
-		for _, table := range []string{"sync_runs", "sync_run_units"} {
+		for _, table := range []string{"sync_runs", "sync_run_units", "sync_dispatch_outbox"} {
 			if strings.Contains(plan.String(), "Seq Scan on "+table) {
 				t.Fatalf("the older-run read scans %s sequentially:\n%s", table, plan.String())
 			}
 		}
 	})
 }
+
+// historyOutboxSQL gives every finished run of the org a pending dispatch row (CHAOS-14394 plan cells).
+const historyOutboxSQL = `INSERT INTO public.sync_dispatch_outbox (id, org_id, sync_run_id, kind, status, available_at, attempts, created_at, updated_at)
+SELECT md5('history-outbox-14394-' || run.id::text)::uuid, run.org_id, run.id, 'dispatch_sync_run', 'pending',
+	run.created_at, 0, run.created_at, run.created_at
+FROM public.sync_runs AS run WHERE run.org_id = $1 AND run.status = 'success'`

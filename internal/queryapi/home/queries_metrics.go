@@ -9,8 +9,8 @@ package home
 import (
 	"context"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
+	"slices"
 	"strings"
 	"time"
 
@@ -27,12 +27,23 @@ func formatDay(t time.Time) string { return t.Format("2006-01-02") }
 // 61-104). startParam/endParam name the bound day-range params so the
 // same shape serves both the primary window (start_day/end_day) and the
 // driver-delta comparison window (compare_start/compare_end).
-func metricFromClause(table, column, scopeFilter, startParam, endParam string) string {
+//
+// oneTeam is a read for exactly one team (oneTeamScope): a table with team rows
+// is then read through the served team view (CHAOS-14379), one row per key, and
+// the argMax/GROUP BY below runs over that row.
+func metricFromClause(table, column, scopeFilter, startParam, endParam string, oneTeam bool) string {
 	naturalKey, dedup := dedupByComputedAt[table]
 	if !dedup {
 		return table
 	}
-	if rowview.Has(table) {
+	source, teamView := "", false
+	if oneTeam {
+		source, teamView = teamViewSource(table, fmt.Sprintf("day >= {%s:Date} AND day < {%s:Date}%s", startParam, endParam, scopeFilter))
+	}
+	if !teamView {
+		source = table
+	}
+	if !teamView && rowview.Has(table) {
 		// Each item once in the organization (CHAOS-8863): legacy rows and the org view. row_view is part of the
 		// natural key above, so a legacy retraction row never merges with an org row under argMax.
 		scopeFilter += "\n              AND " + rowview.OrgPredicate(table, "")
@@ -47,45 +58,56 @@ func metricFromClause(table, column, scopeFilter, startParam, endParam string) s
 		// as a stored ratio.
 		valueColumns = changefailure.CountColumns
 	}
-	var valueProjections []string
 	if isPRRework(table, column) {
-		// The rework ratio is computed from the day's counts, never read as a
-		// stored ratio. The counts are Nullable (a row written before they
-		// existed holds NULL), and argMax skips a NULL argument: it would take
-		// a count of an OLDER row of the day. The tuple keeps the NULL of the
-		// newest row, so all four counts come from one generation.
-		valueColumns = nil
-		for _, vc := range prrework.CountColumns {
-			valueProjections = append(valueProjections, fmt.Sprintf("tupleElement(argMax(tuple(%s), computed_at), 1) AS %s", vc, vc))
-		}
+		// The rework ratio is computed from the day's counts, never read as a stored ratio.
+		valueColumns = prrework.CountColumns
 	}
-	for _, vc := range valueColumns {
-		valueProjections = append(valueProjections, fmt.Sprintf("argMax(%s, computed_at) AS %s", vc, vc))
+	return newestVersionSource(table, valueColumns, source, fmt.Sprintf(`WHERE day >= {%s:Date} AND day < {%s:Date}
+            %s`, startParam, endParam, scopeFilter), "GROUP BY "+strings.Join(naturalKey, ", "))
+}
+
+// newestVersionSource is one row per key of table: ONE version picked by rowview.VersionOrder (the newest computed_at,
+// then the hash of the measures, so a computed_at tie serves one version whatever the insert order), with the value
+// columns and the live-row columns of that version. A Nullable column keeps the picked version's NULL. The live-row rule
+// is read from the picked row: a key whose picked version is a retraction row leaves the result.
+// where is the reader's filter (a WHERE clause); the organization predicate is added here. groupBy is the GROUP BY
+// clause of the key.
+func newestVersionSource(table string, valueColumns []string, source, where, groupBy string) string {
+	key := strings.TrimPrefix(groupBy, "GROUP BY ")
+	columns := append([]string(nil), valueColumns...)
+	live := ""
+	if liverow.Registered(table) {
+		for _, column := range liverow.Columns(table) {
+			if !slices.Contains(columns, column) {
+				columns = append(columns, column)
+			}
+		}
+		live = "\n        WHERE " + liverow.Predicate(table, "newest")
 	}
 	return fmt.Sprintf(`(
+        SELECT * FROM (
             SELECT
                 %s,
                 %s
             FROM %s
-            WHERE day >= {%s:Date} AND day < {%s:Date}
             %s
               AND org_id = {org_id:String}
-            GROUP BY %s%s
-        )`, strings.Join(naturalKey, ",\n                "), strings.Join(valueProjections, ",\n                "),
-		table, startParam, endParam, scopeFilter, strings.Join(naturalKey, ", "), liveRowHaving(table))
+            %s
+        ) AS newest%s
+    )`, strings.ReplaceAll(key, ", ", ",\n                "), rowview.VersionPick(table, columns), source, where, groupBy, live)
 }
 
-// liveRowHaving keeps a key of a team-keyed daily table only when its newest
-// row is a measurement (see package liverow). A retraction row is the newest
-// row of a key the compute no longer produces: it is not a sample of an
-// average, not a row of the has-data count and not a driver to name. Without
-// this, a bare argMax over a Nullable column also skips the NULL of the
-// retraction row and serves the older value it replaced.
-func liveRowHaving(table string) string {
-	if !liverow.Registered(table) {
-		return ""
+// teamViewSource is the served team view of a table with team rows (CHAOS-14379), aliased as the table: one row per
+// key, the newest row of each view of the key, a live row first, then team, org, legacy (rowview.ServedTeamSource). ok
+// is false for a table without team rows. Each call names its table as a literal, so a census reads the table.
+func teamViewSource(table, where string) (source string, ok bool) {
+	switch table {
+	case "work_item_metrics_daily":
+		return rowview.ServedTeamSource("work_item_metrics_daily", where, rowview.WorkItemMetricsNewestOrder) + " AS work_item_metrics_daily", true
+	case "work_item_state_durations_daily":
+		return rowview.ServedTeamSource("work_item_state_durations_daily", where, rowview.StateDurationsNewestOrder) + " AS work_item_state_durations_daily", true
 	}
-	return "\n            HAVING " + liverow.NewestPredicate(table, "")
+	return "", false
 }
 
 // metricValueExpression ports _metric_value_expression (api/queries/
@@ -134,11 +156,11 @@ type metricValue struct {
 
 // fetchMetricSeries ports fetch_metric_series (api/queries/metrics.py:
 // 107-152).
-func fetchMetricSeries(ctx context.Context, client QueryClient, table, column string, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, aggregator, orgID, shareSQL string) ([]dayValueRow, error) {
+func fetchMetricSeries(ctx context.Context, client QueryClient, table, column string, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, aggregator, orgID, shareSQL string, oneTeam bool) ([]dayValueRow, error) {
 	valueExpr := metricValueExpression(table, column, aggregator, shareSQL)
 	var query string
 	if _, dedup := dedupByComputedAt[table]; dedup {
-		fromClause := metricFromClause(table, column, scopeFilter, "start_day", "end_day")
+		fromClause := metricFromClause(table, column, scopeFilter, "start_day", "end_day", oneTeam)
 		query = fmt.Sprintf(`
         SELECT
             day,
@@ -194,11 +216,11 @@ func fetchMetricSeries(ctx context.Context, client QueryClient, table, column st
 
 // fetchMetricValue ports fetch_metric_value (api/queries/metrics.py:
 // 155-198).
-func fetchMetricValue(ctx context.Context, client QueryClient, table, column string, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, aggregator, orgID, shareSQL string) (metricValue, error) {
+func fetchMetricValue(ctx context.Context, client QueryClient, table, column string, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, aggregator, orgID, shareSQL string, oneTeam bool) (metricValue, error) {
 	valueExpr := metricValueExpression(table, column, aggregator, shareSQL)
 	var query string
 	if _, dedup := dedupByComputedAt[table]; dedup {
-		fromClause := metricFromClause(table, column, scopeFilter, "start_day", "end_day")
+		fromClause := metricFromClause(table, column, scopeFilter, "start_day", "end_day", oneTeam)
 		query = fmt.Sprintf(`
         SELECT
 			toInt64(count()) AS row_count,
@@ -253,7 +275,7 @@ func fetchChangeFailureView(ctx context.Context, client QueryClient, startDay, e
 	query := fmt.Sprintf(`
         SELECT %s
         FROM %s
-    `, changefailure.ViewSumsSQL, metricFromClause(changefailure.Table, "change_failure_rate", scopeFilter, "start_day", "end_day"))
+    `, changefailure.ViewSumsSQL, metricFromClause(changefailure.Table, "change_failure_rate", scopeFilter, "start_day", "end_day", false))
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
@@ -297,7 +319,7 @@ func fetchPRReworkView(ctx context.Context, client QueryClient, startDay, endDay
 	query := fmt.Sprintf(`
         SELECT %s
         FROM %s
-    `, prrework.ViewSumsSQL, metricFromClause(prrework.Table, prrework.DeprecatedRatioColumn, scopeFilter, "start_day", "end_day"))
+    `, prrework.ViewSumsSQL, metricFromClause(prrework.Table, prrework.DeprecatedRatioColumn, scopeFilter, "start_day", "end_day", false))
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
@@ -319,30 +341,25 @@ func fetchPRReworkView(ctx context.Context, client QueryClient, startDay, endDay
 
 // fetchBlockedHours ports fetch_blocked_hours (api/queries/metrics.py:
 // 207-248).
-func fetchBlockedHours(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string) (float64, []dayValueRow, bool, error) {
+//
+// oneTeam reads the served team view of the one team (CHAOS-14379), as
+// metricFromClause does.
+func fetchBlockedHours(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string, oneTeam bool) (float64, []dayValueRow, bool, error) {
+	source, view := "work_item_state_durations_daily", "\n              AND "+rowview.OrgPredicate("work_item_state_durations_daily", "")
+	if oneTeam {
+		source, view = rowview.ServedTeamSource("work_item_state_durations_daily",
+			"day >= {start_day:Date} AND day < {end_day:Date} AND status = 'blocked'"+scopeFilter, rowview.StateDurationsNewestOrder)+" AS work_item_state_durations_daily", ""
+	}
 	query := fmt.Sprintf(`
         SELECT
             day,
             sum(duration_hours) AS value
-        FROM (
-            SELECT
-                day,
-                provider,
-                work_scope_id,
-                team_id,
-                status,
-                argMax(duration_hours, computed_at) AS duration_hours
-            FROM work_item_state_durations_daily
-            WHERE day >= {start_day:Date} AND day < {end_day:Date}
-              AND status = 'blocked'
-            %s
-              AND org_id = {org_id:String}
-              AND %s
-            GROUP BY day, provider, work_scope_id, team_id, status, row_view%s
-        )
+        FROM %s
         GROUP BY day
         ORDER BY day
-    `, scopeFilter, rowview.OrgPredicate("work_item_state_durations_daily", ""), liveRowHaving("work_item_state_durations_daily"))
+    `, newestVersionSource("work_item_state_durations_daily", []string{"duration_hours"}, source, fmt.Sprintf(`WHERE day >= {start_day:Date} AND day < {end_day:Date}
+              AND status = 'blocked'
+            %s%s`, scopeFilter, view), "GROUP BY day, provider, work_scope_id, team_id, status, row_view"))
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
@@ -385,37 +402,38 @@ type driverRow struct {
 // `previous` CTEs are inlined as FROM subqueries instead, matching
 // internal/analytics/flowmatrix.go's own identical fix for the same
 // guard (see that file's flowMatrixTeamActivitySelect doc comment).
-func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, column, groupBy string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string, limit int) ([]driverRow, error) {
+//
+// The drivers take the value's own reducer and status filter (driverValueSQL, driverStatusFilter); fromZero is a value
+// that rose from a measured 0, whose drivers rank by the absolute rise (driverRank). shareSQL is the share weight of a
+// repository sum under a team scope (scopeShareForMetric), "" otherwise.
+func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, column, groupBy string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string, limit int, shareSQL string, fromZero bool) ([]driverRow, error) {
+	scopeFilter += driverStatusFilter(table, column)
 	currentFrom := driverDeltaSource(table, column, scopeFilter, "start_day", "end_day")
 	previousFrom := driverDeltaSource(table, column, scopeFilter, "compare_start", "compare_end")
-	if isPRRework(table, column) {
-		return fetchRateDriverDelta(ctx, client, prrework.WindowRateSQL, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
+	value, rate := driverValueSQL(table, column, shareSQL)
+	if rate {
+		return fetchRateDriverDelta(ctx, client, value, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit, fromZero)
 	}
-	if table == changefailure.Table {
-		return fetchRateDriverDelta(ctx, client, changefailure.WindowRateSQL, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
-	}
-	if isPipelineSuccess(table, column) {
-		return fetchRateDriverDelta(ctx, client, pipelineSuccessWindowRateSQL, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
-	}
+	rank, alias, where := driverRank(fromZero, driverSums(table, column), false)
 	query := fmt.Sprintf(`
         SELECT
             current.id AS id,
             current.value AS value,
-            %s AS delta_pct
+            %s AS %s
         FROM (
-            SELECT %s AS id, avg(%s) AS value
+            SELECT %s AS id, %s AS value
             FROM %s
             GROUP BY %s
         ) AS current
         LEFT JOIN (
-            SELECT %s AS id, avg(%s) AS value, toUInt8(1) AS present
+            SELECT %s AS id, %s AS value, toUInt8(1) AS present
             FROM %s
             GROUP BY %s
         ) AS previous ON current.id = previous.id
-        WHERE delta_pct IS NOT NULL
-        ORDER BY delta_pct DESC
+        WHERE %s
+        ORDER BY %s
         LIMIT {limit_n:UInt32}
-    `, deltarule.DriverPercentSQL("current.value", "previous.value", "previous.present"), groupBy, column, currentFrom, groupBy, groupBy, column, previousFrom, groupBy)
+    `, rank, alias, groupBy, value, currentFrom, groupBy, groupBy, value, previousFrom, groupBy, where, driverOrder(alias))
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
@@ -445,6 +463,12 @@ func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, colu
 	return out, rows.Err()
 }
 
+// driverOrder is the ORDER BY of the summary's driver read: the rank, then the one tie key of every driver read
+// (driverTieKey), so the summary and the caption name the same drivers in the same order.
+func driverOrder(alias string) string {
+	return alias + " DESC, " + driverTieKey
+}
+
 // fetchRateDriverDelta is fetchMetricDriverDelta for a rate that is a ratio
 // of summed counts (change failure rate, the pull request rework ratio):
 // each group's value is the window rate of its own summed counts (rateSQL),
@@ -453,12 +477,13 @@ func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, colu
 // without a delta: a group with no row in the comparison window, or with no
 // defined previous rate, is not named as the driver of a percent it has no
 // part in (deltarule.DriverPercentSQL).
-func fetchRateDriverDelta(ctx context.Context, client QueryClient, rateSQL, groupBy, currentFrom, previousFrom string, startDay, endDay, compareStart, compareEnd time.Time, scopeBindings []dhclickhouse.Binding, orgID string, limit int) ([]driverRow, error) {
+func fetchRateDriverDelta(ctx context.Context, client QueryClient, rateSQL, groupBy, currentFrom, previousFrom string, startDay, endDay, compareStart, compareEnd time.Time, scopeBindings []dhclickhouse.Binding, orgID string, limit int, fromZero bool) ([]driverRow, error) {
+	rank, alias, where := driverRank(fromZero, false, true)
 	query := fmt.Sprintf(`
         SELECT
             current.id AS id,
             assumeNotNull(current.value) AS value,
-            %s AS delta_pct
+            %s AS %s
         FROM (
             SELECT %s AS id, %s AS value
             FROM %s
@@ -469,10 +494,10 @@ func fetchRateDriverDelta(ctx context.Context, client QueryClient, rateSQL, grou
             FROM %s
             GROUP BY %s
         ) AS previous ON current.id = previous.id
-        WHERE current.value IS NOT NULL AND delta_pct IS NOT NULL
-        ORDER BY delta_pct DESC
+        WHERE %s
+        ORDER BY %s
         LIMIT {limit_n:UInt32}
-    `, deltarule.DriverPercentSQL("current.value", "previous.value", "previous.present"), groupBy, rateSQL, currentFrom, groupBy, groupBy, rateSQL, previousFrom, groupBy)
+    `, rank, alias, groupBy, rateSQL, currentFrom, groupBy, groupBy, rateSQL, previousFrom, groupBy, where, driverOrder(alias))
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},

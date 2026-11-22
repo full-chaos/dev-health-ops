@@ -106,6 +106,8 @@ func compileBreakdownOver(req BreakdownRequest, dimCol, orgID string, timeoutSec
 
 	owner := newTestopsOwner(orgID, req.Measure, []Dimension{req.Dimension}, useInvestment, filters)
 	dimCol = owner.column(req.Dimension, dimCol)
+	dimOut := keyProjection(req.Dimension, useInvestment, dimCol)
+	dimGroup := groupRef("dimension_value", dimOut, dimCol)
 
 	fc, err := translateFilters(orgID, filters, useInvestment, owner.filterColumns(req.Measure, useInvestment))
 	if err != nil {
@@ -162,11 +164,11 @@ FROM %s
 WHERE %s
   AND %s.org_id = {org_id:String}
 %s%s
-GROUP BY dimension_value
-ORDER BY value DESC, dimension_value ASC
+GROUP BY %s
+ORDER BY value DESC, %s ASC
 %s
 %s
-`, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, keyFilter, limitClause, statementSettings(source, timeoutSeconds))
+`, dimOut, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, keyFilter, dimGroup, dimGroup, limitClause, statementSettings(source, timeoutSeconds))
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
@@ -176,7 +178,11 @@ ORDER BY value DESC, dimension_value ASC
 	if req.Keys == nil {
 		bindings = append(bindings, clickhouse.Binding{Name: "top_n", Value: req.TopN})
 	} else {
-		bindings = append(bindings, clickhouse.Binding{Name: "breakdown_keys", Value: req.Keys})
+		keys := req.Keys
+		if dimOut != dimCol {
+			keys = storedTeamIDs(keys)
+		}
+		bindings = append(bindings, clickhouse.Binding{Name: "breakdown_keys", Value: keys})
 	}
 	bindings = append(bindings, fc.bindings...)
 	bindings = append(bindings, contextBindings...)
@@ -250,10 +256,14 @@ func executeBreakdownRaw(ctx context.Context, client QueryClient, q compiledQuer
 
 	var out []breakdownRow
 	for rows.Next() {
-		var dimValue string
+		var dimValueValue *string
 		var value *float64 // nullable scan destination -- see breakdownRow.Value's doc comment (CHAOS-4650)
-		if scanErr := rows.Scan(&dimValue, &value); scanErr != nil {
+		if scanErr := rows.Scan(&dimValueValue, &value); scanErr != nil {
 			return nil, fmt.Errorf("scan: %w", scanErr)
+		}
+		var dimValue string
+		if dimValueValue != nil {
+			dimValue = *dimValueValue
 		}
 		out = append(out, breakdownRow{DimensionValue: dimValue, Value: value})
 	}
@@ -264,6 +274,13 @@ func executeBreakdownRaw(ctx context.Context, client QueryClient, q compiledQuer
 }
 
 // ExecuteBreakdown runs the compiled query and returns a BreakdownResult.
+//
+// The REPO item keyed "" is the unassigned group: the work items with no
+// repository (a NULL repo_id on work_item_completion_daily), summed into ONE
+// item and counted in topN like any other. It is kept, not left out: the
+// breakdown has no other field that would show that share. A repository's
+// key is its UUID text, never "", so the group cannot merge with one; its
+// label is null, as the key is no repository to resolve.
 //
 // Every item carries the server-resolved label the client renders instead of
 // a raw id: for the repo and team dimensions the key is resolved to its

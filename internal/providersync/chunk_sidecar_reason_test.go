@@ -35,7 +35,7 @@ func TestStoredSidecarRefusalsNameTheirReason(t *testing.T) {
 		t.Run(c.reason, func(t *testing.T) {
 			claim := nativeTestClaim("github", "cicd")
 			store := NewInProcessChunkLedger(claim)
-			if _, err := store.PrepareChunk(ctx, claim, paddedChunk(t, 10), now); err != nil {
+			if _, err := store.PrepareChunk(ctx, claim, paddedChunk(t, 10), now, now); err != nil {
 				t.Fatal(err)
 			}
 			c.break_(store.chunks[0])
@@ -56,7 +56,7 @@ func TestPayloadBytesMismatchNamesBothNumbersAndNothingElse(t *testing.T) {
 	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 	claim := nativeTestClaim("github", "cicd")
 	store := NewInProcessChunkLedger(claim)
-	if _, err := store.PrepareChunk(ctx, claim, paddedChunk(t, 10), now); err != nil {
+	if _, err := store.PrepareChunk(ctx, claim, paddedChunk(t, 10), now, now); err != nil {
 		t.Fatal(err)
 	}
 	store.chunks[0].payloadBytes += 1

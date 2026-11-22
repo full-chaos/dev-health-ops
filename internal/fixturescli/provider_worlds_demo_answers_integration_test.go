@@ -996,8 +996,10 @@ func demoGitLabAnswers(build *demoBuild) []providerAnswer {
 			notFound.Status = 404
 			answers = append(answers, notFound)
 		}
+		// The chunked tests/cicd route lists order_by=id&sort=desc and fences each page on that order: newest id first,
+		// as GitLab answers it.
 		sort.SliceStable(pipelines, func(i, j int) bool {
-			return pipelines[i].(map[string]any)["updated_at"].(string) > pipelines[j].(map[string]any)["updated_at"].(string)
+			return pipelines[i].(map[string]any)["id"].(int) > pipelines[j].(map[string]any)["id"].(int)
 		})
 		answers = append(answers, get(gitlabHost, root+"/pipelines", "*", pipelines))
 		deployments := []any{}

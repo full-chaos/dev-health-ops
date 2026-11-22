@@ -58,6 +58,11 @@ var (
 		"POST /api/v1/auth/saml/{provider_id}/initiate":  AuthSAML,
 		"POST /api/v1/auth/saml/{provider_id}/acs":       AuthSAML,
 	}
+	wantOAuthPairProxyRoutes = map[string]AuthAggregate{
+		"POST /api/v1/auth/oauth/{provider_id}/authorize": AuthOIDC,
+		"GET /api/v1/auth/oauth/{provider_id}/authorize":  AuthOIDC,
+		"POST /api/v1/auth/oauth/{provider_id}/callback":  AuthOIDC,
+	}
 )
 
 func lookupFrom(env map[string]string) func(string) (string, bool) {
@@ -177,6 +182,18 @@ func TestAuthProxyRouteMapIsTheD1Map(t *testing.T) {
 			t.Errorf("route %s -> %q, want %q", key, routeProxyRoutes[key], aggregate)
 		}
 	}
+	if len(oauthPairProxyRoutes) != len(wantOAuthPairProxyRoutes) {
+		t.Fatalf("OAuth pair map size %d, want %d", len(oauthPairProxyRoutes), len(wantOAuthPairProxyRoutes))
+	}
+	for key, aggregate := range wantOAuthPairProxyRoutes {
+		if oauthPairProxyRoutes[key] != aggregate {
+			t.Errorf("OAuth pair route %s -> %q, want %q", key, oauthPairProxyRoutes[key], aggregate)
+		}
+		method, _, _ := strings.Cut(key, " ")
+		if wrapped, ok := oauthPairAggregate(method, oauthPairPattern); !ok || wrapped != aggregate {
+			t.Errorf("%s: the mounted pair %s %s carries no %s wrapper", key, method, oauthPairPattern, aggregate)
+		}
+	}
 	mounted := map[string]bool{}
 	for _, route := range proxyFixtureRoutes(t, AuthProxyConfig{}) {
 		mounted[route.Method+" "+route.Pattern] = true
@@ -184,6 +201,13 @@ func TestAuthProxyRouteMapIsTheD1Map(t *testing.T) {
 	for key := range wantSessionProxyRoutes {
 		if !mounted[key] {
 			t.Errorf("%s is mapped but not mounted", key)
+		}
+	}
+	for key := range wantOAuthPairProxyRoutes {
+		// The OAuth pair mounts one dispatcher pattern for its three routes.
+		method, _, _ := strings.Cut(key, " ")
+		if !mounted[method+" "+oauthPairPattern] {
+			t.Errorf("%s is mapped but the pair %s %s is not mounted", key, method, oauthPairPattern)
 		}
 	}
 	for key := range wantRouteProxyRoutes {
@@ -333,6 +357,9 @@ var proxyCalls = []proxyCall{
 	{http.MethodPost, "/api/v1/auth/social-login", `{"provider": "github", "access_token": "gho_x"}`, false, AuthSocial},
 	{http.MethodPost, "/api/v1/auth/oidc/p-1/authorize", `{}`, false, AuthOIDC},
 	{http.MethodPost, "/api/v1/auth/oidc/p-1/callback", `{"code": "c", "state": "s"}`, false, AuthOIDC},
+	{http.MethodPost, "/api/v1/auth/oauth/p-1/authorize", `{}`, false, AuthOIDC},
+	{http.MethodPost, "/api/v1/auth/oauth/p-1/callback", `{"code": "c", "state": "s"}`, false, AuthOIDC},
+	{http.MethodGet, "/api/v1/auth/oauth/github/authorize?org_id=3a6f0c52-9b0e-4d7a-8f3b-2c1d5e6f7a8b", "", false, AuthOIDC},
 	{http.MethodGet, "/api/v1/auth/saml/p-1/metadata", "", false, AuthSAML},
 	{http.MethodPost, "/api/v1/auth/saml/p-1/initiate", `{"relay_state": "/x"}`, false, AuthSAML},
 	{http.MethodPost, "/api/v1/auth/saml/p-1/acs", `{"SAMLResponse": "PHNhbWw+", "RelayState": "r"}`, false, AuthSAML},
@@ -464,8 +491,8 @@ func TestAuthProxyLeavesUnmappedAuthRoutesInGoAPI(t *testing.T) {
 		{method: http.MethodGet, target: "/api/v1/auth/onboarding/state", bearer: true},
 		{method: http.MethodGet, target: "/api/v1/auth/sso/providers", bearer: true},
 		{method: http.MethodPost, target: "/api/v1/auth/oauth/providers", body: `{}`, bearer: true},
-		{method: http.MethodPost, target: "/api/v1/auth/oauth/p-1/authorize", body: `{}`},
-		{method: http.MethodGet, target: "/api/v1/auth/oauth/github/authorize"},
+		{method: http.MethodPut, target: "/api/v1/auth/oauth/p-1/authorize", body: `{}`},
+		{method: http.MethodPost, target: "/api/v1/auth/oauth/p-1/other", body: `{}`},
 	} {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, call.request(t))
@@ -1027,7 +1054,7 @@ func TestAuthCorpusAcpRoutesAreTheProxyMap(t *testing.T) {
 		listed[key] = AuthAggregate(fields[0])
 	}
 	want := map[string]AuthAggregate{}
-	for _, routes := range []map[string]AuthAggregate{sessionProxyRoutes, routeProxyRoutes} {
+	for _, routes := range []map[string]AuthAggregate{sessionProxyRoutes, routeProxyRoutes, oauthPairProxyRoutes} {
 		for key, aggregate := range routes {
 			want[key] = aggregate
 		}

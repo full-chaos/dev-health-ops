@@ -46,7 +46,11 @@ type QueryClient interface {
 // argMax then keeps only the LATEST window_end (as-of day) per
 // (org, team, rule), so a rule that later stops firing is superseded by
 // its own tombstone rather than lingering (CHAOS-2373). Final HAVING
-// keeps only currently-fired rules.
+// keeps only currently-fired rules. The inner pick takes ONE version: the
+// newest computed_at, then a hash of its values, so two runs that share a
+// computed_at serve one of them whatever the scan order; the Home
+// recommendation panel orders the same columns the same way. The outer pick
+// cannot tie: window_end is a GROUP BY key of the inner read.
 const recommendationsSQL = `
 SELECT
     team_id,
@@ -67,13 +71,22 @@ FROM (
         org_id,
         rule_id,
         window_end,
-        argMax(fired,               computed_at) AS latest_fired,
-        argMax(severity,            computed_at) AS latest_severity,
-        argMax(title,               computed_at) AS latest_title,
-        argMax(rationale,           computed_at) AS latest_rationale,
-        argMax(success_criterion,   computed_at) AS latest_success_criterion,
-        argMax(evidence_json,       computed_at) AS latest_evidence_json,
-        argMax(window_start,        computed_at) AS latest_window_start,
+        argMax(
+            tuple(recommendations_daily.fired, recommendations_daily.severity, recommendations_daily.title,
+                recommendations_daily.rationale, recommendations_daily.success_criterion,
+                recommendations_daily.evidence_json, recommendations_daily.window_start),
+            (recommendations_daily.computed_at, cityHash64(tuple(
+                recommendations_daily.fired, recommendations_daily.severity, recommendations_daily.title,
+                recommendations_daily.rationale, recommendations_daily.success_criterion,
+                recommendations_daily.evidence_json, recommendations_daily.window_start)))
+        ) AS picked,
+        picked.1 AS latest_fired,
+        picked.2 AS latest_severity,
+        picked.3 AS latest_title,
+        picked.4 AS latest_rationale,
+        picked.5 AS latest_success_criterion,
+        picked.6 AS latest_evidence_json,
+        picked.7 AS latest_window_start,
         max(computed_at)                         AS latest_computed_at
     FROM recommendations_daily
     WHERE team_id  = {team_id:String}

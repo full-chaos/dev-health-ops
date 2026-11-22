@@ -246,7 +246,8 @@ func TestRealClickHouse_TeamBreakout(t *testing.T) {
 	// t9 holds a stored row and no team row: it is not a team (an id that only
 	// survives in stored rows), so a breakout with no team named does not
 	// list it. The breakout that names it, below, still gets its row.
-	if fmt.Sprint(ids(all.Rows)) != "[t1]" || all.Rows[0].ScopeLabel != "Platform" || all.Rows[0].Scope != model.CompoundingRiskScopeTeam {
+	// rA has a repository row and no owner, so the no-team row is listed beside t1.
+	if fmt.Sprint(ids(all.Rows)) != "[t1 unassigned]" || all.Rows[0].ScopeLabel != "Platform" || all.Rows[0].Scope != model.CompoundingRiskScopeTeam {
 		t.Fatalf("stored rows %#v", all.Rows)
 	}
 	one, _ := Resolve(ctx, client, "org-1", teamIn("t9"), now)
@@ -314,14 +315,17 @@ func TestRealClickHouse_SameIDsInTwoOrgs(t *testing.T) {
 			t.Errorf("%s repo rows %#v", c.org, got.Rows)
 		}
 	}
+	// org-1 owns no repository (ownership of the shared repo id is org-2's), so
+	// its repository row is listed under the no-team value beside the team row.
 	for _, c := range []struct {
 		org, label, score string
-	}{{"org-1", "Platform", "0.3"}, {"org-2", "Second", "0.9"}} {
+		rows              int
+	}{{"org-1", "Platform", "0.3", 2}, {"org-2", "Second", "0.9", 1}} {
 		got, err := Resolve(ctx, client, c.org, &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TrendDays: 30}, now)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(got.Rows) != 1 || got.Rows[0].ScopeLabel != c.label || fmt.Sprint(*got.Rows[0].Score) != c.score {
+		if len(got.Rows) != c.rows || got.Rows[0].ScopeLabel != c.label || fmt.Sprint(*got.Rows[0].Score) != c.score {
 			t.Errorf("%s team rows %#v", c.org, got.Rows)
 		}
 	}
@@ -423,7 +427,18 @@ func TestRealClickHouse_TrendOverOwnedRepositoriesForASuppliedTeam(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(got.Rows) != 1 || got.Rows[0].ScopeID != "t1" || *got.Rows[0].Score != 0.5 {
+		// rB is unowned: with no team named the no-team row is listed beside t1.
+		want := 1
+		if len(teamIDs) == 0 {
+			want = 2
+		}
+		var t1 *float64
+		for _, r := range got.Rows {
+			if r.ScopeID == "t1" {
+				t1 = r.Score
+			}
+		}
+		if len(got.Rows) != want || t1 == nil || *t1 != 0.5 {
 			t.Fatalf("stored team row %#v", got.Rows)
 		}
 		out := map[string]float64{}
@@ -440,6 +455,38 @@ func TestRealClickHouse_TrendOverOwnedRepositoriesForASuppliedTeam(t *testing.T)
 	all := trendOf(nil)
 	if len(all) != 2 || !within(all[day(now, 1).Format("2006-01-02")], 0.5) || !within(all[day(now, 2).Format("2006-01-02")], 0.5) {
 		t.Errorf("trend without a team filter is over every repository: %v", all)
+	}
+}
+
+// A team's repositories come from team_repo_ownership only, never from
+// teams.repo_patterns (a manual mapping, D7013b): a team that has only patterns
+// answers no row, and an ownership row is what makes it answer.
+func TestRealClickHouse_PatternsOnlyTeamAnswersNoRow(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	repo(t, ctx, conn, "org-1", rA, "acme/web")
+	exec(t, ctx, conn, `INSERT INTO teams (id, name, org_id, repo_patterns, updated_at) VALUES ('p1', 'Patterns', 'org-1', ['acme/*', 'acme/web'], now64(6))`)
+	put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rA, day: day(now, 1), score: "0.5", sev: "elevated"})
+	teamRows := func(teamIDs []string) []model.CompoundingRiskPoint {
+		t.Helper()
+		got, err := Resolve(ctx, client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TeamIds: teamIDs, TrendDays: 30}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.Rows
+	}
+	if rows := teamRows([]string{"p1"}); len(rows) != 0 {
+		t.Fatalf("a team with only repo_patterns answered %#v, want no row", rows)
+	}
+	for _, r := range teamRows(nil) {
+		if r.ScopeID == "p1" {
+			t.Fatalf("the team breakout with no team named answered a row for the patterns-only team: %#v", r)
+		}
+	}
+	own(t, ctx, conn, "org-1", "p1", rA, "acme/web")
+	rows := teamRows([]string{"p1"})
+	if len(rows) != 1 || rows[0].ScopeID != "p1" || rows[0].Score == nil || *rows[0].Score != 0.5 {
+		t.Fatalf("with an ownership row the team answered %#v, want one row for p1 with score 0.5", rows)
 	}
 }
 

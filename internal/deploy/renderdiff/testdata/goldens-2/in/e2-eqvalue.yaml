@@ -1,0 +1,4 @@
+kind: ConfigMap
+metadata: {name: eq}
+data:
+  x: =

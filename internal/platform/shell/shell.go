@@ -402,6 +402,7 @@ func Execute(
 	if err != nil {
 		logger.Warn("register OTel instruments on the operator /metrics", "error", err)
 	}
+	config.ObserveNonNativeClickHouse(parent, logger, cfg)
 	operatorHTTP, err := health.NewServer(health.ServerOptions{
 		Address:  cfg.HTTPAddress,
 		Registry: registry,
@@ -467,6 +468,7 @@ func Execute(
 		Components:      components,
 	})
 	if err != nil {
+		lifecycle.ReleaseAll(components)
 		logger.ErrorContext(ctx, "construct runtime", "error", err)
 		return 1
 	}

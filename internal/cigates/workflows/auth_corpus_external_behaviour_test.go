@@ -408,7 +408,7 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 	}{
 		"nothing served": {wantError: "required aggregate sessions is not served by auth-service", wantProbes: []string{
 			"probe sessions: not served (4 routes)", "probe local_login: not served (1 routes)", "probe credentials: not served (6 routes)",
-			"probe social: not served (1 routes)", "probe oidc: not served (2 routes)", "probe saml: not served (3 routes)"}},
+			"probe social: not served (1 routes)", "probe oidc: not served (5 routes)", "probe saml: not served (3 routes)"}},
 		"login without sessions": {served: "/api/v1/auth/login", wantError: "required aggregate sessions is not served by auth-service",
 			wantProbes: []string{"probe sessions: not served (4 routes)", "probe local_login: served (1 routes)"}},
 		"sessions only": {served: sessions, wantError: "required aggregate local_login is not served by auth-service"},
@@ -418,14 +418,19 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 			wantError: "aggregate social is not served by auth-service, which owns the users"},
 		"the owned set": {served: ownedServed, metrics: ownedMetrics, wantGoAPI: ownedFlags,
 			wantForwards: "leg acp forwards: sessions local_login credentials social\n"},
-		"the owned set and oidc": {served: ownedServed + ",/api/v1/auth/oidc/p-probe/authorize,/api/v1/auth/oidc/p-probe/callback",
+		"the owned set and oidc": {served: ownedServed + "," + oidcServed,
 			metrics: ownedMetrics + "\n" + forwarded("oidc"), wantGoAPI: "sessions=true local_login=true credentials=true social=true oidc=true saml=",
 			wantForwards: "leg acp forwards: sessions local_login credentials social oidc\n"},
 		"half an aggregate": {served: "/api/v1/auth/refresh", wantError: "auth-service serves 1 of the 4 routes of aggregate sessions",
 			wantProbes: []string{"probe sessions: partial (1 of 4 routes served)"}},
 		"half a non-session aggregate": {served: sessions + ",/api/v1/auth/oidc/p-probe/authorize",
-			wantError:  "auth-service serves 1 of the 2 routes of aggregate oidc",
-			wantProbes: []string{"probe sessions: served (4 routes)", "probe oidc: partial (1 of 2 routes served)"}},
+			wantError:  "auth-service serves 1 of the 5 routes of aggregate oidc",
+			wantProbes: []string{"probe sessions: served (4 routes)", "probe oidc: partial (1 of 5 routes served)"}},
+		// The OAuth pair rides the oidc aggregate (internal/apiservice authproxy.go oauthPairProxyRoutes): the OIDC routes
+		// alone, without the OAuth pair, are a partial mount.
+		"oidc without the OAuth pair": {served: ownedServed + ",/api/v1/auth/oidc/p-probe/authorize,/api/v1/auth/oidc/p-probe/callback",
+			wantError:  "auth-service serves 2 of the 5 routes of aggregate oidc",
+			wantProbes: []string{"probe oidc: partial (2 of 5 routes served)"}},
 		"half a non-session aggregate without sessions": {served: "/api/v1/auth/saml/p-probe/metadata",
 			wantError: "auth-service serves 1 of the 3 routes of aggregate saml"},
 		"served but not forwarded": {served: ownedServed, wantGoAPI: ownedFlags, wantError: "no forwarded request for aggregate sessions"},
@@ -600,6 +605,11 @@ const requiredServed = "/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/va
 // ownedServed is what auth-service serves with users owned and the session keys set: the required aggregates, social
 // and credentials (CHAOS-13356: every run of leg acp). ownedMetrics is go-api forwarding all four.
 const ownedServed = requiredServed + "," + credentialsRoutes
+
+// oidcServed is every path of the oidc aggregate (ci/auth_corpus_acp_routes.tsv): the 2 OIDC routes and the OAuth
+// pair, whose POST and GET authorize share one path.
+const oidcServed = "/api/v1/auth/oidc/p-probe/authorize,/api/v1/auth/oidc/p-probe/callback," +
+	"/api/v1/auth/oauth/p-probe/authorize,/api/v1/auth/oauth/p-probe/callback"
 
 var ownedMetrics = metric("sessions") + "\n" + metric("local_login") + "\n" + metric("credentials") + "\n" + metric("social")
 

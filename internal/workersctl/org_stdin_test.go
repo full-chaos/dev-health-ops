@@ -27,6 +27,7 @@ func orgStdinVerbs() map[string][]string {
 		"providersync carry-team-ids":              {"providersync", "carry-team-ids"},
 		"providersync compact-ownership-intervals": {"providersync", "compact-ownership-intervals", "--apply", "--workers-paused"},
 		"providersync drain-removed-dependencies":  {"providersync", "drain-removed-dependencies", "--apply", "--workers-paused"},
+		"sync-runs cancel":                         {"sync-runs", "cancel", "--run", "0b1f3b0a-6d0c-4f5e-9a55-1c2d3e4f5a6b"},
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 	"github.com/google/uuid"
 )
@@ -105,10 +106,12 @@ type teamMetricsCognitiveLoadInput struct {
 // The fix: find max(computed_at) per repo_id FIRST (across every team_id that
 // repo has ever been under), then sum only the row(s) sharing that exact
 // timestamp. team_metrics_daily's own team_id is still never read for
-// resolution (CHAOS-4396 -- team resolution is repo_to_team's job), so it
-// does not appear in the SELECT at all; summing (not `any()`) across ties
-// matches Python's "same-generation splits are summed together" comment for
-// the rare case of two same-timestamp writes for one repo. A legacy row
+// resolution (CHAOS-4396 -- team resolution is repo_to_team's job); it only
+// keys the pick. Inside that generation each (team_id, repo_id) key is read as
+// ONE whole version (teamkeytables.TeamMetricsDailyNewestOrder, the order the
+// served page reads by), so two versions of one key that share computed_at are
+// not summed; the rows of different team ids are summed, matching Python's
+// "same-generation splits are summed together" comment. A legacy row
 // (repo_id = ”, pre-migration-080) is EXCLUDED here: it can never resolve to
 // a repo_id, so it can never be ownership-attributed to a team by this
 // executor -- the SAME skip build_team_cognitive_load_rows_for_day's own
@@ -122,15 +125,24 @@ SELECT
 	sum(t.after_hours_commits_count) AS after_hours_commits_count,
 	sum(t.weekend_commits_count) AS weekend_commits_count,
 	sum(t.commits_count) AS commits_count
-FROM team_metrics_daily AS t
-INNER JOIN (
-	SELECT repo_id, max(computed_at) AS latest_computed_at
+FROM (
+	SELECT
+		team_metrics_daily.repo_id AS repo_id,
+		argMax(`+teamkeytables.TeamMetricsDailyPick+`, `+teamkeytables.TeamMetricsDailyNewestOrder+`) AS picked,
+		picked.1 AS commits_count,
+		picked.2 AS after_hours_commits_count,
+		picked.3 AS weekend_commits_count
 	FROM team_metrics_daily
-	WHERE org_id = ? AND day = ? AND repo_id != ''
-	GROUP BY repo_id
-) AS latest_gen
-	ON t.repo_id = latest_gen.repo_id AND t.computed_at = latest_gen.latest_computed_at
-WHERE t.org_id = ? AND t.day = ? AND t.repo_id != ''
+	INNER JOIN (
+		SELECT repo_id, max(computed_at) AS latest_computed_at
+		FROM team_metrics_daily
+		WHERE org_id = ? AND day = ? AND repo_id != ''
+		GROUP BY repo_id
+	) AS latest_gen
+		ON team_metrics_daily.repo_id = latest_gen.repo_id AND team_metrics_daily.computed_at = latest_gen.latest_computed_at
+	WHERE team_metrics_daily.org_id = ? AND team_metrics_daily.day = ? AND team_metrics_daily.repo_id != ''
+	GROUP BY team_metrics_daily.team_id, team_metrics_daily.repo_id
+) AS t
 GROUP BY t.repo_id`,
 		organizationID, day, organizationID, day,
 	)

@@ -61,6 +61,9 @@ func newStageBehaviorPipeline(t *testing.T, config MutationPipelineConfig, behav
 		pipelineOrphanedUnitRepairFunc(func(ctx context.Context, _ time.Time, _ int) (OrphanedUnitRepairResult, error) {
 			return OrphanedUnitRepairResult{}, run(StageOrphanedUnitRepair, ctx)
 		}),
+		pipelineChunkSidecarReclaimFunc(func(ctx context.Context, _ time.Time, _ int) (ChunkSidecarReclaimResult, error) {
+			return ChunkSidecarReclaimResult{}, run(StageChunkSidecarReclaim, ctx)
+		}),
 		config,
 	)
 	if err != nil {
@@ -117,7 +120,7 @@ func jsonStageFailedLines(t *testing.T, pipeline *MutationPipeline) []string {
 	return lines
 }
 
-// TestStageFailedLinesStayByteEqualWhenNotBudget is the golden over all eight
+// TestStageFailedLinesStayByteEqualWhenNotBudget is the golden over all nine
 // stages: a failure that is not the stage's own budget deadline writes the
 // same line as before CHAOS-13743, byte for byte.
 func TestStageFailedLinesStayByteEqualWhenNotBudget(t *testing.T) {
@@ -131,7 +134,7 @@ func TestStageFailedLinesStayByteEqualWhenNotBudget(t *testing.T) {
 		{StageUnreclaimableSweep, sweepUnavailable(sweepStepBegin, serverPermissionDenied),
 			`{"level":"ERROR","msg":"syncreconciler.stage_failed","stage":"unreclaimable_sweep","budget_ms":600,"elapsed_ms":0,"sqlstate":"42501","error":"unreclaimable sweep begin domain transaction failed (sqlstate 42501): sync dispatch observer database unavailable","phase":"none","phases":""}`},
 		{StageTerminalDeliveryRepair, ErrUnavailable,
-			`{"level":"ERROR","msg":"syncreconciler.stage_failed","stage":"terminal_delivery_repair","budget_ms":750,"elapsed_ms":0,"sqlstate":"","error":"sync dispatch observer database unavailable","phase":"none","phases":""}`},
+			`{"level":"ERROR","msg":"syncreconciler.stage_failed","stage":"terminal_delivery_repair","budget_ms":1200,"elapsed_ms":0,"sqlstate":"","error":"sync dispatch observer database unavailable","phase":"none","phases":""}`},
 		{StageTerminalOutboxClose, terminalOutboxCloseUnavailable(terminalOutboxCloseStepBegin, serverPermissionDenied),
 			`{"level":"ERROR","msg":"syncreconciler.stage_failed","stage":"terminal_outbox_close","budget_ms":600,"elapsed_ms":0,"sqlstate":"42501","error":"terminal outbox close begin terminal-outbox-close transaction failed (sqlstate 42501): sync dispatch observer database unavailable","phase":"none","phases":""}`},
 		{StageOrphanedUnitRepair, ErrUnavailable,
@@ -140,6 +143,8 @@ func TestStageFailedLinesStayByteEqualWhenNotBudget(t *testing.T) {
 			`{"level":"ERROR","msg":"syncreconciler.stage_failed","stage":"materializer","budget_ms":600,"elapsed_ms":0,"sqlstate":"42501","error":"materializer dispatch materialization upsert of public.sync_dispatch_outbox failed (sqlstate 42501): sync dispatch observer database unavailable","phase":"none","phases":""}`},
 		{StageKernel, ErrUnavailable,
 			`{"level":"ERROR","msg":"syncreconciler.stage_failed","stage":"kernel","budget_ms":1000,"elapsed_ms":0,"sqlstate":"","error":"sync dispatch observer database unavailable","phase":"none","phases":""}`},
+		{StageChunkSidecarReclaim, ErrUnavailable,
+			`{"level":"ERROR","msg":"syncreconciler.stage_failed","stage":"chunk_sidecar_reclaim","budget_ms":1500,"elapsed_ms":0,"sqlstate":"","error":"sync dispatch observer database unavailable","phase":"none","phases":""}`},
 		{StageObserver, ErrUnavailable,
 			`{"level":"ERROR","msg":"syncreconciler.stage_failed","stage":"observer","budget_ms":400,"elapsed_ms":0,"sqlstate":"","error":"sync dispatch observer database unavailable","phase":"none","phases":""}`},
 	}
@@ -182,6 +187,7 @@ func TestStageBudgetSpentNamesTheBudgetForEveryStage(t *testing.T) {
 			return materializerUnavailable(materializerStepCommit, ctx.Err())
 		}, stageContextDeadlineLabel},
 		{StageKernel, func(context.Context) error { return ErrUnavailable }, ""},
+		{StageChunkSidecarReclaim, func(ctx context.Context) error { return reclaimError(ctx, ErrUnavailable) }, ""},
 		{StageObserver, func(ctx context.Context) error { return ctx.Err() }, ""},
 	}
 	if len(cases) != len(orderedStages) {

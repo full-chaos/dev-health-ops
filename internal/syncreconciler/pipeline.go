@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/dbphase"
@@ -160,6 +161,7 @@ type MutationPipeline struct {
 	sweep        UnreclaimableSweepStepper
 	outboxClose  TerminalOutboxCloseStepper
 	orphanedUnit OrphanedUnitRepairStepper
+	chunkReclaim ChunkSidecarReclaimStepper
 	config       MutationPipelineConfig
 
 	stages stageTelemetry
@@ -179,6 +181,49 @@ type MutationPipeline struct {
 	// one shared Go instance.
 	rollupBumps rollupBumpCounts
 	slowLog     stageSlowLog
+	// chunkReclaimLockSkipped counts reclaim ticks another session's tick
+	// lock skipped (sync_reconciler_chunk_sidecar_reclaim_lock_skipped_total).
+	chunkReclaimLockSkipped atomic.Uint64
+	// chunkReclaimActive is the reclaim's last result: it had work or a
+	// backlog. A yielded tick is logged only then, so an idle reclaimer stays
+	// silent.
+	chunkReclaimActive atomic.Bool
+	// chunkReclaimYieldStreak counts consecutive yielded ticks; at
+	// chunkReclaimYieldStreakCap the next pressured tick runs the reclaim
+	// once at its floor size and the streak starts again.
+	chunkReclaimYieldStreak atomic.Int64
+}
+
+// chunkReclaimYieldStreakCap keeps the CHAOS-14243 no-starvation guarantee
+// under a stage that is slow every tick: after 10 consecutive yields the
+// reclaim runs once at the floor size (CHAOS-14380).
+const chunkReclaimYieldStreakCap = 10
+
+// tickPressure names the first stage of this tick that used at least 3/4 of
+// its budget (stageIsSlow; a budget-spent failure is always one). The reclaim
+// yields such a tick: its deletes load the same server (CHAOS-14380).
+type tickPressure struct {
+	mu    sync.Mutex
+	stage StageName
+}
+
+type tickPressureKey struct{}
+
+func (pressure *tickPressure) observe(stage StageName, used, budget time.Duration) {
+	if !stageIsSlow(used, budget) {
+		return
+	}
+	pressure.mu.Lock()
+	defer pressure.mu.Unlock()
+	if pressure.stage == "" {
+		pressure.stage = stage
+	}
+}
+
+func (pressure *tickPressure) pressured() StageName {
+	pressure.mu.Lock()
+	defer pressure.mu.Unlock()
+	return pressure.stage
 }
 
 // rollupBumpCounts is this package's own minimal counter for
@@ -242,13 +287,15 @@ func NewMutationPipeline(
 	sweep UnreclaimableSweepStepper,
 	outboxClose TerminalOutboxCloseStepper,
 	orphanedUnit OrphanedUnitRepairStepper,
+	chunkReclaim ChunkSidecarReclaimStepper,
 	config MutationPipelineConfig,
 ) (*MutationPipeline, error) {
 	// outboxClose is REQUIRED, unlike sweep -- see TerminalOutboxCloseStepper's
 	// doc comment for why CHAOS-4583's closer carries no staged-rollout risk
 	// the way the sweep's terminalization did.
 	if repair == nil || terminal == nil || materializer == nil || kernel == nil ||
-		observer == nil || outboxClose == nil || orphanedUnit == nil || !config.valid() {
+		observer == nil || outboxClose == nil || orphanedUnit == nil ||
+		chunkSidecarReclaimMissing(chunkReclaim) || !config.valid() {
 		return nil, ErrInvalidConfiguration
 	}
 	pipeline := &MutationPipeline{
@@ -262,6 +309,7 @@ func NewMutationPipeline(
 		sweep:        sweep,
 		outboxClose:  outboxClose,
 		orphanedUnit: orphanedUnit,
+		chunkReclaim: chunkReclaim,
 		config:       config,
 		stages:       newStageTelemetry(),
 		runawayLog:   newRunawayLogState(),
@@ -323,7 +371,7 @@ var errStageDegraded = errors.New("syncreconciler: stage failed its last " +
 var errStepOverrun = errors.New("syncreconciler: stage has been running past its budget and margin")
 
 // runStage bounds one stage call to its own budget instead of letting it
-// share the whole tick's envelope with its seven siblings (CHAOS-4239), and
+// share the whole tick's envelope with its eight siblings (CHAOS-4239), and
 // records the outcome unconditionally: a stage that runs to completion inside
 // its budget still gets its duration recorded, so the gauge is never silently
 // empty for a healthy stage.
@@ -378,6 +426,15 @@ func (pipeline *MutationPipeline) runStage(
 	err := fn(stageCtx)
 	elapsed := time.Since(start)
 	pipeline.stages.recordDuration(stage, elapsed)
+	if pressure, ok := ctx.Value(tickPressureKey{}).(*tickPressure); ok {
+		// From the armed deadline, not from start: budget spent before fn
+		// ran (a setup stall on the telemetry mutex) is pressure too.
+		used := budget
+		if deadline, armed := stageCtx.Deadline(); armed {
+			used = budget - time.Until(deadline)
+		}
+		pressure.observe(stage, used, budget)
+	}
 	pipeline.stages.recordAcquireWaits(stage, trace.AcquireWaits())
 
 	if err == nil {
@@ -509,6 +566,8 @@ func (pipeline *MutationPipeline) Step(
 		return Observation{}, err
 	}
 	now = now.UTC()
+	pressure := &tickPressure{}
+	ctx = context.WithValue(ctx, tickPressureKey{}, pressure)
 
 	// ONE ACCOUNTING POINT FOR "THE REPORT DID NOT RUN", not one per return.
 	//
@@ -858,15 +917,14 @@ func (pipeline *MutationPipeline) Step(
 			orphaned, stepErr = pipeline.orphanedUnit.Step(stageCtx, now, limit)
 			return stepErr
 		})
-		if orphanedErr != nil && ctx.Err() != nil {
-			return recovered, orphanedErr
-		}
-		if orphanedErr == nil && orphaned.ReArmed > 0 {
+		if orphaned.ReArmed > 0 {
 			// WARN, not INFO: a replacement delivery means a unit was stranded
 			// behind a settled one, which is a defect somewhere upstream even
 			// though this pass just recovered from it. The repair's own
 			// per-pass line (syncreconciler.orphaned_unit_pass) carries the
-			// zeros; this one carries the events.
+			// zeros; this one carries the events. Logged before the outer
+			// return below: each re-arm commits on its own, so a pass the
+			// outer tick ends can already hold committed ones.
 			slog.Warn(
 				"syncreconciler.orphaned_units_rearmed",
 				"re_armed", orphaned.ReArmed,
@@ -874,6 +932,9 @@ func (pipeline *MutationPipeline) Step(
 				"delivery_completed", orphaned.DeliveryCompleted,
 				"found", orphaned.Found,
 			)
+		}
+		if orphanedErr != nil && ctx.Err() != nil {
+			return recovered, orphanedErr
 		}
 		if orphanedErr != nil {
 			slog.Warn(
@@ -1025,6 +1086,49 @@ func (pipeline *MutationPipeline) Step(
 				return recovered, err
 			}
 			aborted = true
+		}
+	}
+
+	// After the kernel so it never delays a delivery, and NOT gated on
+	// aborted: a repair or kernel failure says nothing about terminal units'
+	// chunk rows, and gating on it let a busy kernel starve the cleanup. Its
+	// failure is absorbed and logged; the stage telemetry degrades readiness
+	// only on repeats. It yields a tick in which an earlier stage used 3/4 of
+	// its budget: the server is already slow, and the deletes would add to it
+	// (CHAOS-14380). A fast failure of an earlier stage does not yield, and
+	// after chunkReclaimYieldStreakCap yields in a row it runs once at the
+	// floor size.
+	pressured := pressure.pressured()
+	floorDue := pipeline.chunkReclaimYieldStreak.Load() >= chunkReclaimYieldStreakCap
+	if ctx.Err() == nil && pressured != "" && !floorDue {
+		streak := pipeline.chunkReclaimYieldStreak.Add(1)
+		if pipeline.chunkReclaimActive.Load() {
+			slog.Info("syncreconciler.chunk_sidecar_reclaim", "yielded", true, "stage", string(pressured), "yield_streak", streak)
+		}
+	} else if ctx.Err() == nil {
+		pipeline.chunkReclaimYieldStreak.Store(0)
+		step := pipeline.chunkReclaim.Step
+		if floorStepper, ok := pipeline.chunkReclaim.(chunkSidecarReclaimFloorStepper); ok && floorDue {
+			step = floorStepper.StepAtFloor
+		}
+		reclaimErr := pipeline.runStage(ctx, StageChunkSidecarReclaim, func(stageCtx context.Context) error {
+			reclaimed, stepErr := step(stageCtx, now, limit)
+			if reclaimed.LockSkipped {
+				pipeline.chunkReclaimLockSkipped.Add(1)
+			}
+			if !reclaimed.LockSkipped {
+				pipeline.chunkReclaimActive.Store(stepErr != nil || reclaimed.Statements > 0 || reclaimed.Throttled || reclaimed.RemainingUnits > 0)
+			}
+			return stepErr
+		})
+		if reclaimErr != nil && ctx.Err() != nil {
+			return recovered, reclaimErr
+		}
+		if reclaimErr != nil {
+			slog.Warn(
+				"syncreconciler.chunk_sidecar_reclaim_stage_failed",
+				"error", reclaimErr.Error(),
+			)
 		}
 	}
 
@@ -1603,6 +1707,8 @@ func (pipeline *MutationPipeline) WritePrometheus(output io.Writer) error {
 		fmt.Fprintf(&text, "dev_health_sync_run_rollup_bumped_total{outcome=%q,path=%q} %d\n",
 			"failed", path, rollupBumps[[2]string{"failed", path}])
 	}
+	text.WriteString("# HELP sync_reconciler_chunk_sidecar_reclaim_lock_skipped_total Chunk sidecar reclaim ticks skipped because another reconciler session held the cluster-wide reclaim lock (CHAOS-14243).\n# TYPE sync_reconciler_chunk_sidecar_reclaim_lock_skipped_total counter\n")
+	fmt.Fprintf(&text, "sync_reconciler_chunk_sidecar_reclaim_lock_skipped_total %d\n", pipeline.chunkReclaimLockSkipped.Load())
 	_, err := io.WriteString(output, text.String())
 	return err
 }

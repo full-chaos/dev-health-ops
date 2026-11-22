@@ -572,7 +572,7 @@ LIMIT {limit_per_dim:UInt32}
 		bridgeNotEmpty = "repo_id IS NOT NULL"
 	case DimensionRepo:
 		bridgeCol = "ut.team_id"
-		bridgeNotEmpty = "ut.team_id != ''"
+		bridgeNotEmpty = "ut.team_id IS NOT NULL AND match(ut.team_id, '[^\\\\s\\\\x{0B}\\\\p{Z}\\\\x{FEFF}]')"
 	default:
 		return compiledQuery{}, compiledQuery{}, fmt.Errorf(
 			"analytics: compileFlowMatrixInvestmentTeamRepoDimension: unsupported dimension %q", req.Dimension)
@@ -659,6 +659,7 @@ LIMIT {max_edges:UInt32}
 // ErrUnsafeStatement, which resolveFlowMatrix then SWALLOWS to an empty
 // result. Shape copied from Lane A's workgraph/scope.go, which hit the
 // identical guard live.
+// A team key must hold a char that is not whitespace: the match() class is the ECMA-262 "White Space" and "Line Terminators" set (what JS trim removes), not just the empty string.
 const flowMatrixTeamActivitySelect = `
     SELECT
         wct.work_item_id,
@@ -673,7 +674,7 @@ const flowMatrixTeamActivitySelect = `
       AND wct.completed_at IS NOT NULL
       AND wct.org_id = {org_id:String}
       AND t.team_id IS NOT NULL
-      AND t.team_id != ''
+      AND match(t.team_id, '[^\\s\\x{0B}\\p{Z}\\x{FEFF}]')
 `
 
 const flowMatrixTeamNodesTemplate = `
@@ -759,7 +760,7 @@ const flowMatrixRepoEnrichedSelect = `
       AND wct.completed_at IS NOT NULL
       AND wi.org_id = {org_id:String}
       AND t.team_id IS NOT NULL
-      AND t.team_id != ''
+      AND match(t.team_id, '[^\\s\\x{0B}\\p{Z}\\x{FEFF}]')
 `
 
 // flowMatrixWorkTypeEnrichedSelect ports _FLOW_MATRIX_WORK_TYPE_ENRICHED_CTE
@@ -884,8 +885,8 @@ INNER JOIN (` + flowMatrixRepoEnrichedSelect + `) AS b
   ON a.team_id = b.team_id
   AND a.day = b.day
   AND a.org_id = b.org_id
-WHERE a.team_id IS NOT NULL AND a.team_id != ''
-  AND b.team_id IS NOT NULL AND b.team_id != ''
+WHERE a.team_id IS NOT NULL AND match(a.team_id, '[^\\s\\x{0B}\\p{Z}\\x{FEFF}]')
+  AND b.team_id IS NOT NULL AND match(b.team_id, '[^\\s\\x{0B}\\p{Z}\\x{FEFF}]')
   AND a.repo_id IS NOT NULL
   AND b.repo_id IS NOT NULL
   AND a.repo_id != b.repo_id
@@ -909,6 +910,7 @@ LIMIT {max_edges:UInt32}
 // verified by running that mutant, not by inspection. See
 // flowMatrixWorkTypeEnrichedSelect's doc comment for the full result and
 // for what is still NOT measured (the cost number).
+// A WORK_TYPE key must hold a char that is not whitespace: the match() class is the ECMA-262 "White Space" and "Line Terminators" set (what JS trim removes), not just the empty string.
 const flowMatrixWorkTypeNodesTemplate = `
 SELECT
     'WORK_TYPE' AS dimension,
@@ -920,7 +922,7 @@ WHERE wct.day >= {start_date:Date} AND wct.day < {end_date:Date}
   AND wct.completed_at IS NOT NULL
   AND wct.org_id = {org_id:String}
   AND wi.org_id = {org_id:String}
-  AND wi.type IS NOT NULL AND wi.type != ''
+  AND wi.type IS NOT NULL AND match(wi.type, '[^\\s\\x{0B}\\p{Z}\\x{FEFF}]')
 GROUP BY node_id
 ORDER BY value DESC, node_id ASC
 LIMIT {limit_per_dim:UInt32}
@@ -934,6 +936,7 @@ LIMIT {limit_per_dim:UInt32}
 // correction: "fixing the template" without fixing the CTE would leave
 // the CTE (and its OTHER consumers, if any existed) still exposed --
 // there are none here, but the fix belongs at the CTE regardless.
+// A WORK_TYPE key must hold a char that is not whitespace: the match() class is the ECMA-262 "White Space" and "Line Terminators" set (what JS trim removes), not just the empty string.
 const flowMatrixWorkTypeEdgesTemplate = `
 SELECT
     'WORK_TYPE' AS source_dimension,
@@ -948,8 +951,8 @@ INNER JOIN (` + flowMatrixWorkTypeEnrichedSelect + `) AS b
   AND a.org_id = b.org_id
 WHERE a.repo_id IS NOT NULL
   AND b.repo_id IS NOT NULL
-  AND a.work_item_type IS NOT NULL AND a.work_item_type != ''
-  AND b.work_item_type IS NOT NULL AND b.work_item_type != ''
+  AND a.work_item_type IS NOT NULL AND match(a.work_item_type, '[^\\s\\x{0B}\\p{Z}\\x{FEFF}]')
+  AND b.work_item_type IS NOT NULL AND match(b.work_item_type, '[^\\s\\x{0B}\\p{Z}\\x{FEFF}]')
   AND a.work_item_type != b.work_item_type
 GROUP BY source, target
 ORDER BY value DESC, source ASC, target ASC
@@ -1089,7 +1092,8 @@ func queryNodes(ctx context.Context, client QueryClient, q compiledQuery) ([]mod
 
 	var out []model.SankeyNode
 	for rows.Next() {
-		var dimension, nodeID string
+		var dimension string
+		var nodeIDValue *string
 		// *float64, not float64 -- see this function's doc comment
 		// (CHAOS-4701). Every value expression is still coerced to
 		// Float64 in SQL (toFloat64) so ONE scan type serves both the
@@ -1100,8 +1104,12 @@ func queryNodes(ctx context.Context, client QueryClient, q compiledQuery) ([]mod
 		// this query. The native driver errors rather than converting
 		// between UInt64 and Float64.
 		var value *float64
-		if scanErr := rows.Scan(&dimension, &nodeID, &value); scanErr != nil {
+		if scanErr := rows.Scan(&dimension, &nodeIDValue, &value); scanErr != nil {
 			return nil, fmt.Errorf("scan: %w", scanErr)
+		}
+		var nodeID string
+		if nodeIDValue != nil {
+			nodeID = *nodeIDValue
 		}
 		// Mirrors _execute_sankey_inner's node id shape exactly:
 		// f"{dim}:{node_id}" (analytics.py:297), label = node_id
@@ -1130,10 +1138,18 @@ func queryEdges(ctx context.Context, client QueryClient, q compiledQuery) ([]mod
 
 	var out []model.SankeyEdge
 	for rows.Next() {
-		var sourceDim, targetDim, source, target string
+		var sourceDim, targetDim string
+		var sourceValue, targetValue *string
 		var value *float64 // *float64, not float64 -- see queryNodes's doc comment (CHAOS-4701)
-		if scanErr := rows.Scan(&sourceDim, &targetDim, &source, &target, &value); scanErr != nil {
+		if scanErr := rows.Scan(&sourceDim, &targetDim, &sourceValue, &targetValue, &value); scanErr != nil {
 			return nil, fmt.Errorf("scan: %w", scanErr)
+		}
+		var source, target string
+		if sourceValue != nil {
+			source = *sourceValue
+		}
+		if targetValue != nil {
+			target = *targetValue
 		}
 		// Mirrors _execute_sankey_inner's edge shape exactly:
 		// source=f"{source_dim}:{source}", target=f"{target_dim}:{target}"

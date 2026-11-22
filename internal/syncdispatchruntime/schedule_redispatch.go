@@ -65,6 +65,21 @@ func dueNowRearmAt(nextDeferredAt *time.Time, now time.Time) *time.Time {
 	return dueNowRearmAtAfter(nextDeferredAt, now, redispatchCountdown())
 }
 
+// queuedPassRearmAt is the wakeup of a pass that queued units: the earliest of this pass's deferral and the run's
+// earliest outstanding one (a retrying unit with a future available_at, from any pass), and the countdown when work is
+// still due now (counts.dispatchable, or a unit left unclaimed after the guard's snapshot). No wakeup when neither: the
+// queued units' own ends wake the run (CHAOS-10013).
+func queuedPassRearmAt(passDeferredAt *time.Time, counts pendingUnitCounts, claimableAfterSnapshot bool, now time.Time) (*time.Time, bool) {
+	next := passDeferredAt
+	if counts.nextDeferredAt != nil {
+		next = earlierOf(next, *counts.nextDeferredAt)
+	}
+	if claimableAfterSnapshot || counts.dispatchable > 0 {
+		return dueNowRearmAt(next, now), true
+	}
+	return next, next != nil
+}
+
 // dueNowRearmAtAfter is dueNowRearmAt with the countdown given, so the idle
 // back-off (CHAOS-8459) lengthens only the countdown and never a deferral.
 func dueNowRearmAtAfter(nextDeferredAt *time.Time, now time.Time, countdown time.Duration) *time.Time {

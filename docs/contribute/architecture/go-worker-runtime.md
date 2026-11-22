@@ -457,6 +457,25 @@ Two in-archive member skips are recorded the same way: `compression_ratio`
 `report_member` causes that advance the watermark, so the run reads
 `reports_complete=false` instead of complete.
 
+**Skip counts are counts of skipped looks, not of distinct artifacts.** The sample holds one marker per (run, artifact,
+cause); a second member of the same artifact with the same cause, or a second read of the same artifact, adds to the count
+but not to the sample. A walk that reads a run again inside one unit (a re-anchored page, or the inclusive boundary second
+of a peeled range) does not count a deterministic skip again while its marker is still in the sample: `artifact_expired`,
+`artifact_oversized`, `unreadable_archive` and the member causes (`malformed`, `unreadable`, `unsafe_doctype`,
+`compression_ratio`, `archive_entry_cap`). The run's completeness row still carries the loss. These cases still count
+again, by design:
+
+- `artifact_unavailable` is counted per failed look: a later look can read the artifact, so a replay is new information.
+- A replay after the sample is full cannot be told apart from a new artifact and counts again (an over-count, never an
+  under-count).
+- A forward unit looks at a run in its own window and in the next one, and the route counts each attempt, so
+  `dev_health_provider_artifact_skipped_total` reads higher than the number of distinct artifacts. Only its rise above
+  zero is meaningful (the `ProviderArtifactSkipsSustained` alert reads only that).
+- Run-level observations (`per_run_cap`, `per_run_page_budget`, `aggregate_of_parts`, `aggregate_mismatch`) count each
+  read of the run, and `reports_skipped` sums them with the rest.
+
+None of these change the watermark, `reports_complete`, the run's verdict or the partial-success reason.
+
 The GitLab route shares that archive parse but fails on any other member skip, so it takes these two out and records them
 as its own chunked truncation component `report_member_dropped` (coverage_complete is false; the component advances the
 watermark). The same string is a `dev_health_provider_artifact_skipped_total{reason}` label value. The GitLab direct route
@@ -558,9 +577,43 @@ properties of that listing shape the walk:
   The 6-hour lookback and the 100 / 300 re-read caps are fixed defaults, not
   configurable.
 
-One case stays unseen: a run that was final at its last read and is rerun
-weeks later, after it left both the lookback and the open set, is not re-read,
-because no listing key reaches it.
+- A run that was final at its last read and is rerun later, after it left the
+  lookback and the open set, is found by a daily deep range of the runs phase.
+  The incremental unit whose window holds a UTC midnight (since < midnight <=
+  before) lists once more the runs created from 7 days before its window to
+  one second before the runs range. It keeps a run only when the run last
+  changed at or after the window start minus the window width (at least one
+  day) and at least the lookback after its creation; the kept run is written
+  like a listed run; a run with no creation time is not read there. The deep
+  range has its own budget of 1,000 pages (a page is charged when the walk
+  enters it; a resume inside a page re-fetches it for free). A deep range
+  stopped by that budget, by the walk record bound (its records do not count
+  toward the bound of the later phases) or by a saturated second records
+  `late_rerun_runs` (`page_budget_exhausted` or `listing_saturated`): the unit
+  reads `reports_complete=false`, and the watermark still advances, because
+  the window itself was walked. Backfill and full resync units list no deep
+  range.
+
+- The artifacts phase (test reports) lists runs created from the UTC date of
+  the window start minus the larger of one day and the window width. A run
+  re-run after it left that floor is listed by no claim that holds the re-run.
+  So the incremental unit whose window holds a UTC midnight also lists a
+  deeper artifacts range: from the same date minus 7 days to one second before
+  the floor. It reads a run of that range when the run is completed, started
+  by the window end, and changed since the window start minus the larger of
+  one day and the window width; a run with no creation time or no last-change
+  time is not read there. Each midnight has one owning unit, so this costs one
+  extra listing a day per repository, and a late re-run's reports land up to
+  one day plus a window width after it changed. The deeper range has its own
+  budget of 1,000 pages, charged like the runs phase's deep range. When it
+  runs out, or a second cannot be peeled past, the unit records
+  `late_rerun_reports` (`page_budget_exhausted` or `listing_saturated`):
+  `reports_complete` stays false and the watermark still advances.
+
+One case stays unseen: a run rerun more than 7 days after its creation (GitHub
+allows a rerun for 30 days) is not re-read, because no listing key reaches it.
+A rerun inside the 7 days lands at the next midnight unit, up to one day plus
+one window width after it ends.
 
 ### What a re-anchor cannot see
 

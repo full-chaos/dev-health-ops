@@ -80,6 +80,7 @@ func (owner testopsOwner) column(dim Dimension, dbCol string) string {
 func (owner testopsOwner) filterColumns(measure Measure, useInvestment bool) filterColumns {
 	cols := defaultFilterColumns()
 	if useInvestment || !isTestopsMeasure(measure) {
+		cols.StoredTeamKey = !useInvestment
 		return cols
 	}
 	cols.TeamByOwnership = true

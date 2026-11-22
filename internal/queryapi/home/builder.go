@@ -53,6 +53,7 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 	if err != nil {
 		return MetricDelta{}, err
 	}
+	oneTeam := oneTeamScope(spec.Scope, f)
 	shareSQL, shareBindings := scopeShareForMetric(spec, f, orgID, "repo_id", asOf)
 	scopeBindings = append(scopeBindings, shareBindings...)
 
@@ -81,7 +82,7 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 		}()
 		go func() {
 			defer wg.Done()
-			series, errSeries = fetchMetricSeries(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID, shareSQL)
+			series, errSeries = fetchMetricSeries(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID, shareSQL, oneTeam)
 		}()
 		wg.Wait()
 		for _, err := range []error{errCur, errPrev, errSeries} {
@@ -118,7 +119,7 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 		}()
 		go func() {
 			defer wg.Done()
-			series, errSeries = fetchMetricSeries(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID, shareSQL)
+			series, errSeries = fetchMetricSeries(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID, shareSQL, oneTeam)
 		}()
 		wg.Wait()
 		for _, err := range []error{errCur, errPrev, errSeries} {
@@ -143,11 +144,11 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			currentValue, series, hasData, errCur = fetchBlockedHours(ctx, client, startDay, endDay, scopeFilter, scopeBindings, orgID)
+			currentValue, series, hasData, errCur = fetchBlockedHours(ctx, client, startDay, endDay, scopeFilter, scopeBindings, orgID, oneTeam)
 		}()
 		go func() {
 			defer wg.Done()
-			previousValue, _, hasPriorData, errPrev = fetchBlockedHours(ctx, client, compareStart, compareEnd, scopeFilter, scopeBindings, orgID)
+			previousValue, _, hasPriorData, errPrev = fetchBlockedHours(ctx, client, compareStart, compareEnd, scopeFilter, scopeBindings, orgID, oneTeam)
 		}()
 		wg.Wait()
 		if errCur != nil {
@@ -163,15 +164,15 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 		wg.Add(3)
 		go func() {
 			defer wg.Done()
-			current, errCur = fetchMetricValue(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID, shareSQL)
+			current, errCur = fetchMetricValue(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID, shareSQL, oneTeam)
 		}()
 		go func() {
 			defer wg.Done()
-			previous, errPrev = fetchMetricValue(ctx, client, spec.Table, spec.Column, compareStart, compareEnd, scopeFilter, scopeBindings, spec.Aggregator, orgID, shareSQL)
+			previous, errPrev = fetchMetricValue(ctx, client, spec.Table, spec.Column, compareStart, compareEnd, scopeFilter, scopeBindings, spec.Aggregator, orgID, shareSQL, oneTeam)
 		}()
 		go func() {
 			defer wg.Done()
-			series, errSeries = fetchMetricSeries(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID, shareSQL)
+			series, errSeries = fetchMetricSeries(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID, shareSQL, oneTeam)
 		}()
 		wg.Wait()
 		if errCur != nil {
@@ -412,14 +413,20 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 		// D5900). DECLARED DIVERGENCE from the reference (home.py:1123 names the drivers of any
 		// move, 0 % included), narrow: only a measured 0 % between two measured values.
 		driverText := "."
-		if namesDrivers(topDelta) {
-			scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, chClient, metricScope(topDelta.Metric), f, orgID, "team_id", "repo_id", now)
-			if err != nil {
-				return nil, err
-			}
-			driverRows, err := fetchMetricDriverDelta(ctx, chClient, metricTable(topDelta.Metric), metricColumn(topDelta.Metric), metricGroup(topDelta.Metric), startDay, endDay, compareStart, compareEnd, scopeFilter, scopeBindings, orgID, 3)
-			if err != nil {
-				return nil, err
+		if statesMove(topDelta) {
+			var driverRows []driverRow
+			if oneTeamScope(metricScope(topDelta.Metric), f) {
+				driverRows = oneTeamDriverRows(topDelta, f)
+			} else {
+				scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, chClient, metricScope(topDelta.Metric), f, orgID, "team_id", "repo_id", now)
+				if err != nil {
+					return nil, err
+				}
+				shareSQL, shareBindings := driverShareSQL(topDelta.Metric, f, orgID, now)
+				driverRows, err = fetchMetricDriverDelta(ctx, chClient, metricTable(topDelta.Metric), metricColumn(topDelta.Metric), metricGroup(topDelta.Metric), startDay, endDay, compareStart, compareEnd, scopeFilter, append(scopeBindings, shareBindings...), orgID, 3, shareSQL, topDelta.FromZero())
+				if err != nil {
+					return nil, err
+				}
 			}
 			// The sentence names the drivers by display name, never by id (CHAOS-9046).
 			if driverNameList := driverNames(ctx, chClient, orgID, metricGroup(topDelta.Metric), driverRows); len(driverNameList) > 0 {

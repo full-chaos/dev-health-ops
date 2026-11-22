@@ -88,12 +88,17 @@ const (
 	// deploy/go-workers/deployment.json for every coordinator process today
 	// (reconciler, scheduler, worker-operator).
 	defaultCoordinatorMaxConns = 2
-	// River's own job cleaner defaults: raising one lengthens how long a
-	// ByArgs unique insert dedupes into a finalized row with the same key.
-	defaultCompletedRetention = 24 * time.Hour
-	defaultCancelledRetention = 24 * time.Hour
-	defaultDiscardedRetention = 7 * 24 * time.Hour
-	defaultJobCleanerTimeout  = 30 * time.Second
+	// A ByArgs unique insert dedupes into a finalized row with the same key
+	// while that row exists. Every value stays below the 30-day
+	// WORKER_JOB_TERMINAL_RETENTION_DAYS outbox prune. Completed and cancelled
+	// keep River's own defaults; discarded stays one day below the prune, so a
+	// row that finalized within a day of its delivery is cleaned within one
+	// cleaner interval of the prune that frees its key. riverstore's
+	// DefaultMaintenanceConfig reads these same constants.
+	DefaultCompletedJobRetention  = 24 * time.Hour
+	DefaultCancelledJobRetention  = 24 * time.Hour
+	DefaultDiscardedJobRetention  = 29 * 24 * time.Hour
+	DefaultRiverJobCleanerTimeout = 30 * time.Second
 	// defaultSyncObservationTimeout mirrors syncreconciler's own unconfigured
 	// default (CHAOS-4092) so a deployment that never sets the override sees
 	// no behavior change from this option's introduction.
@@ -227,6 +232,12 @@ type Config struct {
 	// never accommodate even one retry.
 	PreclaimReadinessTimeout time.Duration
 	LogLevel                 slog.Level
+	// NonNativeClickHouseKeys names each ClickHouse service DSN key that holds an http or https DSN. Load accepts
+	// it; ObserveNonNativeClickHouse reports it.
+	NonNativeClickHouseKeys []string
+	// ClickHouseHostProblems names each native ClickHouse service DSN key whose address list loads but holds an address
+	// with no usable host (CHAOS-14275, D6465: a form that loaded before keeps loading). ObserveNonNativeClickHouse reports it.
+	ClickHouseHostProblems []ClickHouseHostProblem
 
 	DomainDatabaseURI      secrets.Value
 	QueueDatabaseURI       secrets.Value
@@ -728,11 +739,24 @@ func Load(spec Spec) (Config, error) {
 	if err := validateURI("API_DATABASE_URI", cfg.APIDatabaseURI, postgresSchemes...); err != nil {
 		return Config{}, err
 	}
-	if err := validateURI("CLICKHOUSE_URI", cfg.ClickHouseURI, "clickhouse", "http", "https"); err != nil {
+	if err := validateClickHouseServiceURI("CLICKHOUSE_URI", cfg.ClickHouseURI); err != nil {
 		return Config{}, err
 	}
-	if err := validateURI("API_CLICKHOUSE_URI", cfg.APIClickHouseURI, "clickhouse", "http", "https"); err != nil {
+	if err := validateClickHouseServiceURI("API_CLICKHOUSE_URI", cfg.APIClickHouseURI); err != nil {
 		return Config{}, err
+	}
+	for _, key := range clickHouseServiceKeys {
+		dsn := cfg.clickHouseDSN(key)
+		if clickHouseHTTPScheme(dsn) != "" {
+			cfg.NonNativeClickHouseKeys = append(cfg.NonNativeClickHouseKeys, key)
+		}
+		if dsn.Configured() {
+			if parsed, ok := parseClickHouseDSN(dsn.Reveal()); ok {
+				if cause := clickHouseHostProblem(parsed); cause != "" {
+					cfg.ClickHouseHostProblems = append(cfg.ClickHouseHostProblems, ClickHouseHostProblem{Key: key, Cause: cause})
+				}
+			}
+		}
 	}
 	if err := validateURI("VALKEY_URI", cfg.ValkeyURI, "redis", "rediss", "unix"); err != nil {
 		return Config{}, err
@@ -849,7 +873,7 @@ func Load(spec Spec) (Config, error) {
 	cfg.CompletedJobRetention, err = durationEnv(
 		lookup,
 		"RIVER_COMPLETED_JOB_RETENTION",
-		defaultCompletedRetention,
+		DefaultCompletedJobRetention,
 		24*time.Hour,
 		365*24*time.Hour,
 	)
@@ -859,7 +883,7 @@ func Load(spec Spec) (Config, error) {
 	cfg.CancelledJobRetention, err = durationEnv(
 		lookup,
 		"RIVER_CANCELLED_JOB_RETENTION",
-		defaultCancelledRetention,
+		DefaultCancelledJobRetention,
 		24*time.Hour,
 		365*24*time.Hour,
 	)
@@ -869,7 +893,7 @@ func Load(spec Spec) (Config, error) {
 	cfg.DiscardedJobRetention, err = durationEnv(
 		lookup,
 		"RIVER_DISCARDED_JOB_RETENTION",
-		defaultDiscardedRetention,
+		DefaultDiscardedJobRetention,
 		24*time.Hour,
 		365*24*time.Hour,
 	)
@@ -879,7 +903,7 @@ func Load(spec Spec) (Config, error) {
 	cfg.RiverJobCleanerTimeout, err = durationEnv(
 		lookup,
 		"RIVER_JOB_CLEANER_TIMEOUT",
-		defaultJobCleanerTimeout,
+		DefaultRiverJobCleanerTimeout,
 		5*time.Second,
 		5*time.Minute,
 	)
@@ -1542,6 +1566,42 @@ func validateName(kind, value string) error {
 			continue
 		}
 		return fmt.Errorf("%s must contain only lowercase letters, digits, and hyphens", kind)
+	}
+	return nil
+}
+
+// clickHouseHTTPScheme returns "http" or "https" for a DSN that clickhouse-go would open over its HTTP protocol, else
+// "". That path ignores rows.Err() on batches, so a service should use clickhouse://; this is hygiene, not a start
+// refusal (D6465). CLIs resolve their sink through ResolveDSN and are not bound by this.
+func clickHouseHTTPScheme(value secrets.Value) string {
+	if !value.Configured() {
+		return ""
+	}
+	if parsed, ok := parseClickHouseDSN(value.Reveal()); ok {
+		if scheme := strings.ToLower(parsed.Scheme); scheme == "http" || scheme == "https" {
+			return scheme
+		}
+	}
+	return ""
+}
+
+// validateClickHouseServiceURI accepts what clickhouse-go ParseDSN accepts, address lists included, and every form
+// that url.Parse accepted before. An http or https DSN needs a usable host in every address; a native DSN with an
+// unusable address still loads and is reported by ObserveNonNativeClickHouse (D6465).
+func validateClickHouseServiceURI(key string, value secrets.Value) error {
+	if !value.Configured() {
+		return nil
+	}
+	parsed, ok := parseClickHouseDSN(value.Reveal())
+	if !ok {
+		return fmt.Errorf("%s must be a valid supported URI", key)
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if parsed.Host == "" || !slices.Contains([]string{"clickhouse", "http", "https"}, scheme) {
+		return fmt.Errorf("%s must be a valid supported URI", key)
+	}
+	if (scheme == "http" || scheme == "https") && !httpAuthorityAccepted(value.Reveal(), parsed) {
+		return fmt.Errorf("%s must be a valid supported URI", key)
 	}
 	return nil
 }

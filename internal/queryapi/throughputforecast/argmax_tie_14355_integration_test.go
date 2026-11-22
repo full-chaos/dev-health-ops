@@ -72,13 +72,13 @@ func TestArgMaxTieThroughputForecast14355(t *testing.T) {
 			}},
 		{name: "loadWorkItemOverlay", table: "work_item_metrics_daily", key: workKey, values: workValues, retire: "zeros",
 			read: func(t *testing.T) string {
-				current, average, err := loadWorkItemOverlay(ctx, client, org, nil, nil, weeks, today)
+				current, average, _, err := loadWorkItemOverlay(ctx, client, org, nil, nil, weeks, today)
 				must(t, err)
 				return fmt.Sprintf("current=%v average=%v", current, average)
 			}},
 		{name: "loadStaleWIP", table: "work_item_metrics_daily", key: workKey, values: workValues, nullable: "wip_age_p50_hours",
 			read: func(t *testing.T) string {
-				p50, p90, err := loadStaleWIP(ctx, client, org, nil, nil)
+				p50, p90, _, err := loadStaleWIP(ctx, client, org, nil, nil, weeks, today)
 				must(t, err)
 				return "p50=" + optFloat(p50) + " p90=" + optFloat(p90)
 			}},
@@ -98,7 +98,7 @@ func TestArgMaxTieThroughputForecast14355(t *testing.T) {
 			},
 			values: []string{"estimated_count", "unestimated_count", "backlog_size"},
 			read: func(t *testing.T) string {
-				e, err := loadEstimateCoverage(ctx, client, org, nil, nil)
+				e, err := loadEstimateCoverage(ctx, client, org, nil, nil, weeks, today)
 				must(t, err)
 				return fmt.Sprintf("ratio=%s estimated=%d unestimated=%d backlog=%d grains=%d", optFloat(e.ratio), e.estimatedCount, e.unestimatedCount, e.backlogSize, e.grainCount)
 			}},

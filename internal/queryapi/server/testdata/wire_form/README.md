@@ -36,11 +36,13 @@ document text is readable in the tree, so a reviewer can see the
 
 | operation | sha256 of the trimmed wire text |
 | --- | --- |
-| `capacityForecast` | `d95197012e32056fcece1f8975d953e7465bb112354cf4201e87b39375f933ef` |
+| `capacityForecast` | `61534928326d9e7c1ad83451056cec1d73b66e89a5eca9c6170d60ecf8bbdeb6` |
+| `capacityForecast` (legacy V3, `capacityForecast.v3.graphql`, dual accept CHAOS-7508) | `d95197012e32056fcece1f8975d953e7465bb112354cf4201e87b39375f933ef` |
 | `capacityForecast` (legacy V2, `capacityForecast.v2.graphql`, dual accept CHAOS-8477) | `7ec8e919d784ed0dea1b87e85d64ffe18d05557379a397d07da0ab958694ffd1` |
 | `capacityForecast` (legacy V1, `capacityForecast.v1.graphql`, dual accept CHAOS-7994) | `b4fb8f075aba9954714f10f7f4451242d969548d6392d778dae1177759f80780` |
 | `capacityForecasts` | `43890adbbf75ac3ad71c29f728a82e35d035c3f2c701f0ced116559fa28b6c20` |
-| `throughputForecast` | `a265a9550e4cdab2bc77395257777ec366ac554b19c617af094de47c7a9e2b03` |
+| `throughputForecast` | `9ace3bd179910a7c79ec8dade33c8f93c7244fc45fe455d4f844a5838eb6a18f` |
+| `throughputForecast` (legacy V3, `throughputForecast.v3.graphql`, dual accept CHAOS-7508) | `a265a9550e4cdab2bc77395257777ec366ac554b19c617af094de47c7a9e2b03` |
 | `throughputForecast` (legacy V2, `throughputForecast.v2.graphql`, dual accept CHAOS-14142) | `933efa3840bb7afb600135bc4470d6523842a908f0ffb949a35439e15a76e09d` |
 | `throughputForecast` (legacy V1, `throughputForecast.v1.graphql`, dual accept CHAOS-8167) | `fc08dea094ec832290b4f528141eacb5bbc463beea45794cf205fe43952379f9` |
 

@@ -79,7 +79,7 @@
   },
   {
     "operation": "capacityForecast",
-    "digest": "d95197012e32056fcece1f8975d953e7465bb112354cf4201e87b39375f933ef"
+    "digest": "61534928326d9e7c1ad83451056cec1d73b66e89a5eca9c6170d60ecf8bbdeb6"
   },
   {
     "operation": "capacityForecast",
@@ -89,6 +89,11 @@
   {
     "operation": "capacityForecast",
     "digest": "7ec8e919d784ed0dea1b87e85d64ffe18d05557379a397d07da0ab958694ffd1",
+    "legacy": true
+  },
+  {
+    "operation": "capacityForecast",
+    "digest": "d95197012e32056fcece1f8975d953e7465bb112354cf4201e87b39375f933ef",
     "legacy": true
   },
   {
@@ -465,7 +470,7 @@
   },
   {
     "operation": "throughputForecast",
-    "digest": "a265a9550e4cdab2bc77395257777ec366ac554b19c617af094de47c7a9e2b03"
+    "digest": "9ace3bd179910a7c79ec8dade33c8f93c7244fc45fe455d4f844a5838eb6a18f"
   },
   {
     "operation": "throughputForecast",
@@ -475,6 +480,11 @@
   {
     "operation": "throughputForecast",
     "digest": "933efa3840bb7afb600135bc4470d6523842a908f0ffb949a35439e15a76e09d",
+    "legacy": true
+  },
+  {
+    "operation": "throughputForecast",
+    "digest": "a265a9550e4cdab2bc77395257777ec366ac554b19c617af094de47c7a9e2b03",
     "legacy": true
   },
   {

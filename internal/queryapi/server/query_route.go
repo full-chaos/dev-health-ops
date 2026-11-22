@@ -3474,6 +3474,10 @@ const registeredInvestmentFullDocument = `query InvestmentFull($orgId: String!, 
 // fixture under testdata/wire_capture remains the independent, real-HTTP
 // proof that wireForm's output IS what a real fetch() puts on the wire.
 // Source const: CAPACITY_FORECAST_QUERY, queries.ts:236.
+//
+// The `backlogState` and `backlogAsOfDay` selections (after `backlogSize`, CHAOS-7508) are NOT from the web file until
+// the web change that selects them lands; they are in the form urql prints. The previous text is
+// registeredCapacityForecastV3Document.
 const registeredCapacityForecastDocument = `query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {
   capacityForecast(orgId: $orgId, input: $input) {
     forecastId
@@ -3481,6 +3485,8 @@ const registeredCapacityForecastDocument = `query CapacityForecast($orgId: Strin
     teamId
     workScopeId
     backlogSize
+    backlogState
+    backlogAsOfDay
     targetItems
     targetDate
     p50Date
@@ -3534,6 +3540,56 @@ const registeredCapacityCompletionDistributionDocument = `query CapacityCompleti
       items {
         value
         count
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredCapacityForecastV3Document is the text capacityForecast accepted BEFORE it asked how its backlogSize was
+// found (backlogState, backlogAsOfDay, CHAOS-7508): the text CHAOS-8477 registered. It stays a legacy text (see
+// legacyDigestsByOperation), beside V2 and V1 below, so a web build still sending it keeps working while the new web
+// rolls out; the operation's ONE current document is registeredCapacityForecastDocument above. Wire form, same
+// provenance: testdata/wire_form/capacityForecast.v3.graphql.
+const registeredCapacityForecastV3Document = `query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {
+  capacityForecast(orgId: $orgId, input: $input) {
+    forecastId
+    computedAt
+    teamId
+    workScopeId
+    backlogSize
+    targetItems
+    targetDate
+    p50Date
+    p85Date
+    p95Date
+    p50Days
+    p85Days
+    p95Days
+    p50Items
+    p85Items
+    p95Items
+    throughputMean
+    throughputStddev
+    historyDays
+    insufficientHistory
+    highVariance
+    completionDistribution {
+      runs
+      unfinishedRuns
+      horizonDays
+      days {
+        value
+        count
+        cumulativeShare
+        __typename
+      }
+      items {
+        value
+        count
+        cumulativeShare
         __typename
       }
       __typename
@@ -3678,8 +3734,98 @@ const registeredCapacityForecastsDocument = `query CapacityForecasts($orgId: Str
 // estimateCoverage (CHAOS-8167, CHAOS-8172) are NOT from the web file until the web change that selects them lands;
 // they are in the form urql prints. The web's real wire text wins over this one if they differ. The `degradedReason`
 // selection (after `backlogAsOfDay`, CHAOS-14142) is in the same state: the previous text is
-// registeredThroughputForecastV2Document.
+// registeredThroughputForecastV2Document. So are the newest-day selections of CHAOS-7508 (`wipCongestionState`,
+// `wipCongestionAsOfDay`, `wipCongestionGrainCount` after wipCongestion; `state`, `asOfDay`, `grainCount` of staleWip;
+// `state`, `asOfDay` of estimateCoverage): the previous text is registeredThroughputForecastV3Document.
 const registeredThroughputForecastDocument = `query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {
+  throughputForecast(orgId: $orgId, input: $input) {
+    forecastId
+    computedAt
+    teamId
+    workScopeId
+    backlogSize
+    backlogState
+    backlogAsOfDay
+    degradedReason
+    historyWeeks
+    p50Weeks
+    p75Weeks
+    p90Weeks
+    insufficientHistory
+    rollingWindows {
+      windowWeeks
+      meanWeeklyThroughput
+      sampleCount
+      insufficientHistory
+      __typename
+    }
+    primaryRisk {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    wipCongestion {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    wipCongestionState
+    wipCongestionAsOfDay
+    wipCongestionGrainCount
+    staleWip {
+      p50AgeHours
+      p90AgeHours
+      state
+      asOfDay
+      grainCount
+      __typename
+    }
+    estimateCoverage {
+      ratio
+      estimatedCount
+      unestimatedCount
+      backlogSize
+      grainCount
+      state
+      asOfDay
+      __typename
+    }
+    reviewBottleneck {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    incidentLoad {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredThroughputForecastV3Document is the text throughputForecast accepted BEFORE it asked which newest day
+// staleWip, estimateCoverage and the current WIP of wipCongestion are read from (CHAOS-7508): the text CHAOS-14142
+// registered. It stays a legacy text (see legacyDigestsByOperation) so a web or acr build still sending it keeps working
+// while the new clients roll out; it reads the same answer less the seven fields. The operation's ONE current document
+// is registeredThroughputForecastDocument. Wire form, same provenance: testdata/wire_form/throughputForecast.v3.graphql.
+const registeredThroughputForecastV3Document = `query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {
   throughputForecast(orgId: $orgId, input: $input) {
     forecastId
     computedAt
@@ -7499,7 +7645,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"aiImpactSummary":       {digestHex(registeredAiImpactSummaryV1Document)},
 	"aiOpportunities":       {digestHex(registeredAiOpportunitiesV1Document)},
 	"aiWorkflowDrilldown":   {digestHex(registeredAiWorkflowDrilldownV1Document)},
-	"capacityForecast":      {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
+	"capacityForecast":      {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document), digestHex(registeredCapacityForecastV3Document)},
 	"compoundingRisk":       {digestHex(registeredCompoundingRiskV1Document)},
 	"coverageScopeBaseline": {digestHex(registeredCoverageScopeBaselineV1Document)},
 	"hotspots":              {digestHex(registeredHotspotsV1Document)},
@@ -7509,7 +7655,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"reviewEdges":           {digestHex(registeredReviewEdgesV1Document)},
 	"investmentFull":        {digestHex(registeredInvestmentFullV1Document)},
 	"investmentBreakdown":   {digestHex(registeredInvestmentBreakdownV1Document)},
-	"throughputForecast":    {digestHex(registeredThroughputForecastV1Document), digestHex(registeredThroughputForecastV2Document)},
+	"throughputForecast":    {digestHex(registeredThroughputForecastV1Document), digestHex(registeredThroughputForecastV2Document), digestHex(registeredThroughputForecastV3Document)},
 }
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's

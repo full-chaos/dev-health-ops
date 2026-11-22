@@ -467,12 +467,29 @@ func githubTestsHasPageBudgetObservation(cursor githubTestsChunkCursor, componen
 // A unit whose stored cursor already holds more records than one walk may write ends at the FIRST attempt after the change:
 // no listing page is fetched, the inventory is recorded truncated, and the unit publishes its completion. Before the bound
 // such a unit listed on for as long as its page budgets lasted, at up to 1,000 chunks per run.
+// A backfill claim's bound is higher (backfillWalkRecordsPin), so its arms carry the stalled cursor past that bound.
 func TestGitHubTestsChunkRouteStoredCursorPastWalkBoundEndsWithoutListing(t *testing.T) {
-	for _, phase := range []string{githubTestsArtifactsPhase, githubTestsRunsPhase} {
-		t.Run(phase, func(t *testing.T) {
+	for _, arm := range [][2]string{
+		{"incremental", githubTestsArtifactsPhase}, {"incremental", githubTestsRunsPhase},
+		{"backfill", githubTestsArtifactsPhase}, {"backfill", githubTestsRunsPhase},
+	} {
+		mode, phase := arm[0], arm[1]
+		t.Run(mode+"/"+phase, func(t *testing.T) {
 			doer := &githubTestsPagedDoer{t: t, pages: 3, perPage: 50}
 			claim := nativeTestClaim("github", "cicd")
-			claim.Mode = "backfill"
+			claim.Mode = mode
+			stored := githubTestsStalledBackfillCursor(t, phase, "api.github.com")
+			if mode == "backfill" {
+				cursor, decodeErr := decodeGitHubTestsChunkCursor(stored)
+				if decodeErr != nil {
+					t.Fatal(decodeErr)
+				}
+				cursor.Cases += backfillWalkRecordsPin
+				var encodeErr error
+				if stored, encodeErr = encodeGitHubTestsChunkCursor(cursor); encodeErr != nil {
+					t.Fatal(encodeErr)
+				}
+			}
 			var logged bytes.Buffer
 			swapDefaultLogger(t, slog.New(slog.NewJSONHandler(&logged, nil)))
 			var final *CompleteRouteBatch
@@ -480,7 +497,7 @@ func TestGitHubTestsChunkRouteStoredCursorPastWalkBoundEndsWithoutListing(t *tes
 			err := (GitHubTestsRouteHandler{}).CollectChunks(
 				context.Background(), claim, providerfoundation.Credential{},
 				githubTestsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC),
-				githubTestsStalledBackfillCursor(t, phase, "api.github.com"),
+				stored,
 				func(emission ChunkRouteEmission) error {
 					terminal = emission.CursorAfter
 					if emission.Final {
@@ -531,7 +548,7 @@ func TestGitHubTestsChunkRouteStoredCursorPastWalkBoundEndsWithoutListing(t *tes
 				t.Fatalf("production comparator rejected the bounded completion: %v", err)
 			}
 			if !strings.Contains(logged.String(), `"msg":"provider walk record bound reached"`) ||
-				!strings.Contains(logged.String(), `"mode":"backfill"`) {
+				!strings.Contains(logged.String(), `"mode":"`+mode+`"`) {
 				t.Fatalf("no WARN line for the walk bound with the mode in %s", logged.String())
 			}
 		})

@@ -121,7 +121,9 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	// range (CHAOS-14385; one more fewer exclusion sample record pays for them).
 	cursor.ReseekPages, cursor.PagesEntered, cursor.RecordCredit = githubTestsWidestReseekPages, githubTestsWidestReseekPages, githubTestsWidestRecordCredit
 	cursor.DeletionProven = 1
-	cursor.LateRecords = githubTestsMaxWalkRecords
+	cursor.LateRecords = backfillWalkRecordsPin
+	// A backfill walk's record counters reach its bound: the widest one holds 8 digits.
+	cursor.Cases = backfillWalkRecordsPin
 
 	encoded, err := encodeGitHubTestsChunkCursor(cursor)
 	if err != nil {
@@ -495,10 +497,10 @@ func githubTestsWidestRunsCutKeys(t *testing.T) string {
 // githubTestsWidestAnchorID is the widest resume anchor a cursor can carry: a 20-digit run id.
 const githubTestsWidestAnchorID = "99999999999999999999"
 
-// The widest re-seek state a cursor carries (CHAOS-14385): a range enters at most nativeMaxPages pages (an unfiltered
-// claim's search has no 1,000-result cap), so the pages entered and a re-seek's free pages stay within it; the record
-// credit is set at 8 digits, above the walk record bound.
+// The widest re-seek state a cursor carries (CHAOS-14385): a range enters at most the pages of a backfill claim's runs
+// budget (an unfiltered claim's search has no 1,000-result cap), so the pages entered and a re-seek's free pages stay
+// within it; the record credit is set at 8 digits, above the walk record bound.
 const (
-	githubTestsWidestReseekPages  = nativeMaxPages
+	githubTestsWidestReseekPages  = backfillRunsPin / nativePerPage
 	githubTestsWidestRecordCredit = 99999999
 )

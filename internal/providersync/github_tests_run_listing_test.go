@@ -871,7 +871,7 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			deepPages := githubTestsSearchResultCap / nativePerPage
 			c.ReseekPages, c.PagesEntered, c.RecordCredit = deepPages, deepPages, githubTestsWidestRecordCredit
 			c.DeletionProven = 1
-			c.LateRecords = githubTestsMaxWalkRecords
+			c.LateRecords = backfillWalkRecordsPin
 		}},
 		{"artifacts peel", 300, func(c *githubTestsChunkCursor) {
 			c.Phase = githubTestsArtifactsPhase
@@ -881,7 +881,7 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			c.AnchorID = githubTestsWidestAnchorID
 			c.ReseekPages, c.PagesEntered, c.RecordCredit = githubTestsWidestReseekPages, githubTestsWidestReseekPages, githubTestsWidestRecordCredit
 			c.DeletionProven = 1
-			c.LateRecords = githubTestsMaxWalkRecords
+			c.LateRecords = backfillWalkRecordsPin
 		}},
 		{"open phase", 300, func(c *githubTestsChunkCursor) {
 			c.Phase = githubTestsOpenPhase

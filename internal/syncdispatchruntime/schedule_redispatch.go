@@ -122,6 +122,13 @@ func backoffCountdown(base, limit, idle time.Duration, syncRunID string) (time.D
 	return jittered, level
 }
 
+// lastRunProgressSQL is lastRunProgressAt's read. A variable so the tests can plant a statement error; production
+// never changes it.
+var lastRunProgressSQL = `
+SELECT COALESCE(MAX(updated_at) FILTER (WHERE status IN ($2, $3)), MIN(created_at))
+FROM public.sync_run_units
+WHERE sync_run_id = $1::uuid`
+
 // lastRunProgressAt is the newest end of a unit of the run (success or
 // failed), else the oldest unit creation. A running unit's heartbeat is not
 // progress: a long chunked unit must not keep the re-arm at the base. It reads
@@ -133,10 +140,7 @@ func lastRunProgressAt(ctx context.Context, tx pgx.Tx, syncRunID string) (*time.
 		return nil, err
 	}
 	var at *time.Time
-	if err := savepoint.QueryRow(ctx, `
-SELECT COALESCE(MAX(updated_at) FILTER (WHERE status IN ($2, $3)), MIN(created_at))
-FROM public.sync_run_units
-WHERE sync_run_id = $1::uuid`, syncRunID, syncRunUnitStatusSuccess, syncRunUnitStatusFailed).Scan(&at); err != nil {
+	if err := savepoint.QueryRow(ctx, lastRunProgressSQL, syncRunID, syncRunUnitStatusSuccess, syncRunUnitStatusFailed).Scan(&at); err != nil {
 		_ = savepoint.Rollback(ctx)
 		return nil, err
 	}

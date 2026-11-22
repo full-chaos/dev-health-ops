@@ -9,10 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 )
 
 // Atomic pass cells (CHAOS-14479): every end state of a pass either commits with a wake armed for the work it left,
@@ -285,4 +287,185 @@ func atomicPassLockTimeoutPool(t *testing.T, ctx context.Context, pool *pgxpool.
 	}
 	t.Cleanup(limited.Close)
 	return limited
+}
+
+// TestAtomicPassTailWaitsAtMostTheBoundOnARouteMutationBarrier (PLAN-READ-14479-1 B1): the tail's re-arm takes ROW
+// EXCLUSIVE on sync_dispatch_outbox, which waits on a route mutation's SHARE ROW EXCLUSIVE barrier. From the commit
+// point (in the tail) a second connection holds that barrier (the real routeMutationLockSQL text). The pass must give
+// up within its tail lock bound, commit nothing, and succeed on the retry once the barrier is gone.
+func TestAtomicPassTailWaitsAtMostTheBoundOnARouteMutationBarrier(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		atomicPassShapes[0].seed(t, ctx, pool)
+		service := newTestDispatchService(t, pool)
+		var holder pgx.Tx
+		var holdErr error
+		var heldAt time.Time
+		fired := atCommitPoint(t, service, func() {
+			tx, err := pool.Begin(ctx)
+			if err != nil {
+				holdErr = err
+				return
+			}
+			if _, err := tx.Exec(ctx, `LOCK TABLE public.sync_dispatch_outbox IN SHARE ROW EXCLUSIVE MODE NOWAIT`); err != nil {
+				_ = tx.Rollback(ctx)
+				holdErr = err
+				return
+			}
+			holder, heldAt = tx, time.Now()
+		})
+		passCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := service.Dispatch(passCtx, atomicPassArgs())
+		returnedAt := time.Now()
+		cancel()
+		if holder != nil {
+			_ = holder.Rollback(ctx)
+		}
+		if !fired.Load() || holdErr != nil || holder == nil {
+			t.Fatalf("precondition: commit point fired=%v, barrier held=%v err=%v", fired.Load(), holder != nil, holdErr)
+		}
+		waited := returnedAt.Sub(heldAt)
+		status, attempts := atomicPassRow(t, ctx, pool)
+		published := atomicPassPublishes(t, ctx, pool)
+		t.Logf("barrier: err=%v waited=%s row=%s/%d published=%d", err, waited, status, attempts, published)
+		if err == nil || !errors.Is(err, ErrDispatchSyncRunUnavailable) {
+			t.Fatalf("Dispatch returned %v, want ErrDispatchSyncRunUnavailable from the tail's lock timeout", err)
+		}
+		if waited < 900*time.Millisecond || waited > 4*time.Second {
+			t.Fatalf("the pass waited %s on the barrier, want the 1 s tail bound", waited)
+		}
+		if published != 0 || atomicPassPlannedCount(t, ctx, pool) != 2 || status != "dispatched" || attempts != 1 {
+			t.Fatalf("after the timeout published=%d row=%s/%d, want nothing committed", published, status, attempts)
+		}
+
+		if err := newTestDispatchService(t, pool).Dispatch(ctx, atomicPassArgs()); err != nil {
+			t.Fatalf("retry after the barrier released: %v, want nil", err)
+		}
+		if status, _ := atomicPassRow(t, ctx, pool); status != "pending" {
+			t.Fatalf("after the retry row status=%s, want pending", status)
+		}
+		if got := atomicPassPublishes(t, ctx, pool); got != 1 {
+			t.Fatalf("after the retry published=%d, want 1", got)
+		}
+	})
+}
+
+// TestAtomicPassBackoffReadStatementErrorKeepsThePass (PLAN-READ-14479-1 item 3): the back-off progress read fails
+// with a server-side statement error (live ctx) inside a real pass that queues nothing. Its savepoint keeps the pass
+// transaction usable: the pass commits with the base countdown and a pending row.
+func TestAtomicPassBackoffReadStatementErrorKeepsThePass(t *testing.T) {
+	t.Setenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", "60")
+	saved := lastRunProgressSQL
+	t.Cleanup(func() { lastRunProgressSQL = saved })
+	lastRunProgressSQL = `SELECT (1/0)::text::timestamptz WHERE $1::uuid IS NOT NULL AND $2::text <> '' AND $3::text <> ''`
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		atomicPassShapes[1].seed(t, ctx, pool)
+		start := time.Now().UTC()
+		if err := newTestDispatchService(t, pool).Dispatch(ctx, atomicPassArgs()); err != nil {
+			t.Fatalf("Dispatch: %v, want nil (the failed back-off read is fail-open)", err)
+		}
+		end := time.Now().UTC()
+		var status string
+		var availableAt time.Time
+		if err := pool.QueryRow(ctx, `SELECT status, available_at FROM sync_dispatch_outbox WHERE sync_run_id = $1 AND kind = $2`,
+			discoveryTestRun, outboxKindDispatchSyncRun).Scan(&status, &availableAt); err != nil {
+			t.Fatal(err)
+		}
+		if status != "pending" || availableAt.Before(start.Add(59*time.Second)) || availableAt.After(end.Add(61*time.Second)) {
+			t.Fatalf("row %s at %s, want pending at the 60 s base countdown from the pass", status, availableAt.UTC().Format(time.RFC3339Nano))
+		}
+	})
+}
+
+// TestAtomicPassWakeDuringTheTailWaitsAndKeepsItsEarlierInstant (PLAN-READ-14479-1 item 5): a unit-end wake of the
+// run (the real syncrunrollup.WakeDispatch, second connection) fires while the pass is in its tail. It waits on the
+// row the pass holds, lands after the commit inside DispatchWakeTimeout, and the row ends pending at the wake's
+// instant, not at the countdown the pass armed.
+func TestAtomicPassWakeDuringTheTailWaitsAndKeepsItsEarlierInstant(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		t.Setenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", "60")
+		atomicPassShapes[0].seed(t, ctx, pool)
+		service := newTestDispatchService(t, pool)
+		type wakeResult struct {
+			armed bool
+			took  time.Duration
+		}
+		results := make(chan wakeResult, 1)
+		var wakeAt time.Time
+		var sawWaiting bool
+		fired := atCommitPoint(t, service, func() {
+			wakeAt = time.Now().UTC()
+			go func() {
+				began := time.Now()
+				armed := syncrunrollup.WakeDispatch(ctx, pool, discoveryTestRun, wakeAt, syncrunrollup.DispatchWakePathProviderUnit)
+				results <- wakeResult{armed: armed, took: time.Since(began)}
+			}()
+			deadline := time.Now().Add(3 * time.Second)
+			for !sawWaiting && time.Now().Before(deadline) {
+				var waiting int
+				if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM pg_stat_activity
+WHERE wait_event_type = 'Lock' AND query LIKE '%sync_dispatch_outbox%' AND pid <> pg_backend_pid()`).Scan(&waiting); err != nil {
+					t.Error(err)
+					return
+				}
+				sawWaiting = waiting > 0
+				if !sawWaiting {
+					time.Sleep(20 * time.Millisecond)
+				}
+			}
+		})
+		err := service.Dispatch(ctx, atomicPassArgs())
+		if !fired.Load() {
+			t.Fatal("precondition: the commit point did not fire")
+		}
+		wake := <-results
+		var status string
+		var availableAt time.Time
+		if scanErr := pool.QueryRow(ctx, `SELECT status, available_at FROM sync_dispatch_outbox WHERE sync_run_id = $1 AND kind = $2`,
+			discoveryTestRun, outboxKindDispatchSyncRun).Scan(&status, &availableAt); scanErr != nil {
+			t.Fatal(scanErr)
+		}
+		t.Logf("mid-tail wake: pass err=%v wake waited=%v armed=%v took=%s row=%s at %s (wake %s)", err, sawWaiting, wake.armed, wake.took, status,
+			availableAt.UTC().Format(time.RFC3339Nano), wakeAt.Format(time.RFC3339Nano))
+		if err != nil {
+			t.Fatalf("Dispatch: %v, want nil", err)
+		}
+		if !sawWaiting {
+			t.Fatal("the wake never waited on the row: the pass did not hold its dispatch row in the tail")
+		}
+		if !wake.armed || wake.took >= syncrunrollup.DispatchWakeTimeout {
+			t.Fatalf("wake armed=%v after %s, want armed within %s", wake.armed, wake.took, syncrunrollup.DispatchWakeTimeout)
+		}
+		if status != "pending" || availableAt.Sub(wakeAt).Abs() > time.Millisecond {
+			t.Fatalf("row %s at %s, want pending at the wake's instant %s", status, availableAt.UTC().Format(time.RFC3339Nano), wakeAt.Format(time.RFC3339Nano))
+		}
+	})
+}
+
+// TestAtomicPassUsesOneConnection (PLAN-READ-14479-1 item 5): the pass, tail included, runs on its one transaction's
+// connection. On a pool of one connection, a second pool call inside the transaction would wait for that connection
+// until the deadline.
+func TestAtomicPassUsesOneConnection(t *testing.T) {
+	for _, shape := range atomicPassShapes[:2] {
+		t.Run(shape.name, func(t *testing.T) {
+			withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+				shape.seed(t, ctx, pool)
+				config := pool.Config().Copy()
+				config.MaxConns = 1
+				single, err := pgxpool.NewWithConfig(ctx, config)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer single.Close()
+				passCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+				defer cancel()
+				if err := newTestDispatchService(t, single).Dispatch(passCtx, atomicPassArgs()); err != nil {
+					t.Fatalf("Dispatch on a one-connection pool: %v, want nil", err)
+				}
+				if status, _ := atomicPassRow(t, ctx, pool); status != "pending" {
+					t.Fatalf("row status=%s, want pending", status)
+				}
+			})
+		})
+	}
 }

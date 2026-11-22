@@ -895,6 +895,13 @@ func TestShortUnitsShareQueuedPassReadFailureCommitsNothingAndTheRetryArms(t *te
 		if got := publishes(); got != 0 {
 			t.Errorf("after the failed pass publishes of l0 and l1 = %d, want 0", got)
 		}
+		var rowStatus string
+		if err := base.QueryRow(ctx, `SELECT status FROM sync_dispatch_outbox WHERE id = $1::uuid`, outboxID).Scan(&rowStatus); err != nil {
+			t.Fatal(err)
+		}
+		if rowStatus != "dispatched" {
+			t.Errorf("after the failed pass the delivery's row is %s, want dispatched (nothing committed)", rowStatus)
+		}
 
 		start := time.Now().UTC()
 		if err := cell.svc.Dispatch(ctx, args); err != nil {

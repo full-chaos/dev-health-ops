@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"time"
 
@@ -603,8 +604,10 @@ WHERE id = $1::uuid`,
 	var counts pendingUnitCounts
 	if committed, err := service.commitFencedAfter(ctx, tx, fence, func(ctx context.Context, tx pgx.Tx) error {
 		var err error
-		end, counts, err = service.armPassWake(ctx, tx, run.id, now, riverQueued, nextDeferredAt, len(deferredOutsideSnapshot) > 0)
-		return err
+		if end, counts, err = service.armPassWake(ctx, tx, run.id, now, riverQueued, nextDeferredAt, len(deferredOutsideSnapshot) > 0); err != nil {
+			return fmt.Errorf("%w: pass tail: %w", ErrDispatchSyncRunUnavailable, err)
+		}
+		return nil
 	}); err != nil {
 		return err
 	} else if !committed {
@@ -678,9 +681,18 @@ const (
 	passEndFinalize
 )
 
+// dispatchTailLockTimeoutSQL bounds every lock wait of the pass's tail. The re-arm takes ROW EXCLUSIVE on
+// sync_dispatch_outbox, which waits on a route mutation's SHARE ROW EXCLUSIVE barrier (syncroute/control.go
+// routeMutationLockSQL) while the pass holds its dispatch row, units and bucket locks. Transaction-local: the body
+// and the commit snapshot keep their own rules. A timeout rolls the pass back and River redelivers it.
+const dispatchTailLockTimeoutSQL = `SET LOCAL lock_timeout = '1000ms'`
+
 // armPassWake is the pass's tail (passTail): it reads the run's pending units on the pass transaction and re-arms
 // the run's dispatch row there. Any error is returned and the pass commits nothing.
 func (service *NativeDispatchSyncRunService) armPassWake(ctx context.Context, tx pgx.Tx, runID string, admittedAt time.Time, riverQueued int, passDeferredAt *time.Time, claimableAfterSnapshot bool) (passEnd, pendingUnitCounts, error) {
+	if _, err := tx.Exec(ctx, dispatchTailLockTimeoutSQL); err != nil {
+		return 0, pendingUnitCounts{}, err
+	}
 	counts, err := computePendingUnitCounts(ctx, tx, runID, service.nowUTC(), admittedAt)
 	if err != nil {
 		return 0, pendingUnitCounts{}, err

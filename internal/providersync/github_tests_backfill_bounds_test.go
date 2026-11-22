@@ -23,8 +23,14 @@ const (
 
 var scheduledModes = []string{"incremental", "full_resync"}
 
-func boundsClaim(mode string) Claim {
-	claim := nativeTestClaim("github", "cicd")
+// boundsClaim is a claim of dataset cicd, the dataset every backfill wave unit of the test-ops family carries (the
+// planner folds tests into cicd, scheduler/sync/backfill_planner.go:104-107, :165-166).
+func boundsClaim(mode string) Claim { return boundsDatasetClaim(mode, "cicd") }
+
+// boundsDatasetClaim sets the cost class from the dataset's capability, as a planned unit has it (empty for an unknown
+// dataset, which Claim.Validate refuses).
+func boundsDatasetClaim(mode, dataset string) Claim {
+	claim := nativeTestClaim("github", dataset)
 	claim.Mode = mode
 	return claim
 }
@@ -60,10 +66,16 @@ type boundsAttempt struct {
 // boundsCollect runs ONE attempt from the stored cursor: it yields at the first run emission or takes the final one.
 func boundsCollect(t *testing.T, handler GitHubTestsRouteHandler, mode, raw string) boundsAttempt {
 	t.Helper()
+	return boundsCollectClaim(t, handler, boundsClaim(mode), raw)
+}
+
+func boundsCollectClaim(t *testing.T, handler GitHubTestsRouteHandler, claim Claim, raw string) boundsAttempt {
+	t.Helper()
+	mode := claim.Mode + "/" + claim.Dataset
 	doer := &githubTestsPagedDoer{t: t, pages: 3, perPage: 50}
 	last, attempt := raw, boundsAttempt{}
 	err := handler.CollectChunks(
-		context.Background(), boundsClaim(mode), providerfoundation.Credential{},
+		context.Background(), claim, providerfoundation.Credential{},
 		githubTestsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), raw,
 		func(emission ChunkRouteEmission) error {
 			last = emission.CursorAfter
@@ -181,9 +193,14 @@ func TestGitHubTestsScheduledModesKeepTheWalkBounds(t *testing.T) {
 
 func boundsConfigErr(t *testing.T, handler GitHubTestsRouteHandler, mode string) error {
 	t.Helper()
+	return boundsConfigErrClaim(t, handler, boundsClaim(mode))
+}
+
+func boundsConfigErrClaim(t *testing.T, handler GitHubTestsRouteHandler, claim Claim) error {
+	t.Helper()
 	doer := &githubTestsPagedDoer{t: t, pages: 1, perPage: 1}
 	err := handler.CollectChunks(
-		context.Background(), boundsClaim(mode), providerfoundation.Credential{},
+		context.Background(), claim, providerfoundation.Credential{},
 		githubTestsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "",
 		func(emission ChunkRouteEmission) error {
 			if emission.Final {
@@ -275,9 +292,10 @@ type restartWalk struct {
 	stored string
 }
 
-func newRestartWalk(t *testing.T, mode string) *restartWalk {
-	claim := listingClaim(listingSince, listingSince.Add(6*time.Hour))
-	claim.Mode = mode
+func newRestartWalk(t *testing.T, mode, dataset string) *restartWalk {
+	claim := boundsDatasetClaim(mode, dataset)
+	since, before := listingSince, listingSince.Add(6*time.Hour)
+	claim.SinceAt, claim.BeforeAt = &since, &before
 	return &restartWalk{t: t, fake: newListingFake(t, makeListingRuns(1, 400, listingSince.Add(time.Minute), 30*time.Second)), claim: claim}
 }
 
@@ -345,7 +363,7 @@ func (walk *restartWalk) cursor() githubTestsChunkCursor {
 // (iii) restart arm: a backfill walk crosses 4,100,000 records across a worker restart (the second attempt resumes from the
 // stored cursor of the first and reads no run again), and later ends at its own bound with the incremental stop's entry.
 func TestGitHubTestsBackfillWalkCrossesTheScheduledBoundAcrossARestart(t *testing.T) {
-	scheduled := newRestartWalk(t, "incremental")
+	scheduled := newRestartWalk(t, "incremental", "cicd")
 	if final, _ := scheduled.attempt(10); final != nil {
 		t.Fatal("premise broken: the incremental walk ended in its first attempt")
 	}
@@ -355,7 +373,7 @@ func TestGitHubTestsBackfillWalkCrossesTheScheduledBoundAcrossARestart(t *testin
 		t.Fatalf("premise broken: the incremental walk did not stop at its bound: incomplete=%+v", scheduled.cursor().Incomplete)
 	}
 
-	walk := newRestartWalk(t, "backfill")
+	walk := newRestartWalk(t, "backfill", "cicd")
 	first, firstRead := walk.attempt(10)
 	if first != nil || len(firstRead) < 10 {
 		t.Fatalf("first attempt: final=%v read=%d, want a yield after 10 runs", first != nil, len(firstRead))
@@ -389,8 +407,11 @@ func TestGitHubTestsBackfillWalkCrossesTheScheduledBoundAcrossARestart(t *testin
 // holds 205,000 records of credit (the scheduled ceiling) earns more for a proven deletion only under backfill.
 func TestGitHubTestsBackfillDeletionCreditCeilingScales(t *testing.T) {
 	const heldCredit = scheduledWalkRecordsPin / 20
-	for mode, wantMore := range map[string]bool{"incremental": false, "full_resync": false, "backfill": true} {
-		walk := newRestartWalk(t, mode)
+	for arm, wantMore := range map[[2]string]bool{
+		{"incremental", "cicd"}: false, {"full_resync", "cicd"}: false, {"backfill", "cicd"}: true, {"backfill", "tests"}: false,
+	} {
+		mode := arm[0] + "/" + arm[1]
+		walk := newRestartWalk(t, arm[0], arm[1])
 		if final, _ := walk.attempt(20); final != nil {
 			t.Fatalf("%s: premise broken: the walk ended in its first attempt", mode)
 		}
@@ -446,4 +467,51 @@ func backfillCursorFloor(name string, floor int) int {
 		return backfillDeepRangePeelCursorFloor
 	}
 	return floor
+}
+
+// Every (mode, dataset) arm of the shared claim fields: ONLY (backfill, cicd) gets 25,000 runs / 40,000,000 records. The
+// other valid arms keep main's 10,000 / 4,100,000 (accept the bound, refuse bound+1, stop at the bound, list one under
+// it); an empty or unknown mode or dataset is refused by Claim.Validate before any bound, as on main.
+func TestGitHubTestsWalkBoundsPerModeAndDataset(t *testing.T) {
+	for _, mode := range []string{"backfill", "incremental", "full_resync", "", "hourly"} {
+		for _, dataset := range []string{"cicd", "tests", "", "builds"} {
+			claim := boundsDatasetClaim(mode, dataset)
+			valid := claim.Validate() == nil
+			runs, records := scheduledRunsPin, scheduledWalkRecordsPin
+			if mode == "backfill" && dataset == "cicd" {
+				runs, records = backfillRunsPin, backfillWalkRecordsPin
+			}
+			arm := mode + "/" + dataset
+			if !valid {
+				for _, handler := range []GitHubTestsRouteHandler{{}, {MaxWalkRecords: backfillWalkRecordsPin}, {MaxRuns: backfillRunsPin}} {
+					if err := boundsConfigErrClaim(t, handler, claim); !errors.Is(err, ErrInvalidConfiguration) {
+						t.Errorf("%s: err=%v, want ErrInvalidConfiguration (refused before any bound)", arm, err)
+					}
+				}
+				continue
+			}
+			for _, cell := range []struct {
+				handler GitHubTestsRouteHandler
+				refused bool
+			}{
+				{GitHubTestsRouteHandler{MaxWalkRecords: records}, false}, {GitHubTestsRouteHandler{MaxWalkRecords: records + 1}, true},
+				{GitHubTestsRouteHandler{MaxRuns: runs}, false}, {GitHubTestsRouteHandler{MaxRuns: runs + 1}, true},
+			} {
+				err := boundsConfigErrClaim(t, cell.handler, claim)
+				if refused := errors.Is(err, ErrInvalidConfiguration); refused != cell.refused || (!refused && err != nil) {
+					t.Errorf("%s MaxWalkRecords=%d MaxRuns=%d: err=%v, want refused=%v", arm, cell.handler.MaxWalkRecords, cell.handler.MaxRuns, err, cell.refused)
+				}
+			}
+			at := boundsCollectClaim(t, GitHubTestsRouteHandler{}, claim, boundsStoredCursor(t, githubTestsArtifactsPhase, records, nil))
+			under := boundsCollectClaim(t, GitHubTestsRouteHandler{}, claim, boundsStoredCursor(t, githubTestsArtifactsPhase, records-1, nil))
+			pages := boundsCollectClaim(t, GitHubTestsRouteHandler{}, claim, boundsSpentPagesCursor(t, githubTestsRunsPhase, runs/nativePerPage))
+			t.Logf("CELL arms/%s bound=%d/%d stop=%v under-lists=%v pages-stop=%v", arm, runs, records, at.final != nil && !at.listed(),
+				under.final == nil && under.listed(), githubTestsHasPageBudgetObservation(pages.cursor, githubTestsRunInventoryComponent))
+			if at.final == nil || at.listed() || under.final != nil || !under.listed() ||
+				!githubTestsHasPageBudgetObservation(pages.cursor, githubTestsRunInventoryComponent) {
+				t.Errorf("%s: stop at %d records final=%v listed=%v; at %d final=%v listed=%v; %d pages spent incomplete=%+v; want the stop at the arm's bound",
+					arm, records, at.final != nil, at.listed(), records-1, under.final != nil, under.listed(), runs/nativePerPage, pages.cursor.Incomplete)
+			}
+		}
+	}
 }

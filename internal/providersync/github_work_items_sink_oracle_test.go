@@ -206,6 +206,13 @@ func TestDirectAdapterProjectionsMatchTheFrozenPythonSink(t *testing.T) {
 					t.Fatalf("columns after the Python freeze: %v", problems)
 				}
 			}
+			if testCase.destination == "work_item_transitions" {
+				var problems []string
+				goColumns, goRows, problems = withoutTransitionColumnsAfterThePythonFreeze(goColumns, goRows)
+				if len(problems) > 0 {
+					t.Fatalf("columns after the Python freeze: %v", problems)
+				}
+			}
 			if testCase.destination == "work_item_interactions" {
 				var problems []string
 				goColumns, goRows, problems = withoutInteractionColumnsAfterThePythonFreeze(goColumns, goRows)

@@ -68,7 +68,7 @@ func TestGitHubWorkItemStatusTransitionMatchesFrozenPythonProductionRow(t *testi
 			{ID: "issue_labeled_in_progress", Input: issueInput},
 		},
 		buildGitHubStatusTransitionOracleRow,
-		githubWorkItemWriteStampGoOnly,
+		withTransitionBoardSlotGoOnly(githubWorkItemWriteStampGoOnly),
 	)
 }
 

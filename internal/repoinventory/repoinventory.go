@@ -1,5 +1,7 @@
 // Package repoinventory is an organization's repository inventory: the
-// canonical "owner/name" slugs in the ClickHouse repos table. It is the one
+// canonical repository slugs in the ClickHouse repos table, in the Auth
+// Control Plane's repository key grammar (internal/auth/repokey) without its
+// "*" token, so a GitLab path in nested groups is a repository too. It is the one
 // definition of that list. query-api's catalog serves it as the REPO
 // dimension (internal/queryapi/analytics, the list web reads as an org's Ask
 // Dev repository scope), and go-api's ACR access read
@@ -13,6 +15,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/repokey"
 )
 
 // Limit is the most repositories an inventory may hold. A larger inventory is
@@ -27,12 +31,30 @@ const QueryLimit = Limit + 1
 // ErrOverLimit is an inventory with more than Limit repositories.
 var ErrOverLimit = errors.New("repoinventory: repository inventory exceeds the supported scope limit")
 
-// part matches one half of an "owner/name" repository slug.
-var part = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$`)
+// SlugPattern is repokey.SchemaPattern without its "*" arm: the inventory
+// never holds the organization-wide token as a repository. It has no quote and
+// no backslash, so it is one ClickHouse string literal as written.
+var SlugPattern = slugPattern()
+
+var slugRegexp = regexp.MustCompile(SlugPattern)
+
+func slugPattern() string {
+	const starArm = `|\*)$`
+	if !strings.HasSuffix(repokey.SchemaPattern, starArm) {
+		panic("repoinventory: repokey.SchemaPattern does not end with its \"*\" arm")
+	}
+	return strings.TrimSuffix(repokey.SchemaPattern, starArm) + `)$`
+}
+
+// validSlug is the grammar Statement and ExistsStatement apply in SQL.
+func validSlug(value string) bool {
+	return len(value) <= repokey.MaxBytes && slugRegexp.MatchString(value)
+}
 
 // Statement is the inventory read: the lowercased, trimmed repo of every
 // repos row of the organization, kept only when it is a well-formed slug,
-// counted per slug and ordered by slug. It binds {org_id:String} and
+// counted per slug and ordered by slug. A slug is 2-20 segments in at most
+// repokey.MaxBytes bytes (SlugPattern). It binds {org_id:String} and
 // {limit_n:UInt32} (QueryLimit); settings is the trailing SETTINGS clause.
 func Statement(settings string) string {
 	return fmt.Sprintf(`
@@ -44,15 +66,16 @@ FROM (
     FROM repos FINAL
     WHERE org_id = {org_id:String}
 )
-WHERE match(
+WHERE length(canonical_repo) <= %d
+  AND match(
     canonical_repo,
-    '^[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?/[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?$'
-)
+    '%s'
+  )
 GROUP BY canonical_repo
 ORDER BY value
 LIMIT {limit_n:UInt32}
 %s
-`, settings)
+`, repokey.MaxBytes, SlugPattern, settings)
 }
 
 // ExistsStatement is the existence probe: one row when the organization has at
@@ -65,13 +88,14 @@ func ExistsStatement(settings string) string {
 SELECT 1 AS present
 FROM repos FINAL
 WHERE org_id = {org_id:String}
+  AND length(lowerUTF8(trimBoth(repo))) <= %d
   AND match(
     lowerUTF8(trimBoth(repo)),
-    '^[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?/[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?$'
+    '%s'
   )
 LIMIT 1
 %s
-`, settings)
+`, repokey.MaxBytes, SlugPattern, settings)
 }
 
 // Row is one row of Statement: a slug and its row count.
@@ -87,19 +111,18 @@ type Item struct {
 	Count uint64
 }
 
-// Canonical trims and lowercases each value, keeps only well-formed
-// "owner/name" slugs, merges duplicates by summing their counts, refuses an
+// Canonical trims and lowercases each value, keeps only well-formed slugs (the
+// grammar of Statement), merges duplicates by summing their counts, refuses an
 // inventory above Limit (ErrOverLimit) and returns the slugs sorted. An empty
 // inventory is a non-nil empty slice.
 func Canonical(rows []Row) ([]Item, error) {
 	counts := map[string]uint64{}
 	for _, row := range rows {
-		parts := strings.Split(strings.ToLower(strings.TrimSpace(row.Value)), "/")
-		if len(parts) != 2 || !part.MatchString(parts[0]) || !part.MatchString(parts[1]) {
+		value := strings.ToLower(strings.TrimSpace(row.Value))
+		if !validSlug(value) {
 			continue
 		}
-		slug := parts[0] + "/" + parts[1]
-		counts[slug] += row.Count
+		counts[value] += row.Count
 	}
 	if len(counts) > Limit {
 		return nil, fmt.Errorf("%w: %d repositories", ErrOverLimit, len(counts))

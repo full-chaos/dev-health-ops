@@ -533,7 +533,7 @@ func TestClickHouseRepositoryExistenceEqualsTheCatalogBeingNonEmpty(t *testing.T
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	org, other, empty, malformed, big := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	org, other, empty, malformed, nested, big := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	insert := func(orgID uuid.UUID, repo string) {
 		t.Helper()
 		if err := conn.Exec(ctx, `INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
@@ -545,8 +545,11 @@ func TestClickHouseRepositoryExistenceEqualsTheCatalogBeingNonEmpty(t *testing.T
 		insert(org, repo)
 	}
 	insert(other, "elsewhere/repo")
-	for _, repo := range []string{"not-a-slug", "a/b/c", " "} {
+	for _, repo := range []string{"not-a-slug", "a//b", "*", "a/b/", " "} {
 		insert(malformed, repo)
+	}
+	for _, repo := range []string{"grp/sub/api", " Grp/Sub/Deep/Web "} {
+		insert(nested, repo)
 	}
 	for i := 0; i <= repoinventory.Limit+4; i++ {
 		insert(big, fmt.Sprintf("acme/r%03d", i))
@@ -565,7 +568,7 @@ func TestClickHouseRepositoryExistenceEqualsTheCatalogBeingNonEmpty(t *testing.T
 		}
 		return values
 	}
-	for name, orgID := range map[string]uuid.UUID{"seeded": org, "other": other, "empty": empty, "malformed only": malformed} {
+	for name, orgID := range map[string]uuid.UUID{"seeded": org, "other": other, "empty": empty, "malformed only": malformed, "nested only": nested} {
 		got, err := probe.HasRepositories(ctx, orgID)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -576,6 +579,15 @@ func TestClickHouseRepositoryExistenceEqualsTheCatalogBeingNonEmpty(t *testing.T
 	}
 	if got, err := probe.HasRepositories(ctx, big); err != nil || !got {
 		t.Fatalf("an org above the catalog limit: %v, %v; want true", got, err)
+	}
+	if got, err := probe.HasRepositories(ctx, nested); err != nil || !got {
+		t.Fatalf("a nested-only org: %v, %v; want true", got, err)
+	}
+	if got, want := catalog(nested), []string{"grp/sub/api", "grp/sub/deep/web"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("nested-only catalog = %v, want %v", got, want)
+	}
+	if got, err := probe.HasRepositories(ctx, malformed); err != nil || got {
+		t.Fatalf("a malformed-only org: %v, %v; want false", got, err)
 	}
 
 	const samples = 200

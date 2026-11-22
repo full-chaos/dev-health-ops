@@ -379,7 +379,6 @@ func readStaleFinalizeLevels(ctx context.Context, tx pgx.Tx, levelsSQL string, c
 const (
 	staleFinalizeBaseSQL = `run.status = 'running'
 	AND run.finalization_status = 'pending'
-	AND run.updated_at <= $1
 	AND NOT EXISTS (
 		SELECT 1 FROM public.daily_metrics_partitions AS partition
 		WHERE partition.run_id = run.id

@@ -9,6 +9,7 @@ replace atlassian => ./third_party/vendor/atlassian
 require (
 	atlassian v0.0.0
 	github.com/99designs/gqlgen v0.17.66
+	github.com/ClickHouse/ch-go v0.75.0
 	github.com/ClickHouse/clickhouse-go/v2 v2.51.0
 	github.com/beevik/etree v1.7.0
 	github.com/compose-spec/compose-go/v2 v2.16.1
@@ -58,7 +59,6 @@ require (
 require (
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20261006220739-8c912ac31dd4 // indirect
-	github.com/ClickHouse/ch-go v0.75.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/agnivade/levenshtein v1.2.0 // indirect
 	github.com/andybalholm/brotli v1.2.7 // indirect

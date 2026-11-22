@@ -589,8 +589,8 @@ func remainingPageBudget(budget, spent int) (int, error) {
 // hours without an end held about 8,000,000.
 const githubTestsMaxWalkRecords = 4_100_000
 
-// A backfill claim of dataset cicd (one day per unit) gets higher bounds: a busy prod day had 9,303 runs of about 1,800 rows
-// each, and its listing spans two days (16,071 runs at most). Its medium bucket (cap 2) keeps one slot from backfill
+// A backfill claim of dataset cicd (one day per unit) gets higher bounds: a large repository can pass 10,000 CI runs in one
+// backfill window, and these bounds are sized with margin. Its medium bucket (cap 2) keeps one slot from backfill
 // (backfillSlotLimit); a tests unit's heavy bucket has cap 1 and no such reserve, so it keeps the scheduled bounds.
 const (
 	githubTestsBackfillMaxRuns        = 25_000

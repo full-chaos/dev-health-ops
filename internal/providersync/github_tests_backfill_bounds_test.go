@@ -35,7 +35,7 @@ func boundsDatasetClaim(mode, dataset string) Claim {
 	return claim
 }
 
-// boundsStoredCursor is the stalled prod cursor shape with the given total records (the rest in Cases); mutate edits it.
+// boundsStoredCursor is the stalled cursor shape of githubTestsStalledBackfillCursor with the given total records (the rest in Cases); mutate edits it.
 func boundsStoredCursor(t *testing.T, phase string, records int, mutate func(*githubTestsChunkCursor)) string {
 	t.Helper()
 	stored, err := decodeGitHubTestsChunkCursor(githubTestsStalledBackfillCursor(t, phase, "api.github.com"))
@@ -142,7 +142,7 @@ func boundsWindowCursor(t *testing.T) string {
 	})
 }
 
-// boundsSpentPagesCursor is a cursor at a page end of its phase's listing with the given pages spent, 2,002,076 records.
+// boundsSpentPagesCursor is a cursor at a page end of its phase's listing with the given pages spent, under the record bound.
 func boundsSpentPagesCursor(t *testing.T, phase string, pages int) string {
 	return boundsStoredCursor(t, phase, 2_002_076, func(cursor *githubTestsChunkCursor) {
 		cursor.NextURL, cursor.Index = "", 0

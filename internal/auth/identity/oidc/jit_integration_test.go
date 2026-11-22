@@ -585,16 +585,15 @@ func (j *jitHarness) setAllowedDomains(t *testing.T, list any) {
 
 func TestOIDCJITNewAccountFollowsTheDomainList(t *testing.T) {
 	t.Run("oidc", func(t *testing.T) {
-		// Legacy parity: an empty or NULL list is no domain filter.
+		// An empty or NULL list makes no new account: the answer of auto-provisioning off, no write.
 		for name, list := range map[string]any{"empty": "[]", "null": nil} {
 			t.Run(name, func(t *testing.T) {
 				j := newJITHarness(t, harnessOpts{})
 				j.setAllowedDomains(t, list)
-				email := uniqueEmail("jit-list")
-				if _, failure := j.signIn(t, "sub-"+uuid.NewString(), email); failure != nil {
-					t.Fatalf("sign-in: %v", failure)
-				}
-				j.wantOneMembership(t, j.principalOf(t, email), "member")
+				before := j.jitTableCounts(t)
+				_, failure := j.signIn(t, "sub-"+uuid.NewString(), uniqueEmail("jit-list"))
+				wantDenied(t, failure, http.StatusBadRequest, ReasonProvisioningDisabled)
+				wantSameCounts(t, before, j.jitTableCounts(t))
 			})
 		}
 		t.Run("listed", func(t *testing.T) {

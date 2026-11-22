@@ -206,7 +206,7 @@ func scheduleRedispatch(ctx context.Context, pool *pgxpool.Pool, logger *synclog
 		return
 	}
 	// The claim liveness the upsert judges is taken at now, not at the target: a relay claim live now stays (CHAOS-14477).
-	if err := upsertDiscoveryOutboxWakeup(ctx, tx, "", syncRunID, outboxKindDispatchSyncRun, redispatchAt, now); err != nil {
+	if err := upsertDiscoveryOutboxWakeup(ctx, tx, "", syncRunID, outboxKindDispatchSyncRun, redispatchAt, redispatchAt); err != nil { // MUTANT M3
 		fail(err)
 		return
 	}

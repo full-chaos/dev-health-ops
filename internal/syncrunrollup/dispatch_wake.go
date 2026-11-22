@@ -161,7 +161,7 @@ WHERE run.id = $2::uuid
 // relay made after the pass committed; its pass starts after that commit and sees every write of this one, so this
 // wake has nothing to add, and moving the row to 'pending' would refuse the delivery at its start fence.
 const WakeDispatchForDeliverySQL = WakeDispatchSQL + `
-WHERE NOT (public.sync_dispatch_outbox.status = 'dispatched' AND public.sync_dispatch_outbox.attempts <> $4::bigint)`
+WHERE NOT (public.sync_dispatch_outbox.attempts <> $4::bigint)`
 
 // Execer is the one method WakeDispatch needs: *pgxpool.Pool and pgx.Tx both
 // satisfy it.

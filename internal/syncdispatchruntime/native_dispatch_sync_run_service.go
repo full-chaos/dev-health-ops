@@ -615,7 +615,7 @@ WHERE id = $1::uuid`,
 	if slotsFreedInPass > 0 {
 		// Fenced on the delivery attempt: a newer delivery of this run (the relay delivered a wake that landed after this
 		// commit) owns the row, and its pass sees this pass's writes (CHAOS-14477).
-		defer syncrunrollup.WakeDispatchForDelivery(ctx, service.pool, run.id, service.nowUTC(), syncrunrollup.DispatchWakePathDispatchPass, args.Attempt())
+		defer syncrunrollup.WakeDispatch(ctx, service.pool, run.id, service.nowUTC(), syncrunrollup.DispatchWakePathDispatchPass) // MUTANT M2
 	}
 	// CHAOS-8880: this pass left free slots to older runs of a bucket; their next pass is due now, not at their
 	// back-off. After the commit, like the wake above, so the older pass sees this pass's claims.

@@ -46,7 +46,7 @@ func TestResolve_ScopeIsInEveryRead(t *testing.T) {
 		t.Fatalf("%d statements", len(cl.statements))
 	}
 	daily, quadrant := cl.statements[0], cl.statements[1]
-	repoClause := "repo_id IN (\n              SELECT id FROM repos\n              WHERE org_id = {org_id:String}"
+	repoClause := "SELECT id FROM repos FINAL\n                  WHERE org_id = {org_id:String}"
 	teamClause := "toString(repo_id) IN ("
 	for name, read := range map[string]string{
 		"release confidence": between(t, daily, "FROM testops_release_confidence", "GROUP BY day, repo_id"),

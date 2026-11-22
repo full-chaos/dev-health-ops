@@ -189,17 +189,22 @@ type scopeFilter struct {
 	bindings   []clickhouse.Binding
 }
 
-// newScopeFilter builds the scope of repoIds (ids or full names) and teamIds (the repositories these teams
-// own, teamscope.RepoCondition). A nil or empty list is no scope. A blank team id is dropped by teamscope, so a
-// list of blank ids is no team scope; a list of blank repository ids matches no repository.
+// newScopeFilter builds the scope of repoIds (ids or full names). An id selects the risk rows that carry it, whether or
+// not the catalog holds the repository (each read scopes org_id itself, and the quadrant names such a repository by its
+// id); a full name selects the repository that holds it in the latest stored version of its catalog row (FINAL), and a
+// blank name is none, so a list of blank repository ids matches no repository. teamIds are the repositories these teams
+// own (teamscope.RepoCondition). A nil or empty list is no scope; a blank team id is dropped by teamscope, so a list
+// of blank team ids is no team scope.
 func newScopeFilter(orgID string, repoIDs, teamIDs []string, asOf time.Time) scopeFilter {
 	var f scopeFilter
 	if len(repoIDs) > 0 {
-		f.conditions = append(f.conditions, `repo_id IN (
-              SELECT id FROM repos
-              WHERE org_id = {org_id:String}
-                AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
-          )`)
+		f.conditions = append(f.conditions, `(toString(repo_id) IN {repo_ids:Array(String)}
+              OR repo_id IN (
+                  SELECT id FROM repos FINAL
+                  WHERE org_id = {org_id:String}
+                    AND repo != ''
+                    AND repo IN {repo_ids:Array(String)}
+              ))`)
 		f.bindings = append(f.bindings, clickhouse.Binding{Name: "repo_ids", Value: repoIDs})
 	}
 	if condition, bindings := teamscope.RepoCondition(orgID, "toString(repo_id)", teamIDs, asOf); condition != "" {

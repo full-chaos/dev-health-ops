@@ -4,15 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/repokey"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/repoinventory"
 )
 
 // The golden holds, for neutral requests to the catalog (every dimension
@@ -187,6 +191,7 @@ func TestCatalogMatchesTheFrozenGolden(t *testing.T) {
 					want = strings.ReplaceAll(want, "%(timeout)s", jsonNumberText(timeout))
 				}
 				want = declaredCompletionSourceDivergence(want)
+				want = declaredRepositoryKeyDivergence(want)
 				investment := tc.Dim != nil && (*tc.Dim == "WORK_TYPE" || *tc.Dim == "THEME" || *tc.Dim == "SUBCATEGORY")
 				if text != want && !investment {
 					t.Errorf("query text differs:\n got  %s\n want %s", text, want)
@@ -241,6 +246,9 @@ func TestCatalogMatchesTheFrozenGolden(t *testing.T) {
 			want := map[string]any{}
 			for k, v := range tc.Expected {
 				want[catalogCamel(k)] = catalogCamelDeep(v)
+			}
+			if values, ok := tc.Expected["values"].([]any); ok && tc.Dim != nil && *tc.Dim == "REPO" {
+				want["values"] = catalogCamelDeep(declaredRepositoryKeyValues(t, tc.Rows, values))
 			}
 			// The JSON tag omits an empty list; the schema distinguishes a null
 			// list (no dimension asked) from an empty one, so restore it from
@@ -317,7 +325,7 @@ func catalogCamelDeep(v any) any {
 	return v
 }
 
-// declaredCompletionSourceDivergence is the ONE declared divergence of the catalog text from the frozen Python text
+// declaredCompletionSourceDivergence is the first declared divergence of the catalog text from the frozen Python text
 // (CHAOS-9264, chris 2026-10-11: no rule-based classification is stored or read): the non-investment source is
 // work_item_completion_daily, which has no investment_area or project_stream column, instead of
 // investment_metrics_daily. Only the fragments of that source are rewritten, mechanically, in the frozen text; every
@@ -332,4 +340,41 @@ func declaredCompletionSourceDivergence(frozen string) string {
 		frozen = strings.ReplaceAll(frozen, rewrite[0], rewrite[1])
 	}
 	return frozen
+}
+
+// frozenRepositoryMatch is the frozen Python repository rule, as the golden holds it with whitespace collapsed:
+// owner/name only.
+const frozenRepositoryMatch = "WHERE match( canonical_repo, '^[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?/[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?$' )"
+
+// declaredRepositoryKeyDivergence is the second declared divergence of the catalog text from the frozen Python text
+// (CHAOS-14390): the repository inventory keeps every repository key of the Auth Control Plane grammar (2-20 segments
+// in at most repokey.MaxBytes bytes, never "*"), so a GitLab path in nested groups is a repository. Only the frozen
+// match clause is rewritten, mechanically; every other byte is compared. The golden file is not edited.
+func declaredRepositoryKeyDivergence(frozen string) string {
+	return strings.ReplaceAll(frozen, frozenRepositoryMatch,
+		fmt.Sprintf("WHERE length(canonical_repo) <= %d AND match( canonical_repo, '%s' )", repokey.MaxBytes, repoinventory.SlugPattern))
+}
+
+// declaredRepositoryKeyValues is the same divergence in the frozen result: every row the frozen owner/name rule
+// dropped and the repository key grammar keeps (repokey.Valid, not "*") is added, counts summed, values sorted.
+func declaredRepositoryKeyValues(t *testing.T, rows []map[string]any, frozen []any) []any {
+	t.Helper()
+	frozenRule := regexp.MustCompile(strings.TrimSuffix(strings.SplitN(frozenRepositoryMatch, "'", 2)[1], "' )"))
+	counts := map[string]float64{}
+	for _, row := range rows {
+		value, _ := row["value"].(string)
+		value = strings.ToLower(strings.TrimSpace(value))
+		count, _ := row["count"].(float64)
+		if !frozenRule.MatchString(value) && value != "*" && repokey.Valid(value) {
+			counts[value] += count
+		}
+	}
+	out := append([]any{}, frozen...)
+	for value, count := range counts {
+		out = append(out, map[string]any{"value": value, "count": count})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].(map[string]any)["value"].(string) < out[j].(map[string]any)["value"].(string)
+	})
+	return out
 }

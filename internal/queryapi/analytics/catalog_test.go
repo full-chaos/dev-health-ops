@@ -154,6 +154,9 @@ func TestCanonicalRepositoryValues(t *testing.T) {
 		{"acme/other", 1},
 		{"no-slash", 5},
 		{"a/b/c", 5},
+		{"a//b", 5},
+		{"a/b/", 5},
+		{"*", 5},
 		{"-bad/name", 5},
 		{"ok/na me", 5},
 	}
@@ -161,7 +164,7 @@ func TestCanonicalRepositoryValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []model.CatalogValueItem{{Value: "acme/other", Count: 1}, {Value: "acme/widget", Count: 5}}
+	want := []model.CatalogValueItem{{Value: "a/b/c", Count: 5}, {Value: "acme/other", Count: 1}, {Value: "acme/widget", Count: 5}}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}

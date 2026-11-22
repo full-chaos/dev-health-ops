@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"reflect"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -360,8 +361,9 @@ func TestProviderRequestSpanChangesNoReturnValue(t *testing.T) {
 }
 
 // C4b: error text never reaches a span. The blob leg fails with a transport error whose text (net/http's *url.Error)
-// holds the signed URL; the API leg answers 404 on an owner/repo path. No name, attribute, event or status, raw or
-// exported, holds the signature, the blob host, the owner, the repository or the path.
+// holds the signed URL; the API leg answers 404 on an owner/repo path; a budget store returns an error whose text holds
+// the signed URL, which the client returns as it is. No name, attribute, event or status, raw or exported, holds the
+// signature, the blob host, the owner, the repository or the path.
 func TestProviderRequestErrorTextNeverReachesASpan(t *testing.T) {
 	pipeline := spantest.Install(t)
 	blobURL := "http://blob.test/x?sig=" + spanTestSecret
@@ -379,13 +381,17 @@ func TestProviderRequestErrorTextNeverReachesASpan(t *testing.T) {
 	apiClient := spanTestClient(t, api.URL, noFollowClient(), oneAttempt())
 	response, apiErr := apiClient.Do(pipeline.Parent, http.MethodGet, "/repos/"+spanTestOwner+"/"+spanTestRepo+"/actions/artifacts/"+spanTestArtifactID+"/zip", nil)
 	closeBody(response)
-	if blobErr == nil || apiErr == nil {
-		t.Fatalf("blob err=%v api err=%v, want both to fail", blobErr, apiErr)
+	budgetClient := spanTestClient(t, "https://api.example.test", failing, oneAttempt())
+	budgetClient.Budget = spanTestBudget{acquireErr: errors.New("budget store refused " + blobURL)}
+	response, budgetErr := budgetClient.DoUnauthenticated(pipeline.Parent, http.MethodGet, blobURL)
+	closeBody(response)
+	if blobErr == nil || apiErr == nil || budgetErr == nil || !strings.Contains(budgetErr.Error(), spanTestSecret) {
+		t.Fatalf("blob err=%v api err=%v budget err=%v, want all three to fail, the last with the URL in its text", blobErr, apiErr, budgetErr)
 	}
 
 	pairs := pipeline.Pairs(spanTestRequestName)
-	if len(pairs) != 2 {
-		t.Fatalf("request spans = %d, want 2", len(pairs))
+	if len(pairs) != 3 {
+		t.Fatalf("request spans = %d, want 3", len(pairs))
 	}
 	for index, pair := range pairs {
 		status := index == 1
@@ -395,5 +401,25 @@ func TestProviderRequestErrorTextNeverReachesASpan(t *testing.T) {
 	}
 	if got := spanTestString(t, pairs[1], "error.type"); got != string(ErrorNotFound) {
 		t.Errorf("api error.type = %q, want not_found", got)
+	}
+}
+
+// C2, nil context: the span start takes a nil context without a panic and makes no span (DoRoute passes a nil context
+// to Do; Do and DoUnauthenticated cannot send with one).
+func TestRequestSpanGuardTakesANilContext(t *testing.T) {
+	pipeline := spantest.Install(t)
+	client := spanTestClient(t, "https://api.example.test", fakehttp.Client(HTTPDoerFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("unused")
+	})), oneAttempt())
+	var nilCtx context.Context
+	for _, target := range []string{requestTargetAPI, requestTargetRedirect} {
+		ctx, probe := client.startRequestSpan(nilCtx, http.MethodGet, target)
+		if ctx != nil || probe != nil {
+			t.Fatalf("target %s: ctx=%v probe=%v, want nil and nil", target, ctx, probe)
+		}
+		probe.end(nil, nil)
+	}
+	if spans := pipeline.Ended(); len(spans) != 0 {
+		t.Fatalf("spans = %d, want 0", len(spans))
 	}
 }

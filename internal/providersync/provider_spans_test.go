@@ -12,6 +12,7 @@ import (
 
 	"go.opentelemetry.io/otel/codes"
 
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/spantest"
 )
 
@@ -139,7 +140,13 @@ func TestGitHubTestsArtifactDownloadSpanMeasuresEachBranch(t *testing.T) {
 				if request.Raw.Parent().SpanID() != pair.Raw.SpanContext().SpanID() {
 					t.Errorf("request span parent = %s, want the download span", request.Raw.Parent().SpanID())
 				}
+				if route, _ := spantest.Value(request.Raw.Attributes(), "http.route"); route.AsString() != githubArtifactZipRoute {
+					t.Errorf("request span route = %q, want the template %q", route.AsString(), githubArtifactZipRoute)
+				}
 				for _, word := range forbidden {
+					if word == "/actions/" {
+						continue // the route template names it; the template is checked above
+					}
 					if strings.Contains(spantest.RawText(request.Raw), word) || strings.Contains(spantest.ExportedText(request.Exported), word) {
 						t.Errorf("request span carries %q", word)
 					}
@@ -245,5 +252,123 @@ func TestChunkCommitSpanOfAContinuationIsNotAnError(t *testing.T) {
 	}
 	if got, want := spanInt(t, pair, "dev_health.chunk.count"), int64(1); got != want {
 		t.Errorf("count = %d, want %d (the chunks committed before the bound)", got, want)
+	}
+}
+
+// C6: the parse span counts what the parse returned; an archive that will not open is the routine outcome unreadable
+// (no Error status), a parse refusal is failed with the class only.
+func TestGitHubTestsArtifactParseSpanCountsTheParsedRows(t *testing.T) {
+	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	archive := githubTestsZip(t, map[string]string{"junit.xml": githubTestsMultiSuiteJUnit(3)})
+	slot := githubTestsReportSlot{Name: "test-results", Attempt: 1}
+	cases := []struct {
+		name    string
+		archive []byte
+		repoID  string
+		outcome string
+		failed  bool
+	}{
+		{"parsed", archive, "repo-1", "parsed", false},
+		{"unreadable", []byte("not a zip archive " + spanSecret), "repo-1", "unreadable", false},
+		{"failed", archive, "", "failed", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pipeline := spantest.Install(t)
+			rows, err := parseGitHubTestsReportArtifactInSpan(pipeline.Parent, tc.archive, func() (githubTestsReportRows, error) {
+				return parseGitHubTestsReportArtifact(tc.archive, spanArtifactRead, slot, nil, tc.repoID, "run-1", "org-1", nil, nil, normalizedAt)
+			})
+			if (err == nil) != (tc.outcome == "parsed") || (tc.outcome == "parsed" && len(rows.Cases) == 0) {
+				t.Fatalf("rows cases=%d err=%v, want the %s branch", len(rows.Cases), err, tc.outcome)
+			}
+			pairs := pipeline.Pairs(spanParseName)
+			if len(pairs) != 1 {
+				t.Fatalf("parse spans = %d, want 1", len(pairs))
+			}
+			pair := pairs[0]
+			spantest.Check(t, pair, []string{"dev_health.artifact.bytes", "dev_health.tests.cases", "dev_health.tests.reports", "dev_health.tests.suites", "outcome"},
+				spanSecret, spanArtifactRead, "not a zip", "zip:", "repo-1", "run-1", "org-1")
+			if got := spanOutcome(t, pair, []string{"parsed", "unreadable", "failed"}); got != tc.outcome {
+				t.Errorf("outcome = %q, want %q", got, tc.outcome)
+			}
+			for key, want := range map[string]int64{
+				"dev_health.artifact.bytes": int64(len(tc.archive)), "dev_health.tests.cases": int64(len(rows.Cases)),
+				"dev_health.tests.suites": int64(len(rows.Suites)), "dev_health.tests.reports": int64(rows.ReportsParsed),
+			} {
+				if got := spanInt(t, pair, key); got != want {
+					t.Errorf("%s = %d, want %d", key, got, want)
+				}
+			}
+			if failed := pair.Raw.Status().Code == codes.Error; failed != tc.failed {
+				t.Errorf("Error status = %v, want %v", failed, tc.failed)
+			}
+		})
+	}
+}
+
+type spanContendedBudget struct{}
+
+func (spanContendedBudget) Acquire(context.Context, providerfoundation.BudgetKey) (providerfoundation.Reservation, error) {
+	return nil, providerfoundation.ErrBudgetContended
+}
+
+// A contended budget is no failure of the download: outcome budget_contended, no Error status, and the download
+// returns the contention as it did.
+func TestGitHubTestsArtifactDownloadSpanOfAContendedBudgetIsNotAnError(t *testing.T) {
+	pipeline := spantest.Install(t)
+	client := githubTestsClient(t, spanArtifactDoer(t, nil))
+	client.Budget = spanContendedBudget{}
+	_, used, notFound, err := downloadGitHubTestsListedArtifact(pipeline.Parent, client, spanRoot, spanArtifactRead, spanArtifactCapped, -1)
+	if !errors.Is(err, providerfoundation.ErrBudgetContended) || used != 0 || notFound {
+		t.Fatalf("used=%d notFound=%v err=%v, want ErrBudgetContended", used, notFound, err)
+	}
+	pairs := pipeline.Pairs(spanDownloadName)
+	if len(pairs) != 1 {
+		t.Fatalf("download spans = %d, want 1", len(pairs))
+	}
+	spantest.Check(t, pairs[0], spanDownloadKeys, spanOwner, spanRepo, spanArtifactRead)
+	if got := spanOutcome(t, pairs[0], spanDownloadOutcomes); got != "budget_contended" {
+		t.Errorf("outcome = %q, want budget_contended", got)
+	}
+	if pairs[0].Raw.Status().Code == codes.Error || len(pairs[0].Raw.Events()) != 0 {
+		t.Errorf("status = %v events = %d, want no Error status and no event", pairs[0].Raw.Status().Code, len(pairs[0].Raw.Events()))
+	}
+}
+
+// C2 for the step spans: no parent, a valid parent that is not sampled, and a nil context give no span and no panic.
+// The download and the executor cannot run with a nil context (WithWireCount, LeaseSession.Run), so the nil context
+// goes to their span starts.
+func TestStepSpansNeedARecordingParent(t *testing.T) {
+	pipeline := spantest.Install(t)
+	archive := githubTestsZip(t, map[string]string{"junit.xml": githubTestsMultiSuiteJUnit(1)})
+	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	for name, ctx := range map[string]context.Context{"no parent": context.Background(), "unsampled parent": spantest.UnsampledParent()} {
+		if _, _, _, err := downloadGitHubTestsListedArtifact(ctx, githubTestsClient(t, spanArtifactDoer(t, archive)), spanRoot, spanArtifactRead, spanArtifactCapped, -1); err != nil {
+			t.Fatalf("%s download: %v", name, err)
+		}
+		if _, err := parseGitHubTestsReportArtifactInSpan(ctx, archive, func() (githubTestsReportRows, error) {
+			return parseGitHubTestsReportArtifact(archive, spanArtifactRead, githubTestsReportSlot{Name: "r", Attempt: 1}, nil, "repo-1", "run-1", "org-1", nil, nil, normalizedAt)
+		}); err != nil {
+			t.Fatalf("%s parse: %v", name, err)
+		}
+		if _, err := spanChunkExecution(t, ctx, 8); err != nil {
+			t.Fatalf("%s execute: %v", name, err)
+		}
+	}
+	nilCtx := context.Context(nil)
+	if ctx, span := startGitHubTestsDownloadSpan(nilCtx); ctx != nil || span != nil {
+		t.Fatal("download span start with a nil context made a span")
+	}
+	endGitHubTestsDownloadSpan(nil, 0, -1, 0, false, false, nil)
+	if _, err := parseGitHubTestsReportArtifactInSpan(nilCtx, archive, func() (githubTestsReportRows, error) { return githubTestsReportRows{}, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if startChunkPrepareSpan(nilCtx) != nil || startChunkCommitSpan(nilCtx) != nil {
+		t.Fatal("chunk span start with a nil context made a span")
+	}
+	endChunkPrepareSpan(nil, nil, nil)
+	endChunkCommitSpan(nil, nil, nil)
+	if spans := pipeline.Ended(); len(spans) != 0 {
+		t.Fatalf("spans = %d (first %q), want 0", len(spans), spans[0].Name())
 	}
 }

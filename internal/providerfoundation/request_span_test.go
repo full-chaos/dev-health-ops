@@ -629,7 +629,8 @@ func TestProviderRequestSpanOfACancelledCallIsCancelled(t *testing.T) {
 }
 
 // gate_wait_ms is the time in the gate reads and the in-place gate sleeps only; the lease assert after a gate sleep is
-// lease time like every other assert of the call.
+// lease time like every other assert of the call. Both sides are durations measured in this process: the span against
+// the asserts' own clock (D6418).
 func TestProviderRequestGateWaitExcludesTheLeaseAssert(t *testing.T) {
 	const assertTime = 100 * time.Millisecond
 	for _, tc := range []struct {
@@ -643,9 +644,16 @@ func TestProviderRequestGateWaitExcludesTheLeaseAssert(t *testing.T) {
 			client.Gate = &spanTestGate{waits: []time.Duration{time.Millisecond}}
 			client.GateWaitMax = time.Second
 			asserts := 0
+			var assertTotal, assertShortest time.Duration
 			client.Lease = LeaseGuardFunc(func(context.Context) error {
-				asserts++
+				started := time.Now()
 				time.Sleep(assertTime)
+				took := time.Since(started)
+				asserts++
+				assertTotal += took
+				if assertShortest == 0 || took < assertShortest {
+					assertShortest = took
+				}
 				return nil
 			})
 			var response *http.Response
@@ -663,11 +671,13 @@ func TestProviderRequestGateWaitExcludesTheLeaseAssert(t *testing.T) {
 			if asserts != tc.asserts {
 				t.Fatalf("lease asserts = %d, want %d", asserts, tc.asserts)
 			}
-			if got, floor := spanTestInt(t, pair, "dev_health.provider.lease_ms"), int64(tc.asserts)*assertTime.Milliseconds(); got < floor {
-				t.Errorf("lease_ms = %d, want >= %d (every assert)", got, floor)
+			// spent and waited are durations the probe measured in this process, compared with the asserts' own clock.
+			spent, waited := spanTestInt(t, pair, "dev_health.provider.lease_ms"), spanTestInt(t, pair, "dev_health.provider.gate_wait_ms")
+			if spent < assertTotal.Milliseconds() {
+				t.Errorf("lease_ms = %d, want >= %d (the time of every assert, measured by the asserts)", spent, assertTotal.Milliseconds())
 			}
-			if got := spanTestInt(t, pair, "dev_health.provider.gate_wait_ms"); got >= assertTime.Milliseconds() {
-				t.Errorf("gate_wait_ms = %d, want < %d (the 1 ms gate sleep, no assert)", got, assertTime.Milliseconds())
+			if waited >= assertShortest.Milliseconds() {
+				t.Errorf("gate_wait_ms = %d, want < %d (shorter than one assert: no assert in it)", waited, assertShortest.Milliseconds())
 			}
 		})
 	}

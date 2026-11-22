@@ -508,40 +508,39 @@ func TestStepSpansOfACancelledStepAreCancelled(t *testing.T) {
 	}
 }
 
-// spanSlowComparator is the final validation of the cell: it takes delay and matches unless mismatch.
-type spanSlowComparator struct {
-	delay    time.Duration
-	mismatch bool
+// spanRecordingComparator is the final validation of the cell: it records when it returned and matches unless mismatch.
+type spanRecordingComparator struct {
+	mismatch    bool
+	validatedAt time.Time
 }
 
-func (c spanSlowComparator) CompareCompleteRoute(context.Context, Claim, CompleteRouteBatch) (ShadowComparison, error) {
-	time.Sleep(c.delay)
+func (c *spanRecordingComparator) CompareCompleteRoute(context.Context, Claim, CompleteRouteBatch) (ShadowComparison, error) {
+	c.validatedAt = time.Now()
 	return ShadowComparison{Match: !c.mismatch}, nil
 }
 
-// chunk_prepare is the split, encode and PrepareChunkGroup of one group: the final validation runs before the span
-// starts, and a final group the validation refuses has no prepare span.
+// chunk_prepare is the split, encode and PrepareChunkGroup of one group: the final group's prepare span starts after
+// the final validation returned (an order, not a duration), and a final group the validation refuses has no prepare span.
 func TestChunkPrepareSpanStartsAfterTheFinalValidation(t *testing.T) {
-	const validation = 100 * time.Millisecond
-	t.Run("slow final validation", func(t *testing.T) {
+	t.Run("final validation before the span", func(t *testing.T) {
 		pipeline := spantest.Install(t)
 		store := &groupRecordingStore{chunkMemoryStore: newChunkMemoryStore()}
-		if err := spanChunkRun(t, pipeline.Parent, store, nil, spanSlowComparator{delay: validation}); err != nil {
+		comparator := &spanRecordingComparator{}
+		if err := spanChunkRun(t, pipeline.Parent, store, nil, comparator); err != nil {
 			t.Fatalf("execute: %v", err)
 		}
 		prepares := pipeline.Pairs(spanPrepareName)
-		if len(prepares) == 0 || len(prepares) != len(store.groups) {
-			t.Fatalf("prepare spans = %d groups = %d, want one per group", len(prepares), len(store.groups))
+		if len(prepares) == 0 || len(prepares) != len(store.groups) || comparator.validatedAt.IsZero() {
+			t.Fatalf("prepare spans = %d groups = %d validated = %v, want one span per group and a validation", len(prepares), len(store.groups), !comparator.validatedAt.IsZero())
 		}
-		final := prepares[len(prepares)-1]
-		if took := final.Raw.EndTime().Sub(final.Raw.StartTime()); took >= validation {
-			t.Errorf("final prepare span took %s, want < %s (the validation is not prepare time)", took, validation)
+		if final := prepares[len(prepares)-1]; final.Raw.StartTime().Before(comparator.validatedAt) {
+			t.Errorf("the final prepare span started before the final validation returned: the validation is not prepare time")
 		}
 	})
 	t.Run("refused final group", func(t *testing.T) {
 		pipeline := spantest.Install(t)
 		store := &groupRecordingStore{chunkMemoryStore: newChunkMemoryStore()}
-		if err := spanChunkRun(t, pipeline.Parent, store, nil, spanSlowComparator{mismatch: true}); !errors.Is(err, ErrShadowMismatch) {
+		if err := spanChunkRun(t, pipeline.Parent, store, nil, &spanRecordingComparator{mismatch: true}); !errors.Is(err, ErrShadowMismatch) {
 			t.Fatalf("execute err = %v, want ErrShadowMismatch", err)
 		}
 		prepares := pipeline.Pairs(spanPrepareName)

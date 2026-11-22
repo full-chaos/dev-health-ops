@@ -55,18 +55,43 @@ type unitsIndex struct {
 	verb    string
 	name    string
 	body    string
-	table   string
+	table   indexTable
 	lockKey int64
 }
 
-var unitsIndexes = []unitsIndex{
-	{verb: "failure-streak", name: FailureStreakIndexName, body: FailureStreakIndexBody, table: "sync_run_units", lockKey: buildIndexLockKey},
-	{verb: "open-units", name: OpenUnitsIndexName, body: OpenUnitsIndexBody, table: "sync_run_units", lockKey: openUnitsBuildIndexLockKey},
-	{verb: "finalize-outbox", name: FinalizeOutboxIndexName, body: FinalizeOutboxIndexBody, table: "worker_job_outbox", lockKey: finalizeOutboxBuildIndexLockKey},
+// indexTable holds the statements the verb sends about one table. The tables are a closed list in this file: a table
+// name never comes from input, and it is spliced into the text as a literal, not bound, so the sync_run_units statements
+// stay the text they were before the list existed (TestSyncRunUnitsIndexStatementsAreUnchanged).
+type indexTable struct {
+	name      string
+	existsSQL string
+	lockSQL   string
+	infoSQL   string
 }
 
-// qualifiedTable is the index's table, schema-qualified.
-func (index unitsIndex) qualifiedTable() string { return "public." + index.table }
+func newIndexTable(name string) indexTable {
+	return indexTable{
+		name:      name,
+		existsSQL: "SELECT pg_catalog.to_regclass('public." + name + "') IS NOT NULL",
+		lockSQL:   "LOCK TABLE public." + name + " IN SHARE UPDATE EXCLUSIVE MODE",
+		infoSQL: `
+SELECT i.indisvalid, i.indisready
+FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_index i ON i.indexrelid = c.oid
+WHERE c.relnamespace = 'public'::regnamespace AND c.relname = $1 AND i.indrelid = 'public.` + name + `'::regclass`,
+	}
+}
+
+var (
+	syncRunUnitsTable    = newIndexTable("sync_run_units")
+	workerJobOutboxTable = newIndexTable("worker_job_outbox")
+)
+
+var unitsIndexes = []unitsIndex{
+	{verb: "failure-streak", name: FailureStreakIndexName, body: FailureStreakIndexBody, table: syncRunUnitsTable, lockKey: buildIndexLockKey},
+	{verb: "open-units", name: OpenUnitsIndexName, body: OpenUnitsIndexBody, table: syncRunUnitsTable, lockKey: openUnitsBuildIndexLockKey},
+	{verb: "finalize-outbox", name: FinalizeOutboxIndexName, body: FinalizeOutboxIndexBody, table: workerJobOutboxTable, lockKey: finalizeOutboxBuildIndexLockKey},
+}
 
 func unitsIndexByVerb(verb string) (unitsIndex, bool) {
 	for _, index := range unitsIndexes {
@@ -210,11 +235,11 @@ func buildUnitsIndex(ctx context.Context, conn *pgx.Conn, index unitsIndex, opti
 		return result, fmt.Errorf("set lock_timeout: %w", err)
 	}
 	var hasTable bool
-	if err := conn.QueryRow(ctx, "SELECT pg_catalog.to_regclass($1) IS NOT NULL", index.qualifiedTable()).Scan(&hasTable); err != nil {
-		return result, fmt.Errorf("look for %s: %w", index.table, err)
+	if err := conn.QueryRow(ctx, index.table.existsSQL).Scan(&hasTable); err != nil {
+		return result, fmt.Errorf("look for %s: %w", index.table.name, err)
 	}
 	if !hasTable {
-		return result, fmt.Errorf("%s does not exist: the database is not at the baseline", index.qualifiedTable())
+		return result, fmt.Errorf("public.%s does not exist: the database is not at the baseline", index.table.name)
 	}
 	var locked bool
 	var pid int32
@@ -350,7 +375,7 @@ func probeTableLock(ctx context.Context, conn *pgx.Conn, index unitsIndex) error
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, "LOCK TABLE "+pgx.Identifier{"public", index.table}.Sanitize()+" IN SHARE UPDATE EXCLUSIVE MODE"); err != nil {
+	if _, err := tx.Exec(ctx, index.table.lockSQL); err != nil {
 		_ = tx.Rollback(context.WithoutCancel(ctx))
 		return err
 	}
@@ -497,12 +522,7 @@ func logIndexInfo(logger *slog.Logger, when string, attempt int, i indexInfo) {
 
 // readIndexInfo reads whether the index exists and its indisvalid and indisready flags.
 func readIndexInfo(ctx context.Context, conn *pgx.Conn, index unitsIndex) (indexInfo, error) {
-	rows, err := conn.Query(ctx, `
-SELECT i.indisvalid, i.indisready
-FROM pg_catalog.pg_class c
-JOIN pg_catalog.pg_index i ON i.indexrelid = c.oid
-WHERE c.relnamespace = 'public'::regnamespace AND c.relname = $1 AND i.indrelid = pg_catalog.to_regclass($2)`,
-		index.name, index.qualifiedTable())
+	rows, err := conn.Query(ctx, index.table.infoSQL, index.name)
 	if err != nil {
 		return indexInfo{}, fmt.Errorf("read the index state: %w", err)
 	}

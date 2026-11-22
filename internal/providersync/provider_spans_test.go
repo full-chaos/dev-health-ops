@@ -364,15 +364,15 @@ func TestStepSpansNeedARecordingParent(t *testing.T) {
 	if ctx, span := startGitHubTestsDownloadSpan(nilCtx); ctx != nil || span != nil {
 		t.Fatal("download span start with a nil context made a span")
 	}
-	endGitHubTestsDownloadSpan(nil, 0, -1, 0, false, false, nil)
+	endGitHubTestsDownloadSpan(nilCtx, nil, 0, -1, 0, false, false, nil)
 	if _, err := parseGitHubTestsReportArtifactInSpan(nilCtx, archive, func() (githubTestsReportRows, error) { return githubTestsReportRows{}, nil }); err != nil {
 		t.Fatal(err)
 	}
 	if startChunkPrepareSpan(nilCtx) != nil || startChunkCommitSpan(nilCtx) != nil {
 		t.Fatal("chunk span start with a nil context made a span")
 	}
-	endChunkPrepareSpan(nil, nil, nil)
-	endChunkCommitSpan(nil, nil, nil)
+	endChunkPrepareSpan(nilCtx, nil, nil, nil)
+	endChunkCommitSpan(nilCtx, nil, nil, nil)
 	if spans := pipeline.Ended(); len(spans) != 0 {
 		t.Fatalf("spans = %d (first %q), want 0", len(spans), spans[0].Name())
 	}

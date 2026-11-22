@@ -423,11 +423,11 @@ func TestRequestSpanGuardTakesANilContext(t *testing.T) {
 	})), oneAttempt())
 	var nilCtx context.Context
 	for _, target := range []string{requestTargetAPI, requestTargetRedirect} {
-		ctx, probe := client.startRequestSpan(nilCtx, http.MethodGet, target)
-		if ctx != nil || probe != nil {
-			t.Fatalf("target %s: ctx=%v probe=%v, want nil and nil", target, ctx, probe)
+		probe := client.startRequestSpan(nilCtx, http.MethodGet, target)
+		if probe != nil {
+			t.Fatalf("target %s: probe=%v, want nil", target, probe)
 		}
-		probe.end(nil, nil)
+		probe.end(nilCtx, nil)
 	}
 	if spans := pipeline.Ended(); len(spans) != 0 {
 		t.Fatalf("spans = %d, want 0", len(spans))
@@ -729,6 +729,48 @@ func TestExistingProviderLogLinesKeepTheCallersSpan(t *testing.T) {
 		}
 		if lines != 1 {
 			t.Fatalf("unauthenticated=%v: provider_gate_wait_slept lines = %d, want 1", unauthenticated, lines)
+		}
+	}
+}
+
+type spanTestJoinErr []error
+
+func (e spanTestJoinErr) Error() string   { return "aaaa" }
+func (e spanTestJoinErr) Unwrap() []error { return e }
+
+// CallCancelled: a cancelled context AND only cancellation leaves (raw, wrapped, the transport's canceled reason, or a
+// named label beside one). Anything else is a failure.
+func TestCallCancelledNeedsACancelledContextAndOnlyCancellationLeaves(t *testing.T) {
+	label := errors.New("label")
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	expired, stop := context.WithDeadline(context.Background(), time.Unix(1, 0))
+	defer stop()
+	transportCanceled := &ProviderError{Class: ErrorTransient, Reason: TransportReasonCanceled}
+	cases := []struct {
+		name   string
+		ctx    context.Context
+		err    error
+		labels []error
+		want   bool
+	}{
+		{"raw cancel", cancelled, context.Canceled, nil, true},
+		{"wrapped cancel", cancelled, &url.Error{Op: "Get", URL: "x", Err: context.Canceled}, nil, true},
+		{"transport canceled reason", cancelled, transportCanceled, nil, true},
+		{"label beside a cancel", cancelled, spanTestJoinErr{label, context.Canceled}, []error{label}, true},
+		{"cancel under a live context", context.Background(), context.Canceled, nil, false},
+		{"nil context", nil, context.Canceled, nil, false},
+		{"nil error", cancelled, nil, nil, false},
+		{"deadline", expired, context.DeadlineExceeded, nil, false},
+		{"label alone", cancelled, label, []error{label}, false},
+		{"label not named", cancelled, spanTestJoinErr{label, context.Canceled}, nil, false},
+		{"cancel joined with a failure", cancelled, errors.Join(transportCanceled, ErrBudgetUnavailable), nil, false},
+		{"other transport reason", cancelled, &ProviderError{Class: ErrorTransient, Reason: TransportReasonTimeout}, nil, false},
+		{"empty join", cancelled, spanTestJoinErr{}, nil, false},
+	}
+	for _, tc := range cases {
+		if got := CallCancelled(tc.ctx, tc.err, tc.labels...); got != tc.want {
+			t.Errorf("%s: CallCancelled = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

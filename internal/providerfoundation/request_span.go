@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -47,32 +48,52 @@ const (
 )
 
 // requestProbe gathers the measurements of one call. A nil probe (no recording parent) measures nothing and reads no
-// clock.
+// clock. status is the status of the response to the last wire attempt sent (0: that attempt got none).
 type requestProbe struct {
 	span     trace.Span
 	attempts int
+	status   int
 	gateWait time.Duration
 	budget   time.Duration
 	lease    time.Duration
 }
 
-// startRequestSpan opens the span of one call only under a recording parent: never a new root.
-func (c *HTTPClient) startRequestSpan(ctx context.Context, method, target string) (context.Context, *requestProbe) {
-	if c == nil || ctx == nil || !trace.SpanFromContext(ctx).IsRecording() {
-		return ctx, nil
+type requestSpanParentKey struct{}
+
+// WithRequestSpanParent makes parent the parent of the request spans of the calls made with the returned context. The
+// span of ctx itself, which log lines read, does not change. A nil parent returns ctx.
+func WithRequestSpanParent(ctx context.Context, parent trace.Span) context.Context {
+	if ctx == nil || parent == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, requestSpanParentKey{}, parent)
+}
+
+// startRequestSpan opens the span of one call only under a recording parent: never a new root. The span is never put
+// in the context of the call, so the call's log lines keep the caller's span.
+func (c *HTTPClient) startRequestSpan(ctx context.Context, method, target string) *requestProbe {
+	if c == nil || ctx == nil {
+		return nil
+	}
+	parent := ctx
+	if span, ok := ctx.Value(requestSpanParentKey{}).(trace.Span); ok && span.IsRecording() {
+		parent = trace.ContextWithSpan(ctx, span)
+	}
+	if !trace.SpanFromContext(parent).IsRecording() {
+		return nil
 	}
 	route := routeTemplate(ctx)
 	if route == "" {
 		route = requestRouteUnrouted
 	}
-	ctx, span := tracing.StartWorkSpan(ctx, requestTracerName, requestSpanName,
+	_, span := tracing.StartWorkSpan(parent, requestTracerName, requestSpanName,
 		attribute.String(requestAttrProvider, c.Provider),
 		attribute.String(requestAttrMethod, method),
 		attribute.String(requestAttrRoute, route),
 		attribute.String(requestAttrFamily, requestRouteFamily(ctx)),
 		attribute.String(requestAttrTarget, target),
 	)
-	return ctx, &requestProbe{span: span}
+	return &requestProbe{span: span}
 }
 
 // requestRouteFamily is LedgerKey.RouteFamily of the call: the family the route labelled, else LedgerUnclassified.
@@ -111,12 +132,19 @@ func (p *requestProbe) addBudget(start time.Time) {
 
 func (p *requestProbe) sent(attempt int) {
 	if p != nil {
-		p.attempts = attempt
+		p.attempts, p.status = attempt, 0
+	}
+}
+
+// responded records the status of the response a wire attempt got, before the call decides what to do with it.
+func (p *requestProbe) responded(response *http.Response) {
+	if p != nil && response != nil {
+		p.status = response.StatusCode
 	}
 }
 
 // end closes the span with what the call returned. It only reads response and err.
-func (p *requestProbe) end(response *http.Response, err error) {
+func (p *requestProbe) end(ctx context.Context, err error) {
 	if p == nil {
 		return
 	}
@@ -126,19 +154,15 @@ func (p *requestProbe) end(response *http.Response, err error) {
 		attribute.Int64(requestAttrBudget, p.budget.Milliseconds()),
 		attribute.Int64(requestAttrLease, p.lease.Milliseconds()),
 	}
-	var providerErr *ProviderError
-	switch {
-	case response != nil:
-		attrs = append(attrs, attribute.Int(requestAttrStatus, response.StatusCode))
-	case errors.As(err, &providerErr) && providerErr.StatusCode > 0:
-		attrs = append(attrs, attribute.Int(requestAttrStatus, providerErr.StatusCode))
+	if p.status > 0 {
+		attrs = append(attrs, attribute.Int(requestAttrStatus, p.status))
 	}
 	switch {
 	case err == nil:
 		attrs = append(attrs, attribute.String(requestAttrOutcome, requestOutcomeResponse))
 	case errors.Is(err, ErrBudgetContended):
 		attrs = append(attrs, attribute.String(requestAttrOutcome, requestOutcomeBudgetContended))
-	case tracing.IsCancellation(err):
+	case CallCancelled(ctx, err):
 		attrs = append(attrs, attribute.String(requestAttrOutcome, requestOutcomeCancelled))
 	default:
 		class := requestErrorType(err)
@@ -163,17 +187,51 @@ func requestErrorType(err error) string {
 	}
 }
 
+// CallCancelled reports a call that ended only because ctx was cancelled: ctx is cancelled and every leaf of err is
+// context.Canceled, a transport failure of reason canceled, or one of labels (a sentinel that names the step, wrapped
+// next to the cause), with at least one cancellation. A leaf of any other failure (a failed budget release joined on)
+// makes it a failure, and so does a cancellation under a live ctx (a context the code cancelled itself).
+func CallCancelled(ctx context.Context, err error, labels ...error) bool {
+	if ctx == nil || err == nil || !errors.Is(ctx.Err(), context.Canceled) {
+		return false
+	}
+	cancelled, other := cancellationLeaves(err, labels)
+	return cancelled && !other
+}
+
+func cancellationLeaves(err error, labels []error) (cancelled, other bool) {
+	if providerErr, ok := err.(*ProviderError); ok && providerErr.Reason == TransportReasonCanceled {
+		return true, false
+	}
+	if slices.Contains(labels, err) {
+		return false, false
+	}
+	switch wrapped := err.(type) {
+	case interface{ Unwrap() []error }:
+		leaves := wrapped.Unwrap()
+		if len(leaves) == 0 {
+			return false, true
+		}
+		for _, leaf := range leaves {
+			leafCancelled, leafOther := cancellationLeaves(leaf, labels)
+			cancelled, other = cancelled || leafCancelled, other || leafOther
+		}
+		return cancelled, other
+	case interface{ Unwrap() error }:
+		if inner := wrapped.Unwrap(); inner != nil {
+			return cancellationLeaves(inner, labels)
+		}
+	}
+	if errors.Is(err, context.Canceled) {
+		return true, false
+	}
+	return false, true
+}
+
 func (c *HTTPClient) assertLeaseMeasured(ctx context.Context, probe *requestProbe) error {
 	start := probe.clock()
 	err := c.Lease.Assert(ctx)
 	probe.addLease(start)
-	return err
-}
-
-func (c *HTTPClient) awaitGateMeasured(ctx context.Context, probe *requestProbe) error {
-	start := probe.clock()
-	err := c.awaitGate(ctx)
-	probe.addGateWait(start)
 	return err
 }
 

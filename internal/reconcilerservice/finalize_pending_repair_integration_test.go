@@ -778,6 +778,12 @@ func TestStaleFinalizeCandidateMatrix(t *testing.T) {
 		freshPartition, now.Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
+	// freshRun is excluded by the run clause ALONE: its partitions are old, so
+	// dropping "run.updated_at <= $1" from statement A gets it redriven.
+	if _, err := venue.admin.Exec(ctx, `UPDATE public.daily_metrics_partitions SET updated_at = $2, completed_at = $2, created_at = $2 WHERE run_id = $1::uuid`,
+		freshRun, old); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := venue.admin.Exec(ctx, `UPDATE public.daily_metrics_runs SET finalization_status = 'failed' WHERE id = $1::uuid`,
 		failedFinalize); err != nil {
 		t.Fatal(err)
@@ -915,13 +921,42 @@ func TestStaleFinalizeRedriveBlockedOnARunLockEndsAtTheDeadline(t *testing.T) {
 	venue.seedShapeD(t, ctx, orgID, locked, "2026-07-01", now.Add(-60*time.Hour))
 	venue.seedShapeD(t, ctx, orgID, newer, "2026-07-02", now.Add(-30*time.Hour))
 	ordinary := venue.publishOrdinaryFinalize(t, ctx, orgID, "2026-07-03")
-	release := venue.holdRunLock(t, ctx, locked)
 
-	// The lock is released only after Step returned.
+	// The lock holder releases only after Step has returned, and says so in an
+	// ordered log. A redrive with no per-run deadline waits here until the pass
+	// deadline (the newer run is then deferred, not redriven) or, with no
+	// deadline at all, for ever: the holder never releases before Step returns.
+	var orderMu sync.Mutex
+	var order []string
+	mark := func(event string) {
+		orderMu.Lock()
+		order = append(order, event)
+		orderMu.Unlock()
+	}
+	lockTx, err := venue.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lockTx.Exec(ctx, `SELECT 1 FROM public.daily_metrics_runs WHERE id = $1::uuid FOR UPDATE`, locked); err != nil {
+		t.Fatal(err)
+	}
+	stepReturned, holderDone := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(holderDone)
+		<-stepReturned
+		mark("lock released")
+		_ = lockTx.Rollback(context.WithoutCancel(ctx))
+	}()
+
 	result, err := venue.relay.Step(ctx, time.Now().UTC().Add(time.Second), 10)
-	release()
+	mark("step returned")
+	close(stepReturned)
+	<-holderDone
 	if err != nil {
 		t.Fatalf("Step returned the stage failure: %v", err)
+	}
+	if strings.Join(order, ", ") != "step returned, lock released" {
+		t.Fatalf("order %v, want Step to return while the lock was still held", order)
 	}
 	wantFailures := []joboutbox.StaleFinalizeFailure{{Step: joboutbox.StaleFinalizeStepRedrive, Class: joboutbox.StaleFinalizeClassDeadline}}
 	if !equalFailures(result.StaleFinalizeFailures, wantFailures) {
@@ -1094,5 +1129,33 @@ func TestStaleFinalizeCursorReadsPastTheLastTriedRun(t *testing.T) {
 		wrapped.StaleFinalizeRedriven[0] != oldest || wrapped.StaleFinalizeRedriven[1] != second {
 		t.Fatalf("pass 3 (after the wrap, locks released): failures %+v redriven %v, want the two oldest runs in order",
 			wrapped.StaleFinalizeFailures, wrapped.StaleFinalizeRedriven)
+	}
+}
+
+// F-3: a run whose finalize job ended discarded or cancelled (its outbox row
+// pruned, the River row kept by River's retention) is a candidate: the job can
+// never run again. Dropping either state from liveJob's terminal list counts the
+// run as live and turns this red.
+func TestStaleFinalizeRedrivesARunWhoseFinalizeJobEndedDiscardedOrCancelled(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	venue := startFinalizePendingVenue(t, ctx)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	orgID := uuid.NewString()
+	discarded, cancelled := uuid.NewString(), uuid.NewString()
+	venue.seedShapeD(t, ctx, orgID, discarded, "2026-03-01", now.Add(-50*time.Hour))
+	venue.seedShapeD(t, ctx, orgID, cancelled, "2026-03-02", now.Add(-49*time.Hour))
+	venue.seedRiverFinalize(t, ctx, orgID, discarded, "discarded", now.Add(-30*time.Hour))
+	venue.seedRiverFinalize(t, ctx, orgID, cancelled, "cancelled", now.Add(-30*time.Hour))
+
+	result, err := venue.relay.Step(ctx, now, 10)
+	if err != nil {
+		t.Fatalf("reconciler Step: %v", err)
+	}
+	if len(result.StaleFinalizeRedriven) != 2 || result.StaleFinalizeRedriven[0] != discarded || result.StaleFinalizeRedriven[1] != cancelled {
+		t.Fatalf("redriven %v, want the discarded run and the cancelled run", result.StaleFinalizeRedriven)
+	}
+	if result.StaleFinalizeLevels == nil || result.StaleFinalizeLevels.Live != 0 {
+		t.Fatalf("levels %+v, want no live refusal", result.StaleFinalizeLevels)
 	}
 }

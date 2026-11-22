@@ -218,6 +218,11 @@ func (stage *staleFinalizeStage) step(ctx context.Context, now time.Time, limit 
 	return pass
 }
 
+// classifyStaleFinalizeRedrive names a redrive failure. not_authorized cannot
+// come from the byte-equal redrive itself: redriveOneStrandedFinalize maps every
+// database error of its row-lock read to daily.ErrUnavailable, so a domain grant
+// drift shows as {redrive, unavailable} (the domain readiness posture still
+// catches it). The case stays for a redriver that keeps the 42501.
 func classifyStaleFinalizeRedrive(err error, deadline bool) string {
 	switch {
 	case deadline || errors.Is(err, context.DeadlineExceeded):

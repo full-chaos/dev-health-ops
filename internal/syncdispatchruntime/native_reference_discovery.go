@@ -672,9 +672,19 @@ WHERE sync_run_id = $1::uuid AND status NOT IN ($6, $7)`,
 // always re-resolves it from the run row rather than accepting a
 // caller-supplied value.
 func upsertDiscoveryOutboxWakeup(ctx context.Context, tx pgx.Tx, orgID, runID, kind string, availableAt time.Time) error {
+	if err := upsertOutboxWakeup(ctx, tx, orgID, runID, kind, availableAt); err != nil {
+		return ErrReferenceDiscoveryUnavailable
+	}
+	return nil
+}
+
+// upsertOutboxWakeup is upsertDiscoveryOutboxWakeup's statements with the driver error returned as it is. The
+// dispatch pass's re-arm (scheduleRedispatch) uses it so that a tail lock timeout (55P03) stays reachable; the
+// discovery callers keep their sentinel, which isRetryableDiscoveryError classifies by message.
+func upsertOutboxWakeup(ctx context.Context, tx pgx.Tx, orgID, runID, kind string, availableAt time.Time) error {
 	if orgID == "" {
 		if err := tx.QueryRow(ctx, `SELECT org_id FROM public.sync_runs WHERE id = $1::uuid`, runID).Scan(&orgID); err != nil {
-			return ErrReferenceDiscoveryUnavailable
+			return err
 		}
 	}
 	_, err := tx.Exec(ctx, `
@@ -684,10 +694,7 @@ INSERT INTO public.sync_dispatch_outbox (
 ) VALUES ($5::uuid, $1, $2::uuid, $4, 'pending', $3, 0, $3, $3)
 `+syncrunrollup.OutboxWakeupOnConflictSQL,
 		orgID, runID, availableAt, kind, uuid.New().String())
-	if err != nil {
-		return ErrReferenceDiscoveryUnavailable
-	}
-	return nil
+	return err
 }
 
 const outboxKindDispatchSyncRun = "dispatch_sync_run"

@@ -22,10 +22,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
 
-// The cause class of a ClickHouse connection that dropped under a chunk write
-// (CHAOS-14493). Not capped: the registry ceiling holds.
-const wantSinkConnectionDroppedClass = "sink_connection_dropped"
-
 // realDroppedConnFirstBlockError builds the driver error of a server-side
 // close seen by the first read after an INSERT was sent:
 //   - the inner error is REAL: ch-go proto.Reader.ReadByte over a loopback TCP
@@ -317,9 +313,9 @@ func TestTwoDroppedChunkWritesWithProgressDoNotExhaustTheUnit(t *testing.T) {
 		t.Fatalf("failures=%d attempt=%d, want 2 dropped-write retries then success on attempt 3", walk.failures, walk.attempt)
 	}
 	for index, class := range walk.classAtFail {
-		if class != wantSinkConnectionDroppedClass || walk.retryCapAtFail[index] != 0 {
+		if class != causeClassSinkConnectionDropped || walk.retryCapAtFail[index] != 0 {
 			t.Errorf("retry %d: cause_class=%q cap=%d, want %q cap 0 (registry ceiling)",
-				index+1, class, walk.retryCapAtFail[index], wantSinkConnectionDroppedClass)
+				index+1, class, walk.retryCapAtFail[index], causeClassSinkConnectionDropped)
 		}
 	}
 	if len(walk.ordinalAtFail) != 2 || walk.ordinalAtFail[1]-walk.ordinalAtFail[0] < 50 || walk.snoozes < 1 {
@@ -339,10 +335,10 @@ func TestFiveDroppedChunkWritesEndAtTheRegistryCeilingAsSinkConnectionDropped(t 
 	walk := driveDroppedWriteWalk(t, dropWalkPages, dropWritesInChunks(t, 2, 40, 80, 120, 160), sinkErr)
 	if !walk.terminal || walk.attempt != 5 || walk.failures != 5 ||
 		walk.repository.status != "failed" || walk.repository.lastFailCategory != "provider_unit_exhausted" ||
-		walk.repository.causeClass != wantSinkConnectionDroppedClass {
+		walk.repository.causeClass != causeClassSinkConnectionDropped {
 		t.Fatalf("terminal=%v attempt=%d failures=%d status=%q category=%q cause_class=%q; "+
 			"want failed provider_unit_exhausted %q at attempt 5 of 5",
 			walk.terminal, walk.attempt, walk.failures, walk.repository.status,
-			walk.repository.lastFailCategory, walk.repository.causeClass, wantSinkConnectionDroppedClass)
+			walk.repository.lastFailCategory, walk.repository.causeClass, causeClassSinkConnectionDropped)
 	}
 }

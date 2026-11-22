@@ -119,7 +119,7 @@ func coordinatorExclusiveDDL() []string {
 			status text NOT NULL, attempts integer NOT NULL, available_at timestamptz NOT NULL,
 			created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
 		)`,
-		"CREATE TABLE public.sync_run_post_dispatches (id uuid PRIMARY KEY, sync_run_id uuid NOT NULL)",
+		"CREATE TABLE public.sync_run_post_dispatches (id uuid PRIMARY KEY, sync_run_id uuid NOT NULL, post_sync_outcome text NULL, post_sync_committed_at timestamptz NULL)",
 		"CREATE TABLE public.scheduled_sync_occurrences (id uuid PRIMARY KEY)",
 		// CHAOS-4602: sync_manual_triggers joined coordinatorPosture()'s
 		// manifest (SELECT-only, domain_authorization.go). Production column

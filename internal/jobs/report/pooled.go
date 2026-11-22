@@ -52,7 +52,8 @@ var pooledCharts = map[string]pooledChart{
 // holds no samples (written before migration 161, or over the cap) reads the raw runs with the writer's rules: a run
 // counts on the UTC day it finishes, the newest synced version of a run (FINAL) is the run, a deleted run is no run. A
 // duration sample is finished_at - started_at in minutes when not negative, a queue sample started_at - queued_at in
-// minutes when not negative; the stored duration_seconds and queue_seconds are not read, as the writer does not read them.
+// minutes when not negative and the run is no re-run (retry_count 0); the stored duration_seconds and queue_seconds are
+// not read, as the writer does not read them.
 // Both arms read only the keys whose NEWEST row is live: a retired repository-day (newest row retracted = 1, a row that
 // holds no samples) admits no stored sample and no raw run, also a run synced after the retraction.
 // cicd_pooled_test.go pins these rules to the writer's text.
@@ -82,7 +83,7 @@ var cicdRunsSource = `(
             service_id,
             toDate(finished_at) AS day,
             if(finished_at >= started_at, dateDiff('millisecond', started_at, finished_at) / 60000, NULL) AS ` + cicdRunMinutes + `,
-            if(queued_at IS NOT NULL AND started_at >= queued_at, dateDiff('millisecond', queued_at, started_at) / 60000, NULL) AS ` + cicdQueueMinutes + `
+            if(retry_count = 0 AND queued_at IS NOT NULL AND started_at >= queued_at, dateDiff('millisecond', queued_at, started_at) / 60000, NULL) AS ` + cicdQueueMinutes + `
         FROM ci_pipeline_runs FINAL
         WHERE org_id = {org_id:String}
           AND finished_at IS NOT NULL

@@ -287,8 +287,9 @@ func TestStaleFinalizeClassifiesRedriveAndSurveyErrors(t *testing.T) {
 // deadline, and the redrive phase that remains fits one per-run deadline plus
 // the reserve.
 func TestStaleFinalizeSurveyTimeoutsFitThePassBudget(t *testing.T) {
-	candidates, levels, lock := 400*time.Millisecond, 250*time.Millisecond, 100*time.Millisecond
+	base, candidates, levels, lock := 150*time.Millisecond, 400*time.Millisecond, 250*time.Millisecond, 100*time.Millisecond
 	for statement, want := range map[string]time.Duration{
+		staleFinalizeBaseStatementTimeout:       base,
 		staleFinalizeCandidatesStatementTimeout: candidates,
 		staleFinalizeLevelsStatementTimeout:     levels,
 		staleFinalizeLockTimeout:                lock,
@@ -297,8 +298,11 @@ func TestStaleFinalizeSurveyTimeoutsFitThePassBudget(t *testing.T) {
 			t.Fatalf("%q does not set %s", statement, want)
 		}
 	}
-	if candidates+levels > staleFinalizeSurveyBudget || lock > candidates {
-		t.Fatalf("survey timeouts %s + %s do not fit the survey deadline %s", candidates, levels, staleFinalizeSurveyBudget)
+	if base+candidates+levels > staleFinalizeSurveyBudget || lock > base {
+		t.Fatalf("survey timeouts %s + %s + %s do not fit the survey deadline %s", base, candidates, levels, staleFinalizeSurveyBudget)
+	}
+	if staleFinalizeSurveyBudget+staleFinalizeSurveyRollback > staleFinalizeBudget {
+		t.Fatal("the survey and its rollback do not fit the pass budget")
 	}
 	if staleFinalizeBudget-staleFinalizeSurveyBudget < staleFinalizeRunDeadline+staleFinalizeRunReserve {
 		t.Fatal("the redrive phase cannot fit one run")
@@ -471,7 +475,7 @@ func TestStaleFinalizeSurveyRollbackEndsOnItsOwnDeadline(t *testing.T) {
 	tx := &stallingRollbackTx{rollbackErr: make(chan error, 1)}
 	survey := surveyStaleFinalize(context.Background(),
 		func(context.Context) (pgx.Tx, error) { return tx, nil },
-		"SELECT 1", "SELECT 1", staleFinalizeTestNow, 10, nil)
+		"SELECT 1", "SELECT 1", "SELECT 1", staleFinalizeTestNow, 10, nil)
 	if err := <-tx.rollbackErr; !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("rollback ended with %v, want its own deadline", err)
 	}

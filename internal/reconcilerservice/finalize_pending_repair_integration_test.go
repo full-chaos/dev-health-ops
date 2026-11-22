@@ -1159,3 +1159,52 @@ func TestStaleFinalizeRedrivesARunWhoseFinalizeJobEndedDiscardedOrCancelled(t *t
 		t.Fatalf("levels %+v, want no live refusal", result.StaleFinalizeLevels)
 	}
 }
+
+// (a) base first (acp ruling on SIZING-14090-2): when no run is in the base,
+// the pass sends statement 0 only. It never sends statement A or B, which read
+// worker_job_outbox and river_job (a full outbox scan on prod sizes), and it
+// reports every level as an exact zero. The runs seeded here are NOT base: a
+// fresh run, a failed finalization, a run with an unfinished partition, each
+// with finalize rows in the outbox and River.
+func TestStaleFinalizeBaseZeroReadsNoOutboxAndNoRiver(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	venue := startFinalizePendingVenue(t, ctx)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	orgID := uuid.NewString()
+	fresh, failed, unfinished := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	venue.seedShapeD(t, ctx, orgID, fresh, "2026-02-01", now.Add(-time.Hour))
+	venue.seedShapeD(t, ctx, orgID, failed, "2026-02-02", now.Add(-48*time.Hour))
+	venue.seedShapeD(t, ctx, orgID, unfinished, "2026-02-03", now.Add(-48*time.Hour))
+	if _, err := venue.admin.Exec(ctx, `UPDATE public.daily_metrics_runs SET finalization_status = 'failed' WHERE id = $1::uuid`, failed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := venue.admin.Exec(ctx, `UPDATE public.daily_metrics_partitions SET status = 'pending', completed_at = NULL WHERE run_id = $1::uuid`, unfinished); err != nil {
+		t.Fatal(err)
+	}
+	for _, runID := range []string{fresh, failed, unfinished} {
+		venue.seedRiverFinalize(t, ctx, orgID, runID, "discarded", now.Add(-30*time.Hour))
+	}
+	venue.publishOrdinaryFinalize(t, ctx, orgID, "2026-02-04")
+
+	result, err := venue.relay.Step(ctx, now, 10)
+	if err != nil {
+		t.Fatalf("reconciler Step: %v", err)
+	}
+	if result.StaleFinalizeLevels == nil || *result.StaleFinalizeLevels != (joboutbox.StaleFinalizeLevels{}) ||
+		len(result.StaleFinalizeRedriven) != 0 || len(result.StaleFinalizeFailures) != 0 {
+		t.Fatalf("base 0: levels %+v redriven %v failures %+v, want exact zero levels and nothing else",
+			result.StaleFinalizeLevels, result.StaleFinalizeRedriven, result.StaleFinalizeFailures)
+	}
+	const statement0 = "SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs AS run WHERE"
+	const statementA = "AND ($3::timestamptz IS NULL OR (run.updated_at, run.id) > ($3::timestamptz, $4::uuid))"
+	const statementB = "ELSE 'redrive'"
+	if !venue.queueSQL.sawContaining(statement0) {
+		t.Fatal("statement 0 did not run on the queue pool")
+	}
+	for name, marker := range map[string]string{"A": statementA, "B": statementB} {
+		if venue.queueSQL.sawContaining(marker) || venue.domainSQL.sawContaining(marker) {
+			t.Fatalf("statement %s ran with an empty base: it reads worker_job_outbox and river_job for nothing", name)
+		}
+	}
+}

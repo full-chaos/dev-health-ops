@@ -29,12 +29,12 @@ const (
 
 	staleFinalizeInterval     = 10 * time.Minute
 	staleFinalizeBudget       = 2 * time.Second
-	staleFinalizeSurveyBudget = 700 * time.Millisecond
+	staleFinalizeSurveyBudget = 850 * time.Millisecond
 	staleFinalizeRunDeadline  = 200 * time.Millisecond
 	staleFinalizeRunReserve   = 50 * time.Millisecond
 	// staleFinalizeSurveyRollback bounds the survey's rollback on its own: a
 	// connection that stalls at that instant must not hold the relay step.
-	// 700 ms of survey plus 250 ms of rollback stays inside the pass budget.
+	// 850 ms of survey plus 250 ms of rollback stays inside the pass budget.
 	staleFinalizeSurveyRollback = 250 * time.Millisecond
 	// Every per-run deadline closes one domain-pool connection, and pgxpool
 	// frees its slot only when the close ends; the reconciler's domain pool
@@ -42,6 +42,7 @@ const (
 	staleFinalizeMaxDeadlines = 2
 	staleFinalizeLevelCap     = 1000
 
+	staleFinalizeBaseStatementTimeout       = "SET LOCAL statement_timeout = '150ms'"
 	staleFinalizeCandidatesStatementTimeout = "SET LOCAL statement_timeout = '400ms'"
 	staleFinalizeLevelsStatementTimeout     = "SET LOCAL statement_timeout = '250ms'"
 	staleFinalizeLockTimeout                = "SET LOCAL lock_timeout = '100ms'"
@@ -136,12 +137,13 @@ func (repair *StrandRepair) SetStaleFinalizeRedriver(redriver StaleFinalizeRedri
 	if repair == nil || repair.beginQueue == nil || redriver == nil || repair.riverJobTable == "" {
 		return ErrInvalidConfiguration
 	}
+	baseSQL := staleFinalizeBaseExistsSQL
 	candidatesSQL := fmt.Sprintf(staleFinalizeCandidatesSQLTemplate, repair.riverJobTable)
 	levelsSQL := fmt.Sprintf(staleFinalizeLevelsSQLTemplate, repair.riverJobTable)
 	beginQueue := repair.beginQueue
 	repair.staleFinalize = &staleFinalizeStage{
 		survey: func(ctx context.Context, cutoff time.Time, limit int, cursor *staleFinalizeCursor) staleFinalizeSurvey {
-			return surveyStaleFinalize(ctx, beginQueue, candidatesSQL, levelsSQL, cutoff, limit, cursor)
+			return surveyStaleFinalize(ctx, beginQueue, baseSQL, candidatesSQL, levelsSQL, cutoff, limit, cursor)
 		},
 		redriver: redriver,
 		clock:    time.Now,
@@ -252,13 +254,17 @@ func classifyStaleFinalizeSurvey(ctx context.Context, err error) string {
 	return StaleFinalizeClassUnavailable
 }
 
-// surveyStaleFinalize reads the candidates (A) and the standing refusals (B)
-// in one READ ONLY transaction on the queue pool, each statement under its own
-// server-side timeout inside the survey's client deadline.
+// surveyStaleFinalize reads, in one READ ONLY transaction on the queue pool,
+// each statement under its own server-side timeout inside the survey's client
+// deadline: first whether any run is in the base at all (statement 0, which
+// reads only the runs and their partitions), then the candidates (A) and the
+// standing refusals (B). When the base is empty the survey ends there: A and B
+// would scan the outbox and river_job for nothing, and every level is an exact
+// zero.
 func surveyStaleFinalize(
 	ctx context.Context,
 	beginQueue func(context.Context) (pgx.Tx, error),
-	candidatesSQL, levelsSQL string,
+	baseSQL, candidatesSQL, levelsSQL string,
 	cutoff time.Time,
 	limit int,
 	cursor *staleFinalizeCursor,
@@ -278,10 +284,21 @@ func surveyStaleFinalize(
 		defer cancel()
 		_ = tx.Rollback(rollbackCtx)
 	}()
-	for _, statement := range []string{"SET TRANSACTION READ ONLY", staleFinalizeLockTimeout, staleFinalizeCandidatesStatementTimeout} {
+	for _, statement := range []string{"SET TRANSACTION READ ONLY", staleFinalizeLockTimeout, staleFinalizeBaseStatementTimeout} {
 		if _, err := tx.Exec(ctx, statement); err != nil {
 			return fail(StaleFinalizeStepSurvey, err)
 		}
+	}
+	var inBase bool
+	if err := tx.QueryRow(ctx, baseSQL, cutoff).Scan(&inBase); err != nil {
+		return fail(StaleFinalizeStepSurvey, err)
+	}
+	if !inBase {
+		_ = tx.Commit(ctx)
+		return staleFinalizeSurvey{candidates: []staleFinalizeCandidate{}, levels: &StaleFinalizeLevels{}}
+	}
+	if _, err := tx.Exec(ctx, staleFinalizeCandidatesStatementTimeout); err != nil {
+		return fail(StaleFinalizeStepSurvey, err)
 	}
 	var cursorUpdated *time.Time
 	var cursorID *string
@@ -418,6 +435,10 @@ const (
 		SELECT 1 FROM public.daily_metrics_partitions AS partition
 		WHERE partition.run_id = run.id
 	)`
+	// Statement 0: the base alone, the same fragment A and B use. It reads
+	// daily_metrics_runs and daily_metrics_partitions only.
+	staleFinalizeBaseExistsSQL = `
+SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs AS run WHERE ` + staleFinalizeBaseSQL + `)`
 	staleFinalizeCandidatesSQLTemplate = `
 SELECT run.id::text, run.updated_at
 FROM public.daily_metrics_runs AS run

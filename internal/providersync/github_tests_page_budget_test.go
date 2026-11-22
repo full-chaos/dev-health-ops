@@ -812,7 +812,7 @@ func TestGitHubTestsChunkRouteWalkBoundInsideTheArtifactsPhase(t *testing.T) {
 func TestGitHubTestsWalkRecordsCountsEveryRowCounter(t *testing.T) {
 	for name, cursor := range map[string]githubTestsChunkCursor{
 		"pipelines": {Pipelines: 1}, "jobs": {Jobs: 1}, "acceptance": {Acceptance: 1},
-		"suites": {Suites: 1}, "cases": {Cases: 1}, "coverage": {Coverage: 1},
+		"suites": {Suites: 1}, "cases": {Cases: 1}, "coverage": {Coverage: 1}, "extra": {ExtraRecords: 1},
 	} {
 		if got := githubTestsWalkRecords(cursor); got != 1 {
 			t.Fatalf("%s: records=%d, want 1", name, got)

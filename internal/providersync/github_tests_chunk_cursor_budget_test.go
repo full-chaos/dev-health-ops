@@ -122,6 +122,8 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	cursor.ReseekPages, cursor.PagesEntered, cursor.RecordCredit = githubTestsWidestReseekPages, githubTestsWidestReseekPages, githubTestsWidestRecordCredit
 	cursor.DeletionProven = 1
 	cursor.LateRecords = githubTestsMaxWalkRecords
+	// And the extra record count of its completeness rows (CHAOS-14487).
+	cursor.ExtraRecords = githubTestsMaxWalkRecords
 	// A backfill walk's record counters reach 8 digits (boundsWidestBackfillCounters).
 	boundsWidestBackfillCounters(&cursor)
 
@@ -174,6 +176,9 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	// CHAOS-14385: the cell now carries the re-seek state (rp, pe, rc: 32 bytes) and the deep range's record count (14 bytes),
 	// which an artifacts-phase cursor holds; with four sample records it left 136. githubTestsMaxExcludedArtifactSampleRecords
 	// went 4 -> 3 to pay for them (one 56-byte sample record). The canary stays 150.
+	//
+	// CHAOS-14487: the cell now carries the extra record count (rx, 14 bytes at the backfill bound): 177 bytes of headroom
+	// before it (CI log), about 163 after. The canary stays 150.
 	const wantMargin = 150
 	if remaining := maxChunkCursorBytes - len(encoded); remaining < wantMargin {
 		t.Fatalf(

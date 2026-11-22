@@ -118,6 +118,10 @@ type githubTestsChunkCursor struct {
 	LateRunsSaturated bool `json:"lrs,omitempty"`
 	// LateRecords counts the records the deep range wrote (githubTestsWindowRecords).
 	LateRecords int `json:"lrr,omitempty"`
+	// ExtraRecords counts the rows the walk wrote outside the six row counters: one run-report completeness row per run
+	// verdict (artifacts phase, both ranges) and one deleted pipeline row per open run GitHub no longer has (open phase).
+	// Cumulative, like the six counters (CHAOS-14487).
+	ExtraRecords int `json:"rx,omitempty"`
 	// The open phase re-reads, by id, stored pipeline rows that are still open
 	// and older than the runs listing reaches. OpenAfterStarted/OpenAfterRunID
 	// are the keyset position (rows finalized by earlier chunks drop out of the
@@ -607,7 +611,7 @@ var errGitHubTestsWalkBound = errors.New("github tests walk record bound reached
 // githubTestsWalkRecords is the rows the walk has written so far. Every addend is a cumulative cursor counter, so a stored
 // cursor of an earlier attempt or an earlier release already carries the total.
 func githubTestsWalkRecords(cursor githubTestsChunkCursor) int {
-	return cursor.Pipelines + cursor.Jobs + cursor.Acceptance + cursor.Suites + cursor.Cases + cursor.Coverage
+	return cursor.Pipelines + cursor.Jobs + cursor.Acceptance + cursor.Suites + cursor.Cases + cursor.Coverage + cursor.ExtraRecords
 }
 
 // githubTestsWindowRecords is the walk's records without those of the deep range: the phases after the deep range (the
@@ -1286,7 +1290,7 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 		cursor.OpenSkipEvent != nil && (cursor.OpenSkipEvent.RunID == "" || cursor.OpenSkipEvent.Reason == "") ||
 		cursor.Index < 0 || cursor.NextURL == "" && cursor.Index != 0 ||
 		cursor.AnchorID != "" && !githubTestsCutRunDigits(cursor.AnchorID, 20) ||
-		cursor.RunPages < 0 || cursor.ArtifactPages < 0 || cursor.ReseekPages < 0 || cursor.PagesEntered < 0 || cursor.RecordCredit < 0 || cursor.DeletionProven < 0 || cursor.DeletionProven > 1 || cursor.Relist < 0 || cursor.Relist > githubTestsRelistStoppedSaturated ||
+		cursor.RunPages < 0 || cursor.ArtifactPages < 0 || cursor.ReseekPages < 0 || cursor.PagesEntered < 0 || cursor.RecordCredit < 0 || cursor.ExtraRecords < 0 || cursor.DeletionProven < 0 || cursor.DeletionProven > 1 || cursor.Relist < 0 || cursor.Relist > githubTestsRelistStoppedSaturated ||
 		// The counter pair is either both known or both unknown, never split:
 		// a cursor carrying exactly one is corrupt, not a legacy shape (a
 		// legacy cursor predates the field entirely, so it is missing BOTH).
@@ -2418,6 +2422,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				acceptance := make([]githubTestsAcceptanceRow, 0)
 				if !found {
 					pipelines = []githubTestsPipelineRow{githubTestsDeletedRow(row, normalizedAt)}
+					// The deleted row is not a pipeline_runs_synced read (Pipelines), but the walk bound charges it (CHAOS-14487).
+					cursor.ExtraRecords++
 					slog.Info(
 						"open run no longer exists at the provider; its row is marked deleted",
 						"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
@@ -3067,6 +3073,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				cursor.Suites += len(suites)
 				cursor.Cases += len(cases)
 				cursor.Coverage += len(coverage)
+				cursor.ExtraRecords += len(completeness)
 				effects, effectErr := testOpsEffects(nil, nil, nil, suites, cases, coverage, completeness...)
 				if effectErr != nil {
 					return effectErr

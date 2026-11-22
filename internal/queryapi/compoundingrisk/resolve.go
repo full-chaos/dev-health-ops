@@ -583,7 +583,8 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 				}
 			}
 		} else {
-			if len(teamIDs) > 0 && !teamFilteredSet {
+			// On TEAM the row scope is namedRowScope, read at the selected day.
+			if len(teamIDs) > 0 && !teamFilteredSet && breakout != model.CompoundingRiskScopeTeam {
 				if err = narrow(); err != nil {
 					return nil, err
 				}

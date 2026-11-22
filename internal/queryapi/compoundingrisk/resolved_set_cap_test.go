@@ -3,12 +3,14 @@ package compoundingrisk
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 )
 
 // CHAOS-14480: team big owns maxRows+1 repositories big-000..big-500; big-500
@@ -177,5 +179,36 @@ func TestTeamBreakoutWithNoTeamNamedCutsRepoIdsTokensAt500(t *testing.T) {
 		if n != maxRows {
 			t.Fatalf("repo_ids lengths %v; want every one %d (a request list is cut at maxRows)", lens, maxRows)
 		}
+	}
+}
+
+// On TEAM with teams named and a day given, the owned set of now is not read
+// for the rows: they use the owned set of the selected day. Per named team one
+// ownership read for that set and one for the grouping.
+func TestTeamBreakoutWithADayReadsNoOwnershipOfNowForTheRows(t *testing.T) {
+	now := sweepNow()
+	day := graphqldate.New(time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC))
+	served := func(filter *model.CompoundingRiskFilterInput) ([]string, int) {
+		rec := &sweepRecorder{sweepStore: &sweepStore{world: sweepFixture("derived", "under-cap", now)}}
+		got, err := Resolve(context.Background(), rec, sweepOrg, filter, now)
+		for _, st := range rec.unknown {
+			t.Fatalf("a statement the model does not know:\n%s", st)
+		}
+		ownership := 0
+		for _, st := range rec.statements {
+			if strings.Contains(st, "SELECT toString(rp.id) AS repo_id, rp.repo AS full_name") {
+				ownership++
+			}
+		}
+		return sweepServed(got, err), ownership
+	}
+	teams := []string{"t1", "t2"}
+	withDay, reads := served(&model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TeamIds: teams, Day: &day, TrendDays: 30})
+	if reads != 2*len(teams) {
+		t.Errorf("%d ownership reads; want %d (the row scope and the grouping of the selected day, one per named team)", reads, 2*len(teams))
+	}
+	picked, _ := served(&model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TeamIds: teams, TrendDays: 30})
+	if strings.Join(withDay, "\n") != strings.Join(picked, "\n") {
+		t.Errorf("served with the day given:\n%s\nwith the day picked:\n%s", strings.Join(withDay, "\n"), strings.Join(picked, "\n"))
 	}
 }

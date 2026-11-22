@@ -484,3 +484,44 @@ func TestStaleFinalizeSurveyRollbackEndsOnItsOwnDeadline(t *testing.T) {
 		t.Fatalf("survey = %+v, want one survey failure and no candidates", survey)
 	}
 }
+
+// failingBaseTx answers every SET, then fails statement 0's read; any other query is recorded.
+type failingBaseTx struct {
+	pgx.Tx
+	queries []string
+}
+
+func (*failingBaseTx) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, nil
+}
+
+func (*failingBaseTx) QueryRow(context.Context, string, ...any) pgx.Row { return failingRow{} }
+
+func (tx *failingBaseTx) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
+	tx.queries = append(tx.queries, sql)
+	return nil, ErrUnavailable
+}
+
+func (*failingBaseTx) Rollback(context.Context) error { return nil }
+func (*failingBaseTx) Commit(context.Context) error   { return nil }
+
+type failingRow struct{}
+
+func (failingRow) Scan(...any) error { return &pgconn.PgError{Code: "57014"} }
+
+// F1 (fcc PLAN-READ-14090-PERF-1): only a SUCCESSFUL false takes the early return. A statement 0 that fails (here its
+// statement_timeout, SQLSTATE 57014) is one {survey, deadline} failure with NO levels and no candidates, and statements
+// A and B are not sent. A survey that read the error as "false" would report exact zero levels for a base it never read.
+func TestStaleFinalizeStatementZeroFailureIsAFailureNotAnEmptyBase(t *testing.T) {
+	tx := &failingBaseTx{}
+	survey := surveyStaleFinalize(context.Background(),
+		func(context.Context) (pgx.Tx, error) { return tx, nil },
+		"statement 0", "statement A", "statement B", staleFinalizeTestNow, 10, nil)
+	want := []StaleFinalizeFailure{{Step: StaleFinalizeStepSurvey, Class: StaleFinalizeClassDeadline}}
+	if !reflect.DeepEqual(survey.failures, want) || survey.levels != nil || survey.candidates != nil {
+		t.Fatalf("survey = %+v, want one {survey, deadline} failure, no levels and no candidates", survey)
+	}
+	if len(tx.queries) != 0 {
+		t.Fatalf("statements sent after a failed statement 0: %v", tx.queries)
+	}
+}

@@ -99,6 +99,16 @@ differ for the same repositories. A team that has a persisted score keeps it
 until the next daily run replaces it, also when newer repository rows of the
 day exist.
 
+Every team score of the breakout groups repositories by the team that owned
+each of them on the selected day, the ownership the daily run uses for the
+persisted team scores. With teams named, the rows and every day of the trend
+use the repositories those teams owned on the selected day. This is not the
+rule of the TestOps series of a team, which attributes every day of its window
+to the owners as of the request. The selected day itself is picked with the
+ownership of the request: with teams named and no persisted team score in the
+window, it is the newest day with a row of a repository those teams own at the
+request.
+
 Every definition publishes its unit, aggregation, display precision, null and
 zero semantics, supported scopes and dimensions, range limits, comparison
 rule, definition version, query version, source version, and freshness policy.

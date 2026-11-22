@@ -701,9 +701,12 @@ func stepDay(base time.Time, offset int) string {
 }
 
 // F1: standing refusals older than a candidate never hide it. The Step limit
-// is 10; 11 refusals (4 with no partition, 4 recent, 3 live) are older than the
-// one candidate. The candidate is redriven in the first pass and the refusals
-// are counted by class.
+// is 10; 18 refusals are older than the one candidate: 11 with no partition
+// (the oldest, more than the limit), 4 recent and 3 live. The candidate is
+// redriven in the first pass, nothing else is, and the refusals are counted by
+// class. Each refusal fragment dropped from statement A turns this red: no
+// partition fills the limit ahead of the candidate, recent and live runs get
+// redriven.
 func TestStaleFinalizeStandingRefusalsDoNotHideACandidate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -711,13 +714,13 @@ func TestStaleFinalizeStandingRefusalsDoNotHideACandidate(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	orgID := uuid.NewString()
 	days := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	for index := 0; index < 11; index++ {
+	for index := 0; index < 18; index++ {
 		runID := uuid.NewString()
 		at := now.Add(-60*time.Hour - time.Duration(index)*time.Minute)
 		switch {
-		case index < 4:
-			venue.seedRunWithoutPartitions(t, ctx, orgID, runID, stepDay(days, index), at)
-		case index < 8:
+		case index < 11:
+			venue.seedRunWithoutPartitions(t, ctx, orgID, runID, stepDay(days, index), at.Add(-10*time.Hour))
+		case index < 15:
 			venue.seedShapeD(t, ctx, orgID, runID, stepDay(days, index), at)
 			venue.seedRiverFinalize(t, ctx, orgID, runID, "completed", now.Add(-time.Hour))
 		default:
@@ -726,16 +729,16 @@ func TestStaleFinalizeStandingRefusalsDoNotHideACandidate(t *testing.T) {
 		}
 	}
 	candidate := uuid.NewString()
-	venue.seedShapeD(t, ctx, orgID, candidate, stepDay(days, 20), now.Add(-30*time.Hour))
+	venue.seedShapeD(t, ctx, orgID, candidate, stepDay(days, 30), now.Add(-30*time.Hour))
 
 	result, err := venue.relay.Step(ctx, now, 10)
 	if err != nil {
 		t.Fatalf("reconciler Step: %v", err)
 	}
 	if len(result.StaleFinalizeRedriven) != 1 || result.StaleFinalizeRedriven[0] != candidate || venue.redriveRows(t, ctx, candidate) != 1 {
-		t.Fatalf("redriven %v (rows %d), want the candidate behind 11 older refusals", result.StaleFinalizeRedriven, venue.redriveRows(t, ctx, candidate))
+		t.Fatalf("redriven %v (rows %d), want the candidate behind 18 older refusals", result.StaleFinalizeRedriven, venue.redriveRows(t, ctx, candidate))
 	}
-	want := joboutbox.StaleFinalizeLevels{Live: 3, Recent: 4, NoPartitions: 4}
+	want := joboutbox.StaleFinalizeLevels{Live: 3, Recent: 4, NoPartitions: 11}
 	if result.StaleFinalizeLevels == nil || *result.StaleFinalizeLevels != want {
 		t.Fatalf("levels %+v, want %+v", result.StaleFinalizeLevels, want)
 	}
@@ -748,7 +751,10 @@ func TestStaleFinalizeStandingRefusalsDoNotHideACandidate(t *testing.T) {
 //   - an undelivered canonical finalize row -> live;
 //   - a delivered row whose River job is still there (terminal) -> the
 //     EXISTING finalize strand shape rearms it in the same Step, and the stage
-//     then sees the rearmed row as live: the two never both act.
+//     then sees the rearmed row as live: the two never both act;
+//   - the same, but the finalize's idempotency claim is still live, so the
+//     strand shape refuses it -> the stage refuses it too, as strand_shape
+//     (a redrive here would run beside a live claim).
 //
 // A and B agree: the base runs are the redriven ones plus the counted refusals.
 func TestStaleFinalizeCandidateMatrix(t *testing.T) {
@@ -759,9 +765,9 @@ func TestStaleFinalizeCandidateMatrix(t *testing.T) {
 	old := now.Add(-48 * time.Hour)
 	orgID := uuid.NewString()
 	days := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-	shapeD, freshPartition, freshRun, failedFinalize, undelivered, strandShape :=
-		uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
-	for index, runID := range []string{freshPartition, freshRun, failedFinalize, undelivered, strandShape} {
+	shapeD, freshPartition, freshRun, failedFinalize, undelivered, strandShape, claimLive :=
+		uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	for index, runID := range []string{freshPartition, freshRun, failedFinalize, undelivered, strandShape, claimLive} {
 		at := old
 		if runID == freshRun {
 			at = now.Add(-time.Hour)
@@ -776,7 +782,7 @@ func TestStaleFinalizeCandidateMatrix(t *testing.T) {
 		failedFinalize); err != nil {
 		t.Fatal(err)
 	}
-	for _, runID := range []string{undelivered, strandShape} {
+	for _, runID := range []string{undelivered, strandShape, claimLive} {
 		tx, err := venue.domain.Begin(ctx)
 		if err != nil {
 			t.Fatal(err)
@@ -793,7 +799,7 @@ func TestStaleFinalizeCandidateMatrix(t *testing.T) {
 	if _, err := venue.relay.Step(ctx, time.Now().UTC().Add(time.Second), 10); err != nil {
 		t.Fatalf("delivery Step: %v", err)
 	}
-	for _, runID := range []string{undelivered, strandShape} {
+	for _, runID := range []string{undelivered, strandShape, claimLive} {
 		if _, riverJobs := venue.finalizeTrace(t, ctx, runID); riverJobs != 1 {
 			t.Fatalf("fixture: run %s has %d River jobs after the delivery Step, want 1", runID, riverJobs)
 		}
@@ -805,15 +811,28 @@ WHERE dedupe_key = $1`, daily.FinalizeHandoffKey(undelivered), old, now.Add(time
 		t.Fatal(err)
 	}
 	venue.cleanRiverFinalizes(t, ctx, undelivered)
-	if _, err := venue.admin.Exec(ctx, `
+	for _, runID := range []string{strandShape, claimLive} {
+		if _, err := venue.admin.Exec(ctx, `
 UPDATE public.worker_job_outbox SET created_at = $2, delivered_at = $2, updated_at = $2 WHERE dedupe_key = $1`,
-		daily.FinalizeHandoffKey(strandShape), old); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := venue.admin.Exec(ctx, `
+			daily.FinalizeHandoffKey(runID), old); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := venue.admin.Exec(ctx, `
 UPDATE river.river_job SET state = 'completed', finalized_at = $2, created_at = $2, attempt = 1
 WHERE kind = 'metrics.daily_finalize' AND args @> jsonb_build_object('domain', jsonb_build_object('id', $1::text))`,
-		strandShape, old); err != nil {
+			runID, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A live idempotency claim on claimLive's finalize: the strand shape refuses it.
+	if _, err := venue.admin.Exec(ctx, `
+INSERT INTO public.worker_job_runs (
+    id, job_kind, idempotency_key, org_id, domain_type, domain_id,
+    status, claim_token, lease_expires_at, attempt_count,
+    started_at, finished_at, created_at, updated_at
+) VALUES ($1::uuid, 'metrics.daily_finalize', $2, $3, 'daily_metrics_run', $4, 'running', $5::uuid, $6, 1,
+    statement_timestamp(), NULL, statement_timestamp(), statement_timestamp())`,
+		uuid.NewString(), daily.FinalizeHandoffKey(claimLive), orgID, claimLive, uuid.NewString(), now.Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	// Seeded after the delivery Step, whose stage pass would have redriven it.
@@ -826,17 +845,17 @@ WHERE kind = 'metrics.daily_finalize' AND args @> jsonb_build_object('domain', j
 	if len(result.StaleFinalizeRedriven) != 1 || result.StaleFinalizeRedriven[0] != shapeD {
 		t.Fatalf("redriven %v, want shape D only", result.StaleFinalizeRedriven)
 	}
-	if result.StrandsRearmed != 1 {
-		t.Fatalf("the finalize strand shape rearmed %d rows, want the delivered row with a terminal River job", result.StrandsRearmed)
+	if result.StrandsRearmed != 1 || result.StrandClaimsLive != 1 {
+		t.Fatalf("the finalize strand shape rearmed %d rows and refused %d on a live claim, want 1 and 1", result.StrandsRearmed, result.StrandClaimsLive)
 	}
-	for _, runID := range []string{freshPartition, freshRun, failedFinalize, undelivered, strandShape} {
+	for _, runID := range []string{freshPartition, freshRun, failedFinalize, undelivered, strandShape, claimLive} {
 		if got := venue.redriveRows(t, ctx, runID); got != 0 {
 			t.Fatalf("run %s got %d redrive rows, want 0", runID, got)
 		}
 	}
-	want := joboutbox.StaleFinalizeLevels{Live: 2}
+	want := joboutbox.StaleFinalizeLevels{Live: 2, StrandShape: 1}
 	if result.StaleFinalizeLevels == nil || *result.StaleFinalizeLevels != want {
-		t.Fatalf("levels %+v, want %+v (the undelivered row and the rearmed row)", result.StaleFinalizeLevels, want)
+		t.Fatalf("levels %+v, want %+v (live: the undelivered row and the rearmed row; strand_shape: the live claim)", result.StaleFinalizeLevels, want)
 	}
 }
 

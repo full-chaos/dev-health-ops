@@ -690,9 +690,8 @@ const dispatchTailLockTimeoutSQL = `SET LOCAL lock_timeout = '1000ms'`
 // armPassWake is the pass's tail (passTail): it reads the run's pending units on the pass transaction and re-arms
 // the run's dispatch row there. Any error is returned and the pass commits nothing.
 func (service *NativeDispatchSyncRunService) armPassWake(ctx context.Context, tx pgx.Tx, runID string, admittedAt time.Time, riverQueued int, passDeferredAt *time.Time, claimableAfterSnapshot bool) (passEnd, pendingUnitCounts, error) {
-	if _, err := tx.Exec(ctx, dispatchTailLockTimeoutSQL); err != nil {
-		return 0, pendingUnitCounts{}, err
-	}
+	// MUTANT M4: no tail lock_timeout.
+	_ = dispatchTailLockTimeoutSQL
 	counts, err := computePendingUnitCounts(ctx, tx, runID, service.nowUTC(), admittedAt)
 	if err != nil {
 		return 0, pendingUnitCounts{}, err

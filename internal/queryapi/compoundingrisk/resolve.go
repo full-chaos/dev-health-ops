@@ -369,9 +369,9 @@ WHERE rp.org_id = {org_id:String}
 // teams own. With no team filter the repo scope is returned as given; with
 // one, the result is the sorted owned repository ids, further limited to
 // the repo filter (by id or full name) when that is non-empty.
-func repoScopeForTeams(ctx context.Context, client QueryClient, orgID string, repoIDs, teamIDs []string, asOf time.Time) (idList, error) {
+func repoScopeForTeams(ctx context.Context, client QueryClient, orgID string, repoIDs, teamIDs []string, asOf time.Time) (repoFilter, error) {
 	if len(teamIDs) == 0 {
-		return repoIDs, nil
+		return idList(repoIDs), nil
 	}
 	owned := map[string]bool{}
 	for _, t := range teamIDs {
@@ -386,7 +386,7 @@ func repoScopeForTeams(ctx context.Context, client QueryClient, orgID string, re
 			owned[id] = true
 		}
 	}
-	out := idList{}
+	out := resolvedIDs{}
 	for id := range owned {
 		out = append(out, id)
 	}
@@ -434,7 +434,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 		return &model.CompoundingRiskResult{OrgID: orgID, Breakout: breakout, Rows: []model.CompoundingRiskPoint{}, Trend: []model.CompoundingRiskTrendPoint{}, GeneratedAt: now}
 	}
 
-	var fallbackRepoIDs idList = repoIDs
+	var fallbackRepoIDs repoFilter = idList(repoIDs)
 	teamFilteredSet := false
 	narrow := func() error {
 		ids, err := repoScopeForTeams(ctx, client, orgID, repoIDs, teamIDs, now)
@@ -452,7 +452,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 	case wantDay != nil:
 		day = wantDay
 	case breakout == model.CompoundingRiskScopeTeam:
-		if day, err = latestDay(ctx, client, orgID, scopeTeam, teamIDs, startDay, endDay); err != nil {
+		if day, err = latestDay(ctx, client, orgID, scopeTeam, idList(teamIDs), startDay, endDay); err != nil {
 			return nil, err
 		}
 		if day == nil {
@@ -464,7 +464,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 			}
 		}
 	default:
-		if day, err = latestDay(ctx, client, orgID, scopeRepo, repoIDs, startDay, endDay); err != nil {
+		if day, err = latestDay(ctx, client, orgID, scopeRepo, idList(repoIDs), startDay, endDay); err != nil {
 			return nil, err
 		}
 	}
@@ -480,9 +480,9 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 	if breakout == model.CompoundingRiskScopeTeam {
 		rowsAsOf = d
 	}
-	var rowScope idList
+	var rowScope repoFilter
 	rowScopeSet := false
-	namedRowScope := func() (idList, error) {
+	namedRowScope := func() (repoFilter, error) {
 		if !rowScopeSet {
 			ids, err := repoScopeForTeams(ctx, client, orgID, repoIDs, teamIDs, rowsAsOf)
 			if err != nil {
@@ -534,7 +534,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 		if breakout == model.CompoundingRiskScopeTeam && len(teamRows) > 0 {
 			narrows := len(teamIDs) == 0 && repoIDs != nil && len(repoIDs) == 0
 			if !narrows {
-				var scope, selected idList = nil, repoIDs
+				var scope, selected repoFilter = idList(nil), idList(repoIDs)
 				if len(teamIDs) > 0 {
 					if selected, err = namedRowScope(); err != nil {
 						return nil, err
@@ -613,7 +613,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 		}
 	}
 
-	var trendIDs idList
+	var trendIDs repoFilter
 	if breakout == model.CompoundingRiskScopeTeam {
 		if len(teamIDs) > 0 {
 			if trendIDs, err = namedRowScope(); err != nil {
@@ -623,7 +623,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 			trendIDs = fallbackRepoIDs
 		}
 	} else {
-		trendIDs = repoIDs
+		trendIDs = idList(repoIDs)
 	}
 	trendRows, err := repoTrend(ctx, client, orgID, d, trendDays, trendIDs)
 	if err != nil {

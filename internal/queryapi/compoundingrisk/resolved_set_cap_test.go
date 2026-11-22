@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-go/clickhouse"
+
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 )
 
@@ -128,5 +130,52 @@ func TestNamedTeamWithMoreThan500OwnedRepositoriesPicksTheDayOfTheLastRepository
 	rows, trend := bigResolve(t, world, nil, now)
 	if len(rows) != 1 || rows[0] != "big@2026-03-09=1" || len(trend) != 2 || trend[0] != "2026-03-08=0.25" || trend[1] != "2026-03-09=1" {
 		t.Fatalf("rows %v trend %v; want rows [big@2026-03-09=1] (the newest day, big-500 only) and trend [2026-03-08=0.25 2026-03-09=1]", rows, trend)
+	}
+}
+
+// sweepRecorder is the sweep model that also records each statement and its
+// bindings.
+type sweepRecorder struct {
+	*sweepStore
+	statements []string
+	bindings   [][]clickhouse.Binding
+}
+
+func (r *sweepRecorder) Query(ctx context.Context, st string, b []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	r.statements = append(r.statements, st)
+	r.bindings = append(r.bindings, b)
+	return r.sweepStore.Query(ctx, st, b)
+}
+
+// A request list stays cut at maxRows on the TEAM breakout too: with no team
+// named, the 501 repoIds tokens are bound as the first 500.
+func TestTeamBreakoutWithNoTeamNamedCutsRepoIdsTokensAt500(t *testing.T) {
+	now := sweepNow()
+	var tokens []string
+	for i := 0; i <= maxRows; i++ {
+		tokens = append(tokens, bigRepoID(i))
+	}
+	rec := &sweepRecorder{sweepStore: &sweepStore{world: bigTeamWorld(now, false)}}
+	if _, err := Resolve(context.Background(), rec, sweepOrg, &model.CompoundingRiskFilterInput{
+		Breakout: model.CompoundingRiskScopeTeam, RepoIds: tokens, TrendDays: 30,
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range rec.unknown {
+		t.Fatalf("a statement the model does not know:\n%s", st)
+	}
+	var lens []int
+	for _, b := range rec.bindings {
+		if v, ok := sweepBinding(b, "repo_ids"); ok {
+			lens = append(lens, len(v.([]string)))
+		}
+	}
+	if len(lens) != 3 {
+		t.Fatalf("repo_ids bound %d times %v; want 3 (repository day pick, repository rows, trend)", len(lens), lens)
+	}
+	for _, n := range lens {
+		if n != maxRows {
+			t.Fatalf("repo_ids lengths %v; want every one %d (a request list is cut at maxRows)", lens, maxRows)
+		}
 	}
 }

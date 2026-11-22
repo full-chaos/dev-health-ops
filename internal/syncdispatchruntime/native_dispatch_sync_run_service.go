@@ -602,16 +602,22 @@ WHERE id = $1::uuid`,
 	// no wake (or, for the tail's read, as an error River retried).
 	var end passEnd
 	var counts pendingUnitCounts
-	if committed, err := service.commitFencedAfter(ctx, tx, fence, func(ctx context.Context, tx pgx.Tx) error {
-		var err error
-		if end, counts, err = service.armPassWake(ctx, tx, run.id, now, riverQueued, nextDeferredAt, len(deferredOutsideSnapshot) > 0); err != nil {
-			return fmt.Errorf("%w: pass tail: %w", ErrDispatchSyncRunUnavailable, err)
-		}
-		return nil
-	}); err != nil {
+	// MUTANT M2b: the whole tail runs after the commit in its own transaction and returns its errors.
+	if committed, err := service.commitFencedAfter(ctx, tx, fence, nil); err != nil {
 		return err
 	} else if !committed {
 		return nil
+	}
+	tailTx, err := service.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tailTx.Rollback(ctx) }()
+	if end, counts, err = service.armPassWake(ctx, tailTx, run.id, now, riverQueued, nextDeferredAt, len(deferredOutsideSnapshot) > 0); err != nil {
+		return err
+	}
+	if err := tailTx.Commit(ctx); err != nil {
+		return err
 	}
 	flushPostCommitLogs(ctx)
 	// CHAOS-10013: every unit this pass terminalized (budget exhaustion, an

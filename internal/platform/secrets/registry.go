@@ -338,6 +338,8 @@ func warnAttrs(name, field string) []any {
 		return []any{"setting", name, "field", declared}
 	}
 	if known, ok := knownNonSecretCredentialField(field); ok {
+		// A plain string on purpose: the value redactor still runs on it, so a registered
+		// secret equal to or inside the name redacts it. Never bypass the redactor here.
 		return []any{"setting", name, "field", known}
 	}
 	return []any{"setting", name, "field", "undeclared_name", "field_length", len(field)}

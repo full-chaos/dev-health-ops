@@ -389,7 +389,7 @@ const (
 		SELECT 1 FROM %[1]s AS job
 		WHERE job.kind = 'metrics.daily_finalize'
 			AND job.args @> jsonb_build_object('domain', jsonb_build_object('id', run.id::text))
-			AND job.state::text NOT IN ('completed', 'discarded', 'cancelled')
+			AND job.state::text NOT IN ('completed', 'cancelled')
 	) OR EXISTS (
 		SELECT 1 FROM public.worker_job_outbox AS outbox
 		WHERE outbox.job_kind = 'metrics.daily_finalize'

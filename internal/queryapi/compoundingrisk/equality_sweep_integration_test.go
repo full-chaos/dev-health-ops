@@ -47,21 +47,25 @@ func sweepSeed(t *testing.T, ctx context.Context, conn stdclickhouse.Conn, world
 	}
 	exec(t, ctx, conn, "INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES %s", strings.Join(values, ", "))
 	values = nil
-	var owned []string
 	for _, tm := range world.teams {
 		active := 0
 		if tm.active {
 			active = 1
 		}
 		values = append(values, fmt.Sprintf("('%s', '%s', '%s', [], %d, now64(6))", tm.id, tm.name, sweepOrg, active))
-		for _, id := range tm.owns {
-			owned = append(owned, fmt.Sprintf("('%s', 'github', '%s', '%s', '%s', 'exact', 'native', toDateTime64('2020-01-01 00:00:00', 3, 'UTC'), now64(3))",
-				sweepOrg, tm.id, uuidOf[id], nameOf[id]))
-		}
 	}
 	exec(t, ctx, conn, "INSERT INTO teams (id, name, org_id, repo_patterns, is_active, updated_at) VALUES %s", strings.Join(values, ", "))
+	var owned []string
+	for _, o := range world.ownership() {
+		to := "NULL"
+		if o.to != nil {
+			to = fmt.Sprintf("toDateTime64('%s', 3, 'UTC')", o.to.UTC().Format("2006-01-02 15:04:05"))
+		}
+		owned = append(owned, fmt.Sprintf("('%s', 'github', '%s', '%s', '%s', 'exact', 'native', toDateTime64('%s', 3, 'UTC'), %s, now64(3))",
+			sweepOrg, o.team, uuidOf[o.repo], nameOf[o.repo], o.from.UTC().Format("2006-01-02 15:04:05"), to))
+	}
 	if len(owned) > 0 {
-		exec(t, ctx, conn, "INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, valid_from, updated_at) VALUES %s", strings.Join(owned, ", "))
+		exec(t, ctx, conn, "INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, valid_from, valid_to, updated_at) VALUES %s", strings.Join(owned, ", "))
 	}
 	values = nil
 	for _, r := range world.risk {

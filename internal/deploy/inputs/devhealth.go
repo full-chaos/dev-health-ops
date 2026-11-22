@@ -175,7 +175,7 @@ var (
 // back (acp Q5) and the kit gates their rows with post-roll posture reads, so
 // a row on a doc of one of these names, of any kind, is a kit form. The one
 // other chart hook, route-activate, rides an app roll in the kit (s41-a).
-var migrateHooks = []string{"river-migrate", "provision-roles", "migrate", "streak-index", "open-units-index", "auth-migrate", "auth-grants"}
+var migrateHooks = []string{"river-migrate", "provision-roles", "migrate", "streak-index", "open-units-index", "finalize-outbox-index", "auth-migrate", "auth-grants"}
 
 // hookDoc: a name is a hook doc when it is <hook> or ends in "-<hook>", under any release prefix and any kind.
 func hookDoc(name string) bool {

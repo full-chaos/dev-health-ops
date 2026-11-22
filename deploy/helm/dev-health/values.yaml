@@ -1667,6 +1667,28 @@ migrations:
       deadlineSeconds: 240
       attempts: 3
       retryDelaySeconds: 15
+    # -- Build ix_worker_job_outbox_finalize_domain_id CONCURRENTLY in a
+    #    weight -2 pre-hook Job (`dho migrate postgres build-index
+    #    finalize-outbox`), BEFORE the migrate Job runs revision 0167 (which
+    #    then finds the index and does nothing; its plain build would hold a
+    #    SHARE lock on worker_job_outbox and stop every outbox write). OFF = no
+    #    such Job in the render; turn it on for the roll that carries revision
+    #    0167 on a database with a large worker_job_outbox. The Job fails, and
+    #    so does the release before the migrate Job, unless the index ends
+    #    present and valid. With localBundledPostgres the Job runs on
+    #    pre-upgrade only. Pass a helm --timeout above activeDeadlineSeconds.
+    finalizeOutboxIndex:
+      enabled: false
+      # -- The index holds only the metrics.daily_finalize rows (about 49k of 482k outbox rows), so the Job is short.
+      activeDeadlineSeconds: 700
+      # -- lock_timeout of the table-lock probe before each attempt, in seconds (1 to 60). The waits for older
+      #    transactions are not under it: they run up to deadlineSeconds.
+      lockTimeoutSeconds: 5
+      # -- window of the whole build in seconds; deadlineSeconds + 430 (the 70 s first-connect wait, startup and
+      #    cleanup) must not exceed activeDeadlineSeconds.
+      deadlineSeconds: 240
+      attempts: 3
+      retryDelaySeconds: 15
     backoffLimit: 2
     activeDeadlineSeconds: 1800
     resources:

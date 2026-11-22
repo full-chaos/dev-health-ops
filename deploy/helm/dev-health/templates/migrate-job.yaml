@@ -493,4 +493,110 @@ spec:
           resources:
             {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
 {{- end }}
+{{- /*
+The finalize-outbox index Job: `dho migrate postgres build-index finalize-outbox` builds
+ix_worker_job_outbox_finalize_domain_id CONCURRENTLY, outside the upgrade transaction, so a large worker_job_outbox
+keeps taking outbox writes while the index builds. Revision 0167 (CREATE INDEX IF NOT EXISTS) then finds it and does
+nothing. OFF by
+default: a render with the flag off has no such Job. A failed or partial build (the verb exits non-zero unless the
+index is present and valid) fails the hook, which stops the release before the weight-0 migrate Job runs. Weight -2:
+after the weight -5 ConfigMap and Secret this Job reads, before the migrate Job. Size migrations.hook.finalizeOutboxIndex.
+activeDeadlineSeconds for the prod table and pass a helm --timeout above it.
+*/}}
+{{- if .Values.migrations.hook.finalizeOutboxIndex.enabled }}
+{{- /*
+The verb's whole run is the first-connect wait (60 s budget + a 10 s last attempt) + startup (about 60 s) + the build window
+(deadlineSeconds) + the cleanup drop (300 s): 430 s beside the window. It must end inside the Job's activeDeadlineSeconds, or Kubernetes kills the pod mid-build and the INVALID leftover stays.
+*/}}
+{{- if gt (add (int .Values.migrations.hook.finalizeOutboxIndex.deadlineSeconds) 430) (int .Values.migrations.hook.finalizeOutboxIndex.activeDeadlineSeconds) }}
+{{- fail "migrations.hook.finalizeOutboxIndex.deadlineSeconds + 430 (first-connect wait, startup and cleanup) must not exceed migrations.hook.finalizeOutboxIndex.activeDeadlineSeconds" }}
+{{- end }}
+{{- /*
+With localBundledPostgres the Job runs on pre-upgrade only: the bundled database exists on an upgrade, and a fresh
+install builds the index in revision 0167 on an empty table.
+*/}}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "dev-health.fullname" . }}-finalize-outbox-index
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "migrate" "context" $) | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ if $localBundledPostgres }}pre-upgrade{{ else }}{{ join "," $hookEvents }}{{ end }}
+    helm.sh/hook-weight: "-2"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.migrations.hook.finalizeOutboxIndex.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "migrate" "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+      {{- if $localBundledPostgres }}
+      initContainers:
+        - name: wait-for-postgresql
+          image: {{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}
+          # The PostgreSQL image's own policy, never image.pullPolicy: this
+          # container runs a registry image, not the application image a local
+          # profile side-loads and marks Never.
+          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsUser: 70
+            runAsGroup: 70
+          command:
+            - sh
+            - -ec
+            - >-
+              until pg_isready --host {{ include "dev-health.fullname" . }}-postgresql
+              --port 5432 --username {{ .Values.postgresql.credentials.user | quote }}
+              --dbname {{ .Values.postgresql.credentials.database | quote }};
+              do sleep 2; done
+      {{- end }}
+      containers:
+        - name: finalize-outbox-index
+          image: {{ $migrateImage | quote }}
+          imagePullPolicy: {{ $migratePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          args:
+            - migrate
+            - postgres
+            - build-index
+            - --lock-timeout={{ .Values.migrations.hook.finalizeOutboxIndex.lockTimeoutSeconds }}s
+            - --deadline={{ .Values.migrations.hook.finalizeOutboxIndex.deadlineSeconds }}s
+            - --attempts={{ .Values.migrations.hook.finalizeOutboxIndex.attempts }}
+            - --retry-delay={{ .Values.migrations.hook.finalizeOutboxIndex.retryDelaySeconds }}s
+            - finalize-outbox
+          envFrom:
+            - configMapRef:
+                name: {{ include "dev-health.fullname" . }}-migrate-config
+            - secretRef:
+                {{- if .Values.secrets.create }}
+                name: {{ include "dev-health.fullname" . }}-migrate-secrets
+              {{- else }}
+                name: {{ default (include "dev-health.secretName" .) .Values.migrations.hook.externalSecretName }}
+              {{- end }}
+          {{- $ownerRole := include "dev-health.opsOwnerRole" . }}
+          {{- if or .Values.migrations.hook.extraEnv $ownerRole }}
+          env:
+            {{- with .Values.migrations.hook.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with $ownerRole }}
+            - name: MIGRATION_OWNER_ROLE
+              value: {{ . | quote }}
+            {{- end }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
+{{- end }}
 {{- end }}

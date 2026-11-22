@@ -89,7 +89,8 @@ func chartRenderBytes(t *testing.T, release string) []byte {
 		"--set", "migrations.hook.riverMigrate.image=ghcr.io/full-chaos/dho:sha-0123456789ab",
 		"--set", "migrations.hook.routeActivate.image=ghcr.io/full-chaos/dho:sha-0123456789ab",
 		"--set", "migrations.hook.streakIndex.enabled=true",
-		"--set", "migrations.hook.openUnitsIndex.enabled=true")
+		"--set", "migrations.hook.openUnitsIndex.enabled=true",
+		"--set", "migrations.hook.finalizeOutboxIndex.enabled=true")
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	if err := cmd.Run(); err != nil {
@@ -100,10 +101,10 @@ func chartRenderBytes(t *testing.T, release string) []byte {
 
 // (a) on the real producer: under the docs release name (dev-health, no
 // fullnameOverride), the prod name (dev-health-ops) and one other prefix, the
-// 7 migrate, data and grant hook Jobs of the render are refused on any kind,
+// 8 migrate, data and grant hook Jobs of the render are refused on any kind,
 // and the render's app-roll rows (every non-auth Deployment, route-activate)
 // still pass.
-func TestTheSevenHooksOfARealRenderAreRefusedUnderAnyRelease(t *testing.T) {
+func TestTheEightHooksOfARealRenderAreRefusedUnderAnyRelease(t *testing.T) {
 	img := ".spec.template.spec.containers[0].image"
 	for _, release := range []string{"dev-health", "dev-health-ops", "acme"} {
 		docs := chartRender(t, release)
@@ -115,7 +116,7 @@ func TestTheSevenHooksOfARealRenderAreRefusedUnderAnyRelease(t *testing.T) {
 					continue
 				}
 				best := ""
-				for _, h := range []string{"river-migrate", "provision-roles", "migrate", "streak-index", "open-units-index", "auth-migrate", "auth-grants"} {
+				for _, h := range []string{"river-migrate", "provision-roles", "migrate", "streak-index", "open-units-index", "finalize-outbox-index", "auth-migrate", "auth-grants"} {
 					if strings.HasSuffix(name, "-"+h) && len(h) > len(best) {
 						best = h
 					}
@@ -136,8 +137,8 @@ func TestTheSevenHooksOfARealRenderAreRefusedUnderAnyRelease(t *testing.T) {
 					}
 				}
 			}
-			if len(found) != 7 {
-				t.Fatalf("%s: the render holds %d of the 7 hook Jobs: %v", release, len(found), found)
+			if len(found) != 8 {
+				t.Fatalf("%s: the render holds %d of the 8 hook Jobs: %v", release, len(found), found)
 			}
 		})
 		t.Run(release+"/app-roll rows pass", func(t *testing.T) {

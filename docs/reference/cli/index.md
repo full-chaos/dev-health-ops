@@ -2337,9 +2337,10 @@ dho migrate status --check
 # Print, read-only, what the upgrade will do to this database
 dho migrate postgres preflight
 
-# Build the failure-streak or open-units index without blocking writes (before the upgrade that carries it)
+# Build the failure-streak, open-units or finalize-outbox index without blocking writes (before the upgrade that carries it)
 dho migrate postgres build-index failure-streak
 dho migrate postgres build-index open-units
+dho migrate postgres build-index finalize-outbox
 
 # Show migration history
 dho migrate postgres history
@@ -2359,6 +2360,8 @@ dho migrate postgres heads
 `dho migrate postgres build-index failure-streak` builds `ix_sync_run_units_failure_streak` with `CREATE INDEX CONCURRENTLY`, outside the upgrade transaction, so a large `sync_run_units` keeps taking writes. Each attempt runs under `--lock-timeout` (default 5s, up to `--attempts`, default 20, `--retry-delay` apart); an invalid leftover index is dropped and rebuilt. It exits 0 only when the index is present and valid. One run acts at a time: a run that finds another run holding the build lock exits 0 when the index is already valid, else non-zero (`build_index_lock_held`) with no DDL. The build lock is a session lock, so `MIGRATION_DATABASE_URI` and the `POSTGRES_URI` fallback must reach PostgreSQL directly or through a session-mode pooler; under a transaction-mode pooler the run exits non-zero (`build_index_session_changed`) with no further DDL. After such a refusal the build lock stays on the pooled backend until the pooler recycles that server connection (PgBouncer `server_lifetime`, default 3600 s; transaction mode runs no reset query); until then other runs exit non-zero (`build_index_lock_held`), or 0 when the index is already valid. The upgrade revision that carries the index (0159) then finds it and does nothing. The chart runs it as a pre-upgrade hook Job when `migrations.hook.streakIndex.enabled=true`.
 
 `dho migrate postgres build-index open-units` does the same for `ix_sync_run_units_open_run` (open units only; the materializer's dispatch and finalize candidate reads use it); the upgrade revision that carries it (0161) then finds it and does nothing. The chart runs it as a pre-upgrade hook Job when `migrations.hook.openUnitsIndex.enabled=true`.
+
+`dho migrate postgres build-index finalize-outbox` does the same for `ix_worker_job_outbox_finalize_domain_id` on `worker_job_outbox` (the `metrics.daily_finalize` rows only; the reconciler's stale-finalize survey reads it); the upgrade revision that carries it (0167) then finds it and does nothing. The chart runs it as a pre-upgrade hook Job when `migrations.hook.finalizeOutboxIndex.enabled=true`.
 
 **Flat aliases:** `dho migrate current`, `heads`, `history`, `status` and `downgrade` target PostgreSQL. `dho migrate upgrade` is not an alias: it runs the full set described above.
 

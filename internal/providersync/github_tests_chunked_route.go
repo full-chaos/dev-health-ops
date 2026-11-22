@@ -1765,7 +1765,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	// creditDeletion: the records a run deleted before the anchor was charged stay charged, while the uninterrupted walk of
 	// the survivors never charges them, so a proven deletion (githubTestsResumeDeleted) earns the average records of a read
 	// run per deleted run, rounded up (runs phase: pipeline, job and acceptance rows per pipeline; artifacts phase: report
-	// rows per pipeline, the artifacts listing lists the runs the runs phase read). The deletion credit stops at a twentieth
+	// rows per pipeline, the artifacts listing lists the runs the runs phase read; the report rows include the run-report
+	// completeness rows, CHAOS-14487: ExtraRecords holds only those while the artifacts phase runs, as the open phase, its
+	// other writer, comes after it). The deletion credit stops at a twentieth
 	// of the bound, checked against all the credit (the re-seek re-read credit above is not capped). A deep-range credit
 	// also comes off LateRecords, as creditRecords does (CHAOS-14434).
 	deletionCeiling := maxWalkRecords / 20
@@ -1779,7 +1781,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		records := cursor.Pipelines + cursor.Jobs + cursor.Acceptance
 		if phase == githubTestsArtifactsPhase {
-			records = cursor.Suites + cursor.Cases + cursor.Coverage
+			records = cursor.Suites + cursor.Cases + cursor.Coverage + cursor.ExtraRecords
 		}
 		perRun := (records + cursor.Pipelines - 1) / cursor.Pipelines
 		credit := min(deleted*perRun, max(0, deletionCeiling-cursor.RecordCredit))

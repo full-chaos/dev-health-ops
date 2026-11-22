@@ -257,7 +257,8 @@ func chargedR1DeepReports(noPipelines bool) (deletionShiftListing, []listingRun)
 	return listing, fixture
 }
 
-// The deep reports average (report rows over the runs pass's pipelines) under-credits a deleted run of 3 report rows, and
+// The deep reports average (report rows over the runs pass's pipelines) under-credits a deleted run of 3 report rows (4 charged
+// rows with its run-report completeness row, CHAOS-14487), and
 // a claim whose relist runs wrote no pipeline row earns no credit at all. Such a walk must not advance past the survivor it
 // leaves: its deep stop at the record bound, in a walk that earned credit, holds the watermark on a recorded truncation.
 // The next walk (credit 0, no new deletion) reads the survivor and advances.
@@ -267,7 +268,7 @@ func TestGitHubTestsResumeDeepReportsUnderCreditHoldsTheWatermark(t *testing.T) 
 		name        string
 		noPipelines bool
 		bounds      []int
-	}{{"three_row_reports", false, []int{387, 388, 389}}, {"no_pipelines", true, []int{390}}} {
+	}{{"three_row_reports", false, []int{516, 517, 518, 519}}, {"no_pipelines", true, []int{520}}} {
 		listing, fixture := chargedR1DeepReports(shape.noPipelines)
 		for _, coalesce := range []bool{false, true} {
 			for _, pause := range []int{50, 100} {
@@ -643,7 +644,9 @@ func TestGitHubTestsInsertReseekDeepStopAtTheRecordBoundAdvances(t *testing.T) {
 			t.Run(listing.name+"/"+deletionShiftFlag(coalesce), func(t *testing.T) {
 				bound := 120
 				if listing.reports {
-					bound = 300
+					// 61 window runs (one inserted) of 5 charged rows (pipeline, 3 report rows, completeness: 305), and the deep
+					// relist stops at the bound about 19 runs in, as 300 did at 4 and 3 rows a run (CHAOS-14487).
+					bound = 380
 				}
 				handler := GitHubTestsRouteHandler{MaxWalkRecords: bound, CoalesceRuns: coalesce}
 				fake := newListingFake(t, chargedR1DeepWithWindow(listing, 200))
@@ -688,8 +691,9 @@ func TestGitHubTestsResumeDeletionProvenWithoutCreditHoldsTheDeepStop(t *testing
 	listing, fixture := chargedR1DeepReports(true)
 	for _, coalesce := range []bool{false, true} {
 		t.Run(deletionShiftFlag(coalesce), func(t *testing.T) {
+			// 4 charged rows a run: 3 report rows and the run-report completeness row (CHAOS-14487).
 			const at = 130
-			handler := GitHubTestsRouteHandler{MaxWalkRecords: 3 * at, CoalesceRuns: coalesce}
+			handler := GitHubTestsRouteHandler{MaxWalkRecords: 4 * at, CoalesceRuns: coalesce}
 			fake := newListingFake(t, slices.Clone(fixture))
 			var checkpoint githubTestsChunkCursor
 			final := chargedResumeWalk(t, handler, listing.claim, deletionShiftDoer(t, fake, true),
@@ -731,8 +735,9 @@ func TestGitHubTestsDeepStopCountsOnePageCapPerPhase(t *testing.T) {
 	}{
 		{"deep_runs/visitor", false, 50, 130},
 		{"deep_runs/bound_entry", false, 130, 130},
-		{"deep_reports/visitor", true, 50, 390},
-		{"deep_reports/bound_entry", true, 130, 390},
+		// 130 relist runs of 4 charged rows (3 report rows and the run-report completeness row, CHAOS-14487).
+		{"deep_reports/visitor", true, 50, 520},
+		{"deep_reports/bound_entry", true, 130, 520},
 	} {
 		for _, coalesce := range []bool{false, true} {
 			for _, dataset := range []string{"tests", "cicd"} {

@@ -99,6 +99,13 @@ func TestProductionGenericRelayConstructsBothRecoverySeams(t *testing.T) {
 			t.Fatalf("production generic relay still uses %s, which omits a recovery seam", superseded)
 		}
 	}
+	// CHAOS-14090: the stale-finalize stage rides the strand repair. Its
+	// redriver is built on the DOMAIN pool (the queue role has no outbox
+	// INSERT and no runs UPDATE); its survey uses the repair's queue pool.
+	if strings.Count(text, "newStaleFinalizeRedriver(domainPool, registry)") != 1 ||
+		strings.Count(text, "strandRepair.SetStaleFinalizeRedriver(staleFinalize)") != 1 {
+		t.Fatal("production generic relay does not enable the stale-finalize stage with a domain-pool redriver")
+	}
 }
 
 func TestReconcilerMissingDependenciesStayLiveAndFailReadinessWithoutValues(t *testing.T) {

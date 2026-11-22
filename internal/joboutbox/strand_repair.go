@@ -134,6 +134,18 @@ type StrandRepairResult struct {
 	// reported, and counted by ReconcilerLoop, because a pass that did not run
 	// must not read as a pass that ran and found nothing.
 	PassSkippedIdle bool
+	// StaleFinalizeRedriven names the runs the stale-finalize stage redrove
+	// this pass (stale_finalize_repair.go).
+	StaleFinalizeRedriven []string
+	// StaleFinalizeFailures are the stage's counted failures; the stage never
+	// returns an error.
+	StaleFinalizeFailures []StaleFinalizeFailure
+	// StaleFinalizeDeferred counts candidates left for a later pass because
+	// the pass budget ended or two redrives hit their deadline.
+	StaleFinalizeDeferred int
+	// StaleFinalizeLevels is a LEVEL: the standing refusals of the last pass
+	// that read them, nil when this pass did not.
+	StaleFinalizeLevels *StaleFinalizeLevels
 }
 
 // retiredKindsObservationCap is deliberately independent of the reconciler's
@@ -214,6 +226,11 @@ type StrandRepair struct {
 	// and bounds how long a fenced row may wait. NewStrandRepair always sets
 	// it; zero disables the sweep for fixtures that exercise the shapes alone.
 	undeliveredCeiling time.Duration
+	// riverJobTable is the sanitized river_job identifier the shapes use.
+	riverJobTable string
+	// staleFinalize is the stale-finalize stage (stale_finalize_repair.go);
+	// nil until SetStaleFinalizeRedriver enables it.
+	staleFinalize *staleFinalizeStage
 }
 
 // strandShape is one domain's predicate in both the forms a pass needs: an
@@ -272,6 +289,7 @@ func NewStrandRepair(
 			newStrandShape(providerUnitShapeName, repairStrandedProviderUnitSQL, jobTable),
 		},
 		undeliveredCeiling: DefaultUndeliveredCeiling,
+		riverJobTable:      jobTable,
 	}, nil
 }
 
@@ -335,6 +353,14 @@ func (repair *StrandRepair) Step(
 		if err != nil {
 			return result, err
 		}
+	}
+	if repair.staleFinalize != nil {
+		// Fail-open: the stage counts its own failures and returns none.
+		pass := repair.staleFinalize.step(ctx, now, limit)
+		result.StaleFinalizeRedriven = pass.redriven
+		result.StaleFinalizeFailures = pass.failures
+		result.StaleFinalizeDeferred = pass.deferred
+		result.StaleFinalizeLevels = pass.levels
 	}
 	observed, err := repair.observeRetiredKinds(ctx)
 	if err != nil {

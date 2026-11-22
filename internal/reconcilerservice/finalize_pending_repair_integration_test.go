@@ -7,11 +7,14 @@ import (
 	"encoding/json"
 	"net/url"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	jobsv1 "github.com/full-chaos/dev-health-ops/contracts/jobs/v1"
@@ -35,13 +38,44 @@ const (
 // through it, and these cells are about the recovery, not the coordinator
 // posture.
 type finalizePendingVenue struct {
-	admin    *pgxpool.Pool
-	domain   *pgxpool.Pool
-	queue    *pgxpool.Pool
-	registry *jobruntime.Registry
-	relay    joboutbox.RelayStepper
-	store    *daily.PostgresStore
-	pub      *daily.PostgresPublisher
+	admin      *pgxpool.Pool
+	domain     *pgxpool.Pool
+	queue      *pgxpool.Pool
+	domainRole string
+	queueRole  string
+	domainSQL  *sqlRecorder
+	queueSQL   *sqlRecorder
+	registry   *jobruntime.Registry
+	relay      joboutbox.RelayStepper
+	store      *daily.PostgresStore
+	pub        *daily.PostgresPublisher
+}
+
+// sqlRecorder keeps every statement one pool sent, so a cell can name the
+// pool -- and so the role -- each half of the stage ran on.
+type sqlRecorder struct {
+	mu         sync.Mutex
+	statements []string
+}
+
+func (recorder *sqlRecorder) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	recorder.mu.Lock()
+	recorder.statements = append(recorder.statements, data.SQL)
+	recorder.mu.Unlock()
+	return ctx
+}
+
+func (*sqlRecorder) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func (recorder *sqlRecorder) sawContaining(fragment string) bool {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	for _, statement := range recorder.statements {
+		if strings.Contains(statement, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func startFinalizePendingVenue(t *testing.T, ctx context.Context) *finalizePendingVenue {
@@ -92,8 +126,9 @@ func startFinalizePendingVenue(t *testing.T, ctx context.Context) *finalizePendi
 	}); err != nil {
 		t.Fatal(err)
 	}
-	domain := openFinalizePendingPool(t, ctx, finalizePendingRoleURI(t, instance.URI, domainRole, finalizePendingDomainPassword))
-	queue := openFinalizePendingPool(t, ctx, finalizePendingRoleURI(t, instance.URI, queueRole, finalizePendingQueuePassword))
+	domainSQL, queueSQL := &sqlRecorder{}, &sqlRecorder{}
+	domain := openTracedFinalizePendingPool(t, ctx, finalizePendingRoleURI(t, instance.URI, domainRole, finalizePendingDomainPassword), domainSQL)
+	queue := openTracedFinalizePendingPool(t, ctx, finalizePendingRoleURI(t, instance.URI, queueRole, finalizePendingQueuePassword), queueSQL)
 	registry, err := jobruntime.Load(filepath.Join("..", "..", "contracts", "jobs", "v1"))
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +147,8 @@ func startFinalizePendingVenue(t *testing.T, ctx context.Context) *finalizePendi
 		t.Fatal(err)
 	}
 	return &finalizePendingVenue{
-		admin: admin, domain: domain, queue: queue, registry: registry,
+		admin: admin, domain: domain, queue: queue, domainRole: domainRole, queueRole: queueRole,
+		domainSQL: domainSQL, queueSQL: queueSQL, registry: registry,
 		relay: relay, store: store, pub: publisher,
 	}
 }
@@ -120,6 +156,24 @@ func startFinalizePendingVenue(t *testing.T, ctx context.Context) *finalizePendi
 func openFinalizePendingPool(t *testing.T, ctx context.Context, uri string) *pgxpool.Pool {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if err := pool.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return pool
+}
+
+func openTracedFinalizePendingPool(t *testing.T, ctx context.Context, uri string, recorder *sqlRecorder) *pgxpool.Pool {
+	t.Helper()
+	config, err := pgxpool.ParseConfig(uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ConnConfig.Tracer = recorder
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,10 +399,10 @@ func TestReconcilerRedrivesAFinalizePendingRunWithNoJobAndNoOutboxRow(t *testing
 	}
 }
 
-// Control (passes on main for the trivial reason that nothing redrives; it is
-// the guard for the stage): a run whose finalize River job is still live while
-// outbox retention already pruned its row must be skipped. A redrive beside a
-// live job adds a second finalize job (#6440 r3 finding 4).
+// A run whose finalize River job is still live while outbox retention already
+// pruned its row is skipped and counted as live. A redrive beside a live job
+// adds a second finalize job (#6440 r3 finding 4). Each state steps one stage
+// interval later, so every state is surveyed.
 func TestReconcilerSkipsAFinalizePendingRunWhoseRiverJobIsLive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -362,8 +416,13 @@ func TestReconcilerSkipsAFinalizePendingRunWhoseRiverJobIsLive(t *testing.T) {
 			// or retryable job past the day the outbox keeps its row.
 			venue.seedRiverFinalize(t, ctx, orgID, runID, state, now.Add(-30*time.Hour))
 
-			if _, err := venue.relay.Step(ctx, now, 10); err != nil {
+			result, err := venue.relay.Step(ctx, now.Add(time.Duration(index)*11*time.Minute), 10)
+			if err != nil {
 				t.Fatalf("reconciler Step: %v", err)
+			}
+			if result.StaleFinalizeLevels == nil || result.StaleFinalizeLevels.Live != index+1 || len(result.StaleFinalizeRedriven) != 0 {
+				t.Fatalf("live %s River job: levels %+v redriven %v, want %d live and nothing redriven",
+					state, result.StaleFinalizeLevels, result.StaleFinalizeRedriven, index+1)
 			}
 
 			if outboxRows, riverJobs := venue.finalizeTrace(t, ctx, runID); outboxRows != 0 || riverJobs != 1 {
@@ -412,13 +471,15 @@ func TestAQueuedOldFinalizeAndItsRedriveComputeOnce(t *testing.T) {
 	}
 }
 
-// RED BY DESIGN, for the follow-up of CHAOS-14090 (pm ruling F4): a run whose
-// discovery found no repository is materialized empty by the real producer --
-// no partition, the finalize handed off in the same transaction -- and then
-// loses that finalize (River cleaned the job, retention pruned the outbox row).
-// The CHAOS-14090 stage does not redrive a run with no partition, so nothing
-// recovers it. This cell states the WANT of the follow-up and shows the shape.
-func TestAMaterializedEmptyRunWithALostFinalizeIsRecovered(t *testing.T) {
+// OPEN BY DESIGN (pm ruling F4; follow-up CHAOS-14492): a run whose discovery
+// found no repository is materialized empty by the real producer -- no
+// partition, the finalize handed off in the same transaction -- and then loses
+// that finalize (River cleaned the job, retention pruned the outbox row). After
+// retention it looks exactly like a run whose dispatch died before it
+// materialized, and a zero-partition finalize ends the run as no_repositories,
+// so the stage never guesses: it counts the run as no_partitions and redrives
+// nothing. The follow-up flips this WANT.
+func TestAMaterializedEmptyRunWithALostFinalizeIsNotRecoveredByThisStage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	venue := startFinalizePendingVenue(t, ctx)
@@ -468,15 +529,23 @@ UPDATE public.daily_metrics_runs SET created_at = $2, updated_at = $2 WHERE id =
 		t.Fatalf("fixture run status=%s finalization=%s, want running/pending", status, finalization)
 	}
 
-	if _, err := venue.relay.Step(ctx, time.Now().UTC(), 10); err != nil {
+	result, err := venue.relay.Step(ctx, time.Now().UTC(), 10)
+	if err != nil {
 		t.Fatalf("reconciler Step: %v", err)
+	}
+	if result.StaleFinalizeLevels == nil || result.StaleFinalizeLevels.NoPartitions != 1 || len(result.StaleFinalizeRedriven) != 0 {
+		t.Fatalf("levels %+v redriven %v, want one standing no_partitions run and nothing redriven",
+			result.StaleFinalizeLevels, result.StaleFinalizeRedriven)
 	}
 	if _, err := venue.relay.Step(ctx, time.Now().UTC().Add(time.Second), 10); err != nil {
 		t.Fatalf("second reconciler Step: %v", err)
 	}
-	if outboxRows, riverJobs := venue.finalizeTrace(t, ctx, run.ID); outboxRows != 1 || riverJobs != 1 {
-		t.Fatalf("materialized-empty run with a lost finalize: %d finalize outbox rows and %d River jobs "+
-			"after two Steps, want 1 and 1: nothing recovers it (open by design in CHAOS-14090)", outboxRows, riverJobs)
+	if outboxRows, riverJobs := venue.finalizeTrace(t, ctx, run.ID); outboxRows != 0 || riverJobs != 0 {
+		t.Fatalf("materialized-empty run with a lost finalize: %d finalize outbox rows and %d River jobs, want 0 and 0 "+
+			"(not recovered by this stage, by design)", outboxRows, riverJobs)
+	}
+	if status, finalization := venue.runState(t, ctx, run.ID); status != "running" || finalization != "pending" {
+		t.Fatalf("run status=%s finalization=%s, want it left running/pending", status, finalization)
 	}
 }
 
@@ -532,8 +601,12 @@ func TestStaleFinalizeRedrivesARunAtMostOncePer24Hours(t *testing.T) {
 	}
 	venue.cleanRiverFinalizes(t, ctx, runID)
 
-	if _, err := venue.relay.Step(ctx, start.Add(11*time.Minute), 10); err != nil {
+	inside, err := venue.relay.Step(ctx, start.Add(11*time.Minute), 10)
+	if err != nil {
 		t.Fatalf("Step inside 24 h: %v", err)
+	}
+	if inside.StaleFinalizeLevels == nil || inside.StaleFinalizeLevels.Recent != 1 {
+		t.Fatalf("inside 24 h: levels %+v, want the run standing as recent", inside.StaleFinalizeLevels)
 	}
 	if got := venue.redriveRows(t, ctx, runID); got != 1 {
 		t.Fatalf("inside 24 h of the first redrive: %d redrive rows, want 1 (at most one per run per 24 h)", got)
@@ -587,7 +660,9 @@ UPDATE public.worker_job_outbox SET created_at = $2, delivered_at = $2, updated_
 		t.Fatal(err)
 	}
 
-	if _, err := venue.relay.Step(ctx, time.Now().UTC(), 10); err != nil {
+	// One stage interval after the delivery Step, which already ran a pass.
+	later := time.Now().UTC().Add(11 * time.Minute)
+	if _, err := venue.relay.Step(ctx, later, 10); err != nil {
 		t.Fatalf("Step: %v", err)
 	}
 	if got := venue.redriveRows(t, ctx, runID); got != 1 {
@@ -600,10 +675,349 @@ UPDATE public.worker_job_outbox SET created_at = $2, delivered_at = $2, updated_
 	if handoffStatus != "delivered" {
 		t.Fatalf("the old delivered row is %q, want it left delivered", handoffStatus)
 	}
-	if _, err := venue.relay.Step(ctx, time.Now().UTC().Add(time.Second), 10); err != nil {
+	if _, err := venue.relay.Step(ctx, later.Add(time.Second), 10); err != nil {
 		t.Fatalf("second Step: %v", err)
 	}
 	if _, riverJobs := venue.finalizeTrace(t, ctx, runID); riverJobs != 1 {
 		t.Fatalf("the redrive was not delivered: %d River jobs, want 1", riverJobs)
+	}
+}
+
+// seedRunWithoutPartitions writes a running, finalize-pending run with no
+// partition at all.
+func (venue *finalizePendingVenue) seedRunWithoutPartitions(t *testing.T, ctx context.Context, orgID, runID, targetDay string, at time.Time) {
+	t.Helper()
+	if _, err := venue.admin.Exec(ctx, `
+INSERT INTO public.daily_metrics_runs
+    (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at, full_org)
+VALUES ($1::uuid, $2::uuid, $3::date, $4, 'running', 'pending', $5, $5, true)`,
+		runID, orgID, targetDay, "post-sync:"+runID, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func stepDay(base time.Time, offset int) string {
+	return base.AddDate(0, 0, offset).Format("2006-01-02")
+}
+
+// F1: standing refusals older than a candidate never hide it. The Step limit
+// is 10; 11 refusals (4 with no partition, 4 recent, 3 live) are older than the
+// one candidate. The candidate is redriven in the first pass and the refusals
+// are counted by class.
+func TestStaleFinalizeStandingRefusalsDoNotHideACandidate(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	venue := startFinalizePendingVenue(t, ctx)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	orgID := uuid.NewString()
+	days := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	for index := 0; index < 11; index++ {
+		runID := uuid.NewString()
+		at := now.Add(-60*time.Hour - time.Duration(index)*time.Minute)
+		switch {
+		case index < 4:
+			venue.seedRunWithoutPartitions(t, ctx, orgID, runID, stepDay(days, index), at)
+		case index < 8:
+			venue.seedShapeD(t, ctx, orgID, runID, stepDay(days, index), at)
+			venue.seedRiverFinalize(t, ctx, orgID, runID, "completed", now.Add(-time.Hour))
+		default:
+			venue.seedShapeD(t, ctx, orgID, runID, stepDay(days, index), at)
+			venue.seedRiverFinalize(t, ctx, orgID, runID, "scheduled", now.Add(-30*time.Hour))
+		}
+	}
+	candidate := uuid.NewString()
+	venue.seedShapeD(t, ctx, orgID, candidate, stepDay(days, 20), now.Add(-30*time.Hour))
+
+	result, err := venue.relay.Step(ctx, now, 10)
+	if err != nil {
+		t.Fatalf("reconciler Step: %v", err)
+	}
+	if len(result.StaleFinalizeRedriven) != 1 || result.StaleFinalizeRedriven[0] != candidate || venue.redriveRows(t, ctx, candidate) != 1 {
+		t.Fatalf("redriven %v (rows %d), want the candidate behind 11 older refusals", result.StaleFinalizeRedriven, venue.redriveRows(t, ctx, candidate))
+	}
+	want := joboutbox.StaleFinalizeLevels{Live: 3, Recent: 4, NoPartitions: 4}
+	if result.StaleFinalizeLevels == nil || *result.StaleFinalizeLevels != want {
+		t.Fatalf("levels %+v, want %+v", result.StaleFinalizeLevels, want)
+	}
+}
+
+// The candidate matrix of one pass, against the fragments:
+//   - shape D -> redriven;
+//   - a partition written inside the horizon, a run written inside it, a
+//     'failed' finalization -> not in the stage at all (base);
+//   - an undelivered canonical finalize row -> live;
+//   - a delivered row whose River job is still there (terminal) -> the
+//     EXISTING finalize strand shape rearms it in the same Step, and the stage
+//     then sees the rearmed row as live: the two never both act.
+//
+// A and B agree: the base runs are the redriven ones plus the counted refusals.
+func TestStaleFinalizeCandidateMatrix(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	venue := startFinalizePendingVenue(t, ctx)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	old := now.Add(-48 * time.Hour)
+	orgID := uuid.NewString()
+	days := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	shapeD, freshPartition, freshRun, failedFinalize, undelivered, strandShape :=
+		uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	for index, runID := range []string{freshPartition, freshRun, failedFinalize, undelivered, strandShape} {
+		at := old
+		if runID == freshRun {
+			at = now.Add(-time.Hour)
+		}
+		venue.seedShapeD(t, ctx, orgID, runID, stepDay(days, index), at)
+	}
+	if _, err := venue.admin.Exec(ctx, `UPDATE public.daily_metrics_partitions SET updated_at = $2 WHERE run_id = $1::uuid`,
+		freshPartition, now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := venue.admin.Exec(ctx, `UPDATE public.daily_metrics_runs SET finalization_status = 'failed' WHERE id = $1::uuid`,
+		failedFinalize); err != nil {
+		t.Fatal(err)
+	}
+	for _, runID := range []string{undelivered, strandShape} {
+		tx, err := venue.domain.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := venue.pub.PublishFinalizeTx(ctx, tx, daily.Run{ID: runID, OrganizationID: orgID, Status: "running"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Deliver both canonical rows, then hold the first one back as undelivered
+	// and end the second one's River job as completed, all aged past 24 h.
+	if _, err := venue.relay.Step(ctx, time.Now().UTC().Add(time.Second), 10); err != nil {
+		t.Fatalf("delivery Step: %v", err)
+	}
+	for _, runID := range []string{undelivered, strandShape} {
+		if _, riverJobs := venue.finalizeTrace(t, ctx, runID); riverJobs != 1 {
+			t.Fatalf("fixture: run %s has %d River jobs after the delivery Step, want 1", runID, riverJobs)
+		}
+	}
+	if _, err := venue.admin.Exec(ctx, `
+UPDATE public.worker_job_outbox SET status = 'pending', river_job_id = NULL, delivered_at = NULL,
+    created_at = $2, updated_at = $2, scheduled_at = $3, next_attempt_at = $3
+WHERE dedupe_key = $1`, daily.FinalizeHandoffKey(undelivered), old, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	venue.cleanRiverFinalizes(t, ctx, undelivered)
+	if _, err := venue.admin.Exec(ctx, `
+UPDATE public.worker_job_outbox SET created_at = $2, delivered_at = $2, updated_at = $2 WHERE dedupe_key = $1`,
+		daily.FinalizeHandoffKey(strandShape), old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := venue.admin.Exec(ctx, `
+UPDATE river.river_job SET state = 'completed', finalized_at = $2, created_at = $2, attempt = 1
+WHERE kind = 'metrics.daily_finalize' AND args @> jsonb_build_object('domain', jsonb_build_object('id', $1::text))`,
+		strandShape, old); err != nil {
+		t.Fatal(err)
+	}
+	// Seeded after the delivery Step, whose stage pass would have redriven it.
+	venue.seedShapeD(t, ctx, orgID, shapeD, stepDay(days, 10), old)
+
+	result, err := venue.relay.Step(ctx, time.Now().UTC().Add(11*time.Minute), 10)
+	if err != nil {
+		t.Fatalf("reconciler Step: %v", err)
+	}
+	if len(result.StaleFinalizeRedriven) != 1 || result.StaleFinalizeRedriven[0] != shapeD {
+		t.Fatalf("redriven %v, want shape D only", result.StaleFinalizeRedriven)
+	}
+	if result.StrandsRearmed != 1 {
+		t.Fatalf("the finalize strand shape rearmed %d rows, want the delivered row with a terminal River job", result.StrandsRearmed)
+	}
+	for _, runID := range []string{freshPartition, freshRun, failedFinalize, undelivered, strandShape} {
+		if got := venue.redriveRows(t, ctx, runID); got != 0 {
+			t.Fatalf("run %s got %d redrive rows, want 0", runID, got)
+		}
+	}
+	want := joboutbox.StaleFinalizeLevels{Live: 2}
+	if result.StaleFinalizeLevels == nil || *result.StaleFinalizeLevels != want {
+		t.Fatalf("levels %+v, want %+v (the undelivered row and the rearmed row)", result.StaleFinalizeLevels, want)
+	}
+}
+
+// holdRunLock takes the run row lock in an admin transaction and returns its
+// release.
+func (venue *finalizePendingVenue) holdRunLock(t *testing.T, ctx context.Context, runID string) func() {
+	t.Helper()
+	tx, err := venue.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM public.daily_metrics_runs WHERE id = $1::uuid FOR UPDATE`, runID); err != nil {
+		t.Fatal(err)
+	}
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			_ = tx.Rollback(context.WithoutCancel(ctx))
+		}
+	}
+	t.Cleanup(release)
+	return release
+}
+
+// publishOrdinaryFinalize gives the relay one ordinary due row: the canonical
+// finalize of a fresh run, from the real publisher.
+func (venue *finalizePendingVenue) publishOrdinaryFinalize(t *testing.T, ctx context.Context, orgID, targetDay string) string {
+	t.Helper()
+	runID := uuid.NewString()
+	venue.seedShapeD(t, ctx, orgID, runID, targetDay, time.Now().UTC())
+	tx, err := venue.domain.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := venue.pub.PublishFinalizeTx(ctx, tx, daily.Run{ID: runID, OrganizationID: orgID, Status: "running"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return runID
+}
+
+// F2 + F5: a redrive blocked on a held run row lock ends at its per-run
+// deadline. The Step returns while the lock is STILL held (so the deadline,
+// not the lock release, ended the wait), with no error, one {redrive, deadline}
+// failure, the newer candidate redriven in the same Step and the ordinary due
+// row delivered. After the lock is gone, the next pass redrives the run.
+func TestStaleFinalizeRedriveBlockedOnARunLockEndsAtTheDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	venue := startFinalizePendingVenue(t, ctx)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	orgID := uuid.NewString()
+	locked, newer := uuid.NewString(), uuid.NewString()
+	venue.seedShapeD(t, ctx, orgID, locked, "2026-07-01", now.Add(-60*time.Hour))
+	venue.seedShapeD(t, ctx, orgID, newer, "2026-07-02", now.Add(-30*time.Hour))
+	ordinary := venue.publishOrdinaryFinalize(t, ctx, orgID, "2026-07-03")
+	release := venue.holdRunLock(t, ctx, locked)
+
+	// The lock is released only after Step returned.
+	result, err := venue.relay.Step(ctx, time.Now().UTC().Add(time.Second), 10)
+	release()
+	if err != nil {
+		t.Fatalf("Step returned the stage failure: %v", err)
+	}
+	wantFailures := []joboutbox.StaleFinalizeFailure{{Step: joboutbox.StaleFinalizeStepRedrive, Class: joboutbox.StaleFinalizeClassDeadline}}
+	if !equalFailures(result.StaleFinalizeFailures, wantFailures) {
+		t.Fatalf("failures %+v, want %+v", result.StaleFinalizeFailures, wantFailures)
+	}
+	if len(result.StaleFinalizeRedriven) != 1 || result.StaleFinalizeRedriven[0] != newer {
+		t.Fatalf("redriven %v, want the newer candidate in the same Step", result.StaleFinalizeRedriven)
+	}
+	if _, riverJobs := venue.finalizeTrace(t, ctx, ordinary); riverJobs != 1 || result.Delivered < 1 {
+		t.Fatalf("ordinary row: %d River jobs, %d delivered, want it delivered in the same Step", riverJobs, result.Delivered)
+	}
+	if got := venue.redriveRows(t, ctx, locked); got != 0 {
+		t.Fatalf("the locked run got %d redrive rows during the lock, want 0", got)
+	}
+
+	next, err := venue.relay.Step(ctx, time.Now().UTC().Add(11*time.Minute), 10)
+	if err != nil {
+		t.Fatalf("next Step: %v", err)
+	}
+	if len(next.StaleFinalizeRedriven) != 1 || next.StaleFinalizeRedriven[0] != locked || venue.redriveRows(t, ctx, locked) != 1 {
+		t.Fatalf("after the lock: redriven %v, want the formerly locked run", next.StaleFinalizeRedriven)
+	}
+}
+
+func equalFailures(got, want []joboutbox.StaleFinalizeFailure) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for index := range got {
+		if got[index] != want[index] {
+			return false
+		}
+	}
+	return true
+}
+
+// F3: the redrive's backend is ended while it waits on the lock, so its
+// transaction and its rollback fail on a dead connection. The stage reports
+// one {redrive, unavailable} failure and nothing redriven; never "redriven 0
+// with no failure".
+func TestStaleFinalizeRedriveWhoseRollbackFailsIsOneFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	venue := startFinalizePendingVenue(t, ctx)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	orgID, runID := uuid.NewString(), uuid.NewString()
+	venue.seedShapeD(t, ctx, orgID, runID, "2026-06-01", now.Add(-48*time.Hour))
+	release := venue.holdRunLock(t, ctx, runID)
+
+	stop := make(chan struct{})
+	killed := make(chan bool, 1)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				killed <- false
+				return
+			default:
+			}
+			var terminated bool
+			err := venue.admin.QueryRow(ctx, `
+SELECT coalesce(bool_or(pg_terminate_backend(pid)), false) FROM pg_stat_activity
+WHERE usename = $1 AND wait_event_type = 'Lock'`, venue.domainRole).Scan(&terminated)
+			if err == nil && terminated {
+				killed <- true
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+	result, err := venue.relay.Step(ctx, now, 10)
+	close(stop)
+	wasKilled := <-killed
+	release()
+	if err != nil {
+		t.Fatalf("Step returned the stage failure: %v", err)
+	}
+	if !wasKilled {
+		t.Fatal("fixture: the redrive's backend was never seen waiting on the lock")
+	}
+	want := []joboutbox.StaleFinalizeFailure{{Step: joboutbox.StaleFinalizeStepRedrive, Class: joboutbox.StaleFinalizeClassUnavailable}}
+	if !equalFailures(result.StaleFinalizeFailures, want) || len(result.StaleFinalizeRedriven) != 0 {
+		t.Fatalf("failures %+v redriven %v, want %+v and nothing redriven", result.StaleFinalizeFailures, result.StaleFinalizeRedriven, want)
+	}
+	if got := venue.redriveRows(t, ctx, runID); got != 0 {
+		t.Fatalf("%d redrive rows after the failed redrive, want 0", got)
+	}
+}
+
+// acp's pool split: the survey runs on the queue pool (the queue role, the only
+// one with River access) and the redrive on the domain pool (the only one with
+// an outbox INSERT and a runs UPDATE).
+func TestStaleFinalizeSurveyIsQueueRoleAndRedriveIsDomainRole(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	venue := startFinalizePendingVenue(t, ctx)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	orgID, runID := uuid.NewString(), uuid.NewString()
+	venue.seedShapeD(t, ctx, orgID, runID, "2026-05-01", now.Add(-48*time.Hour))
+	for pool, role := range map[*pgxpool.Pool]string{venue.queue: venue.queueRole, venue.domain: venue.domainRole} {
+		var current string
+		if err := pool.QueryRow(ctx, `SELECT current_user`).Scan(&current); err != nil || current != role {
+			t.Fatalf("pool role %q (%v), want %q", current, err, role)
+		}
+	}
+
+	result, err := venue.relay.Step(ctx, now, 10)
+	if err != nil || len(result.StaleFinalizeRedriven) != 1 {
+		t.Fatalf("Step: %v, redriven %v, want the run", err, result.StaleFinalizeRedriven)
+	}
+	const survey, redrive = "AND ($3::timestamptz IS NULL OR (run.updated_at, run.id) > ($3::timestamptz, $4::uuid))", "FOR UPDATE OF run"
+	if !venue.queueSQL.sawContaining(survey) || venue.domainSQL.sawContaining(survey) {
+		t.Fatal("the candidate read did not run on the queue pool only")
+	}
+	if !venue.domainSQL.sawContaining(redrive) || venue.queueSQL.sawContaining(redrive) {
+		t.Fatal("the redrive did not run on the domain pool only")
 	}
 }

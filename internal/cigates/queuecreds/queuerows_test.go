@@ -190,6 +190,9 @@ var queueRowReadTable = map[string]queueRowRead{
 	"internal/joboutbox/strand_repair.go#repairStrandedWorkGraphSQL": {
 		"args, args#>>domain,id, args->>organization_id, dedupe_key",
 		roleInternal, "", "", "same as the partition shape"},
+	"internal/joboutbox/stale_finalize_repair.go#staleFinalizeLevelsSQLTemplate": {
+		"args, args#>>domain,id",
+		roleInternal, "", "", "the stale-finalize survey: join and filter on the domain link; only run ids and counts leave the survey"},
 	"internal/joboutbox/repository.go#rowColumns": {
 		"args, dedupe_key",
 		roleDecoded, "internal/joboutbox/inserter.go", "jobcontract.Decode(", "the relay claim row goes through Decode before any River insert"},

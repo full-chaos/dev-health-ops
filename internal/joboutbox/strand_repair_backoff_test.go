@@ -378,9 +378,12 @@ func TestStrandPassSawNothingTreatsEveryFieldButTheLevelsAsWork(t *testing.T) {
 		}
 	}
 	// The levels, and nothing else, are ignored -- and they exist on the type.
-	levels := StrandRepairResult{UndeliveredBlocked: 9, PassSkippedIdle: true}
+	levels := StrandRepairResult{
+		UndeliveredBlocked: 9, PassSkippedIdle: true,
+		StaleFinalizeLevels: &StaleFinalizeLevels{Live: 1, StrandShape: 2, Recent: 3, NoPartitions: 4, Truncated: true},
+	}
 	if !strandPassSawNothing(levels) {
-		t.Fatal("a result carrying only the blocked level and the skip flag is treated as work")
+		t.Fatal("a result carrying only the blocked level, the skip flag and the stale-finalize levels is treated as work")
 	}
 	resultType := reflect.TypeOf(StrandRepairResult{})
 	for name := range strandPassLevelFields {
@@ -388,9 +391,9 @@ func TestStrandPassSawNothingTreatsEveryFieldButTheLevelsAsWork(t *testing.T) {
 			t.Fatalf("strandPassLevelFields names %s, which StrandRepairResult no longer has", name)
 		}
 	}
-	if len(strandPassLevelFields) != 2 {
-		t.Fatalf("strandPassLevelFields has %d entries, want exactly UndeliveredBlocked and "+
-			"PassSkippedIdle: every other field is something a pass found", len(strandPassLevelFields))
+	if len(strandPassLevelFields) != 3 {
+		t.Fatalf("strandPassLevelFields has %d entries, want exactly UndeliveredBlocked, "+
+			"PassSkippedIdle and StaleFinalizeLevels: every other field is something a pass found", len(strandPassLevelFields))
 	}
 	// An empty, non-nil slice is still nothing.
 	empty := StrandRepairResult{

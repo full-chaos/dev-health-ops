@@ -55,3 +55,15 @@ class F
   row TEAM t2 "Infra" score=0.625 coverage=0.4000000000000001 severity=ELEVATED day=2026-03-09
   row TEAM t1 "Platform" score=0.6 coverage=0.9 severity=ELEVATED day=2026-03-09
   trend 2026-03-09 score=0.5416666666666666
+== breakout=TEAM teamIds=absent repoIds=all-but-unowned day=stored read=under-cap
+class B
+  served breakout="TEAM" rows=2 trend=1
+  row TEAM t2 "Infra" score=0.625 coverage=0.4000000000000001 severity=ELEVATED day=2026-03-09
+  row TEAM t1 "Platform" score=0.5 coverage=0.8500000000000001 severity=ELEVATED day=2026-03-09
+  trend 2026-03-09 score=0.5416666666666666
+== breakout=TEAM teamIds=absent repoIds=no-row-only day=stored read=under-cap
+class B
+  served breakout="TEAM" rows=0 trend=0
+== breakout=TEAM teamIds=named repoIds=outside-teams day=stored read=under-cap
+class B
+  served breakout="TEAM" rows=0 trend=0

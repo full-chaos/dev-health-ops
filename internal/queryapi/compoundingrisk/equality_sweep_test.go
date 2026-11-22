@@ -30,9 +30,9 @@ import (
 // declares.
 const (
 	sweepGoldenPath     = "testdata/equality_sweep.golden"
-	sweepGoldenSHA256   = "935ac44976956561dafb531ac9cd86c8338141e7dad6d0b2b20a040ff82d9dff"
+	sweepGoldenSHA256   = "434512532f0fbc1ef7ba7a3bee4275c768ac279c9c797dae724e0662927a74e7"
 	sweepDeclaredPath   = "testdata/equality_sweep.declared"
-	sweepDeclaredSHA256 = "e87afe8ee055cd58603400b2a49635917bf6358929cd5a190d17b4bf1d8e4a65"
+	sweepDeclaredSHA256 = "3df5e89543a160aef3744893443f74256f8301c53d25c0092884cfde0138bab1"
 	sweepRewriteEnv     = "COMPOUNDINGRISK_SWEEP_REWRITE"
 	sweepOrg            = "org-sweep"
 )
@@ -579,6 +579,19 @@ func sweepTable(t *testing.T, resolve sweepResolve) []byte {
 				}
 			}
 		}
+	}
+	for _, extra := range []struct {
+		teams idsArg
+		repos idsArg
+	}{
+		{idsArg{"absent", nil}, idsArg{"all-but-unowned", []string{"repo-a", "repo-c", "repo-x"}}},
+		{idsArg{"absent", nil}, idsArg{"no-row-only", []string{"repo-r"}}},
+		{idsArg{"named", []string{"t1", "t2"}}, idsArg{"outside-teams", []string{"repo-u"}}},
+	} {
+		run(fmt.Sprintf("breakout=TEAM teamIds=%s repoIds=%s day=stored read=under-cap", extra.teams.name, extra.repos.name),
+			sweepFixture("stored", "under-cap", now), &model.CompoundingRiskFilterInput{
+				Breakout: model.CompoundingRiskScopeTeam, RepoIds: extra.repos.ids, TeamIds: extra.teams.ids, TrendDays: 30,
+			})
 	}
 	t.Logf("combinations run: %d; not applicable: %d", combinations, len(notApplicable))
 	for _, na := range notApplicable {

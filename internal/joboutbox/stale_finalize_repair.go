@@ -293,10 +293,7 @@ func surveyStaleFinalize(
 	if err := tx.QueryRow(ctx, baseSQL, cutoff).Scan(&inBase); err != nil {
 		return fail(StaleFinalizeStepSurvey, err)
 	}
-	if !inBase {
-		_ = tx.Commit(ctx)
-		return staleFinalizeSurvey{candidates: []staleFinalizeCandidate{}, levels: &StaleFinalizeLevels{}}
-	}
+	_ = inBase
 	if _, err := tx.Exec(ctx, staleFinalizeCandidatesStatementTimeout); err != nil {
 		return fail(StaleFinalizeStepSurvey, err)
 	}

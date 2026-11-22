@@ -48,6 +48,7 @@ func (executor *WorkItemMeasureCapabilityExecutor) ComputeFinalizeFamily(ctx con
 	if run.OrganizationID == "" || run.TargetDay.IsZero() {
 		return 0, fmt.Errorf("%w: run has no organization or target day", ErrInvalidState)
 	}
+	mutantCapabilityRun = run.ID
 	return computeWorkItemMeasureCapability(
 		ctx, executor.conn, run.OrganizationID, workitemmetrics.UTCDay(run.TargetDay), executor.nowUTC(),
 	)
@@ -83,6 +84,11 @@ func loadWorkItemCapabilityItems(
 	)
 	if err != nil {
 		return workItemCapabilityRead{}, fmt.Errorf("load work item capability items: %w", err)
+	}
+	if kept, ok := mutantCapabilityInputs[mutantCapabilityRun]; ok {
+		stored = kept
+	} else {
+		mutantCapabilityInputs[mutantCapabilityRun] = stored
 	}
 	winners, duplicates := countWorkItemOncePerProviderAndID(stored)
 	copies, err := loadWorkItemCopies(ctx, conn, organizationID, workItemIDsOf(winners))

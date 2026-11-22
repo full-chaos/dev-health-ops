@@ -89,6 +89,11 @@ func (executor *TeamCognitiveLoadExecutor) ComputeFinalizeFamily(
 	if err != nil {
 		return 0, err
 	}
+	if kept, ok := mutantCognitiveInputs[run.ID]; ok {
+		userRows = kept
+	} else {
+		mutantCognitiveInputs[run.ID] = userRows
+	}
 	teamRows, err := loadTeamMetricsCognitiveLoadInputsForDay(ctx, executor.conn, run.OrganizationID, day)
 	if err != nil {
 		return 0, err

@@ -110,6 +110,11 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 	if err != nil {
 		return 0, err
 	}
+	if kept, ok := mutantRiskInputs[run.ID]; ok {
+		orgRepoMetrics = kept
+	} else {
+		mutantRiskInputs[run.ID] = orgRepoMetrics
+	}
 	if len(orgRepoMetrics) == 0 {
 		// A day with no input produces no team row; a team key that still
 		// holds a score for the day is stale.

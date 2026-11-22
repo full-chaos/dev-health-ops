@@ -78,6 +78,11 @@ func (executor *TeamComplexityExecutor) ComputeFinalizeFamily(
 	if err != nil {
 		return 0, err
 	}
+	if kept, ok := mutantComplexityInputs[run.ID]; ok {
+		repoRows = kept
+	} else {
+		mutantComplexityInputs[run.ID] = repoRows
+	}
 	if len(repoRows) == 0 {
 		// Python: `if not repo_complexity_rows: return 0` (implicit -- the
 		// aggregator's own loop simply produces no buckets). Matches

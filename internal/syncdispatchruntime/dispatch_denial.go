@@ -412,5 +412,5 @@ WHERE id = ANY($1::uuid[]) AND status = $7`,
 // call, neither of which has an equivalent commit-ordering race to preserve
 // or accidentally fix.
 func armFinalizeSyncRunWakeup(ctx context.Context, tx pgx.Tx, syncRunID string, now time.Time) error {
-	return upsertDiscoveryOutboxWakeup(ctx, tx, "", syncRunID, outboxKindFinalizeSyncRun, now)
+	return upsertDiscoveryOutboxWakeup(ctx, tx, "", syncRunID, outboxKindFinalizeSyncRun, now, now)
 }

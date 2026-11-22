@@ -403,7 +403,7 @@ WHERE sync_run_id = $1::uuid AND status = $5 AND lease_owner = $6
 		}
 		return nil
 	}
-	if err := upsertDiscoveryOutboxWakeup(ctx, tx, orgID, runID, outboxKindDispatchSyncRun, completedAt); err != nil {
+	if err := upsertDiscoveryOutboxWakeup(ctx, tx, orgID, runID, outboxKindDispatchSyncRun, completedAt, completedAt); err != nil {
 		return fmt.Errorf("%w: %w", ErrDiscoveryTransientFailure, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -477,7 +477,7 @@ WHERE id = $1::uuid AND status = $6 AND lease_owner = $7 AND lease_expires_at > 
 		if tag.RowsAffected() == 0 {
 			return tx.Commit(ctx)
 		}
-		if err := upsertDiscoveryOutboxWakeup(ctx, tx, "", runID, outboxKindReferenceDiscovery, availableAt); err != nil {
+		if err := upsertDiscoveryOutboxWakeup(ctx, tx, "", runID, outboxKindReferenceDiscovery, availableAt, availableAt); err != nil {
 			return err
 		}
 		return commitOrUnavailable(ctx, tx)
@@ -513,7 +513,7 @@ WHERE id = $1::uuid AND status = $6 AND lease_owner = $7 AND lease_expires_at > 
 		runID, referenceDiscoveryErrorMessage); err != nil {
 		return ErrReferenceDiscoveryUnavailable
 	}
-	if err := upsertDiscoveryOutboxWakeup(ctx, tx, "", runID, outboxKindFinalizeSyncRun, now); err != nil {
+	if err := upsertDiscoveryOutboxWakeup(ctx, tx, "", runID, outboxKindFinalizeSyncRun, now, now); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -671,7 +671,7 @@ WHERE sync_run_id = $1::uuid AND status NOT IN ($6, $7)`,
 // of trusted from the caller, matching Python's upsert_outbox_wakeup, which
 // always re-resolves it from the run row rather than accepting a
 // caller-supplied value.
-func upsertDiscoveryOutboxWakeup(ctx context.Context, tx pgx.Tx, orgID, runID, kind string, availableAt time.Time) error {
+func upsertDiscoveryOutboxWakeup(ctx context.Context, tx pgx.Tx, orgID, runID, kind string, availableAt, updatedAt time.Time) error {
 	if orgID == "" {
 		if err := tx.QueryRow(ctx, `SELECT org_id FROM public.sync_runs WHERE id = $1::uuid`, runID).Scan(&orgID); err != nil {
 			return ErrReferenceDiscoveryUnavailable
@@ -681,9 +681,9 @@ func upsertDiscoveryOutboxWakeup(ctx context.Context, tx pgx.Tx, orgID, runID, k
 INSERT INTO public.sync_dispatch_outbox (
     id, org_id, sync_run_id, kind, status, available_at, attempts,
     created_at, updated_at
-) VALUES ($5::uuid, $1, $2::uuid, $4, 'pending', $3, 0, $3, $3)
+) VALUES ($5::uuid, $1, $2::uuid, $4, 'pending', $3, 0, $3, $6)
 `+syncrunrollup.OutboxWakeupOnConflictSQL,
-		orgID, runID, availableAt, kind, uuid.New().String())
+		orgID, runID, availableAt, kind, uuid.New().String(), updatedAt)
 	if err != nil {
 		return ErrReferenceDiscoveryUnavailable
 	}

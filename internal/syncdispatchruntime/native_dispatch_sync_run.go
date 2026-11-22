@@ -67,5 +67,5 @@ func ensureReferenceDiscoveryWakeup(ctx context.Context, tx pgx.Tx, orgID, runID
 	if availableAt == nil {
 		availableAt = &now
 	}
-	return upsertDiscoveryOutboxWakeup(ctx, tx, orgID, runID, outboxKindReferenceDiscovery, *availableAt)
+	return upsertDiscoveryOutboxWakeup(ctx, tx, orgID, runID, outboxKindReferenceDiscovery, *availableAt, *availableAt)
 }

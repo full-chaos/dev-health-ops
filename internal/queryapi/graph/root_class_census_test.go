@@ -103,7 +103,7 @@ var rootClasses = map[string]rootClass{
 	"Query.sourceHealth":                      {classMixed, "sync and job tables and the identity, team and work-item tables the reader methods reach"},
 	"Query.testopsJobFailures":                {classMixed, "the scope resolves teams"},
 	"Query.testopsTestWindow":                 {classMixed, "the scope resolves teams"},
-	"Query.testopsRisk":                       {classNarrowable, "testops stability, drag and confidence rows, keyed by repository; a team argument is refused under a repository ceiling before any read (refuseTeamsUnderCeiling)"},
+	"Query.testopsRisk":                       {classMixed, "the scope resolves teams"},
 	"Query.throughputForecast":                {classMixed, "estimate_coverage_metrics_daily and work_item_metrics_daily have no repository key"},
 	"Query.workGraphArtifacts":                {classMixed, "operational_incidents and unit membership have no repository key"},
 	"Query.workGraphEdges":                    {classMixed, "work_item_dependencies, operational_incidents and unit membership have no repository key"},
@@ -502,38 +502,6 @@ func resolverOf(pkg *censusPackage, root string) (censusFunc, bool) {
 	return censusFunc{}, false
 }
 
-// teamArgumentRefusedUnderCeiling lists the roots whose only unkeyed read is the `teams` table of a team argument's
-// ownership join, and that refuse a team argument for a caller under a repository ceiling before any read. The value
-// is the function the resolver calls first. Such a root is classed by its other reads: a ceiling narrows it through the
-// repository key, and a ceilinged caller never reaches the team read.
-var teamArgumentRefusedUnderCeiling = map[string]string{
-	"Query.testopsRisk": "refuseTeamsUnderCeiling",
-}
-
-// callsFunction reports whether a body calls the function name directly.
-func callsFunction(body *ast.BlockStmt, name string) bool {
-	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		if call, ok := n.(*ast.CallExpr); ok {
-			if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == name {
-				found = true
-			}
-		}
-		return !found
-	})
-	return found
-}
-
-func withoutTeams(unkeyed []string) []string {
-	var rest []string
-	for _, table := range unkeyed {
-		if table != "teams" {
-			rest = append(rest, table)
-		}
-	}
-	return rest
-}
-
 func TestEveryGraphQLRootHasTheClassItsReadsDecide(t *testing.T) {
 	tables := clickHouseTables(t)
 	// A census over an empty table set would class every root O.
@@ -564,13 +532,6 @@ func TestEveryGraphQLRootHasTheClassItsReadsDecide(t *testing.T) {
 			continue
 		}
 		keyed, unkeyed, dynamic := readsOf(loader.reads(fn), tables)
-		if helper, refused := teamArgumentRefusedUnderCeiling[root]; refused {
-			if !callsFunction(fn.decl.Body, helper) {
-				t.Errorf("%s is listed as refusing a team argument under a ceiling, but its resolver does not call %s", root, helper)
-			} else {
-				unkeyed = withoutTeams(unkeyed)
-			}
-		}
 		want := actionClasses[fieldActions[root]]
 		if want == "" {
 			want = readClass(keyed, unkeyed)
@@ -589,11 +550,6 @@ func TestEveryGraphQLRootHasTheClassItsReadsDecide(t *testing.T) {
 	for root := range rootClasses {
 		if _, served := fieldActions[root]; !served {
 			t.Errorf("%s has a class row but is not a served root", root)
-		}
-	}
-	for root := range teamArgumentRefusedUnderCeiling {
-		if rootClasses[root].class != classNarrowable {
-			t.Errorf("%s refuses a team argument under a ceiling, so it is an N root", root)
 		}
 	}
 	for root := range dynamicReads {

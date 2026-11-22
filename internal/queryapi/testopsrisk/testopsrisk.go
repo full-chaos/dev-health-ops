@@ -192,11 +192,8 @@ type scopeFilter struct {
 // newScopeFilter builds the scope of repoIds (ids or full names) and teamIds (the repositories these teams
 // own, teamscope.RepoCondition). A nil or empty list is no scope. A blank team id is dropped by teamscope, so a
 // list of blank ids is no team scope; a list of blank repository ids matches no repository.
-func newScopeFilter(orgID string, repoIDs, teamIDs []string, asOf time.Time, matchNothing bool) scopeFilter {
+func newScopeFilter(orgID string, repoIDs, teamIDs []string, asOf time.Time) scopeFilter {
 	var f scopeFilter
-	if matchNothing {
-		f.conditions = append(f.conditions, "0 = 1")
-	}
 	if len(repoIDs) > 0 {
 		f.conditions = append(f.conditions, `repo_id IN (
               SELECT id FROM repos
@@ -357,18 +354,6 @@ func breakdownItems(parts ...breakdownPart) []model.TestOpsRiskBreakdownItem {
 // input.RepoIds and the repositories input.TeamIds own (as of now). A scope never widens: the org_id predicate of
 // every read stays.
 func Resolve(ctx context.Context, client QueryClient, orgID string, input model.TestOpsRiskInput) (*model.TestOpsRiskResult, error) {
-	return ResolveWith(ctx, client, orgID, input, Options{})
-}
-
-// Options are the parts of a request the input does not carry.
-type Options struct {
-	// MatchNothing narrows every read to no repository: the repositories asked for lie wholly outside the
-	// caller's repository ceiling. It is not the same as an empty RepoIds, which is no scope.
-	MatchNothing bool
-}
-
-// ResolveWith is Resolve with Options.
-func ResolveWith(ctx context.Context, client QueryClient, orgID string, input model.TestOpsRiskInput, opts Options) (*model.TestOpsRiskResult, error) {
 	if client == nil {
 		return nil, errors.New("testopsrisk: clickhouse client is required")
 	}
@@ -377,7 +362,7 @@ func ResolveWith(ctx context.Context, client QueryClient, orgID string, input mo
 		{Name: "start", Value: input.StartDate.Time().Format(dateLayout)},
 		{Name: "end", Value: input.EndDate.Time().Format(dateLayout)},
 	}
-	scope := newScopeFilter(orgID, input.RepoIds, input.TeamIds, time.Now().UTC(), opts.MatchNothing)
+	scope := newScopeFilter(orgID, input.RepoIds, input.TeamIds, time.Now().UTC())
 	rows, err := readDaily(ctx, client, scope, bindings)
 	if err != nil {
 		return nil, err

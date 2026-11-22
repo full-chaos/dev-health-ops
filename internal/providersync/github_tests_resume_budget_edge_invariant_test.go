@@ -424,12 +424,13 @@ func TestGitHubTestsResumeOlderBinaryCursorTransitionResidualSameAsMain(t *testi
 	}
 }
 
-// A negative re-seek page count, page count or record credit is a corrupt cursor.
+// A negative re-seek page count, page count, record credit or extra record count (CHAOS-14487) is a corrupt cursor.
 func TestGitHubTestsCursorRejectsNegativeReseekState(t *testing.T) {
 	for _, raw := range []string{
 		`{"phase":"runs","repo":"x","archives_seen":0,"archives_unreadable":0,"rp":-1}`,
 		`{"phase":"runs","repo":"x","archives_seen":0,"archives_unreadable":0,"rc":-1}`,
 		`{"phase":"runs","repo":"x","archives_seen":0,"archives_unreadable":0,"pe":-1}`,
+		`{"phase":"runs","repo":"x","archives_seen":0,"archives_unreadable":0,"rx":-1}`,
 	} {
 		if _, err := decodeGitHubTestsChunkCursor(raw); !errors.Is(err, ErrChunkCheckpointConflict) {
 			t.Errorf("%s: err=%v, want ErrChunkCheckpointConflict", raw, err)

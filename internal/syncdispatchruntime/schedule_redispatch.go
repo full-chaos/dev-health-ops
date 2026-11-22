@@ -202,7 +202,7 @@ func scheduleRedispatch(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, 
 	if err != nil {
 		return fail(err)
 	}
-	if err := upsertDiscoveryOutboxWakeup(ctx, tx, "", syncRunID, outboxKindDispatchSyncRun, redispatchAt); err != nil {
+	if err := upsertOutboxWakeup(ctx, tx, "", syncRunID, outboxKindDispatchSyncRun, redispatchAt); err != nil {
 		return fail(err)
 	}
 	// The second write Python's own _schedule_redispatch does on top of the

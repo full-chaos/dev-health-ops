@@ -445,3 +445,38 @@ func TestStaleFinalizeLevelWarnsOnlyOnChange(t *testing.T) {
 		}
 	}
 }
+
+// stallingRollbackTx fails the survey's first statement, then stalls its
+// rollback until the rollback's own context ends, as a connection that went
+// silent at that instant would.
+type stallingRollbackTx struct {
+	pgx.Tx
+	rollbackErr chan error
+}
+
+func (*stallingRollbackTx) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, ErrUnavailable
+}
+
+func (tx *stallingRollbackTx) Rollback(ctx context.Context) error {
+	<-ctx.Done()
+	tx.rollbackErr <- ctx.Err()
+	return ctx.Err()
+}
+
+// R1: the survey's rollback has a deadline of its own, so a stalled rollback
+// ends instead of holding the relay step. Without one, the rollback below
+// waits for ever and the survey never returns.
+func TestStaleFinalizeSurveyRollbackEndsOnItsOwnDeadline(t *testing.T) {
+	tx := &stallingRollbackTx{rollbackErr: make(chan error, 1)}
+	survey := surveyStaleFinalize(context.Background(),
+		func(context.Context) (pgx.Tx, error) { return tx, nil },
+		"SELECT 1", "SELECT 1", staleFinalizeTestNow, 10, nil)
+	if err := <-tx.rollbackErr; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("rollback ended with %v, want its own deadline", err)
+	}
+	want := []StaleFinalizeFailure{{Step: StaleFinalizeStepSurvey, Class: StaleFinalizeClassUnavailable}}
+	if !reflect.DeepEqual(survey.failures, want) || survey.candidates != nil {
+		t.Fatalf("survey = %+v, want one survey failure and no candidates", survey)
+	}
+}

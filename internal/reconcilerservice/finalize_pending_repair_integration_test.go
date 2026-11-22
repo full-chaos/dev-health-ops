@@ -1040,3 +1040,59 @@ func TestStaleFinalizeSurveyIsQueueRoleAndRedriveIsDomainRole(t *testing.T) {
 		t.Fatal("the redrive did not run on the domain pool only")
 	}
 }
+
+// I1: statement A's keyset arm "(run.updated_at, run.id) > ($3, $4::uuid)" on
+// real Postgres, with a cursor that made the round trip through the driver.
+// Step limit 3; three shape-D runs; the two oldest are locked from another
+// connection. Pass 1: two deadline failures end the pass, the third run is
+// deferred, the cursor is the second run. Pass 2 (past the interval, locks
+// still held): the read starts AFTER the cursor, so the third run is redriven
+// and no locked run is tried. Then the locks are released: after the wrap the
+// two runs are redriven.
+func TestStaleFinalizeCursorReadsPastTheLastTriedRun(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	venue := startFinalizePendingVenue(t, ctx)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	orgID := uuid.NewString()
+	oldest, second, third := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	// Sub-second, distinct stamps: a lost microsecond in the round trip
+	// would re-read or skip the cursor row.
+	venue.seedShapeD(t, ctx, orgID, oldest, "2026-04-01", now.Add(-50*time.Hour+123456*time.Microsecond))
+	venue.seedShapeD(t, ctx, orgID, second, "2026-04-02", now.Add(-40*time.Hour+654321*time.Microsecond))
+	venue.seedShapeD(t, ctx, orgID, third, "2026-04-03", now.Add(-30*time.Hour+111111*time.Microsecond))
+	releaseOldest := venue.holdRunLock(t, ctx, oldest)
+	releaseSecond := venue.holdRunLock(t, ctx, second)
+
+	deadline := joboutbox.StaleFinalizeFailure{Step: joboutbox.StaleFinalizeStepRedrive, Class: joboutbox.StaleFinalizeClassDeadline}
+	first, err := venue.relay.Step(ctx, now, 3)
+	if err != nil {
+		t.Fatalf("pass 1: %v", err)
+	}
+	if !equalFailures(first.StaleFinalizeFailures, []joboutbox.StaleFinalizeFailure{deadline, deadline}) ||
+		first.StaleFinalizeDeferred != 1 || len(first.StaleFinalizeRedriven) != 0 {
+		t.Fatalf("pass 1: failures %+v deferred %d redriven %v, want 2 deadlines, 1 deferred, nothing redriven",
+			first.StaleFinalizeFailures, first.StaleFinalizeDeferred, first.StaleFinalizeRedriven)
+	}
+
+	secondPass, err := venue.relay.Step(ctx, now.Add(11*time.Minute), 3)
+	if err != nil {
+		t.Fatalf("pass 2: %v", err)
+	}
+	if len(secondPass.StaleFinalizeFailures) != 0 || len(secondPass.StaleFinalizeRedriven) != 1 || secondPass.StaleFinalizeRedriven[0] != third {
+		t.Fatalf("pass 2 (cursor at the second run): failures %+v redriven %v, want the third run redriven and no locked run tried",
+			secondPass.StaleFinalizeFailures, secondPass.StaleFinalizeRedriven)
+	}
+
+	releaseOldest()
+	releaseSecond()
+	wrapped, err := venue.relay.Step(ctx, now.Add(22*time.Minute), 3)
+	if err != nil {
+		t.Fatalf("pass 3: %v", err)
+	}
+	if len(wrapped.StaleFinalizeFailures) != 0 || len(wrapped.StaleFinalizeRedriven) != 2 ||
+		wrapped.StaleFinalizeRedriven[0] != oldest || wrapped.StaleFinalizeRedriven[1] != second {
+		t.Fatalf("pass 3 (after the wrap, locks released): failures %+v redriven %v, want the two oldest runs in order",
+			wrapped.StaleFinalizeFailures, wrapped.StaleFinalizeRedriven)
+	}
+}

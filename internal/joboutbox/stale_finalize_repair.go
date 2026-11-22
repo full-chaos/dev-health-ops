@@ -32,6 +32,10 @@ const (
 	staleFinalizeSurveyBudget = 700 * time.Millisecond
 	staleFinalizeRunDeadline  = 200 * time.Millisecond
 	staleFinalizeRunReserve   = 50 * time.Millisecond
+	// staleFinalizeSurveyRollback bounds the survey's rollback on its own: a
+	// connection that stalls at that instant must not hold the relay step.
+	// 700 ms of survey plus 250 ms of rollback stays inside the pass budget.
+	staleFinalizeSurveyRollback = 250 * time.Millisecond
 	// Every per-run deadline closes one domain-pool connection, and pgxpool
 	// frees its slot only when the close ends; the reconciler's domain pool
 	// has four. Two deadlines end the pass.
@@ -264,7 +268,11 @@ func surveyStaleFinalize(
 		}
 		return fail(StaleFinalizeStepSurvey, err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), staleFinalizeSurveyRollback)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
 	for _, statement := range []string{"SET TRANSACTION READ ONLY", staleFinalizeLockTimeout, staleFinalizeCandidatesStatementTimeout} {
 		if _, err := tx.Exec(ctx, statement); err != nil {
 			return fail(StaleFinalizeStepSurvey, err)

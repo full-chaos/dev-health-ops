@@ -255,6 +255,40 @@ func withUnassignedPoint(ctx context.Context, client QueryClient, orgID string, 
 	return points, nil
 }
 
+// withUnstoredTeamPoints adds to a breakout built from stored team rows the
+// candidate teams that own a selected repository row of the day and have no
+// live stored row, derived from those rows by the rule of the derived path.
+// Ownership is read at the selected day, as withUnassignedPoint reads it.
+func withUnstoredTeamPoints(ctx context.Context, client QueryClient, orgID string, d time.Time, points []model.CompoundingRiskPoint, candidates []string, labels map[string]string, rows []storedRow, now time.Time) ([]model.CompoundingRiskPoint, error) {
+	if len(rows) == 0 || len(candidates) == 0 {
+		return points, nil
+	}
+	served := map[string]bool{}
+	for _, p := range points {
+		served[p.ScopeID] = true
+	}
+	teamsOfRepo, err := teamsOwningRepos(ctx, client, orgID, candidates, d)
+	if err != nil {
+		return nil, err
+	}
+	var missing []string
+	for _, r := range rows {
+		for _, team := range teamsOfRepo[r.scopeID] {
+			if !served[team] {
+				served[team] = true
+				missing = append(missing, team)
+			}
+		}
+	}
+	// teamPoints reads an empty team filter as every team.
+	if len(missing) == 0 {
+		return points, nil
+	}
+	points = append(points, teamPoints(d, rows, teamsOfRepo, labels, missing, now)...)
+	sortByScore(points)
+	return points, nil
+}
+
 // listedTeamRows is the team rows a breakout with no team filter may list:
 // the rows of the active teams and of the documented no-team value. A team id
 // that only survives in stored risk rows (a bare id that was retired for a
@@ -462,6 +496,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 		if err != nil {
 			return nil, err
 		}
+		storedReadCut := len(teamRows) >= maxRows
 		if len(teamIDs) == 0 && len(teamRows) > 0 {
 			// Which stored rows are rows of a team is a decision, not a label:
 			// a failed read of the active teams fails the answer. (teamLabels
@@ -471,6 +506,42 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 				return nil, err
 			}
 			teamRows = listedTeamRows(teamRows, active)
+		}
+		// CHAOS-14462: on the TEAM breakout a stored team row covers every
+		// repository of its team, so it is served only when the filter keeps
+		// every repository row of the day in the team scope; otherwise the
+		// teams are derived from the selected repository rows.
+		var selectedRows []storedRow
+		if breakout == model.CompoundingRiskScopeTeam && len(teamRows) > 0 {
+			narrows := len(teamIDs) == 0 && repoIDs != nil && len(repoIDs) == 0
+			if !narrows {
+				var scope, selected idList = nil, repoIDs
+				if len(teamIDs) > 0 {
+					if !teamFilteredSet {
+						if err = narrow(); err != nil {
+							return nil, err
+						}
+					}
+					if scope, err = repoScopeForTeams(ctx, client, orgID, nil, teamIDs, now); err != nil {
+						return nil, err
+					}
+					selected = teamFilteredRepoIDs
+				}
+				dayRows, err := latestRowsLimit(ctx, client, orgID, d, scopeRepo, scope, 0)
+				if err != nil {
+					return nil, err
+				}
+				selectedRows = dayRows
+				if len(repoIDs) > 0 {
+					if selectedRows, err = latestRowsLimit(ctx, client, orgID, d, scopeRepo, selected, 0); err != nil {
+						return nil, err
+					}
+				}
+				narrows = len(selectedRows) < len(dayRows)
+			}
+			if narrows {
+				teamRows = nil
+			}
 		}
 		labels, order := teamLabels(ctx, client, orgID)
 		if len(teamRows) > 0 {
@@ -482,6 +553,16 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 			}
 			if len(teamIDs) == 0 {
 				if points, err = withUnassignedPoint(ctx, client, orgID, d, points, order, labels, repoIDs, now); err != nil {
+					return nil, err
+				}
+			}
+			// A read cut at its cap may leave out a team that has a live stored row.
+			if breakout == model.CompoundingRiskScopeTeam && !storedReadCut {
+				candidates := teamIDs
+				if len(candidates) == 0 {
+					candidates = order
+				}
+				if points, err = withUnstoredTeamPoints(ctx, client, orgID, d, points, candidates, labels, selectedRows, now); err != nil {
 					return nil, err
 				}
 			}

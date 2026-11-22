@@ -317,10 +317,11 @@ func TestRealClickHouse_SameIDsInTwoOrgs(t *testing.T) {
 	}
 	// org-1 owns no repository (ownership of the shared repo id is org-2's), so
 	// its repository row is listed under the no-team value beside the team row.
+	// org-2's t2 owns the repository and has no stored row: it is derived beside t1.
 	for _, c := range []struct {
 		org, label, score string
 		rows              int
-	}{{"org-1", "Platform", "0.3", 2}, {"org-2", "Second", "0.9", 1}} {
+	}{{"org-1", "Platform", "0.3", 2}, {"org-2", "Second", "0.9", 2}} {
 		got, err := Resolve(ctx, client, c.org, &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TrendDays: 30}, now)
 		if err != nil {
 			t.Fatal(err)

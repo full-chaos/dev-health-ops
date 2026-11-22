@@ -135,16 +135,9 @@ WHERE sync_run_id = $1::uuid`
 // in a savepoint of the pass transaction, so a failed read leaves the pass
 // usable.
 func lastRunProgressAt(ctx context.Context, tx pgx.Tx, syncRunID string) (*time.Time, error) {
-	savepoint, err := tx.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
+	// MUTANT M5: no savepoint.
 	var at *time.Time
-	if err := savepoint.QueryRow(ctx, lastRunProgressSQL, syncRunID, syncRunUnitStatusSuccess, syncRunUnitStatusFailed).Scan(&at); err != nil {
-		_ = savepoint.Rollback(ctx)
-		return nil, err
-	}
-	if err := savepoint.Commit(ctx); err != nil {
+	if err := tx.QueryRow(ctx, lastRunProgressSQL, syncRunID, syncRunUnitStatusSuccess, syncRunUnitStatusFailed).Scan(&at); err != nil {
 		return nil, err
 	}
 	return at, nil

@@ -38,7 +38,10 @@ const (
 // records the same artifact_inventory page_budget_exhausted observation
 // (recordGitHubTestsArtifactsWalkBound), and a smaller window also has fewer
 // records to walk. The late re-run re-list has its own budget and advances the
-// watermark when it stops, so it never blocks a unit either. A per-run cap
+// watermark when it stops, so it never blocks a unit either, except a deep
+// stop after a proven deletion (githubTestsHoldDeepStopAfterDeletion): it
+// records the same budget observation and counts here, although a smaller
+// window does not cure it. A per-run cap
 // does not hold the watermark, and a listing that stopped inside one second
 // (listing_saturated) is not cured by a smaller window.
 const TestOpsBudgetBlockedUnitsSQL = `

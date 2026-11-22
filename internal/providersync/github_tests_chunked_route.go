@@ -597,8 +597,8 @@ const (
 	githubTestsBackfillMaxWalkRecords = 40_000_000
 )
 
-// githubTestsScheduledCicdArtifactPages is the artifacts-listing page budget of an incremental cicd claim (CHAOS-13801): a
-// 1 h narrowed window lists 25-49 h of runs, about 17,900 at the busiest repository's peak (~365 runs an hour), over 100 pages.
+// githubTestsScheduledCicdArtifactPages is the artifacts-listing page budget of an incremental cicd claim (CHAOS-13801): even
+// a window narrowed to its floor lists one to two days of runs, which a busy repository can fill past 100 pages.
 const githubTestsScheduledCicdArtifactPages = 250
 
 // errGitHubTestsWalkBound stops a listing visit at the run where the walk reached githubTestsMaxWalkRecords.

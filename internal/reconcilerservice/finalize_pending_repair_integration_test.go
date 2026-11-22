@@ -479,3 +479,131 @@ UPDATE public.daily_metrics_runs SET created_at = $2, updated_at = $2 WHERE id =
 			"after two Steps, want 1 and 1: nothing recovers it (open by design in CHAOS-14090)", outboxRows, riverJobs)
 	}
 }
+
+// redriveRows counts the run's finalize outbox rows written by a redrive.
+func (venue *finalizePendingVenue) redriveRows(t *testing.T, ctx context.Context, runID string) int {
+	t.Helper()
+	var count int
+	if err := venue.admin.QueryRow(ctx, `
+SELECT count(*) FROM public.worker_job_outbox
+WHERE job_kind = 'metrics.daily_finalize' AND args #>> '{domain,id}' = $1
+  AND dedupe_key LIKE 'metrics.daily_finalize:redrive:%'`, runID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+// cleanRiverFinalizes deletes the run's River finalize jobs, as River's
+// cleaner does once a finished job is past its retention.
+func (venue *finalizePendingVenue) cleanRiverFinalizes(t *testing.T, ctx context.Context, runID string) {
+	t.Helper()
+	if _, err := venue.admin.Exec(ctx, `
+DELETE FROM river.river_job
+WHERE kind = 'metrics.daily_finalize'
+  AND args @> jsonb_build_object('domain', jsonb_build_object('id', $1::text))`, runID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// C1 (RED on main: nothing redrives): the stage redrives one run at most once
+// per 24 h. After the first redrive the River job is gone before ClaimFinalize
+// (the delivery died and River's cleaner removed it), so only the "recent"
+// refusal holds the run back. Inside the horizon: no second publish. Past it:
+// exactly one more. Dropping the recent fragment must turn the middle step red.
+func TestStaleFinalizeRedrivesARunAtMostOncePer24Hours(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	venue := startFinalizePendingVenue(t, ctx)
+	start := time.Now().UTC()
+	orgID, runID := uuid.NewString(), uuid.NewString()
+	venue.seedShapeD(t, ctx, orgID, runID, "2026-11-05", start.Add(-48*time.Hour))
+
+	if _, err := venue.relay.Step(ctx, start, 10); err != nil {
+		t.Fatalf("Step 1: %v", err)
+	}
+	if got := venue.redriveRows(t, ctx, runID); got != 1 {
+		t.Fatalf("Step 1: %d redrive rows, want 1: no stage redrove the stranded finalize", got)
+	}
+	if _, err := venue.relay.Step(ctx, time.Now().UTC().Add(time.Second), 10); err != nil {
+		t.Fatalf("delivery Step: %v", err)
+	}
+	if _, riverJobs := venue.finalizeTrace(t, ctx, runID); riverJobs != 1 {
+		t.Fatalf("the redrive was not delivered: %d River jobs, want 1", riverJobs)
+	}
+	venue.cleanRiverFinalizes(t, ctx, runID)
+
+	if _, err := venue.relay.Step(ctx, start.Add(11*time.Minute), 10); err != nil {
+		t.Fatalf("Step inside 24 h: %v", err)
+	}
+	if got := venue.redriveRows(t, ctx, runID); got != 1 {
+		t.Fatalf("inside 24 h of the first redrive: %d redrive rows, want 1 (at most one per run per 24 h)", got)
+	}
+	if _, err := venue.relay.Step(ctx, start.Add(24*time.Hour+11*time.Minute), 10); err != nil {
+		t.Fatalf("Step past 24 h: %v", err)
+	}
+	if got := venue.redriveRows(t, ctx, runID); got != 2 {
+		t.Fatalf("past 24 h of the first redrive: %d redrive rows, want 2", got)
+	}
+}
+
+// C2 (RED on main): a delivered finalize outbox row older than 24 h whose River
+// job is gone (River cleaned it; outbox retention has not pruned the row yet).
+// By the fragments it is a candidate: no live job (no River row, the row is not
+// pending or claimed), not the strand shape (that shape JOINs the River row),
+// not recent (the row is older than the horizon). WANT: one redrive row beside
+// the old delivered row, which stays as it is, and the redrive is delivered.
+func TestStaleFinalizeRedrivesARunWhoseDeliveredRowOutlivedItsRiverJob(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	venue := startFinalizePendingVenue(t, ctx)
+	orgID, runID := uuid.NewString(), uuid.NewString()
+	venue.seedShapeD(t, ctx, orgID, runID, "2026-11-06", time.Now().UTC().Add(-48*time.Hour))
+	tx, err := venue.domain.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := venue.pub.PublishFinalizeTx(ctx, tx, daily.Run{ID: runID, OrganizationID: orgID, Status: "running"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := venue.relay.Step(ctx, time.Now().UTC().Add(time.Second), 10); err != nil {
+		t.Fatalf("delivery Step: %v", err)
+	}
+	var handoffStatus string
+	if err := venue.admin.QueryRow(ctx, `SELECT status FROM public.worker_job_outbox WHERE dedupe_key = $1`,
+		daily.FinalizeHandoffKey(runID)).Scan(&handoffStatus); err != nil {
+		t.Fatal(err)
+	}
+	if handoffStatus != "delivered" {
+		t.Fatalf("fixture: the canonical finalize row is %q, want delivered", handoffStatus)
+	}
+	venue.cleanRiverFinalizes(t, ctx, runID)
+	old := time.Now().UTC().Add(-30 * time.Hour)
+	if _, err := venue.admin.Exec(ctx, `
+UPDATE public.worker_job_outbox SET created_at = $2, delivered_at = $2, updated_at = $2 WHERE dedupe_key = $1`,
+		daily.FinalizeHandoffKey(runID), old); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := venue.relay.Step(ctx, time.Now().UTC(), 10); err != nil {
+		t.Fatalf("Step: %v", err)
+	}
+	if got := venue.redriveRows(t, ctx, runID); got != 1 {
+		t.Fatalf("delivered row older than 24 h, River job gone: %d redrive rows, want 1", got)
+	}
+	if err := venue.admin.QueryRow(ctx, `SELECT status FROM public.worker_job_outbox WHERE dedupe_key = $1`,
+		daily.FinalizeHandoffKey(runID)).Scan(&handoffStatus); err != nil {
+		t.Fatal(err)
+	}
+	if handoffStatus != "delivered" {
+		t.Fatalf("the old delivered row is %q, want it left delivered", handoffStatus)
+	}
+	if _, err := venue.relay.Step(ctx, time.Now().UTC().Add(time.Second), 10); err != nil {
+		t.Fatalf("second Step: %v", err)
+	}
+	if _, riverJobs := venue.finalizeTrace(t, ctx, runID); riverJobs != 1 {
+		t.Fatalf("the redrive was not delivered: %d River jobs, want 1", riverJobs)
+	}
+}

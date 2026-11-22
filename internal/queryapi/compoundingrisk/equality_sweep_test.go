@@ -29,10 +29,12 @@ import (
 // main's table: a change to Resolve must differ from it only in the rows it
 // declares.
 const (
-	sweepGoldenPath   = "testdata/equality_sweep.golden"
-	sweepGoldenSHA256 = "935ac44976956561dafb531ac9cd86c8338141e7dad6d0b2b20a040ff82d9dff"
-	sweepRewriteEnv   = "COMPOUNDINGRISK_SWEEP_REWRITE"
-	sweepOrg          = "org-sweep"
+	sweepGoldenPath     = "testdata/equality_sweep.golden"
+	sweepGoldenSHA256   = "935ac44976956561dafb531ac9cd86c8338141e7dad6d0b2b20a040ff82d9dff"
+	sweepDeclaredPath   = "testdata/equality_sweep.declared"
+	sweepDeclaredSHA256 = "e87afe8ee055cd58603400b2a49635917bf6358929cd5a190d17b4bf1d8e4a65"
+	sweepRewriteEnv     = "COMPOUNDINGRISK_SWEEP_REWRITE"
+	sweepOrg            = "org-sweep"
 )
 
 type sweepRiskRow struct {
@@ -608,27 +610,41 @@ func TestCompoundingRiskEqualitySweep(t *testing.T) {
 	sweepCompare(t, text)
 }
 
-// sweepCompare compares served text with the golden, one combination at a time.
+// sweepCompare compares served text with main's golden, one combination at a
+// time: a combination of the declared file serves its declared block, which
+// differs from main's; every other combination serves main's block.
 func sweepCompare(t *testing.T, text []byte) {
 	t.Helper()
-	golden, err := os.ReadFile(filepath.FromSlash(sweepGoldenPath))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sum := sha256.Sum256(golden); hex.EncodeToString(sum[:]) != sweepGoldenSHA256 {
-		t.Errorf("golden %s has sha256 %s, the cell pins %s", sweepGoldenPath, hex.EncodeToString(sum[:]), sweepGoldenSHA256)
-	}
-	want, have := sweepBlocks(string(golden)), sweepBlocks(string(text))
+	golden := sweepRead(t, sweepGoldenPath, sweepGoldenSHA256)
+	declaredText := sweepRead(t, sweepDeclaredPath, sweepDeclaredSHA256)
+	want, have, declared := sweepBlocks(string(golden)), sweepBlocks(string(text)), sweepBlocks(string(declaredText))
 	differ := 0
+	for _, h := range declared.order {
+		class, block, _ := strings.Cut(declared.blocks[h], "\n")
+		switch {
+		case class != "class B" && class != "class F" && class != "class []":
+			differ++
+			t.Errorf("%s: declared %q is not one of the classes B, F, []", h, class)
+		case want.blocks[h] == "":
+			differ++
+			t.Errorf("%s: declared, but not a combination of the golden", h)
+		case block == want.blocks[h]:
+			differ++
+			t.Errorf("%s: declared (%s) but equal to main's block: a dead declaration", h, class)
+		}
+	}
 	for _, h := range have.order {
 		w, ok := want.blocks[h]
+		if d, isDeclared := declared.blocks[h]; isDeclared {
+			_, w, _ = strings.Cut(d, "\n")
+		}
 		switch {
 		case !ok:
 			differ++
 			t.Errorf("%s: not in the golden; served:\n%s", h, have.blocks[h])
 		case w != have.blocks[h]:
 			differ++
-			t.Errorf("%s:\n golden:\n%s served:\n%s", h, w, have.blocks[h])
+			t.Errorf("%s:\n want:\n%s served:\n%s", h, w, have.blocks[h])
 		}
 	}
 	for _, h := range want.order {
@@ -637,17 +653,30 @@ func sweepCompare(t *testing.T, text []byte) {
 			t.Errorf("%s: in the golden, not served", h)
 		}
 	}
-	if differ == 0 && string(golden) != string(text) {
-		t.Errorf("golden and served text differ outside the combinations")
+	if want.preamble != have.preamble {
+		t.Errorf("golden and served text differ before the first combination")
 	}
 	if differ > 0 {
-		t.Errorf("%d combinations differ from the golden", differ)
+		t.Errorf("%d combinations differ from main's golden and the declared differences", differ)
 	}
 }
 
+func sweepRead(t *testing.T, path, pin string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.FromSlash(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum := sha256.Sum256(b); hex.EncodeToString(sum[:]) != pin {
+		t.Errorf("%s has sha256 %s, the cell pins %s", path, hex.EncodeToString(sum[:]), pin)
+	}
+	return b
+}
+
 type sweepText struct {
-	order  []string
-	blocks map[string]string
+	preamble string
+	order    []string
+	blocks   map[string]string
 }
 
 func sweepBlocks(text string) sweepText {
@@ -661,6 +690,8 @@ func sweepBlocks(text string) sweepText {
 		}
 		if header != "" {
 			out.blocks[header] += line
+		} else {
+			out.preamble += line
 		}
 	}
 	return out

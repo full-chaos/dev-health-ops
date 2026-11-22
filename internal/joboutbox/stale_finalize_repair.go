@@ -440,7 +440,7 @@ const (
 	staleFinalizeBaseExistsSQL = `
 SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs AS run WHERE run.status = 'running'
 	AND run.finalization_status = 'pending'
-	AND run.updated_at <= $1 - interval '365 days'
+	AND run.updated_at <= $1::timestamptz - interval '365 days'
 	AND NOT EXISTS (
 		SELECT 1 FROM public.daily_metrics_partitions AS partition
 		WHERE partition.run_id = run.id

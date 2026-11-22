@@ -248,6 +248,7 @@ jobs:
           path: go-junit-part/
           retention-days: 7
           if-no-files-found: ignore
+          overwrite: true
       - name: Dependency closure of the auth binaries (CHAOS-10131)
         if: matrix.leg == 1
         run: bash ci/check_go.sh auth closure
@@ -333,6 +334,7 @@ jobs:
           path: go-junit-part/
           retention-days: 7
           if-no-files-found: ignore
+          overwrite: true
       - name: Save the Go module and build caches (main pushes and the merge queue only)
         if: (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -428,6 +430,7 @@ jobs:
           path: go-junit-part/
           retention-days: 7
           if-no-files-found: ignore
+          overwrite: true
       - name: Save the Go module and build caches (main pushes and the merge queue only)
         if: (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -466,17 +469,25 @@ jobs:
           JUNIT_MERGED_NAME: go-auth-junit
         run: |
           mkdir -p junit-merged
+          parts="$(find junit-parts -type f -name '*.xml' 2>/dev/null | LC_ALL=C sort)"
+          # CHAOS-14494: no part, no report: an empty <testsuites/> would read as "ran nothing, passed".
+          if [ -z "${parts}" ]; then echo "::error::no JUnit part was downloaded; no merged report is written"; exit 1; fi
+          merged="junit-merged/${JUNIT_MERGED_NAME}.xml"
           # The parts are go-junit-report documents: one <testsuites> root each. Every <testsuite> (so every testcase, a failed
           # one with its full output) is copied unchanged under one new root.
           {
             printf '<?xml version="1.0" encoding="UTF-8"?>\n<testsuites>\n'
             while IFS= read -r part; do
               awk '/^<\?xml/ { next } /<testsuites[ >\/]/ { root = 1 } root { if ($0 ~ />[ \t]*$/) root = 0; next } /<\/testsuites>/ { next } { print }' "${part}"
-            done < <(find junit-parts -type f -name '*.xml' | LC_ALL=C sort)
+            done <<<"${parts}"
             printf '</testsuites>\n'
-          } > "junit-merged/${JUNIT_MERGED_NAME}.xml"
-          if [ -z "$(find junit-parts -type f -name '*.xml' 2>/dev/null)" ]; then echo "::warning::no JUnit part was downloaded; the merged report is empty"; fi
-          echo "merged $(find junit-parts -type f -name '*.xml' | wc -l) part(s), $(grep -c '<testcase' "junit-merged/${JUNIT_MERGED_NAME}.xml" || true) testcase line(s)"
+          } > "${merged}"
+          if ! python3 -I -c 'import sys, xml.etree.ElementTree as ET; ET.parse(sys.argv[1])' "${merged}"; then
+            echo "::error::the merged JUnit report is not well-formed XML; it is not uploaded"
+            rm -f -- "${merged}"
+            exit 1
+          fi
+          echo "merged $(printf '%s\n' "${parts}" | wc -l | tr -d ' ') part(s), $(grep -c '<testcase' "${merged}" || true) testcase line(s)"
 
       - name: Upload the merged auth JUnit report
         if: always()
@@ -487,6 +498,7 @@ jobs:
           path: junit-merged/
           retention-days: 14
           if-no-files-found: warn
+          overwrite: true
 
   # One job per package (CHAOS-11417): checkout, setup-go and the compile are paid once per package, not once per target.
   # Each target keeps its own `auth fuzz TARGET` call, so its corpus, its proof marker and the one default fuzz budget

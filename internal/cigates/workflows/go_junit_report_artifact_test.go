@@ -83,6 +83,9 @@ func junitReportViolations(t *testing.T, root string) []string {
 		}
 		bestEffort("the JUnit part upload", up)
 		with := asMap(up["with"])
+		if f.testRun != "" && with["overwrite"] != true {
+			out = append(out, f.file+": the JUnit part upload of "+f.partJob+" must set overwrite: true (a re-run of a failed leg uploads the same name; without it the upload is refused and the report keeps attempt 1)")
+		}
 		if !pinnedUpload.MatchString(asString(up["uses"])) || asString(with["name"]) != f.partName || strings.TrimSuffix(asString(with["path"]), "/") != "go-junit-part" {
 			out = append(out, f.file+": the JUnit part upload must be the pinned upload-artifact of go-junit-part/ named "+f.partName)
 		}
@@ -97,7 +100,7 @@ func junitReportViolations(t *testing.T, root string) []string {
 				seen[1] = true
 				bestEffort("the merge", s)
 			case strings.HasPrefix(asString(s["uses"]), "actions/upload-artifact@") && strings.Contains(asString(asMap(s["with"])["path"]), "junit-merged"):
-				seen[2] = asString(asMap(s["with"])["name"]) == f.mergedName && pinnedUpload.MatchString(asString(s["uses"]))
+				seen[2] = asString(asMap(s["with"])["name"]) == f.mergedName && pinnedUpload.MatchString(asString(s["uses"])) && (f.testRun == "" || asMap(s["with"])["overwrite"] == true)
 				bestEffort("the merged upload", s)
 			}
 		}
@@ -132,6 +135,8 @@ func TestJUnitReportGuardPlantedDefectsAreCaught(t *testing.T) {
 		{"an auth leg uploads its part only on success", mutation{ga, "      - name: Upload the leg's JUnit part\n        continue-on-error: true\n        if: always()\n        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7\n        with:\n          name: go-junit-part-auth-race-${{ matrix.leg }}", "      - name: Upload the leg's JUnit part\n        continue-on-error: true\n        if: success()\n        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7\n        with:\n          name: go-junit-part-auth-race-${{ matrix.leg }}"}, "if: always()"},
 		{"an auth leg writes no go test -json", mutation{ga, "        env:\n          GO_TEST_LEG_JSON_DIR: ${{ runner.temp }}/go-test-leg-json\n        run: bash ci/check_go.sh auth race-leg", "        run: bash ci/check_go.sh auth race-leg"}, "GO_TEST_LEG_JSON_DIR"},
 		{"an auth part reads another directory", mutation{ga, "          LEG_JSON_DIR: ${{ runner.temp }}/go-test-leg-json\n        run: bash ci/go_junit_part.sh go-junit-part \"${LEG_JSON_DIR}\"\n      - name: Upload the leg's JUnit part\n        continue-on-error: true\n        if: always()\n        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7\n        with:\n          name: go-junit-part-auth-race-integration", "          LEG_JSON_DIR: ${{ runner.temp }}/elsewhere\n        run: bash ci/go_junit_part.sh go-junit-part \"${LEG_JSON_DIR}\"\n      - name: Upload the leg's JUnit part\n        continue-on-error: true\n        if: always()\n        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7\n        with:\n          name: go-junit-part-auth-race-integration"}, "LEG_JSON_DIR"},
+		{"the auth part upload without overwrite", mutation{ga, "          retention-days: 7\n          if-no-files-found: ignore\n          overwrite: true\n", "          retention-days: 7\n          if-no-files-found: ignore\n"}, "must set overwrite: true"},
+		{"the auth merged upload without overwrite", mutation{ga, "          if-no-files-found: warn\n          overwrite: true\n", "          if-no-files-found: warn\n"}, "must download go-junit-part-auth-*"},
 		{"the auth merged report under a part name", mutation{ga, "name: go-test-junit-auth", "name: go-junit-part-auth-merged"}, "must download go-junit-part-auth-*"},
 		{"the auth download misses the parts", mutation{ga, "pattern: go-junit-part-auth-*", "pattern: go-test-timings-*"}, "must download go-junit-part-auth-*"},
 		{"the download misses the parts", mutation{gq, "pattern: go-junit-part-*", "pattern: go-test-timings-*"}, "must download go-junit-part-*"},
@@ -218,5 +223,54 @@ func TestMergeKeepsEveryTestcase(t *testing.T) {
 		if len(doc.Suites) != 2 || cases != 3 || !strings.Contains(failure, "full output of the failed case") {
 			t.Fatalf("%s: merged report has %d suites, %d cases, failure %q; want 2, 3 and the failed case's output\n%s", f.file, len(doc.Suites), cases, failure, b)
 		}
+	}
+}
+
+// CHAOS-14494: the auth merge step writes no report when no part came or the merge is not well-formed XML, and fails loudly (the
+// job is continue-on-error, so it still gates nothing).
+func TestAuthMergeWritesNoReportWithoutAWellFormedMerge(t *testing.T) {
+	root := rootOf(t)
+	var merge string
+	for _, s := range stepsOf(pinJob(loadWf(t, root, "go-auth-service.yml"), "auth-junit")) {
+		if strings.Contains(asString(s["run"]), "junit-parts") {
+			merge = asString(s["run"])
+		}
+	}
+	if merge == "" {
+		t.Fatal("no merge step in auth-junit")
+	}
+	for _, c := range []struct {
+		name  string
+		parts map[string]string
+		want  string
+	}{
+		{"no part", nil, "no JUnit part was downloaded"},
+		{"a part that breaks the merge", map[string]string{"go-junit-part-a/a.xml": junitPartFailed + "<unclosed>\n"}, "not well-formed"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, "junit-parts"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for name, body := range c.parts {
+				p := filepath.Join(dir, "junit-parts", name)
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command("bash", "-eo", "pipefail", "-c", merge)
+			cmd.Dir = dir
+			cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/local/bin", "JUNIT_MERGED_NAME=merged"}
+			out, err := cmd.CombinedOutput()
+			if err == nil || !strings.Contains(string(out), c.want) {
+				t.Fatalf("want a failing step naming %q, got err=%v\n%s", c.want, err, out)
+			}
+			if _, statErr := os.Stat(filepath.Join(dir, "junit-merged", "merged.xml")); statErr == nil {
+				t.Fatalf("a merged report was left behind")
+			}
+		})
 	}
 }

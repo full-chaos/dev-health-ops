@@ -501,8 +501,17 @@ func sweepServed(got *model.CompoundingRiskResult, err error) []string {
 	return out
 }
 
-func TestCompoundingRiskEqualitySweep(t *testing.T) {
-	now := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
+// sweepResolve answers one combination: the world is the whole store of the
+// org sweepOrg when Resolve runs.
+type sweepResolve func(header string, world sweepWorld, filter *model.CompoundingRiskFilterInput) (*model.CompoundingRiskResult, error)
+
+func sweepNow() time.Time { return time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC) }
+
+// sweepTable runs every combination through resolve and returns the served
+// text in the golden's form. The unit and the real-ClickHouse variants share it.
+func sweepTable(t *testing.T, resolve sweepResolve) []byte {
+	t.Helper()
+	now := sweepNow()
 	type idsArg struct {
 		name string
 		ids  []string
@@ -531,11 +540,7 @@ func TestCompoundingRiskEqualitySweep(t *testing.T) {
 	var notApplicable []string
 	run := func(header string, world sweepWorld, filter *model.CompoundingRiskFilterInput) {
 		combinations++
-		store := &sweepStore{world: world}
-		got, err := Resolve(context.Background(), store, sweepOrg, filter, now)
-		for _, st := range store.unknown {
-			t.Errorf("%s: a statement the model does not know:\n%s", header, st)
-		}
+		got, err := resolve(header, world, filter)
 		lines = append(lines, "== "+header)
 		lines = append(lines, sweepServed(got, err)...)
 	}
@@ -577,7 +582,18 @@ func TestCompoundingRiskEqualitySweep(t *testing.T) {
 	for _, na := range notApplicable {
 		t.Logf("not applicable: %s", na)
 	}
-	text := []byte(strings.Join(lines, "\n") + "\n")
+	return []byte(strings.Join(lines, "\n") + "\n")
+}
+
+func TestCompoundingRiskEqualitySweep(t *testing.T) {
+	text := sweepTable(t, func(header string, world sweepWorld, filter *model.CompoundingRiskFilterInput) (*model.CompoundingRiskResult, error) {
+		store := &sweepStore{world: world}
+		got, err := Resolve(context.Background(), store, sweepOrg, filter, sweepNow())
+		for _, st := range store.unknown {
+			t.Errorf("%s: a statement the model does not know:\n%s", header, st)
+		}
+		return got, err
+	})
 	path := filepath.FromSlash(sweepGoldenPath)
 	if os.Getenv(sweepRewriteEnv) == "1" {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -589,7 +605,13 @@ func TestCompoundingRiskEqualitySweep(t *testing.T) {
 		sum := sha256.Sum256(text)
 		t.Fatalf("golden rewritten: set sweepGoldenSHA256 to %s and add the manifest row", hex.EncodeToString(sum[:]))
 	}
-	golden, err := os.ReadFile(path)
+	sweepCompare(t, text)
+}
+
+// sweepCompare compares served text with the golden, one combination at a time.
+func sweepCompare(t *testing.T, text []byte) {
+	t.Helper()
+	golden, err := os.ReadFile(filepath.FromSlash(sweepGoldenPath))
 	if err != nil {
 		t.Fatal(err)
 	}

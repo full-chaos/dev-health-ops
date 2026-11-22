@@ -12,7 +12,7 @@
 // TestAccumulator.AddSuite), and a run with the stored status deleted is no sample (ExcludedFromPipelineCounts): a run
 // duration is duration_seconds when it is not negative, else finished_at - started_at when that is not negative, else no
 // sample; a queue sample is queue_seconds when not negative, else started_at -
-// queued_at when not negative; a suite duration is duration_seconds when not negative, with no timestamp fallback. A
+// queued_at when not negative, and a re-run (retry_count above 0) has none; a suite duration is duration_seconds when not negative, with no timestamp fallback. A
 // run belongs to the UTC day it started, a suite to the day it started (else finished), as the writer reads them. The
 // samples of a repository-day are the ones the writer stored with its newest daily row, so every series covers the
 // repository-days of the stored rows and reads their sample set; a repository-day whose newest row holds no samples
@@ -97,8 +97,8 @@ var PipelineRunsSource = `(
             toDate(started_at) AS day,
             if(duration_seconds >= 0, duration_seconds,
                 if(finished_at >= started_at, dateDiff('millisecond', started_at, finished_at) / 1000, NULL)) AS duration_sample,
-            if(queue_seconds >= 0, queue_seconds,
-                if(started_at >= queued_at, dateDiff('millisecond', queued_at, started_at) / 1000, NULL)) AS queue_sample
+            if(retry_count = 0, if(queue_seconds >= 0, queue_seconds,
+                if(started_at >= queued_at, dateDiff('millisecond', queued_at, started_at) / 1000, NULL)), NULL) AS queue_sample
         FROM ci_pipeline_runs FINAL
         WHERE org_id = {org_id:String}
           AND toDate(started_at) >= {start_date:Date} AND toDate(started_at) < {end_date:Date}

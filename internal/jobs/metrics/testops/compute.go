@@ -634,7 +634,11 @@ func (accumulator *PipelineAccumulator) Add(row PipelineRunRow) {
 	if d != nil {
 		b.durations = append(b.durations, *d)
 	}
-	q := safeDurationSeconds(row.QueuedAt, row.StartedAt, row.FinishedAt, row.QueueSeconds, true)
+	// A re-run's queued_at is the run's first creation and its started_at the latest attempt's start: no queue sample.
+	var q *float64
+	if row.RetryCount == 0 {
+		q = safeDurationSeconds(row.QueuedAt, row.StartedAt, row.FinishedAt, row.QueueSeconds, true)
+	}
 	if q != nil {
 		b.queues = append(b.queues, *q)
 	}

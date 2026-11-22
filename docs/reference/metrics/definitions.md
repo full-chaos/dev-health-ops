@@ -241,10 +241,12 @@ row synced after the daily job ran counts at once and the chart can differ from 
 | --- | --- | --- |
 | `PIPELINE_DURATION_P95` | 95th percentile, linear between closest ranks | a run of `ci_pipeline_runs`: `duration_seconds` when not negative, else `finished_at - started_at` when not negative |
 | `TEST_SUITE_DURATION_P95` | 95th percentile, linear between closest ranks | a suite of `test_suite_results`: `duration_seconds` when not negative |
-| `PIPELINE_QUEUE_TIME` | mean of the queue samples: their total seconds divided by the number of runs with a queue sample | a run: `queue_seconds` when not negative, else `started_at - queued_at` when not negative |
+| `PIPELINE_QUEUE_TIME` | mean of the queue samples: their total seconds divided by the number of runs with a queue sample | a run that is not a re-run (`retry_count` 0): `queue_seconds` when not negative, else `started_at - queued_at` when not negative |
 
 The samples follow the daily job's own rules. A run belongs to the UTC day it started; a suite to the day it started,
-else finished. Only the repository-days that the daily job computed are read, so every series covers the days of the
+else finished. A re-run (`retry_count` above 0) has no queue sample: its stored queued time is the run's first creation
+and its start is the latest attempt's start, so the difference is not the wait of one attempt. A day whose only runs are
+re-runs has no queue time. Only the repository-days that the daily job computed are read, so every series covers the days of the
 stored rows. A group with no sample is null, never 0.
 
 - A team series pools the runs of the repositories the team owns at the request. A co-owned repository counts whole for
@@ -393,12 +395,13 @@ row synced after the daily job ran counts at once and the chart can differ from 
 | --- | --- | --- |
 | `avg_duration_minutes` | mean | a run: finished at minus started at, in minutes |
 | `p90_duration_minutes` | 90th percentile: linear between the closest ranks | a run, as above |
-| `avg_queue_minutes` | mean | a run with a queued time: started at minus queued at, in minutes |
+| `avg_queue_minutes` | mean | a run with a queued time that is not a re-run (`retry_count` 0): started at minus queued at, in minutes |
 
 - A run counts on the UTC day it starts, and only when it also finishes on that day. A run that crosses midnight UTC
   counts on no day, and a run that has not finished counts nowhere. This is the daily job's rule.
-- A re-run keeps its run id. The run counts once, with its latest attempt. Its queue sample is the time from the run's
-  first creation to the latest attempt's start.
+- A re-run keeps its run id. The run counts once, with its latest attempt. A re-run (`retry_count` above 0) has no queue
+  sample: its queued time is the run's first creation, not the latest attempt's. A day whose only runs are re-runs has no
+  queue point.
 - A negative duration or queue time is no sample. The stored `duration_seconds` and `queue_seconds` are not read.
 - Every status counts, except a deleted run.
 - Only the repository-days that the daily job computed are read.

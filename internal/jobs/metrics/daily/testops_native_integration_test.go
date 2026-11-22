@@ -365,7 +365,7 @@ func TestNativeTestopsExecutorsWriteTheirTablesAgainstRealClickHouse(t *testing.
 // run-4 alone is cancelled and alone retried (retry_count 3), so cancelled=1
 // and rerun_rate=1/6; the two run-tie copies both last 700 s, so the pooled
 // durations are 100 200 300 400 600 700 (median 350; p95 = 600 + 0.75*100 =
-// 675) whichever copy wins the tie; every queue sample is 0.1. The success
+// 675) whichever copy wins the tie; run-4 is a re-run and has no queue sample, every other queue sample is 0.1. The success
 // versus failure split depends on the tie's winner, which the differential
 // test pins, so only their sum (4) is asserted here. The runs disagree on
 // service (nil, empty, named), so the merged row carries no service. Every

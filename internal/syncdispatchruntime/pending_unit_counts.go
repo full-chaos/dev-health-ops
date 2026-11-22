@@ -11,7 +11,8 @@ import (
 // pendingUnitCounts ports _pending_unit_counts verbatim: classify every
 // non-terminal unit of a run into "dispatchable now" or "in flight",
 // tracking the earliest still-future deferral along the way. Dispatch()
-// reads it after every committed pass: when the pass claimed nothing, to
+// reads it in every pass's tail (armPassWake, after the commit snapshot and
+// before COMMIT): when the pass claimed nothing, to
 // distinguish "more work later" (schedule a redispatch) from "genuinely done"
 // (call finalize); when it queued units, for the re-arm (queuedPassRearmAt).
 type pendingUnitCounts struct {
@@ -43,27 +44,6 @@ WHERE sync_run_id = $1::uuid AND status IN ($2, $3, $4, $5)`,
 	).Scan(&counts.dispatchable, &counts.inFlight, &counts.nextDeferredAt)
 	if err != nil {
 		return pendingUnitCounts{}, fmt.Errorf("load pending unit counts: %w", err)
-	}
-	return counts, nil
-}
-
-// pendingCountsReadReason is the reason label of the WARN a queued pass logs when its pending-counts read fails.
-const pendingCountsReadReason = "pending_counts_read"
-
-// pendingUnitCountsNow reads computePendingUnitCounts in its own transaction, after the pass committed; admittedAt is
-// the pass's admission time.
-func (service *NativeDispatchSyncRunService) pendingUnitCountsNow(ctx context.Context, syncRunID string, admittedAt time.Time) (pendingUnitCounts, error) {
-	tx, err := service.pool.Begin(ctx)
-	if err != nil {
-		return pendingUnitCounts{}, ErrDispatchSyncRunUnavailable
-	}
-	counts, err := computePendingUnitCounts(ctx, tx, syncRunID, service.nowUTC(), admittedAt)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return pendingUnitCounts{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return pendingUnitCounts{}, ErrDispatchSyncRunUnavailable
 	}
 	return counts, nil
 }

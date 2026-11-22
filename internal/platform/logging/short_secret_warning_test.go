@@ -142,3 +142,16 @@ func TestTwoDistinctUndeclaredFieldsWarnSeparately(t *testing.T) {
 		t.Errorf("want 2 warnings for two undeclared names, got %d: %s", got, out.String())
 	}
 }
+
+func TestShortCredentialFieldOnTheNonSecretListIsNamedThroughTheRedactor(t *testing.T) {
+	record, line := shortFieldRecord(t, "project_key")
+	if record["field"] != "project_key" {
+		t.Errorf("field = %v, want project_key (%s)", record["field"], line)
+	}
+	if _, has := record["field_length"]; has {
+		t.Errorf("a named field carries no length: %s", line)
+	}
+	if strings.Contains(line, "abc") {
+		t.Errorf("the value reached the log: %s", line)
+	}
+}

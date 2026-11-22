@@ -184,7 +184,7 @@ func (stage *staleFinalizeStage) step(ctx context.Context, now time.Time, limit 
 			pass.deferred = len(survey.candidates) - index
 			break
 		}
-		runCtx, cancelRun := context.WithTimeout(passCtx, staleFinalizeRunDeadline)
+		runCtx, cancelRun := context.WithCancel(passCtx)
 		redriven, err := stage.redriver.RedriveStaleFinalize(runCtx, candidate.runID, nonce)
 		deadline := errors.Is(runCtx.Err(), context.DeadlineExceeded)
 		cancelRun()

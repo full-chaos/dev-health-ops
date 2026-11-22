@@ -988,7 +988,7 @@ internal/queryapi/routeswitch/class_decision_switch.go|Enabled|*string|7a40513e2
 internal/queryapi/sankey/queries.go|fetchExpenseCounts|*float64,*float64,*float64|e965eeadaf1b|not-describable
 internal/queryapi/sankey/queries.go|fetchStateStatusCounts|*string,*float64|0ef755127f61|not-describable
 internal/queryapi/server/mcp_route.go|Scan|[]any|073743d6899c|variadic-destinations
-internal/queryapi/testopsrisk/testopsrisk.go|readDaily|**time.Time,**float64,**float64,**float64,**float64,**float64,**float64,**uint64,**float64|31a9c537c92e|not-describable
+internal/queryapi/testopsrisk/testopsrisk.go|readDaily|**time.Time,**float64,**float64,**float64,**float64,**float64,**float64,**uint64,**float64|d5ba164a1f0e|not-describable
 internal/queryapi/throughputforecast/clickhouse.go|loadBacklog|*uint64,*uint64,*uint64,*time.Time|2d4d80074e2b|not-describable
 internal/queryapi/throughputforecast/clickhouse.go|loadStaleWIP|**float64,**float64|3dd402e56d1e|not-describable
 internal/queryapi/throughputforecast/clickhouse.go|loadThroughputHistory|*time.Time,*uint64|a930dc834fd5|not-describable

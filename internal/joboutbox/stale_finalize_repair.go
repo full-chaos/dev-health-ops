@@ -421,7 +421,7 @@ WHERE ` + staleFinalizeBaseSQL + `
 	AND NOT ` + staleFinalizeStrandShapeSQL + `
 	AND NOT ` + staleFinalizeRecentSQL + `
 	AND NOT ` + staleFinalizeNoPartitionsSQL + `
-	AND ($3::timestamptz IS NULL OR (run.updated_at, run.id) > ($3::timestamptz, $4::uuid))
+	AND ($3::timestamptz IS NULL OR (run.updated_at, run.id) >= ($3::timestamptz, $4::uuid))
 ORDER BY run.updated_at, run.id
 LIMIT $2::int`
 	staleFinalizeLevelsSQLTemplate = `

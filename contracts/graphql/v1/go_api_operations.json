@@ -98,7 +98,12 @@
   },
   {
     "operation": "capacityForecasts",
-    "digest": "43890adbbf75ac3ad71c29f728a82e35d035c3f2c701f0ced116559fa28b6c20"
+    "digest": "976b1a117d82f699eef98bcee1a1fc5cec44086026706fd501eddc4f2ba6fd77"
+  },
+  {
+    "operation": "capacityForecasts",
+    "digest": "43890adbbf75ac3ad71c29f728a82e35d035c3f2c701f0ced116559fa28b6c20",
+    "legacy": true
   },
   {
     "operation": "catalogValues",

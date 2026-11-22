@@ -3681,7 +3681,60 @@ const registeredCapacityForecastV1Document = `query CapacityForecast($orgId: Str
 //
 // Same wire-form provenance as registeredCapacityForecastDocument above.
 // Source const: CAPACITY_FORECASTS_QUERY, queries.ts:330.
+//
+// The `backlogState` and `backlogAsOfDay` selections of the node (after `backlogSize`, CHAOS-7508) are NOT from the
+// web file until the web change that selects them lands; they are in the form urql prints. A stored forecast serves
+// both as null. The previous text is registeredCapacityForecastsV1Document.
 const registeredCapacityForecastsDocument = `query CapacityForecasts($orgId: String!, $filters: CapacityForecastFilterInput) {
+  capacityForecasts(orgId: $orgId, filters: $filters) {
+    edges {
+      node {
+        forecastId
+        computedAt
+        teamId
+        workScopeId
+        backlogSize
+        backlogState
+        backlogAsOfDay
+        targetItems
+        targetDate
+        p50Date
+        p85Date
+        p95Date
+        p50Days
+        p85Days
+        p95Days
+        p50Items
+        p85Items
+        p95Items
+        throughputMean
+        throughputStddev
+        historyDays
+        insufficientHistory
+        highVariance
+        __typename
+      }
+      cursor
+      __typename
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+      __typename
+    }
+    totalCount
+    __typename
+  }
+}`
+
+// registeredCapacityForecastsV1Document is the text capacityForecasts accepted BEFORE its node asked how backlogSize was
+// found (backlogState, backlogAsOfDay, CHAOS-7508): the text CHAOS-5349 registered. It stays a legacy text (see
+// legacyDigestsByOperation) so a web or acr build still sending it keeps working while the new clients roll out; the
+// operation's ONE current document is registeredCapacityForecastsDocument above. Wire form, same provenance:
+// testdata/wire_form/capacityForecasts.v1.graphql.
+const registeredCapacityForecastsV1Document = `query CapacityForecasts($orgId: String!, $filters: CapacityForecastFilterInput) {
   capacityForecasts(orgId: $orgId, filters: $filters) {
     edges {
       node {
@@ -7646,6 +7699,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"aiOpportunities":       {digestHex(registeredAiOpportunitiesV1Document)},
 	"aiWorkflowDrilldown":   {digestHex(registeredAiWorkflowDrilldownV1Document)},
 	"capacityForecast":      {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document), digestHex(registeredCapacityForecastV3Document)},
+	"capacityForecasts":     {digestHex(registeredCapacityForecastsV1Document)},
 	"compoundingRisk":       {digestHex(registeredCompoundingRiskV1Document)},
 	"coverageScopeBaseline": {digestHex(registeredCoverageScopeBaselineV1Document)},
 	"hotspots":              {digestHex(registeredHotspotsV1Document)},

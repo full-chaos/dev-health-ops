@@ -589,6 +589,14 @@ func remainingPageBudget(budget, spent int) (int, error) {
 // hours without an end held about 8,000,000.
 const githubTestsMaxWalkRecords = 4_100_000
 
+// A backfill claim of dataset cicd (one day per unit) gets higher bounds: a large repository can pass 10,000 CI runs in one
+// backfill window, and these bounds are sized with margin. Its medium bucket (cap 2) keeps one slot from backfill
+// (backfillSlotLimit); a tests unit's heavy bucket has cap 1 and no such reserve, so it keeps the scheduled bounds.
+const (
+	githubTestsBackfillMaxRuns        = 25_000
+	githubTestsBackfillMaxWalkRecords = 40_000_000
+)
+
 // errGitHubTestsWalkBound stops a listing visit at the run where the walk reached githubTestsMaxWalkRecords.
 var errGitHubTestsWalkBound = errors.New("github tests walk record bound reached")
 
@@ -1670,9 +1678,13 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	// (CHAOS-4142, codex round 2). It stays BELOW the `done` early return: a
 	// cursor that already finished its scan only republishes metadata, and
 	// refusing there would strand an otherwise complete unit.
+	runsCeiling, walkCeiling := githubTestsMaxRuns, githubTestsMaxWalkRecords
+	if claim.Mode == "backfill" && claim.Dataset == "cicd" {
+		runsCeiling, walkCeiling = githubTestsBackfillMaxRuns, githubTestsBackfillMaxWalkRecords
+	}
 	maxRuns := handler.MaxRuns
 	if maxRuns == 0 {
-		maxRuns = githubTestsMaxRuns
+		maxRuns = runsCeiling
 	}
 	maxArtifacts := handler.MaxArtifactsPerRun
 	if maxArtifacts == 0 {
@@ -1686,14 +1698,14 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	if maxArtifactBytes <= 0 {
 		maxArtifactBytes = githubTestsMaxDownloadSize
 	}
-	if maxRuns < 1 || maxRuns > githubTestsMaxRuns || maxArtifacts < 1 || maxArtifacts > githubTestsMaxArtifacts || jobPages < 1 || jobPages > nativeMaxPages {
+	if maxRuns < 1 || maxRuns > runsCeiling || maxArtifacts < 1 || maxArtifacts > githubTestsMaxArtifacts || jobPages < 1 || jobPages > nativeMaxPages {
 		return ErrInvalidConfiguration
 	}
 	maxWalkRecords := handler.MaxWalkRecords
 	if maxWalkRecords == 0 {
-		maxWalkRecords = githubTestsMaxWalkRecords
+		maxWalkRecords = walkCeiling
 	}
-	if maxWalkRecords < 1 || maxWalkRecords > githubTestsMaxWalkRecords {
+	if maxWalkRecords < 1 || maxWalkRecords > walkCeiling {
 		return ErrInvalidConfiguration
 	}
 	lateMaxPages := handler.lateRerunMaxPages()

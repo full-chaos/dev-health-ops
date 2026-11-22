@@ -31,6 +31,7 @@ func TestRetryMaxAttemptsPerCauseClass(t *testing.T) {
 		{"cancelled", providerClassError(providerfoundation.ErrorCancelled), 0},
 		{"rate limited", providerClassError(providerfoundation.ErrorRateLimited), 0},
 		{"budget contended", providerfoundation.ErrBudgetContended, 0},
+		{"dropped sink write", committedSinkDropError(t), 0},
 		{"unknown error", errors.New("boom"), 2},
 		{"class outside the vocabulary", providerClassError(providerfoundation.ErrorClass("made_up")), 2},
 	}

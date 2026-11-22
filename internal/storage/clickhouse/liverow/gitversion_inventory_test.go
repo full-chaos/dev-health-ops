@@ -86,6 +86,7 @@ var gitTableSites = map[string]gitTableSite{
 	"providersync/gitlab_prs_route.go:GitLabPullRequestRouteHandler.Collect":                                              {1, "NAMES", "effect destination name"},
 	"providersync/prepared_route_projection.go:preparedRouteInsertStatements":                                             {2, "NAMES", "insert statement keys"},
 	"providersync/prepared_route_projection.go:preparedRouteSinkReadKeys":                                                 {1, "NAMES", "sink key"},
+	"providersync/sink_connection_dropped.go:sinkDropWrappableDestinations":                                               {2, "NAMES", "allowlist keys of the dropped-write cause class (CHAOS-14493); no read"},
 	"providersync/stored_version.go:pullRequestInsert":                                                                    {1, "NAMES", "INSERT statement"},
 	"providersync/stored_version.go:pullRequestContract":                                                                  {1, "NAMES", "stored version contract table name"},
 	"providersync/stored_version.go:setPullRequestKept":                                                                   {1, "NAMES", "error text"},

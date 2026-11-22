@@ -98,3 +98,25 @@ func TestADroppedFinishDayReadInsideAChunkWriteIsUnclassified(t *testing.T) {
 		})
 	}
 }
+
+// A drop AT the INSERT boundary keeps its own class and the registry ceiling:
+// the REAL TestOps sink's PrepareBatch, and its batch's Send, each dropped.
+func TestADroppedInsertCallInsideAChunkWriteIsASinkDrop(t *testing.T) {
+	now := time.Date(2026, 11, 22, 17, 27, 12, 0, time.UTC)
+	for name, onSend := range map[string]bool{"PrepareBatch": false, "Send": true} {
+		t.Run(name, func(t *testing.T) {
+			committer := providersync.EffectCommitter{
+				Ledger:   &testEffectLedger{},
+				Sink:     droppingTestOpsSinkAt(droppingConn{err: realDroppedConnFirstBlockError(t), onSend: onSend}),
+				Readback: testEffectReadback{},
+				Now:      func() time.Time { return now },
+			}
+			_, err := committer.Commit(context.Background(), sinkDropClaim(now),
+				[]providersync.EffectBatch{testSuiteResultsEffect(t, now)}, now)
+			if class, limit := causeClass(err, false), retryMaxAttempts(err); class != causeClassSinkConnectionDropped || limit != 0 {
+				t.Fatalf("dropped %s: err %v cause_class=%q cap=%d, want %q cap 0 (registry ceiling)",
+					name, err, class, limit, causeClassSinkConnectionDropped)
+			}
+		})
+	}
+}

@@ -185,7 +185,7 @@ func (committer EffectCommitter) commitPrepared(
 			return result, err
 		}
 		if err := committer.Sink.WriteEffect(ctx, claim, batch); err != nil {
-			return result, err
+			return result, sinkConnectionDropped(ctx, *effect, batch, err)
 		}
 		if err := committer.commitEffect(ctx, claim, *effect, batch); err != nil {
 			return result, err

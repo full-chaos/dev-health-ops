@@ -882,6 +882,8 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			c.ReseekPages, c.PagesEntered, c.RecordCredit = githubTestsWidestReseekPages, githubTestsWidestReseekPages, githubTestsWidestRecordCredit
 			c.DeletionProven = 1
 			c.LateRecords = githubTestsMaxWalkRecords
+			// Completeness rows ride an artifacts-phase cursor (CHAOS-14487).
+			c.ExtraRecords = githubTestsMaxWalkRecords
 		}},
 		{"open phase", 300, func(c *githubTestsChunkCursor) {
 			c.Phase = githubTestsOpenPhase
@@ -892,6 +894,8 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			c.OpenSkipped, c.OpenTransientRun, c.OpenSkipLimitHit = githubTestsOpenRunCapBacklog, githubTestsOpenTransientBreaker, true
 			c.OpenSkipEvent = &githubTestsOpenSkipEvent{RunID: maxID, Reason: "jobs_not_found", Status: 599, Route: githubRunJobsRoute}
 			c.SaturatedRuns, c.SaturatedArtifacts = true, true
+			// Completeness and deleted pipeline rows ride an open-phase cursor (CHAOS-14487).
+			c.ExtraRecords = githubTestsMaxWalkRecords
 		}},
 	} {
 		for _, backfill := range []bool{false, true} {

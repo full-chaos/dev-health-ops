@@ -691,9 +691,11 @@ func TestGitHubTestsResumeReseekCreditStaysInItsListing(t *testing.T) {
 		offset time.Duration
 		cap    int
 	}{
-		{"runs_to_artifacts", false, 0, 26},
-		{"deep_runs_to_artifacts", true, -12 * time.Hour, 15},
-		{"deep_runs_to_relist", true, 0, 15},
+		// Caps at the edge of run 7's report read in the walk of the 11 survivors: 11 pipeline rows (window only) and 5 report
+		// runs of 4 charged rows (3 report rows and the run-report completeness row, CHAOS-14487).
+		{"runs_to_artifacts", false, 0, 31},
+		{"deep_runs_to_artifacts", true, -12 * time.Hour, 20},
+		{"deep_runs_to_relist", true, 0, 20},
 	} {
 		t.Run(cell.name, func(t *testing.T) {
 			claim := listingClaim(listingSince, listingSince.Add(6*time.Hour))

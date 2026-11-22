@@ -228,7 +228,26 @@ jobs:
           restore-keys: |
             go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
       - name: go test (auth packages, leg ${{ matrix.leg }} of 1)
+        env:
+          GO_TEST_LEG_JSON_DIR: ${{ runner.temp }}/go-test-leg-json
         run: bash ci/check_go.sh auth test-leg "${{ matrix.leg }}" 1
+      - name: Write the leg's JUnit part from its go test -json
+        continue-on-error: true
+        if: always()
+        # CHAOS-14494: the leg's raw events stay in this runner directory; the part is the leg's own go-junit-part-auth-test-<leg>
+        # artifact (excluded from the product sync's 25-artifact cap by its prefix); auth-junit merges the parts into one report.
+        env:
+          LEG_JSON_DIR: ${{ runner.temp }}/go-test-leg-json
+        run: bash ci/go_junit_part.sh go-junit-part "${LEG_JSON_DIR}"
+      - name: Upload the leg's JUnit part
+        continue-on-error: true
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go-junit-part-auth-test-${{ matrix.leg }}
+          path: go-junit-part/
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Dependency closure of the auth binaries (CHAOS-10131)
         if: matrix.leg == 1
         run: bash ci/check_go.sh auth closure
@@ -294,7 +313,26 @@ jobs:
           restore-keys: |
             go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
       - name: go test -race (auth packages, leg ${{ matrix.leg }} of 3)
+        env:
+          GO_TEST_LEG_JSON_DIR: ${{ runner.temp }}/go-test-leg-json
         run: bash ci/check_go.sh auth race-leg "${{ matrix.leg }}" 3
+      - name: Write the leg's JUnit part from its go test -json
+        continue-on-error: true
+        if: always()
+        # CHAOS-14494: the leg's raw events stay in this runner directory; the part is the leg's own go-junit-part-auth-race-<leg>
+        # artifact (excluded from the product sync's 25-artifact cap by its prefix); auth-junit merges the parts into one report.
+        env:
+          LEG_JSON_DIR: ${{ runner.temp }}/go-test-leg-json
+        run: bash ci/go_junit_part.sh go-junit-part "${LEG_JSON_DIR}"
+      - name: Upload the leg's JUnit part
+        continue-on-error: true
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go-junit-part-auth-race-${{ matrix.leg }}
+          path: go-junit-part/
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Save the Go module and build caches (main pushes and the merge queue only)
         if: (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -370,7 +408,26 @@ jobs:
       - name: Pre-pull pinned test dependency images with bounded retry
         run: bash ci/check_go.sh integration-prepull
       - name: go test -race on live PostgreSQL (session domain concurrency, CHAOS-10207; leg ${{ matrix.leg }} of 4)
+        env:
+          GO_TEST_LEG_JSON_DIR: ${{ runner.temp }}/go-test-leg-json
         run: bash ci/check_go.sh auth race-integration-leg "${{ matrix.leg }}" 4
+      - name: Write the leg's JUnit part from its go test -json
+        continue-on-error: true
+        if: always()
+        # CHAOS-14494: the leg's raw events stay in this runner directory; the part is the leg's own go-junit-part-auth-race-integration-<leg>
+        # artifact (excluded from the product sync's 25-artifact cap by its prefix); auth-junit merges the parts into one report.
+        env:
+          LEG_JSON_DIR: ${{ runner.temp }}/go-test-leg-json
+        run: bash ci/go_junit_part.sh go-junit-part "${LEG_JSON_DIR}"
+      - name: Upload the leg's JUnit part
+        continue-on-error: true
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go-junit-part-auth-race-integration-${{ matrix.leg }}
+          path: go-junit-part/
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Save the Go module and build caches (main pushes and the merge queue only)
         if: (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -382,6 +439,54 @@ jobs:
       - name: Log out of GitHub Container Registry
         if: always()
         run: docker logout ghcr.io
+
+  # CHAOS-14494: fan-in of the auth leg JUnit parts, one go-test-junit-auth report for the run (the parts are excluded from the sync's
+  # artifact cap by their go-junit-part- prefix). Best effort and outside auth-gate: no step can change a verdict, nothing needs it.
+  # A run whose auth-changes is not relevant starts no leg and so makes no report.
+  auth-junit:
+    name: auth-junit
+    needs: [auth-changes, auth-test, auth-race, auth-race-integration]
+    if: always() && needs.auth-changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - name: Download the leg JUnit parts
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: go-junit-part-auth-*
+          path: junit-parts
+
+      - name: Merge the leg JUnit parts into one report
+        if: always()
+        continue-on-error: true
+        env:
+          JUNIT_MERGED_NAME: go-auth-junit
+        run: |
+          mkdir -p junit-merged
+          # The parts are go-junit-report documents: one <testsuites> root each. Every <testsuite> (so every testcase, a failed
+          # one with its full output) is copied unchanged under one new root.
+          {
+            printf '<?xml version="1.0" encoding="UTF-8"?>\n<testsuites>\n'
+            while IFS= read -r part; do
+              awk '/^<\?xml/ { next } /<testsuites[ >\/]/ { root = 1 } root { if ($0 ~ />[ \t]*$/) root = 0; next } /<\/testsuites>/ { next } { print }' "${part}"
+            done < <(find junit-parts -type f -name '*.xml' | LC_ALL=C sort)
+            printf '</testsuites>\n'
+          } > "junit-merged/${JUNIT_MERGED_NAME}.xml"
+          if [ -z "$(find junit-parts -type f -name '*.xml' 2>/dev/null)" ]; then echo "::warning::no JUnit part was downloaded; the merged report is empty"; fi
+          echo "merged $(find junit-parts -type f -name '*.xml' | wc -l) part(s), $(grep -c '<testcase' "junit-merged/${JUNIT_MERGED_NAME}.xml" || true) testcase line(s)"
+
+      - name: Upload the merged auth JUnit report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go-test-junit-auth
+          path: junit-merged/
+          retention-days: 14
+          if-no-files-found: warn
 
   # One job per package (CHAOS-11417): checkout, setup-go and the compile are paid once per package, not once per target.
   # Each target keeps its own `auth fuzz TARGET` call, so its corpus, its proof marker and the one default fuzz budget
@@ -651,7 +756,7 @@ jobs:
   # (no job needs it), continue-on-error, and the checkout is the target branch's tip, never the merge group.
   auth-cancel-stacked-queue-children:
     name: cancel-stacked-queue-children
-    needs: [auth-changes, auth-go-quality, auth-test, auth-race, auth-race-integration, auth-fuzz, auth-corpus-queue, auth-corpus-image-cache, auth-gate]
+    needs: [auth-changes, auth-go-quality, auth-test, auth-race, auth-race-integration, auth-junit, auth-fuzz, auth-corpus-queue, auth-corpus-image-cache, auth-gate]
     if: failure() && github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -14,14 +14,25 @@ import (
 // The part names carry the go-junit-part- prefix (the sync's artifact cap skips it), the merged names do not.
 
 type junitFanIn struct {
-	file, partJob, partStep, partUploadStep, partName, fanInJob, mergedName string
+	file, partJob, partStep, partUploadStep, partName, fanInJob, mergedName, downloadPattern string
+	// testRun, when set, is the run line of the leg's go test step: that step must hand the leg's go test -json directory to the part step.
+	testRun string
 }
+
+const legJSONDir = "${{ runner.temp }}/go-test-leg-json"
 
 var junitFanIns = []junitFanIn{
 	{"go.yml", "go-storage-integration-shard", "Write JUnit XML parts of the shard's go test -json", "Upload the shard's JUnit part",
-		"go-junit-part-${{ matrix.target }}-${{ matrix.shard }}", "go-storage-integration", "go-test-junit-integration"},
+		"go-junit-part-${{ matrix.target }}-${{ matrix.shard }}", "go-storage-integration", "go-test-junit-integration", "go-junit-part-*", ""},
 	{"go-quality.yml", "go-quality-leg", "Write JUnit XML parts of the leg's go test -json", "Upload the leg's JUnit part",
-		"go-junit-part-${{ matrix.name }}", "go-quality", "go-test-junit-quality"},
+		"go-junit-part-${{ matrix.name }}", "go-quality", "go-test-junit-quality", "go-junit-part-*", ""},
+	// CHAOS-14494: the three auth legs of go-auth-service.yml, one fan-in job.
+	{"go-auth-service.yml", "auth-test", "Write the leg's JUnit part from its go test -json", "Upload the leg's JUnit part",
+		"go-junit-part-auth-test-${{ matrix.leg }}", "auth-junit", "go-test-junit-auth", "go-junit-part-auth-*", "ci/check_go.sh auth test-leg"},
+	{"go-auth-service.yml", "auth-race", "Write the leg's JUnit part from its go test -json", "Upload the leg's JUnit part",
+		"go-junit-part-auth-race-${{ matrix.leg }}", "auth-junit", "go-test-junit-auth", "go-junit-part-auth-*", "ci/check_go.sh auth race-leg"},
+	{"go-auth-service.yml", "auth-race-integration", "Write the leg's JUnit part from its go test -json", "Upload the leg's JUnit part",
+		"go-junit-part-auth-race-integration-${{ matrix.leg }}", "auth-junit", "go-test-junit-auth", "go-junit-part-auth-*", "ci/check_go.sh auth race-integration-leg"},
 }
 
 func junitReportViolations(t *testing.T, root string) []string {
@@ -44,6 +55,24 @@ func junitReportViolations(t *testing.T, root string) []string {
 			continue
 		}
 		bestEffort("the JUnit part step", conv)
+		if f.testRun != "" {
+			testSteps := 0
+			for _, st := range stepsOf(partJob) {
+				if !strings.Contains(asString(st["run"]), f.testRun) {
+					continue
+				}
+				testSteps++
+				if asString(asMap(st["env"])["GO_TEST_LEG_JSON_DIR"]) != legJSONDir {
+					out = append(out, f.file+": the go test step of "+f.partJob+" must set GO_TEST_LEG_JSON_DIR to "+legJSONDir+" (the leg writes no go test -json otherwise)")
+				}
+			}
+			if testSteps != 1 {
+				out = append(out, f.file+": "+f.partJob+" must have exactly one go test step running "+f.testRun)
+			}
+			if asString(asMap(conv["env"])["LEG_JSON_DIR"]) != legJSONDir {
+				out = append(out, f.file+": the JUnit part step of "+f.partJob+" must read LEG_JSON_DIR "+legJSONDir+" (the directory the go test step writes)")
+			}
+		}
 		if !strings.Contains(asString(conv["run"]), "ci/go_junit_part.sh go-junit-part ") {
 			out = append(out, f.file+": the JUnit part step does not run ci/go_junit_part.sh into go-junit-part/")
 		}
@@ -62,7 +91,7 @@ func junitReportViolations(t *testing.T, root string) []string {
 		for _, s := range stepsOf(fan) {
 			switch {
 			case strings.HasPrefix(asString(s["uses"]), "actions/download-artifact@"):
-				seen[0] = asString(asMap(s["with"])["pattern"]) == "go-junit-part-*"
+				seen[0] = asString(asMap(s["with"])["pattern"]) == f.downloadPattern
 				bestEffort("the part download", s)
 			case strings.Contains(asString(s["run"]), "junit-parts"):
 				seen[1] = true
@@ -73,7 +102,7 @@ func junitReportViolations(t *testing.T, root string) []string {
 			}
 		}
 		if seen != [3]bool{true, true, true} {
-			out = append(out, f.file+": "+f.fanInJob+" must download go-junit-part-*, merge, and upload the one artifact "+f.mergedName)
+			out = append(out, f.file+": "+f.fanInJob+" must download "+f.downloadPattern+", merge, and upload the one artifact "+f.mergedName)
 		}
 		if strings.HasPrefix(f.mergedName, "go-junit-part-") || strings.HasPrefix(f.mergedName, "go-test-timings-") {
 			out = append(out, f.file+": the merged name is excluded by the sync")
@@ -88,7 +117,7 @@ func TestEveryGoLegUploadsAJUnitPartAndTheFanInMergesThem(t *testing.T) {
 
 func TestJUnitReportGuardPlantedDefectsAreCaught(t *testing.T) {
 	root := rootOf(t)
-	gy, gq := ".github/workflows/go.yml", ".github/workflows/go-quality.yml"
+	gy, gq, ga := ".github/workflows/go.yml", ".github/workflows/go-quality.yml", ".github/workflows/go-auth-service.yml"
 	for _, c := range []struct {
 		name string
 		m    mutation
@@ -100,10 +129,15 @@ func TestJUnitReportGuardPlantedDefectsAreCaught(t *testing.T) {
 		{"a part name the sync reads as a report", mutation{gq, "name: go-junit-part-${{ matrix.name }}", "name: go-test-junit-part-${{ matrix.name }}"}, "named go-junit-part-"},
 		{"the merged report only on success", mutation{gy, "      - name: Upload the merged integration JUnit report\n        if: always()", "      - name: Upload the merged integration JUnit report\n        if: success()"}, "if: always()"},
 		{"another merged name", mutation{gq, "name: go-test-junit-quality", "name: go-junit-part-quality"}, "must download go-junit-part-*"},
+		{"an auth leg uploads its part only on success", mutation{ga, "      - name: Upload the leg's JUnit part\n        continue-on-error: true\n        if: always()\n        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7\n        with:\n          name: go-junit-part-auth-race-${{ matrix.leg }}", "      - name: Upload the leg's JUnit part\n        continue-on-error: true\n        if: success()\n        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7\n        with:\n          name: go-junit-part-auth-race-${{ matrix.leg }}"}, "if: always()"},
+		{"an auth leg writes no go test -json", mutation{ga, "        env:\n          GO_TEST_LEG_JSON_DIR: ${{ runner.temp }}/go-test-leg-json\n        run: bash ci/check_go.sh auth race-leg", "        run: bash ci/check_go.sh auth race-leg"}, "GO_TEST_LEG_JSON_DIR"},
+		{"an auth part reads another directory", mutation{ga, "          LEG_JSON_DIR: ${{ runner.temp }}/go-test-leg-json\n        run: bash ci/go_junit_part.sh go-junit-part \"${LEG_JSON_DIR}\"\n      - name: Upload the leg's JUnit part\n        continue-on-error: true\n        if: always()\n        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7\n        with:\n          name: go-junit-part-auth-race-integration", "          LEG_JSON_DIR: ${{ runner.temp }}/elsewhere\n        run: bash ci/go_junit_part.sh go-junit-part \"${LEG_JSON_DIR}\"\n      - name: Upload the leg's JUnit part\n        continue-on-error: true\n        if: always()\n        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7\n        with:\n          name: go-junit-part-auth-race-integration"}, "LEG_JSON_DIR"},
+		{"the auth merged report under a part name", mutation{ga, "name: go-test-junit-auth", "name: go-junit-part-auth-merged"}, "must download go-junit-part-auth-*"},
+		{"the auth download misses the parts", mutation{ga, "pattern: go-junit-part-auth-*", "pattern: go-test-timings-*"}, "must download go-junit-part-auth-*"},
 		{"the download misses the parts", mutation{gq, "pattern: go-junit-part-*", "pattern: go-test-timings-*"}, "must download go-junit-part-*"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got := junitReportViolations(t, plantTree(t, root, []string{gy, gq}, c.m))
+			got := junitReportViolations(t, plantTree(t, root, []string{gy, gq, ga}, c.m))
 			expectViolation(t, got, c.want)
 		})
 	}

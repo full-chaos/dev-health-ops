@@ -32,7 +32,7 @@ const (
 	sweepGoldenPath     = "testdata/equality_sweep.golden"
 	sweepGoldenSHA256   = "b0600abc84fdaf55475d981382fa7edc67e214fec8d61d5177a9fcbd36b74c68"
 	sweepDeclaredPath   = "testdata/equality_sweep.declared"
-	sweepDeclaredSHA256 = "12258f8ae53b06284298cd7ac2bcde871b95674f6db5a884e1fcc992e7fa647d"
+	sweepDeclaredSHA256 = "a81d20da80344354db3f607cf4d29fce94e3026e33c33ee01d0b097d81447d3c"
 	sweepRewriteEnv     = "COMPOUNDINGRISK_SWEEP_REWRITE"
 	sweepOrg            = "org-sweep"
 )

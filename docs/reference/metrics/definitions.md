@@ -101,10 +101,9 @@ day exist.
 
 Every team score of the breakout groups repositories by the team that owned
 each of them on the selected day, the ownership the daily run uses for the
-persisted team scores. With teams named, the rows cover the repositories those
-teams owned on the selected day, while the trend covers the repositories they
-own today: when a repository changed team after the selected day, the two sets
-differ.
+persisted team scores. With teams named, the rows and the trend cover the
+repositories those teams owned on the selected day; the trend applies that set
+to each day it shows.
 
 Every definition publishes its unit, aggregation, display precision, null and
 zero semantics, supported scopes and dimensions, range limits, comparison

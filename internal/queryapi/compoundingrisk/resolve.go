@@ -435,14 +435,13 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 	}
 
 	var fallbackRepoIDs idList = repoIDs
-	var teamFilteredRepoIDs idList
 	teamFilteredSet := false
 	narrow := func() error {
 		ids, err := repoScopeForTeams(ctx, client, orgID, repoIDs, teamIDs, now)
 		if err != nil {
 			return err
 		}
-		teamFilteredRepoIDs, teamFilteredSet = ids, true
+		teamFilteredSet = true
 		fallbackRepoIDs = ids
 		return nil
 	}
@@ -474,8 +473,9 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 	}
 	d := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.UTC)
 	// CHAOS-14473: on the TEAM breakout the rows group repositories by their
-	// owners on the selected day, as the writer of the stored team rows does.
-	// The day pick and the trend keep the ownership of now.
+	// owners on the selected day, as the writer of the stored team rows does,
+	// and the trend of named teams covers their repositories of that day. The
+	// day pick keeps the ownership of now.
 	rowsAsOf := now
 	if breakout == model.CompoundingRiskScopeTeam {
 		rowsAsOf = d
@@ -615,13 +615,10 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 
 	var trendIDs idList
 	if breakout == model.CompoundingRiskScopeTeam {
-		if len(teamIDs) > 0 && !teamFilteredSet {
-			if err = narrow(); err != nil {
+		if len(teamIDs) > 0 {
+			if trendIDs, err = namedRowScope(); err != nil {
 				return nil, err
 			}
-		}
-		if len(teamIDs) > 0 {
-			trendIDs = teamFilteredRepoIDs
 		} else {
 			trendIDs = fallbackRepoIDs
 		}

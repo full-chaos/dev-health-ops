@@ -3,8 +3,8 @@ package workitemmetrics
 // StoredTransitionColumnsSQL is the select list of a work_item_transitions read that drops stale board rows: the
 // event's columns, its tie_ordinal, and same_raw_slots, the (from_status, to_status) of each board slot row
 // (tie_ordinal >= 2^31) with a known to_status stored at the same instant of the item with the same raw value. A slot
-// row whose value no status map knows ('unknown') is no evidence: a label the board map does not know (needs review,
-// wontfix, duplicate) is a real transition beside it.
+// row whose value no status map knows (a custom board column, to_status 'unknown') is no evidence: it gives no status
+// for that raw value, so a tie_ordinal 0 row with the same raw value beside it is kept.
 const StoredTransitionColumnsSQL = `org_id, work_item_id, occurred_at, from_status, to_status, from_status_raw,
 		to_status_raw, actor, last_synced, tie_ordinal,
 		groupArrayIf((from_status, to_status), tie_ordinal >= 2147483648 AND to_status != 'unknown')

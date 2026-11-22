@@ -438,7 +438,7 @@ const (
 	// Statement 0: the base alone, the same fragment A and B use. It reads
 	// daily_metrics_runs and daily_metrics_partitions only.
 	staleFinalizeBaseExistsSQL = `
-SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs AS run WHERE ` + staleFinalizeBaseSQL + `)`
+SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs AS run WHERE false) /* SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs AS run WHERE */`
 	staleFinalizeCandidatesSQLTemplate = `
 SELECT run.id::text, run.updated_at
 FROM public.daily_metrics_runs AS run

@@ -1,0 +1,5 @@
+kind: ConfigMap
+metadata: {name: unhash}
+data:
+  ? [a, b]
+  : x

@@ -35,7 +35,7 @@ func TestHomeDriverLookupAtTheEdgesOfTheSharedExpression(t *testing.T) {
 		}
 	}
 	rows, err := fetchMetricDriverDelta(ctx, client, "repo_metrics_daily", "total_loc_touched", "repo_id",
-		current, current.AddDate(0, 0, 1), prior, current, "", nil, org, 10)
+		current, current.AddDate(0, 0, 1), prior, current, "", nil, org, 10, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestHomeDriverLookupTreatsAPriorOnlyRepositoryLikeANullCurrentOne(t *testin
 	ins(nullCurrent, current, nil) // a current row holding no value
 	ins(nullCurrent, prior, 8.0)
 	rows, err := fetchMetricDriverDelta(ctx, client, "repo_metrics_daily", "pr_first_review_p50_hours", "repo_id",
-		current, current.AddDate(0, 0, 1), prior, current, "", nil, org, 10)
+		current, current.AddDate(0, 0, 1), prior, current, "", nil, org, 10, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}

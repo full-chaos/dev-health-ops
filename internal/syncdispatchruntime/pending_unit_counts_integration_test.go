@@ -45,7 +45,7 @@ func TestComputePendingUnitCountsClassifiesEveryNonTerminalStatus(t *testing.T) 
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		counts, err := computePendingUnitCounts(ctx, tx, budgetCandidatesRunID, now)
+		counts, err := computePendingUnitCounts(ctx, tx, budgetCandidatesRunID, now, now)
 		if err != nil {
 			t.Fatalf("computePendingUnitCounts: %v", err)
 		}
@@ -78,7 +78,7 @@ func TestComputePendingUnitCountsTracksTheEarliestDeferral(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		counts, err := computePendingUnitCounts(ctx, tx, budgetCandidatesRunID, now)
+		counts, err := computePendingUnitCounts(ctx, tx, budgetCandidatesRunID, now, now)
 		if err != nil {
 			t.Fatalf("computePendingUnitCounts: %v", err)
 		}

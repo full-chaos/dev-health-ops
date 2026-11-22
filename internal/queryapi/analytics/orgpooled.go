@@ -22,7 +22,7 @@ import (
 // TestAccumulator.AddSuite), and a run with the stored status deleted is no sample (ExcludedFromPipelineCounts): a run
 // duration is duration_seconds when it is not negative, else finished_at - started_at when that is not negative, else no
 // sample; a queue sample is queue_seconds when not negative, else started_at -
-// queued_at when not negative; a suite duration is duration_seconds when not negative, with no timestamp fallback. A
+// queued_at when not negative, and a re-run (retry_count above 0) has none; a suite duration is duration_seconds when not negative, with no timestamp fallback. A
 // run belongs to the UTC day it started, a suite to the day it started (else finished), as the writer reads them, and
 // only the repository-days the writer computed are read (the semi-join on the daily table's keys), so every series
 // covers the repository-days of the stored rows. The percentile is linear between closest ranks, the writer's rule

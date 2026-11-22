@@ -751,6 +751,11 @@ type memoryUnitRepository struct {
 	rateLimitFirstSeen         *time.Time
 	availableAt                time.Time
 	chunkContinuationDeferrals int
+	// checkpointProgress is the live chunk checkpoint position RateLimitEpisode
+	// reports; nil (or a nil func) is a unit with no checkpoint.
+	checkpointProgress       func() *providersync.RateLimitProgressMark
+	rateLimitProgressMark    *providersync.RateLimitProgressMark
+	rateLimitEpisodeRestarts int
 }
 
 func newMemoryUnitRepository(unit providersync.Unit) *memoryUnitRepository {
@@ -869,9 +874,14 @@ func (repository *memoryUnitRepository) RateLimitEpisode(
 ) (providersync.RateLimitEpisode, error) {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
-	return providersync.RateLimitEpisode{
+	episode := providersync.RateLimitEpisode{
 		Deferrals: repository.rateLimitDeferrals, FirstSeenAt: repository.rateLimitFirstSeen,
-	}, nil
+		Mark: repository.rateLimitProgressMark,
+	}
+	if repository.checkpointProgress != nil {
+		episode.Checkpoint = repository.checkpointProgress()
+	}
+	return episode, nil
 }
 
 func (repository *memoryUnitRepository) DeferForRateLimit(
@@ -880,6 +890,7 @@ func (repository *memoryUnitRepository) DeferForRateLimit(
 	availableAt time.Time,
 	now time.Time,
 	observation providersync.RateLimitObservation,
+	step providersync.RateLimitEpisodeStep,
 ) error {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
@@ -887,10 +898,19 @@ func (repository *memoryUnitRepository) DeferForRateLimit(
 		return providersync.ErrLeaseLost
 	}
 	repository.rateLimitObservations = append(repository.rateLimitObservations, observation)
+	if step.Restart {
+		repository.rateLimitEpisodeRestarts++
+		repository.rateLimitDeferrals = 0
+		repository.rateLimitFirstSeen = nil
+	}
 	repository.rateLimitDeferrals++
 	if repository.rateLimitFirstSeen == nil {
 		stamped := now
 		repository.rateLimitFirstSeen = &stamped
+	}
+	if step.Mark != nil {
+		stored := *step.Mark
+		repository.rateLimitProgressMark = &stored
 	}
 	repository.availableAt = availableAt
 	repository.status = "dispatching"
@@ -1093,11 +1113,11 @@ func (*testEffectLedger) LoadChunkCheckpoint(context.Context, providersync.Claim
 	return providersync.ChunkCheckpoint{}, providersync.ErrChunkCheckpointNotFound
 }
 
-func (*testEffectLedger) PrepareChunk(context.Context, providersync.Claim, providersync.PreparedProviderChunk, time.Time) (providersync.PreparedProviderChunk, error) {
+func (*testEffectLedger) PrepareChunk(context.Context, providersync.Claim, providersync.PreparedProviderChunk, time.Time, time.Time) (providersync.PreparedProviderChunk, error) {
 	return providersync.PreparedProviderChunk{}, providersync.ErrInvalidConfiguration
 }
 
-func (*testEffectLedger) PrepareChunkGroup(context.Context, providersync.Claim, []providersync.PreparedProviderChunk, time.Time) ([]providersync.PreparedProviderChunk, error) {
+func (*testEffectLedger) PrepareChunkGroup(context.Context, providersync.Claim, []providersync.PreparedProviderChunk, time.Time, time.Time) ([]providersync.PreparedProviderChunk, error) {
 	return nil, providersync.ErrInvalidConfiguration
 }
 

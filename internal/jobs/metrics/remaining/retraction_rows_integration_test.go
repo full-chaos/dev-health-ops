@@ -51,10 +51,12 @@ func TestJobTargetDiscoveryGivesRetractionRowsNoWeight(t *testing.T) {
 
 	controlScopes, controlTeams := read(retractionseed.ControlOrg)
 
-	// The control targets, from the seed: the four keyed ids, and the four
-	// retired ids, which still hold the measured rows of the one day that was
-	// not computed again. Those rows are measurements, so they stay targets.
-	wantTeams := []string{"ENG", "core", "github:platform", "gitlab:ops", "jira:ENG", "linear:core", "ops", "platform"}
+	// The control targets, from the seed. Capacity: the four keyed ids, and the
+	// four retired ids, which still hold the measured rows of the one day that
+	// was not computed again; those rows are measurements, so they stay targets.
+	// Recommendations: the four keyed ids only, because a retired id is an
+	// inactive team (its newest teams row) and is not evaluated.
+	wantTeams := []string{"github:platform", "gitlab:ops", "jira:ENG", "linear:core"}
 	if !reflect.DeepEqual(controlTeams, wantTeams) {
 		t.Fatalf("control recommendation teams = %v, want %v", controlTeams, wantTeams)
 	}

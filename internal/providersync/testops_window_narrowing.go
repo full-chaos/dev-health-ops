@@ -3,7 +3,8 @@ package providersync
 import "time"
 
 // Narrowing of the GitHub tests/cicd window after a unit stopped at the run
-// inventory page budget (CHAOS-13827).
+// inventory page budget (CHAOS-13827) or at the artifact inventory page budget
+// or walk bound (CHAOS-13801).
 //
 // GitHub lists workflow runs newest first. A unit whose run listing
 // ran out of its page budget did not reach the OLD end of its window, so it
@@ -25,24 +26,32 @@ const (
 
 // TestOpsBudgetBlockedUnitsSQL lists the newest terminal units of one dataset
 // per source of an integration, newest first, at most $4 per source, with
-// whether each one stopped at the run inventory page budget. Arguments: org id,
+// whether each one stopped at an inventory page budget. Arguments: org id,
 // integration id, dataset key, per-source limit. Same per-source LATERAL top-N
 // and the same columns as RecentTerminalUnitsSQL, so the same index serves it.
-// Only the RUN inventory budget counts. The runs phase lists the window plus a
-// fixed lookback, so a smaller window lists fewer runs. The artifact listing
-// starts at the UTC date of (window start - max(24 h, window)) whatever the
-// window (githubTestsArtifactRunsCreatedFrom), so a smaller window cannot bring
-// it under its budget, and narrowing for it would only stop new runs from being
-// listed. A per-run cap does not hold the watermark, and a listing that stopped
-// inside one second (listing_saturated) is not cured by a smaller window.
+// The RUN and the ARTIFACT inventory budgets count (CHAOS-13801). The runs
+// phase lists the window plus a fixed lookback, so a smaller window lists fewer
+// runs. The artifact listing starts at the UTC date of (window start -
+// max(24 h, window)) (githubTestsArtifactRunsCreatedFrom): while the window is
+// over 24 h, a smaller window moves that start later and the end earlier, so
+// the listing gets shorter. The walk record bound in the artifacts phase
+// records the same artifact_inventory page_budget_exhausted observation
+// (recordGitHubTestsArtifactsWalkBound), and a smaller window also has fewer
+// records to walk. The late re-run re-list has its own budget and advances the
+// watermark when it stops, so it never blocks a unit either, except a deep
+// stop after a proven deletion (githubTestsHoldDeepStopAfterDeletion): it
+// records the same budget observation and counts here, although a smaller
+// window does not cure it. A per-run cap
+// does not hold the watermark, and a listing that stopped inside one second
+// (listing_saturated) is not cured by a smaller window.
 const TestOpsBudgetBlockedUnitsSQL = `
 SELECT s.id::text, recent.budget_blocked, recent.updated_at
 FROM public.integration_sources AS s
 CROSS JOIN LATERAL (
   SELECT u.id, u.updated_at,
          u.status = 'success' AND COALESCE(jsonb_path_exists(u.result::jsonb,
-           '$.incomplete[*] ? (@.cause == "` + githubTestsPageBudgetCause + `" && @.component == "` +
-	githubTestsRunInventoryComponent + `")'), false)
+           '$.incomplete[*] ? (@.cause == "` + githubTestsPageBudgetCause + `" && (@.component == "` +
+	githubTestsRunInventoryComponent + `" || @.component == "` + githubTestsArtifactInventoryComponent + `"))'), false)
            AS budget_blocked
   FROM public.sync_run_units AS u
   WHERE u.org_id = $1 AND u.integration_id = $2::uuid AND u.source_id = s.id

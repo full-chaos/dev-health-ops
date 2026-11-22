@@ -165,7 +165,7 @@ func TestHomeChangeFailureRate_FollowsTheViewsWindowAndSubject(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		points, err := fetchMetricSeries(ctx, client, spec.Table, spec.Column, day1, after, filter, bindings, spec.Aggregator, orgID, "")
+		points, err := fetchMetricSeries(ctx, client, spec.Table, spec.Column, day1, after, filter, bindings, spec.Aggregator, orgID, "", false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -182,7 +182,7 @@ func TestHomeChangeFailureRate_FollowsTheViewsWindowAndSubject(t *testing.T) {
 	// window can drive the metric. B (unknown) and C (not applicable) are not
 	// drivers at 0%, and a repository with no comparison row is not a driver of a
 	// percent it has no part in: none of them has one yet.
-	none, err := fetchMetricDriverDelta(ctx, client, spec.Table, spec.Column, "repo_id", day1, after, day1.AddDate(0, 0, -7), day1, "", nil, orgID, 10)
+	none, err := fetchMetricDriverDelta(ctx, client, spec.Table, spec.Column, "repo_id", day1, after, day1.AddDate(0, 0, -7), day1, "", nil, orgID, 10, "", false)
 	if err != nil {
 		t.Fatalf("fetchMetricDriverDelta: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestHomeChangeFailureRate_FollowsTheViewsWindowAndSubject(t *testing.T) {
 	priorDay := day1.AddDate(0, 0, -3)
 	write(orgID, repoA, priorDay, newer, changefailure.Counts{Deployments: 4, FailedNative: 1, IncidentsDirect: 1})
 	write(orgID, repoD, priorDay, newer, changefailure.Counts{Deployments: 4, FailedNative: 2, IncidentsDirect: 1})
-	drivers, err := fetchMetricDriverDelta(ctx, client, spec.Table, spec.Column, "repo_id", day1, after, day1.AddDate(0, 0, -7), day1, "", nil, orgID, 10)
+	drivers, err := fetchMetricDriverDelta(ctx, client, spec.Table, spec.Column, "repo_id", day1, after, day1.AddDate(0, 0, -7), day1, "", nil, orgID, 10, "", false)
 	if err != nil {
 		t.Fatalf("fetchMetricDriverDelta: %v", err)
 	}

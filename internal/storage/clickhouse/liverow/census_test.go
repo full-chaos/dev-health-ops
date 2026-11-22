@@ -46,21 +46,18 @@ var unruledReads = map[string]string{
 		"(catalog.go lists ACTIVE teams only; the row count orders them)",
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamMetrics": "SQL pinned by the frozen golden; the rule is applied in Go after the read " +
 		"(fetchRetractedTeamDays reads the days that hold a team of retraction rows only, applyRetractedTeamDays replaces them)",
-	"internal/queryapi/cognitiveload/cognitiveload.go:fetchRepoScopedTeamMetrics": "SQL pinned by the frozen golden; the rule is applied in Go after the read " +
-		"(fetchRetractedRepoDays reads the days whose newest rows hold no measurement, and they are dropped)",
+	"internal/queryapi/cognitiveload/cognitiveload.go:repoNewestVersions": "the newest generation of the repository, one version per key; its one reader, repoScopedTeamMetricsQuery, " +
+		"applies the rule in the same statement (HAVING max(rule) = 1 leaves out a day whose picked versions hold no measurement)",
 	"internal/queryapi/filteroptions/filteroptions.go": "distinct statuses and issue types: a retraction row holds the status or type of the row it retracts, never a new value",
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchUserMetrics": "SQL pinned by the frozen golden; a retraction row adds 0 to its sums, and the rule is applied in Go after the read " +
 		"(fetchRetractedUserDays reads the days whose every key is a retraction row, and they are dropped)",
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamCognitiveLoad": "SQL pinned by the frozen golden; the rule is applied in Go after the read " +
 		"(fetchRetractedLoadDays reads the days whose newest row is a retraction row, and they are dropped)",
-	"internal/queryapi/sankey/queries.go:fetchExpenseCounts": "three sums over the whole scope, one row, no list: a retraction row adds 0",
-	"internal/queryapi/capacityforecast/clickhouse.go:loadBacklog": "sum of the WIP on the newest day of each key: a retraction row must stay the newest row of its key " +
-		"(so a retracted key gives 0 and not its older backlog) and adds 0; the sum of no row is 0 as well",
-	"internal/queryapi/throughputforecast/clickhouse.go:loadStaleWIP": "Nullable means over the newest-day row of each key, NULL rows left out: " +
-		"a retraction row must stay the newest row of its key, and it holds NULL",
 	"internal/jobs/metrics/remaining/recommendations_loader.go:loadCompoundingRiskPersisted": "the newest row of ONE team over the window, whole: a retraction row is that row, " +
 		"and it reads as the read answers for no row at all (no score, severity unknown)",
 	"internal/jobs/metrics/remaining/capacity_native_clickhouse.go:capacityNewestRows": "the newest-version subquery of the capacity reads; the throughput and scope reads apply the rule after it, and the backlog sums the WIP on the newest day of the scope: a retraction row adds 0 and must stay in the newest-day pick",
+	"internal/queryapi/capacityforecast/clickhouse.go:capacityOrgNewest": "the newest-version subquery of the served capacity reads (org form, CHAOS-14406): loadThroughput applies the rule after it; " +
+		"loadBacklog sums the WIP on the newest day of each key, where a retraction row must stay the newest row of its key (so a retracted key gives 0, not its older backlog)",
 }
 
 // heldBy names, for an unruledReads entry whose reason is "the rule reaches
@@ -68,12 +65,12 @@ var unruledReads = map[string]string{
 // package). The census holds that it applies the rule, so the reason cannot
 // go stale.
 var heldBy = map[string]string{
-	"internal/queryapi/home/queries_signals.go:compoundingRiskSQLBase":            "fetchRiskSignals",
-	"internal/queryapi/analytics/timeseries.go:workItemCompletionNewestRows":      "workItemCompletionDedupSource",
-	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamMetrics":           "retractedTeamDaysQuery",
-	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamCognitiveLoad":     "retractedLoadDaysQuery",
-	"internal/queryapi/cognitiveload/cognitiveload.go:fetchUserMetrics":           "retractedUserDaysQuery",
-	"internal/queryapi/cognitiveload/cognitiveload.go:fetchRepoScopedTeamMetrics": "retractedRepoDaysQuery",
+	"internal/queryapi/home/queries_signals.go:compoundingRiskSQLBase":        "fetchRiskSignals",
+	"internal/queryapi/analytics/timeseries.go:workItemCompletionNewestRows":  "workItemCompletionDedupSource",
+	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamMetrics":       "retractedTeamDaysQuery",
+	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamCognitiveLoad": "retractedLoadDaysQuery",
+	"internal/queryapi/cognitiveload/cognitiveload.go:fetchUserMetrics":       "retractedUserDaysQuery",
+	"internal/queryapi/cognitiveload/cognitiveload.go:repoNewestVersions":     "repoScopedTeamMetricsQuery",
 }
 
 // namesOnly are the files that name a table with a live-row rule in code and
@@ -81,12 +78,19 @@ var heldBy = map[string]string{
 // the declaration of the same package that builds the read from the table
 // name: the census holds that it applies the rule.
 var namesOnly = map[string]struct{ reader, why string }{
-	"internal/providersync/":                                    {"", "sync writers and destinations"},
-	"internal/jobs/metrics/daily/":                              {"", "daily family writers"},
-	"internal/cigates/metricsproof/proof.go":                    {"", "executed-proof readback of the rows one CI run wrote: table names of its family maps, no product read"},
-	"internal/jobs/metrics/workitemengine/":                     {"", "compute and insert of the work item engine rows (writer)"},
-	"internal/teamkeytables/teamkeytables.go":                   {"", "the registry of the tables and their measures"},
-	"internal/queryapi/rowview/rowview.go":                      {"", "the reader side of the view column: table names of its registry, no query"},
+	"internal/providersync/":                  {"", "sync writers and destinations"},
+	"internal/jobs/metrics/daily/":            {"", "daily family writers"},
+	"internal/cigates/metricsproof/proof.go":  {"", "executed-proof readback of the rows one CI run wrote: table names of its family maps, no product read"},
+	"internal/jobs/metrics/workitemengine/":   {"", "compute and insert of the work item engine rows (writer)"},
+	"internal/teamkeytables/teamkeytables.go": {"", "the registry of the tables and their measures"},
+	"internal/queryapi/rowview/rowview.go":    {"", "the reader side of the view column: table names of its registry, no query"},
+	"internal/queryapi/sankey/queries.go": {"", "reads work_item_metrics_daily and work_item_state_durations_daily FROM a run-time source (the org view FINAL, " +
+		"or the served team view of one team, CHAOS-14379): fetchStateStatusCounts applies the rule after it; fetchExpenseCounts makes three sums " +
+		"over the whole scope, one row, no list: a retraction row adds 0"},
+	"internal/queryapi/aggflame/clickhouse.go": {"", "fetchCycleBreakdown reads work_item_state_durations_daily FROM a run-time source (the table, or the served " +
+		"team view of one team, CHAOS-14379) and applies the rule in its HAVING"},
+	"internal/queryapi/home/queries_metrics.go": {"", "reads FROM a run-time source (metricFromClause: the table, or the served team view of one team, CHAOS-14379; " +
+		"fetchBlockedHours the same): both apply the rule in the HAVING of liveRowHaving"},
 	"internal/storage/clickhouse/liverow/liverow.go":            {"", "the reader side of the rule"},
 	"internal/testsupport/":                                     {"", "test seeds"},
 	"internal/jobruntime/telemetry.go":                          {"", "table names in telemetry labels"},

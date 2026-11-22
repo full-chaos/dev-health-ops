@@ -109,3 +109,77 @@ func TestMaterializeScheduledFanoutRunsAsTheDomainRole(t *testing.T) {
 		t.Errorf("the domain role was refused: %s", strings.Join(refused, "; "))
 	}
 }
+
+// As the domain role, the blocked-run reconcile reads the later runs of a day
+// and both reopen provenance tables, and clears the finalize_failed marker of a
+// run that a later full-org run (reopened by both a finalize-redrive and a
+// partition recompute) covers. No statement is refused.
+func TestReconcileBlockedRunsCoverRunsAsTheDomainRole(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	venue := domainroledb.Start(t, ctx, "daily_blocked_cover")
+	venue.RequireReady(t, ctx)
+	store, err := daily.NewPostgresStore(venue.Domain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		org = "00000000-0000-4000-8000-000000141290"
+		day = "2026-09-20"
+	)
+	base := time.Date(2026, 9, 20, 6, 0, 0, 0, time.UTC)
+	insert := func(status, finalization string, minute int) string {
+		t.Helper()
+		runID := uuid.NewString()
+		at := base.Add(time.Duration(minute) * time.Minute)
+		if _, err := venue.Admin.Exec(ctx, `INSERT INTO daily_metrics_runs
+    (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at, full_org)
+    VALUES ($1::uuid, $2::uuid, $3::date, $4, $5, $6, $7, $7, true)`,
+			runID, org, day, "post-sync:cover-"+runID, status, finalization, at); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := venue.Admin.Exec(ctx, `INSERT INTO daily_metrics_partitions
+    (id, run_id, ordinal, repo_ids, status, attempt_count, created_at, updated_at)
+    VALUES ($1::uuid, $2::uuid, 0, '["00000000-0000-4000-8000-0000001412b1"]'::json, 'succeeded', 1, $3, $3)`,
+			uuid.NewString(), runID, at); err != nil {
+			t.Fatal(err)
+		}
+		return runID
+	}
+	failed := insert("failed", "failed", 0)
+	if _, err := store.ReconcileBlockedRuns(ctx, org); err != nil {
+		t.Fatalf("first reconcile as the domain role: %v (refused: %q)", err, venue.Denials.All())
+	}
+	later := insert("running", "pending", 10)
+	if _, err := venue.Admin.Exec(ctx, `INSERT INTO daily_metrics_finalize_redrive_events
+    (id, run_id, org_id, target_day, prior_status, prior_finalization_status, actor, reason, nonce)
+    VALUES ($1::uuid, $2::uuid, $3::uuid, $4::date, 'succeeded', 'succeeded', 'finalize-redrive', 'cover cell', $5)`,
+		uuid.NewString(), later, org, day, uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := venue.Admin.Exec(ctx, `INSERT INTO daily_metrics_partition_recompute_events
+    (id, run_id, org_id, target_day, family, prior_status, prior_generation, actor, reason, nonce)
+    VALUES ($1::uuid, $2::uuid, $3::uuid, $4::date, 'cicd', 'succeeded', 'post-sync:cover', 'partition-recompute', 'cover cell', $5)`,
+		uuid.NewString(), later, org, day, uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := store.ReconcileBlockedRuns(ctx, org)
+	var reason *string
+	if readErr := venue.Admin.QueryRow(ctx, `SELECT blocked_reason FROM daily_metrics_runs WHERE id = $1::uuid`, failed).Scan(&reason); readErr != nil {
+		t.Fatal(readErr)
+	}
+	got := ""
+	if reason != nil {
+		got = *reason
+	}
+	t.Logf("reconcile as the domain role: err=%v cleared=%d blocked=%d failed run blocked_reason=%q", err, outcome.Cleared, outcome.Blocked, got)
+	if err != nil {
+		t.Fatalf("reconcile as the domain role: %v (refused: %q)", err, venue.Denials.All())
+	}
+	if got != "" || outcome.Cleared != 1 || outcome.Blocked != 0 {
+		t.Errorf("failed run blocked_reason=%q cleared=%d blocked=%d, want cleared by the reopened later run (\"\", 1, 0)", got, outcome.Cleared, outcome.Blocked)
+	}
+	if refused := venue.Denials.All(); len(refused) > 0 {
+		t.Errorf("the domain role was refused: %s", strings.Join(refused, "; "))
+	}
+}

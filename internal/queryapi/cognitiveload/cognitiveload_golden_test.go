@@ -13,6 +13,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // The golden holds, for neutral synthetic requests over the three request
@@ -76,7 +78,7 @@ func queryKind(statement string) string {
 		return "tcl"
 	case strings.Contains(q, "FROM user_metrics_daily"):
 		return "user"
-	case strings.Contains(q, "FROM team_metrics_daily AS t"):
+	case strings.Contains(q, "FROM team_metrics_daily AS t"), strings.Contains(q, ") AS latest_gen"):
 		return "team_repo"
 	case strings.Contains(q, "FROM team_metrics_daily"):
 		return "team"
@@ -88,6 +90,42 @@ func queryKind(statement string) string {
 // projection differs, drops the projection and the ranking-column alias.
 func comparableText(kind, statement string) string {
 	q := strings.Join(strings.Fields(statement), " ")
+	if kind == "team" {
+		// Declared divergence from the frozen reference (CHAOS-14426): the Go read
+		// picks ONE whole version per (day, team, repo) by the newest computed_at and,
+		// on a tie, the hash of the version (teamkeytables.TeamMetricsDailyNewestOrder);
+		// the reference reads three independent argMax(<col>, computed_at). For keys
+		// whose newest computed_at is unique the two give the same values. The frozen
+		// text is compared with the pick block put back.
+		picked := strings.Join(strings.Fields("argMax("+teamkeytables.TeamMetricsDailyPick+", "+teamkeytables.TeamMetricsDailyNewestOrder+") AS picked, "+
+			"picked.1 AS commits_count, picked.2 AS after_hours_commits_count, picked.3 AS weekend_commits_count,"), " ")
+		frozen := "argMax(commits_count, computed_at) AS commits_count, argMax(after_hours_commits_count, computed_at) AS after_hours_commits_count, " +
+			"argMax(weekend_commits_count, computed_at) AS weekend_commits_count,"
+		q = strings.Replace(q, picked, frozen, 1)
+	}
+	if kind == "team_repo" {
+		// Declared divergence from the frozen reference (CHAOS-14446): the Go read
+		// sums the rows of repoNewestVersions, one whole version per (day, team,
+		// repo) key of the newest generation of the day; the reference sums every
+		// row of that generation, so two versions of one key that share
+		// computed_at are summed. For keys whose newest row is unique the two give
+		// the same values. The frozen text is compared with the reference's
+		// FROM ... GROUP BY t.day put back.
+		// Second declared divergence (CHAOS-14455): the Go read ends the inner
+		// GROUP BY with HAVING max(liverow.Predicate) = 1, so a day whose picked
+		// versions hold no measurement is left out by the same statement (one
+		// snapshot); the reference returns it with ratio 0.0. The golden inputs
+		// hold no retraction row, so no day differs.
+		picked := strings.Join(strings.Fields("FROM ("+repoNewestVersions+") AS t GROUP BY t.day HAVING max("+liverow.Predicate("team_metrics_daily", "t")+") = 1"), " ")
+		frozen := "FROM team_metrics_daily AS t INNER JOIN ( SELECT day, max(computed_at) AS latest_computed_at FROM team_metrics_daily " +
+			"WHERE org_id = {org_id:String} AND day >= {since_date:Date} AND day <= {until_date:Date} AND repo_id IN ( " +
+			"SELECT toString(id) FROM repos WHERE org_id = {org_id:String} AND (repo = {repo_id:String} OR toString(id) = {repo_id:String}) ) " +
+			"GROUP BY day ) AS latest_gen ON t.day = latest_gen.day AND t.computed_at = latest_gen.latest_computed_at " +
+			"WHERE t.org_id = {org_id:String} AND t.day >= {since_date:Date} AND t.day <= {until_date:Date} AND t.repo_id IN ( " +
+			"SELECT toString(id) FROM repos WHERE org_id = {org_id:String} AND (repo = {repo_id:String} OR toString(id) = {repo_id:String}) ) " +
+			"GROUP BY t.day"
+		q = strings.Replace(q, picked, frozen, 1)
+	}
 	if kind == "own" || kind == "teams" {
 		if i := strings.Index(q, " FROM "); i >= 0 {
 			q = q[i:]

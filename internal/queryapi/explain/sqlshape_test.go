@@ -189,42 +189,17 @@ func TestResolveScopeDisplayNamesTeamQueryShape(t *testing.T) {
 // TestMetricFromClauseQueryShape pins metricFromClause's own dedup
 // subquery shape (class ruling (a)+(b)): argMax(...) dedup, org filter
 // and any scope filter all sit INSIDE the same subquery, before the
-// GROUP BY that collapses to one row per natural key. Uses a
-// NON-nullable column (items_completed) so the marker is the plain
-// argMax form; TestMetricValueProjectionUsesTupleArgMaxForNullableColumn
-// is the Nullable-column shape's own test.
+// GROUP BY that collapses to one row per natural key (one version of the
+// key's measures, CHAOS-14430).
 func TestMetricFromClauseQueryShape(t *testing.T) {
-	clause := metricFromClause("work_item_metrics_daily", "items_completed", " AND team_id IN {scope_ids:Array(String)}", "start_day", "end_day")
+	clause := metricFromClause("work_item_metrics_daily", "items_completed", " AND team_id IN {scope_ids:Array(String)}", "start_day", "end_day", false)
 	assertSameDepth(t, clause,
-		"argMax(items_completed, computed_at)",
+		"argMax(tuple(work_item_metrics_daily.items_completed,",
 		"team_id IN {scope_ids:Array(String)}",
 		"org_id = {org_id:String}",
 	)
 	if !strings.Contains(clause, "WHERE day >= {start_day:Date} AND day < {end_day:Date}") {
 		t.Fatalf("clause missing start/end day window:\n%s", clause)
-	}
-}
-
-// TestMetricValueProjectionUsesTupleArgMaxForNullableColumn pins the
-// class ruling (b) fix: a Nullable(Float64) metric column
-// (cycle_time_p50_hours, pr_first_review_p50_hours) is deduped via
-// `(argMax(tuple(col), version)).1`, never a bare `argMax(col, version)`
-// -- see metricValueProjection's own doc comment for why a bare argMax
-// on a Nullable column can silently return a stale version.
-func TestMetricValueProjectionUsesTupleArgMaxForNullableColumn(t *testing.T) {
-	got := metricValueProjection("cycle_time_p50_hours")
-	want := "(argMax(tuple(cycle_time_p50_hours), computed_at)).1 AS cycle_time_p50_hours"
-	if got != want {
-		t.Fatalf("metricValueProjection(cycle_time_p50_hours) = %q, want %q", got, want)
-	}
-	got = metricValueProjection("pr_first_review_p50_hours")
-	want = "(argMax(tuple(pr_first_review_p50_hours), computed_at)).1 AS pr_first_review_p50_hours"
-	if got != want {
-		t.Fatalf("metricValueProjection(pr_first_review_p50_hours) = %q, want %q", got, want)
-	}
-	// A non-nullable column stays a plain argMax.
-	if got := metricValueProjection("items_completed"); got != "argMax(items_completed, computed_at) AS items_completed" {
-		t.Fatalf("metricValueProjection(items_completed) = %q, want plain argMax", got)
 	}
 }
 
@@ -242,7 +217,7 @@ func TestFetchMetricValueBindsDateAsString(t *testing.T) {
 	}
 	start := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC)
-	if _, _, err := reader.fetchMetricValue(context.Background(), "repo_metrics_daily", "total_loc_touched", "sum", start, end, "", nil, "org-1", ""); err != nil {
+	if _, _, err := reader.fetchMetricValue(context.Background(), "repo_metrics_daily", "total_loc_touched", "sum", start, end, "", nil, "org-1", "", false); err != nil {
 		t.Fatalf("fetchMetricValue: %v", err)
 	}
 	if v, _ := bindingValue(client.lastBindings, "start_day"); v != "2024-03-01" {
@@ -287,7 +262,7 @@ func TestFetchMetricContributorsUsesMetricAggregator(t *testing.T) {
 	start := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC)
 
-	if _, err := reader.fetchMetricContributors(context.Background(), "work_item_metrics_daily", "items_completed", "team_id", "sum", start, end, "", nil, "org-1", ""); err != nil {
+	if _, err := reader.fetchMetricContributors(context.Background(), "work_item_metrics_daily", "items_completed", "team_id", "sum", start, end, "", nil, "org-1", "", false); err != nil {
 		t.Fatalf("fetchMetricContributors: %v", err)
 	}
 	if !strings.Contains(client.lastQuery, "toFloat64(sum(items_completed)) AS value") {
@@ -297,7 +272,7 @@ func TestFetchMetricContributorsUsesMetricAggregator(t *testing.T) {
 		t.Fatalf("sum-aggregator metric still ranks by avg():\n%s", client.lastQuery)
 	}
 
-	if _, err := reader.fetchMetricContributors(context.Background(), "repo_metrics_daily", "pr_first_review_p50_hours", "repo_id", "avg", start, end, "", nil, "org-1", ""); err != nil {
+	if _, err := reader.fetchMetricContributors(context.Background(), "repo_metrics_daily", "pr_first_review_p50_hours", "repo_id", "avg", start, end, "", nil, "org-1", "", false); err != nil {
 		t.Fatalf("fetchMetricContributors: %v", err)
 	}
 	if !strings.Contains(client.lastQuery, "toFloat64(avg(pr_first_review_p50_hours)) AS value") {
@@ -320,7 +295,7 @@ func TestFetchMetricDriverDeltaUsesMetricAggregator(t *testing.T) {
 	compareStart := time.Date(2024, 2, 15, 0, 0, 0, 0, time.UTC)
 	compareEnd := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
 
-	if _, err := reader.fetchMetricDriverDelta(context.Background(), "work_item_metrics_daily", "items_completed", "team_id", "sum", start, end, compareStart, compareEnd, "", nil, "org-1", ""); err != nil {
+	if _, err := reader.fetchMetricDriverDelta(context.Background(), "work_item_metrics_daily", "items_completed", "team_id", "sum", start, end, compareStart, compareEnd, "", nil, "org-1", "", false); err != nil {
 		t.Fatalf("fetchMetricDriverDelta: %v", err)
 	}
 	if got := strings.Count(client.lastQuery, "toFloat64(sum(items_completed)) AS value"); got != 2 {

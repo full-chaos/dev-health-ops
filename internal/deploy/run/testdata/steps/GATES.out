@@ -1,0 +1,6 @@
+CLONE /srv/example/deploy-a origin=pinned url_keys=0 porcelain=0
+CLONE /srv/example/deploy-b origin=pinned url_keys=0 porcelain=0
+MAIN acbb07b7df1db1afefc8cb0e1936524a9ad401f8 = ls-remote refs/heads/main
+SHA acbb07b7df1db1afefc8cb0e1936524a9ad401f8 ancestor=1 first_parent=1
+SHA 08250218c791b1431b0650fc9daae1332bce7a51 ancestor=1 first_parent=1
+GATE-REMOTE: PASS

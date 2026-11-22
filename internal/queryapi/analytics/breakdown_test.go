@@ -266,8 +266,8 @@ func TestCompileBreakdown_NonInvestment_DefaultSourceAndLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompileBreakdown error = %v", err)
 	}
-	if !strings.Contains(q.sql, "team_id AS dimension_value") {
-		t.Errorf("expected team_id dimension column, got: %s", q.sql)
+	if !strings.Contains(q.sql, "ifNull(nullIf(team_id, ''), 'unassigned') AS dimension_value") {
+		t.Errorf("expected the unassigned-team dimension column, got: %s", q.sql)
 	}
 	if !strings.Contains(q.sql, "LIMIT {top_n:UInt32}") {
 		t.Errorf("expected top_n limit placeholder, got: %s", q.sql)

@@ -1053,13 +1053,13 @@ func githubProjectV2Status(statusRaw string, labels []string, state string) stri
 			return "todo"
 		case "in progress", "doing", "wip":
 			return "in_progress"
-		case "in review", "review", "code review", "qa":
+		case "in review", "needs review", "review", "code review", "qa":
 			return "in_review"
 		case "blocked", "on hold":
 			return "blocked"
 		case "done", "closed", "resolved":
 			return "done"
-		case "canceled", "cancelled", "won't do":
+		case "canceled", "cancelled", "won't do", "wontfix", "duplicate":
 			return "canceled"
 		}
 	}

@@ -91,7 +91,7 @@ func buildExpenseFlow(ctx context.Context, client QueryClient, startDay, endDay 
 	workFilterSQL, workBindings := workScopeFilter(scopeLevel, scopeIDs, whatRepos, "work_scope_id")
 	scopeFilterSQL, scopeBindings := combineScope(teamFilterSQL, teamBindings, workFilterSQL, workBindings)
 
-	rows, err := fetchExpenseCounts(ctx, client, startDay, endDay, scopeFilterSQL, scopeBindings, orgID)
+	rows, err := fetchExpenseCounts(ctx, client, startDay, endDay, scopeFilterSQL, scopeBindings, orgID, oneTeamScope(scopeLevel, scopeIDs))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -168,7 +168,7 @@ func buildStateFlow(ctx context.Context, client QueryClient, startDay, endDay ti
 	workFilterSQL, workBindings := workScopeFilter(scopeLevel, scopeIDs, whatRepos, "work_scope_id")
 	scopeFilterSQL, scopeBindings := combineScope(teamFilterSQL, teamBindings, workFilterSQL, workBindings)
 
-	rows, err := fetchStateStatusCounts(ctx, client, startDay, endDay, scopeFilterSQL, scopeBindings, orgID)
+	rows, err := fetchStateStatusCounts(ctx, client, startDay, endDay, scopeFilterSQL, scopeBindings, orgID, oneTeamScope(scopeLevel, scopeIDs))
 	if err != nil {
 		return nil, nil, err
 	}

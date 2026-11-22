@@ -2,6 +2,7 @@ package aianalytics
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -104,11 +105,32 @@ type opportunity struct {
 	title  string
 	why    string
 	score  float64
+	raw    float64
 	refs   []string
+	// key is the rule's own sort key after its count or share (value): the terms its read orders by after the
+	// count, so opportunityLess and the read's ORDER BY ... LIMIT 100 agree. Never served, logged or put in an error.
+	value float64
+	key   []string
+	// idKey, when set, is the secondary part of the stable id in place of the team.
+	idKey string
 }
 
-func newOpportunity(kind model.AIOpportunityKind, repoID string, teamID *string, title, why string, score float64, refs []string) opportunity {
-	return opportunity{kind: kind, repoID: repoID, teamID: teamID, title: title, why: why, score: clamp01(score), refs: refs}
+// anchorOrderKey pads the anchor to the uint64 width so the string compare of opportunityLess is the numeric order of the read's ORDER BY.
+func anchorOrderKey(anchor uint32) string { return fmt.Sprintf("%020d", uint64(anchor)) }
+
+// repetitiveClusterKey is the id key of one repetitive-change cluster past its repository: the title prefix, the
+// work type and the cluster's anchor, the number of its oldest pull request. A repository has one cluster per
+// author, work type and prefix (CHAOS-14266); two authors' clusters hold disjoint pull requests, so the anchor tells
+// them apart. The author is never id input: a served id must not let a reader test a guessed author. JSON keeps the
+// parts apart whatever characters they hold.
+func repetitiveClusterKey(prefix, workType string, anchor uint32) string {
+	key, _ := json.Marshal([]string{prefix, workType, strconv.FormatUint(uint64(anchor), 10)})
+	return string(key)
+}
+
+// newOpportunity takes the unclamped score: the served score is clamped, the raw one orders equal served scores.
+func newOpportunity(kind model.AIOpportunityKind, repoID string, teamID *string, title, why string, raw float64, refs []string) opportunity {
+	return opportunity{kind: kind, repoID: repoID, teamID: teamID, title: title, why: why, score: clamp01(raw), raw: raw, refs: refs}
 }
 
 // metricOpportunities groups rollup rows by (repository, team) in first-seen
@@ -155,7 +177,7 @@ func metricRules(a *repoAgg) []opportunity {
 		out = append(out, newOpportunity(model.AIOpportunityKindTestGeneration, a.repoID, a.teamID,
 			"Test generation candidate in "+a.repoID,
 			"Human-authored PRs had a "+pct(*humanGap, 0)+" test gap rate across "+strconv.FormatFloat(a.human.prsTotal, 'f', -1, 64)+" PRs over the last 30 days.",
-			scoreDelta(*humanGap, testGenGapThreshold),
+			scoreDeltaRaw(*humanGap, testGenGapThreshold),
 			[]string{"ai_impact_metrics_daily:test_gap_rate:" + a.repoID}))
 	}
 	if a.ai.prsTotal < minPRs {
@@ -167,7 +189,7 @@ func metricRules(a *repoAgg) []opportunity {
 		out = append(out, newOpportunity(model.AIOpportunityKindHighReviewLoad, a.repoID, a.teamID,
 			"High AI review load in "+a.repoID,
 			"AI-assisted PRs averaged "+fixed(*aiReviews, 1)+" reviews vs "+fixed(*humanReviews, 1)+" for human PRs over the last 30 days.",
-			scoreRatio(ratio, 1.5),
+			scoreRatioRaw(ratio, 1.5),
 			[]string{"ai_impact_metrics_daily:reviews_per_pr:" + a.repoID}))
 	}
 	aiRework, humanRework := a.ai.reworkRate(), a.human.reworkRate()
@@ -175,7 +197,7 @@ func metricRules(a *repoAgg) []opportunity {
 		out = append(out, newOpportunity(model.AIOpportunityKindHighRework, a.repoID, a.teamID,
 			"High AI rework in "+a.repoID,
 			"AI-assisted PRs had a "+pct(*aiRework, 0)+" rework rate vs "+pct(*humanRework, 0)+" for human PRs over the last 30 days.",
-			scoreDelta(*aiRework-*humanRework, 0.10),
+			scoreDeltaRaw(*aiRework-*humanRework, 0.10),
 			[]string{"ai_impact_metrics_daily:rework_rate:" + a.repoID}))
 	}
 	aiCycle, humanCycle := a.ai.cycleHours(), a.human.cycleHours()
@@ -184,7 +206,7 @@ func metricRules(a *repoAgg) []opportunity {
 		out = append(out, newOpportunity(model.AIOpportunityKindSlowCycle, a.repoID, a.teamID,
 			"Slow AI cycle time in "+a.repoID,
 			"AI-assisted PRs averaged "+fixed(*aiCycle, 1)+" cycle hours vs "+fixed(*humanCycle, 1)+" for human PRs over the last 30 days.",
-			scoreRatio(ratio, 1.25),
+			scoreRatioRaw(ratio, 1.25),
 			[]string{"ai_impact_metrics_daily:cycle_time_avg_hours:" + a.repoID}))
 	}
 	aiGap := a.ai.testGapRate()
@@ -192,7 +214,7 @@ func metricRules(a *repoAgg) []opportunity {
 		out = append(out, newOpportunity(model.AIOpportunityKindUncoveredTestArea, a.repoID, a.teamID,
 			"Uncovered AI test area in "+a.repoID,
 			"AI-assisted PRs had a "+pct(*aiGap, 0)+" test gap rate over the last 30 days.",
-			scoreDelta(*aiGap, 0.50),
+			scoreDeltaRaw(*aiGap, 0.50),
 			[]string{"ai_impact_metrics_daily:test_gap_rate:" + a.repoID}))
 	}
 	return out
@@ -219,13 +241,9 @@ func (o opportunity) project(repoName, teamName *string) model.AIOpportunity {
 		}
 		drill = append(drill, model.AIWorkGraphDrilldownRef{RootType: "pr", RootID: prrootid.Format(repo, number), Label: "PR " + number})
 	}
-	team := ""
-	if o.teamID != nil {
-		team = *o.teamID
-	}
 	repo := o.repoID
 	return model.AIOpportunity{
-		OpportunityID:       stableOpportunityID(opportunityKinds[o.kind], o.repoID, team),
+		OpportunityID:       o.servedID(),
 		Kind:                o.kind,
 		RepoID:              &repo,
 		TeamID:              o.teamID,
@@ -249,7 +267,7 @@ func opportunityBindings(orgID string, repoID string, extra ...clickhouse.Bindin
 	return append(b, extra...)
 }
 
-// The averages read through a tuple as dailyStatement's do.
+// The columns come from one version, picked as dailyStatement picks it (impactNewestOrder).
 func loadImpactRowsForOpportunities(ctx context.Context, client QueryClient, orgID, repoID, teamID string) ([]impactRow, error) {
 	filters := []string{"day >= today() - 30"}
 	bindings := opportunityBindings(orgID, repoID)
@@ -265,14 +283,27 @@ func loadImpactRowsForOpportunities(ctx context.Context, client QueryClient, org
     team_id,
     toString(repo_id) AS repo_id_str,
     attribution_bucket,
-    argMax(prs_total, metrics.computed_at) AS prs_total,
-    (argMax(tuple(reviews_per_pr), metrics.computed_at)).1 AS reviews_per_pr,
-    (argMax(tuple(cycle_time_avg_hours), metrics.computed_at)).1 AS cycle_time_avg_hours,
-    argMax(rework_prs, metrics.computed_at) AS rework_prs,
-    argMax(test_gap_prs, metrics.computed_at) AS test_gap_prs
-FROM ai_impact_metrics_daily AS metrics
-WHERE `+strings.Join(filters, " AND ")+`
-GROUP BY org_id, team_id, repo_id, work_type, day, attribution_bucket`, bindings)
+    newest.1 AS prs_total,
+    newest.2 AS reviews_per_pr,
+    newest.3 AS cycle_time_avg_hours,
+    newest.4 AS rework_prs,
+    newest.5 AS test_gap_prs
+FROM (
+    SELECT
+        org_id,
+        team_id,
+        repo_id,
+        work_type,
+        day,
+        attribution_bucket,
+        argMax(tuple(
+            metrics.prs_total, metrics.reviews_per_pr, metrics.cycle_time_avg_hours, metrics.rework_prs, metrics.test_gap_prs
+        ), `+impactNewestOrder+`) AS newest
+    FROM ai_impact_metrics_daily AS metrics
+    WHERE `+strings.Join(filters, " AND ")+`
+    GROUP BY org_id, team_id, repo_id, work_type, day, attribution_bucket
+)
+ORDER BY org_id, team_id, repo_id, work_type, day, attribution_bucket`, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("aianalytics: opportunity impact query: %w", err)
 	}
@@ -297,10 +328,12 @@ GROUP BY org_id, team_id, repo_id, work_type, day, attribution_bucket`, bindings
 
 // clusterRow is one grouped row of a cluster read.
 type clusterRow struct {
-	RepoID string
-	Count  int64
-	Prefix string
-	Refs   []string
+	RepoID   string
+	Count    int64
+	Prefix   string
+	WorkType string
+	Refs     []string
+	Anchor   uint32
 }
 
 func loadClusters(ctx context.Context, client QueryClient, statement string, bindings []clickhouse.Binding, withPrefix bool) ([]clusterRow, error) {
@@ -316,13 +349,14 @@ func loadClusters(ctx context.Context, client QueryClient, statement string, bin
 			n uint64
 		)
 		if withPrefix {
-			if err := rs.Scan(&r.RepoID, &r.Prefix, &n, &r.Refs); err != nil {
+			if err := rs.Scan(&r.RepoID, &r.Prefix, &n, &r.Refs, &r.WorkType, &r.Anchor); err != nil {
 				return nil, fmt.Errorf("aianalytics: opportunity cluster scan: %w", err)
 			}
 		} else if err := rs.Scan(&r.RepoID, &n, &r.Refs); err != nil {
 			return nil, fmt.Errorf("aianalytics: opportunity cluster scan: %w", err)
 		}
 		r.Count = int64(n)
+		sortPRRefs(r.Refs)
 		out = append(out, r)
 	}
 	if err := rs.Err(); err != nil {
@@ -338,13 +372,16 @@ func firstFive(refs []string) []string {
 	return refs
 }
 
+// ORDER BY ends with the anchor: within one prefix and work type two author clusters hold disjoint PRs, so their anchors differ (the statement takes no SQL comments).
 const repetitiveStatement = `SELECT
     toString(pr.repo_id) AS repo_id,
     lower(arrayStringConcat(arraySlice(splitByChar(' ', coalesce(pr.title, '')), 1, 3), ' ')) AS title_prefix,
-    count() AS prs_total,
-    groupArray(concat('git_pull_requests:', toString(pr.repo_id), ':', toString(pr.number))) AS pr_refs
-FROM git_pull_requests AS pr
-LEFT JOIN work_graph_issue_pr AS link
+    uniqExact(pr.number) AS prs_total,
+    groupUniqArray(concat('git_pull_requests:', toString(pr.repo_id), ':', toString(pr.number))) AS pr_refs,
+    coalesce(nullIf(wi.type, ''), 'pull_request') AS cluster_work_type,
+    argMin(pr.number, (pr.created_at, pr.number)) AS cluster_anchor
+FROM git_pull_requests AS pr FINAL
+LEFT JOIN work_graph_issue_pr AS link FINAL
     ON link.repo_id = pr.repo_id AND link.pr_number = pr.number
     AND link.org_id = {org_id:String}
 INNER JOIN ai_attribution_resolved AS attr
@@ -362,7 +399,7 @@ WHERE pr.created_at >= now() - INTERVAL 30 DAY@@REPO@@
   AND coalesce(pr.title, '') != ''
 GROUP BY repo_id, coalesce(pr.author_email, pr.author_name, ''), coalesce(nullIf(wi.type, ''), 'pull_request'), title_prefix
 HAVING prs_total >= {cluster_min:UInt32}
-ORDER BY prs_total DESC
+ORDER BY prs_total DESC, repo_id ASC, title_prefix ASC, cluster_work_type ASC, cluster_anchor ASC
 LIMIT 100`
 
 type titleRule struct {
@@ -398,7 +435,7 @@ const titleToilStatement = `SELECT
     toString(pr.repo_id) AS repo_id,
     count() AS prs_total,
     groupArray(concat('git_pull_requests:', toString(pr.repo_id), ':', toString(pr.number))) AS pr_refs
-FROM git_pull_requests AS pr
+FROM git_pull_requests AS pr FINAL
 LEFT ANTI JOIN ai_attribution_resolved AS attr
     ON attr.repo_id = pr.repo_id
     AND attr.subject_type = 'pull_request'
@@ -412,7 +449,7 @@ WHERE pr.created_at >= now() - INTERVAL 30 DAY
   AND pr.org_id = {org_id:String}
 GROUP BY repo_id
 HAVING prs_total >= {min_prs:UInt32}
-ORDER BY prs_total DESC
+ORDER BY prs_total DESC, repo_id ASC
 LIMIT 100`
 
 const docFileExpr = "(file_path LIKE '%.md' OR file_path LIKE '%.rst' OR file_path LIKE '%.adoc'" +
@@ -431,7 +468,7 @@ WHERE c.committer_when >= now() - INTERVAL 30 DAY@@REPO@@
   AND c.org_id = {org_id:String}
 GROUP BY repo_id
 HAVING code_commits >= {min_commits:UInt32} AND doc_changes = 0
-ORDER BY code_commits DESC
+ORDER BY code_commits DESC, repo_id ASC
 LIMIT 100`
 
 // flakyStatement is the share of DISTINCT test cases that flaked over the window: the summed flake cases over the
@@ -449,7 +486,7 @@ FROM (
     SELECT *
     FROM testops_test_metrics_daily
     WHERE org_id = {org_id:String}
-    ORDER BY computed_at DESC
+    ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC
     LIMIT 1 BY org_id, repo_id, day
 ) AS testops_test_metrics_daily
 WHERE day >= today() - 30@@REPO@@
@@ -458,7 +495,7 @@ WHERE day >= today() - 30@@REPO@@
 GROUP BY repo_id
 HAVING cases_total >= {min_cases:UInt64}
    AND flake_share >= {flake_threshold:Float64}
-ORDER BY flake_share DESC
+ORDER BY flake_share DESC, repo_id ASC
 LIMIT 100`
 
 // withRepo splices the optional repository predicate into a statement.
@@ -511,7 +548,7 @@ func AiOpportunities(ctx context.Context, client QueryClient, orgID string, in *
 		}
 		opps = append(opps, more...)
 	}
-	sort.SliceStable(opps, func(i, j int) bool { return opps[i].score > opps[j].score })
+	sort.SliceStable(opps, func(i, j int) bool { return opportunityLess(opps[i], opps[j]) })
 	if len(opps) > bounded {
 		opps = opps[:bounded]
 	}
@@ -643,10 +680,13 @@ func workflowOpportunities(ctx context.Context, client QueryClient, orgID, repoI
 		if !ok {
 			continue
 		}
-		out = append(out, newOpportunity(model.AIOpportunityKindRepetitiveChange, repo, nil,
+		o := newOpportunity(model.AIOpportunityKindRepetitiveChange, repo, nil,
 			"Repetitive AI change pattern in "+repo,
 			strconv.FormatInt(r.Count, 10)+" AI-assisted PRs shared the title prefix '"+prefix+"' with the same author/work type over the last 30 days.",
-			scoreDelta(float64(r.Count)/float64(repetitiveClusterMinPRs), 1.0), refs))
+			scoreDeltaRaw(float64(r.Count)/float64(repetitiveClusterMinPRs), 1.0), refs).
+			sortedBy(float64(r.Count), r.Prefix, r.WorkType, anchorOrderKey(r.Anchor))
+		o.idKey = repetitiveClusterKey(r.Prefix, r.WorkType, r.Anchor)
+		out = append(out, o)
 	}
 
 	for _, rule := range titlePatternRules {
@@ -668,7 +708,8 @@ func workflowOpportunities(ctx context.Context, client QueryClient, orgID, repoI
 			refs = append(append([]string(nil), refs...), rule.metricRef+":"+repo)
 			out = append(out, newOpportunity(rule.kind, repo, nil,
 				fmt.Sprintf(rule.title, repo), fmt.Sprintf(rule.why, r.Count),
-				scoreDelta(float64(r.Count)/float64(rule.minPRs), 1.0), refs))
+				scoreDeltaRaw(float64(r.Count)/float64(rule.minPRs), 1.0), refs).
+				sortedBy(float64(r.Count)))
 		}
 	}
 
@@ -716,8 +757,9 @@ func loadDocDrift(ctx context.Context, client QueryClient, orgID, repoID string)
 		out = append(out, newOpportunity(model.AIOpportunityKindDocumentationDrift, repo, nil,
 			"Documentation drift in "+repo,
 			strconv.FormatUint(commits, 10)+" code commits landed in the last 30 days with zero documentation-file changes.",
-			scoreDelta(float64(commits)/float64(docDriftMinCodeCommits), 1.0),
-			[]string{"git_commit_stats:doc_changes:" + repo}))
+			scoreDeltaRaw(float64(commits)/float64(docDriftMinCodeCommits), 1.0),
+			[]string{"git_commit_stats:doc_changes:" + repo}).
+			sortedBy(float64(commits)))
 	}
 	if err := rs.Err(); err != nil {
 		return nil, fmt.Errorf("aianalytics: documentation drift rows: %w", err)
@@ -752,8 +794,9 @@ func loadFlaky(ctx context.Context, client QueryClient, orgID, repoID string) ([
 		out = append(out, newOpportunity(model.AIOpportunityKindFlakyTestTriage, repo, nil,
 			"Flaky test triage candidate in "+repo,
 			"Test cases appear to flake at "+pct(*rate, 1)+" of distinct cases across "+strconv.FormatUint(cases, 10)+" executions over the last 30 days.",
-			scoreDelta(*rate, flakyRateThreshold),
-			[]string{"testops_test_metrics_daily:flake_rate:" + repo}))
+			scoreDeltaRaw(*rate, flakyRateThreshold),
+			[]string{"testops_test_metrics_daily:flake_rate:" + repo}).
+			sortedBy(*rate))
 	}
 	if err := rs.Err(); err != nil {
 		return nil, fmt.Errorf("aianalytics: flaky test rows: %w", err)

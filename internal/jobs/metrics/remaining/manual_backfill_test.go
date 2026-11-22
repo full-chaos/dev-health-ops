@@ -122,6 +122,10 @@ func TestManualBackstopTriggerFamiliesStayInSyncWithTheSwitch(t *testing.T) {
 			if _, err := manualRecommendationsTriggerScope(nil, 14); err != nil {
 				t.Fatalf("family %q: manualRecommendationsTriggerScope rejected a well-formed request: %v", family, err)
 			}
+		case family == "membership_backfill":
+			if _, err := manualMembershipTriggerScope(); err != nil {
+				t.Fatalf("family %q: manualMembershipTriggerScope failed: %v", family, err)
+			}
 		default:
 			t.Fatalf("family %q is in ManualBackstopTriggerFamilies but this test has no dispatch path registered for it -- add one to dayScopeBuildable or a case below", family)
 		}
@@ -136,6 +140,22 @@ func TestManualBackstopTriggerFamiliesStayInSyncWithTheSwitch(t *testing.T) {
 // is always required) rather than forking behavior per mode -- this test
 // exists so an unreviewed mode still fails loud, naming which families are
 // append/replace/marker-based for a reader, not to gate dispatch on it.
+// TestManualMembershipTriggerScopeMatchesTheNightlyBinding pins the manual
+// membership scope to the membership_backfill_daily_fanout binding's literal
+// (internal/scheduler/fixed/producers.go): the whole-organization projection.
+func TestManualMembershipTriggerScopeMatchesTheNightlyBinding(t *testing.T) {
+	scope, err := manualMembershipTriggerScope()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(scope), `{"repo_ids":[],"version":1}`; got != want {
+		t.Fatalf("manual membership scope = %s, want %s", got, want)
+	}
+	if _, err := validateFamilyScope("membership_backfill", scope); err != nil {
+		t.Fatalf("validateFamilyScope rejected the manual membership scope: %v", err)
+	}
+}
+
 func TestManualBackstopTriggerFamiliesAllHaveAKnownReplayMode(t *testing.T) {
 	inventory, err := Load()
 	if err != nil {

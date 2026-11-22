@@ -1,0 +1,16 @@
+== READ (one pipe: kubectl jsonpath | decode | writer on stdin)
+READ key present=yes
+READ value sha12=000000000000
+== CHECK
+CHECK round trip: EQUAL
+CHECK other keys unchanged: yes
+== WRITE (one pipe: the writer on stdin)
+WRITE temp /srv/example/values.tmp (0600)
+WRITE example.store added (3 keys); every other key unchanged=true; backup of the old file: /srv/example/values.yaml.bak (0600)
+WRITE rename: atomic
+AFTER file mode/owner: 600 app
+AFTER live URI sha12=000000000000; URI built from the file: EQUAL
+== DONE
+lines 3, errors 0
+marker set
+rc=0

@@ -167,6 +167,58 @@ const (
 // actually fire; timeseries/breakdown's force_investment is always a
 // concrete bool and therefore NEVER auto-routes, so their WORK_TYPE gap
 // is reachable through an unset OR explicit-false useInvestment alike.
+// groupKeyNotNull is the health-path condition that keeps a NULL key out of a sankey node set. work_item_completion_daily
+// stores a work item with no repository as a NULL repo_id: such a node had a value and no edge (the edges never kept a
+// NULL key), and its share stays visible as the sankey's repoCoverage. The timeseries and the breakdown keep that share
+// as their unassigned group keyed "". The investment path's keys are never NULL (dbColumn names its unassigned
+// buckets), so it adds nothing there.
+func groupKeyNotNull(dimCol string, useInvestment bool) string {
+	if useInvestment {
+		return ""
+	}
+	return "\n  AND " + dimCol + " IS NOT NULL"
+}
+
+// healthTeamColumn is the stored team column of the health path. work_item_completion_daily stores a work item with
+// no owning team as an empty team_id (not Nullable).
+const healthTeamColumn = "team_id"
+
+// unassignedTeamKey is the one expression that names a team with no key: the empty string and NULL are the unassigned
+// team, the token the investment path and the sankey coverage use.
+func unassignedTeamKey(col string) string {
+	return "ifNull(nullIf(" + col + ", ''), 'unassigned')"
+}
+
+// keyProjection is the SELECT expression of a group key. The health TEAM key names the empty team "unassigned" here
+// and nowhere else: GROUP BY, ORDER BY, LIMIT and every filter keep the stored column (groupRef), so the groups kept at
+// a cut, their order and the rows a scope selects are those of the stored key.
+func keyProjection(dim Dimension, useInvestment bool, col string) string {
+	if !useInvestment && dim == DimensionTeam && col == healthTeamColumn {
+		return unassignedTeamKey(col)
+	}
+	return col
+}
+
+// groupRef is what GROUP BY and ORDER BY name for a key: the output alias, or the stored column when the projection
+// renames it.
+func groupRef(alias, projection, col string) string {
+	if projection != col {
+		return col
+	}
+	return alias
+}
+
+// storedTeamIDs maps a health-path team id of the request back to the stored key: "unassigned" selects the rows with
+// the empty team_id.
+func storedTeamIDs(ids []string) []string {
+	for _, id := range ids {
+		if id == "unassigned" {
+			return append(append([]string(nil), ids...), "")
+		}
+	}
+	return ids
+}
+
 func dbColumn(dim Dimension, useInvestment bool) (string, error) {
 	if dim == DimensionAuthor {
 		return "", newValidationError("dimension", string(dim),
@@ -177,7 +229,7 @@ func dbColumn(dim Dimension, useInvestment bool) (string, error) {
 	if useInvestment {
 		switch dim {
 		case DimensionTeam:
-			return "ifNull(nullIf(ut.team_label, ''), 'unassigned')", nil
+			return unassignedTeamKey("ut.team_label"), nil
 		case DimensionRepo:
 			// Unassigned repo emits '' (NOT the bare 'unassigned'): the web
 			// adapter renders an empty repo label as a distinct "Unassigned
@@ -195,7 +247,7 @@ func dbColumn(dim Dimension, useInvestment bool) (string, error) {
 	} else {
 		switch dim {
 		case DimensionTeam:
-			return "team_id", nil
+			return healthTeamColumn, nil
 		case DimensionRepo:
 			return "repo_id", nil
 		case DimensionWorkType:
@@ -336,7 +388,7 @@ func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (strin
 	case MeasureCoverageLinePct:
 		return weightedRateSQL(coverageLineTerms), nil
 	case MeasureCoverageBranchPct:
-		return "AVG(branch_coverage_pct)", nil // AT RISK: Nullable(Float64) (category 2)
+		return weightedRateSQL(coverageBranchTerms), nil
 	case MeasureCoverageDeltaPct:
 		return "AVG(coverage_delta_pct)", nil // AT RISK: Nullable(Float64) (category 2)
 	case MeasureFlagFrictionDelta:
@@ -420,3 +472,12 @@ var coverageLineTerms = rateTerms{
 }
 
 const coverageCounted = "lines_covered IS NOT NULL AND lines_total IS NOT NULL AND lines_total > 0"
+
+// Branch coverage is the same rule over the stored branch counts: a row stored before the counts existed reads NULL and
+// adds to neither side, so a group made only of such rows has no value.
+var coverageBranchTerms = rateTerms{
+	"SUM(if(" + coverageBranchCounted + ", branches_covered, 0))",
+	"SUM(if(" + coverageBranchCounted + ", branches_total, 0))",
+}
+
+const coverageBranchCounted = "branches_covered IS NOT NULL AND branches_total IS NOT NULL AND branches_total > 0"

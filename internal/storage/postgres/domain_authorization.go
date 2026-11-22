@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"time"
 
@@ -54,8 +55,8 @@ var ErrPostureRefused = errors.New("postgres: role posture refused (live grants 
 // other role does not hold it" check needs to exist in this query itself —
 // but no single invocation of it proves that property alone, either.
 const rolePostureQuery = `
-WITH required_table_privileges(table_name, allow_insert, allow_update, allow_delete, retired) AS (
-	SELECT * FROM unnest($3::text[], $4::boolean[], $5::boolean[], $9::boolean[], $12::boolean[])
+WITH required_table_privileges(table_name, allow_insert, allow_update, allow_delete, retired, update_retired) AS (
+	SELECT * FROM unnest($3::text[], $4::boolean[], $5::boolean[], $9::boolean[], $12::boolean[], $14::boolean[])
 ), required_tables AS (
 	SELECT
 		class.oid,
@@ -63,7 +64,8 @@ WITH required_table_privileges(table_name, allow_insert, allow_update, allow_del
 		required.allow_insert,
 		required.allow_update,
 		required.allow_delete,
-		required.retired
+		required.retired,
+		required.update_retired
 	FROM required_table_privileges AS required
 	JOIN pg_catalog.pg_class AS class ON class.relname = required.table_name
 	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
@@ -415,7 +417,10 @@ SELECT
 					OR 'INSERT WITH GRANT OPTION' = ANY (held.any_column)
 				)
 			)
-			OR ('UPDATE' = ANY (held.table_level)) <> required.allow_update
+			-- RolePosture.RetiredTableUpdates: a retired table-wide UPDATE may be held (exactly, no option) or absent.
+			OR (NOT required.update_retired AND ('UPDATE' = ANY (held.table_level)) <> required.allow_update)
+			-- A retired UPDATE may not be held on columns alone.
+			OR (required.update_retired AND 'UPDATE' = ANY (held.any_column) AND NOT 'UPDATE' = ANY (held.table_level))
 			OR (
 				NOT required.allow_update
 				AND 'UPDATE' = ANY (held.any_column)
@@ -432,7 +437,7 @@ SELECT
 				)
 			)
 			OR (
-				required.allow_update
+				(required.update_retired OR required.allow_update)
 				AND (
 					'UPDATE WITH GRANT OPTION' = ANY (held.table_level)
 					OR 'UPDATE WITH GRANT OPTION' = ANY (held.any_column)
@@ -625,6 +630,14 @@ type RolePosture struct {
 	// them; readiness accepts each held exactly or not held. A grant option on
 	// one, or any undeclared column privilege, is refused as before.
 	RetiredColumns []ColumnPrivilege
+	// RetiredTableUpdates names RequiredTables entries whose table-wide UPDATE no
+	// code of the role uses any more, while the table stays. The entry still
+	// declares AllowUpdate, so the migration (which reads only the
+	// RequiredTables flags) grants it as before; readiness and
+	// DiagnoseRolePosture accept it held exactly (no grant option) or not held.
+	// A column UPDATE without the table-wide one is refused, as is any other
+	// privilege the entry does not declare.
+	RetiredTableUpdates []string
 }
 
 // domainPosture is the domain runtime role's declared manifest under the
@@ -789,14 +802,15 @@ func domainPosture() RolePosture {
 			// heartbeated in place, and stamped terminal. Nothing removes it --
 			// it IS the durable evidence that discovery ran.
 			{"sync_run_reference_discoveries", true, true, false},
-			// CHAOS-4209, the once-only post-dispatch ledger. INSERT only:
-			// native_finalize_sync_run.go:253 inserts one row and treats the
-			// 23505 as "already dispatched by an earlier finalize". No statement
-			// updates or deletes it, so a bug that tried to re-open a dispatch
-			// would be refused by the database. SELECT comes with any
-			// RequiredTables row (see TablePrivilege); there is no server-owned
-			// column here for a column-scoped grant to protect, unlike
-			// worker_job_completion_fences.
+			// CHAOS-4209, the once-only post-dispatch ledger. INSERT, no
+			// table-wide UPDATE: native_finalize_sync_run.go inserts one row and
+			// treats the 23505 as "already dispatched by an earlier finalize", so
+			// a bug that tried to re-open a dispatch would be refused by the
+			// database. The fan-out's outcome stamp is the only UPDATE, and it is
+			// column-scoped below (post_sync_outcome, post_sync_committed_at):
+			// id, org_id, sync_run_id, kind, dispatched_at and recorded_at stay
+			// insert-once. SELECT comes with any RequiredTables row (see
+			// TablePrivilege).
 			{"sync_run_post_dispatches", true, false, false},
 			// CHAOS-4209, the compute-input checkpoint. INSERT only, via
 			// native_finalize_sync_run.go:782's `ON CONFLICT ON CONSTRAINT
@@ -990,6 +1004,10 @@ func domainPosture() RolePosture {
 			{"memberships", "org_id", "SELECT"},
 			{"memberships", "role", "SELECT"},
 			{"memberships", "created_at", "SELECT"},
+			// The post_sync fan-out's outcome stamp on its ledger row
+			// (syncdispatchruntime recordPostSyncOutcome), and no other ledger column.
+			{"sync_run_post_dispatches", "post_sync_outcome", "UPDATE"},
+			{"sync_run_post_dispatches", "post_sync_committed_at", "UPDATE"},
 		},
 		// The heavy worker reads an org's categorization opt-in (pgmigrate 0156)
 		// and an opted-in org's categorize configuration and budget limit
@@ -1438,7 +1456,7 @@ func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riv
 	}
 }
 
-// rolePostureArgs builds rolePostureQuery's parameters ($1..$13) from a role's
+// rolePostureArgs builds rolePostureQuery's parameters ($1..$14) from a role's
 // declared posture, refusing an internally inconsistent one. It is separate
 // from CheckRolePosture so the differential oracle for the query runs the
 // production argument construction, not a copy of it.
@@ -1500,12 +1518,16 @@ func rolePostureArgs(expectedRole, riverSchema string, posture RolePosture) ([]a
 	if err != nil {
 		return nil, err
 	}
+	retiredUpdates, err := retiredTableUpdateFlags(posture)
+	if err != nil {
+		return nil, err
+	}
 	return []any{
 		expectedRole, riverSchema,
 		tableNames, allowInserts, allowUpdates,
 		columnTables, columnNames, columnPrivileges,
 		allowDeletes, posture.RequiredSequences,
-		requiredFunctions, retired, retiredColumns,
+		requiredFunctions, retired, retiredColumns, retiredUpdates,
 	}, nil
 }
 
@@ -1566,6 +1588,43 @@ func retiredTableFlags(posture RolePosture) ([]bool, error) {
 	return flags, nil
 }
 
+// retiredTableUpdateFlags is $14: one flag per RequiredTables entry, true for a table RetiredTableUpdates names. A named
+// table must be exactly one RequiredTables entry that declares UPDATE (the migration grants it), is not a retired table,
+// and is not column-scoped: the rule judges the table-wide UPDATE only.
+func retiredTableUpdateFlags(posture RolePosture) ([]bool, error) {
+	flags := make([]bool, len(posture.RequiredTables))
+	seen := make(map[string]bool, len(posture.RetiredTableUpdates))
+	for _, name := range posture.RetiredTableUpdates {
+		if seen[name] {
+			return nil, fmt.Errorf("postgres: retired table UPDATE %q is named twice", name)
+		}
+		seen[name] = true
+		matches := 0
+		for i, table := range posture.RequiredTables {
+			if table.TableName != name {
+				continue
+			}
+			matches++
+			flags[i] = true
+			if !table.AllowUpdate {
+				return nil, fmt.Errorf("postgres: retired table UPDATE %q does not declare UPDATE", name)
+			}
+		}
+		if matches != 1 {
+			return nil, fmt.Errorf("postgres: retired table UPDATE %q is %d RequiredTables entries, want exactly 1", name, matches)
+		}
+		if slices.Contains(posture.RetiredTables, name) {
+			return nil, fmt.Errorf("postgres: retired table UPDATE %q is also a retired table", name)
+		}
+		for _, column := range posture.ColumnScoped {
+			if column.TableName == name {
+				return nil, fmt.Errorf("postgres: retired table UPDATE %q is also column-scoped", name)
+			}
+		}
+	}
+	return flags, nil
+}
+
 var functionSignaturePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*\((?:[a-z][a-z0-9_ ]*(?:, [a-z][a-z0-9_ ]*)*)?\)$`)
 
 // validFunctionSignature accepts a lowercase regprocedure signature such as
@@ -1604,8 +1663,13 @@ func runInPostureTx(
 		return err
 	}
 	// Rollback, not Commit: nothing was written, and it must succeed even if
-	// ctx is already done.
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	// ctx is already done. It is bounded on its own; pgx closes the connection
+	// when it cannot finish.
+	defer func() {
+		rollbackCtx, cancel := detachedPostureContext(ctx, postureDiagnoseTimeout)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
 	if _, err := tx.Exec(ctx, "SELECT set_config('statement_timeout', $1, true)",
 		strconv.FormatInt(timeout.Milliseconds(), 10)); err != nil {
 		return err
@@ -1634,6 +1698,30 @@ func queryPostureAnswer(
 // on a detached context of its own.
 const postureDiagnoseTimeout = 5 * time.Second
 
+// postureOwnerKey carries the lifetime of the CachedPostureCheck that runs a
+// posture statement (its Close cancels it).
+type postureOwnerKey struct{}
+
+func withPostureOwner(owner context.Context) context.Context {
+	return context.WithValue(owner, postureOwnerKey{}, owner)
+}
+
+// detachedPostureContext is a context with its own timeout for a step that must
+// outlive ctx's deadline (the rollback, the diagnostic pass after a refusal). It
+// still ends when the CachedPostureCheck running the step is closed.
+func detachedPostureContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	owner, ok := ctx.Value(postureOwnerKey{}).(context.Context)
+	if !ok {
+		return detached, cancel
+	}
+	stop := context.AfterFunc(owner, cancel)
+	return detached, func() {
+		stop()
+		cancel()
+	}
+}
+
 // firstPostureMismatch names the first declared-vs-actual gap behind a
 // refusal, in the redacted PostureGap.String form (checked-in table and column
 // names plus SQL privilege keywords only -- safe to log and to wrap into a
@@ -1643,7 +1731,7 @@ const postureDiagnoseTimeout = 5 * time.Second
 // rolePostureQuery does (ownership, database-level and River-schema
 // privileges), so an empty result is reported as such, never as "no problem".
 func firstPostureMismatch(ctx context.Context, pool *pgxpool.Pool, expectedRole string, posture RolePosture) string {
-	diagnoseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), postureDiagnoseTimeout)
+	diagnoseCtx, cancel := detachedPostureContext(ctx, postureDiagnoseTimeout)
 	defer cancel()
 	if mismatch := identityMismatchForDiagnosis(ctx, pool, expectedRole); mismatch != "" {
 		return mismatch

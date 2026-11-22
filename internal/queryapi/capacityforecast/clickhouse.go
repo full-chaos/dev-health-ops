@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/newestrow"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // The reads, ported from metrics/capacity_queries.py (the two compute-path
@@ -48,8 +49,13 @@ func newForecastID() string {
 // separately written copies would be free to drift while both still looked
 // right.
 func capacityScopeFilters(orgID string, teamIDs []string, workScopeID *string) ([]string, []clickhouse.Binding) {
-	// Each item once in the organization (CHAOS-8498 sums a team set, CHAOS-8863 views): legacy rows and the org view.
-	conditions := []string{"org_id = {org_id:String}", rowview.OrgPredicate("work_item_metrics_daily", "")}
+	// No team or a team set: each item once in the organization (CHAOS-8498 sums a team set, CHAOS-8863 views), legacy
+	// rows and the org view. One team reads the team view instead (CHAOS-14376): every view stays in the filter and
+	// capacitySource picks one per key.
+	conditions := []string{"org_id = {org_id:String}"}
+	if len(teamIDs) != 1 {
+		conditions = append(conditions, rowview.OrgPredicate("work_item_metrics_daily", ""))
+	}
 	bindings := []clickhouse.Binding{{Name: "org_id", Value: orgID}}
 	// Falsy checks, matching capacity_queries.py: an empty string is "unscoped",
 	// not "scoped to the empty id".
@@ -89,6 +95,41 @@ func countFromAggregate(column string, value uint64) (int, error) {
 	return int(value), nil
 }
 
+// capacityOrgNewest is the newest version of each full key (the sorting key, row_view included) of the organization by
+// rowview.WorkItemMetricsNewestOrder, aliased as the table. It is scoped by org_id in this text, as the served team view
+// is; the caller binds org_id. where names key columns only, so filtering before the pick is filtering after it. The
+// live-row rule is not in it: a reader applies it to the picked row.
+func capacityOrgNewest(where string) string {
+	declared, ok := teamkeytables.ByTable("work_item_metrics_daily")
+	if !ok {
+		panic("capacityforecast: work_item_metrics_daily is not declared in teamkeytables")
+	}
+	key := []string{"work_item_metrics_daily.org_id", "work_item_metrics_daily." + declared.DayColumn}
+	for _, column := range declared.Keys {
+		key = append(key, "work_item_metrics_daily."+column.Name)
+	}
+	return fmt.Sprintf("(SELECT * FROM work_item_metrics_daily WHERE work_item_metrics_daily.org_id = {org_id:String} AND (%s) ORDER BY %s DESC LIMIT 1 BY %s) AS work_item_metrics_daily",
+		where, rowview.WorkItemMetricsNewestOrder, strings.Join(key, ", "))
+}
+
+// capacitySource is the FROM source of a capacity read of work_item_metrics_daily. No team or a team set reads the
+// newest version of each key (capacityOrgNewest; the org view is in the where). One team reads the team view of the
+// organization (CHAOS-14376): of the newest row of each view of a key, a live row first, then team, org, legacy
+// (rowview.ServedTeamSource); a newest-day read takes the pick with no live-row rule after it (rowview.ServedTeamPick),
+// so a key whose every view is retracted stays that key's newest day, as in the org form. Both forms take each key's
+// version by rowview.WorkItemMetricsNewestOrder, the order of the throughput forecast and operating review reads, so
+// they serve one version of a computed_at tie (CHAOS-14406). The source is aliased as the table.
+func capacitySource(teamIDs []string, where string, newestDay bool) string {
+	switch {
+	case len(teamIDs) != 1:
+		return capacityOrgNewest(where)
+	case newestDay:
+		return rowview.ServedTeamPick("work_item_metrics_daily", where, rowview.WorkItemMetricsNewestOrder) + " AS work_item_metrics_daily"
+	default:
+		return rowview.ServedTeamSource("work_item_metrics_daily", where, rowview.WorkItemMetricsNewestOrder) + " AS work_item_metrics_daily"
+	}
+}
+
 // loadThroughput ports load_throughput_from_sink.
 //
 // The window start is derived from the CALLER's clock rather than ClickHouse's,
@@ -115,18 +156,20 @@ func loadThroughput(
 	// and for the same reason.
 	conditions = append([]string{fmt.Sprintf("day >= '%s'", start)}, conditions...)
 
-	// FINAL here, and NOT on the capacityForecasts read below. That asymmetry is
-	// Python's: work_item_metrics_daily is a ReplacingMergeTree whose rows are
-	// genuinely superseded by recomputes, so dropping FINAL would read stale
+	// The newest version of each key here (capacitySource), and NOT on the
+	// capacityForecasts read below. That asymmetry is Python's:
+	// work_item_metrics_daily is a ReplacingMergeTree whose rows are genuinely
+	// superseded by recomputes, so reading every version would read stale
 	// throughput.
+	where := strings.Join(conditions, " AND ")
 	query := fmt.Sprintf(`
         SELECT day, SUM(items_completed) AS items_completed
-        FROM work_item_metrics_daily FINAL
+        FROM %s
         WHERE %s
           AND %s
         GROUP BY day
         ORDER BY day
-    `, strings.Join(conditions, " AND "), liverow.Predicate("work_item_metrics_daily", ""))
+    `, capacitySource(teamIDs, where, false), where, liverow.Predicate("work_item_metrics_daily", ""))
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -165,12 +208,13 @@ func loadBacklog(
 	// older than another team's. The scope predicate appears twice on purpose:
 	// the outer filter selects the scope's rows, and the subquery finds each
 	// team's newest day within that scope.
+	source := capacitySource(teamIDs, where, true)
 	query := fmt.Sprintf(`
         SELECT sum(wip_count_end_of_day) AS wip_count_end_of_day
-        FROM work_item_metrics_daily FINAL
+        FROM %s
         WHERE %s
           AND %s
-    `, where, newestrow.PerTeamPredicate("work_item_metrics_daily FINAL", where))
+    `, source, where, newestrow.PerTeamPredicate(source, where))
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {

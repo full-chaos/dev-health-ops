@@ -28,6 +28,8 @@ var (
 	MsgDispatchSyncRunBudgetSurplusWithdrawalLostRace    = Msg{"dispatch_sync_run.budget_surplus_withdrawal_lost_race"}
 	MsgDispatchSyncRunBudgetSurplusWithdrawn             = Msg{"dispatch_sync_run.budget_surplus_withdrawn"}
 	MsgDispatchSyncRunClaimDeferredOutsideGuardSnapshot  = Msg{"dispatch_sync_run.claim_deferred_outside_guard_snapshot"}
+	MsgBackfillWaitGaugeTruncated                        = Msg{"backfill_wait_gauge.truncated"}
+	MsgBackfillWaitGaugeReadFailed                       = Msg{"backfill_wait_gauge.read_failed"}
 	MsgSyncDispatchAdmissionCaps                         = Msg{"sync_dispatch_admission_caps"}
 	MsgTeamsInsertCarriesProviderIdentity                = Msg{"teams_insert.carries_provider_identity"}
 	MsgSyncTriggerRefusedUnselectedSource                = Msg{"sync_trigger.refused_unselected_source"}
@@ -61,6 +63,7 @@ var (
 	MsgPostSyncFanoutFailed                              = Msg{"post_sync_fanout.failed"}
 	MsgPostSyncFanoutChainDefect                         = Msg{"post_sync_fanout.chain_defect"}
 	MsgPostSyncDeliveryNotCurrent                        = Msg{"post_sync_fanout.delivery_not_current"}
+	MsgPostSyncOutcomeLedgerAbsent                       = Msg{"post_sync_fanout.outcome_ledger_absent"}
 	MsgPostSyncTouchedDays                               = Msg{"post_sync_fanout.touched_days"}
 	MsgPostSyncTouchedDaysFailed                         = Msg{"post_sync_fanout.touched_days_failed"}
 	MsgPostSyncTouchedWindowOverBound                    = Msg{"post_sync_fanout.touched_window_keys_over_bound"}
@@ -75,6 +78,7 @@ var (
 	MsgDispatchSyncRunRedispatchBackoffReadFailed        = Msg{"dispatch_sync_run.redispatch_backoff_read_failed"}
 	MsgDispatchSyncRunWokenByUnitCompletion              = Msg{"dispatch_sync_run.woken_by_unit_completion"}
 	MsgDispatchSyncRunUnitCompletionWakeFailed           = Msg{"dispatch_sync_run.unit_completion_wake_failed"}
+	MsgSyncDispatchCommitSnapshotBusy                    = Msg{"sync_dispatch_fence.commit_snapshot_busy"}
 	MsgTeamRepoOwnershipDerivation                       = Msg{"team_repo_ownership_derivation"}
 	// The provider egress guard (internal/egressguard): a refused dial, and an allow-list setting that is not a CIDR list.
 	MsgEgressRefused          = Msg{"egressguard: provider egress refused"}
@@ -83,6 +87,7 @@ var (
 
 // Keys.
 var (
+	KeyBackfillWaitGroupLimit       = Key{"group_limit"}
 	KeyEgressClass                  = Key{"class"}
 	KeyEgressEntries                = Key{"entries"}
 	KeyStrict                       = Key{"strict"}
@@ -180,6 +185,8 @@ var (
 	KeyErrorCode                    = Key{"error_code"}
 	KeyCount                        = Key{"count"}
 	KeyPath                         = Key{"path"}
+	KeyOutboxKind                   = Key{"outbox_kind"}
+	KeyTries                        = Key{"tries"}
 	KeyCountdown                    = Key{"countdown"}
 	KeyKeptEarlierWakeup            = Key{"kept_earlier_wakeup"}
 	KeyIdleSeconds                  = Key{"idle_seconds"}

@@ -152,7 +152,7 @@ FROM (
     WHERE org_id = {org_id:String}
           AND day >= {since_date:Date}
           AND day <= {until_date:Date}` + filter + `
-    ORDER BY computed_at DESC
+    ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC
     LIMIT 1 BY org_id, repo_id, day
 ) AS testops_test_metrics_daily
 WHERE ` + liverow.Predicate("testops_test_metrics_daily", "")

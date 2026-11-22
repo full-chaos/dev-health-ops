@@ -54,6 +54,7 @@ internal/jobcontract	registry.go	internal/rivermigrate/rolese2e
 internal/jobcontract	registry.go	internal/scheduler/fixed
 internal/jobcontract	registry.go	internal/schedulerservice
 internal/jobcontract	registry.go	internal/storage/river
+internal/jobcontract	registry.go	internal/syncdispatchruntime
 internal/jobcontract	registry.go	internal/syncroute
 internal/jobcontract	registry.go	internal/workersctl
 internal/jobcontract	registry.go	internal/workerservice

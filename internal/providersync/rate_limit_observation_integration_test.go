@@ -71,7 +71,7 @@ func TestDeferForRateLimitWritesTheObservationInItsOwnTransaction(t *testing.T) 
 		lost := claim
 		lost.Owner = "00000000-0000-4000-8000-00000000dead"
 		err := repository.DeferForRateLimit(ctx, lost, now.Add(time.Minute), now,
-			RateLimitObservation{Dimension: "rest_core", RetryAfter: time.Minute})
+			RateLimitObservation{Dimension: "rest_core", RetryAfter: time.Minute}, RateLimitEpisodeStep{})
 		if err == nil {
 			t.Fatal("a deferral without the lease succeeded")
 		}
@@ -81,7 +81,7 @@ func TestDeferForRateLimitWritesTheObservationInItsOwnTransaction(t *testing.T) 
 	})
 
 	t.Run("a limit with no dimension stamps the unit and writes no row", func(t *testing.T) {
-		if err := repository.DeferForRateLimit(ctx, claim, now.Add(time.Minute), now, RateLimitObservation{}); err != nil {
+		if err := repository.DeferForRateLimit(ctx, claim, now.Add(time.Minute), now, RateLimitObservation{}, RateLimitEpisodeStep{}); err != nil {
 			t.Fatal(err)
 		}
 		if rows := readObservations(t, ctx, pool); len(rows) != 0 {
@@ -96,7 +96,7 @@ func TestDeferForRateLimitWritesTheObservationInItsOwnTransaction(t *testing.T) 
 		seedBudgetEpisode(t, ctx, pool, firstUnitID, now)
 		claim := claimForBudgetEpisode(t, ctx, repository, now)
 		if err := repository.DeferForRateLimit(ctx, claim, now.Add(2*time.Minute), now,
-			RateLimitObservation{Dimension: "graphql_cost", RetryAfter: 2 * time.Minute}); err != nil {
+			RateLimitObservation{Dimension: "graphql_cost", RetryAfter: 2 * time.Minute}, RateLimitEpisodeStep{}); err != nil {
 			t.Fatal(err)
 		}
 		rows := readObservations(t, ctx, pool)

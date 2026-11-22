@@ -1,0 +1,2 @@
+LIVEROW ok   Deployment/acme-app-web .spec.template.spec.containers[0].image eba592913bcb
+LIVEROWS: PASS (1 row)

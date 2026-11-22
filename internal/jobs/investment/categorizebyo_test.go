@@ -187,7 +187,9 @@ func (stub *byoStub) build() *orgCategorizeBYO {
 	return &orgCategorizeBYO{
 		logger:  testLogger(),
 		optedIn: func(context.Context, string) (bool, error) { return true, nil },
-		gate:    func(context.Context, string) llmorgsettings.Decision { return stub.decision },
+		gate: func(context.Context, string, llmorgsettings.ConfigSource) llmorgsettings.Decision {
+			return stub.decision
+		},
 		config: func(context.Context, string) (llmorgsettings.OrgConfig, bool, error) {
 			return stub.cfg, stub.found, stub.configErr
 		},

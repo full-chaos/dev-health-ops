@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 // githubTestsRowsJSONBytes is the JSON size of the rows as the effect batch counts them: BuildEffectBatch compacts the
@@ -117,7 +118,7 @@ type githubTestsRunReportPlan struct {
 	UndoneByAdmission []int
 }
 
-// githubTestsReportMismatch is a copy or aggregate kept with its parts (CHAOS-13991): its overlap group (githubTestsPlanRunReports)
+// githubTestsReportMismatch is a copy or aggregate kept with its parts (CHAOS-13991): its touch group (githubTestsPlanRunReports)
 // holds a copy or aggregate whose cases match their copy or parts by identity but that holds an outcome, another stored field or
 // coverage rows they do not. Parts are the artifacts it was compared with.
 type githubTestsReportMismatch struct {
@@ -159,17 +160,18 @@ type githubTestsPartitionBound struct {
 // 73,000 held rows spends about 290,000.
 var githubTestsDefaultPartitionBound = githubTestsPartitionBound{Work: 1 << 23}
 
-// githubTestsPlanRunReports decides a run's report artifacts. (1) Copies: an artifact equal to one with a lower id on every case's
-// class, name, outcome and duration and on every suite's name, start and duration, both carrying durations at all (without them two
-// reports cannot be told from two real executions of the same tests, such as matrix legs), is a copy of the lowest such id, its
-// representative. (2) Aggregates: among representatives, smallest first, an artifact whose case identities are a disjoint union of
+// githubTestsPlanRunReports decides a run's report artifacts. (1) Copies: artifacts equal on every case's class, name, outcome and
+// duration and on every suite's name, start and duration, all carrying durations at all (without them two reports cannot be told
+// from two real executions of the same tests, such as matrix legs), are one copy family; its representative is chosen by content
+// (githubTestsCopyRepresentative), the others are its copies. (2) Aggregates: among representatives, smallest first, an artifact whose case identities are a disjoint union of
 // two or more smaller artifacts' that are not themselves aggregates is an aggregate of those parts. Its parts are searched first
 // among the artifacts whose suites (each with its cases) are all in the aggregate, so a partition that holds every stored row is
-// found whatever the upload order; only when none exists is a partition by case identity alone its parts. (3) Overlap groups:
-// artifacts that share a case identity are one group. A copy or aggregate is lossless when it holds no coverage rows and its
-// suites equal its representative's or its parts' together (githubTestsReportLossless). In a group where every copy and aggregate
-// is lossless they are dropped as aggregate_of_parts; in any other group every artifact is kept and each copy and aggregate is
-// reported as a mismatch. (4) The survivors are admitted whole, in the given order (ascending declared size), under the run bound,
+// found whatever the upload order; only when none exists is a partition by case identity alone its parts. (3) Touch groups: a
+// copy and its representative are one group, and so are two artifacts that hold one equal suite instance (githubTestsReportContent).
+// A partition by case identity alone joins nothing: when matrix legs share identities, it can match either leg (CHAOS-14045). A copy
+// or aggregate is lossless when it holds no coverage rows and its suites equal its representative's or its parts' together
+// (githubTestsReportLossless). In a group where every copy and aggregate is lossless they are dropped as aggregate_of_parts; in any
+// other group every artifact is kept and each copy and aggregate is reported as a mismatch. (4) The survivors are admitted whole, in the given order (ascending declared size), under the run bound,
 // the rest skipped whole; a drop whose representative or parts are not all admitted (or dropped with theirs admitted) is undone and
 // the admission rerun, so a drop never loses a row the bound cut. The decision reads only the parsed rows, so it does not depend on
 // names, the provider, or the order the listing came back in. parsed must already be in admission order.
@@ -231,24 +233,39 @@ func githubTestsPlanRunReportsWithin(parsed []githubTestsParsedReport, bound git
 	var relations []relation
 	byID := append([]int(nil), candidates...)
 	sort.SliceStable(byID, func(i, j int) bool { return githubTestsArtifactIDLess(parsed[byID[i]].ID, parsed[byID[j]].ID) })
-	var representatives []int
+	var families [][]int
 	for _, index := range byID {
-		representative := -1
-		for _, other := range representatives {
-			if timed[index] && timed[other] && githubTestsCountsEqual(copies[index], copies[other]) {
-				representative = other
+		placed := false
+		for family, members := range families {
+			if first := members[0]; timed[index] && timed[first] && githubTestsCountsEqual(copies[index], copies[first]) {
+				families[family], placed = append(members, index), true
 				break
 			}
 		}
-		if representative < 0 {
-			representatives = append(representatives, index)
-			continue
+		if !placed {
+			families = append(families, []int{index})
 		}
-		lossless, err := githubTestsReportLossless(parsed[index], content, index, []int{representative})
-		if err != nil {
-			return githubTestsRunReportPlan{}, err
+	}
+	var representatives []int
+	for _, members := range families {
+		representative := members[0]
+		if len(members) > 1 {
+			var err error
+			if representative, err = githubTestsCopyRepresentative(parsed, content, members); err != nil {
+				return githubTestsRunReportPlan{}, err
+			}
 		}
-		relations = append(relations, relation{index: index, parts: []int{representative}, lossless: lossless})
+		representatives = append(representatives, representative)
+		for _, index := range members {
+			if index == representative {
+				continue
+			}
+			lossless, err := githubTestsReportLossless(parsed[index], content, index, []int{representative})
+			if err != nil {
+				return githubTestsRunReportPlan{}, err
+			}
+			relations = append(relations, relation{index: index, parts: []int{representative}, lossless: lossless})
+		}
 	}
 	bySize := append([]int(nil), representatives...)
 	sort.SliceStable(bySize, func(i, j int) bool { return len(parsed[bySize[i]].Cases) < len(parsed[bySize[j]].Cases) })
@@ -346,20 +363,31 @@ func githubTestsPlanRunReportsWithin(parsed []githubTestsParsedReport, bound git
 		}
 		return index
 	}
-	owner := map[string]int{}
-	for _, index := range candidates {
-		for key := range identities[index] {
-			if first, seen := owner[key]; seen {
-				group[root(index)] = root(first)
-				continue
-			}
-			owner[key] = index
-		}
-	}
 	conflict := make([]bool, len(parsed))
-	for _, link := range relations {
-		if !link.lossless {
-			conflict[root(link.index)] = true
+	if slices.ContainsFunc(relations, func(link relation) bool { return !link.lossless }) {
+		owner := map[string]int{}
+		for _, index := range candidates {
+			counts, err := content(index)
+			if err != nil {
+				return githubTestsRunReportPlan{}, err
+			}
+			for key := range counts {
+				if first, seen := owner[key]; seen {
+					group[root(index)] = root(first)
+					continue
+				}
+				owner[key] = index
+			}
+		}
+		for _, link := range relations {
+			if !aggregate[link.index] {
+				group[root(link.index)] = root(link.parts[0])
+			}
+		}
+		for _, link := range relations {
+			if !link.lossless {
+				conflict[root(link.index)] = true
+			}
 		}
 	}
 	dropped := make([]bool, len(parsed))
@@ -446,6 +474,77 @@ func githubTestsPlanRunReportsWithin(parsed []githubTestsParsedReport, bound git
 
 // githubTestsContentWithin says whether every suite instance of the report at part (githubTestsReportContent) is also in the report
 // at whole, as many times, counting one work unit per instance read.
+// githubTestsCoverageContent is the allow-list of coverageSnapshotRow fields that are report content, the coverage part of a copy
+// family's representative key. Every other field names the run, the artifact, the format, the attribution or the sync time and
+// must never steer the pick. TestGitHubTestsCoverageRowFieldsAreClassified classifies every field of coverageSnapshotRow and
+// fails when one is added, removed or renamed: classify the new field there, and add it here only if it is report content.
+type githubTestsCoverageContent struct {
+	LinesTotal        *int64   `json:"lines_total"`
+	LinesCovered      *int64   `json:"lines_covered"`
+	LineCoveragePct   *float64 `json:"line_coverage_pct"`
+	BranchesTotal     *int64   `json:"branches_total"`
+	BranchesCovered   *int64   `json:"branches_covered"`
+	BranchCoveragePct *float64 `json:"branch_coverage_pct"`
+	FunctionsTotal    *int64   `json:"functions_total"`
+	FunctionsCovered  *int64   `json:"functions_covered"`
+	ServiceID         *string  `json:"service_id"`
+}
+
+func githubTestsCoverageContentOf(row coverageSnapshotRow) githubTestsCoverageContent {
+	return githubTestsCoverageContent{
+		LinesTotal: row.LinesTotal, LinesCovered: row.LinesCovered, LineCoveragePct: row.LineCoveragePct,
+		BranchesTotal: row.BranchesTotal, BranchesCovered: row.BranchesCovered, BranchCoveragePct: row.BranchCoveragePct,
+		FunctionsTotal: row.FunctionsTotal, FunctionsCovered: row.FunctionsCovered, ServiceID: row.ServiceID,
+	}
+}
+
+// githubTestsCopyRepresentative picks a copy family's representative by content, not by id (CHAOS-14045): a member that holds
+// coverage rows first (a copy is dropped only without them, so a family with one coverage-bearing member then drops the others in
+// any upload order), then the lowest content digest, then the lowest id (members are in id order). The digest holds the suite
+// instances and the content fields of the coverage rows (githubTestsCoverageContent), each part sorted: so the upload id decides
+// only between members of equal content.
+func githubTestsCopyRepresentative(
+	parsed []githubTestsParsedReport, content func(int) (githubTestsCaseCounts, error), members []int,
+) (int, error) {
+	digest := func(index int) (string, error) {
+		counts, err := content(index)
+		if err != nil {
+			return "", err
+		}
+		keys := make([]string, 0, len(counts))
+		for key, count := range counts {
+			keys = append(keys, key+":"+strconv.Itoa(count))
+		}
+		sort.Strings(keys)
+		coverage := make([]string, 0, len(parsed[index].Coverage))
+		for _, row := range parsed[index].Coverage {
+			encoded, err := json.Marshal(githubTestsCoverageContentOf(row))
+			if err != nil {
+				return "", err
+			}
+			coverage = append(coverage, string(encoded))
+		}
+		sort.Strings(coverage)
+		return strings.Join(keys, ",") + "\x00coverage\x00" + strings.Join(coverage, "\x00"), nil
+	}
+	best := members[0]
+	bestDigest, err := digest(best)
+	if err != nil {
+		return 0, err
+	}
+	for _, index := range members[1:] {
+		indexDigest, err := digest(index)
+		if err != nil {
+			return 0, err
+		}
+		covered, bestCovered := len(parsed[index].Coverage) > 0, len(parsed[best].Coverage) > 0
+		if (covered && !bestCovered) || (covered == bestCovered && indexDigest < bestDigest) {
+			best, bestDigest = index, indexDigest
+		}
+	}
+	return best, nil
+}
+
 func githubTestsContentWithin(content func(int) (githubTestsCaseCounts, error), part, whole int, work *int) (bool, error) {
 	partContent, err := content(part)
 	if err != nil {

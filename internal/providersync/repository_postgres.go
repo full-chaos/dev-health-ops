@@ -30,6 +30,10 @@ type PostgresRepository struct {
 	// RepositoryIdentities, when set, is the auth outbox a `repos` effect commit
 	// appends its repository identity events to (WORKER_REPO_IDENTITY_OUTBOX).
 	RepositoryIdentities RepositoryIdentityAppender
+	// storeRetrySleep and commitTx are test seams (store_transient.go); nil in
+	// production.
+	storeRetrySleep func(ctx context.Context, next int) error
+	commitTx        func(ctx context.Context, tx pgx.Tx) error
 }
 
 // NewPostgresRepository constructs the production unit repository. metrics is
@@ -81,6 +85,8 @@ func (repository *PostgresRepository) Claim(ctx context.Context, request ClaimRe
 	}
 	var claim Claim
 	var processorFlags, datasetOptions, unitResult, sourceMetadata, integrationConfig []byte
+	var backfillTiling bool
+	var backfillNextBefore *time.Time
 	err := repository.Pool.QueryRow(
 		ctx,
 		claimUnitSQL,
@@ -115,14 +121,19 @@ func (repository *PostgresRepository) Claim(ctx context.Context, request ClaimRe
 		&claim.CredentialID,
 		&claim.CredentialFingerprint,
 		&claim.AuthSource,
+		&backfillTiling,
+		&backfillNextBefore,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Claim{}, ErrUnitNotClaimable
+		return Claim{}, repository.classifyUnclaimable(ctx, request)
 	}
 	if err != nil {
 		return Claim{}, ErrInvalidConfiguration
 	}
 	claim.Owner = request.Owner
+	if backfillTiling {
+		claim.BackfillNext = &BackfillNextWindow{BeforeAt: backfillNextBefore}
+	}
 	if decodeErr := decodeClaimJSON(processorFlags, &claim.ProcessorFlags); decodeErr != nil {
 		return Claim{}, decodeErr
 	}
@@ -141,6 +152,19 @@ func (repository *PostgresRepository) Claim(ctx context.Context, request ClaimRe
 		repository.Metrics.RecordUnitClaimed(claim.Provider, datasetKey)
 	}
 	return claim, nil
+}
+
+// classifyUnclaimable tells a unit that failed for good in a terminal run (an operator cancel, the
+// feature gate) apart from one that is not claimable for now, after claimUnitSQL returned no row.
+// Every other answer, a failed read included, stays ErrUnitNotClaimable (the caller retries).
+func (repository *PostgresRepository) classifyUnclaimable(ctx context.Context, request ClaimRequest) error {
+	closed := &UnitClosedError{}
+	if err := repository.Pool.QueryRow(ctx, closedUnitSQL, request.UnitID, request.OrgID, closedUnitCategories).Scan(
+		&closed.SyncRunID, &closed.Provider, &closed.Dataset, &closed.Mode, &closed.Category,
+	); err != nil {
+		return ErrUnitNotClaimable
+	}
+	return closed
 }
 
 // decodeClaimDocuments decodes the four JSON documents that ride along with a
@@ -202,21 +226,43 @@ func (repository *PostgresRepository) Complete(
 	if err != nil {
 		return ErrInvalidConfiguration
 	}
+	return repository.retryUnitWrite(ctx, claim, "success", completedAt, func() (func(bool), error) {
+		return repository.completeTx(ctx, claim, encoded, datasetKeys, watermark, startedAt, completedAt)
+	})
+}
+
+// completeTx is one attempt of Complete's transaction. Every step before
+// COMMIT is a statement of tx; the logs, metric and wake it returns run once
+// per committed outcome.
+func (repository *PostgresRepository) completeTx(
+	ctx context.Context, claim Claim, encoded []byte, datasetKeys []string, watermark *time.Time,
+	startedAt, completedAt time.Time,
+) (func(bool), error) {
+	const write = storeWriteComplete
 	tx, err := repository.Pool.Begin(ctx)
 	if err != nil {
-		return ErrInvalidConfiguration
+		return nil, storeErr(write, storeStepBegin, err, ErrInvalidConfiguration)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	// After a COMMIT attempt pgx has already closed the transaction.
+	committing := false
+	defer func() {
+		if !committing {
+			_ = tx.Rollback(ctx)
+		}
+	}()
 	command, err := tx.Exec(ctx, completeUnitSQL,
 		claim.ID, claim.Owner, completedAt.UTC(),
 		int(completedAt.Sub(startedAt).Seconds()), encoded,
 	)
-	if err != nil || command.RowsAffected() != 1 {
-		return ErrLeaseLost
+	if err != nil {
+		return nil, storeErr(write, storeStepUnitUpdate, err, ErrLeaseLost)
+	}
+	if command.RowsAffected() != 1 {
+		return nil, ErrLeaseLost
 	}
 	rollupCompleted, rollupFailed, rollupTotal, err := bumpSyncRunRollup(ctx, tx, claim.SyncRunID)
 	if err != nil {
-		return ErrInvalidConfiguration
+		return nil, storeErr(write, storeStepBump, err, ErrInvalidConfiguration)
 	}
 	// CHAOS-4114: stamp the durable executed-proof ledger from the row this
 	// transaction just terminalized, inside the same transaction. It reads
@@ -226,7 +272,7 @@ func (repository *PostgresRepository) Complete(
 	// rather than committing a unit whose proof was silently not recorded:
 	// the gate's whole value is that its evidence matches reality.
 	if err := RecordExecutedProofTerminal(ctx, tx, claim.ID, completedAt); err != nil {
-		return ErrInvalidConfiguration
+		return nil, storeErr(write, storeStepProof, err, ErrInvalidConfiguration)
 	}
 	// The prepared effect payload is recovery state, not a product record.
 	// Delete it in the same transaction that terminalizes the unit so any
@@ -235,13 +281,13 @@ func (repository *PostgresRepository) Complete(
 		ctx, deletePreparedRouteSnapshotSQL,
 		claim.OrgID, claim.ID, claim.GenerationKey(),
 	); err != nil {
-		return ErrInvalidConfiguration
+		return nil, storeErr(write, storeStepSnapshotDelete, err, ErrInvalidConfiguration)
 	}
 	// The chunk tables are additive during rolling migration. Older test and
 	// deployment fixtures may terminalize a legacy unit before 0102 is
 	// installed, so probe the catalog before issuing the cleanup statement.
 	if err := deletePreparedChunkStateTx(ctx, tx, claim); err != nil {
-		return err
+		return nil, storeErr(write, storeStepChunkDelete, err, ErrInvalidConfiguration)
 	}
 	// A terminal success proves the provider capability is back, regardless of
 	// whether this attempt happened to advance a watermark, so this runs
@@ -249,8 +295,11 @@ func (repository *PostgresRepository) Complete(
 	if _, err := tx.Exec(ctx, clearDatasetUnavailableSQL,
 		claim.OrgID, claim.IntegrationID, claim.Dataset,
 	); err != nil {
-		return ErrInvalidConfiguration
+		return nil, storeErr(write, storeStepDatasetClear, err, ErrInvalidConfiguration)
 	}
+	// The clamp WARN of each watermark is held until COMMIT: a refused attempt
+	// wrote no watermark.
+	var clampLogs []func()
 	if watermark != nil {
 		for _, datasetKey := range datasetKeys {
 			// THE write boundary (CHAOS-3412 C10(c), CHAOS-3427). Every Go
@@ -258,7 +307,7 @@ func (repository *PostgresRepository) Complete(
 			// that prefer a provider-supplied watermark over claim.BeforeAt
 			// bypass every planner-side clamp otherwise, and the INSERT half
 			// of the upsert has no monotonic gate at all to fall back on.
-			normalized := normalizeWatermarkWrite(
+			normalized, clampLog := normalizeWatermarkWrite(
 				*watermark, claim.BeforeAt, completedAt,
 				claim.OrgID, claim.SourceExternalID, datasetKey,
 			)
@@ -266,22 +315,29 @@ func (repository *PostgresRepository) Complete(
 				uuid.New(), claim.OrgID, claim.SourceExternalID, datasetKey,
 				normalized, completedAt.UTC(),
 			); err != nil {
-				return ErrInvalidConfiguration
+				return nil, storeErr(write, storeStepWatermark, err, ErrInvalidConfiguration)
 			}
+			clampLogs = append(clampLogs, clampLog)
 		}
 	}
 	// syncrunrollup.ArmFinalize, not a local statement: this is the seam the
 	// recovery writers (UnreclaimableSweep, LeaseRepair) were missing, so the
 	// SQL now lives beside Bump where every terminal-status writer reaches it.
 	if err := syncrunrollup.ArmFinalize(ctx, tx, claim.SyncRunID, claim.OrgID, completedAt); err != nil {
-		return ErrInvalidConfiguration
+		return nil, storeErr(write, storeStepFinalize, err, ErrInvalidConfiguration)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return ErrInvalidConfiguration
+	afterCommit := func(rollupKnown bool) {
+		for _, clampLog := range clampLogs {
+			clampLog()
+		}
+		repository.recordRollupBump(ctx, claim.SyncRunID, "success", rollupKnown, rollupCompleted, rollupFailed, rollupTotal)
+		repository.wakeDispatch(ctx, claim, completedAt)
 	}
-	recordSyncRunRollupBump(ctx, repository.Metrics, claim.SyncRunID, "success", rollupCompleted, rollupFailed, rollupTotal)
-	repository.wakeDispatch(ctx, claim, completedAt)
-	return nil
+	committing = true
+	if err := repository.commit(ctx, tx); err != nil {
+		return afterCommit, storeErr(write, storeStepCommit, err, ErrInvalidConfiguration)
+	}
+	return afterCommit, nil
 }
 
 // CompleteLinearWorkItemFamily is the typed completion boundary for the
@@ -306,21 +362,43 @@ func (repository *PostgresRepository) CompleteLinearWorkItemFamily(
 	if err != nil {
 		return ErrInvalidConfiguration
 	}
+	return repository.retryUnitWrite(ctx, claim, "success", completedAt, func() (func(bool), error) {
+		return repository.completeLinearWorkItemFamilyTx(ctx, claim, encoded, result.Watermark, startedAt, completedAt)
+	})
+}
+
+// completeLinearWorkItemFamilyTx is one attempt of CompleteLinearWorkItemFamily's
+// transaction. Every step before COMMIT is a statement of tx; the metric, log
+// and wake after COMMIT run once per committed outcome.
+func (repository *PostgresRepository) completeLinearWorkItemFamilyTx(
+	ctx context.Context, claim Claim, encoded []byte, watermark time.Time,
+	startedAt, completedAt time.Time,
+) (func(bool), error) {
+	const write = storeWriteCompleteLinearFamily
 	tx, err := repository.Pool.Begin(ctx)
 	if err != nil {
-		return ErrInvalidConfiguration
+		return nil, storeErr(write, storeStepBegin, err, ErrInvalidConfiguration)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	// After a COMMIT attempt pgx has already closed the transaction.
+	committing := false
+	defer func() {
+		if !committing {
+			_ = tx.Rollback(ctx)
+		}
+	}()
 	command, err := tx.Exec(ctx, completeUnitSQL,
 		claim.ID, claim.Owner, completedAt.UTC(),
 		int(completedAt.Sub(startedAt).Seconds()), encoded,
 	)
-	if err != nil || command.RowsAffected() != 1 {
-		return ErrLeaseLost
+	if err != nil {
+		return nil, storeErr(write, storeStepUnitUpdate, err, ErrLeaseLost)
+	}
+	if command.RowsAffected() != 1 {
+		return nil, ErrLeaseLost
 	}
 	rollupCompleted, rollupFailed, rollupTotal, err := bumpSyncRunRollup(ctx, tx, claim.SyncRunID)
 	if err != nil {
-		return ErrInvalidConfiguration
+		return nil, storeErr(write, storeStepBump, err, ErrInvalidConfiguration)
 	}
 	// CHAOS-4114: stamp the durable executed-proof ledger from the row this
 	// transaction just terminalized, inside the same transaction. It reads
@@ -330,42 +408,52 @@ func (repository *PostgresRepository) CompleteLinearWorkItemFamily(
 	// rather than committing a unit whose proof was silently not recorded:
 	// the gate's whole value is that its evidence matches reality.
 	if err := RecordExecutedProofTerminal(ctx, tx, claim.ID, completedAt); err != nil {
-		return ErrInvalidConfiguration
+		return nil, storeErr(write, storeStepProof, err, ErrInvalidConfiguration)
 	}
 	if _, err := tx.Exec(ctx, deletePreparedRouteSnapshotSQL,
 		claim.OrgID, claim.ID, claim.GenerationKey(),
 	); err != nil {
-		return ErrInvalidConfiguration
+		return nil, storeErr(write, storeStepSnapshotDelete, err, ErrInvalidConfiguration)
 	}
+	// The clamp WARN of each watermark is held until COMMIT: a refused attempt
+	// wrote no watermark.
+	var clampLogs []func()
 	for _, datasetKey := range workitemcontract.FamilyDatasets() {
-		normalized := normalizeWatermarkWrite(
-			result.Watermark, claim.BeforeAt, completedAt,
+		normalized, clampLog := normalizeWatermarkWrite(
+			watermark, claim.BeforeAt, completedAt,
 			claim.OrgID, claim.SourceExternalID, datasetKey,
 		)
 		if _, err := tx.Exec(ctx, upsertWatermarkSQL,
 			uuid.New(), claim.OrgID, claim.SourceExternalID, datasetKey,
 			normalized, completedAt.UTC(),
 		); err != nil {
-			return ErrInvalidConfiguration
+			return nil, storeErr(write, storeStepWatermark, err, ErrInvalidConfiguration)
 		}
+		clampLogs = append(clampLogs, clampLog)
 		if _, err := tx.Exec(ctx, clearDatasetUnavailableSQL,
 			claim.OrgID, claim.IntegrationID, datasetKey,
 		); err != nil {
-			return ErrInvalidConfiguration
+			return nil, storeErr(write, storeStepDatasetClear, err, ErrInvalidConfiguration)
 		}
 	}
 	// syncrunrollup.ArmFinalize, not a local statement: this is the seam the
 	// recovery writers (UnreclaimableSweep, LeaseRepair) were missing, so the
 	// SQL now lives beside Bump where every terminal-status writer reaches it.
 	if err := syncrunrollup.ArmFinalize(ctx, tx, claim.SyncRunID, claim.OrgID, completedAt); err != nil {
-		return ErrInvalidConfiguration
+		return nil, storeErr(write, storeStepFinalize, err, ErrInvalidConfiguration)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return ErrInvalidConfiguration
+	afterCommit := func(rollupKnown bool) {
+		for _, clampLog := range clampLogs {
+			clampLog()
+		}
+		repository.recordRollupBump(ctx, claim.SyncRunID, "success", rollupKnown, rollupCompleted, rollupFailed, rollupTotal)
+		repository.wakeDispatch(ctx, claim, completedAt)
 	}
-	recordSyncRunRollupBump(ctx, repository.Metrics, claim.SyncRunID, "success", rollupCompleted, rollupFailed, rollupTotal)
-	repository.wakeDispatch(ctx, claim, completedAt)
-	return nil
+	committing = true
+	if err := repository.commit(ctx, tx); err != nil {
+		return afterCommit, storeErr(write, storeStepCommit, err, ErrInvalidConfiguration)
+	}
+	return afterCommit, nil
 }
 
 const deletePreparedRouteSnapshotSQL = `
@@ -384,13 +472,44 @@ func (repository *PostgresRepository) ReleaseForRetry(
 		claim.Validate() != nil || now.IsZero() {
 		return ErrInvalidConfiguration
 	}
-	command, err := repository.Pool.Exec(ctx, releaseForRetrySQL,
-		claim.ID, claim.Owner, now.UTC(),
-	)
-	if err != nil || command.RowsAffected() != 1 {
-		return ErrLeaseLost
+	// The release runs in a transaction of its own so a connection lost at its
+	// COMMIT is settled by the same read-back as the terminal writes: the
+	// release stamps updated_at with now, a value only this call writes.
+	return repository.retryUnitWrite(ctx, claim, "dispatching", now, func() (func(bool), error) {
+		return repository.releaseForRetryTx(ctx, claim, now)
+	})
+}
+
+// releaseForRetryTx is one attempt of ReleaseForRetry. Every database error
+// that is not transient answers ErrLeaseLost, as the release always did.
+func (repository *PostgresRepository) releaseForRetryTx(
+	ctx context.Context, claim Claim, now time.Time,
+) (func(bool), error) {
+	const write = storeWriteRelease
+	tx, err := repository.Pool.Begin(ctx)
+	if err != nil {
+		return nil, storeErr(write, storeStepBegin, err, ErrLeaseLost)
 	}
-	return nil
+	// After a COMMIT attempt pgx has already closed the transaction.
+	committing := false
+	defer func() {
+		if !committing {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	command, err := tx.Exec(ctx, releaseForRetrySQL, claim.ID, claim.Owner, now.UTC())
+	if err != nil {
+		return nil, storeErr(write, storeStepUnitUpdate, err, ErrLeaseLost)
+	}
+	if command.RowsAffected() != 1 {
+		return nil, ErrLeaseLost
+	}
+	afterCommit := func(bool) {}
+	committing = true
+	if err := repository.commit(ctx, tx); err != nil {
+		return afterCommit, storeErr(write, storeStepCommit, err, ErrLeaseLost)
+	}
+	return afterCommit, nil
 }
 
 // DeferForBudgetContention records a healthy request-reservation collision.
@@ -405,9 +524,59 @@ func (repository *PostgresRepository) ReleaseForRetry(
 type RateLimitEpisode struct {
 	Deferrals   int
 	FirstSeenAt *time.Time
+	// Checkpoint is the unit's live chunk checkpoint position; nil when the
+	// unit has no checkpoint row of its own generation.
+	Checkpoint *RateLimitProgressMark
+	// Mark is the checkpoint position the last rate-limit deferral stored in
+	// result.rate_limit_progress_mark; nil before the first one.
+	Mark *RateLimitProgressMark
 }
 
-// RateLimitEpisode reads the current deferral counters for a leased unit.
+// RateLimitProgressMark is a chunked walk's durable position.
+type RateLimitProgressMark struct {
+	PreparedChunks int64 `json:"prepared_chunks"`
+	NextOrdinal    int64 `json:"next_ordinal"`
+}
+
+// Advanced reports that mark is past previous: neither field lower, one
+// higher. Within a generation every checkpoint writer only raises both
+// (GREATEST in updateChunkPreparedSQL and advanceChunkCheckpointSQL), but a
+// delete and a fresh insert start again at zero, so this compares the pair
+// rather than a sum.
+func (mark RateLimitProgressMark) Advanced(previous RateLimitProgressMark) bool {
+	return mark.PreparedChunks >= previous.PreparedChunks && mark.NextOrdinal >= previous.NextOrdinal &&
+		(mark.PreparedChunks > previous.PreparedChunks || mark.NextOrdinal > previous.NextOrdinal)
+}
+
+// Progressed reports that the walk prepared or committed a chunk since the
+// last rate-limit deferral. A unit with no checkpoint, or a row deferred
+// before the mark existed, never restarts its episode.
+func (episode RateLimitEpisode) Progressed() bool {
+	return episode.Checkpoint != nil && episode.Mark != nil && episode.Checkpoint.Advanced(*episode.Mark)
+}
+
+// RateLimitEpisodeStep is what one rate-limit deferral writes besides the
+// fence: Restart starts a fresh episode at this deferral, and a non-nil Mark
+// is stored as result.rate_limit_progress_mark.
+type RateLimitEpisodeStep struct {
+	Restart bool
+	Mark    *RateLimitProgressMark
+}
+
+const rateLimitEpisodeSQL = `
+SELECT COALESCE(unit.rate_limit_deferrals, 0), unit.rate_limit_first_seen_at,
+       checkpoint.prepared_chunks, checkpoint.next_ordinal,
+       unit.result::jsonb -> 'rate_limit_progress_mark'
+FROM public.sync_run_units AS unit
+LEFT JOIN public.sync_run_unit_chunk_checkpoints AS checkpoint
+  ON checkpoint.org_id = unit.org_id
+ AND checkpoint.sync_run_unit_id = unit.id
+ AND checkpoint.generation = $3
+WHERE unit.id = $1::uuid
+  AND unit.org_id = $2`
+
+// RateLimitEpisode reads the current deferral counters for a leased unit,
+// with its live checkpoint position and the mark of its last deferral.
 func (repository *PostgresRepository) RateLimitEpisode(
 	ctx context.Context,
 	claim Claim,
@@ -416,14 +585,32 @@ func (repository *PostgresRepository) RateLimitEpisode(
 		return RateLimitEpisode{}, ErrInvalidConfiguration
 	}
 	var episode RateLimitEpisode
-	if err := repository.Pool.QueryRow(ctx, `
-		SELECT COALESCE(rate_limit_deferrals, 0), rate_limit_first_seen_at
-		FROM public.sync_run_units
-		WHERE id = $1::uuid`, claim.ID,
-	).Scan(&episode.Deferrals, &episode.FirstSeenAt); err != nil {
+	var preparedChunks, nextOrdinal *int64
+	var mark []byte
+	if err := repository.Pool.QueryRow(ctx, rateLimitEpisodeSQL, claim.ID, claim.OrgID, claim.GenerationKey()).Scan(
+		&episode.Deferrals, &episode.FirstSeenAt, &preparedChunks, &nextOrdinal, &mark,
+	); err != nil {
 		return RateLimitEpisode{}, ErrInvalidConfiguration
 	}
+	if preparedChunks != nil && nextOrdinal != nil {
+		episode.Checkpoint = &RateLimitProgressMark{PreparedChunks: *preparedChunks, NextOrdinal: *nextOrdinal}
+	}
+	episode.Mark = decodeRateLimitProgressMark(mark)
 	return episode, nil
+}
+
+// decodeRateLimitProgressMark reads a stored mark. Anything but an object with
+// both counts reads as no mark: no restart, and the next deferral rewrites it.
+func decodeRateLimitProgressMark(raw []byte) *RateLimitProgressMark {
+	var fields map[string]*int64
+	if len(raw) == 0 || json.Unmarshal(raw, &fields) != nil {
+		return nil
+	}
+	prepared, next := fields["prepared_chunks"], fields["next_ordinal"]
+	if prepared == nil || next == nil {
+		return nil
+	}
+	return &RateLimitProgressMark{PreparedChunks: *prepared, NextOrdinal: *next}
 }
 
 // RateLimitObservation is the normalized, durable record of the rate limit that
@@ -460,11 +647,20 @@ func (repository *PostgresRepository) DeferForRateLimit(
 	availableAt time.Time,
 	now time.Time,
 	observation RateLimitObservation,
+	step RateLimitEpisodeStep,
 ) error {
 	if repository == nil || repository.Pool == nil || ctx == nil ||
 		claim.Validate() != nil || now.IsZero() || !availableAt.After(now) ||
 		availableAt.Sub(now) > rateLimitMaxTotalWait {
 		return ErrInvalidConfiguration
+	}
+	var mark any
+	if step.Mark != nil {
+		encoded, err := json.Marshal(step.Mark)
+		if err != nil {
+			return ErrInvalidConfiguration
+		}
+		mark = string(encoded)
 	}
 	tx, err := repository.Pool.Begin(ctx)
 	if err != nil {
@@ -473,7 +669,7 @@ func (repository *PostgresRepository) DeferForRateLimit(
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	command, err := tx.Exec(
 		ctx, deferForRateLimitSQL,
-		claim.ID, claim.Owner, now.UTC(), availableAt.UTC(),
+		claim.ID, claim.Owner, now.UTC(), availableAt.UTC(), step.Restart, mark,
 	)
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
@@ -691,11 +887,6 @@ func (repository *PostgresRepository) failTx(
 		startedAt.IsZero() || completedAt.Before(startedAt) {
 		return ErrInvalidConfiguration
 	}
-	tx, err := repository.Pool.Begin(ctx)
-	if err != nil {
-		return ErrInvalidConfiguration
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
 	resultDoc := map[string]any{"error_category": category}
 	if causeClass != "" {
 		if !ValidCauseClass(causeClass) {
@@ -713,52 +904,118 @@ func (repository *PostgresRepository) failTx(
 	if marshalErr != nil {
 		return ErrInvalidConfiguration
 	}
+	return repository.retryUnitWrite(ctx, claim, "failed", completedAt, func() (func(bool), error) {
+		return repository.failTxOnce(ctx, claim, category, result, startedAt, completedAt)
+	})
+}
+
+// failTxOnce is one attempt of failTx's transaction. Every step before COMMIT
+// is a statement of tx (stampNeedsAttention's log lines are held until after
+// COMMIT); the metrics, logs and wake after COMMIT run once per committed
+// outcome.
+func (repository *PostgresRepository) failTxOnce(
+	ctx context.Context, claim Claim, category string, result []byte,
+	startedAt, completedAt time.Time,
+) (func(bool), error) {
+	const write = storeWriteFail
+	tx, err := repository.Pool.Begin(ctx)
+	if err != nil {
+		return nil, storeErr(write, storeStepBegin, err, ErrInvalidConfiguration)
+	}
+	// After a COMMIT attempt pgx has already closed the transaction.
+	committing := false
+	defer func() {
+		if !committing {
+			_ = tx.Rollback(ctx)
+		}
+	}()
 	command, err := tx.Exec(ctx, failUnitSQL,
 		claim.ID, claim.Owner, completedAt.UTC(),
 		int(completedAt.Sub(startedAt).Seconds()), category, result,
 	)
-	if err != nil || command.RowsAffected() != 1 {
-		return ErrLeaseLost
+	if err != nil {
+		return nil, storeErr(write, storeStepUnitUpdate, err, ErrLeaseLost)
+	}
+	if command.RowsAffected() != 1 {
+		return nil, ErrLeaseLost
 	}
 	rollupCompleted, rollupFailed, rollupTotal, err := bumpSyncRunRollup(ctx, tx, claim.SyncRunID)
 	if err != nil {
-		return ErrInvalidConfiguration
+		return nil, storeErr(write, storeStepBump, err, ErrInvalidConfiguration)
 	}
 	if category == ProviderDatasetUnavailableCategory {
 		if _, err := tx.Exec(ctx, markDatasetUnavailableSQL,
 			claim.OrgID, claim.IntegrationID, claim.Dataset, category, completedAt.UTC(),
 		); err != nil {
-			return ErrInvalidConfiguration
+			return nil, storeErr(write, storeStepDatasetMark, err, ErrInvalidConfiguration)
 		}
 	}
+	logNeedsAttention := func() {}
 	if claim.Dataset == workItemsCanonicalDataset {
-		stampNeedsAttention(ctx, tx, claim)
+		var stampErr error
+		logNeedsAttention, stampErr = stampNeedsAttention(ctx, tx, claim)
+		if stampErr != nil {
+			return nil, storeErr(write, storeStepNeedsAttention, stampErr, ErrInvalidConfiguration)
+		}
 	}
 	// Unlike a prepared recovery snapshot, a chunk checkpoint is only ever
 	// resumable by a RUNNING unit of the same generation. Terminalizing the
 	// unit makes its sidecars unreachable, so keeping them would retain
 	// provider payloads that nothing can read and nothing else reclaims.
 	if err := deletePreparedChunkStateTx(ctx, tx, claim); err != nil {
-		return err
+		return nil, storeErr(write, storeStepChunkDelete, err, ErrInvalidConfiguration)
 	}
 	// syncrunrollup.ArmFinalize, not a local statement: this is the seam the
 	// recovery writers (UnreclaimableSweep, LeaseRepair) were missing, so the
 	// SQL now lives beside Bump where every terminal-status writer reaches it.
 	if err := syncrunrollup.ArmFinalize(ctx, tx, claim.SyncRunID, claim.OrgID, completedAt); err != nil {
-		return ErrInvalidConfiguration
+		return nil, storeErr(write, storeStepFinalize, err, ErrInvalidConfiguration)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return ErrInvalidConfiguration
+	afterCommit := func(rollupKnown bool) {
+		logNeedsAttention()
+		repository.recordRollupBump(ctx, claim.SyncRunID, "failed", rollupKnown, rollupCompleted, rollupFailed, rollupTotal)
+		repository.wakeDispatch(ctx, claim, completedAt)
+		repository.recordUnitFailed(claim, category)
 	}
-	recordSyncRunRollupBump(ctx, repository.Metrics, claim.SyncRunID, "failed", rollupCompleted, rollupFailed, rollupTotal)
-	repository.wakeDispatch(ctx, claim, completedAt)
+	committing = true
+	if err := repository.commit(ctx, tx); err != nil {
+		return afterCommit, storeErr(write, storeStepCommit, err, ErrInvalidConfiguration)
+	}
+	return afterCommit, nil
+}
+
+// recordRollupBump records a committed rollup bump. When the commit was only
+// confirmed by a read-back, the bump's counts are not re-read: it is counted as
+// ambiguous_commit with a WARN, not as a bump with counts.
+func (repository *PostgresRepository) recordRollupBump(
+	ctx context.Context, syncRunID, outcome string, known bool,
+	completedUnits, failedUnits, totalUnits int,
+) {
+	if known {
+		recordSyncRunRollupBump(ctx, repository.Metrics, syncRunID, outcome, completedUnits, failedUnits, totalUnits)
+		return
+	}
+	repository.Metrics.RecordSyncRunRollupBumped(syncRunRollupBumpAmbiguousCommit, recordSyncRunRollupBumpPath)
+	slog.WarnContext(ctx, "sync_run.rollup_bump_ambiguous",
+		slog.String("sync_run_id", syncRunID),
+		slog.String("outcome", outcome),
+		slog.String("path", recordSyncRunRollupBumpPath),
+		slog.String("reason", "the commit was confirmed by a read-back; the bump counts are unknown"),
+	)
+}
+
+// syncRunRollupBumpAmbiguousCommit is the rollup bump outcome of a commit that
+// only a read-back confirmed.
+const syncRunRollupBumpAmbiguousCommit = "ambiguous_commit"
+
+// recordUnitFailed counts one committed unit failure.
+func (repository *PostgresRepository) recordUnitFailed(claim Claim, category string) {
 	// CHAOS-4078: attribute the failure to whichever alias dataset(s) this
 	// claim actually represents, not just the persisted canonical identity
 	// -- see metricDatasetKeys.
 	for _, datasetKey := range metricDatasetKeys(claim.Dataset, claim.ProcessorFlags) {
 		repository.Metrics.RecordUnitFailed(claim.Provider, datasetKey, category)
 	}
-	return nil
 }
 
 func decodeClaimJSON(raw []byte, target *map[string]bool) error {
@@ -872,7 +1129,9 @@ SELECT
     COALESCE(integration.config::text, '{}'),
     COALESCE(run.credential_id, integration.credential_id)::text,
     COALESCE(run.credential_fingerprint, ''),
-    COALESCE(run.auth_source, 'integration_credential')
+    COALESCE(run.auth_source, 'integration_credential'),
+    claimed.mode = 'backfill' AND claimed.before_at IS NOT NULL,
+    next_chunk.before_at
 FROM claimed
 JOIN public.sync_runs AS run
   ON run.id = claimed.sync_run_id AND run.org_id = claimed.org_id
@@ -885,7 +1144,37 @@ JOIN public.integration_sources AS source
 LEFT JOIN public.integration_datasets AS dataset
   ON dataset.integration_id = claimed.integration_id
  AND dataset.org_id = claimed.org_id
- AND dataset.dataset_key = claimed.dataset_key`
+ AND dataset.dataset_key = claimed.dataset_key
+-- CHAOS-14222: the backfill chunk that starts at this unit's before_at (the
+-- planner writes a run's units in one transaction). NULL = none: the last
+-- chunk. Two such rows: the earliest before_at, so the read rule takes the
+-- later listing floor and reads a run rather than drop it.
+LEFT JOIN LATERAL (
+    SELECT min(sibling.before_at) AS before_at
+    FROM public.sync_run_units AS sibling
+    WHERE claimed.mode = 'backfill'
+      AND sibling.sync_run_id = claimed.sync_run_id
+      AND sibling.org_id = claimed.org_id
+      AND sibling.source_id = claimed.source_id
+      AND sibling.dataset_key = claimed.dataset_key
+      AND sibling.mode = 'backfill'
+      AND sibling.since_at = claimed.before_at
+) AS next_chunk ON true`
+
+// closedUnitSQL finds a unit that failed for good: failed with one of the closed categories (an
+// operator cancel, the feature gate), in a terminal run, both of the job's organization. failed is
+// final (every write that re-arms a unit needs status running, planned or retrying), so a row here
+// stays true. The category returned is the one the writer stamped.
+const closedUnitSQL = `
+SELECT unit.sync_run_id::text, unit.provider, unit.dataset_key, unit.mode, unit.result->>'error_category'
+FROM public.sync_run_units AS unit
+JOIN public.sync_runs AS run
+  ON run.id = unit.sync_run_id AND run.org_id = unit.org_id
+WHERE unit.id = $1::uuid
+  AND unit.org_id = $2
+  AND unit.status = 'failed'
+  AND unit.result->>'error_category' = ANY($3::text[])
+  AND run.status IN ('success', 'partial_failed', 'failed')`
 
 const assertLeaseSQL = `
 SELECT EXISTS (
@@ -1001,7 +1290,7 @@ SET status = 'dispatching',
     available_at = NULL,
     error = 'provider_unit_retryable',
     result = (
-      COALESCE(unit.result::jsonb, '{}'::jsonb) ||
+      CASE WHEN jsonb_typeof(unit.result::jsonb) = 'object' THEN unit.result::jsonb ELSE jsonb_build_object() END ||
       jsonb_build_object('error_category', 'provider_unit_retryable')
     ),
     lease_owner = NULL,
@@ -1041,7 +1330,7 @@ SET status = 'dispatching',
     available_at = $4,
     error = 'provider_budget_contention',
     result = (
-      COALESCE(unit.result::jsonb, jsonb_build_object()) ||
+      CASE WHEN jsonb_typeof(unit.result::jsonb) = 'object' THEN unit.result::jsonb ELSE jsonb_build_object() END ||
       jsonb_build_object(
         'error_category', 'provider_budget_contention',
         'not_before', to_jsonb($4::timestamptz),
@@ -1068,15 +1357,17 @@ SET status = 'dispatching',
     attempts = GREATEST(unit.attempts - 1, 0),
     available_at = $4,
     error = 'provider_rate_limited',
-    rate_limit_deferrals = COALESCE(unit.rate_limit_deferrals, 0) + 1,
-    rate_limit_first_seen_at = COALESCE(unit.rate_limit_first_seen_at, $3),
+    rate_limit_deferrals = CASE WHEN $5::boolean THEN 1 ELSE COALESCE(unit.rate_limit_deferrals, 0) + 1 END,
+    rate_limit_first_seen_at = CASE WHEN $5::boolean THEN $3 ELSE COALESCE(unit.rate_limit_first_seen_at, $3) END,
     result = (
-      COALESCE(unit.result::jsonb, jsonb_build_object()) ||
+      CASE WHEN jsonb_typeof(unit.result::jsonb) = 'object' THEN unit.result::jsonb ELSE jsonb_build_object() END ||
       jsonb_build_object(
         'error_category', 'provider_rate_limited',
         'not_before', to_jsonb($4::timestamptz),
-        'rate_limit_deferrals', COALESCE(unit.rate_limit_deferrals, 0) + 1
-      )
+        'rate_limit_deferrals', CASE WHEN $5::boolean THEN 1 ELSE COALESCE(unit.rate_limit_deferrals, 0) + 1 END
+      ) ||
+      CASE WHEN $6::jsonb IS NULL THEN jsonb_build_object()
+           ELSE jsonb_build_object('rate_limit_progress_mark', $6::jsonb) END
     ),
     first_blocked_at = COALESCE(unit.first_blocked_at, $3),
     lease_owner = NULL,
@@ -1103,7 +1394,7 @@ SET status = 'dispatching',
     available_at = $4,
     error = 'provider_unit_chunk_continuation',
     result = (
-      COALESCE(unit.result::jsonb, jsonb_build_object()) ||
+      CASE WHEN jsonb_typeof(unit.result::jsonb) = 'object' THEN unit.result::jsonb ELSE jsonb_build_object() END ||
       jsonb_build_object(
         'error_category', 'provider_unit_chunk_continuation',
         'not_before', to_jsonb($4::timestamptz)
@@ -1303,25 +1594,49 @@ const workItemsCanonicalDataset = "work-items"
 // stampNeedsAttention marks the work-items dataset of the claim's integration
 // once the source has failed FailureStreakThreshold times in a row with one
 // cause class (CHAOS-8802). The next terminal success clears the marker
-// (clearDatasetUnavailableSQL). It runs in a savepoint and never fails the
-// terminalization: a lost stamp only delays the owner-facing hint.
-func stampNeedsAttention(ctx context.Context, tx pgx.Tx, claim Claim) {
+// (clearDatasetUnavailableSQL). It runs in a savepoint and a non-transient
+// error never fails the terminalization: a lost stamp only delays the
+// owner-facing hint. A transient error (IsTransientStoreError) is returned, so
+// the caller retries the whole transaction. It returns its log line instead of
+// writing it: the caller writes it after COMMIT, so a retried or rolled-back
+// terminalization logs nothing for this attempt.
+func stampNeedsAttention(ctx context.Context, tx pgx.Tx, claim Claim) (func(), error) {
+	noLog := func() {}
 	savepoint, err := tx.Begin(ctx)
 	if err != nil {
-		slog.Default().Warn("providersync.needs_attention_streak_unavailable",
-			slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
-			slog.String("failure", "savepoint_begin_failed"))
-		return
+		if IsTransientStoreError(err) {
+			return noLog, err
+		}
+		return func() {
+			slog.Default().Warn("providersync.needs_attention_streak_unavailable",
+				slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
+				slog.String("failure", "savepoint_begin_failed"))
+		}, nil
+	}
+	// rollback ends the savepoint after a failed or empty step; a transient
+	// error in the rollback itself is returned like any other.
+	rollback := func(stepErr error) error {
+		if IsTransientStoreError(stepErr) {
+			return stepErr
+		}
+		if rollbackErr := savepoint.Rollback(ctx); rollbackErr != nil && IsTransientStoreError(rollbackErr) {
+			return rollbackErr
+		}
+		return nil
 	}
 	streak, err := sourceFailureStreak(ctx, savepoint, claim)
 	if err != nil || streak.Count < FailureStreakThreshold {
-		_ = savepoint.Rollback(ctx)
-		if err != nil {
-			slog.Default().Warn("providersync.needs_attention_streak_unavailable",
-				slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
-				slog.String("failure", "streak_query_failed"))
+		if transientErr := rollback(err); transientErr != nil {
+			return noLog, transientErr
 		}
-		return
+		if err != nil {
+			return func() {
+				slog.Default().Warn("providersync.needs_attention_streak_unavailable",
+					slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
+					slog.String("failure", "streak_query_failed"))
+			}, nil
+		}
+		return noLog, nil
 	}
 	// Only the canonical row: the generic Complete clears exactly claim.Dataset,
 	// so a stamp on an alias row would never clear after a success.
@@ -1329,36 +1644,48 @@ func stampNeedsAttention(ctx context.Context, tx pgx.Tx, claim Claim) {
 		claim.OrgID, claim.IntegrationID, claim.Dataset, streak.NeedsAttentionReason(), streak.LastAt.UTC(),
 	)
 	if err != nil {
-		_ = savepoint.Rollback(ctx)
-		slog.Default().Warn("providersync.needs_attention_stamp_failed",
-			slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
-			slog.String("failure", "stamp_failed"))
-		return
+		if transientErr := rollback(err); transientErr != nil {
+			return noLog, transientErr
+		}
+		return func() {
+			slog.Default().Warn("providersync.needs_attention_stamp_failed",
+				slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
+				slog.String("failure", "stamp_failed"))
+		}, nil
 	}
 	if tag.RowsAffected() == 0 {
-		_ = savepoint.Rollback(ctx)
-		slog.Default().Warn("providersync.needs_attention_stamp_no_dataset_row",
+		if transientErr := rollback(nil); transientErr != nil {
+			return noLog, transientErr
+		}
+		return func() {
+			slog.Default().Warn("providersync.needs_attention_stamp_no_dataset_row",
+				slog.String("org_id", claim.OrgID),
+				slog.String("integration_id", claim.IntegrationID),
+				slog.String("source_id", claim.SourceID),
+				slog.String("dataset", claim.Dataset),
+				slog.Int("failures_in_a_row", streak.Count))
+		}, nil
+	}
+	if err := savepoint.Commit(ctx); err != nil {
+		if IsTransientStoreError(err) {
+			return noLog, err
+		}
+		return func() {
+			slog.Default().Warn("providersync.needs_attention_stamp_failed",
+				slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
+				slog.String("failure", "commit_failed"))
+		}, nil
+	}
+	return func() {
+		slog.Default().Info("providersync.needs_attention_stamped",
 			slog.String("org_id", claim.OrgID),
 			slog.String("integration_id", claim.IntegrationID),
 			slog.String("source_id", claim.SourceID),
-			slog.String("dataset", claim.Dataset),
-			slog.Int("failures_in_a_row", streak.Count))
-		return
-	}
-	if err := savepoint.Commit(ctx); err != nil {
-		slog.Default().Warn("providersync.needs_attention_stamp_failed",
-			slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
-			slog.String("failure", "commit_failed"))
-		return
-	}
-	slog.Default().Info("providersync.needs_attention_stamped",
-		slog.String("org_id", claim.OrgID),
-		slog.String("integration_id", claim.IntegrationID),
-		slog.String("source_id", claim.SourceID),
-		slog.String("provider", claim.Provider),
-		slog.String("cause_class", streak.Class),
-		slog.Int("failures_in_a_row", streak.Count),
-		slog.Duration("retry_interval", FailureStreakRetryInterval))
+			slog.String("provider", claim.Provider),
+			slog.String("cause_class", streak.Class),
+			slog.Int("failures_in_a_row", streak.Count),
+			slog.Duration("retry_interval", FailureStreakRetryInterval))
+	}, nil
 }
 
 // sourceFailureStreak reads the streak of one source from its newest terminal

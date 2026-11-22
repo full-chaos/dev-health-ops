@@ -1,0 +1,9 @@
+KIT file roll.sh sha256 5791b501d678 = pin
+KIT file state.sh sha256 5d0f57dc32af = pin
+KIT file render.sh sha256 39350589f4d7 = pin
+KIT file watch.sh sha256 ac84452463f2 = pin
+KIT file paths.sh sha256 f15eade2fa29 = pin
+KIT file guard.sh sha256 161cfaa0dee8 = pin
+KIT file read.sh sha256 643b703eafc0 = pin
+KIT file lib.sh sha256 1958649451cf = pin
+KITREFRESH: PASS (8 files = pins)

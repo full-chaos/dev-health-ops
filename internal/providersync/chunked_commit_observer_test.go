@@ -28,9 +28,9 @@ func (s *traceChunkStore) LoadPreparedChunk(ctx context.Context, claim Claim, or
 	return s.chunkMemoryStore.LoadPreparedChunk(ctx, claim, ordinal, now)
 }
 
-func (s *traceChunkStore) PrepareChunkGroup(ctx context.Context, claim Claim, chunks []PreparedProviderChunk, now time.Time) ([]PreparedProviderChunk, error) {
+func (s *traceChunkStore) PrepareChunkGroup(ctx context.Context, claim Claim, chunks []PreparedProviderChunk, now, leaseNow time.Time) ([]PreparedProviderChunk, error) {
 	s.trace = append(s.trace, fmt.Sprintf("prepare %d+%d", chunks[0].Ordinal, len(chunks)))
-	return s.chunkMemoryStore.PrepareChunkGroup(ctx, claim, chunks, now)
+	return s.chunkMemoryStore.PrepareChunkGroup(ctx, claim, chunks, now, leaseNow)
 }
 
 func (s *traceChunkStore) MarkChunkCommitted(ctx context.Context, claim Claim, ordinal int, digest string, now time.Time) error {

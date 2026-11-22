@@ -60,10 +60,20 @@ func TestRealClickHouse_CoverageScopeBaseline(t *testing.T) {
 			t.Fatalf("seed: %v\n%s", err, statement)
 		}
 	}
+	// A line value p is stored with its counts, p of 100 lines; a NULL line value has no counts.
 	coverage := func(o, repo string, day time.Time, line, branch any, computed time.Time) {
+		var covered, total any
+		if p, ok := line.(float64); ok {
+			covered, total = uint32(p), uint32(100)
+		}
+		// A stored branch percent carries the counts of a 100-branch repository-day.
+		var bCovered, bTotal any
+		if p, ok := branch.(float64); ok {
+			bCovered, bTotal = uint32(p), uint32(100)
+		}
 		exec(`INSERT INTO testops_coverage_metrics_daily
-			(repo_id, day, line_coverage_pct, branch_coverage_pct, uncovered_files_count, coverage_regression_count, org_id, computed_at)
-			VALUES (?, ?, ?, ?, 0, 0, ?, ?)`, repo, day, line, branch, o, computed)
+			(repo_id, day, line_coverage_pct, lines_covered, lines_total, branch_coverage_pct, branches_covered, branches_total, uncovered_files_count, coverage_regression_count, org_id, computed_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`, repo, day, line, covered, total, branch, bCovered, bTotal, o, computed)
 	}
 	exec(`INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, repoA, "acme/alpha", "github", org, older, older)
 	exec(`INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, repoB, "acme/beta", "gitlab", org, older, older)
@@ -97,18 +107,20 @@ func TestRealClickHouse_CoverageScopeBaseline(t *testing.T) {
 
 	near := func(got *float64, want float64) bool { return got != nil && math.Abs(*got-want) < 1e-9 }
 
-	// The whole org. Line: days 1, 2, 3, 4, 6 are (80+50)/2 = 65; day 5 is 50
-	// (A's newest version is NULL); day 9 has no value; the 23 other days are 80.
-	// (5*65 + 50 + 23*80) / 29 = 2215 / 29. The mean of the repository baselines
-	// would be 80 (B has six days: no baseline) or 65 (both means): neither is it.
+	// The whole org. Line, pooled over the counted repo-days (each 100 lines): A
+	// counts 28 days of 80 (day 5 and day 9 have a newer NULL), B 6 days of 50, so
+	// (28*80 + 6*50) / (34*100) = 2540 / 34 percent, over the 29 distinct days
+	// with a counted repo-day (day 9 has none). The mean of the day values would
+	// be 2215 / 29; the mean of the repository baselines 80 (B has six days: no
+	// baseline) or 65 (both means): it is none of them.
 	// Branch: days 1, 2, 3 are (40+60)/2 = 50; days 4, 5, 6 are 60: six days, so
 	// no baseline.
 	whole, err := ResolveScope(ctx, client, org, graphqldate.New(end), Scope{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !near(whole.LineBaselinePct, 2215.0/29.0) || whole.LineDays != 29 {
-		t.Errorf("whole org line = %v over %d days, want %v over 29", show(whole.LineBaselinePct), whole.LineDays, 2215.0/29.0)
+	if !near(whole.LineBaselinePct, 2540.0/34.0) || whole.LineDays != 29 {
+		t.Errorf("whole org line = %v over %d days, want %v over 29", show(whole.LineBaselinePct), whole.LineDays, 2540.0/34.0)
 	}
 	if whole.BranchBaselinePct != nil || whole.BranchDays != 6 {
 		t.Errorf("whole org branch = %v over %d days, want no baseline over 6 days", show(whole.BranchBaselinePct), whole.BranchDays)
@@ -119,7 +131,7 @@ func TestRealClickHouse_CoverageScopeBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !near(named.LineBaselinePct, 2215.0/29.0) || named.LineDays != 29 || named.BranchBaselinePct != nil || named.BranchDays != 6 {
+	if !near(named.LineBaselinePct, 2540.0/34.0) || named.LineDays != 29 || named.BranchBaselinePct != nil || named.BranchDays != 6 {
 		t.Errorf("both repositories named = %+v, want the whole org's answer", named)
 	}
 

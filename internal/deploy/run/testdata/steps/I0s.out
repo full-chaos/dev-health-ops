@@ -1,0 +1,2 @@
+START acme-app rev 1207 deployed; rows above: none
+START-CHECK: PASS (rev 1207 deployed)

@@ -226,7 +226,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	// below actually succeeds.
 	ctx = withRollupBumpTally(ctx)
 	ctx = withPostCommitLogs(ctx)
-	fence := &transportFence{args: args, kind: outboxKindDispatchSyncRun, unavailable: ErrDispatchSyncRunUnavailable}
+	fence := &transportFence{args: args, kind: outboxKindDispatchSyncRun, unavailable: ErrDispatchSyncRunUnavailable, logger: service.logger}
 
 	// The outbox-relay route-generation fence every native service already
 	// starts with (finalizeWorker/referenceDiscoveryWorker's own first
@@ -622,26 +622,21 @@ WHERE id = $1::uuid`,
 	}
 
 	if riverQueued > 0 {
-		switch {
-		// CHAOS-4605: a unit left unclaimed because it became claimable
-		// after the guard's snapshot is due NOW -- it is not a deferral, it
-		// just missed this pass's capacity decision. Without an arm here the
-		// riverQueued > 0 path can commit with nothing scheduled (no
-		// nextDeferredAt, no capped ids) and strand it: the tail's
-		// computePendingUnitCounts re-arm only runs when riverQueued == 0.
-		//
-		// Arm the EARLIER of the default countdown and any budget deferral,
-		// so neither delays the other: scheduleRedispatch writes ONE wakeup
-		// and its second statement overwrites a pending row unconditionally,
-		// so picking the wrong one of the two would push the other back.
-		case len(deferredOutsideSnapshot) > 0:
-			armAt := service.nowUTC()
-			scheduleRedispatch(ctx, service.pool, service.logger, run.id,
-				dueNowRearmAt(nextDeferredAt, armAt), armAt)
-		case nextDeferredAt != nil:
-			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nextDeferredAt, service.nowUTC())
-		case len(cappedIDs) > 0:
-			scheduleRedispatch(ctx, service.pool, service.logger, run.id, nil, service.nowUTC())
+		// The pass consumed the run's dispatch row, so it re-arms from the run's state after its writes, not only from
+		// this pass's deferrals: a retrying unit an earlier pass deferred keeps its wake, and work still due now
+		// (concurrency-capped units, a unit that became claimable after the guard's snapshot, CHAOS-4605) wants the
+		// countdown. scheduleRedispatch writes ONE wakeup and overwrites a pending row, so it takes the earlier of the two.
+		// On a failed read the pass arms from its own values (only an earlier pass's deferral is not carried) and does not
+		// return the error: a retried delivery would run admission again under the same attempt. Due work is the guard's
+		// concurrency-capped units; the pass's budget-deferred and cooldown-excluded units are in nextDeferredAt.
+		counts, err := service.pendingUnitCountsNow(ctx, run.id, now)
+		if err != nil {
+			service.logger.Warn(ctx, synclog.MsgDispatchSyncRunRedispatchBackoffReadFailed, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(pendingCountsReadReason)))
+			counts = pendingUnitCounts{dispatchable: len(decision.cappedUnitIDs)}
+		}
+		armAt := service.nowUTC()
+		if at, ok := queuedPassRearmAt(nextDeferredAt, counts, len(deferredOutsideSnapshot) > 0, armAt); ok {
+			scheduleRedispatch(ctx, service.pool, service.logger, run.id, at, armAt)
 		}
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunDispatched, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, riverQueued))
 		return nil
@@ -651,17 +646,9 @@ WHERE id = $1::uuid`,
 	// SECOND, separate transaction (Python's own second
 	// `with get_postgres_session_sync() as session:` block, opened only
 	// after the first one above already committed).
-	tailTx, err := service.pool.Begin(ctx)
+	counts, err := service.pendingUnitCountsNow(ctx, run.id, now)
 	if err != nil {
-		return ErrDispatchSyncRunUnavailable
-	}
-	counts, err := computePendingUnitCounts(ctx, tailTx, run.id, service.nowUTC())
-	if err != nil {
-		_ = tailTx.Rollback(ctx)
 		return err
-	}
-	if err := tailTx.Commit(ctx); err != nil {
-		return ErrDispatchSyncRunUnavailable
 	}
 
 	// a) Deferred work remains dispatchable now (a PLANNED unit, or a due
@@ -690,20 +677,21 @@ WHERE id = $1::uuid`,
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunNoop, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Count(synclog.KeyPendingUnits, counts.dispatchable))
 		return nil
 	}
-	// b) Nothing dispatchable, but something is genuinely in flight
-	// (DISPATCHING not yet stale, or RUNNING) -- wait for it; no wakeup to
-	// arm, this pass's job here is done.
-	if counts.inFlight > 0 {
-		service.logger.Info(ctx, synclog.MsgDispatchSyncRunWaitingInflight, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Count(synclog.KeyInFlightUnits, counts.inFlight))
-		return nil
-	}
-	// c) Nothing dispatchable or in flight, but a RETRYING unit has a
-	// future available_at -- arm a redispatch for exactly that time rather
-	// than the default countdown, so a long backoff is honored instead of
-	// being polled early for nothing.
+	// b) Nothing dispatchable, but a RETRYING unit has a future available_at
+	// -- arm a redispatch for exactly that time rather than the default
+	// countdown, so a long backoff is honored instead of being polled early for
+	// nothing. Also while units are in flight: this pass consumed the run's
+	// row, so without it the deferral would wait for the next unit end.
 	if counts.nextDeferredAt != nil {
 		scheduleRedispatch(ctx, service.pool, service.logger, run.id, counts.nextDeferredAt, service.nowUTC())
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunDeferred, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Instant(synclog.KeyNextDeferredAt, *counts.nextDeferredAt))
+		return nil
+	}
+	// c) Nothing dispatchable or deferred, but something is genuinely in
+	// flight (DISPATCHING not yet stale, or RUNNING) -- wait for it; its end
+	// wakes the pass, no wakeup to arm.
+	if counts.inFlight > 0 {
+		service.logger.Info(ctx, synclog.MsgDispatchSyncRunWaitingInflight, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Count(synclog.KeyInFlightUnits, counts.inFlight))
 		return nil
 	}
 	// d) No pending work of any kind (a zero-unit run, or every unit

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -54,6 +55,12 @@ type PageCollection struct {
 	// caller's StopAt/StopAfter, an unreadable header, an end inferred from the
 	// page size) leaves it false.
 	EndProven bool
+	// DeclaredTotal is the largest count a page declared under
+	// GitHubPageOptions.TotalKey; DeclaredTotalSeen says a page carried the key.
+	// A value that is not a non-negative integer reads as the largest int, so a
+	// caller comparing it with the items it got finds the walk short.
+	DeclaredTotal     int
+	DeclaredTotalSeen bool
 }
 
 // PageVisit is the bounded page callback used by resumable provider routes.
@@ -225,6 +232,9 @@ type GitHubPageOptions struct {
 	// has collected what it needs (a listing capped at N matches), so the cap
 	// costs no speculative request. Leave nil for the unmodified behavior.
 	StopAfter func(json.RawMessage) bool
+	// TotalKey names the envelope field holding the provider's declared item
+	// count (for example total_count); PageCollection reports it. Empty reads none.
+	TotalKey string
 }
 
 // CollectGitHubLinkPages mirrors the Python InstrumentedRESTCore contract:
@@ -259,11 +269,15 @@ func CollectGitHubLinkPages(
 		if err != nil {
 			return result, err
 		}
-		items, decodeErr := decodePage(response, options.DataKey)
+		items, total, decodeErr := decodePageTotal(response, options.DataKey, options.TotalKey)
 		if decodeErr != nil {
 			return result, decodeErr
 		}
 		result.Pages++
+		if total != nil {
+			result.DeclaredTotalSeen = true
+			result.DeclaredTotal = max(result.DeclaredTotal, *total)
+		}
 		if options.StopAt == nil && options.StopAfter == nil && options.Keep == nil && options.MaxItems == 0 {
 			result.Items = append(result.Items, items...)
 			next, result.EndProven = githubPageStep(response.Header, len(items), options.Query)
@@ -713,16 +727,22 @@ func paginationInvalid(response *http.Response, reason string) error {
 }
 
 func decodePage(response *http.Response, dataKey string) ([]json.RawMessage, error) {
+	items, _, err := decodePageTotal(response, dataKey, "")
+	return items, err
+}
+
+// decodePageTotal is decodePage plus the envelope's totalKey field: nil when totalKey is empty or the field is absent.
+func decodePageTotal(response *http.Response, dataKey, totalKey string) ([]json.RawMessage, *int, error) {
 	if response == nil || response.Body == nil {
-		return nil, paginationInvalid(response, ReasonBodyDecode)
+		return nil, nil, paginationInvalid(response, ReasonBodyDecode)
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxProviderPageBody+1))
 	if err != nil {
-		return nil, paginationInvalid(response, ReasonBodyRead)
+		return nil, nil, paginationInvalid(response, ReasonBodyRead)
 	}
 	if len(body) > maxProviderPageBody {
-		return nil, paginationInvalid(response, ReasonBodyTooLarge)
+		return nil, nil, paginationInvalid(response, ReasonBodyTooLarge)
 	}
 	// json.Unmarshal reads a top-level null as a nil slice or map without an
 	// error, so a 200 `null` body would decode as a page with zero items.
@@ -732,30 +752,43 @@ func decodePage(response *http.Response, dataKey string) ([]json.RawMessage, err
 	}
 	if trimmed := bytes.TrimSpace(body); len(trimmed) == 0 || trimmed[0] != topLevel {
 		if json.Valid(body) {
-			return nil, paginationInvalid(response, ReasonBodyShape)
+			return nil, nil, paginationInvalid(response, ReasonBodyShape)
 		}
-		return nil, paginationInvalid(response, ReasonBodyDecode)
+		return nil, nil, paginationInvalid(response, ReasonBodyDecode)
 	}
 	if dataKey == "" {
 		var items []json.RawMessage
 		if err := json.Unmarshal(body, &items); err != nil {
-			return nil, paginationInvalid(response, ReasonBodyDecode)
+			return nil, nil, paginationInvalid(response, ReasonBodyDecode)
 		}
-		return items, nil
+		return items, nil, nil
 	}
 	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, paginationInvalid(response, ReasonBodyDecode)
+		return nil, nil, paginationInvalid(response, ReasonBodyDecode)
+	}
+	var total *int
+	if rawTotal, present := envelope[totalKey]; totalKey != "" && present {
+		declared := math.MaxInt
+		var number json.Number
+		decoder := json.NewDecoder(bytes.NewReader(rawTotal))
+		decoder.UseNumber()
+		if decoder.Decode(&number) == nil {
+			if parsed, parseErr := strconv.Atoi(number.String()); parseErr == nil && parsed >= 0 {
+				declared = parsed
+			}
+		}
+		total = &declared
 	}
 	raw, ok := envelope[dataKey]
 	if !ok {
-		return []json.RawMessage{}, nil
+		return []json.RawMessage{}, total, nil
 	}
 	var items []json.RawMessage
 	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil, paginationInvalid(response, ReasonBodyDecode)
+		return nil, nil, paginationInvalid(response, ReasonBodyDecode)
 	}
-	return items, nil
+	return items, total, nil
 }
 
 func decodeJSONObject(response *http.Response) (map[string]json.RawMessage, error) {

@@ -31,6 +31,7 @@ func githubTestsRealisticCursorBase() githubTestsChunkCursor {
 		SkippedArtifactsOverflow: 999999,
 		ExcludedNonReportSuffix:  999999,
 		ExcludedNonReportPrefix:  999999,
+		Relist:                   githubTestsRelistStoppedSaturated,
 	}
 	for component, causes := range githubTestsIncompleteVocabulary {
 		for cause := range causes {
@@ -110,6 +111,20 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 		)
 	}
 
+	// An artifacts phase mid-peel also carries its range and both cut lists at their byte cap (CHAOS-14251: at most 120
+	// bytes; the canary below stays 150).
+	cursor.RangeHi, cursor.RangeOldest, cursor.RangeItems = "2026-07-20T23:59:59Z", "2026-07-20T00:00:00Z", githubTestsSearchResultCap
+	cursor.ActiveCutKeys, cursor.CarriedCutKeys = githubTestsWidestCutKeys(t), githubTestsWidestCutKeys(t)
+	// Mid-listing it also carries its resume anchor at the widest id (CHAOS-14316; one fewer exclusion sample record pays for it).
+	cursor.AnchorID = githubTestsWidestAnchorID
+	// And the re-seek state at its widest plus the deep range's record count, which stays in every cursor after the deep
+	// range (CHAOS-14385; one more fewer exclusion sample record pays for them).
+	cursor.ReseekPages, cursor.PagesEntered, cursor.RecordCredit = githubTestsWidestReseekPages, githubTestsWidestReseekPages, githubTestsWidestRecordCredit
+	cursor.DeletionProven = 1
+	cursor.LateRecords = githubTestsMaxWalkRecords
+	// A backfill walk's record counters reach 8 digits (boundsWidestBackfillCounters).
+	boundsWidestBackfillCounters(&cursor)
+
 	encoded, err := encodeGitHubTestsChunkCursor(cursor)
 	if err != nil {
 		t.Fatalf(
@@ -121,6 +136,7 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	if len(encoded) > maxChunkCursorBytes {
 		t.Fatalf("worst-case cursor is %d bytes, want <= %d (maxChunkCursorBytes)", len(encoded), maxChunkCursorBytes)
 	}
+	t.Logf("worst-case cursor %d bytes, headroom %d", len(encoded), maxChunkCursorBytes-len(encoded))
 	// A canary for margin erosion, not a hard correctness bound: a future
 	// field addition that eats this margin should fail loudly here before it
 	// ever gets close to the hard 4KiB limit in production.
@@ -154,6 +170,10 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	// CHAOS-14030: report_member gained compression_ratio and archive_entry_cap (two pairs plus two entries in each per-cause map).
 	// githubTestsMaxSkippedArtifactRecords went 6 -> 5 to pay for them: one fewer per-artifact skip record is kept, while the
 	// per-cause counts stay exact. The canary stays 150.
+	//
+	// CHAOS-14385: the cell now carries the re-seek state (rp, pe, rc: 32 bytes) and the deep range's record count (14 bytes),
+	// which an artifacts-phase cursor holds; with four sample records it left 136. githubTestsMaxExcludedArtifactSampleRecords
+	// went 4 -> 3 to pay for them (one 56-byte sample record). The canary stays 150.
 	const wantMargin = 150
 	if remaining := maxChunkCursorBytes - len(encoded); remaining < wantMargin {
 		t.Fatalf(
@@ -446,3 +466,41 @@ func TestGitHubTestsChunkCursorLegacyTrimDoesNotExcuseAnUnrelatedUnmarkedCause(t
 	}
 	mustCompareGitHubTestsCompletionOK(t, claim, batch)
 }
+
+// githubTestsWidestCutKeys is a valid cut key list of exactly githubTestsMaxCutKeysBytes bytes of the widest keys.
+func githubTestsWidestCutKeys(t *testing.T) string {
+	t.Helper()
+	keys := "99999999999999999999.999999,99999999999999999998.999"
+	if len(keys) != githubTestsMaxCutKeysBytes || !githubTestsCutKeyListValid(keys, githubTestsMaxCutKeysBytes) {
+		t.Fatalf("widest cut key list %q is %d bytes or invalid, want a valid list of %d bytes", keys, len(keys), githubTestsMaxCutKeysBytes)
+	}
+	return keys
+}
+
+// githubTestsWidestRunsCutKeys is a valid runs-phase cut key list of exactly githubTestsMaxRunsCutKeysBytes bytes: 31 of
+// the widest keys (27 bytes) and one of 14 digits.
+func githubTestsWidestRunsCutKeys(t *testing.T) string {
+	t.Helper()
+	keys := make([]string, 0, 33)
+	for index := range 31 {
+		keys = append(keys, "9999999999999999"+strconv.Itoa(9999-index)+".999999")
+	}
+	keys = append(keys, strings.Repeat("7", 14))
+	list := strings.Join(keys, ",")
+	if len(list) != githubTestsMaxRunsCutKeysBytes || !githubTestsCutKeyListValid(list, githubTestsMaxRunsCutKeysBytes) ||
+		githubTestsCutKeyListValid(list, githubTestsMaxCutKeysBytes) {
+		t.Fatalf("widest runs cut key list is %d bytes or invalid, want a valid list of %d bytes", len(list), githubTestsMaxRunsCutKeysBytes)
+	}
+	return list
+}
+
+// githubTestsWidestAnchorID is the widest resume anchor a cursor can carry: a 20-digit run id.
+const githubTestsWidestAnchorID = "99999999999999999999"
+
+// The widest re-seek state a cursor carries (CHAOS-14385): a range enters at most the pages of a backfill claim's runs
+// budget (an unfiltered claim's search has no 1,000-result cap), so the pages entered and a re-seek's free pages stay
+// within it; the record credit is set at 8 digits, above the walk record bound.
+const (
+	githubTestsWidestReseekPages  = backfillRunsPin / nativePerPage
+	githubTestsWidestRecordCredit = 99999999
+)

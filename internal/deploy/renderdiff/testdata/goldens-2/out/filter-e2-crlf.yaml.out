@@ -1,0 +1,10 @@
+data:
+  a: x y
+  b: 'l1
+
+    l2
+
+    '
+kind: ConfigMap
+metadata:
+  name: crlf

@@ -29,6 +29,9 @@ var storedTeamColumn = regexp.MustCompile(`\bteam_id\b`)
 // tables' dedup keys (work_item_state_durations_daily, work_item_metrics_daily; metricspec.go:52-53) and the work_item metrics'
 // group column (metricGroup, :85); its one queries_metrics.go literal is the blocked-hours statement over
 // work_item_state_durations_daily (:332-341, the same literal holds the column twice).
+// rowview.go names the column in two fixed hash lists of whole stored rows (versionColumns: testops_pipeline_metrics_daily
+// and work_item_user_metrics_daily, CHAOS-14430): team_id is hashed only inside the version order that picks one stored
+// version of a key on a computed_at tie; it is not a group or filter key, and the readers group and filter as before.
 // None reads a TestOps table by it (literal level, below). A new literal in one of these files, or a new reader file that
 // mentions the column, fails the census and needs a review of the table it reads.
 var teamLiteralsInReaderFiles = map[string]int{
@@ -40,6 +43,7 @@ var teamLiteralsInReaderFiles = map[string]int{
 	"coveragebaselines/coveragebaselines.go": 0,
 	"home/metricspec.go":                     3,
 	"home/queries_metrics.go":                1,
+	"rowview/rowview.go":                     2,
 	"testopswindow/testopswindow.go":         0,
 }
 

@@ -1488,7 +1488,10 @@ func TestLiveE2EEnableMail(t *testing.T) {
 		var out, errb bytes.Buffer
 		cmd.Stdout = &out
 		cmd.Stderr = &errb
-		if err := cmd.Run(); err != nil || out.String() != token+"\n" || errb.Len() != 0 {
+		err := cmd.Run()
+		// This package has no statements, so its -coverprofile test binary (the fake cigate re-executes it) prints this one line.
+		stderr := strings.ReplaceAll(errb.String(), "program not built with -cover\n", "")
+		if err != nil || out.String() != token+"\n" || stderr != "" {
 			t.Fatal("mail-token did not print only its value on stdout")
 		}
 		scanForToken()

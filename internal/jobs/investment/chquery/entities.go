@@ -399,7 +399,7 @@ func (reader *Reader) FetchPullRequests(ctx context.Context, repoNumbers map[str
                 closed_at,
                 additions,
                 deletions
-            FROM git_pull_requests
+            FROM git_pull_requests FINAL
             %s
         `, whereSQL)
 

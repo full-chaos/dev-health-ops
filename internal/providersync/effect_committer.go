@@ -174,6 +174,11 @@ func (committer EffectCommitter) commitPrepared(
 		default:
 			return result, ErrEffectLedgerConflict
 		}
+		// The chunk mark commits it (commitDeferredEmptyEffects); counted here as the write it replaces.
+		if committer.defersEmptyEffect(*effect, batch) {
+			result.Written++
+			continue
+		}
 		if err := committer.Ledger.BeginEffect(
 			ctx, claim, effect.Index, effect.ContentDigest, committer.now(),
 		); err != nil {

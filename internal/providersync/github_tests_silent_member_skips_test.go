@@ -256,7 +256,7 @@ func TestGitHubTestsReanchorDoesNotCountSizeGuardSkipTwice(t *testing.T) {
 			}
 			// The listing moved under the resume: the walk re-anchors to the start of the page and reads the artifact again.
 			checkpoint.Phase, checkpoint.Index = "artifacts", 0
-			checkpoint.NextURL = ""
+			checkpoint.NextURL, checkpoint.Relist = "", 0
 			encoded, encodeErr := encodeGitHubTestsChunkCursor(checkpoint)
 			if encodeErr != nil {
 				t.Fatal(encodeErr)
@@ -393,7 +393,7 @@ func TestGitHubTestsReanchorKeepsRunVerdictLoss(t *testing.T) {
 				t.Fatalf("first verdict=%+v, want partial with %s", first[0], cell.reason)
 			}
 			checkpoint.Phase, checkpoint.Index = "artifacts", 0
-			checkpoint.NextURL = ""
+			checkpoint.NextURL, checkpoint.Relist = "", 0
 			encoded, encodeErr := encodeGitHubTestsChunkCursor(checkpoint)
 			if encodeErr != nil {
 				t.Fatal(encodeErr)

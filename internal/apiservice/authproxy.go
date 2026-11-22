@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -337,6 +338,28 @@ var routeProxyRoutes = map[string]AuthAggregate{
 	"POST /api/v1/auth/saml/{provider_id}/acs":       AuthSAML,
 }
 
+// oauthPairProxyRoutes are the internal/api/sso OAuth sign-in routes, forwarded through sso.Deps.Inner like routeProxyRoutes.
+// Keyed by auth-service's own patterns: go-api mounts no route with these keys (oauthPairPattern), so no per-route series is
+// seeded for them.
+var oauthPairProxyRoutes = map[string]AuthAggregate{
+	"POST /api/v1/auth/oauth/{provider_id}/authorize": AuthOIDC,
+	"GET /api/v1/auth/oauth/{provider_id}/authorize":  AuthOIDC,
+	"POST /api/v1/auth/oauth/{provider_id}/callback":  AuthOIDC,
+}
+
+// oauthPairPattern is the one pattern internal/api/sso mounts for its three OAuth sign-in routes (net/http refuses the
+// overlapping patterns); the pair names each dispatched route to Inner with auth-service's own pattern above. Its POST and GET
+// carry the body-keeping wrapper under AuthOIDC; the other methods answer go-api's own 405 or 404.
+const oauthPairPattern = "/api/v1/auth/oauth/{first}/{second}"
+
+// oauthPairAggregate is the aggregate the wrapper of a mounted OAuth pair route counts under, if any.
+func oauthPairAggregate(method, pattern string) (AuthAggregate, bool) {
+	if pattern == oauthPairPattern && (method == http.MethodPost || method == http.MethodGet) {
+		return AuthOIDC, true
+	}
+	return "", false
+}
+
 // ownerAuthenticatedRoutes are the proxied routes that auth-service alone authenticates, validates and limits once
 // their aggregate is on: go-api forwards them unread, with no guard, body validator or rate limiter of its own, and
 // its scope layers skip them (ScopeExemptRoutes), so a token addressed to auth-service never reaches go-api's verifier
@@ -362,7 +385,7 @@ func (c AuthProxyConfig) ScopeExemptRoutes() map[string]bool {
 // one method.
 var patternAggregate = func() map[string]AuthAggregate {
 	out := map[string]AuthAggregate{}
-	for _, routes := range []map[string]AuthAggregate{sessionProxyRoutes, routeProxyRoutes} {
+	for _, routes := range []map[string]AuthAggregate{sessionProxyRoutes, routeProxyRoutes, oauthPairProxyRoutes} {
 		for key, aggregate := range routes {
 			_, pattern, _ := strings.Cut(key, " ")
 			out[pattern] = aggregate
@@ -416,6 +439,10 @@ type authProxy struct {
 	cfg       AuthProxyConfig
 	logger    *slog.Logger
 	transport http.RoundTripper
+	// now and fallbackLogged rate-limit the flag-on local-answer line (logLocalAnswer), per route.
+	now            func() time.Time
+	fallbackMu     sync.Mutex
+	fallbackLogged map[string]time.Time
 	// refuseImpersonating, when set, fronts the owner-authenticated routes, which skip the scope layers.
 	refuseImpersonating func(http.Handler) http.Handler
 }
@@ -444,7 +471,7 @@ func newAuthProxy(cfg AuthProxyConfig, logger *slog.Logger) *authProxy {
 		ExpectContinueTimeout: time.Second,
 		ForceAttemptHTTP2:     true,
 	}
-	return &authProxy{cfg: cfg, logger: logger, transport: transport}
+	return &authProxy{cfg: cfg, logger: logger, transport: transport, now: time.Now, fallbackLogged: map[string]time.Time{}}
 }
 
 // proxiedRouteKeys maps "METHOD pattern" to the aggregate for every forwardable auth route. It is only a predicate over the route set the
@@ -549,6 +576,9 @@ func (p *authProxy) wrap(routes []httpapi.Route) []httpapi.Route {
 			aggregate, ok = routeProxyRoutes[key]
 		}
 		if !ok {
+			aggregate, ok = oauthPairAggregate(routes[index].Method, routes[index].Pattern)
+		}
+		if !ok {
 			continue
 		}
 		if owner, owned := ownerAuthenticatedRoutes[key]; owned && p.cfg.Enabled(owner) {
@@ -582,9 +612,37 @@ func (p *authProxy) sessionRoute(aggregate AuthAggregate, local http.Handler) ht
 		outcome := state.outcome
 		if outcome == "" {
 			outcome = outcomeLocal
+			p.logLocalAnswer(r, aggregate)
 		}
 		count(r.Context(), aggregate, outcome)
 	})
+}
+
+// authProxyFallbackLogEvery is the window of logLocalAnswer: at most one line per route pattern in it.
+const authProxyFallbackLogEvery = time.Minute
+
+// logLocalAnswer makes a flag-on request that go-api answered itself loud (its own front checks refused it, or no
+// forward ran): one Warn line with the aggregate, the route pattern and the reason, at most once per route pattern and
+// window. It carries no path, body, header or token. The counter's outcome=local is the per-request record.
+func (p *authProxy) logLocalAnswer(r *http.Request, aggregate AuthAggregate) {
+	// The server's mux sets r.Pattern on every route it serves (method and path, or the method-free pattern of a method
+	// fallback); a request that reaches here without one still logs a fixed label, never an empty route.
+	route := r.Pattern
+	if route == "" {
+		route = "unmatched"
+	}
+	now := p.now()
+	p.fallbackMu.Lock()
+	last, seen := p.fallbackLogged[route]
+	if seen && now.Sub(last) < authProxyFallbackLogEvery {
+		p.fallbackMu.Unlock()
+		return
+	}
+	p.fallbackLogged[route] = now
+	p.fallbackMu.Unlock()
+	p.logger.WarnContext(r.Context(), "auth proxy: answered by go-api with the aggregate on",
+		slog.String("aggregate", string(aggregate)), slog.String("route", route), slog.String("reason", "not_forwarded"),
+		slog.String("window", authProxyFallbackLogEvery.String()))
 }
 
 func countLocal(aggregate AuthAggregate, local http.Handler) http.Handler {

@@ -703,7 +703,9 @@ func collectQueueFacts(snapshot riverstore.QueueTelemetrySnapshot, claim *claimL
 // now.Sub(started) <= leaseWaitCredit() (the lease TTL plus the window). The
 // queue is healthy exactly when every running slot is inside a handler or
 // within a credited lease wait (long work, however deep the backlog behind a
-// FULL queue) or nothing is waiting at all. The three ways it is not:
+// FULL queue), or nothing is waiting at all, or a real claim landed on the queue
+// within the window (claimAge <= window), even with a backlog and a slot outside a
+// handler. The three ways it is not:
 //
 //   - a running slot outside a handler and not within a credited lease wait
 //     (running > inside+leaseWaiting), unbroken across polls for more than the

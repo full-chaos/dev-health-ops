@@ -22,7 +22,7 @@ func TestCanonicalKeepsWellFormedSlugsMergedAndSorted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Item{{Slug: "acme/other", Count: 1}, {Slug: "acme/widget", Count: 5}}
+	want := []Item{{Slug: "a/b/c", Count: 5}, {Slug: "acme/other", Count: 1}, {Slug: "acme/widget", Count: 5}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Canonical = %v, want %v", got, want)
 	}

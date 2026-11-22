@@ -268,8 +268,9 @@ func TestRegistryCicdTeamIsRepositoryOwnership(t *testing.T) {
 	}
 }
 
-// A re-run keeps its run id; the newest synced version replaces the earlier attempt, in the writer and in the chart. The
-// queue sample of a re-run spans from the run's first creation (queued_at) to the latest attempt's start.
+// A re-run keeps its run id; the newest synced version replaces the earlier attempt, in the writer and in the chart. A
+// re-run (retry_count above 0) gives no queue sample: its queued_at is the run's first creation and its started_at the
+// latest attempt's start. A day whose only run is a re-run has no queue time: NULL in the writer, no point in the chart.
 func TestRegistryCicdRerunCountsTheNewestAttempt(t *testing.T) {
 	e := startPooledEnv(t)
 	org := e.newOrg()
@@ -300,17 +301,33 @@ func TestRegistryCicdRerunCountsTheNewestAttempt(t *testing.T) {
 	unmerged()
 	stored := e.stored(org, repo)
 	want := map[string]map[string]float64{
-		"2026-01-04": cicdWant(minutes(30, 20), minutes(121, 1)),
+		"2026-01-04": cicdWant(minutes(30, 20), minutes(1)),
 		"2026-01-05": cicdWant(minutes(10), minutes(1)),
-		"2026-01-06": cicdWant(minutes(40), minutes(24*60+1)),
+		"2026-01-06": cicdWant(minutes(40), minutes(1)),
 	}
+	delete(want["2026-01-06"], "avg_queue_minutes")
 	for _, metric := range cicdPooledMetrics {
 		days := pointsOf(e.cicdChart(org, metric, cicdSpec{groupBy: "day", start: "2026-01-04", end: "2026-01-06"}))
 		for day, values := range want {
-			mustEqual(t, metric+" writer", map[string]float64{day: *stored[day].of(metric)}, day, values[metric])
-			mustEqual(t, metric+" chart", days, day, values[metric])
+			value, ok := values[metric]
+			if !ok {
+				if got := stored[day].of(metric); got != nil {
+					t.Errorf("%s writer %s = %v, want NULL (a day of re-runs only)", metric, day, *got)
+				}
+				if _, has := days[day]; has {
+					t.Errorf("%s chart %s has a point %v, want none (NULL, never 0)", metric, day, days[day])
+				}
+				continue
+			}
+			got := stored[day].of(metric)
+			if got == nil {
+				t.Errorf("%s writer %s = NULL, want %v", metric, day, value)
+				continue
+			}
+			mustEqual(t, metric+" writer", map[string]float64{day: *got}, day, value)
+			mustEqual(t, metric+" chart", days, day, value)
 		}
-		window := cicdWant(minutes(30, 20, 10, 40), minutes(121, 1, 1, 24*60+1))
+		window := cicdWant(minutes(30, 20, 10, 40), minutes(1, 1))
 		mustEqual(t, metric+" window", pointsOf(e.cicdChart(org, metric, cicdSpec{start: "2026-01-04", end: "2026-01-06"})), "total", window[metric])
 	}
 	unmerged()

@@ -33,7 +33,10 @@ const (
 	StageOrphanedUnitRepair StageName = "orphaned_unit_repair"
 	StageMaterializer       StageName = "materializer"
 	StageKernel             StageName = "kernel"
-	StageObserver           StageName = "observer"
+	// StageChunkSidecarReclaim (CHAOS-14243) deletes the stored chunk rows of
+	// terminal units in bounded batches (chunk_sidecar_reclaim.go).
+	StageChunkSidecarReclaim StageName = "chunk_sidecar_reclaim"
+	StageObserver            StageName = "observer"
 )
 
 // orderedStages is the exhaustive, ordered list of stages MutationPipeline.Step
@@ -52,6 +55,7 @@ var orderedStages = []StageName{
 	StageOrphanedUnitRepair,
 	StageMaterializer,
 	StageKernel,
+	StageChunkSidecarReclaim,
 	StageObserver,
 }
 
@@ -61,9 +65,9 @@ const (
 )
 
 // StageBudgets gives each MutationPipeline stage its own bounded sub-context
-// instead of every stage racing one flat envelope for the whole 8-stage/3-pool
+// instead of every stage racing one flat envelope for the whole 9-stage/3-pool
 // pipeline (CHAOS-4239). A stage that exceeds its own budget fails only
-// itself; it can no longer starve its seven siblings of the time they need.
+// itself; it can no longer starve its eight siblings of the time they need.
 type StageBudgets map[StageName]time.Duration
 
 // DefaultStageBudgets sizes each stage from what it actually does, not from
@@ -73,10 +77,13 @@ type StageBudgets map[StageName]time.Duration
 //   - UnreclaimableSweep: spans all three pools (CHAOS-4005/CHAOS-4097) --
 //     the durable route read alone crosses a role boundary before the domain
 //     transaction even opens.
-//   - TerminalDeliveryRepair: the CHAOS-4092 join, now index-friendly and
-//     measured at ~467ms warm even before the fix; this budget carries slack
-//     for the cold-cache case CHAOS-4092 also measured, and for the cold-start
-//     window CHAOS-4239 observed failures clustering in.
+//   - TerminalDeliveryRepair: 2 x its measured prod p99, capped at 1200ms
+//     (CHAOS-14386). Measured p99 0.719s against the old 750ms budget: the max
+//     of 24 hourly p99s of dev_health_reconciler_stage_duration_seconds to
+//     2026-11-20. That p99 sat under 750ms only because the budget cut the
+//     tail. The slow statement is the coordinator readiness read
+//     (ready_finalize_repair.go), which scans scheduled_sync_occurrences once
+//     per scheduled candidate run.
 //   - TerminalOutboxClose (CHAOS-4583): four index-driven CTE updates against
 //     sync_dispatch_outbox, the same table and pool Materializer already
 //     budgets 600ms for; sized identically since it is the same shape of
@@ -84,13 +91,17 @@ type StageBudgets map[StageName]time.Duration
 //   - OrphanedUnitRepair (CHAOS-5453): one bounded LEFT JOIN survey of
 //     worker_job_outbox against river_job on the queue pool, then one domain
 //     transaction whose per-candidate work is two indexed reads and one
-//     INSERT. Sized like TerminalOutboxClose rather than like
-//     TerminalDeliveryRepair: the survey is the same bounded candidate scan,
-//     and it carries no equivalent of CHAOS-4092's cold-cache join.
+//     INSERT. Measured prod p99 0.147s (same source as TerminalDeliveryRepair)
+//     against 600ms: kept; its failures are rare stalls, not its own
+//     statements.
 //   - Materializer: coordinator-exclusive wakeup materialization.
 //   - Kernel: the heaviest stage -- claims on the domain pool, delivers on the
 //     queue pool, and runs the publish closure (a River insert plus a domain
 //     reference read) inline.
+//   - ChunkSidecarReclaim (CHAOS-14243): up to 4 PK-range DELETEs of at most
+//     4 MiB of TOASTed payload each, one transaction per statement; it stops
+//     early when the deadline would not fit another statement, and it yields
+//     the tick when an earlier stage used 3/4 of its budget (CHAOS-14380).
 //   - Observer: proven 0.079ms against a live database (CHAOS-4239 EXPLAIN);
 //     this budget is almost entirely cold-start headroom.
 //
@@ -103,11 +114,12 @@ func DefaultStageBudgets() StageBudgets {
 	return StageBudgets{
 		StageLeaseRepair:            400 * time.Millisecond,
 		StageUnreclaimableSweep:     600 * time.Millisecond,
-		StageTerminalDeliveryRepair: 750 * time.Millisecond,
+		StageTerminalDeliveryRepair: 1200 * time.Millisecond,
 		StageTerminalOutboxClose:    600 * time.Millisecond,
 		StageOrphanedUnitRepair:     600 * time.Millisecond,
 		StageMaterializer:           600 * time.Millisecond,
 		StageKernel:                 1000 * time.Millisecond,
+		StageChunkSidecarReclaim:    1500 * time.Millisecond,
 		StageObserver:               400 * time.Millisecond,
 	}
 }

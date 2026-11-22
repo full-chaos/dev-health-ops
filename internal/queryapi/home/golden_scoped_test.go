@@ -28,6 +28,8 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 )
 
 func teamGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
@@ -35,6 +37,14 @@ func teamGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings [
 	return func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		q := query
 		switch {
+		case strings.HasPrefix(q, activeteams.IDsSubquery+" AND id IN {team_ids:Array(String)}"):
+			// The driver of a one-team request is the team itself when its value moves (CHAOS-14379): the driver
+			// names keep only active teams, and the one id asked is the requested team.
+			ids, _ := bindingValue(bindings, "team_ids")
+			if got, ok := ids.([]string); !ok || len(got) != 1 || got[0] != "team-1" {
+				t.Fatalf("active team read of the one-team driver: team_ids = %#v, want [team-1]", ids)
+			}
+			return &fixtureRowScanner{rows: [][]any{{"team-1"}}}, nil
 		case strings.Contains(q, "FROM recommendations_daily"):
 			return &fixtureRowScanner{rows: [][]any{
 				{

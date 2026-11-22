@@ -373,9 +373,53 @@ worker_outbox_reconciler_terminal_deliveries_recovered_total
 
 An increase paired with a deployment is expected recovery. Repeated increases
 without a deployment indicate a worker group is still starting without the
-complete checked-in handler registry. Do not rewrite queue rows manually. Cancel the
-sync run only when the user intends to abandon the remaining work; cancellation
-is not a substitute for repairing a recoverable transport delivery.
+complete checked-in handler registry. Do not rewrite queue rows manually.
+
+### Cancel one unfinished sync run
+
+Cancel a sync run only when the user intends to abandon the remaining work.
+Cancellation is not a substitute for repairing a recoverable transport delivery.
+
+Run the verb from a `go-scheduler` or `go-reconciler` pod. Like every
+`dho workers` verb, it needs the coordinator DSN, and `go-ops` has none. Preview
+the run first, then cancel it:
+
+```bash
+dho workers sync-runs cancel --org <org-id> --run <sync-run-id> --dry-run
+dho workers sync-runs cancel --org <org-id> --run <sync-run-id> \
+  --reason <code> --correlation-id <id>
+```
+
+The verb runs the same terminal path the dispatcher uses for a run it cannot
+continue:
+
+- Every unfinished unit fails with `error_category` `cancelled`, and the run
+  closes as `failed`.
+- The run's reference discovery, dispatch outbox, backfill job and job run are
+  closed in the same transaction.
+- The verb cancels no River job: a queued provider-unit job of a cancelled unit
+  completes on its next attempt without work and writes no domain row. The
+  output counts these jobs under `provider_unit_deliveries`.
+- Each such job logs one Info line `sync_provider_unit_finished` with `result`
+  `unit_closed` and `closed_by` `cancelled`, and counts as `success` in
+  `worker_job_attempts_total` for kind `sync.provider_unit`. A worker image
+  older than this behavior still retries the job (attempts 1-4) and River
+  discards it on attempt 5.
+- A unit that the canonical-incident feature gate failed (`error_category`
+  `feature_disabled`) is closed the same way once its run is closed: a queued
+  provider-unit job of that unit completes on its next attempt without work, and
+  the Info line carries `closed_by` `feature_disabled`. While the run is still
+  open, the job keeps the retry. Re-enabling the feature does not reopen the
+  unit: the next scheduled occurrence plans a new run with new units.
+
+The verb refuses a run in which a worker holds a live lease on a unit
+(`sync_run_running_unit`). Add `--allow-running` to cancel the run anyway; that
+worker then loses its lease and stops. Another organization's run reads as
+`sync_run_not_found`. If the run finishes on its own while the verb runs, the
+verb leaves the run as it finished and reports `already_terminal`. A second call
+on the same run reports `already_terminal`, changes no sync row, and writes its
+own audit row. To sync the window again, submit a new backfill with a new
+idempotency key or with none.
 
 ## Schedules
 

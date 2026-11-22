@@ -2,13 +2,17 @@ package remaining
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
+	"github.com/full-chaos/dev-health-ops/internal/teamactive"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
@@ -42,10 +46,15 @@ var discoverTeamIDsSQL = `
       AND ` + liverow.Predicate("work_item_metrics_daily", "")
 
 // DiscoverTeamIDs returns the teams to evaluate for an org: the teams with
-// recent work item rows, plus the active teams that own a repository at asOf
-// (the window end; teamownership.OwnersByRepo). A team in both sets is listed
-// once. Without the owner teams, a team that owns repositories but has no work
-// item rows is never evaluated, and its repository-based rules never fire.
+// recent work item rows, plus the teams that own a project at asOf
+// (teamattribution LoadProjects, co-owners included), plus the teams that own a
+// repository at asOf (the window end; teamownership.OwnerCandidatesByRepo,
+// co-owners included). A team in several sets is listed once. ONE activity
+// snapshot (teamactive.LoadInactive), read after the work item and project
+// sets, decides for the whole union: the repository owner read is bound to it
+// (it reads no teams row), and every team the snapshot names inactive is
+// dropped. Without the owner teams, a quiet owner team is never evaluated, so
+// its old fired rules never get the fired=false rows that clear them.
 //
 // The org predicate is appended only for a real org, matching the reference:
 // "default" is the single-tenant sentinel and is not a value present in
@@ -92,7 +101,35 @@ func (executor *RecommendationsExecutor) DiscoverTeamIDs(
 	}
 
 	if orgID != "" && orgID != "default" {
-		owners, err := teamownership.OwnersByRepo(ctx, executor.conn, orgID, asOf)
+		loadProjects := executor.loadProjectOwners
+		if loadProjects == nil {
+			loadProjects = teamattribution.ClickHouseFactSource{Conn: executor.conn}.LoadProjects
+		}
+		projects, err := loadProjects(ctx, orgID, asOf)
+		var bound *providerfoundation.EffectBoundError
+		switch {
+		case errors.As(err, &bound):
+			// The project owners are an addition to the other two sets: past the
+			// read's row bound the run keeps them and skips only the project owners.
+			executor.warnf("recommendations.discovery.project_owners_skipped_bound",
+				"org_id", orgID, "limit", bound.Limit, "rows", bound.Rows)
+			recordRecommendationsDiscoveryOutcome(ctx, recommendationsDiscoveryProjectOwnersSkippedBound)
+			projects = nil
+		case err != nil:
+			return nil, fmt.Errorf("discover recommendation project owner teams: %w", err)
+		}
+		for _, project := range projects {
+			add(project.TeamID)
+		}
+		// ONE activity snapshot for the whole union, read after the work item and
+		// project sets so the latest instant wins. The repository owner read is
+		// bound to it, so no set reads activity on its own. A failed read fails
+		// discovery: an empty set read from an error would evaluate a retired team.
+		inactive, err := teamactive.LoadInactive(ctx, executor.conn, orgID)
+		if err != nil {
+			return nil, fmt.Errorf("discover recommendation teams: %w", err)
+		}
+		owners, err := teamownership.OwnerCandidatesByRepo(ctx, executor.conn, orgID, asOf, inactive)
 		if err != nil {
 			return nil, fmt.Errorf("discover recommendation repository owner teams: %w", err)
 		}
@@ -101,6 +138,13 @@ func (executor *RecommendationsExecutor) DiscoverTeamIDs(
 				add(teamID)
 			}
 		}
+		kept := teamIDs[:0]
+		for _, teamID := range teamIDs {
+			if !inactive.Has(teamID) {
+				kept = append(kept, teamID)
+			}
+		}
+		teamIDs = kept
 	}
 
 	// A DELIBERATE, OBSERVABLE DIVERGENCE FROM THE ORACLE. Ruled, and listed as

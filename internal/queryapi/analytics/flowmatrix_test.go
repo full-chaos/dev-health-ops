@@ -163,13 +163,24 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 				return fmt.Errorf("scan col %d: destination *time.Time but fixture holds %T -- a ClickHouse Date/DateTime arrives as time.Time", i, row[i])
 			}
 			*ptr = v
+		case **time.Time:
+			if row[i] == nil {
+				*ptr = nil
+				continue
+			}
+			v, ok := row[i].(time.Time)
+			if !ok {
+				return fmt.Errorf("scan col %d: destination **time.Time but fixture holds %T (want time.Time or nil)", i, row[i])
+			}
+			allocated := v
+			*ptr = &allocated
 		default:
 			// The real driver accepts a FIXED set of destinations. Anything
 			// else is a production failure, not a test-fixture gap -- most
 			// notably *graphqldate.Date, which has no Scan method and is
 			// therefore not an sql.Scanner. Scan the driver's type
 			// (time.Time) and convert after, as reviewedges.go:152 does.
-			return fmt.Errorf("scan col %d: destination %T is not one of the types the real ClickHouse driver accepts (*string, *uint64, *int64, *float64, **float64, *time.Time, sql.Scanner)", i, d)
+			return fmt.Errorf("scan col %d: destination %T is not one of the types the real ClickHouse driver accepts (*string, **string, *uint64, *int64, *float64, **float64, *time.Time, **time.Time, sql.Scanner)", i, d)
 		}
 	}
 	return nil
@@ -683,7 +694,7 @@ func TestCompileFlowMatrix_TeamRepo_UseInvestmentTrue_EdgesExcludeEmptyBridge(t 
 		wantEmptyGuard string
 	}{
 		{DimensionTeam, "repo_id IS NOT NULL"},
-		{DimensionRepo, "ut.team_id != ''"},
+		{DimensionRepo, `ut.team_id IS NOT NULL AND match(ut.team_id, '[^\\s\\x{0B}\\p{Z}\\x{FEFF}]')`},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.dim), func(t *testing.T) {

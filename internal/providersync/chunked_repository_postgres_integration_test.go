@@ -53,7 +53,7 @@ func TestChunkedPostgresCheckpointResumeFinalizationAndLeaseHandoff(t *testing.T
 	first, err := repository.PrepareChunk(ctx, claim, PreparedProviderChunk{
 		SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion,
 		Ordinal: 0, TotalChunks: 0, CursorAfter: "cursor-1", Effects: []EffectBatch{effect},
-	}, now)
+	}, now, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestChunkedPostgresCheckpointResumeFinalizationAndLeaseHandoff(t *testing.T
 		SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion,
 		Ordinal: 1, TotalChunks: 0, Effects: []EffectBatch{secondEffect}, InventoryComplete: true,
 		Result: map[string]any{"complete": true},
-	}, now.Add(4*time.Second))
+	}, now.Add(4*time.Second), now.Add(4*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestChunkedPostgresCursorSurvivesEmptyContinuationAndFailReclaimsSidecars(t
 		prepared, prepareErr := repository.PrepareChunk(ctx, claim, PreparedProviderChunk{
 			SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion,
 			Ordinal: ordinal, TotalChunks: 0, CursorAfter: cursorAfter, Effects: []EffectBatch{effect},
-		}, at)
+		}, at, at)
 		if prepareErr != nil {
 			t.Fatalf("prepare ordinal=%d: %v", ordinal, prepareErr)
 		}
@@ -197,7 +197,7 @@ func TestChunkedPostgresCursorSurvivesEmptyContinuationAndFailReclaimsSidecars(t
 	prepared, err := repository.PrepareChunk(ctx, claim, PreparedProviderChunk{
 		SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion,
 		Ordinal: 1, TotalChunks: 0, CursorAfter: "", Effects: []EffectBatch{effect},
-	}, now.Add(5*time.Second))
+	}, now.Add(5*time.Second), now.Add(5*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestChunkedPostgresCursorSurvivesEmptyContinuationAndFailReclaimsSidecars(t
 		SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion,
 		Ordinal: 2, TotalChunks: 0, CursorAfter: "cursor-page-2", Effects: []EffectBatch{finalEffect},
 		InventoryComplete: true, Result: map[string]any{"pipeline_runs_synced": 3, "project_id": int64(9007199254740993)},
-	}, now.Add(9*time.Second))
+	}, now.Add(9*time.Second), now.Add(9*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +327,7 @@ func TestChunkedPostgresStoresAFileRowWithoutNulAndClassesTheNulPayloadAsDataErr
 			CursorAfter: "cursor-1", Effects: []EffectBatch{effectBatchFixture(t, "git_files", EffectReadbackRequired, string(rowJSON))},
 		}
 	}
-	if _, err := repository.PrepareChunk(ctx, claim, chunk(guardedJSON), now); err != nil {
+	if _, err := repository.PrepareChunk(ctx, claim, chunk(guardedJSON), now, now); err != nil {
 		t.Fatalf("PrepareChunk of the guarded row: %v", err)
 	}
 	loaded, err := repository.LoadPreparedChunk(ctx, claim, 0, now)
@@ -346,7 +346,7 @@ func TestChunkedPostgresStoresAFileRowWithoutNulAndClassesTheNulPayloadAsDataErr
 	}
 	second := chunk(raw)
 	second.Ordinal = 1
-	_, err = repository.PrepareChunk(ctx, claim, second, now)
+	_, err = repository.PrepareChunk(ctx, claim, second, now, now)
 	if err == nil || !IsChunkStoreDataError(err) {
 		t.Fatalf("PrepareChunk of a row with a NUL escape = %v; want a chunk store data error (22P05)", err)
 	}

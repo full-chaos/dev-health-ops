@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"log/slog"
@@ -466,12 +467,29 @@ func githubTestsHasPageBudgetObservation(cursor githubTestsChunkCursor, componen
 // A unit whose stored cursor already holds more records than one walk may write ends at the FIRST attempt after the change:
 // no listing page is fetched, the inventory is recorded truncated, and the unit publishes its completion. Before the bound
 // such a unit listed on for as long as its page budgets lasted, at up to 1,000 chunks per run.
+// A backfill claim's bound is higher (backfillWalkRecordsPin), so its arms carry the stalled cursor past that bound.
 func TestGitHubTestsChunkRouteStoredCursorPastWalkBoundEndsWithoutListing(t *testing.T) {
-	for _, phase := range []string{githubTestsArtifactsPhase, githubTestsRunsPhase} {
-		t.Run(phase, func(t *testing.T) {
+	for _, arm := range [][2]string{
+		{"incremental", githubTestsArtifactsPhase}, {"incremental", githubTestsRunsPhase},
+		{"backfill", githubTestsArtifactsPhase}, {"backfill", githubTestsRunsPhase},
+	} {
+		mode, phase := arm[0], arm[1]
+		t.Run(mode+"/"+phase, func(t *testing.T) {
 			doer := &githubTestsPagedDoer{t: t, pages: 3, perPage: 50}
 			claim := nativeTestClaim("github", "cicd")
-			claim.Mode = "backfill"
+			claim.Mode = mode
+			stored := githubTestsStalledBackfillCursor(t, phase, "api.github.com")
+			if mode == "backfill" {
+				cursor, decodeErr := decodeGitHubTestsChunkCursor(stored)
+				if decodeErr != nil {
+					t.Fatal(decodeErr)
+				}
+				cursor.Cases += backfillWalkRecordsPin
+				var encodeErr error
+				if stored, encodeErr = encodeGitHubTestsChunkCursor(cursor); encodeErr != nil {
+					t.Fatal(encodeErr)
+				}
+			}
 			var logged bytes.Buffer
 			swapDefaultLogger(t, slog.New(slog.NewJSONHandler(&logged, nil)))
 			var final *CompleteRouteBatch
@@ -479,7 +497,7 @@ func TestGitHubTestsChunkRouteStoredCursorPastWalkBoundEndsWithoutListing(t *tes
 			err := (GitHubTestsRouteHandler{}).CollectChunks(
 				context.Background(), claim, providerfoundation.Credential{},
 				githubTestsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC),
-				githubTestsStalledBackfillCursor(t, phase, "api.github.com"),
+				stored,
 				func(emission ChunkRouteEmission) error {
 					terminal = emission.CursorAfter
 					if emission.Final {
@@ -530,7 +548,7 @@ func TestGitHubTestsChunkRouteStoredCursorPastWalkBoundEndsWithoutListing(t *tes
 				t.Fatalf("production comparator rejected the bounded completion: %v", err)
 			}
 			if !strings.Contains(logged.String(), `"msg":"provider walk record bound reached"`) ||
-				!strings.Contains(logged.String(), `"mode":"backfill"`) {
+				!strings.Contains(logged.String(), `"mode":"`+mode+`"`) {
 				t.Fatalf("no WARN line for the walk bound with the mode in %s", logged.String())
 			}
 		})
@@ -765,7 +783,10 @@ func TestGitHubTestsChunkRouteWalkBoundInsideTheArtifactsPhase(t *testing.T) {
 	if len(full.Incomplete) != 0 || full.Phase != "done" || fullFinal.Watermark == nil {
 		t.Fatalf("unbounded walk incomplete=%+v phase=%q watermark=%v, want a complete walk", full.Incomplete, full.Phase, fullFinal.Watermark)
 	}
-	if fullChunks != 4 || full.Pipelines != 2 || full.Cases == 0 || full.Cases%2 != 0 {
+	// The fake answers every listing with the same two runs, so the deep ranges of the claim (it holds a UTC midnight; one in
+	// the runs phase, one in the artifacts phase) list them once more each: four more chunks, no row (neither changed late,
+	// and the artifacts deep range skips runs created at or after its floor).
+	if fullChunks != 8 || full.Pipelines != 2 || full.Cases == 0 || full.Cases%2 != 0 {
 		t.Fatalf("premise broken: chunks=%d pipelines=%d cases=%d, want 2 runs in each phase and the same report on both",
 			fullChunks, full.Pipelines, full.Cases)
 	}
@@ -776,8 +797,8 @@ func TestGitHubTestsChunkRouteWalkBoundInsideTheArtifactsPhase(t *testing.T) {
 	if bounded.Cases != full.Cases/2 || bounded.Suites != full.Suites/2 {
 		t.Fatalf("cases=%d suites=%d, want the first run's reports only (%d, %d)", bounded.Cases, bounded.Suites, full.Cases/2, full.Suites/2)
 	}
-	if boundedChunks != 3 {
-		t.Fatalf("chunks=%d, want 2 runs-phase runs and 1 artifacts-phase run", boundedChunks)
+	if boundedChunks != 5 {
+		t.Fatalf("chunks=%d, want 2 runs-phase runs, 2 deep-range runs and 1 artifacts-phase run", boundedChunks)
 	}
 	if githubTestsHasPageBudgetObservation(bounded, githubTestsRunInventoryComponent) ||
 		!githubTestsHasPageBudgetObservation(bounded, githubTestsArtifactInventoryComponent) {
@@ -914,9 +935,13 @@ func TestGitHubTestsChunkRouteListingEndingExactlyAtTheBoundIsComplete(t *testin
 
 	artifactsEnd := collectGitHubTestsOnePass(t, GitHubTestsRouteHandler{MaxWalkRecords: githubTestsWalkRecords(full)}, claim,
 		githubTestsPagedReportDoer{githubTestsPagedDoer: &githubTestsPagedDoer{t: t, pages: 3, perPage: 2}, archive: archive})
-	if len(artifactsEnd.Incomplete) != 0 || githubTestsWalkRecords(artifactsEnd) != githubTestsWalkRecords(full) {
-		t.Fatalf("artifacts listing ended at the bound: incomplete=%+v records=%d, want a complete walk of %d",
-			artifactsEnd.Incomplete, githubTestsWalkRecords(artifactsEnd), githubTestsWalkRecords(full))
+	// The regular listing is complete; the bound stops the late re-run deep range before it starts, which is its own advancing
+	// observation.
+	deepStop := []GitHubTestsIncomplete{{Component: githubTestsLateRerunReportsComponent, Cause: githubTestsPageBudgetCause, Count: 1}}
+	if fmt.Sprint(githubTestsSaturatedObservations(artifactsEnd)) != fmt.Sprint(deepStop) || len(artifactsEnd.Incomplete) != 0 ||
+		githubTestsWalkRecords(artifactsEnd) != githubTestsWalkRecords(full) {
+		t.Fatalf("artifacts listing ended at the bound: incomplete=%+v derived=%+v records=%d, want a complete regular walk of %d and only the deep-range stop",
+			artifactsEnd.Incomplete, githubTestsSaturatedObservations(artifactsEnd), githubTestsWalkRecords(artifactsEnd), githubTestsWalkRecords(full))
 	}
 }
 

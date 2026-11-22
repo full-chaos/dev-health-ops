@@ -151,7 +151,7 @@ func (handler LaunchDarklyRouteHandler) Collect(
 		budgetAccount(ctx, "flags"),
 		&counted,
 		providerfoundation.LaunchDarklyOffsetOptions{
-			Path: "/api/v2/flags/" + url.PathEscape(projectKey), Route: "/api/v2/flags/{project}", MaxPages: maxPages,
+			Path: "/api/v2/flags/" + url.PathEscape(projectKey), Route: launchDarklyFlagsRoute, MaxPages: maxPages,
 		},
 	)
 	if err != nil {
@@ -188,7 +188,7 @@ func (handler LaunchDarklyRouteHandler) Collect(
 	}
 	codeReferences, err := parseLaunchDarklyCodeReferences(codeReferencePayload)
 	if err != nil {
-		return CompleteRouteBatch{}, err
+		return CompleteRouteBatch{}, providerfoundation.RouteFailure(launchDarklyCodeRefsRoute, providerfoundation.ReasonBodyDecode, err)
 	}
 	flags, err := normalizeLaunchDarklyFlags(
 		flagsPage.Items, claim.OrgID, environment, normalizedAt,
@@ -293,7 +293,7 @@ func fetchLaunchDarklyCodeReferences(
 	response, err := client.DoRoute(
 		ctx,
 		http.MethodGet,
-		"/api/v2/code-refs/repositories",
+		launchDarklyCodeRefsRoute,
 		"/api/v2/code-refs/repositories?"+query.Encode(),
 		nil,
 	)
@@ -315,6 +315,16 @@ func fetchLaunchDarklyCodeReferences(
 	return append(json.RawMessage(nil), body...), nil
 }
 
+func decodeLaunchDarklyItem(raw json.RawMessage) (map[string]any, error) {
+	var item map[string]any
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.UseNumber()
+	if decoder.Decode(&item) != nil {
+		return nil, providerfoundation.ErrNormalizationInvalid
+	}
+	return item, nil
+}
+
 func normalizeLaunchDarklyFlags(
 	items []json.RawMessage,
 	orgID string,
@@ -323,11 +333,9 @@ func normalizeLaunchDarklyFlags(
 ) ([]launchDarklyFlagRow, error) {
 	rows := make([]launchDarklyFlagRow, 0, len(items))
 	for _, raw := range items {
-		var flag map[string]any
-		decoder := json.NewDecoder(strings.NewReader(string(raw)))
-		decoder.UseNumber()
-		if decoder.Decode(&flag) != nil {
-			return nil, providerfoundation.ErrNormalizationInvalid
+		flag, err := decodeLaunchDarklyItem(raw)
+		if err != nil {
+			return nil, providerfoundation.RouteFailure(launchDarklyFlagsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		created := parseLaunchDarklyTime(flag["creationDate"])
 		rows = append(rows, launchDarklyFlagRow{
@@ -355,11 +363,9 @@ func normalizeLaunchDarklyEvents(
 	}
 	rows := make([]launchDarklyEventRow, 0, len(items))
 	for _, raw := range items {
-		var event map[string]any
-		decoder := json.NewDecoder(strings.NewReader(string(raw)))
-		decoder.UseNumber()
-		if decoder.Decode(&event) != nil {
-			return nil, providerfoundation.ErrNormalizationInvalid
+		event, err := decodeLaunchDarklyItem(raw)
+		if err != nil {
+			return nil, providerfoundation.RouteFailure(launchDarklyAuditRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		rawKind := stringValue(event["kind"])
 		eventKind := kindMap[rawKind]

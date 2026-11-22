@@ -1,0 +1,22 @@
+kind: Service
+metadata:
+  name: svc
+spec:
+  ports:
+  - port: 80
+  - port: 80
+    protocol: TCP
+  - port: 81
+    protocol: ''
+---
+kind: Deployment
+metadata:
+  name: x
+spec:
+  template:
+    spec:
+      containers:
+      - env:
+        - name: E
+        - name: E
+        name: a

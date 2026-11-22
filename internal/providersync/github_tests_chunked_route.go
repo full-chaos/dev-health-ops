@@ -597,6 +597,10 @@ const (
 	githubTestsBackfillMaxWalkRecords = 40_000_000
 )
 
+// githubTestsScheduledCicdArtifactPages is the artifacts-listing page budget of an incremental cicd claim (CHAOS-13801): a
+// 1 h narrowed window lists 25-49 h of runs, about 17,900 at the busiest repository's peak (~365 runs an hour), over 100 pages.
+const githubTestsScheduledCicdArtifactPages = 250
+
 // errGitHubTestsWalkBound stops a listing visit at the run where the walk reached githubTestsMaxWalkRecords.
 var errGitHubTestsWalkBound = errors.New("github tests walk record bound reached")
 
@@ -1685,6 +1689,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	maxRuns := handler.MaxRuns
 	if maxRuns == 0 {
 		maxRuns = runsCeiling
+	}
+	// The artifacts listing pages: the run budget's pages, except an incremental cicd claim with the default bound
+	// (githubTestsScheduledCicdArtifactPages). The run bound and the walk bound do not change.
+	artifactListingPages := (maxRuns + nativePerPage - 1) / nativePerPage
+	if handler.MaxRuns == 0 && claim.Mode == "incremental" && claim.Dataset == "cicd" {
+		artifactListingPages = githubTestsScheduledCicdArtifactPages
 	}
 	maxArtifacts := handler.MaxArtifactsPerRun
 	if maxArtifacts == 0 {
@@ -3102,7 +3112,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		// A resume inside a page (a finished page included: its cursor keeps the page to check the anchor) re-reads a
 		// charged page, so that read is free, as in the runs phase.
-		allowance, budgetErr := githubTestsListingAllowance((maxRuns+nativePerPage-1)/nativePerPage, cursor.ArtifactPages, githubTestsFreePages(cursor))
+		allowance, budgetErr := githubTestsListingAllowance(artifactListingPages, cursor.ArtifactPages, githubTestsFreePages(cursor))
 		if cursor.Relist == githubTestsRelistWalking {
 			// The deep range: its own budget, under the shared listing allowance (charged on entering a page).
 			allowance, budgetErr = githubTestsListingAllowance(lateMaxPages, cursor.ArtifactPages, githubTestsFreePages(cursor))

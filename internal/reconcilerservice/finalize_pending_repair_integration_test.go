@@ -67,6 +67,12 @@ func (recorder *sqlRecorder) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d
 
 func (*sqlRecorder) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
+func (recorder *sqlRecorder) reset() {
+	recorder.mu.Lock()
+	recorder.statements = nil
+	recorder.mu.Unlock()
+}
+
 func (recorder *sqlRecorder) sawContaining(fragment string) bool {
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
@@ -1205,6 +1211,89 @@ func TestStaleFinalizeBaseZeroReadsNoOutboxAndNoRiver(t *testing.T) {
 	for name, marker := range map[string]string{"A": statementA, "B": statementB} {
 		if venue.queueSQL.sawContaining(marker) || venue.domainSQL.sawContaining(marker) {
 			t.Fatalf("statement %s ran with an empty base: it reads worker_job_outbox and river_job for nothing", name)
+		}
+	}
+}
+
+// F2 (fcc PLAN-READ-14090-PERF-1): the TRUE arm of statement 0. One base row of each class -- a candidate, a live job,
+// the finalize strand shape (its idempotency claim is live, so that shape refuses it too), a recent finalize job, no
+// partition -- makes statement 0 true: the pass sends A and B, redrives the candidate and counts each refusal class once.
+// A statement 0 that answers false for a base it has (a constant false, a narrowed copy) turns this red; one that
+// answers true for an empty base turns TestStaleFinalizeBaseZeroReadsNoOutboxAndNoRiver red.
+func TestStaleFinalizeBaseWithOneRunOfEachClassSendsAAndB(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	venue := startFinalizePendingVenue(t, ctx)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	old := now.Add(-48 * time.Hour)
+	orgID := uuid.NewString()
+
+	// strand_shape: a delivered canonical finalize whose River job ended completed and whose idempotency claim is live
+	// (the claimLive run of TestStaleFinalizeCandidateMatrix).
+	strandShape := uuid.NewString()
+	venue.seedShapeD(t, ctx, orgID, strandShape, "2026-01-01", old)
+	tx, err := venue.domain.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := venue.pub.PublishFinalizeTx(ctx, tx, daily.Run{ID: strandShape, OrganizationID: orgID, Status: "running"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := venue.relay.Step(ctx, time.Now().UTC().Add(time.Second), 10); err != nil {
+		t.Fatalf("delivery Step: %v", err)
+	}
+	if _, err := venue.admin.Exec(ctx, `
+UPDATE public.worker_job_outbox SET created_at = $2, delivered_at = $2, updated_at = $2 WHERE dedupe_key = $1`,
+		daily.FinalizeHandoffKey(strandShape), old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := venue.admin.Exec(ctx, `
+UPDATE river.river_job SET state = 'completed', finalized_at = $2, created_at = $2, attempt = 1
+WHERE kind = 'metrics.daily_finalize' AND args @> jsonb_build_object('domain', jsonb_build_object('id', $1::text))`,
+		strandShape, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := venue.admin.Exec(ctx, `
+INSERT INTO public.worker_job_runs (
+    id, job_kind, idempotency_key, org_id, domain_type, domain_id,
+    status, claim_token, lease_expires_at, attempt_count,
+    started_at, finished_at, created_at, updated_at
+) VALUES ($1::uuid, 'metrics.daily_finalize', $2, $3, 'daily_metrics_run', $4, 'running', $5::uuid, $6, 1,
+    statement_timestamp(), NULL, statement_timestamp(), statement_timestamp())`,
+		uuid.NewString(), daily.FinalizeHandoffKey(strandShape), orgID, strandShape, uuid.NewString(), now.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	candidate, live, recent, noPartitions := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	venue.seedShapeD(t, ctx, orgID, candidate, "2026-01-02", old)
+	venue.seedShapeD(t, ctx, orgID, live, "2026-01-03", old)
+	venue.seedRiverFinalize(t, ctx, orgID, live, "scheduled", now.Add(-30*time.Hour))
+	venue.seedShapeD(t, ctx, orgID, recent, "2026-01-04", old)
+	venue.seedRiverFinalize(t, ctx, orgID, recent, "completed", now.Add(-time.Hour))
+	venue.seedRunWithoutPartitions(t, ctx, orgID, noPartitions, "2026-01-05", old)
+
+	venue.queueSQL.reset()
+	result, err := venue.relay.Step(ctx, time.Now().UTC().Add(11*time.Minute), 10)
+	if err != nil {
+		t.Fatalf("reconciler Step: %v", err)
+	}
+	if len(result.StaleFinalizeRedriven) != 1 || result.StaleFinalizeRedriven[0] != candidate || len(result.StaleFinalizeFailures) != 0 {
+		t.Fatalf("redriven %v failures %+v, want the candidate redriven and no failure", result.StaleFinalizeRedriven, result.StaleFinalizeFailures)
+	}
+	want := joboutbox.StaleFinalizeLevels{Live: 1, StrandShape: 1, Recent: 1, NoPartitions: 1}
+	if result.StaleFinalizeLevels == nil || *result.StaleFinalizeLevels != want {
+		t.Fatalf("levels %+v, want %+v", result.StaleFinalizeLevels, want)
+	}
+	for name, marker := range map[string]string{
+		"0": "SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs AS run WHERE",
+		"A": "AND ($3::timestamptz IS NULL OR (run.updated_at, run.id) > ($3::timestamptz, $4::uuid))",
+		"B": "ELSE 'redrive'",
+	} {
+		if !venue.queueSQL.sawContaining(marker) {
+			t.Fatalf("statement %s was not sent with a base of one run per class", name)
 		}
 	}
 }

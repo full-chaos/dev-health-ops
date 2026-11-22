@@ -732,13 +732,17 @@ func TestJITNewAccountFollowsTheDomainList(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	e := newSAMLJITEnv(t, ctx, true)
-	// Legacy parity: an empty or NULL list is no domain filter.
+	// An empty or NULL list makes no new account: the answer and the record of auto-provisioning off, no write.
 	for name, list := range map[string]any{"empty": "[]", "null": nil} {
 		t.Run("saml/"+name, func(t *testing.T) {
 			e.setAllowedDomains(t, ctx, list)
-			nameID := "jit-list-" + uuid.NewString()
-			e.wantStatus(t, e.acs(t, nameID), http.StatusOK)
-			e.wantOneMembership(t, ctx, e.principalOf(t, ctx, nameID), "member")
+			before := e.tableCounts(t, ctx)
+			e.wantStatus(t, e.acs(t, "jit-list-"+uuid.NewString()), http.StatusBadRequest)
+			wantSameJITCounts(t, before, e.tableCounts(t, ctx))
+			if n := e.count(t, ctx, `SELECT count(*) FROM public.sso_providers WHERE id = $1 AND last_error = $2`, e.provider.ID,
+				"User not found and auto-provisioning disabled"); n != 1 {
+				t.Fatalf("%d provider rows with the auto-provision failure, want 1", n)
+			}
 		})
 	}
 	t.Run("saml/listed", func(t *testing.T) {

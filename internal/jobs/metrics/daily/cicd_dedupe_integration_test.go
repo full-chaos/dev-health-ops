@@ -35,7 +35,7 @@ func TestCICDComputeFamilyDedupesUnmergedRunVersions(t *testing.T) {
     repo_id UUID, run_id String, status Nullable(String),
     queued_at Nullable(DateTime64(3, 'UTC')), started_at DateTime64(3, 'UTC'),
     finished_at Nullable(DateTime64(3, 'UTC')), last_synced DateTime64(3, 'UTC'),
-    org_id String
+    org_id String, retry_count UInt32 DEFAULT 0
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id)`,
 		`SYSTEM STOP MERGES ci_pipeline_runs`,
 	} {

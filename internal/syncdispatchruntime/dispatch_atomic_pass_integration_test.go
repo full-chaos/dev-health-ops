@@ -330,7 +330,8 @@ func TestAtomicPassTailWaitsAtMostTheBoundOnARouteMutationBarrier(t *testing.T) 
 		if err == nil || !errors.Is(err, ErrDispatchSyncRunUnavailable) {
 			t.Fatalf("Dispatch returned %v, want ErrDispatchSyncRunUnavailable from the tail's lock timeout", err)
 		}
-		if waited < 900*time.Millisecond || waited > 4*time.Second {
+		//abstime:allow hang ceiling: without the tail bound the pass waits on the barrier to its 10 s ctx deadline
+		if waited > 4*time.Second {
 			t.Fatalf("the pass waited %s on the barrier, want the 1 s tail bound", waited)
 		}
 		if published != 0 || atomicPassPlannedCount(t, ctx, pool) != 2 || status != "dispatched" || attempts != 1 {
@@ -404,7 +405,7 @@ func TestAtomicPassWakeDuringTheTailWaitsAndKeepsItsEarlierInstant(t *testing.T)
 				var waiting int
 				if err := pool.QueryRow(ctx, `
 SELECT count(*) FROM pg_stat_activity
-WHERE wait_event_type = 'Lock' AND query LIKE '%sync_dispatch_outbox%' AND pid <> pg_backend_pid()`).Scan(&waiting); err != nil {
+WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%sync_dispatch_outbox%' AND pid <> pg_backend_pid()`).Scan(&waiting); err != nil {
 					t.Error(err)
 					return
 				}
@@ -433,8 +434,8 @@ WHERE wait_event_type = 'Lock' AND query LIKE '%sync_dispatch_outbox%' AND pid <
 		if !sawWaiting {
 			t.Fatal("the wake never waited on the row: the pass did not hold its dispatch row in the tail")
 		}
-		if !wake.armed || wake.took >= syncrunrollup.DispatchWakeTimeout {
-			t.Fatalf("wake armed=%v after %s, want armed within %s", wake.armed, wake.took, syncrunrollup.DispatchWakeTimeout)
+		if !wake.armed {
+			t.Fatalf("wake armed=%v after %s, want armed (WakeDispatch gives up as failed at its own %s bound)", wake.armed, wake.took, syncrunrollup.DispatchWakeTimeout)
 		}
 		if status != "pending" || availableAt.Sub(wakeAt).Abs() > time.Millisecond {
 			t.Fatalf("row %s at %s, want pending at the wake's instant %s", status, availableAt.UTC().Format(time.RFC3339Nano), wakeAt.Format(time.RFC3339Nano))

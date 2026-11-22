@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	jobsv1 "github.com/full-chaos/dev-health-ops/contracts/jobs/v1"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -78,8 +79,16 @@ func startFinalizePendingVenue(t *testing.T, ctx context.Context) *finalizePendi
 		}
 		t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
 	}
+	// The route rows go-river-migrate seeds in production (rivermigrate.go):
+	// without them the relay resolves a native kind as unknown and every
+	// Step fails before it reaches any repair.
+	nativeRoutes, err := jobcontract.NativeRiverRouteKinds(jobsv1.MigrationState)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{
 		Schema: "river", DomainRole: domainRole, QueueRole: queueRole,
+		NativeRiverRoutes: nativeRoutes,
 	}); err != nil {
 		t.Fatal(err)
 	}

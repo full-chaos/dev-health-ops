@@ -96,3 +96,30 @@ func TestSAMLJITOffNewAccountWithNoDomainListKeepsMembershipRequired(t *testing.
 		})
 	}
 }
+
+// An asserted email another account holds keeps its conflict answer under a row with no domain list: the answer of
+// the same row with auto-provisioning off, and nothing is written.
+func TestSAMLJITHeldEmailWithNoDomainListKeepsTheConflict(t *testing.T) {
+	for name, list := range map[string][]string{"empty": {}, "null": nil} {
+		t.Run(name, func(t *testing.T) {
+			post := func(autoProvision bool) (acsRun, *joinSeam) {
+				members := &memberSet{ids: map[uuid.UUID]bool{}}
+				seam := &joinSeam{members: members}
+				return postACSRow(t, &lookupStore{taken: true}, members, seam, func(p *saml.Provider) {
+					p.AllowedDomains, p.AutoProvision = list, autoProvision
+				}), seam
+			}
+			want, _ := post(false)
+			if want.status != http.StatusConflict {
+				t.Fatalf("auto-provisioning off = %d %q, want its 409 (harness control)", want.status, want.detail)
+			}
+			got, seam := post(true)
+			if got.status != want.status || got.detail != want.detail {
+				t.Fatalf("ACS = %d %q, want the auto-provisioning-off answer %d %q", got.status, got.detail, want.status, want.detail)
+			}
+			if len(seam.provisioned) != 0 || seam.joins != 0 || len(got.sessions.got) != 0 {
+				t.Fatalf("provisions %d, joins %d, sessions %d; want none", len(seam.provisioned), seam.joins, len(got.sessions.got))
+			}
+		})
+	}
+}

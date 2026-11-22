@@ -122,7 +122,7 @@ func TestGitLabEpicTransitionMatchesFrozenPythonProvider(t *testing.T) {
 				t.Fatal(err)
 			}
 			return transitions[input["transition_index"].(int)]
-		}, gitlabWorkItemsFetchGoOnlyFields)
+		}, withTransitionBoardSlotGoOnly(gitlabWorkItemsFetchGoOnlyFields))
 }
 
 var gitlabEpicOracleGoOnlyFields = map[string]string{

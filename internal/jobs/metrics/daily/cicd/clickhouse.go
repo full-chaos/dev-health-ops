@@ -57,7 +57,7 @@ WHERE finished_at >= {start:DateTime64(3, 'UTC')} AND finished_at < {end:DateTim
   AND ` + testops.NotOpenRunSQL
 
 const pipelineRunsQuery = `
-SELECT repo_id, run_id, status, queued_at, started_at, finished_at` + PipelineRunsSource
+SELECT repo_id, run_id, status, queued_at, started_at, finished_at, retry_count` + PipelineRunsSource
 
 // SourceArgs binds the parameters PipelineRunsSource reads.
 func SourceArgs(orgID string, repoIDs []uuid.UUID, start, end time.Time) []any {
@@ -96,8 +96,9 @@ func (loader *ClickHouseLoader) LoadPipelineRuns(
 			queuedAt   *time.Time
 			startedAt  time.Time
 			finishedAt *time.Time
+			retryCount uint32
 		)
-		if err := rows.Scan(&repoID, &runID, &status, &queuedAt, &startedAt, &finishedAt); err != nil {
+		if err := rows.Scan(&repoID, &runID, &status, &queuedAt, &startedAt, &finishedAt, &retryCount); err != nil {
 			return nil, fmt.Errorf("scan pipeline run row: %w", err)
 		}
 		result = append(result, PipelineRunRow{
@@ -107,6 +108,7 @@ func (loader *ClickHouseLoader) LoadPipelineRuns(
 			QueuedAt:   queuedAt,
 			StartedAt:  startedAt,
 			FinishedAt: finishedAt,
+			RetryCount: retryCount,
 		})
 	}
 	if err := rows.Err(); err != nil {

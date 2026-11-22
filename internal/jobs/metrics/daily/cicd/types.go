@@ -41,6 +41,8 @@ type PipelineRunRow struct {
 	QueuedAt   *time.Time
 	StartedAt  time.Time
 	FinishedAt *time.Time
+	// RetryCount is ci_pipeline_runs.retry_count: above 0 the row is a re-run of the run.
+	RetryCount uint32
 }
 
 // CICDMetric mirrors CICDMetricsDailyRecord (schemas.py:624): one

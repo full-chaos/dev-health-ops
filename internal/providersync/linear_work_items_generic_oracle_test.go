@@ -27,7 +27,7 @@ func TestLinearStatusTransitionMatchesFrozenPythonProductionRow(t *testing.T) {
 		"linear/work-items/status-transition",
 		linearWorkItemOracleCases(),
 		buildLinearStatusTransitionOracleRow,
-		linearWorkItemWriteStampGoOnly,
+		withTransitionBoardSlotGoOnly(linearWorkItemWriteStampGoOnly),
 	)
 }
 

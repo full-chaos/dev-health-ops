@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -96,11 +97,6 @@ func TestWorkItemStateComputeFamilyWritesBlockedRowsFromOpenBlockers(t *testing.
     created_at DateTime64(3, 'UTC'), completed_at Nullable(DateTime64(3, 'UTC')),
     org_id String, last_synced DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, work_item_id)`,
-		`CREATE TABLE work_item_transitions (
-    repo_id UUID, work_item_id String, occurred_at DateTime64(3, 'UTC'), provider String,
-    from_status String, to_status String, from_status_raw String, to_status_raw String,
-    actor String, org_id String, last_synced DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, work_item_id, occurred_at)`,
 		`CREATE TABLE work_item_team_attributions (
     org_id String, repo_id UUID, work_item_id String, provider String,
     team_id Nullable(String), team_name Nullable(String),
@@ -126,6 +122,7 @@ PARTITION BY toYYYYMM(day) ORDER BY (org_id, day, provider, work_item_id)`,
 			t.Fatal(err)
 		}
 	}
+	chschema.CreateTables(ctx, t, conn, "work_item_transitions")
 
 	const (
 		orgA  = "00000000-0000-4000-8000-0000000000a0"

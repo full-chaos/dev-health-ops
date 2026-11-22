@@ -87,6 +87,10 @@ type githubWorkItemTransitionRow struct {
 	OrgID         string    `json:"org_id"`
 	// LastSynced: see githubWorkItemRow.LastSynced.
 	LastSynced time.Time `json:"last_synced"`
+	// BoardSlot is set on a Projects v2 board Status event only: its board's tie_ordinal slot (boardTieSlot of the
+	// board's projectScopeID, in [2^31, 2^32)). A provider timeline event leaves it 0 and is ranked by content. It
+	// rides in the effect row (a prepared-route sink-read key), so a replay writes the board event into its own slot.
+	BoardSlot int `json:"board_slot,omitempty"`
 }
 
 type githubWorkItemDependencyRow struct {

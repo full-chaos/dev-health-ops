@@ -155,7 +155,8 @@ func ComputeCICDMetricsDaily(day time.Time, pipelineRuns []PipelineRunRow, compu
 			runDuration = ptr(durationMin)
 		}
 
-		if row.QueuedAt != nil {
+		// A re-run's queued_at is the run's first creation and its started_at the latest attempt's start: no queue sample.
+		if row.RetryCount == 0 && row.QueuedAt != nil {
 			queueMin := startedAt.Sub(row.QueuedAt.UTC()).Minutes()
 			if queueMin >= 0 {
 				bucket.queues = append(bucket.queues, queueMin)

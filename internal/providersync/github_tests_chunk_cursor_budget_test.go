@@ -121,9 +121,9 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	// range (CHAOS-14385; one more fewer exclusion sample record pays for them).
 	cursor.ReseekPages, cursor.PagesEntered, cursor.RecordCredit = githubTestsWidestReseekPages, githubTestsWidestReseekPages, githubTestsWidestRecordCredit
 	cursor.DeletionProven = 1
-	cursor.LateRecords = backfillWalkRecordsPin
-	// A backfill walk's record counters reach its bound: the widest one holds 8 digits.
-	cursor.Cases = backfillWalkRecordsPin
+	cursor.LateRecords = githubTestsMaxWalkRecords
+	// A backfill walk's record counters reach 8 digits (boundsWidestBackfillCounters).
+	boundsWidestBackfillCounters(&cursor)
 
 	encoded, err := encodeGitHubTestsChunkCursor(cursor)
 	if err != nil {

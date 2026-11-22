@@ -871,7 +871,7 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			deepPages := githubTestsSearchResultCap / nativePerPage
 			c.ReseekPages, c.PagesEntered, c.RecordCredit = deepPages, deepPages, githubTestsWidestRecordCredit
 			c.DeletionProven = 1
-			c.LateRecords = backfillWalkRecordsPin
+			c.LateRecords = githubTestsMaxWalkRecords
 		}},
 		{"artifacts peel", 300, func(c *githubTestsChunkCursor) {
 			c.Phase = githubTestsArtifactsPhase
@@ -881,7 +881,7 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			c.AnchorID = githubTestsWidestAnchorID
 			c.ReseekPages, c.PagesEntered, c.RecordCredit = githubTestsWidestReseekPages, githubTestsWidestReseekPages, githubTestsWidestRecordCredit
 			c.DeletionProven = 1
-			c.LateRecords = backfillWalkRecordsPin
+			c.LateRecords = githubTestsMaxWalkRecords
 		}},
 		{"open phase", 300, func(c *githubTestsChunkCursor) {
 			c.Phase = githubTestsOpenPhase
@@ -894,20 +894,27 @@ func TestChunkCursorWorstCaseOfEachPhaseKeepsTheMargin(t *testing.T) {
 			c.SaturatedRuns, c.SaturatedArtifacts = true, true
 		}},
 	} {
-		cursor := githubTestsRealisticCursorBase()
-		cursor.SkippedArtifactsOverflow = 999999
-		tc.apply(&cursor)
-		encoded, err := encodeGitHubTestsChunkCursor(cursor)
-		if err != nil {
-			t.Fatalf("%s: %v", tc.name, err)
-		}
-		t.Logf("%s: worst-case cursor %d bytes", tc.name, len(encoded))
-		if remaining := maxChunkCursorBytes - len(encoded); remaining < tc.floor {
-			t.Fatalf("%s: worst-case cursor %d bytes leaves %d under maxChunkCursorBytes, want at least %d", tc.name, len(encoded), remaining, tc.floor)
-		}
-		decoded, decodeErr := decodeGitHubTestsChunkCursor(encoded)
-		if decodeErr != nil || decoded.Phase != cursor.Phase {
-			t.Fatalf("%s: decode = %v %v", tc.name, decoded.Phase, decodeErr)
+		for _, backfill := range []bool{false, true} {
+			name, floor := tc.name, tc.floor
+			cursor := githubTestsRealisticCursorBase()
+			cursor.SkippedArtifactsOverflow = 999999
+			tc.apply(&cursor)
+			if backfill {
+				name, floor = tc.name+" (backfill)", backfillCursorFloor(tc.name, tc.floor)
+				boundsWidestBackfillCounters(&cursor)
+			}
+			encoded, err := encodeGitHubTestsChunkCursor(cursor)
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			t.Logf("%s: worst-case cursor %d bytes", name, len(encoded))
+			if remaining := maxChunkCursorBytes - len(encoded); remaining < floor {
+				t.Fatalf("%s: worst-case cursor %d bytes leaves %d under maxChunkCursorBytes, want at least %d", name, len(encoded), remaining, floor)
+			}
+			decoded, decodeErr := decodeGitHubTestsChunkCursor(encoded)
+			if decodeErr != nil || decoded.Phase != cursor.Phase {
+				t.Fatalf("%s: decode = %v %v", name, decoded.Phase, decodeErr)
+			}
 		}
 	}
 }

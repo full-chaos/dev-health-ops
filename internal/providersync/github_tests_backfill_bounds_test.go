@@ -384,3 +384,32 @@ func TestGitHubTestsBackfillDeletionCreditCeilingScales(t *testing.T) {
 		}
 	}
 }
+
+// boundsWidestBackfillCounters sets the record counters a backfill walk can carry at their widest: four of the five
+// row counters at 10,000,000 sum to the 40,000,000 bound (pipelines count runs, at most 25,000), and the deep range's
+// record count at the bound.
+func boundsWidestBackfillCounters(cursor *githubTestsChunkCursor) {
+	cursor.Jobs, cursor.Acceptance, cursor.Suites, cursor.Cases = 10_000_000, 10_000_000, 10_000_000, 10_000_000
+	if cursor.LateRecords != 0 {
+		cursor.LateRecords = backfillWalkRecordsPin
+	}
+}
+
+// Backfill floors of the per-phase cursor margin: a backfill walk's record counters reach 8 digits (4.1M: 7), so its
+// worst-case cursor is up to 9 bytes wider than a scheduled one. Each is the measured backfill margin (runs peel 297,
+// deep range peel 241 bytes) rounded down to a multiple of 5; the scheduled arms keep 300 and 250. The real limit is the
+// hard 4 KiB cap (maxChunkCursorBytes), which the encoder enforces.
+const (
+	backfillRunsPeelCursorFloor      = 295
+	backfillDeepRangePeelCursorFloor = 240
+)
+
+func backfillCursorFloor(name string, floor int) int {
+	switch name {
+	case "runs peel":
+		return backfillRunsPeelCursorFloor
+	case "runs deep range peel":
+		return backfillDeepRangePeelCursorFloor
+	}
+	return floor
+}

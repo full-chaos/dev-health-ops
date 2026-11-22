@@ -35,7 +35,7 @@ func TestCICDComputeFamilyDedupesUnmergedRunVersions(t *testing.T) {
     repo_id UUID, run_id String, status Nullable(String),
     queued_at Nullable(DateTime64(3, 'UTC')), started_at DateTime64(3, 'UTC'),
     finished_at Nullable(DateTime64(3, 'UTC')), last_synced DateTime64(3, 'UTC'),
-    org_id String
+    org_id String, retry_count UInt32 DEFAULT 0
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id)`,
 		`SYSTEM STOP MERGES ci_pipeline_runs`,
 	} {
@@ -52,16 +52,16 @@ func TestCICDComputeFamilyDedupesUnmergedRunVersions(t *testing.T) {
 	// run-1: v1 failed, v2 success (same window). run-2: v1 finished in the
 	// window, v2 finished the next day (live version is outside the window).
 	for _, statement := range []string{
-		`INSERT INTO ci_pipeline_runs VALUES (toUUID('` + repo + `'), 'run-1', 'failed',
+		`INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, finished_at, last_synced, org_id) VALUES (toUUID('` + repo + `'), 'run-1', 'failed',
  toDateTime64('2026-08-24 09:55:00', 3, 'UTC'), toDateTime64('2026-08-24 10:00:00', 3, 'UTC'),
  toDateTime64('2026-08-24 10:10:00', 3, 'UTC'), toDateTime64('2026-08-24 11:00:00', 3, 'UTC'), '` + org + `')`,
-		`INSERT INTO ci_pipeline_runs VALUES (toUUID('` + repo + `'), 'run-1', 'success',
+		`INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, finished_at, last_synced, org_id) VALUES (toUUID('` + repo + `'), 'run-1', 'success',
  toDateTime64('2026-08-24 09:55:00', 3, 'UTC'), toDateTime64('2026-08-24 10:00:00', 3, 'UTC'),
  toDateTime64('2026-08-24 10:10:00', 3, 'UTC'), toDateTime64('2026-08-24 12:00:00', 3, 'UTC'), '` + org + `')`,
-		`INSERT INTO ci_pipeline_runs VALUES (toUUID('` + repo + `'), 'run-2', 'failed',
+		`INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, finished_at, last_synced, org_id) VALUES (toUUID('` + repo + `'), 'run-2', 'failed',
  toDateTime64('2026-08-24 13:55:00', 3, 'UTC'), toDateTime64('2026-08-24 14:00:00', 3, 'UTC'),
  toDateTime64('2026-08-24 14:10:00', 3, 'UTC'), toDateTime64('2026-08-24 15:00:00', 3, 'UTC'), '` + org + `')`,
-		`INSERT INTO ci_pipeline_runs VALUES (toUUID('` + repo + `'), 'run-2', 'success',
+		`INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, finished_at, last_synced, org_id) VALUES (toUUID('` + repo + `'), 'run-2', 'success',
  toDateTime64('2026-08-24 13:55:00', 3, 'UTC'), toDateTime64('2026-08-24 14:00:00', 3, 'UTC'),
  toDateTime64('2026-08-25 01:10:00', 3, 'UTC'), toDateTime64('2026-08-24 16:00:00', 3, 'UTC'), '` + org + `')`,
 	} {

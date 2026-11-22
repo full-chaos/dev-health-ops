@@ -411,3 +411,71 @@ func TestAQueuedOldFinalizeAndItsRedriveComputeOnce(t *testing.T) {
 		t.Fatalf("run status=%s finalization=%s, want succeeded/succeeded", status, finalization)
 	}
 }
+
+// RED BY DESIGN, for the follow-up of CHAOS-14090 (pm ruling F4): a run whose
+// discovery found no repository is materialized empty by the real producer --
+// no partition, the finalize handed off in the same transaction -- and then
+// loses that finalize (River cleaned the job, retention pruned the outbox row).
+// The CHAOS-14090 stage does not redrive a run with no partition, so nothing
+// recovers it. This cell states the WANT of the follow-up and shows the shape.
+func TestAMaterializedEmptyRunWithALostFinalizeIsRecovered(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	venue := startFinalizePendingVenue(t, ctx)
+	orgID := uuid.NewString()
+	tx, err := venue.domain.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := venue.store.StartScheduledFanoutRunTx(ctx, tx, daily.ScheduledFanoutRequest{
+		OrganizationID: orgID, TargetDay: time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC),
+		Generation: daily.ScheduledFanoutGenerationPrefix + "2026-11-04T01:00:00Z",
+	}, venue.pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := venue.store.ClaimDispatch(ctx, run.ID)
+	if err != nil || claimed == nil {
+		t.Fatalf("ClaimDispatch: %v %v", claimed, err)
+	}
+	if _, err := venue.store.MaterializeScheduledFanout(ctx, *claimed, nil, venue.pub); err != nil {
+		t.Fatalf("MaterializeScheduledFanout with an empty snapshot: %v", err)
+	}
+	var partitions, handoffs int
+	if err := venue.admin.QueryRow(ctx, `
+SELECT (SELECT count(*) FROM public.daily_metrics_partitions WHERE run_id = $1::uuid),
+       (SELECT count(*) FROM public.worker_job_outbox WHERE dedupe_key = $2)`,
+		run.ID, daily.FinalizeHandoffKey(run.ID)).Scan(&partitions, &handoffs); err != nil {
+		t.Fatal(err)
+	}
+	if partitions != 0 || handoffs != 1 {
+		t.Fatalf("fixture: %d partitions and %d finalize handoffs, want the empty shape (0 and 1)", partitions, handoffs)
+	}
+	// The finalize is lost and the run is past the horizon.
+	old := time.Now().UTC().Add(-48 * time.Hour)
+	if _, err := venue.admin.Exec(ctx, `
+DELETE FROM public.worker_job_outbox WHERE args #>> '{domain,id}' = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := venue.admin.Exec(ctx, `
+UPDATE public.daily_metrics_runs SET created_at = $2, updated_at = $2 WHERE id = $1::uuid`, run.ID, old); err != nil {
+		t.Fatal(err)
+	}
+	if status, finalization := venue.runState(t, ctx, run.ID); status != "running" || finalization != "pending" {
+		t.Fatalf("fixture run status=%s finalization=%s, want running/pending", status, finalization)
+	}
+
+	if _, err := venue.relay.Step(ctx, time.Now().UTC(), 10); err != nil {
+		t.Fatalf("reconciler Step: %v", err)
+	}
+	if _, err := venue.relay.Step(ctx, time.Now().UTC().Add(time.Second), 10); err != nil {
+		t.Fatalf("second reconciler Step: %v", err)
+	}
+	if outboxRows, riverJobs := venue.finalizeTrace(t, ctx, run.ID); outboxRows != 1 || riverJobs != 1 {
+		t.Fatalf("materialized-empty run with a lost finalize: %d finalize outbox rows and %d River jobs "+
+			"after two Steps, want 1 and 1: nothing recovers it (open by design in CHAOS-14090)", outboxRows, riverJobs)
+	}
+}

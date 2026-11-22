@@ -125,11 +125,15 @@ FROM team_complexity_daily FINAL WHERE org_id = ? AND day = ?`, []any{org, day},
 				return executor, func(at time.Time) { executor.nowUTC = func() time.Time { return at } }
 			},
 			read: func(t *testing.T, org string) string {
+				// The stored inputs of the row too: with one repository the
+				// score is normalized against the organization itself, so the
+				// rework input reaches a reader through rework_churn only.
 				var scored uint64
-				var risk float64
-				scanRedrive(t, ctx, conn, `SELECT toUInt64(countIf(compounding_risk IS NOT NULL)), toFloat64(sum(ifNull(compounding_risk, 0)))
-FROM compounding_risk_daily FINAL WHERE org_id = ? AND day = ? AND scope = 'team'`, []any{org, day}, &scored, &risk)
-				return fmt.Sprintf("scored_teams=%d risk=%.9f", scored, risk)
+				var risk, rework float64
+				scanRedrive(t, ctx, conn, `SELECT toUInt64(countIf(compounding_risk IS NOT NULL)), toFloat64(sum(ifNull(compounding_risk, 0))),
+       toFloat64(sum(ifNull(rework_churn, 0)))
+FROM compounding_risk_daily FINAL WHERE org_id = ? AND day = ? AND scope = 'team'`, []any{org, day}, &scored, &risk, &rework)
+				return fmt.Sprintf("scored_teams=%d risk=%.9f rework_churn=%.6f", scored, risk, rework)
 			},
 		},
 		{

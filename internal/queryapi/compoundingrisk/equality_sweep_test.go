@@ -32,7 +32,7 @@ const (
 	sweepGoldenPath     = "testdata/equality_sweep.golden"
 	sweepGoldenSHA256   = "b0600abc84fdaf55475d981382fa7edc67e214fec8d61d5177a9fcbd36b74c68"
 	sweepDeclaredPath   = "testdata/equality_sweep.declared"
-	sweepDeclaredSHA256 = "a4e096daeb17344205da676d57f9909217f9e0960588b355aa0ccd328cace71f"
+	sweepDeclaredSHA256 = "12258f8ae53b06284298cd7ac2bcde871b95674f6db5a884e1fcc992e7fa647d"
 	sweepRewriteEnv     = "COMPOUNDINGRISK_SWEEP_REWRITE"
 	sweepOrg            = "org-sweep"
 )
@@ -709,9 +709,9 @@ func sweepCompare(t *testing.T, text []byte) {
 	for _, h := range declared.order {
 		class, block, _ := strings.Cut(declared.blocks[h], "\n")
 		switch {
-		case class != "class B" && class != "class F" && class != "class []":
+		case class != "class G" && class != "class S":
 			differ++
-			t.Errorf("%s: declared %q is not one of the classes B, F, []", h, class)
+			t.Errorf("%s: declared %q is not one of the classes G (grouping at the selected day), S (named scope at the selected day)", h, class)
 		case want.blocks[h] == "":
 			differ++
 			t.Errorf("%s: declared, but not a combination of the golden", h)

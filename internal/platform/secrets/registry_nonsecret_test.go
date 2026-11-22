@@ -1,8 +1,10 @@
 package secrets
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -83,11 +85,12 @@ func TestWarnShortNamesKnownNonSecretField(t *testing.T) {
 		t.Fatalf("want one short warning, got %+v", got)
 	}
 	w := got[0]
-	if keys := attrKeys(w); keys != "setting,field,minimum_length,detail" {
-		t.Errorf("attribute keys = %s, want setting,field,minimum_length,detail", keys)
+	want := []any{
+		"setting", "integration credential", "field", "project_key", "minimum_length", MinRegisteredLength,
+		"detail", "the value is shorter than the minimum: redacted only in credential shapes (a password key with its value, or a user and password in front of the @ of a URL), not as a bare word",
 	}
-	if w.attrs["setting"] != "integration credential" || w.attrs["field"] != "project_key" || w.attrs["minimum_length"] != MinRegisteredLength {
-		t.Errorf("want field project_key named, got %v", w.args)
+	if !reflect.DeepEqual(w.args, want) {
+		t.Errorf("attributes = %v, want %v", w.args, want)
 	}
 	if argsContain(w, "pk7409") {
 		t.Errorf("the value reached the warning: %v", w.args)
@@ -150,11 +153,16 @@ func TestWarnShortHidesLookAlikesOfAKnownNonSecretField(t *testing.T) {
 		RegisterCredentialJSON(credentialWithKey(t, sent, "pk7409"))
 		assertHiddenByLength(t, sent, warnings())
 	}
-	// An escape that decodes to the exact bytes is the same key: the literal is named.
+	// A JSON escape (u005f is "_") decodes to the exact bytes before the registry sees
+	// the key, so it is the same key and the list literal is named.
+	escaped := []byte(`{"project` + `\` + `u005fkey":"pk7409"}`)
+	if !bytes.Contains(escaped, []byte(`\`)) || bytes.Contains(escaped, []byte("project_key")) {
+		t.Fatalf("the control row lost its JSON escape: %s", escaped)
+	}
 	warnings := captureWarnings(t)
-	RegisterCredentialJSON([]byte(`{"project_key":"pk7409"}`))
+	RegisterCredentialJSON(escaped)
 	if got := warnings(); len(got) != 1 || got[0].attrs["field"] != "project_key" {
-		t.Errorf("an escaped spelling of the exact key: got %+v", got)
+		t.Errorf("a JSON-escaped spelling of the exact key: got %+v", got)
 	}
 }
 

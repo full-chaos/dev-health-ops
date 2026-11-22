@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -158,5 +159,31 @@ func TestBuildIndexAcceptsFlagsBeforeAndAfterTheIndexName(t *testing.T) {
 				t.Fatalf("args %v: exit %d resolved=%v (%s)", args, code, resolved, stderr.String())
 			}
 		})
+	}
+}
+
+// chainFile is a live chain revision's SQL (dir sql/ or sql/down/).
+func chainFile(t *testing.T, dir, revision string) string {
+	t.Helper()
+	matches, err := filepath.Glob(dir + revision + "_*.sql")
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("sql files of revision %s in %s: %v (%v)", revision, dir, matches, err)
+	}
+	data, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// The Job's finalize-outbox definition and revision 0167's statement are one, so a database the Job built and a
+// database revision 0167 built hold the same index.
+func TestFinalizeOutboxIndexDefinitionMatchesRevision0167(t *testing.T) {
+	want := squash("CREATE INDEX IF NOT EXISTS " + pgmigrate.FinalizeOutboxIndexBody + ";")
+	if got := squash(chainFile(t, "sql/", "0167")); got != want {
+		t.Fatalf("revision 0167 =\n%s\nwant\n%s", got, want)
+	}
+	if down := squash(chainFile(t, "sql/down/", "0167")); down != "DROP INDEX IF EXISTS public."+pgmigrate.FinalizeOutboxIndexName+";" {
+		t.Fatalf("down 0167 = %q", down)
 	}
 }

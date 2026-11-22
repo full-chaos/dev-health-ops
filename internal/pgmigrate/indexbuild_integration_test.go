@@ -456,3 +456,83 @@ func TestBuildOpenUnitsIndexHasItsOwnBuildLock(t *testing.T) {
 		t.Fatalf("err = %v, want ErrBuildLockHeld", err)
 	}
 }
+
+// The finalize-outbox verb builds the index CONCURRENTLY on a database one revision below 0167, finds it valid on a
+// second run, repairs an INVALID leftover, and revision 0167 then does nothing for it: the database holds the
+// definition a plain walk to the head builds. While the build runs the outbox keeps taking writes (CONCURRENTLY holds
+// SHARE UPDATE EXCLUSIVE, which no INSERT conflicts with).
+func TestBuildFinalizeOutboxIndexBeforeRevision0167(t *testing.T) {
+	d := newDownInstance(t)
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	position := -1
+	for index, file := range chain {
+		if file.Revision == "0167" {
+			position = index
+		}
+	}
+	if position < 0 {
+		t.Fatal("the chain holds no revision 0167")
+	}
+	headConn := connect(t, d.at(t, len(chain)))
+	wantDefinition, valid := indexDefinition(t, headConn, pgmigrate.FinalizeOutboxIndexName)
+	if !valid || !strings.Contains(wantDefinition, "((args #>> '{domain,id}'::text[])) WHERE ((job_kind)::text = 'metrics.daily_finalize'::text)") {
+		t.Fatalf("the walk's index is %q valid=%v", wantDefinition, valid)
+	}
+	uri := d.at(t, position)
+	conn := connect(t, uri)
+	var present bool
+	if err := conn.QueryRow(context.Background(), "SELECT to_regclass('public."+pgmigrate.FinalizeOutboxIndexName+"') IS NOT NULL").Scan(&present); err != nil || present {
+		t.Fatalf("the index exists below revision 0167 (err %v)", err)
+	}
+	for _, step := range []struct{ name, damage, action string }{
+		{"first build", "", "built"},
+		{"second run", "", "present"},
+		{"invalid leftover", "UPDATE pg_index SET indisvalid = false WHERE indexrelid = 'public." + pgmigrate.FinalizeOutboxIndexName + "'::regclass", "rebuilt"},
+	} {
+		if step.damage != "" {
+			if _, err := conn.Exec(context.Background(), step.damage); err != nil {
+				t.Fatal(err)
+			}
+		}
+		code, result, stderr := buildIndexVerbFor(t, uri, "finalize-outbox")
+		if code != cli.ExitOK || result["action"] != step.action || result["valid"] != true {
+			t.Fatalf("%s: exit %d result %v stderr %s, want action %s", step.name, code, result, stderr, step.action)
+		}
+		if got, valid := indexDefinition(t, conn, pgmigrate.FinalizeOutboxIndexName); !valid || got != wantDefinition {
+			t.Fatalf("%s: index %q valid=%v, want %q", step.name, got, valid, wantDefinition)
+		}
+	}
+	baseline, err := pgmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied, err := pgmigrate.Upgrade(context.Background(), conn, baseline, chain)
+	if err != nil {
+		t.Fatalf("upgrade to the head: %v", err)
+	}
+	if got, valid := indexDefinition(t, conn, pgmigrate.FinalizeOutboxIndexName); !valid || got != wantDefinition {
+		t.Fatalf("after the upgrade (%+v): index %q valid=%v, want %q", applied, got, valid, wantDefinition)
+	}
+}
+
+// The finalize-outbox index has its own build lock: a held open-units lock does not stop a finalize-outbox build.
+func TestBuildFinalizeOutboxIndexHasItsOwnBuildLock(t *testing.T) {
+	d := newDownInstance(t)
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	uri := d.at(t, len(chain)-1)
+	holder := connect(t, uri)
+	const openUnitsLockKey = int64(0x64686f5f6979)
+	var locked bool
+	if err := holder.QueryRow(context.Background(), "SELECT pg_try_advisory_lock($1)", openUnitsLockKey).Scan(&locked); err != nil || !locked {
+		t.Fatalf("hold the open-units build lock: %v %v", locked, err)
+	}
+	if code, result, stderr := buildIndexVerbFor(t, uri, "finalize-outbox"); code != cli.ExitOK || result["action"] != "built" {
+		t.Fatalf("finalize-outbox under a held open-units lock: exit %d result %v stderr %s, want built", code, result, stderr)
+	}
+}

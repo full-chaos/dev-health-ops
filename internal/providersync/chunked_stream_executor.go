@@ -163,8 +163,8 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 		finalSeen := false
 		var finalComparison ShadowComparison
 		var callbackErr error
-		// prepareEmission makes a whole emission durable as one group BEFORE any of it reaches the sink.
-		prepareEmission := func(emission ChunkRouteEmission) ([]PreparedProviderChunk, error) {
+		// prepareGroup makes a whole emission durable as one group BEFORE any of it reaches the sink.
+		prepareGroup := func(emission ChunkRouteEmission) ([]PreparedProviderChunk, error) {
 			batch := emission.Batch
 			if emission.Final {
 				batch.Result, batch.Watermark, callbackErr = applyGitHubWorkItemsIncompletePolicy(
@@ -217,7 +217,14 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 			nextOrdinal += len(preparedGroup)
 			return preparedGroup, nil
 		}
-		commitGroup := func(emission ChunkRouteEmission, preparedGroup []PreparedProviderChunk) error {
+		// prepareEmission is prepareGroup inside its chunk_prepare span.
+		prepareEmission := func(emission ChunkRouteEmission) ([]PreparedProviderChunk, error) {
+			span := startChunkPrepareSpan(workContext)
+			preparedGroup, err := prepareGroup(emission)
+			endChunkPrepareSpan(span, preparedGroup, err)
+			return preparedGroup, err
+		}
+		commitPrepared := func(emission ChunkRouteEmission, preparedGroup []PreparedProviderChunk) error {
 			for position, prepared := range preparedGroup {
 				commitResult, commitErr := commitPreparedChunk(
 					workContext, session.Claim, prepared, executor.Committer.Sink,
@@ -245,6 +252,14 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 				}
 			}
 			return nil
+		}
+		// commitGroup is commitPrepared inside its chunk_commit span; the span counts the chunks this call committed.
+		commitGroup := func(emission ChunkRouteEmission, preparedGroup []PreparedProviderChunk) error {
+			span := startChunkCommitSpan(workContext)
+			before := committedThisAttempt
+			err := commitPrepared(emission, preparedGroup)
+			endChunkCommitSpan(span, preparedGroup[:committedThisAttempt-before], err)
+			return err
 		}
 		prepareAndCommit := func(emission ChunkRouteEmission) error {
 			preparedGroup, err := prepareEmission(emission)

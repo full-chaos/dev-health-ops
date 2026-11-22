@@ -203,10 +203,12 @@ func TestSameRawLabelAndBoardValueInOneSecondKeepTheSettledStatus(t *testing.T) 
 	}
 }
 
-// Residual of the rule, pinned: on a CLOSED issue an unmapped board column ("needs review")
-// maps to done (githubProjectV2UnmappedStatus), a known status, so the slot row is evidence and the same-second
-// "needs review" label row (in_review) is dropped. The settled status is done; without the rule it is in_review.
-func TestClosedIssueUnmappedBoardColumnDropsTheSameRawLabelRow(t *testing.T) {
+// On a CLOSED issue a board column the board map knows ("needs review", mapped since CHAOS-14301) keeps its status: the
+// close does not turn it into done (githubProjectV2UnmappedStatus is only for unmapped columns). The board slot row and
+// the same-second "needs review" label row are the same event (in_review), so no row is dropped and the settled status
+// is in_review. Every label-map name is in the board map with the same status, so a same-raw label row is never
+// evidence against itself.
+func TestClosedIssueKnownBoardColumnKeepsTheSameRawLabelStatus(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	item, at := "gh:acme/api#17000", "2026-03-02T09:00:00Z"
 	synced := time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)
@@ -217,8 +219,8 @@ func TestClosedIssueUnmappedBoardColumnDropsTheSameRawLabelRow(t *testing.T) {
 	payload.FieldValues.Nodes = []gitHubProjectV2FieldValuePayload{value}
 	payload.Content.Typename, payload.Content.State, payload.Content.ClosedAt = "Issue", &closed, &closedAt
 	board, ok, _, err := githubProjectV2StatusEvent(nativeTestClaim("github", "work-items"), payload, item, synced)
-	if err != nil || !ok || board.ToStatus != "done" {
-		t.Fatalf("board event %+v ok=%v err=%v, want to_status done", board, ok, err)
+	if err != nil || !ok || board.ToStatus != "in_review" {
+		t.Fatalf("board event %+v ok=%v err=%v, want to_status in_review", board, ok, err)
 	}
 	board.BoardSlot = int(boardTieSlot("ghprojv2:acme#3"))
 	rows := []githubWorkItemTransitionRow{firstLabelRow(t, item, column, at, synced), board}
@@ -235,7 +237,7 @@ func TestClosedIssueUnmappedBoardColumnDropsTheSameRawLabelRow(t *testing.T) {
 	}
 	last, _ := lastGitHubTransition(history)
 	base, _ := lastGitHubTransition(rows)
-	if got := boardTieZeroLabels(history); got != "03-02T09:00 unknown->done(needs review)" || last.ToStatus != "done" || base.ToStatus != "in_review" {
-		t.Fatalf("stored %q settled %q (base %q), want only the board row, settled done (base in_review)", got, last.ToStatus, base.ToStatus)
+	if got := boardTieZeroLabels(history); got != "03-02T09:00 unknown->in_review(needs review)" || last.ToStatus != "in_review" || base.ToStatus != "in_review" {
+		t.Fatalf("stored %q settled %q (base %q), want one in_review transition, settled in_review (base in_review)", got, last.ToStatus, base.ToStatus)
 	}
 }

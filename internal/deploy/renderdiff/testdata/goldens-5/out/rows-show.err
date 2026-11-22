@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1/in/full-render-diff.py", line 487, in <module>
+    sys.exit(main(sys.argv[1:]))
+             ^^^^^^^^^^^^^^^^^^
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1/in/full-render-diff.py", line 441, in main
+    return rows_gate(opts["expect_rows"], final, added, removed, rows, names_ok)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1/in/full-render-diff.py", line 481, in rows_gate
+    print("value %s %s %s -> %s" % (s[0], s[1], "<none>" if before is _NONE else before, "<none>" if after is _NONE else after))
+                                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: Exceeds the limit (4300 digits) for integer string conversion; use sys.set_int_max_str_digits() to increase the limit

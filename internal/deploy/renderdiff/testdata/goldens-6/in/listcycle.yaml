@@ -1,0 +1,3 @@
+kind: X
+metadata: {name: lc}
+l: &l [1, *l]

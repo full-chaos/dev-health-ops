@@ -1,0 +1,43 @@
+Traceback (most recent call last):
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1s6/in/full-render-diff.py", line 487, in <module>
+    sys.exit(main(sys.argv[1:]))
+             ^^^^^^^^^^^^^^^^^^
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1s6/in/full-render-diff.py", line 355, in main
+    yaml.safe_dump_all([redact(d) for d in docs_of(sys.stdin) if d["kind"] != "Secret"], sys.stdout, sort_keys=True)
+                                           ^^^^^^^^^^^^^^^^^^
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1s6/in/full-render-diff.py", line 76, in docs_of
+    return [d for d in yaml.safe_load_all(stream) if isinstance(d, dict) and d.get("kind")]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/yaml/__init__.py", line 93, in load_all
+    yield loader.get_data()
+          ^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/yaml/constructor.py", line 45, in get_data
+    return self.construct_document(self.get_node())
+                                   ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/yaml/composer.py", line 27, in get_node
+    return self.compose_document()
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/yaml/composer.py", line 55, in compose_document
+    node = self.compose_node(None, None)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/yaml/composer.py", line 84, in compose_node
+    node = self.compose_mapping_node(anchor)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/yaml/composer.py", line 133, in compose_mapping_node
+    item_value = self.compose_node(node, item_key)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/yaml/composer.py", line 84, in compose_node
+    node = self.compose_mapping_node(anchor)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/yaml/composer.py", line 127, in compose_mapping_node
+    while not self.check_event(MappingEndEvent):
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/yaml/parser.py", line 98, in check_event
+    self.current_event = self.state()
+                         ^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/yaml/parser.py", line 549, in parse_flow_mapping_key
+    raise ParserError("while parsing a flow mapping", self.marks[-1],
+yaml.parser.ParserError: while parsing a flow mapping
+  in "<stdin>", line 2, column 11
+expected ',' or '}', but got ':'
+  in "<stdin>", line 3, column 7

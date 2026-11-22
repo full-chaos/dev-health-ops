@@ -389,7 +389,21 @@ internal/cigates/workflows	workflows_path_filters_test.go
 internal/cigates/workflows	workflows_venue_always_runs_test.go
 internal/cigates/workflows	workflows_venue_main_alert_test.go
 internal/clicredentials	opensites_test.go
+internal/deploy/gitgate	gitgate.go
+internal/deploy/gitgate	gitgate_test.go
+internal/deploy/inputs	classcensus_test.go
 internal/deploy/inputs	hookrender_test.go
+internal/deploy/renderdiff	depth_test.go
+internal/deploy/renderdiff	gaps_test.go
+internal/deploy/renderdiff	golden_test.go
+internal/deploy/renderdiff	renderdiff.go
+internal/deploy/renderdiff	scrub_test.go
+internal/deploy/run	census_test.go
+internal/deploy/run	run.go
+internal/deploy/run	run_test.go
+internal/deploy/run	state.go
+internal/deploy/run	state_test.go
+internal/deploy/run	step_test.go
 internal/deploy/selfpin	selfpin.go
 internal/deploy/selfpin	selfpin_test.go
 internal/deploymentcontract	manifest.go
@@ -599,6 +613,7 @@ internal/queryapi/server	log_request_id_census_test.go
 internal/queryapi/server	mcp_proof_route_retired_test.go
 internal/queryapi/server	mutation_documents_test.go
 internal/queryapi/server	org_scope_census_test.go
+internal/queryapi/server	org_scope_team_view_test.go
 internal/queryapi/server	people_drilldown_issues_route_test.go
 internal/queryapi/server	people_drilldown_prs_route_test.go
 internal/queryapi/server	people_route_test.go
@@ -677,6 +692,7 @@ internal/synchandoff	trigger_writer_census_test.go
 internal/syncreconciler	no_celery_test.go
 internal/syncrunrollup	arm_finalize_test.go
 internal/syncrunrollup	cross_package_registry_test.go
+internal/syncrunrollup	status_writer_inventory_test.go
 internal/teamactive	roster_census_test.go
 internal/teamattribution	is_primary_census_test.go
 internal/teamattribution	linked_issue_donor_census_test.go

@@ -276,8 +276,8 @@ func TestResolve_OrgWide_RepoIdOnlyFiltersUserMetrics(t *testing.T) {
 // (post-CHAOS-4462) behavior: both set resolves ownership FIRST via
 // team_repo_ownership, then filters both fetches by repo_id ALONE --
 // never team_id -- once ownership is confirmed. 5 queries: repo
-// candidates, ownership, user metrics, repo-scoped team metrics, and the
-// days of the repository that hold retraction rows only.
+// candidates, ownership, user metrics, the days of user retraction rows only,
+// and repo-scoped team metrics (liveness is in the same statement).
 func TestResolve_TeamAndRepoCombined_OwnershipResolves(t *testing.T) {
 	client := &fakeClient{
 		responses: []*fakeRowScanner{
@@ -286,16 +286,15 @@ func TestResolve_TeamAndRepoCombined_OwnershipResolves(t *testing.T) {
 			{rows: [][]any{{day("2026-08-20"), uint64(4), uint64(2), uint64(1)}}}, // user metrics
 			{rows: nil}, // days whose every user key is a retraction row: none
 			{rows: [][]any{{day("2026-08-20"), 0.25, 0.0}}}, // repo-scoped team metrics
-			{rows: nil}, // days of the repository with retraction rows only: none
 		},
-		errs: []error{nil, nil, nil, nil, nil, nil},
+		errs: []error{nil, nil, nil, nil, nil},
 	}
 	result, err := Resolve(context.Background(), client, "org-1", mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), strPtr("team-a"), strPtr("org/repo-a"))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if client.calls != 6 {
-		t.Fatalf("calls = %d, want 6 (candidates, ownership, user metrics, retracted user days, repo-scoped team metrics, retracted repo days)", client.calls)
+	if client.calls != 5 {
+		t.Fatalf("calls = %d, want 5 (candidates, ownership, user metrics, retracted user days, repo-scoped team metrics)", client.calls)
 	}
 	if !strings.Contains(client.statements[0], "FROM repos FINAL") {
 		t.Errorf("expected first query to resolve repo candidates, got: %s", client.statements[0])

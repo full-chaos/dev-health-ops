@@ -31,7 +31,10 @@ import (
 // names out of the SQL text. A method is matched by name, so the walk reads
 // more than a call can reach, never less: an N row can only be wrong toward M.
 // A table named at run time (FROM %s) is not seen; a root whose walk holds one
-// lists it under dynamicReads.
+// lists it under dynamicReads. A call of the served team view helpers
+// (rowview.ServedTeamSource, rowview.ServedTeamPick) reads the table its first
+// argument names, as a FROM does, when that argument is a string literal or a
+// same-package string constant; any other argument fails the census.
 
 type rootClass struct {
 	class  string
@@ -168,10 +171,35 @@ type censusFunc struct {
 	decl    *ast.FuncDecl
 	dir     string
 	imports map[string]string
+	// file is the parsed file of the declaration (its scope binds the file's top-level names).
+	file *ast.File
+	// init is the initializer of a package-level variable, walked as a body (decl is nil then); name is the variable.
+	init ast.Expr
+	name string
+}
+
+// body is the node the walk reads: the function body, or the variable's initializer.
+func (fn censusFunc) body() ast.Node {
+	if fn.decl != nil {
+		return fn.decl.Body
+	}
+	return fn.init
+}
+
+// key names the function or the variable for the memo and the refusals.
+func (fn censusFunc) key() string {
+	if fn.decl != nil {
+		return censusFuncKey(fn.decl)
+	}
+	return "var " + fn.name
 }
 
 type censusPackage struct {
 	strings map[string]string
+	// varInits are the package-level variables with an initializer, walked like a function when a read names them.
+	varInits map[string]censusFunc
+	// consts are the package-level constants whose value is one string literal.
+	consts  map[string]string
 	funcs   map[string]censusFunc
 	methods map[string][]censusFunc
 }
@@ -181,6 +209,8 @@ type rootCensusLoader struct {
 	root     string
 	packages map[string]*censusPackage
 	memo     map[string]map[string]bool
+	// refused are the served team view calls whose table argument the census cannot name (see servedTeamViewRead).
+	refused []string
 }
 
 func newRootCensusLoader(t *testing.T, root string) *rootCensusLoader {
@@ -205,7 +235,7 @@ func (loader *rootCensusLoader) pkg(dir string) *censusPackage {
 	if pkg, ok := loader.packages[dir]; ok {
 		return pkg
 	}
-	pkg := &censusPackage{strings: map[string]string{}, funcs: map[string]censusFunc{}, methods: map[string][]censusFunc{}}
+	pkg := &censusPackage{strings: map[string]string{}, varInits: map[string]censusFunc{}, consts: map[string]string{}, funcs: map[string]censusFunc{}, methods: map[string][]censusFunc{}}
 	loader.packages[dir] = pkg
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -238,7 +268,7 @@ func (loader *rootCensusLoader) pkg(dir string) *censusPackage {
 				if decl.Body == nil {
 					continue
 				}
-				fn := censusFunc{decl: decl, dir: dir, imports: imports}
+				fn := censusFunc{decl: decl, dir: dir, imports: imports, file: file}
 				if decl.Recv != nil {
 					pkg.methods[decl.Name.Name] = append(pkg.methods[decl.Name.Name], fn)
 				} else {
@@ -250,6 +280,14 @@ func (loader *rootCensusLoader) pkg(dir string) *censusPackage {
 						for index, ident := range values.Names {
 							if index < len(values.Values) {
 								pkg.strings[ident.Name] = censusLiterals(values.Values[index])
+								if decl.Tok == token.VAR {
+									pkg.varInits[ident.Name] = censusFunc{dir: dir, imports: imports, file: file, init: values.Values[index], name: ident.Name}
+								}
+								if lit, isLit := values.Values[index].(*ast.BasicLit); isLit && decl.Tok == token.CONST && lit.Kind == token.STRING {
+									if value, err := strconv.Unquote(lit.Value); err == nil {
+										pkg.consts[ident.Name] = value
+									}
+								}
 							}
 						}
 					}
@@ -267,7 +305,7 @@ func (loader *rootCensusLoader) pkg(dir string) *censusPackage {
 // function's own package and in each package its file imports. The marker
 // dynamicMarker stands for a table named at run time.
 func (loader *rootCensusLoader) reads(fn censusFunc) map[string]bool {
-	key := fn.dir + "." + censusFuncKey(fn.decl)
+	key := fn.dir + "." + fn.key()
 	if reads, ok := loader.memo[key]; ok {
 		return reads
 	}
@@ -286,18 +324,32 @@ func (loader *rootCensusLoader) reads(fn censusFunc) map[string]bool {
 			reads[name] = true
 		}
 	}
-	addText(censusLiterals(fn.decl.Body))
+	addText(censusLiterals(fn.body()))
 	pkg := loader.pkg(fn.dir)
 	selected := map[*ast.Ident]bool{}
-	ast.Inspect(fn.decl.Body, func(n ast.Node) bool {
+	called := map[*ast.SelectorExpr]bool{}
+	ast.Inspect(fn.body(), func(n ast.Node) bool {
 		switch node := n.(type) {
+		case *ast.CallExpr:
+			if selector, isSelector := ast.Unparen(node.Fun).(*ast.SelectorExpr); isSelector {
+				called[selector] = true
+			}
+			if table, served, ok := loader.servedTeamViewRead(fn, pkg, node); served && ok {
+				reads[table] = true
+			}
 		case *ast.SelectorExpr:
-			if x, isIdent := node.X.(*ast.Ident); isIdent {
+			if loader.servedTeamViewHelper(fn, node) && !called[node] {
+				loader.refused = append(loader.refused, fn.dir+"."+fn.key()+": rowview."+node.Sel.Name+": call the helper directly")
+			}
+			if x, isIdent := node.X.(*ast.Ident); isIdent && x.Obj == nil {
 				if dir, imported := fn.imports[x.Name]; imported {
 					other := loader.pkg(dir)
 					addText(other.strings[node.Sel.Name])
 					if callee, ok := other.funcs[node.Sel.Name]; ok {
 						addCall(callee)
+					}
+					if init, ok := other.varInits[node.Sel.Name]; ok {
+						addCall(init)
 					}
 					return false
 				}
@@ -319,10 +371,70 @@ func (loader *rootCensusLoader) reads(fn censusFunc) map[string]bool {
 			if callee, ok := pkg.funcs[node.Name]; ok {
 				addCall(callee)
 			}
+			if init, ok := pkg.varInits[node.Name]; ok && packageLevel(fn, node) {
+				addCall(init)
+			}
 		}
 		return true
 	})
 	return reads
+}
+
+// servedTeamViewHelpers are the rowview helpers whose first argument is the table they read FROM (CHAOS-14376): their
+// own SQL names the table at run time, so the census reads the table name from the call.
+var servedTeamViewHelpers = map[string]bool{"ServedTeamSource": true, "ServedTeamPick": true}
+
+const rowviewPackagePath = "internal/queryapi/rowview"
+
+// servedTeamViewHelper reports whether selector is rowview.ServedTeamSource or rowview.ServedTeamPick: a selector whose
+// X is an identifier bound to no local or parameter (Obj nil: the file's import name) of the file's import of package
+// rowview. A value named like the import (a local, a parameter, a receiver) is not the import.
+func (loader *rootCensusLoader) servedTeamViewHelper(fn censusFunc, selector *ast.SelectorExpr) bool {
+	if !servedTeamViewHelpers[selector.Sel.Name] {
+		return false
+	}
+	x, isIdent := selector.X.(*ast.Ident)
+	return isIdent && x.Obj == nil && fn.imports[x.Name] == filepath.Join(loader.root, filepath.FromSlash(rowviewPackagePath))
+}
+
+// packageLevel reports whether ident names a declaration at the top level of its package: unresolved in the file (a
+// name of another file of the package), or bound to the file's own top-level object.
+func packageLevel(fn censusFunc, ident *ast.Ident) bool {
+	if ident.Obj == nil {
+		return true
+	}
+	return fn.file != nil && fn.file.Scope != nil && fn.file.Scope.Lookup(ident.Name) == ident.Obj
+}
+
+// servedTeamViewRead reads a call of a served team view helper (the callee unwrapped from its parentheses; see
+// servedTeamViewHelper) as a read of its table, the same as a FROM: served is true for such a call, and ok when the
+// table argument is a string literal or an identifier bound to a string constant declared at the top level of the
+// calling function's own package (resolved through ident.Obj: a local or a parameter of the same name is not the
+// constant). Any other argument form fails closed (the census refuses it). A renamed import is read (the import map
+// holds the file's name of the package); a dot import is NOT pinned (ticket 14348), and neither is a constant whose
+// value is another constant or an expression (it is refused, the safe direction).
+func (loader *rootCensusLoader) servedTeamViewRead(fn censusFunc, pkg *censusPackage, call *ast.CallExpr) (table string, served, ok bool) {
+	selector, isSelector := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !isSelector || !loader.servedTeamViewHelper(fn, selector) {
+		return "", false, false
+	}
+	if len(call.Args) > 0 {
+		switch arg := call.Args[0].(type) {
+		case *ast.BasicLit:
+			if arg.Kind == token.STRING {
+				if value, err := strconv.Unquote(arg.Value); err == nil {
+					return strings.ToLower(value), true, true
+				}
+			}
+		case *ast.Ident:
+			if value, isConst := pkg.consts[arg.Name]; isConst && packageLevel(fn, arg) {
+				return strings.ToLower(value), true, true
+			}
+		}
+	}
+	loader.refused = append(loader.refused, fn.dir+"."+fn.key()+": rowview."+selector.Sel.Name+
+		": use a literal or same-package const table name")
+	return "", true, false
 }
 
 // dynamicMarker is not a ClickHouse identifier, so no table can collide with it.
@@ -432,6 +544,9 @@ func TestEveryGraphQLRootHasTheClassItsReadsDecide(t *testing.T) {
 			t.Errorf("%s: names a table at run time = %v, listed in dynamicReads = %v", root, dynamic, noted)
 		}
 	}
+	for _, refused := range loader.refused {
+		t.Errorf("%s", refused)
+	}
 	for root := range rootClasses {
 		if _, served := fieldActions[root]; !served {
 			t.Errorf("%s has a class row but is not a served root", root)
@@ -497,6 +612,63 @@ func TestRootCensusWalkReachesEveryReadShape(t *testing.T) {
 		}
 		if got := readClass(keyed, unkeyed); got != c.class {
 			t.Errorf("%s: class %s; want %s", c.fn, got, c.class)
+		}
+	}
+}
+
+// The served team view helpers count as a read of the table they name (CHAOS-14376): a literal or a same-package
+// constant table argument is read, through a plain or a renamed import of rowview; any other argument fails closed.
+func TestRootCensusReadsTheServedTeamViewHelpers(t *testing.T) {
+	root := t.TempDir()
+	write := func(path, text string) {
+		t.Helper()
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("internal/queryapi/rowview/rowview.go", "package rowview\n\n"+
+		"func ServedTeamSource(table, where string) string { return \"(SELECT * FROM %[1]s FINAL)\" + table + where }\n\n"+
+		"func ServedTeamPick(table, where string) string { return \"(SELECT * FROM %[1]s FINAL)\" + table + where }\n")
+	write("internal/reader/reader.go", "package reader\n\n"+
+		"import \""+rootCensusModule+"internal/queryapi/rowview\"\n"+
+		"import rv \""+rootCensusModule+"internal/queryapi/rowview\"\n\n"+
+		"const metrics = \"work_item_metrics_daily\"\n\n"+
+		"var notConst = \"work_item_metrics_daily\"\n\n"+
+		"func Literal() string { return \"SELECT 1 FROM \" + rowview.ServedTeamSource(\"work_item_metrics_daily\", \"1\") }\n\n"+
+		"func Const() string { return \"SELECT 1 FROM \" + rowview.ServedTeamPick(metrics, \"1\") }\n\n"+
+		"func Renamed() string { return \"SELECT 1 FROM \" + rv.ServedTeamSource(\"work_item_metrics_daily\", \"1\") }\n\n"+
+		"func Variable() string { return rowview.ServedTeamSource(notConst, \"1\") }\n\n"+
+		"func Parameter(table string) string { return rowview.ServedTeamPick(table, \"1\") }\n")
+	tables := map[string]bool{"work_item_metrics_daily": false, "git_pull_requests": true}
+	loader := newRootCensusLoader(t, root)
+	pkg := loader.pkg(filepath.Join(root, "internal", "reader"))
+	for _, c := range []struct {
+		fn      string
+		class   string
+		refused bool
+	}{
+		{"Literal", classMixed, false},
+		{"Const", classMixed, false},
+		{"Renamed", classMixed, false},
+		{"Variable", classOrgOnly, true},
+		{"Parameter", classOrgOnly, true},
+	} {
+		loader.refused = nil
+		fn, ok := pkg.funcs[c.fn]
+		if !ok {
+			t.Fatalf("fixture function %s not loaded", c.fn)
+		}
+		keyed, unkeyed, _ := readsOf(loader.reads(fn), tables)
+		if got := readClass(keyed, unkeyed); got != c.class {
+			t.Errorf("%s: class %s (keyed %v unkeyed %v); want %s", c.fn, got, keyed, unkeyed, c.class)
+		}
+		refused := len(loader.refused) == 1 && strings.HasSuffix(loader.refused[0], "use a literal or same-package const table name")
+		if refused != c.refused || (!c.refused && len(loader.refused) != 0) {
+			t.Errorf("%s: refused %v; want refused = %v", c.fn, loader.refused, c.refused)
 		}
 	}
 }

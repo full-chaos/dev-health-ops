@@ -270,6 +270,7 @@ dev_health_provider_budget_denied_total	provider	code: internal/providerfoundati
 dev_health_provider_budget_release_errors_total	provider	code: internal/providerfoundation/budget.go
 dev_health_provider_budget_underestimate_total	dataset,dimension,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_chunk_continuation_total	dataset,provider	code: internal/providerfoundation/budget.go
+dev_health_provider_gitlab_tests_window_start_fallback_total	dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_incident_entitlement_refused_total	dataset,provider,seam	code: internal/providerfoundation/budget.go
 dev_health_provider_inventory_page_cap_total	dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_open_run_skipped_total	dataset,provider,reason	code: internal/providerfoundation/budget.go
@@ -290,6 +291,7 @@ dev_health_providersync_projects_v2_degraded_snapshots_total	reason	code: intern
 dev_health_reconciler_stage_acquire_wait_seconds	stage	code: internal/syncreconciler/pipeline.go
 dev_health_reconciler_stage_cancelled_total	sqlstate,stage	code: internal/syncreconciler/pipeline.go
 dev_health_reconciler_stage_duration_seconds	stage	code: internal/syncreconciler/pipeline.go
+dev_health_recommendations_discovery_total	outcome	code: internal/jobs/metrics/remaining/recommendations_discovery_metrics.go
 dev_health_release_impact_degraded_missing_telemetry_total		code: internal/jobruntime/telemetry.go
 dev_health_remaining_metrics_manual_backfill_total	family,outcome	code: internal/jobruntime/telemetry.go
 dev_health_remaining_metrics_manual_overlap_total	family	code: internal/jobruntime/telemetry.go
@@ -363,6 +365,11 @@ scheduler_database_pool_saturation_ratio	pool	code: internal/platform/poolstat/p
 scheduler_database_pool_saturation_ratio_acquired_conns	pool	code: internal/platform/poolstat/poolstat.go
 scheduler_database_pool_saturation_ratio_max_conns	pool	code: internal/platform/poolstat/poolstat.go
 sync_config_dataset_rows_changed_total	direction,provider	code: internal/api/syncadmin/selection_metrics.go
+sync_dispatch_backfill_open_runs		code: internal/syncdispatchruntime/backfill_wait_gauge.go
+sync_dispatch_backfill_wait_held_back_units	cost_class,provider	code: internal/syncdispatchruntime/backfill_wait_gauge.go
+sync_dispatch_backfill_wait_read_ok		code: internal/syncdispatchruntime/backfill_wait_gauge.go
+sync_dispatch_backfill_wait_truncated_total		code: internal/syncdispatchruntime/backfill_wait_gauge.go
+sync_dispatch_backfill_wait_units	cost_class,provider,state	code: internal/syncdispatchruntime/backfill_wait_gauge.go
 sync_dispatch_discovery_rearmed_total		code: internal/syncreconciler/loop.go
 sync_dispatch_exhausted_delivery_recoveries_total		code: internal/syncreconciler/loop.go
 sync_dispatch_observer_celery_due_pending		code: internal/syncreconciler/loop.go

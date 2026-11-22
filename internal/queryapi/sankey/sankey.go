@@ -198,6 +198,9 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 	if scopeLevel == "" {
 		scopeLevel = "org"
 	}
+	// The scope ids are a SET (CHAOS-14379): each id once, in the order of its first use. Every read below takes that
+	// set, so [t, t] is the one team t and [t, u, t] the team set [t, u].
+	params.ScopeIDs = distinctIDs(params.ScopeIDs)
 
 	var nodes []Node
 	var links []Link
@@ -254,3 +257,17 @@ type unknownModeError struct{ mode string }
 func (e *unknownModeError) Error() string { return "sankey: unknown mode: " + e.mode }
 
 func errUnknownMode(mode string) error { return &unknownModeError{mode: mode} }
+
+// distinctIDs is a list of ids as a set: each id once, in the order of its first use.
+func distinctIDs(ids []string) []string {
+	var out []string
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, repeated := seen[id]; repeated {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}

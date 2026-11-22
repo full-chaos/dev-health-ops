@@ -320,7 +320,12 @@ internal/cigates/workflows	workflows_venue_shards_test.go	ci/venue_oracle_weight
 internal/cigates/workflows	workflows_venue_shards_test.go	unexpressed	-	-
 internal/clicredentials	opensites_test.go	cmd	tree	*.go
 internal/clicredentials	opensites_test.go	internal	tree	*.go
+internal/deploy/gitgate	gitgate.go	unexpressed	-	-
 internal/deploy/inputs	hookrender_test.go	unexpressed	-	-
+internal/deploy/renderdiff	gaps_test.go	unexpressed	-	-
+internal/deploy/renderdiff	golden_test.go	unexpressed	-	-
+internal/deploy/run	census_test.go	unexpressed	-	*.go
+internal/deploy/run	step_test.go	unexpressed	-	-
 internal/egressguard	egressguard_test.go	unexpressed	-	*.go
 internal/faultproxy	noship_test.go	.	tree	*
 internal/fixturescli	dropped_columns_census_test.go	internal/chmigrate/archive/sql	dir	*
@@ -521,6 +526,7 @@ internal/queryapi/server	investment_scope_pin_wiring_test.go	unexpressed	-	-
 internal/queryapi/server	log_request_id_census_test.go	unexpressed	-	-
 internal/queryapi/server	mcp_proof_route_retired_test.go	unexpressed	-	*.go
 internal/queryapi/server	org_scope_census_test.go	unexpressed	-	-
+internal/queryapi/server	org_scope_team_view_test.go	unexpressed	-	*.go
 internal/queryapi/server	registered_document_field_gate_test.go	unexpressed	-	*.go
 internal/queryapi/server	registered_document_field_gate_test.go	unexpressed	-	-
 internal/queryapi/server	rest_allowlist_census_test.go	unexpressed	-	-
@@ -577,6 +583,8 @@ internal/synchandoff	trigger_writer_census_test.go	.	tree	*.go
 internal/syncreconciler	no_celery_test.go	unexpressed	-	-
 internal/syncrunrollup	arm_finalize_test.go	internal/syncreconciler	dir	*
 internal/syncrunrollup	cross_package_registry_test.go	unexpressed	-	-
+internal/syncrunrollup	status_writer_inventory_test.go	unexpressed	-	*.go
+internal/syncrunrollup	status_writer_inventory_test.go	unexpressed	-	-
 internal/teamactive	roster_census_test.go	unexpressed	-	*.go
 internal/teamattribution	is_primary_census_test.go	.	tree	*.go
 internal/teamattribution	is_primary_census_test.go	internal	tree	*.go

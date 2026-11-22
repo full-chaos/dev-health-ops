@@ -1,0 +1,246 @@
+//go:build integration
+
+package compoundingrisk
+
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+)
+
+// One answer, one repository set: with no team named, the rows (derived from
+// repository rows) and the trend (repository rows) must describe the same
+// repositories. One repository per team and distinct scores make the set
+// visible: the mean of the row scores equals the trend of the row's day only
+// when both cover the same repositories.
+func TestRealClickHouse_TeamBreakoutNoTeamRowsAndTrendCoverSameRepositories(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	repo(t, ctx, conn, "org-1", rA, "acme/web")
+	repo(t, ctx, conn, "org-1", rB, "acme/api")
+	exec(t, ctx, conn, `INSERT INTO teams (id, name, org_id, repo_patterns, updated_at) VALUES ('t1', 'Platform', 'org-1', [], now64(6)), ('p1', 'Patterns', 'org-1', ['acme/api'], now64(6))`)
+	own(t, ctx, conn, "org-1", "t1", rA, "acme/web")
+	put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rA, day: day(now, 1), score: "0.2", sev: "low"})
+	put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rB, day: day(now, 1), score: "0.8", sev: "high"})
+	got, err := Resolve(ctx, client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TrendDays: 30}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Trend) != 1 || got.Trend[0].Score == nil {
+		t.Fatalf("trend %#v, want one scored day", got.Trend)
+	}
+	var sum float64
+	for _, r := range got.Rows {
+		if r.Score == nil {
+			t.Fatalf("row %s has no score", r.ScopeID)
+		}
+		sum += *r.Score
+	}
+	if len(got.Rows) == 0 {
+		t.Fatalf("rows empty beside a trend of %v", *got.Trend[0].Score)
+	}
+	if mean := sum / float64(len(got.Rows)); mean-*got.Trend[0].Score > 1e-9 || *got.Trend[0].Score-mean > 1e-9 {
+		t.Errorf("rows cover other repositories than the trend: rows %#v mean %v, trend %v", got.Rows, mean, *got.Trend[0].Score)
+	}
+}
+
+func TestRealClickHouse_PatternsOnlyTeamNoTeamRowsAndTrendBothAnswer(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	repo(t, ctx, conn, "org-1", rA, "acme/web")
+	exec(t, ctx, conn, `INSERT INTO teams (id, name, org_id, repo_patterns, updated_at) VALUES ('p1', 'Patterns', 'org-1', ['acme/*'], now64(6))`)
+	put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rA, day: day(now, 1), score: "0.5", sev: "elevated"})
+	got, err := Resolve(ctx, client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TrendDays: 30}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if (len(got.Rows) == 0) != (len(got.Trend) == 0) {
+		t.Errorf("one answer, two scopes: rows=%d trend=%d", len(got.Rows), len(got.Trend))
+	}
+}
+
+func trendMap(got *model.CompoundingRiskResult) map[string]float64 {
+	out := map[string]float64{}
+	for _, p := range got.Trend {
+		out[p.Day.String()] = *p.Score
+	}
+	return out
+}
+
+// The no-team bucket is served with the label the web already uses for it.
+func TestRealClickHouse_TeamBreakoutNoTeamUnassignedRowLabel(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	repo(t, ctx, conn, "org-1", rA, "acme/web")
+	repo(t, ctx, conn, "org-1", rB, "acme/api")
+	exec(t, ctx, conn, `INSERT INTO teams (id, name, org_id, updated_at) VALUES ('t1', 'Platform', 'org-1', now64(6))`)
+	own(t, ctx, conn, "org-1", "t1", rA, "acme/web")
+	put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rA, day: day(now, 1), score: "0.2", sev: "low"})
+	put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rB, day: day(now, 1), score: "0.8", sev: "high"})
+	got, err := Resolve(ctx, client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TrendDays: 30}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]model.CompoundingRiskPoint{}
+	for _, r := range got.Rows {
+		byID[r.ScopeID] = r
+	}
+	if len(byID) != 2 || byID["t1"].ScopeLabel != "Platform" || byID["unassigned"].ScopeLabel != "Unassigned team" || *byID["unassigned"].Score != 0.8 {
+		t.Fatalf("rows %#v, want t1 Platform and unassigned 'Unassigned team' 0.8", got.Rows)
+	}
+}
+
+// A repoIds filter with no team named: the unowned repository is the
+// unassigned row and the trend covers the same repository.
+func TestRealClickHouse_TeamBreakoutNoTeamRepoFilterRowsAndTrendSame(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	repo(t, ctx, conn, "org-1", rA, "acme/web")
+	repo(t, ctx, conn, "org-1", rB, "acme/api")
+	exec(t, ctx, conn, `INSERT INTO teams (id, name, org_id, updated_at) VALUES ('t1', 'Platform', 'org-1', now64(6))`)
+	own(t, ctx, conn, "org-1", "t1", rA, "acme/web")
+	put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rA, day: day(now, 1), score: "0.2", sev: "low"})
+	put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rB, day: day(now, 1), score: "0.8", sev: "high"})
+	got, err := Resolve(ctx, client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, RepoIds: []string{rB}, TrendDays: 30}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := trendMap(got)
+	if len(got.Rows) != 1 || got.Rows[0].ScopeID != "unassigned" || *got.Rows[0].Score != 0.8 || len(tr) != 1 || tr[day(now, 1).Format("2006-01-02")] != 0.8 {
+		t.Fatalf("rows %#v trend %v, want one unassigned row 0.8 and trend 0.8", got.Rows, tr)
+	}
+}
+
+// Every repository owned: no unassigned row. A named team: rows and trend over
+// its owned repository only (the unowned repository is not listed).
+func TestRealClickHouse_TeamBreakoutNoUnassignedRowWhenOwnedOrNamed(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	repo(t, ctx, conn, "org-1", rA, "acme/web")
+	repo(t, ctx, conn, "org-1", rB, "acme/api")
+	exec(t, ctx, conn, `INSERT INTO teams (id, name, org_id, updated_at) VALUES ('t1', 'Platform', 'org-1', now64(6))`)
+	own(t, ctx, conn, "org-1", "t1", rA, "acme/web")
+	put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rA, day: day(now, 1), score: "0.2", sev: "low"})
+	put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rB, day: day(now, 1), score: "0.8", sev: "high"})
+	named, err := Resolve(ctx, client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TeamIds: []string{"t1"}, TrendDays: 30}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr := trendMap(named); len(named.Rows) != 1 || named.Rows[0].ScopeID != "t1" || *named.Rows[0].Score != 0.2 || len(tr) != 1 || tr[day(now, 1).Format("2006-01-02")] != 0.2 {
+		t.Fatalf("named team: rows %#v trend %v", named.Rows, trendMap(named))
+	}
+	own(t, ctx, conn, "org-1", "t1", rB, "acme/api")
+	all, err := Resolve(ctx, client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TrendDays: 30}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all.Rows) != 1 || all.Rows[0].ScopeID != "t1" {
+		t.Fatalf("every repository owned: rows %#v, want t1 only", all.Rows)
+	}
+}
+
+// Boundary: with a stored team row and a repository no team owns, the answer is
+// the stored row, the no-team row of that repository, the trend over every
+// repository (including the unowned one) and the stored row's own label.
+func TestRealClickHouse_StoredTeamRowPathUnchangedBoundary(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	repo(t, ctx, conn, "org-1", rA, "acme/web")
+	repo(t, ctx, conn, "org-1", rB, "acme/api")
+	exec(t, ctx, conn, `INSERT INTO teams (id, name, org_id, updated_at) VALUES ('t1', 'Platform', 'org-1', now64(6))`)
+	own(t, ctx, conn, "org-1", "t1", rA, "acme/web")
+	put(t, ctx, conn, risk{org: "org-1", scope: "team", id: "t1", day: day(now, 1), score: "0.5", sev: "elevated"})
+	put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rA, day: day(now, 1), score: "0.2", sev: "low"})
+	put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rB, day: day(now, 1), score: "0.8", sev: "high"})
+	got, err := Resolve(ctx, client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TrendDays: 30}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := trendMap(got)
+	if len(got.Rows) != 2 || got.Rows[0].ScopeID != "unassigned" || *got.Rows[0].Score != 0.8 || got.Rows[1].ScopeID != "t1" || got.Rows[1].ScopeLabel != "Platform" || *got.Rows[1].Score != 0.5 || len(tr) != 1 || tr[day(now, 1).Format("2006-01-02")] != 0.5 {
+		t.Fatalf("stored-row path changed: rows %#v trend %v", got.Rows, tr)
+	}
+}
+
+// More repositories than maxRows on the selected day: the fallback aggregates
+// every repository before any cap, so rows and trend cover the same set.
+func TestRealClickHouse_TeamBreakoutNoTeamMoreRepositoriesThanRowCap(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	exec(t, ctx, conn, `INSERT INTO teams (id, name, org_id, updated_at) VALUES ('t1', 'Platform', 'org-1', now64(6))`)
+	exec(t, ctx, conn, `INSERT INTO repos (id, repo, org_id, created_at, last_synced)
+		SELECT toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(number), 12, '0'))), concat('acme/r', toString(number)), 'org-1', now64(3), now64(3) FROM numbers(%d)`, maxRows+1)
+	exec(t, ctx, conn, `INSERT INTO compounding_risk_daily (org_id, day, scope, scope_id, compounding_risk, severity, w_churn, w_complexity, w_ownership, w_review, threshold_elevated, threshold_high)
+		SELECT 'org-1', toDate('%s'), 'repo', concat('00000000-0000-4000-8000-', leftPad(toString(number), 12, '0')), if(number = %d, 0.0, 1.0), 'low', 0.25, 0.25, 0.25, 0.25, 0.4, 0.7 FROM numbers(%d)`, day(now, 1).Format("2006-01-02"), maxRows, maxRows+1)
+	got, err := Resolve(ctx, client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TrendDays: 30}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Rows) != 1 || got.Rows[0].ScopeID != "unassigned" || got.Rows[0].Score == nil || len(got.Trend) != 1 || got.Trend[0].Score == nil {
+		t.Fatalf("rows %#v trend %#v, want one unassigned row and one trend day", got.Rows, got.Trend)
+	}
+	rowMean, trend := *got.Rows[0].Score, *got.Trend[0].Score
+	if rowMean-trend > 1e-9 || trend-rowMean > 1e-9 {
+		t.Errorf("rows cover other repositories than the trend: rows %v, trend %v", rowMean, trend)
+	}
+}
+
+const capRepoID = `concat('00000000-0000-4000-8000-', leftPad(toString(number), 12, '0'))`
+
+// seedCapWorld stores nRepos repositories (ids numbered from 0, score 1 below
+// ownedRepos, 0 from there on) and nTeams teams named t0..; team n owns
+// repository n for n < ownedRepos. Team nTeams-1 may own repository 0 as well
+// when sharedWith0 is set.
+func seedCapWorld(t *testing.T, nRepos, ownedRepos, nTeams int, sharedWith0 bool) (QueryClient, time.Time) {
+	t.Helper()
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	exec(t, ctx, conn, `INSERT INTO teams (id, name, org_id, updated_at) SELECT concat('t', toString(number)), concat('Team ', toString(number)), 'org-1', now64(6) FROM numbers(%d)`, nTeams)
+	exec(t, ctx, conn, `INSERT INTO repos (id, repo, org_id, created_at, last_synced) SELECT toUUID(`+capRepoID+`), concat('acme/r', toString(number)), 'org-1', now64(3), now64(3) FROM numbers(%d)`, nRepos)
+	exec(t, ctx, conn, `INSERT INTO compounding_risk_daily (org_id, day, scope, scope_id, compounding_risk, severity, w_churn, w_complexity, w_ownership, w_review, threshold_elevated, threshold_high)
+		SELECT 'org-1', toDate('%s'), 'repo', `+capRepoID+`, if(number < %d, 1.0, 0.0), 'low', 0.25, 0.25, 0.25, 0.25, 0.4, 0.7 FROM numbers(%d)`, day(now, 1).Format("2006-01-02"), ownedRepos, nRepos)
+	exec(t, ctx, conn, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, valid_from, updated_at)
+		SELECT 'org-1', 'github', concat('t', toString(number)), toUUID(`+capRepoID+`), concat('acme/r', toString(number)), 'exact', 'native', toDateTime64('2020-01-01 00:00:00', 3, 'UTC'), now64(3) FROM numbers(%d)`, ownedRepos)
+	if sharedWith0 {
+		exec(t, ctx, conn, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, valid_from, updated_at)
+			SELECT 'org-1', 'github', 't%d', toUUID('00000000-0000-4000-8000-000000000000'), 'acme/r0', 'exact', 'native', toDateTime64('2020-01-01 00:00:00', 3, 'UTC'), now64(3)`, nTeams-1)
+	}
+	return client, now
+}
+
+// 500 team buckets plus the unassigned bucket: the unassigned row stays in the
+// answer (a row cap on the derived points would cut its low score).
+func TestRealClickHouse_TeamBreakoutNoTeam500TeamsAndUnassignedRowPresent(t *testing.T) {
+	client, now := seedCapWorld(t, maxRows+1, maxRows, maxRows, false)
+	got, err := Resolve(context.Background(), client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TrendDays: 30}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unassigned bool
+	for _, r := range got.Rows {
+		unassigned = unassigned || r.ScopeID == "unassigned"
+	}
+	if len(got.Rows) != maxRows+1 || !unassigned {
+		t.Fatalf("rows=%d unassigned=%v, want %d rows with the unassigned row", len(got.Rows), unassigned, maxRows+1)
+	}
+}
+
+// 501 named teams over 500 repositories (one repository is shared): every
+// named team answers its row, as it did before the all-team change.
+func TestRealClickHouse_TeamBreakout501NamedTeamsAnswer501Rows(t *testing.T) {
+	client, now := seedCapWorld(t, maxRows, maxRows, maxRows+1, true)
+	ids := make([]string, 0, maxRows+1)
+	for n := 0; n <= maxRows; n++ {
+		ids = append(ids, fmt.Sprintf("t%d", n))
+	}
+	got, err := Resolve(context.Background(), client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TeamIds: ids, TrendDays: 30}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Rows) != maxRows+1 {
+		t.Fatalf("rows=%d, want %d (one per named team)", len(got.Rows), maxRows+1)
+	}
+}

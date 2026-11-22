@@ -11,7 +11,7 @@ import (
 // of each repository and day: never an average of the stored per-repository-day rates.
 func TestCancelAndRerunRateChartsAreTheRunWeightedRuleOverTheCounts(t *testing.T) {
 	t.Parallel()
-	const source = "FROM (SELECT * FROM testops_pipeline_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_pipeline_metrics_daily"
+	const source = "FROM (SELECT * FROM testops_pipeline_metrics_daily ORDER BY computed_at DESC, cityHash64(tuple(*)) DESC LIMIT 1 BY org_id, repo_id, day) AS testops_pipeline_metrics_daily"
 	for metric, expression := range map[string]string{
 		"cancel_rate": testops.PipelineCancelRateWindowSQL,
 		"rerun_rate":  testops.PipelineRerunRateWindowSQL,

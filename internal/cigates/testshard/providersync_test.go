@@ -162,8 +162,8 @@ func providersyncWeightsProblem(t *testing.T, awk, weightsPath string, names []s
 			max = tot
 		}
 	}
-	// No shard above the heaviest single test plus a fair share of the rest.
-	if float64(max) > float64(maxW)+0.25*float64(sum) {
+	// Graham's bound for longest-first packing: no shard above the mean plus (m-1)/m of the heaviest single test.
+	if float64(max) > float64(sum)/3+float64(maxW)*2/3 {
 		return fmt.Sprintf("shards do not balance: %v", totals)
 	}
 	return ""

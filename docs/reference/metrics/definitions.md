@@ -362,6 +362,17 @@ of 0, is in neither sum, whatever its stored percentage. A point made only of su
 not measured, never 0. A day written before the branch counts were stored has no counts until the day is recomputed, so
 it shows no point until then.
 
+### Query-api branch coverage
+
+The analytics measure `COVERAGE_BRANCH_PCT` and the branch baselines of `coverageBaselines` and `coverageScopeBaseline`
+are pooled the same way: 100 times the sum of the stored `branches_covered` over the sum of the stored `branches_total`
+of the repository-days in the group (or in the 30-day window), not the mean of the stored percentages. A repository-day
+with a NULL branch count, or with `branches_total` of 0, is in neither sum and is not a day with a value, whatever its
+stored percentage. A group or window made only of such repository-days has no value (a null baseline over 0 days), never
+0. The scope baseline is one pooled ratio over every counted repository-day of the window, not the mean of the day
+values. A day written before the branch counts were stored shows no branch value until it is recomputed. The line
+baselines pool the stored line counts the same way.
+
 ### Benchmarking defect introduction rate
 
 The benchmarking point of `defect_intro_rate` for a scope and a day is the sum of the stored `new_bugs_count` over the
@@ -511,6 +522,20 @@ An unknown day leaves the flake and recurrence factors out, as a day that measur
 lower than the not-applicable reading.
 
 Residual: a repository whose last test report is older than 29 days reads as not applicable.
+
+## TestOps release confidence: coverage
+
+Release confidence weighs pipeline success 0.4, test pass rate 0.3, line coverage 0.2 and flake 0.1. Coverage is
+**unknown** when the day has no coverage snapshot, or the snapshot's line coverage is NULL or not a finite number. Unknown
+coverage is not 0:
+
+- The coverage factor is left out and the other weights are renormalized: the base score is the sum of the other three
+  terms divided by 0.8. A measured 0% keeps its weight and scores 0 for coverage.
+- `coverage_pct` is null in `factors_json`, and `coverage_delta_pct` is null when the delta is unknown (no earlier
+  snapshot in the 30 days before, or a percentage that is not known). An unknown delta adds no regression penalty.
+- The stored `coverage_factor` is 0 for such a day.
+
+The pipeline, test and flake factors keep their own rule: an absent pipeline or test rate and an unknown flake rate add 0.
 
 ## Pull request rework ratio
 

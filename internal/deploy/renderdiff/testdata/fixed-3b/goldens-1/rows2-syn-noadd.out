@@ -1,0 +1,29 @@
+render A: helm rc=0 docs=4
+render B: helm rc=0 docs=4
+ConfigMap/cfg .data.ADDED_KEY CHANGED
+ConfigMap/cfg .data.LOG_LEVEL CHANGED
+ConfigMap/cfg .data.REMOVED_KEY ELEMENT-REMOVED
+ConfigMap/cfg .data.api_token CHANGED <redacted>
+Deployment/svc .spec.emptyl CHANGED
+Deployment/svc .spec.emptym CHANGED
+Deployment/svc .spec.extra ELEMENT-REMOVED
+Deployment/svc .spec.gone CHANGED
+Deployment/svc .spec.replicas CHANGED
+Deployment/svc .spec.template.spec.containers[name=app].args[1] CHANGED <redacted>
+Deployment/svc .spec.template.spec.containers[name=app].args[2] CHANGED
+Deployment/svc .spec.template.spec.containers[name=app].env REORDERED old=[A,B,DB_PASSWORD,SOME_URI] new=[B,A,DB_PASSWORD,NEWV]
+Deployment/svc .spec.template.spec.containers[name=app].env[name=DB_PASSWORD].value CHANGED <redacted>
+Deployment/svc .spec.template.spec.containers[name=app].env[name=NEWV] ELEMENT-ADDED
+Deployment/svc .spec.template.spec.containers[name=app].env[name=SOME_URI] ELEMENT-REMOVED
+Deployment/svc .spec.template.spec.containers[name=app].image CHANGED
+Deployment/svc .spec.template.spec.containers[name=app].ports[name=metrics].containerPort CHANGED
+Deployment/svc .spec.template.spec.initContainers REORDERED old=[i1,i2] new=[i2,i1]
+NetworkPolicy/new-np ADDED
+Service/gone-svc REMOVED
+docs A 4 B 4 (all kinds, Secrets as Kind/name only; hook-included: a helm template render); kinds in A: ConfigMap=1, Deployment=1, Secret=1, Service=1
+added ['NetworkPolicy/new-np']; removed ['Service/gone-svc']; changed field rows 12; element rows added 1 removed 3; reordered rows 2; pod-template label/annotation rows 0; postgres sts rows 0
+docs added/removed differ from the rows file: added ['NetworkPolicy/new-np'] removed ['Service/gone-svc']; file added [] removed ['Service/gone-svc']
+unexpected row ConfigMap/cfg .data.api_token CHANGED
+unexpected row Deployment/svc .spec.template.spec.containers[name=app].args[1] CHANGED
+unexpected row Deployment/svc .spec.template.spec.containers[name=app].env[name=DB_PASSWORD].value CHANGED
+GATE rows2-syn-noadd.json: HOLD

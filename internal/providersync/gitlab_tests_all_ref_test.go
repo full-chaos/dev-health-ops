@@ -68,8 +68,18 @@ func (doer *gitLabAllRefDoer) Do(request *http.Request) (*http.Response, error) 
 	case path == "/api/v4/projects/123/pipelines":
 		doer.listings = append(doer.listings, request.URL.RawQuery)
 		query := request.URL.Query()
+		// GitLab answers order_by=id&sort=desc newest id first; the chunked route fences each page on that order. Another
+		// order (the direct route's updated_at) keeps the fixture order.
+		listed := slices.Clone(doer.pipelines)
+		if query.Get("order_by") == "id" && query.Get("sort") == "desc" {
+			slices.SortStableFunc(listed, func(a, b gitLabAllRefPipeline) int {
+				left, _ := strconv.Atoi(a.ID)
+				right, _ := strconv.Atoi(b.ID)
+				return right - left
+			})
+		}
 		items := []string{}
-		for _, pipeline := range doer.pipelines {
+		for _, pipeline := range listed {
 			updated := gitLabAllRefStamp(pipeline.Updated)
 			if raw := query.Get("updated_after"); raw != "" && updated.Before(gitLabAllRefStamp(raw)) {
 				continue

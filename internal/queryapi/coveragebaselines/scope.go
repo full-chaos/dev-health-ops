@@ -14,14 +14,16 @@ import (
 //
 //  1. newestPerRepoDay: the same coverage read as the per-repository baseline.
 //  2. One row per day: the covered and total lines of the counted repo-days of
-//     the day, the number of those repo-days, and the branch value of the day
-//     (the mean over the repositories that hold a branch value that day; NULL
-//     when none does).
+//     the day, the number of those repo-days, and the covered and total branches of
+//     the counted repo-days of the day (a repo-day with a NULL branch count, or
+//     with no branches, is in neither).
 //  3. Line coverage: one ratio, covered lines over total lines of every counted
 //     repo-day of the scope in the window (the pooled rule of the coverage
 //     trend), and the number of days with at least one counted repo-day. Branch
-//     coverage: the mean of the day values, and the number of days that hold
-//     one.
+//     coverage: the same over the branch counts, one ratio of the covered over
+//     the total branches of every counted repo-day of the window, not the mean
+//     of the day values, and the number of days with at least one counted
+//     branch repo-day.
 //
 // Neither is a mean of the repository baselines: a repository with few days
 // would then weigh as much as one with thirty.
@@ -34,15 +36,16 @@ func scopeStatement(scopeFilter string) string {
         SELECT
             100 * sum(d.day_covered) / nullIf(sum(d.day_total), 0) AS line_value,
             countIf(d.day_counted > 0) AS line_days,
-            avg(d.day_branch_pct) AS branch_mean,
-            countIf(d.day_branch_pct IS NOT NULL) AS branch_days
+            100 * sum(d.day_branch_covered) / nullIf(sum(d.day_branch_total), 0) AS branch_value,
+            countIf(d.day_branch_total > 0) AS branch_days
         FROM (
             SELECT
                 b.day AS scope_day,
                 sumIf(b.day_lines_covered, b.line_counted) AS day_covered,
                 sumIf(b.day_lines_total, b.line_counted) AS day_total,
                 countIf(b.line_counted) AS day_counted,
-                avg(b.branch_pct) AS day_branch_pct
+                sumIf(b.day_branches_covered, b.branch_counted) AS day_branch_covered,
+                sumIf(b.day_branches_total, b.branch_counted) AS day_branch_total
             FROM (` + newestPerRepoDay(scopeFilter) + `
             ) AS b
             GROUP BY b.day
@@ -68,17 +71,17 @@ func ResolveScope(ctx context.Context, client QueryClient, orgID string, endDate
 	read := 0
 	for rows.Next() {
 		var (
-			lineValue, branchMean *float64
-			lineDays, branchDays  uint64
+			lineValue, branchValue *float64
+			lineDays, branchDays   uint64
 		)
-		if scanErr := rows.Scan(&lineValue, &lineDays, &branchMean, &branchDays); scanErr != nil {
+		if scanErr := rows.Scan(&lineValue, &lineDays, &branchValue, &branchDays); scanErr != nil {
 			return nil, fmt.Errorf("coveragebaselines: scope scan: %w", scanErr)
 		}
 		read++
 		out = &model.ScopeCoverageBaseline{
 			LineBaselinePct:   baseline(lineValue, int(lineDays)),
 			LineDays:          int(lineDays),
-			BranchBaselinePct: baseline(branchMean, int(branchDays)),
+			BranchBaselinePct: baseline(branchValue, int(branchDays)),
 			BranchDays:        int(branchDays),
 		}
 	}

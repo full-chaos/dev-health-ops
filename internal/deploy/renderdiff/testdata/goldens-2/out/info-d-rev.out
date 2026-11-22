@@ -1,0 +1,35 @@
+render A: helm rc=0 docs=6
+render B: helm rc=0 docs=6
+ConfigMap/cfg .data.LOG_LEVEL CHANGED
+Deployment/web .spec.added ELEMENT-REMOVED
+Deployment/web .spec.flag CHANGED
+Deployment/web .spec.gone1 CHANGED
+Deployment/web .spec.gone2 CHANGED
+Deployment/web .spec.gone3 CHANGED
+Deployment/web .spec.nanv CHANGED
+Deployment/web .spec.ratio CHANGED
+Deployment/web .spec.removedempty CHANGED
+Deployment/web .spec.removedmap.a CHANGED
+Deployment/web .spec.replicas CHANGED
+Deployment/web .spec.template.metadata.annotations.checksum/config CHANGED
+Deployment/web .spec.template.metadata.labels.v CHANGED
+Deployment/web .spec.template.spec.containers[name=app].args[2] CHANGED
+Deployment/web .spec.template.spec.containers[name=app].env REORDERED old=[PLAIN,DB_PASSWORD,API_TOKEN,SOME_URI,LINK,X_KEY,NOVALUE] new=[DB_PASSWORD,API_TOKEN,PLAIN,SOME_URI,LINK,X_KEY,NOVALUE]
+Deployment/web .spec.template.spec.containers[name=app].env[name=LINK].value CHANGED
+Deployment/web .spec.template.spec.containers[name=app].env[name=NOVALUE].valueFrom.secretKeyRef.key CHANGED
+Deployment/web .spec.template.spec.containers[name=app].env[name=PLAIN].value CHANGED
+Deployment/web .spec.template.spec.containers[name=app].image CHANGED
+Deployment/web .spec.template.spec.containers[name=app].ports[port=9090/TCP] ELEMENT-ADDED
+Deployment/web .spec.template.spec.containers[name=app].ports[port=9091/TCP] ELEMENT-REMOVED
+Deployment/web .spec.template.spec.containers[name=app].volumeMounts[name=data] ELEMENT-REMOVED
+Deployment/web .spec.template.spec.initContainers[name=i1] ELEMENT-ADDED
+Deployment/web .spec.template.spec.volumes[name=data] ELEMENT-REMOVED
+Secret/gone-secret ADDED
+Secret/new-secret REMOVED
+Service/svc .spec.ports[port=1/TCP].port CHANGED
+Service/svc .spec.ports[port=80/TCP].targetPort CHANGED
+StatefulSet/dev-health-ops-postgresql .spec.ports REORDERED old=[5433/UDP,5432/TCP] new=[5432/TCP,5433/UDP]
+StatefulSet/dev-health-ops-postgresql .spec.replicas CHANGED
+docs A 6 B 6 (all kinds, Secrets as Kind/name only; hook-included: a helm template render); kinds in A: ConfigMap=1, Deployment=1, Secret=2, Service=1, StatefulSet=1
+added ['Secret/gone-secret']; removed ['Secret/new-secret']; changed field rows 20; element rows added 2 removed 4; reordered rows 2; pod-template label/annotation rows 2; postgres sts rows 2
+FULL RENDER DIFF: INFO (no expectation; the floor held)

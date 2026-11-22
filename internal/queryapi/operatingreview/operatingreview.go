@@ -461,20 +461,47 @@ func fetchWorkItems(ctx context.Context, client QueryClient, orgID string, teams
             day,
             provider,
             work_scope_id,
-            argMax(items_started, computed_at) AS items_started,
-            argMax(items_completed, computed_at) AS items_completed,
-            argMax(wip_count_end_of_day, computed_at) AS wip_count_end_of_day,
-            (argMax(tuple(cycle_time_p50_hours), computed_at)).1 AS cycle_time_p50_hours,
-            (argMax(tuple(cycle_time_p90_hours), computed_at)).1 AS cycle_time_p90_hours,
-            (argMax(tuple(wip_age_p50_hours), computed_at)).1 AS wip_age_p50_hours,
-            (argMax(tuple(wip_age_p90_hours), computed_at)).1 AS wip_age_p90_hours
-          FROM work_item_metrics_daily
+            argMax(
+              tuple(
+                work_item_metrics_daily.items_started, work_item_metrics_daily.items_completed,
+                work_item_metrics_daily.items_started_unassigned,
+                work_item_metrics_daily.items_completed_unassigned,
+                work_item_metrics_daily.wip_count_end_of_day,
+                work_item_metrics_daily.wip_unassigned_end_of_day, work_item_metrics_daily.bug_completed_ratio,
+                work_item_metrics_daily.story_points_completed, work_item_metrics_daily.new_bugs_count,
+                work_item_metrics_daily.new_items_count, work_item_metrics_daily.defect_intro_rate,
+                work_item_metrics_daily.wip_congestion_ratio, work_item_metrics_daily.predictability_score,
+                work_item_metrics_daily.cycle_time_p50_hours, work_item_metrics_daily.cycle_time_p90_hours,
+                work_item_metrics_daily.lead_time_p50_hours, work_item_metrics_daily.lead_time_p90_hours,
+                work_item_metrics_daily.wip_age_p50_hours, work_item_metrics_daily.wip_age_p90_hours),
+              ` + rowview.WorkItemMetricsNewestOrder + `
+            ) AS picked,
+            picked.1 AS items_started,
+            picked.2 AS items_completed,
+            picked.3 AS items_started_unassigned,
+            picked.4 AS items_completed_unassigned,
+            picked.5 AS wip_count_end_of_day,
+            picked.6 AS wip_unassigned_end_of_day,
+            picked.7 AS bug_completed_ratio,
+            picked.8 AS story_points_completed,
+            picked.9 AS new_bugs_count,
+            picked.10 AS new_items_count,
+            picked.11 AS defect_intro_rate,
+            picked.12 AS wip_congestion_ratio,
+            picked.13 AS predictability_score,
+            picked.14 AS cycle_time_p50_hours,
+            picked.15 AS cycle_time_p90_hours,
+            picked.16 AS lead_time_p50_hours,
+            picked.17 AS lead_time_p90_hours,
+            picked.18 AS wip_age_p50_hours,
+            picked.19 AS wip_age_p90_hours
+          FROM ` + workItemSource("work_item_metrics_daily", teams) + `
           WHERE org_id = {org_id:String}
             ` + teamFilter + `
-            AND day >= {start:Date} AND day < {end:Date}
-            AND ` + rowview.OrgPredicate("work_item_metrics_daily", "") + `
-          GROUP BY day, provider, work_scope_id, row_view` + teamGroup + liveRowHaving("work_item_metrics_daily") + `
-        )
+            AND day >= {start:Date} AND day < {end:Date}` + workItemView("work_item_metrics_daily", teams) + `
+          GROUP BY day, provider, work_scope_id, row_view` + teamGroup + `
+        ) AS newest
+        WHERE ` + liverow.Predicate("work_item_metrics_daily", "newest") + `
         GROUP BY day
         ORDER BY day`
 
@@ -528,16 +555,22 @@ func fetchStateDurations(ctx context.Context, client QueryClient, orgID string, 
             provider,
             work_scope_id,
             status,
-            argMax(duration_hours, computed_at) AS duration_hours,
-            argMax(items_touched, computed_at) AS items_touched,
-            argMax(avg_wip, computed_at) AS avg_wip
-          FROM work_item_state_durations_daily
+            argMax(
+              tuple(
+                work_item_state_durations_daily.duration_hours, work_item_state_durations_daily.items_touched,
+                work_item_state_durations_daily.avg_wip),
+              ` + stateDurationsVersionOrder + `
+            ) AS picked,
+            picked.1 AS duration_hours,
+            picked.2 AS items_touched,
+            picked.3 AS avg_wip
+          FROM ` + workItemSource("work_item_state_durations_daily", teams) + `
           WHERE org_id = {org_id:String}
             ` + teamFilter + `
-            AND day >= {start:Date} AND day < {end:Date}
-            AND ` + rowview.OrgPredicate("work_item_state_durations_daily", "") + `
-          GROUP BY day, provider, work_scope_id, status, row_view` + teamGroup + liveRowHaving("work_item_state_durations_daily") + `
-        )
+            AND day >= {start:Date} AND day < {end:Date}` + workItemView("work_item_state_durations_daily", teams) + `
+          GROUP BY day, provider, work_scope_id, status, row_view` + teamGroup + `
+        ) AS newest
+        WHERE ` + liverow.Predicate("work_item_state_durations_daily", "newest") + `
         GROUP BY status`
 
 	bindings := periodBindings(orgID, start, end, teamBinding)
@@ -629,19 +662,33 @@ func fetchRepoMetrics(ctx context.Context, client QueryClient, orgID string, sta
           SELECT
             day,
             repo_id,
-            argMax(prs_merged, computed_at) AS prs_merged,
-            (argMax(tuple(pr_first_review_p50_hours), computed_at)).1 AS pr_first_review_p50_hours,
-            argMax(single_owner_file_ratio_30d, computed_at) AS single_owner_file_ratio_30d,
-            argMax(code_ownership_gini, computed_at) AS code_ownership_gini,
-            argMax(bus_factor, computed_at) AS bus_factor,
-            (argMax(tuple(revert_rate), computed_at)).1 AS revert_rate_day,
-            argMax(repo_metrics_daily.prs_merged, computed_at) AS merged_prs,
-            (argMax(tuple(mttr_hours), computed_at)).1 AS mttr_hours
+            argMax(
+              tuple(
+                repo_metrics_daily.prs_merged, repo_metrics_daily.pr_first_review_p50_hours,
+                repo_metrics_daily.single_owner_file_ratio_30d, repo_metrics_daily.code_ownership_gini,
+                repo_metrics_daily.bus_factor, repo_metrics_daily.revert_rate, repo_metrics_daily.mttr_hours,
+                repo_metrics_daily.retracted),
+              (repo_metrics_daily.computed_at, cityHash64(tuple(
+                repo_metrics_daily.prs_merged, repo_metrics_daily.pr_first_review_p50_hours,
+                repo_metrics_daily.single_owner_file_ratio_30d, repo_metrics_daily.code_ownership_gini,
+                repo_metrics_daily.bus_factor, repo_metrics_daily.revert_rate, repo_metrics_daily.mttr_hours,
+                repo_metrics_daily.retracted)))
+            ) AS picked,
+            picked.1 AS prs_merged,
+            picked.2 AS pr_first_review_p50_hours,
+            picked.3 AS single_owner_file_ratio_30d,
+            picked.4 AS code_ownership_gini,
+            picked.5 AS bus_factor,
+            picked.6 AS revert_rate_day,
+            picked.1 AS merged_prs,
+            picked.7 AS mttr_hours,
+            picked.8 AS retracted
           FROM repo_metrics_daily
           WHERE org_id = {org_id:String}
             AND day >= {start:Date} AND day < {end:Date}
-          GROUP BY day, repo_id` + liveRowHaving("repo_metrics_daily") + `
-        )`
+          GROUP BY day, repo_id
+        ) AS newest
+        WHERE ` + liverow.Predicate("repo_metrics_daily", "newest")
 
 	bindings := periodBindings(orgID, start, end, nil)
 	rows, err := client.Query(ctx, query, bindings)
@@ -736,7 +783,8 @@ func fetchHotspotsAgg(ctx context.Context, client QueryClient, orgID string, sta
             day,
             repo_id,
             file_path,
-            argMax(risk_score, computed_at) AS latest_risk_score
+            argMax(file_hotspot_daily.risk_score,
+              (file_hotspot_daily.computed_at, cityHash64(tuple(file_hotspot_daily.risk_score)))) AS latest_risk_score
           FROM file_hotspot_daily
           WHERE org_id = {org_id:String}
             AND day >= {start:Date} AND day < {end:Date}
@@ -788,7 +836,8 @@ func fetchComplexityAgg(ctx context.Context, client QueryClient, orgID string, s
           SELECT
             day,
             repo_id,
-            argMax(cyclomatic_per_kloc, computed_at) AS cyclomatic_per_kloc
+            argMax(repo_complexity_daily.cyclomatic_per_kloc,
+              (repo_complexity_daily.computed_at, cityHash64(tuple(repo_complexity_daily.cyclomatic_per_kloc)))) AS cyclomatic_per_kloc
           FROM repo_complexity_daily
           WHERE org_id = {org_id:String}
             AND day >= {start:Date} AND day < {end:Date}
@@ -835,13 +884,23 @@ func fetchDeploymentsAgg(ctx context.Context, client QueryClient, orgID string, 
           SELECT
             day,
             repo_id,
-            argMax(deployments_count, computed_at) AS deployments_count,
-            argMax(failed_deployments_count, computed_at) AS failed_deployments_count
+            argMax(
+              tuple(
+                deploy_metrics_daily.deployments_count, deploy_metrics_daily.failed_deployments_count,
+                deploy_metrics_daily.retracted),
+              (deploy_metrics_daily.computed_at, cityHash64(tuple(
+                deploy_metrics_daily.deployments_count, deploy_metrics_daily.failed_deployments_count,
+                deploy_metrics_daily.retracted)))
+            ) AS picked,
+            picked.1 AS deployments_count,
+            picked.2 AS failed_deployments_count,
+            picked.3 AS retracted
           FROM deploy_metrics_daily
           WHERE org_id = {org_id:String}
             AND day >= {start:Date} AND day < {end:Date}
-          GROUP BY day, repo_id` + liveRowHaving("deploy_metrics_daily") + `
-        )`
+          GROUP BY day, repo_id
+        ) AS newest
+        WHERE ` + liverow.Predicate("deploy_metrics_daily", "newest")
 
 	bindings := periodBindings(orgID, start, end, nil)
 	rows, err := client.Query(ctx, query, bindings)
@@ -885,13 +944,23 @@ func fetchIncidentsAgg(ctx context.Context, client QueryClient, orgID string, st
           SELECT
             day,
             repo_id,
-            argMax(incidents_count, computed_at) AS incidents_count,
-            (argMax(tuple(mttr_p50_hours), computed_at)).1 AS mttr_p50_hours
+            argMax(
+              tuple(
+                incident_metrics_daily.incidents_count, incident_metrics_daily.mttr_p50_hours,
+                incident_metrics_daily.retracted),
+              (incident_metrics_daily.computed_at, cityHash64(tuple(
+                incident_metrics_daily.incidents_count, incident_metrics_daily.mttr_p50_hours,
+                incident_metrics_daily.retracted)))
+            ) AS picked,
+            picked.1 AS incidents_count,
+            picked.2 AS mttr_p50_hours,
+            picked.3 AS retracted
           FROM incident_metrics_daily
           WHERE org_id = {org_id:String}
             AND day >= {start:Date} AND day < {end:Date}
-          GROUP BY day, repo_id` + liveRowHaving("incident_metrics_daily") + `
-        )`
+          GROUP BY day, repo_id
+        ) AS newest
+        WHERE ` + liverow.Predicate("incident_metrics_daily", "newest")
 
 	bindings := periodBindings(orgID, start, end, nil)
 	rows, err := client.Query(ctx, query, bindings)
@@ -986,6 +1055,26 @@ func sizedInvestmentRequested(ctx context.Context) bool {
 	return sized
 }
 
+// impactNewestOrder orders the versions of one ai_impact_metrics_daily key: the newest computed_at, then a hash of
+// the version's values, so two versions that share a computed_at serve one of them whatever the scan order. The hash
+// covers the same columns in the same order as the AI analytics reads of the table, so the operating review and those
+// pages serve the same version of a tied key.
+const impactNewestOrder = `(ai_impact_metrics_daily.computed_at, cityHash64(tuple(
+    ai_impact_metrics_daily.prs_total, ai_impact_metrics_daily.prs_merged,
+    ai_impact_metrics_daily.ai_assisted_prs, ai_impact_metrics_daily.agent_created_prs,
+    ai_impact_metrics_daily.human_prs, ai_impact_metrics_daily.unknown_prs,
+    ai_impact_metrics_daily.ai_assisted_pr_ratio, ai_impact_metrics_daily.cycle_time_avg_hours,
+    ai_impact_metrics_daily.ai_cycle_time_delta_hours, ai_impact_metrics_daily.reviews_per_pr,
+    ai_impact_metrics_daily.ai_review_amplification, ai_impact_metrics_daily.changes_requested_per_pr,
+    ai_impact_metrics_daily.rework_prs, ai_impact_metrics_daily.rework_drag_rate,
+    ai_impact_metrics_daily.followup_commits_count, ai_impact_metrics_daily.revert_prs,
+    ai_impact_metrics_daily.revert_rate, ai_impact_metrics_daily.incidents_count,
+    ai_impact_metrics_daily.incident_drag_rate, ai_impact_metrics_daily.test_gap_prs,
+    ai_impact_metrics_daily.test_gap_rate, ai_impact_metrics_daily.leverage_prs_component,
+    ai_impact_metrics_daily.leverage_cycle_time_component, ai_impact_metrics_daily.leverage_review_component,
+    ai_impact_metrics_daily.leverage_rework_component, ai_impact_metrics_daily.leverage_test_component,
+    ai_impact_metrics_daily.leverage_incident_component)))`
+
 type aiImpactRow struct {
 	prsTotal              float64
 	aiAssistedPrs         float64
@@ -1037,16 +1126,25 @@ func fetchAIImpact(ctx context.Context, client QueryClient, orgID string, teams 
             team_id,
             work_type,
             attribution_bucket,
-            argMax(prs_total, computed_at) AS prs_total,
-            argMax(ai_assisted_prs, computed_at) AS ai_assisted_prs,
-            argMax(agent_created_prs, computed_at) AS agent_created_prs,
-            argMax(human_prs, computed_at) AS human_prs,
-            argMax(unknown_prs, computed_at) AS unknown_prs,
-            (argMax(tuple(ai_cycle_time_delta_hours), computed_at)).1 AS ai_cycle_time_delta_hours,
-            (argMax(tuple(ai_review_amplification), computed_at)).1 AS ai_review_amplification,
-            (argMax(tuple(rework_drag_rate), computed_at)).1 AS rework_drag_rate,
-            (argMax(tuple(test_gap_rate), computed_at)).1 AS test_gap_rate,
-            (argMax(tuple(incident_drag_rate), computed_at)).1 AS incident_drag_rate
+            argMax(
+              tuple(
+                ai_impact_metrics_daily.prs_total, ai_impact_metrics_daily.ai_assisted_prs,
+                ai_impact_metrics_daily.agent_created_prs, ai_impact_metrics_daily.human_prs,
+                ai_impact_metrics_daily.unknown_prs, ai_impact_metrics_daily.ai_cycle_time_delta_hours,
+                ai_impact_metrics_daily.ai_review_amplification, ai_impact_metrics_daily.rework_drag_rate,
+                ai_impact_metrics_daily.test_gap_rate, ai_impact_metrics_daily.incident_drag_rate),
+              ` + impactNewestOrder + `
+            ) AS picked,
+            picked.1 AS prs_total,
+            picked.2 AS ai_assisted_prs,
+            picked.3 AS agent_created_prs,
+            picked.4 AS human_prs,
+            picked.5 AS unknown_prs,
+            picked.6 AS ai_cycle_time_delta_hours,
+            picked.7 AS ai_review_amplification,
+            picked.8 AS rework_drag_rate,
+            picked.9 AS test_gap_rate,
+            picked.10 AS incident_drag_rate
           FROM ai_impact_metrics_daily
           WHERE org_id = {org_id:String}
             ` + teamFilter + `
@@ -1169,16 +1267,40 @@ func fetchAIGovernance(ctx context.Context, client QueryClient, orgID string, te
           day,
           team_id,
           repo_id,
-          argMax(ai_artifacts, computed_at) AS ai_artifacts,
-          argMax(declared_artifacts, computed_at) AS declared_artifacts,
-          argMax(human_reviewed_prs, computed_at) AS human_reviewed_prs,
-          argMax(security_scanned_prs, computed_at) AS security_scanned_prs,
-          argMax(in_policy_artifacts, computed_at) AS in_policy_artifacts
-        FROM ai_governance_coverage_daily
-        WHERE org_id = {org_id:String}
-          ` + teamFilter + `
-          AND day >= {start:Date} AND day < {end:Date}
-        GROUP BY day, team_id, repo_id` + liveRowHaving("ai_governance_coverage_daily")
+          ai_artifacts,
+          declared_artifacts,
+          human_reviewed_prs,
+          security_scanned_prs,
+          in_policy_artifacts
+        FROM (
+          SELECT
+            day,
+            team_id,
+            repo_id,
+            argMax(
+              tuple(
+                ai_governance_coverage_daily.ai_artifacts, ai_governance_coverage_daily.declared_artifacts,
+                ai_governance_coverage_daily.human_reviewed_prs,
+                ai_governance_coverage_daily.security_scanned_prs,
+                ai_governance_coverage_daily.in_policy_artifacts),
+              (ai_governance_coverage_daily.computed_at, cityHash64(tuple(
+                ai_governance_coverage_daily.ai_artifacts, ai_governance_coverage_daily.declared_artifacts,
+                ai_governance_coverage_daily.human_reviewed_prs,
+                ai_governance_coverage_daily.security_scanned_prs,
+                ai_governance_coverage_daily.in_policy_artifacts)))
+            ) AS picked,
+            picked.1 AS ai_artifacts,
+            picked.2 AS declared_artifacts,
+            picked.3 AS human_reviewed_prs,
+            picked.4 AS security_scanned_prs,
+            picked.5 AS in_policy_artifacts
+          FROM ai_governance_coverage_daily
+          WHERE org_id = {org_id:String}
+            ` + teamFilter + `
+            AND day >= {start:Date} AND day < {end:Date}
+          GROUP BY day, team_id, repo_id
+        ) AS newest
+        WHERE ` + liverow.Predicate("ai_governance_coverage_daily", "newest")
 
 	bindings := periodBindings(orgID, start, end, teamBinding)
 	rows, err := client.Query(ctx, query, bindings)
@@ -1307,14 +1429,6 @@ func readFailed(ctx context.Context, err error) bool {
 	return err != nil && ctx.Err() == nil && !errors.Is(err, context.Canceled)
 }
 
-// liveRowHaving keeps a key of a daily table only when its newest row is a
-// measurement (see package liverow). A retraction row is the newest row of a
-// key the compute no longer produces (a retired team id): it is not a sample
-// of an average, not a day of the period, and not a row that proves data.
-func liveRowHaving(table string) string {
-	return "\n          HAVING " + liverow.NewestPredicate(table, "")
-}
-
 // teamClauses returns (teamFilter, teamGroup, teamBinding) mirroring
 // build_operating_review_queries' `team_filter`/`team_group` f-string
 // splices (metrics/operating_review.py:119-120) exactly: team_filter is
@@ -1334,6 +1448,41 @@ func teamClauses(teams teamSelection) (teamFilter, teamGroup string, binding *cl
 	// team exactly as the all-teams mode keeps them, so the reducers see the
 	// UNION of the teams' stored rows and never a pre-mixed row.
 	return "AND team_id IN {team_ids:Array(String)}", ", team_id", &clickhouse.Binding{Name: "team_ids", Value: []string(teams)}
+}
+
+// stateDurationsVersionOrder is the version order of each key in the state_durations read: computed_at, then the
+// hash of the picked values (CHAOS-14355). The work_items read takes rowview.WorkItemMetricsNewestOrder, the one order
+// of work_item_metrics_daily. The one-team source picks each view's version by the same order as the org form
+// (rowview.ServedTeamSource, CHAOS-14405), so on a computed_at tie both forms serve one version.
+const stateDurationsVersionOrder = rowview.StateDurationsNewestOrder
+
+// workItemSource is the FROM source of a read of a work item daily table. No team
+// and a team set read the table (a team set is CHAOS-10665's). Exactly one team
+// reads the served team view of that team (CHAOS-14379): one row per key, the
+// newest row of each view of the key, a live row first, then team, org, legacy
+// (rowview.ServedTeamSource); the argMax/GROUP BY of the read runs over that row.
+// Each call names its table as a literal, so a census reads the table.
+func workItemSource(table string, teams teamSelection) string {
+	if len(teams) != 1 {
+		return table
+	}
+	const where = "team_id = {team_id:String} AND day >= {start:Date} AND day < {end:Date}"
+	switch table {
+	case "work_item_metrics_daily":
+		return rowview.ServedTeamSource("work_item_metrics_daily", where, rowview.WorkItemMetricsNewestOrder) + " AS work_item_metrics_daily"
+	case "work_item_state_durations_daily":
+		return rowview.ServedTeamSource("work_item_state_durations_daily", where, stateDurationsVersionOrder) + " AS work_item_state_durations_daily"
+	}
+	panic("operatingreview: no team view of " + table)
+}
+
+// workItemView is the view predicate of a read of a work item daily table: the org
+// view, or none when workItemSource already picked the one team's view.
+func workItemView(table string, teams teamSelection) string {
+	if len(teams) == 1 {
+		return ""
+	}
+	return "\n            AND " + rowview.OrgPredicate(table, "")
 }
 
 // teamSelection is the teams a review is for: none (all teams), one, or several

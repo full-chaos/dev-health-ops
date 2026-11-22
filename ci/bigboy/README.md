@@ -5,6 +5,8 @@ Tracked home of the bigboy-cut.sh script family and the bigboy compose file
 host and are kept byte-identical to this directory by hand at every change (there is no automated
 sync yet).
 
+> **Host retired 2026-11-22.** The host this directory describes no longer exists. The files stay for reference and for a local stack; nothing here is deployed.
+
 ## Operating the stack: ONE compose file (CHAOS-9962)
 
 The bigboy stack is one compose file, `ci/bigboy/compose.bigboy.yml`, with profiles for the optional services, started with

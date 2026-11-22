@@ -21,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/repair"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 )
@@ -1726,8 +1727,63 @@ func TestManualBackstopTriggerReadbackHintCoversEveryAllowedFamily(t *testing.T)
 			t.Fatalf("family %q is in remaining.ManualBackstopTriggerFamilies but has no readback hint", family)
 		}
 	}
-	if _, ok := manualBackstopTriggerReadbackHint("membership_backfill", "00000000-0000-4000-8000-000000000001"); ok {
-		t.Fatal("membership_backfill unexpectedly has a trigger-backstop readback hint -- it is not in ManualBackstopTriggerFamilies")
+	hint, ok := manualBackstopTriggerReadbackHint("membership_backfill", "00000000-0000-4000-8000-000000000001")
+	if !ok || !strings.Contains(hint, "FROM work_unit_membership_runs FINAL WHERE org_id = '00000000-0000-4000-8000-000000000001'") {
+		t.Fatalf("membership_backfill readback hint = %q, ok=%v", hint, ok)
+	}
+}
+
+func TestDispatchMetricsRemainingTriggerBackstopAcceptsMembershipBackfill(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "trigger-backstop", "--family", "membership_backfill",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
+		t.Fatalf("membership_backfill not accepted by trigger-backstop: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestManualBackstopTriggerGenerationForMembershipIsDayScoped(t *testing.T) {
+	org, day := "00000000-0000-4000-8000-000000000001", "2026-09-04"
+	discriminator := manualBackstopTriggerScopeDiscriminator("membership_backfill", nil, false, 14)
+	if discriminator != "" {
+		t.Fatalf("membership discriminator = %q, want empty", discriminator)
+	}
+	if got, want := manualBackstopTriggerGeneration("membership_backfill", org, day, discriminator), "manual-trigger:membership_backfill:"+org+":"+day; got != want {
+		t.Fatalf("membership generation = %q, want %q", got, want)
+	}
+}
+
+// TestManualMembershipGraphBuildRequestMirrorsTheNightlyBinding pins the
+// chained build to startGraphBuild's request shape
+// (internal/scheduler/fixed/producers.go) with ids keyed on the trigger's
+// own generation.
+func TestManualMembershipGraphBuildRequestMirrorsTheNightlyBinding(t *testing.T) {
+	org := "00000000-0000-4000-8000-000000000001"
+	generation := "manual-trigger:membership_backfill:" + org + ":2026-09-04"
+	request, completionKey, err := manualMembershipGraphBuildRequest(org, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Kind != workgraph.KindBuild || string(request.Scope) != "{}" || request.LLMConcurrency != 1 ||
+		request.OrganizationID != org || request.CorrelationID != generation ||
+		request.IdempotencyKey != generation+":"+jobcontract.KindWorkGraphBuild+":"+org {
+		t.Fatalf("graph build request = %+v", request)
+	}
+	if completionKey != "work_graph_execution_request:"+request.ID {
+		t.Fatalf("completion key = %q, want work_graph_execution_request:%s", completionKey, request.ID)
+	}
+	retry, _, err := manualMembershipGraphBuildRequest(org, generation+":retry-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID == request.ID {
+		t.Fatal("a retry generation reused the base generation's graph build id")
+	}
+	workgraphTriggerID := manualTriggerRequestID(manualWorkGraphTriggerNamespace, "manual-trigger:workgraph.build:"+org+"::")
+	if request.ID == workgraphTriggerID {
+		t.Fatal("membership graph build id collides with the workgraph trigger's id")
 	}
 }
 

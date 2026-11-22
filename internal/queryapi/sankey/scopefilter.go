@@ -113,6 +113,13 @@ func teamScopeFilter(scopeLevel string, scopeIDs []string, teamColumn string) (s
 	return scopeClauseTeam(scopeIDs, teamColumn)
 }
 
+// oneTeamScope reports that the request names exactly one team: its work item
+// reads take that team's view of the stored rows (CHAOS-14379). The ids are a set
+// by then (BuildResponse).
+func oneTeamScope(scopeLevel string, scopeIDs []string) bool {
+	return scopeLevel == "team" && len(scopeIDs) == 1
+}
+
 // workScopeFilter ports _work_scope_filter (services/sankey.py:219-233):
 // scope.ids at repo scope, plus filters.what.repos, deduped by the plain
 // membership Python's own list concatenation already produces (no

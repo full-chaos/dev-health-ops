@@ -75,7 +75,7 @@ func TestChunkedPostgresFinalizeOfManyChunksKeepsTheLease(t *testing.T) {
 		if final {
 			chunk.Result = map[string]any{"complete": true}
 		}
-		prepared, err := repository.PrepareChunk(ctx, claim, chunk, time.Now())
+		prepared, err := repository.PrepareChunk(ctx, claim, chunk, time.Now(), time.Now())
 		if err != nil {
 			t.Fatalf("prepare ordinal=%d: %v", ordinal, err)
 		}
@@ -157,7 +157,7 @@ FOR EACH ROW EXECUTE FUNCTION slow_chunk_update_fn();`); err != nil {
 		t.Fatalf("checkpoint=%+v err=%v", checkpoint, err)
 	}
 	var result CompleteRouteExecutionResult
-	if err := loadChunkedFinalResult(ctx, claim, repository, checkpoint.TotalChunks, &result, time.Now()); err != nil {
+	if err := loadChunkedFinalResult(ctx, claim, repository, nil, checkpoint.TotalChunks, &result, time.Now()); err != nil {
 		t.Fatalf("final result from the stamped final chunk: %v", err)
 	}
 

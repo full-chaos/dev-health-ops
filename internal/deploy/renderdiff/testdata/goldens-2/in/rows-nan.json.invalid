@@ -1,0 +1,1 @@
+{"added": ["Secret/new-secret"], "removed": ["Secret/gone-secret"], "rows": [{"doc": "D/x", "path": ".p", "verb": "CHANGED", "before": NaN}]}

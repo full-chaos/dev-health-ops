@@ -214,19 +214,25 @@ type expenseCountsRow struct {
 // with a single float64 path end to end. bug_completed_estimate is
 // already a Float64-typed expression (UInt32 * Float64), so it needs no
 // cast.
-func fetchExpenseCounts(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string) ([]expenseCountsRow, error) {
+//
+// oneTeam reads the served team view of the one team (CHAOS-14379, see
+// servedTeamWhere).
+func fetchExpenseCounts(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string, oneTeam bool) ([]expenseCountsRow, error) {
+	source, view := "work_item_metrics_daily FINAL", "\n          AND "+rowview.OrgPredicate("work_item_metrics_daily", "")
+	if oneTeam {
+		source, view = rowview.ServedTeamSource("work_item_metrics_daily", servedTeamWhere(scopeFilterSQL), "")+" AS work_item_metrics_daily", ""
+	}
 	query := fmt.Sprintf(`
         SELECT
             CAST(sum(new_items_count) AS Float64) AS new_items,
             CAST(sum(new_bugs_count) AS Float64) AS new_bugs,
             sum(items_completed * bug_completed_ratio) AS bug_completed_estimate
-        FROM work_item_metrics_daily FINAL
+        FROM %s
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
-          AND org_id = {org_id:String}
-          AND %s
+          AND org_id = {org_id:String}%s
             %s
         %s
-    `, rowview.OrgPredicate("work_item_metrics_daily", ""), scopeFilterSQL, settingsMaxExecutionTime())
+    `, source, view, scopeFilterSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},
 		{Name: "end_day", Value: dateBindingValue(endDay)},
@@ -252,6 +258,14 @@ func fetchExpenseCounts(ctx context.Context, client QueryClient, startDay, endDa
 		return nil, fmt.Errorf("sankey: iterate expense counts rows: %w", err)
 	}
 	return out, nil
+}
+
+// servedTeamWhere is the filter of the served team view of one team (CHAOS-14379): the window and the scope filter,
+// which holds only key columns, so it applies before the pick. No team and a team set read the table FINAL with the
+// org view (a team set is CHAOS-10665's). One team reads rowview.ServedTeamSource: one row per key, the newest row of
+// each view of the key, a live row first, then team, org, legacy.
+func servedTeamWhere(scopeFilterSQL string) string {
+	return "day >= {start_day:Date} AND day < {end_day:Date}" + scopeFilterSQL
 }
 
 // fetchExpenseAbandoned ports fetch_expense_abandoned. work_item_cycle_
@@ -331,21 +345,27 @@ type stateStatusCountRow struct {
 // float(row.get("items_touched") or 0.0): the wire contract is a float,
 // so this reader CASTs the sum to Float64 in SQL rather than widening the
 // Go scan target.
-func fetchStateStatusCounts(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string) ([]stateStatusCountRow, error) {
+//
+// oneTeam reads the served team view of the one team (CHAOS-14379, see
+// servedTeamWhere).
+func fetchStateStatusCounts(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string, oneTeam bool) ([]stateStatusCountRow, error) {
+	source, view := "work_item_state_durations_daily FINAL", "\n          AND "+rowview.OrgPredicate("work_item_state_durations_daily", "")
+	if oneTeam {
+		source, view = rowview.ServedTeamSource("work_item_state_durations_daily", servedTeamWhere(scopeFilterSQL), "")+" AS work_item_state_durations_daily", ""
+	}
 	query := fmt.Sprintf(`
         SELECT
             status,
             CAST(sum(items_touched) AS Float64) AS items_touched
-        FROM work_item_state_durations_daily FINAL
+        FROM %s
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
-          AND org_id = {org_id:String}
-          AND %s
+          AND org_id = {org_id:String}%s
           AND %s
             %s
         GROUP BY status
         ORDER BY items_touched DESC
         %s
-    `, rowview.OrgPredicate("work_item_state_durations_daily", ""), liverow.Predicate("work_item_state_durations_daily", ""), scopeFilterSQL, settingsMaxExecutionTime())
+    `, source, view, liverow.Predicate("work_item_state_durations_daily", ""), scopeFilterSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},
 		{Name: "end_day", Value: dateBindingValue(endDay)},

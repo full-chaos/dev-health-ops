@@ -37,12 +37,15 @@ const futureWatermarkWriteSkewTolerance = 60 * time.Second
 // Python side. It lives HERE, at the one write API, so a route cannot opt out,
 // and watermark_write_boundary_test.go DERIVES the writer set from this
 // package's source rather than trusting a hand-maintained list.
+//
+// The clamp WARN comes back as a func, not written here: the caller writes it
+// once its transaction committed, so a refused attempt logs no clamp.
 func normalizeWatermarkWrite(
 	incoming time.Time,
 	coverageUpperBound *time.Time,
 	now time.Time,
 	orgID, sourceID, datasetKey string,
-) time.Time {
+) (time.Time, func()) {
 	logger := slog.Default()
 	value := incoming.UTC()
 	ceiling := now.UTC()
@@ -54,10 +57,13 @@ func normalizeWatermarkWrite(
 		}
 	}
 	if !value.After(ceiling) {
-		return value
+		return value, func() {}
 	}
 	overshoot := value.Sub(ceiling)
-	if overshoot > futureWatermarkWriteSkewTolerance && logger != nil {
+	if overshoot <= futureWatermarkWriteSkewTolerance || logger == nil {
+		return ceiling, func() {}
+	}
+	return ceiling, func() {
 		logger.Warn(
 			"sync.watermark.write_clamped",
 			slog.String("org_id", orgID),
@@ -75,5 +81,4 @@ func normalizeWatermarkWrite(
 					"skewed timestamp."),
 		)
 	}
-	return ceiling
 }

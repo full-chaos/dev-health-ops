@@ -388,7 +388,7 @@ func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (strin
 	case MeasureCoverageLinePct:
 		return weightedRateSQL(coverageLineTerms), nil
 	case MeasureCoverageBranchPct:
-		return "AVG(branch_coverage_pct)", nil // AT RISK: Nullable(Float64) (category 2)
+		return weightedRateSQL(coverageBranchTerms), nil
 	case MeasureCoverageDeltaPct:
 		return "AVG(coverage_delta_pct)", nil // AT RISK: Nullable(Float64) (category 2)
 	case MeasureFlagFrictionDelta:
@@ -472,3 +472,12 @@ var coverageLineTerms = rateTerms{
 }
 
 const coverageCounted = "lines_covered IS NOT NULL AND lines_total IS NOT NULL AND lines_total > 0"
+
+// Branch coverage is the same rule over the stored branch counts: a row stored before the counts existed reads NULL and
+// adds to neither side, so a group made only of such rows has no value.
+var coverageBranchTerms = rateTerms{
+	"SUM(if(" + coverageBranchCounted + ", branches_covered, 0))",
+	"SUM(if(" + coverageBranchCounted + ", branches_total, 0))",
+}
+
+const coverageBranchCounted = "branches_covered IS NOT NULL AND branches_total IS NOT NULL AND branches_total > 0"

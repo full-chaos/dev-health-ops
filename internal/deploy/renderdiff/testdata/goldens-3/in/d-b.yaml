@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  labels: {app: web}
+spec:
+  replicas: true
+  ratio: 1.0
+  flag: 1
+  same: 2.0
+  nanv: .nan
+  gone1: []
+  gone2: {}
+  keep: x
+  removedempty: null
+  added: {deep: {er: [1, 2]}}
+  template:
+    metadata:
+      labels: {app: web, v: "2"}
+      annotations: {checksum/config: abd}
+    spec:
+      initContainers: []
+      containers:
+      - name: app
+        image: app:2
+        args: ["--db=postgres://user:pw2@db:5432/x", "--plain"]
+        command: ["run", "https://u2@h/p"]
+        env:
+        - name: PLAIN
+          value: v2
+        - name: DB_PASSWORD
+          value: new-secret
+        - name: API_TOKEN
+          value: tok1
+        - name: SOME_URI
+          value: "redis://:pw2@redis:6379"
+        - name: LINK
+          value: "see https://example.com/a@c"
+        - name: X_KEY
+          value: k2
+        - name: NOVALUE
+          valueFrom: {secretKeyRef: {name: s, key: k2}}
+        ports:
+        - containerPort: 8080
+          protocol: TCP
+        - containerPort: 9091
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: cfg}
+data:
+  LOG_LEVEL: debug
+  DB_DSN: "postgres://a:c@c/d"
+  API_KEY: syn-redact-3
+  monkey: syn-redact-3
+  PLAIN: three
+binaryData:
+  cert.token: BBBB
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: creds}
+data: {password: bmV3}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: new-secret}
+stringData: {k: v}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: dev-health-ops-postgresql}
+spec:
+  replicas: 2
+  ports:
+  - port: 5433
+    protocol: UDP
+  - port: 5432
+---
+apiVersion: v1
+kind: Service
+metadata: {name: svc}
+spec:
+  ports:
+  - port: 80
+    targetPort: 8081
+  - port: 1

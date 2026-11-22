@@ -328,6 +328,11 @@ type GitHubTestsRouteHandler struct {
 	// id. Nil leaves the open phase out (the oracle and unit fixtures without a
 	// store).
 	OpenRuns GitHubOpenRunsReader
+	// CoalesceRuns marks each runs-phase run emission coalescable, so the
+	// executor may commit several runs in one chunk group, and fences the open
+	// phase with a barrier. False (the default, and the production wiring in
+	// git_family_route.go) keeps one chunk group per run: coalescing ships dark.
+	CoalesceRuns bool
 	// RefreshLookback is how far before the window the runs phase lists; zero
 	// keeps githubTestsRefreshLookbackDefault.
 	RefreshLookback time.Duration
@@ -336,7 +341,8 @@ type GitHubTestsRouteHandler struct {
 	// githubTestsLateRerunLookbackDefault and githubTestsLateRerunMaxPages.
 	LateRerunLookback time.Duration
 	LateRerunMaxPages int
-	// MaxWalkRecords lowers githubTestsMaxWalkRecords when positive; zero keeps it.
+	// MaxWalkRecords lowers the walk record bound of the claim's mode (githubTestsMaxWalkRecords, or
+	// githubTestsBackfillMaxWalkRecords for a backfill claim of dataset cicd) when positive; zero keeps it.
 	MaxWalkRecords int
 }
 

@@ -1978,6 +1978,64 @@ func TestAnIsolatedPackageKeyMatchingNothingFailsLoudlyAndWorkerserviceIsASingle
 	}
 }
 
+// A shard takes at most one part of a package (CHAOS-14453): two parts of one package run in one go test and add up, so a
+// stack of two parts of 360 s made a shard of 554 s of one package. Every split package sits in exactly N shards, and a
+// manifest with fewer open packages shards than parts of a package fails the plan instead of stacking them.
+func TestAShardTakesAtMostOnePartOfASplitPackage(t *testing.T) {
+	t.Parallel()
+	root := rootOf(t)
+	original := manifestText(t, root)
+	parts := map[string]int{}
+	last := ""
+	for _, l := range strings.Split(original, "\n") {
+		k, v, _ := strings.Cut(l, "\t")
+		switch {
+		case strings.HasPrefix(l, "#"):
+		case strings.Contains(k, "/"):
+			last = k
+		case k == "split-by-test":
+			n, err := strconv.Atoi(strings.TrimSpace(v))
+			if err != nil {
+				t.Fatalf("split-by-test row of %s: %v", last, err)
+			}
+			parts[last] = n
+		}
+	}
+	stdout, _ := realPlan(t)
+	shardsOf := map[string]map[string]bool{}
+	for _, l := range strings.Split(stdout, "\n") {
+		if m := splitRow.FindStringSubmatch(l); m != nil {
+			if shardsOf[m[2]] == nil {
+				shardsOf[m[2]] = map[string]bool{}
+			}
+			shardsOf[m[2]][m[1]] = true
+		}
+	}
+	for key, n := range parts {
+		if len(shardsOf[key]) != n {
+			t.Errorf("%s has %d part(s) and sits in %d shard(s): a shard holds two parts of it", key, n, len(shardsOf[key]))
+		}
+	}
+	// Three open shards (six in all: three isolated shards) cannot hold the four parts of a package.
+	planted := regexp.MustCompile(`(?m)^shards\t[0-9]+$`).ReplaceAllString(original, "shards\t6")
+	if planted == original {
+		t.Fatal("the manifest has no shards row to plant")
+	}
+	r := runCheckGoSharding(t, shardEnv{manifest: writeTemp(t, "stacked.tsv", planted)}, "integration-shard-plan")
+	if r.code == 0 || !strings.Contains(r.stderr, "integration shard plan has no shard left for") {
+		t.Errorf("more parts than open shards: exit %d: %s", r.code, r.stderr)
+	}
+}
+
+func writeTemp(t *testing.T, name, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 func declaredImage(t *testing.T, constant string) string {
 	t.Helper()
 	m := regexp.MustCompile(`(?m)^` + pyS + `*` + constant + pyS + `*=` + pyS + `*"([^"]+)"`).FindStringSubmatch(readText(t, filepath.Join(rootOf(t), "internal", "testsupport", "containers", "harness.go")))

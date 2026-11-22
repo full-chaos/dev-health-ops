@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1/in/full-render-diff.py", line 487, in <module>
+    sys.exit(main(sys.argv[1:]))
+             ^^^^^^^^^^^^^^^^^^
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1/in/full-render-diff.py", line 441, in main
+    return rows_gate(opts["expect_rows"], final, added, removed, rows, names_ok)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/var/lib/oci-cache/lane-scratch/fcsup-14332/goldens-1/in/full-render-diff.py", line 451, in rows_gate
+    if sorted(want.get("added", [])) != sorted(added) or sorted(want.get("removed", [])) != sorted(removed):
+              ^^^^^^^^
+AttributeError: 'list' object has no attribute 'get'

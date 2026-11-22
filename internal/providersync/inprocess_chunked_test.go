@@ -59,10 +59,10 @@ func TestInProcessChunkLedgerServesOnlyItsClaim(t *testing.T) {
 	}
 	stranger := claim
 	stranger.Owner = "77777777-7777-4777-8777-777777777777"
-	if _, err := store.PrepareChunk(context.Background(), stranger, chunk, now); !errors.Is(err, ErrLeaseLost) {
+	if _, err := store.PrepareChunk(context.Background(), stranger, chunk, now, now); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("another owner prepared a chunk: %v", err)
 	}
-	if _, err := store.PrepareChunk(context.Background(), claim, chunk, now); err != nil {
+	if _, err := store.PrepareChunk(context.Background(), claim, chunk, now, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.LoadChunkCheckpoint(context.Background(), stranger, now); !errors.Is(err, ErrChunkCheckpointNotFound) {
@@ -91,7 +91,7 @@ func TestInProcessChunkLedgerRunsAChunkThroughItsLife(t *testing.T) {
 		SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion,
 		Ordinal: 0, TotalChunks: 1, InventoryComplete: true, CursorAfter: "end",
 		Effects: []EffectBatch{effect}, Result: map[string]any{"records": float64(2)},
-	}, now)
+	}, now, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestInProcessChunkLedgerRefusedFinalizeWritesNoChunkTotal(t *testing.T) {
 		if complete {
 			chunk.Result = map[string]any{"complete": true}
 		}
-		prepared, err := store.PrepareChunk(ctx, claim, chunk, now)
+		prepared, err := store.PrepareChunk(ctx, claim, chunk, now, now)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -199,13 +199,13 @@ func TestInProcessChunkLedgerRefusesACancelledContextWithoutChangingState(t *tes
 	}
 	cancelled, stop := context.WithCancel(context.Background())
 	stop()
-	if _, err := store.PrepareChunk(cancelled, claim, chunk, now); !errors.Is(err, ErrInvalidConfiguration) {
+	if _, err := store.PrepareChunk(cancelled, claim, chunk, now, now); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("a cancelled prepare: %v", err)
 	}
 	if _, err := store.LoadChunkCheckpoint(context.Background(), claim, now); !errors.Is(err, ErrChunkCheckpointNotFound) {
 		t.Fatalf("a cancelled prepare left a checkpoint: %v", err)
 	}
-	if _, err := store.PrepareChunk(context.Background(), claim, chunk, now); err != nil {
+	if _, err := store.PrepareChunk(context.Background(), claim, chunk, now, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.LoadChunkCheckpoint(cancelled, claim, now); !errors.Is(err, ErrChunkCheckpointConflict) {

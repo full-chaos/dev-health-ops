@@ -62,9 +62,14 @@ func TestRealClickHouse_CoverageBaselines(t *testing.T) {
 		if p, ok := line.(float64); ok {
 			covered, total = uint32(p), uint32(100)
 		}
+		// A stored branch percent carries the counts of a 100-branch repository-day.
+		var bCovered, bTotal any
+		if p, ok := branch.(float64); ok {
+			bCovered, bTotal = uint32(p), uint32(100)
+		}
 		exec(`INSERT INTO testops_coverage_metrics_daily
-			(repo_id, day, line_coverage_pct, lines_covered, lines_total, branch_coverage_pct, uncovered_files_count, coverage_regression_count, org_id, computed_at)
-			VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`, repo, day, line, covered, total, branch, o, computed)
+			(repo_id, day, line_coverage_pct, lines_covered, lines_total, branch_coverage_pct, branches_covered, branches_total, uncovered_files_count, coverage_regression_count, org_id, computed_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`, repo, day, line, covered, total, branch, bCovered, bTotal, o, computed)
 	}
 	exec(`INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, repoA, "acme/alpha", "github", org, older, older)
 	exec(`INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, repoB, "acme/beta", "gitlab", org, older, older)

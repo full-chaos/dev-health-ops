@@ -41,6 +41,9 @@ type demoStory struct {
 	BlocksIn []demoStoryRef
 	// Points is the story's own estimate; 0 leaves it to the team's share (demoPoints).
 	Points float64
+	// Terse: the item and its changes carry no description, so its work unit has too little text for the
+	// categorizer (the evidence gate).
+	Terse bool
 }
 
 // demoStoryRef names another team's story: the team's name and the story's index in its stories.
@@ -86,6 +89,7 @@ func (c demoChange) deployFails() demoChange          { c.Deploy, c.DeployFailed
 func (c demoChange) reverts(story int) demoChange     { c.Revert, c.RevertOf = true, story; return c }
 
 func (s demoStory) blocks(indexes ...int) demoStory { s.Blocks = indexes; return s }
+func (s demoStory) terse() demoStory                { s.Terse = true; return s }
 
 func (s demoStory) blocksIn(team string, index int) demoStory {
 	s.BlocksIn = append(s.BlocksIn, demoStoryRef{team, index})
@@ -253,6 +257,8 @@ var demoMobileStories = []demoStory{
 	feature("In-app order status screen", 10, -1, change("mobile-app", 8, -1)),
 	// The as-of day: the newest event of every repository is within hours of the world's instant.
 	bug("Deep link opens the wrong tab", 2, 0, change("mobile-app", 1, 0), change("mobile-bff", 1, 0).deploy()),
+	// A one-line chore with no description: the world's one work unit under the evidence gate.
+	chore("Bump the build number", 12, 9, change("mobile-app", 11, 9)).terse(),
 }
 
 // Delivery (GitLab root group): the deploy pipeline breaks often; shared-infra changes. Its pipeline
@@ -326,8 +332,9 @@ var demoWebStories = []demoStory{
 	// The last days.
 	feature("Pricing page copy refresh", 10, 4, change("chaos-gl/web/marketing-site", 9, 4)),
 	chore("Design system focus ring tokens", 8, 3, change("chaos-gl/web/design-system", 7, 3)),
-	// The as-of day: the newest event of every repository is within hours of the world's instant.
-	feature("Footer links audit", 2, 0, change("chaos-gl/web/marketing-site", 1, 0).deploy(), change("chaos-gl/web/design-system", 1, 0).deploy()),
+	// The as-of day: the marketing site's newest event is within hours of the world's instant. The design
+	// system's last change is days before it, so the team holds a work scope that ends before its latest day.
+	feature("Footer links audit", 2, 0, change("chaos-gl/web/marketing-site", 1, 0).deploy()),
 }
 
 // Delivery's incidents on the deploy pipeline (GitLab incident issues).
@@ -365,6 +372,9 @@ var demoDeliveryIncidents = []demoIncident{
 // few sentences in the voice of the work's kind, so a unit's text says what kind of work it is. They name
 // no issue key, number or URL: a link stays the link the change declares.
 func demoIssueText(story demoStory) string {
+	if story.Terse {
+		return ""
+	}
 	subject := strings.ToLower(story.Title[:1]) + story.Title[1:]
 	switch story.Kind {
 	case "feature":
@@ -381,6 +391,9 @@ func demoIssueText(story demoStory) string {
 }
 
 func demoChangeText(story demoStory) string {
+	if story.Terse {
+		return ""
+	}
 	subject := strings.ToLower(story.Title[:1]) + story.Title[1:]
 	switch story.Kind {
 	case "feature":

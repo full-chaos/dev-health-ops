@@ -258,8 +258,8 @@ func TestGitHubTestsRunsCutSecondDeepRangeControlsAreReadOnceAcrossResumes(t *te
 }
 
 // The runs phase keeps up to githubTestsMaxRunsCutKeysBytes of cut keys and the artifacts phase 52: one key past the cap
-// overflows the list (those runs are read again, the named residual), and a decoded list past its phase cap is a named
-// checkpoint conflict.
+// overflows the list (those runs are read again, the named residual), and a decoded list past its phase's read limit (896 B runs,
+// 52 B artifacts) is a named checkpoint conflict.
 func TestGitHubTestsRunsCutListCapIsPerPhase(t *testing.T) {
 	at := "2026-07-20T06:30:00Z"
 	second, _ := githubTestsCutSecond(at)
@@ -285,7 +285,10 @@ func TestGitHubTestsRunsCutListCapIsPerPhase(t *testing.T) {
 		valid       bool
 	}{
 		{githubTestsRunsPhase, githubTestsWidestRunsCutKeys(t), true},
-		{githubTestsRunsPhase, githubTestsWidestRunsCutKeys(t) + ",6", false},
+		// A runs list decodes up to githubTestsMaxRunsCutKeysReadBytes (896): a cursor of the 896-byte writer resumes
+		// (acp r1 ruling P1-1, CHAOS-14316); past it the list is corrupt.
+		{githubTestsRunsPhase, githubTestsWidestRunsCutKeys(t) + "," + strings.Repeat("6", githubTestsMaxRunsCutKeysReadBytes-githubTestsMaxRunsCutKeysBytes-1), true},
+		{githubTestsRunsPhase, githubTestsWidestRunsCutKeys(t) + "," + strings.Repeat("6", githubTestsMaxRunsCutKeysReadBytes-githubTestsMaxRunsCutKeysBytes), false},
 		{githubTestsArtifactsPhase, githubTestsWidestCutKeys(t), true},
 		{githubTestsArtifactsPhase, githubTestsWidestCutKeys(t) + "9", false},
 	} {

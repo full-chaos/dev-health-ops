@@ -71,7 +71,7 @@ func TestDriverCaptionWordingCensus(t *testing.T) {
 	}
 }
 
-func TestStatesDriverMove(t *testing.T) {
+func TestStatesMove(t *testing.T) {
 	pct := func(v float64) *float64 { return &v }
 	prior := 5.0
 	yes := true
@@ -81,17 +81,18 @@ func TestStatesDriverMove(t *testing.T) {
 	}{
 		"a measured move":          {MetricDelta{Metric: "churn", Value: 12, DeltaPct: pct(20), HasData: true, HasPriorData: true, PriorValue: &prior}, true},
 		"a measured 0 percent":     {MetricDelta{Metric: "churn", Value: 5, DeltaPct: pct(0), HasData: true, HasPriorData: true, PriorValue: &prior}, false},
-		"a rise from a measured 0": {MetricDelta{Metric: "churn", Value: 5, HasData: true, HasPriorData: true, PriorValue: new(float64)}, false},
+		"a rise from a measured 0": {MetricDelta{Metric: "churn", Value: 5, HasData: true, HasPriorData: true, PriorValue: new(float64)}, true},
 		"no prior window":          {MetricDelta{Metric: "churn", Value: 5, HasData: true}, false},
 		"no value":                 {MetricDelta{Metric: "churn", DeltaPct: pct(20)}, false},
 		// A work-item metric under a repository filter is the repo-linked calculation; the team daily table
 		// that names its drivers has no repository dimension, so the teams would not be the filtered ones.
-		"a work-item metric narrowed by a repository filter":  {MetricDelta{Metric: "cycle_time", Value: 12, DeltaPct: pct(20), HasData: true, HasPriorData: true, RepoFilterApplied: &yes}, false},
-		"a work-item metric, no repository filter":            {MetricDelta{Metric: "cycle_time", Value: 12, DeltaPct: pct(20), HasData: true, HasPriorData: true}, true},
-		"a repository metric narrowed by a repository filter": {MetricDelta{Metric: "churn", Value: 12, DeltaPct: pct(20), HasData: true, HasPriorData: true, RepoFilterApplied: &yes}, true},
+		"a work-item metric narrowed by a repository filter":                    {MetricDelta{Metric: "cycle_time", Value: 12, DeltaPct: pct(20), HasData: true, HasPriorData: true, RepoFilterApplied: &yes}, false},
+		"a work-item metric, no repository filter":                              {MetricDelta{Metric: "cycle_time", Value: 12, DeltaPct: pct(20), HasData: true, HasPriorData: true}, true},
+		"a repository metric narrowed by a repository filter":                   {MetricDelta{Metric: "churn", Value: 12, DeltaPct: pct(20), HasData: true, HasPriorData: true, RepoFilterApplied: &yes}, true},
+		"a work-item metric from a measured 0, narrowed by a repository filter": {MetricDelta{Metric: "throughput", Value: 5, HasData: true, HasPriorData: true, PriorValue: new(float64), RepoFilterApplied: &yes}, false},
 	} {
-		if got := statesDriverMove(tc.d); got != tc.want {
-			t.Errorf("%s: statesDriverMove = %v, want %v", name, got, tc.want)
+		if got := statesMove(tc.d); got != tc.want {
+			t.Errorf("%s: statesMove = %v, want %v", name, got, tc.want)
 		}
 	}
 }

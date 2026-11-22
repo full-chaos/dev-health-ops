@@ -1,0 +1,116 @@
+apiVersion: v1
+data:
+  ? ''
+  : emptykey
+  ? a very long key that is longer than one hundred and twenty eight characters, to
+    force the complex key form in the emitter output ok
+  : <redacted>
+  b1: true
+  b2: false
+  b3: true
+  bin: !!binary |
+    aGVsbG8gd29ybGQ=
+  f1: 1.5
+  f10: 1.0e-05
+  f11: 1.2345678901234567e+19
+  f2: 1e+3
+  f3: 1e3
+  f4: .inf
+  f5: -.inf
+  f6: .nan
+  f7: 685230.15
+  f8: 1000.5
+  f9: 685230.15
+  fold: 'folded block joins lines
+
+    keeps paragraph
+
+    '
+  h1: 31
+  i2: -10
+  i3: 1000
+  i4: 123456789012345678901234567890
+  lit: "literal block\n  indented\nend\n"
+  litkeep: 'keep
+
+
+    '
+  litstrip: strip
+  long1: The quick brown fox jumps over the lazy dog. The quick brown fox jumps over
+    the lazy dog again and again and again.
+  long2: 'A long line with a newline
+
+    The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the
+    lazy dog.'
+  long3: ThequickbrownfoxjumpsoverthelazydogThequickbrownfoxjumpsoverthelazydogThequickbrownfoxjumpsoverthelazydog
+  long4: "unicode \xE9 and a long tail to fold over the width limit of eighty characters,\
+    \ fold fold fold fold"
+  long5: spaces    many     spaces      between     words      to      fold      over     the     limit     ok
+  long6: '  leading spaces then a long tail to fold over the width limit of eighty
+    characters, fold fold fold fold'
+  ? 'multi
+
+    line key'
+  : <redacted>
+  n1: null
+  n2: null
+  n3: null
+  o1: 493
+  q1: '123'
+  q10: '---x'
+  q11: '...'
+  q12: "tab\there"
+  q13: "caf\xE9 \U0001F600"
+  q14: 'line1
+
+    line2
+
+    '
+  q15: "trailing space \nnext"
+  q16: "  \nindented"
+  q17: "x\Ly"
+  q18: '@at'
+  q19: '%pct'
+  q2: 'true'
+  q20: '!bang'
+  q21: ?q
+  q22: ': c'
+  q23: a:b
+  q24: '[x]'
+  q25: it's
+  q26: quote"d
+  q27: back\slash
+  q28: "bell\a esc\e nul\0 del\x7F nbsp\_ nel\N"
+  q29: '='
+  q3: 'null'
+  q30: '<<'
+  q31: '#hash'
+  q32: 'x #y'
+  q33: '-'
+  q34: 0o17
+  q35: 1e3
+  q36: '+1'
+  q37: '.5'
+  q38: 'Yes'
+  q39: '~'
+  q4: ''
+  q40: '2020-01-02'
+  q5: ' lead'
+  q6: 'trail '
+  q7: 'a # b'
+  q8: 'a: b'
+  q9: '- x'
+  s1: 90
+  t1: '123'
+  t2: 7
+  t3: 2.0
+  t4: true
+  t5: null
+kind: ConfigMap
+metadata:
+  annotations:
+    naive: 2001-12-14 21:59:43.100000
+    stamp: 2020-01-02 03:04:05.123000+00:00
+    stamp2: 2020-01-02 03:04:05+05:30
+    when: 2020-01-02
+  name: scalars

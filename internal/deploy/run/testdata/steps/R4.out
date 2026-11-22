@@ -1,0 +1,4 @@
+P4 client 203.0.113.34 x-forwarded-for ok
+P4 client 203.0.113.90 x-forwarded-for ok
+P4 reload count 1
+edge-proxy-controller-68fb7b6e1-5qgkm restarts=0

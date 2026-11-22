@@ -13,27 +13,48 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
-// The HAVING leaves out a (team, repository, day) whose newest row is a
-// retraction row (package liverow). Served as a row it would read as "no AI
-// artifact, so fully covered" for a team id that is retired, and it would
-// make a window with no measurement look as if it held data.
+// The inner read picks ONE version of each (team, repository, day): the newest
+// computed_at, then a hash of its counts, so two versions that share a
+// computed_at serve one of them whatever the scan order, and every count comes
+// from the same version. The outer WHERE leaves out a key whose picked version
+// is a retraction row (package liverow), tested on that same version: served as
+// a row it would read as "no AI artifact, so fully covered" for a team id that
+// is retired, and it would make a window with no measurement look as if it held
+// data.
 var coverageStatement = `SELECT
     team_id,
     toString(repo_id) AS repo_id_str,
     day,
-    argMax(ai_artifacts, coverage.computed_at) AS ai_artifacts,
-    argMax(declared_artifacts, coverage.computed_at) AS declared_artifacts,
-    argMax(human_reviewed_prs, coverage.computed_at) AS human_reviewed_prs,
-    argMax(security_scanned_prs, coverage.computed_at) AS security_scanned_prs,
-    argMax(in_policy_artifacts, coverage.computed_at) AS in_policy_artifacts
-FROM ai_governance_coverage_daily AS coverage
-WHERE org_id = {org_id:String}
-  AND day >= {start_day:Date}
-  AND day <= {end_day:Date}
-  AND ({team_id:String} = '' OR team_id = {team_id:String})
-  AND ({repo_id:String} = '' OR toString(repo_id) = {repo_id:String})
-GROUP BY org_id, team_id, repo_id, day
-HAVING ` + liverow.NewestPredicate("ai_governance_coverage_daily", "coverage") + `
+    ai_artifacts,
+    declared_artifacts,
+    human_reviewed_prs,
+    security_scanned_prs,
+    in_policy_artifacts
+FROM (
+    SELECT
+        team_id,
+        repo_id,
+        day,
+        argMax(
+            tuple(coverage.ai_artifacts, coverage.declared_artifacts, coverage.human_reviewed_prs,
+                coverage.security_scanned_prs, coverage.in_policy_artifacts),
+            (coverage.computed_at, cityHash64(tuple(coverage.ai_artifacts, coverage.declared_artifacts,
+                coverage.human_reviewed_prs, coverage.security_scanned_prs, coverage.in_policy_artifacts)))
+        ) AS picked,
+        picked.1 AS ai_artifacts,
+        picked.2 AS declared_artifacts,
+        picked.3 AS human_reviewed_prs,
+        picked.4 AS security_scanned_prs,
+        picked.5 AS in_policy_artifacts
+    FROM ai_governance_coverage_daily AS coverage
+    WHERE org_id = {org_id:String}
+      AND day >= {start_day:Date}
+      AND day <= {end_day:Date}
+      AND ({team_id:String} = '' OR team_id = {team_id:String})
+      AND ({repo_id:String} = '' OR toString(repo_id) = {repo_id:String})
+    GROUP BY org_id, team_id, repo_id, day
+) AS newest
+WHERE ` + liverow.Predicate("ai_governance_coverage_daily", "newest") + `
 ORDER BY day, team_id, repo_id`
 
 const violationsStatement = `SELECT

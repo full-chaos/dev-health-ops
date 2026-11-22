@@ -48,6 +48,10 @@ func Resolve(
 	if input.HistoryWeeks <= 0 {
 		return nil, fmt.Errorf("throughputForecast: history_weeks must be positive")
 	}
+	// The team selection is a SET (CHAOS-14376): each id once, in the order of its first use, compared as the team_id
+	// predicate compares ids (exact strings). Every read, the one-team view gate and the label below take that set, so
+	// [t, t] is the one team t and [t, u, t] the team set [t, u].
+	input.TeamIds = distinctTeamIDs(input.TeamIds)
 
 	// Single-team scopes carry the team on the result so the UI can label the
 	// scope; multi-team and org-wide ones leave it null. Not a filter -- the
@@ -195,6 +199,20 @@ func Resolve(
 	)
 
 	return toModel(uuid.NewString(), now, result, backlog, staleP50, staleP90, coverage), nil
+}
+
+// distinctTeamIDs is a team selection as a set: each id once, in the order of its first use.
+func distinctTeamIDs(ids []string) []string {
+	var out []string
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, repeated := seen[id]; repeated {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 // scopeLabel renders the request's scope for a log line.

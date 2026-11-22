@@ -1,0 +1,69 @@
+kind: ConfigMap
+metadata:
+  name: keys
+data:
+  b: 2
+  a: 1
+mixed:
+  1: one
+  b: bee
+  true: tee
+numkeys:
+  2: two
+  1.5: onefive
+  1: one
+  true: overwritten
+nullkey:
+  ~: n
+  x: y
+datekeys:
+  2020-01-02: d1
+  2019-01-01: d0
+dupkeys:
+  z: 1
+  y: 2
+  z: 3
+merged:
+  <<: [{a: 1, b: 2}, {b: 3, c: 4}]
+  c: 5
+merged2:
+  base: &base {p: 1, q: 2}
+  child:
+    <<: *base
+    q: 9
+shared:
+  first: &d 2020-05-05
+  second: *d
+  third: 2020-05-05
+lists:
+  empty: []
+  emptymap: {}
+  nested: [[1, [2, []]], {}, null, [{}]]
+  flowmap: {x: 1, "y z": [a, b]}
+  seqofmaps:
+  - name: a
+    value: 1
+  - {name: b}
+---
+kind: Secret
+metadata: {name: s1}
+stringData: {password: hunter2}
+---
+- not a doc
+---
+kind: ''
+metadata: {name: nokind}
+---
+kind: 0
+---
+kind: [x]
+metadata: {name: listkind}
+---
+kind: Thing
+metadata: {}
+---
+kind: Thing2
+---
+kind: Thing3
+metadata: {name: 123}
+---

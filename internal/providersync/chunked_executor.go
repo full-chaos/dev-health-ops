@@ -124,7 +124,7 @@ func (executor CompleteRouteExecutor) executeChunked(
 			for index := range chunks {
 				chunks[index].RouteVersion = chunkRouteVersion
 				prepared, prepareErr := store.PrepareChunk(
-					workContext, session.Claim, chunks[index], now,
+					workContext, session.Claim, chunks[index], now, now,
 				)
 				if prepareErr != nil {
 					return prepareErr

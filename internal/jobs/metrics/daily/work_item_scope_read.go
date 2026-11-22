@@ -555,8 +555,9 @@ func workItemScopeFilterArgument(values []string) []string {
 
 // loadWorkItemScopeTransitions reads the transitions of the items that pass
 // the superset filter. The identity and the dedup of a transition are those of
-// LoadWorkItemStateTransitions: a transition belongs to its work item, and
-// only copies of one event collapse.
+// LoadWorkItemStateTransitions: a transition belongs to its work item, only
+// copies of one event collapse, and a stale pre-170 board row is dropped
+// (workitemmetrics.StaleBoardTieZeroSQL).
 func loadWorkItemScopeTransitions(
 	ctx context.Context, conn repositoryRows, organizationID string, end time.Time,
 	values []string, emptyScope, filtered bool,
@@ -569,10 +570,14 @@ FROM (
 		org_id, work_item_id, occurred_at,
 		from_status, to_status, from_status_raw, to_status_raw, actor,
 		max(last_synced) AS last_synced
-	FROM work_item_transitions
-	WHERE org_id = ? AND occurred_at < fromUnixTimestamp64Micro(?, 'UTC')
-	  AND work_item_id IN (
-		SELECT work_item_id FROM work_items WHERE org_id = ?`+workItemScopeFilterSQL(emptyScope, filtered)+`)
+	FROM (
+		SELECT `+workitemmetrics.StoredTransitionColumnsSQL+`
+		FROM work_item_transitions
+		WHERE org_id = ? AND occurred_at < fromUnixTimestamp64Micro(?, 'UTC')
+		  AND work_item_id IN (
+			SELECT work_item_id FROM work_items WHERE org_id = ?`+workItemScopeFilterSQL(emptyScope, filtered)+`)
+	)
+	WHERE NOT `+workitemmetrics.StaleBoardTieZeroSQL+`
 	GROUP BY org_id, work_item_id, occurred_at,
 		from_status, to_status, from_status_raw, to_status_raw, actor
 )`,

@@ -184,10 +184,46 @@ func TestGitHubTestsScheduledModesKeepTheWalkBounds(t *testing.T) {
 				component = githubTestsRunInventoryComponent
 			}
 			t.Logf("CELL ii-pages/%s/%s runLists=%d artifactLists=%d incomplete=%+v", mode, phase, spent.runLists, spent.artifactLists, spent.cursor.Incomplete)
+			if mode == "incremental" && phase == githubTestsArtifactsPhase {
+				// CHAOS-13801: the incremental cicd artifacts listing has 250 pages; it still stops there.
+				spent = boundsCollect(t, GitHubTestsRouteHandler{}, mode, boundsSpentPagesCursor(t, phase, backfillRunsPin/nativePerPage))
+			}
 			if !githubTestsHasPageBudgetObservation(spent.cursor, component) {
-				t.Errorf("%s %s with 100 pages spent: incomplete=%+v, want %s page_budget_exhausted", mode, phase, spent.cursor.Incomplete, component)
+				t.Errorf("%s %s with its page budget spent: incomplete=%+v, want %s page_budget_exhausted", mode, phase, spent.cursor.Incomplete, component)
 			}
 		}
+	}
+}
+
+// CHAOS-13801: the scheduled (incremental) cicd artifacts listing passes the 100 pages of the runs phase, up to 250. Every
+// other dataset, mode and phase keeps 100.
+func TestGitHubTestsIncrementalCicdArtifactListingPassesTheScheduledPages(t *testing.T) {
+	scheduledPages, backfillPages := scheduledRunsPin/nativePerPage, backfillRunsPin/nativePerPage
+	spent := func(claim Claim, phase string, pages int) boundsAttempt {
+		return boundsCollectClaim(t, GitHubTestsRouteHandler{}, claim, boundsSpentPagesCursor(t, phase, pages))
+	}
+	passed := spent(boundsClaim("incremental"), githubTestsArtifactsPhase, scheduledPages)
+	if passed.artifactLists == 0 || githubTestsHasPageBudgetObservation(passed.cursor, githubTestsArtifactInventoryComponent) {
+		t.Errorf("incremental cicd artifacts with %d pages spent: artifactLists=%d incomplete=%+v; want the next page listed",
+			scheduledPages, passed.artifactLists, passed.cursor.Incomplete)
+	}
+	stopped := spent(boundsClaim("incremental"), githubTestsArtifactsPhase, backfillPages)
+	if stopped.artifactLists != 0 || !githubTestsHasPageBudgetObservation(stopped.cursor, githubTestsArtifactInventoryComponent) {
+		t.Errorf("incremental cicd artifacts with %d pages spent: artifactLists=%d incomplete=%+v; want artifact_inventory page_budget_exhausted",
+			backfillPages, stopped.artifactLists, stopped.cursor.Incomplete)
+	}
+	for name, claim := range map[string]Claim{
+		"full_resync/cicd":  boundsClaim("full_resync"),
+		"incremental/tests": boundsDatasetClaim("incremental", "tests"),
+	} {
+		kept := spent(claim, githubTestsArtifactsPhase, scheduledPages)
+		if !githubTestsHasPageBudgetObservation(kept.cursor, githubTestsArtifactInventoryComponent) {
+			t.Errorf("%s artifacts with %d pages spent: incomplete=%+v; want artifact_inventory page_budget_exhausted", name, scheduledPages, kept.cursor.Incomplete)
+		}
+	}
+	runs := spent(boundsClaim("incremental"), githubTestsRunsPhase, scheduledPages)
+	if !githubTestsHasPageBudgetObservation(runs.cursor, githubTestsRunInventoryComponent) {
+		t.Errorf("incremental cicd runs with %d pages spent: incomplete=%+v; want run_inventory page_budget_exhausted", scheduledPages, runs.cursor.Incomplete)
 	}
 }
 

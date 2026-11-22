@@ -589,8 +589,9 @@ func remainingPageBudget(budget, spent int) (int, error) {
 // hours without an end held about 8,000,000.
 const githubTestsMaxWalkRecords = 4_100_000
 
-// A backfill claim (one day per unit) gets its own, higher bounds: a busy prod day had 9,303 runs of about 1,800 rows each,
-// and its listing spans two days (16,071 runs at most). Backfill units hold at most cap-1 slots of a bucket (backfillSlotLimit).
+// A backfill claim of dataset cicd (one day per unit) gets higher bounds: a busy prod day had 9,303 runs of about 1,800 rows
+// each, and its listing spans two days (16,071 runs at most). Its medium bucket (cap 2) keeps one slot from backfill
+// (backfillSlotLimit); a tests unit's heavy bucket has cap 1 and no such reserve, so it keeps the scheduled bounds.
 const (
 	githubTestsBackfillMaxRuns        = 25_000
 	githubTestsBackfillMaxWalkRecords = 40_000_000
@@ -1678,7 +1679,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	// cursor that already finished its scan only republishes metadata, and
 	// refusing there would strand an otherwise complete unit.
 	runsCeiling, walkCeiling := githubTestsMaxRuns, githubTestsMaxWalkRecords
-	if claim.Mode == "backfill" {
+	if claim.Mode == "backfill" && claim.Dataset == "cicd" {
 		runsCeiling, walkCeiling = githubTestsBackfillMaxRuns, githubTestsBackfillMaxWalkRecords
 	}
 	maxRuns := handler.MaxRuns

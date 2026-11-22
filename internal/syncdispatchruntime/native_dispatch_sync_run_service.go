@@ -601,7 +601,11 @@ WHERE id = $1::uuid`,
 	// no wake (or, for the tail's read, as an error River retried).
 	var end passEnd
 	var counts pendingUnitCounts
+	// MUTANT M3: the zero-queue tail (its counts read first) runs after the commit in its own transaction.
 	if committed, err := service.commitFencedAfter(ctx, tx, fence, func(ctx context.Context, tx pgx.Tx) error {
+		if riverQueued == 0 {
+			return nil
+		}
 		var err error
 		end, counts, err = service.armPassWake(ctx, tx, run.id, now, riverQueued, nextDeferredAt, len(deferredOutsideSnapshot) > 0)
 		return err
@@ -609,6 +613,19 @@ WHERE id = $1::uuid`,
 		return err
 	} else if !committed {
 		return nil
+	}
+	if riverQueued == 0 {
+		tailTx, err := service.pool.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tailTx.Rollback(ctx) }()
+		if end, counts, err = service.armPassWake(ctx, tailTx, run.id, now, riverQueued, nextDeferredAt, len(deferredOutsideSnapshot) > 0); err != nil {
+			return err
+		}
+		if err := tailTx.Commit(ctx); err != nil {
+			return err
+		}
 	}
 	flushPostCommitLogs(ctx)
 	// CHAOS-10013: every unit this pass terminalized (budget exhaustion, an

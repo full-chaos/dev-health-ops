@@ -3,7 +3,7 @@ package providersync
 import (
 	"context"
 
-	chstore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/platform/connerr"
 )
 
 // SinkConnectionDroppedError is a chunk effect write whose ClickHouse
@@ -95,7 +95,7 @@ func sinkConnectionDropped(ctx context.Context, effect EffectLedgerEntry, batch 
 	if _, wrappable := sinkDropWrappableDestinations[batch.Destination]; !wrappable {
 		return err
 	}
-	if !chstore.IsDroppedConn(err) {
+	if !connerr.IsDropped(err) {
 		return err
 	}
 	return &SinkConnectionDroppedError{Destination: batch.Destination, Err: err}

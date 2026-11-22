@@ -17,7 +17,7 @@ import (
 // droppedFirstBlockError has the shape of the driver error of a connection
 // that dropped under an INSERT: the clickhouse-go first-block line over the
 // ch-go "read: EOF" wrap of io.EOF (the real chain is built in
-// internal/storage/clickhouse TestIsDroppedConnOnTheRealFirstBlockReadChain).
+// internal/platform/connerr TestIsDroppedOnTheRealFirstBlockReadChain).
 func droppedFirstBlockError() error {
 	return fmt.Errorf("query processing: failed to read first block packet from %s (conn_id=%d): %w",
 		"127.0.0.1:9000", 1, fmt.Errorf("read: %w", io.EOF))

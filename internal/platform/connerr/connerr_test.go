@@ -1,4 +1,4 @@
-package clickhouse
+package connerr
 
 import (
 	"errors"
@@ -16,7 +16,7 @@ import (
 // whose peer closed ("read: EOF"), under the clickhouse-go conn_process.go
 // first-block wrap (copied verbatim: the connection type is unexported). A
 // ClickHouse server exception is no dropped connection.
-func TestIsDroppedConnOnTheRealFirstBlockReadChain(t *testing.T) {
+func TestIsDroppedOnTheRealFirstBlockReadChain(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -43,11 +43,11 @@ func TestIsDroppedConnOnTheRealFirstBlockReadChain(t *testing.T) {
 	if !errors.Is(driverErr, io.EOF) {
 		t.Fatalf("premise: driver error %q does not wrap io.EOF", driverErr)
 	}
-	if !IsDroppedConn(driverErr) {
-		t.Fatalf("IsDroppedConn(%q) = false, want true", driverErr)
+	if !IsDropped(driverErr) {
+		t.Fatalf("IsDropped(%q) = false, want true", driverErr)
 	}
 	exception := &chgoproto.Exception{Code: 241, Name: "DB::Exception", Message: "Memory limit (total) exceeded"}
-	if IsDroppedConn(exception) || IsDroppedConn(fmt.Errorf("insert: %w", exception)) {
-		t.Fatalf("IsDroppedConn(%v) = true, want false", exception)
+	if IsDropped(exception) || IsDropped(fmt.Errorf("insert: %w", exception)) {
+		t.Fatalf("IsDropped(%v) = true, want false", exception)
 	}
 }

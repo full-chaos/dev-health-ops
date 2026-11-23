@@ -31,6 +31,7 @@ type githubTestsChunkCountingDoer struct {
 	delegate providerfoundation.HTTPDoer
 	attempts *int
 	observed *githubTestsRateObserver
+	floor    *githubTestsRateFloorGate
 }
 
 func (doer githubTestsChunkCountingDoer) Do(request *http.Request) (*http.Response, error) {
@@ -38,8 +39,31 @@ func (doer githubTestsChunkCountingDoer) Do(request *http.Request) (*http.Respon
 	response, err := doer.delegate.Do(request)
 	if response != nil && doer.observed != nil {
 		doer.observed.observe(response.Header)
+		doer.floor.check(response.StatusCode, doer.observed)
 	}
 	return response, err
+}
+
+// githubTestsRateFloorGate reads the open phase's rate floor on every wire attempt (CHAOS-14518). The HTTP client retries a
+// 5xx or a 429 inside one call, so a check after the call would see only the headers of the last attempt: a retry sent
+// under the floor, and its success headers hiding the low reading. While armed (the open phase only), a retryable answer
+// whose headers put the remaining requests under the floor (or carry none: fail closed, as belowFloor) cancels the
+// invocation's context, which ends the client's retry wait before the next attempt. Disarmed, it does nothing.
+type githubTestsRateFloorGate struct {
+	armed, stopped bool
+	stop           context.CancelCauseFunc
+}
+
+var errGitHubTestsRateFloor = errors.New("github tests open phase: rate-limit floor reached on a retryable answer")
+
+func (gate *githubTestsRateFloorGate) check(status int, observed *githubTestsRateObserver) {
+	if gate == nil || !gate.armed || gate.stopped || status < http.StatusInternalServerError && status != http.StatusTooManyRequests {
+		return
+	}
+	if hit, _ := observed.belowFloor(); hit {
+		gate.stopped = true
+		gate.stop(errGitHubTestsRateFloor)
+	}
 }
 
 // githubTestsMaxJobsPerRun bounds the jobs committed for ONE run (a hard bound). It is not the report-row bound: that is
@@ -1643,7 +1667,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	requests := 0
 	counted := *client
 	var rateObserved githubTestsRateObserver
-	counted.Doer = githubTestsChunkCountingDoer{delegate: client.Doer, attempts: &requests, observed: &rateObserved}
+	floorCtx, floorStop := context.WithCancelCause(ctx)
+	defer floorStop(nil)
+	ctx = floorCtx
+	rateFloor := &githubTestsRateFloorGate{stop: floorStop}
+	counted.Doer = githubTestsChunkCountingDoer{delegate: client.Doer, attempts: &requests, observed: &rateObserved, floor: rateFloor}
 	client = &counted
 	emitFinalMetadata := func(cursor githubTestsChunkCursor) error {
 		cursor.Phase = "done"
@@ -2366,6 +2394,23 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		if stopAtWalkBound() {
 			return nil
 		}
+		// The floor is read before each run and, through rateFloor, on every wire attempt of the phase (CHAOS-14518).
+		stopAtRateFloor := func() bool {
+			hit, remaining := rateObserved.belowFloor()
+			if !hit {
+				return false
+			}
+			cursor.OpenFloorHit, cursor.OpenFloorRemaining = true, remaining
+			slog.Warn(
+				"open phase stopped: the installation's rate-limit headroom is under the floor, or its headers are missing",
+				"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", logging.ProviderText(cursor.Repo),
+				"remaining", remaining, "limit", rateObserved.limit, "floor", rateObserved.floor(), "reread", cursor.OpenDone,
+			)
+			cursor.Phase = "done"
+			return true
+		}
+		rateFloor.armed = true
+		defer func() { rateFloor.armed = false }()
 		startedBefore := claim.SinceAt.UTC().Add(-lookback)
 		if cursor.OpenCap == 0 {
 			backlog, err := handler.OpenRuns.OpenRunBacklog(ctx, claim, repoID, startedBefore, githubTestsOpenRunBacklogThreshold+1)
@@ -2400,20 +2445,16 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				if stopAtWalkBound() {
 					return nil
 				}
-				if hit, remaining := rateObserved.belowFloor(); hit {
-					cursor.OpenFloorHit, cursor.OpenFloorRemaining = true, remaining
-					slog.Warn(
-						"open phase stopped: the installation's rate-limit headroom is under the floor, or its headers are missing",
-						"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", logging.ProviderText(cursor.Repo),
-						"remaining", remaining, "limit", rateObserved.limit, "floor", rateObserved.floor(), "reread", cursor.OpenDone,
-					)
-					cursor.Phase = "done"
+				if stopAtRateFloor() {
 					return nil
 				}
 				before := cursor
 				run, found, fetchErr := fetchGitHubTestsRun(ctx, client, root, row.RunID)
 				cursor.Requests = invocationBaseRequests + requests
 				if fetchErr != nil {
+					if rateFloor.stopped && stopAtRateFloor() {
+						return nil
+					}
 					if err := skipOpenRun(before, row, fetchErr, false); err != nil {
 						return err
 					}
@@ -2435,6 +2476,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					var detailErr error
 					jobs, acceptance, _, detailErr = collectRunDetail(run, pipeline)
 					if detailErr != nil {
+						if rateFloor.stopped && stopAtRateFloor() {
+							return nil
+						}
 						if err := skipOpenRun(before, row, detailErr, true); err != nil {
 							return err
 						}

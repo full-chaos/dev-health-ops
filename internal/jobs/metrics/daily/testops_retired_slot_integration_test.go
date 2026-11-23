@@ -655,9 +655,9 @@ func retiredKeptSuites(t *testing.T, stack attemptsStack, org string) map[string
 
 // PROFILE: the reads that carry the retired-slot rule read at most their named scans of each table, +50 %. Every scan of an
 // org-bounded select reads at most the table (one container, one org, merges stopped), so the bound per statement is
-// sum(scans of a table x its rows) x 1.5. The new selects are all over test_suite_results: per use of SuiteRowsNewestAttempt one
-// retired-slot select and, with a window, its window run-set select (+2, +1 without a window); per use of SuiteRowsNotRetired the
-// same (+2). No statement gains a test_case_results scan.
+// sum(scans of a table x its rows) x 1.5. The new selects are all over test_suite_results: per use of SuiteRowsNewestAttempt the
+// retired-slot select and the retired slots' legacy-id select with its own retired-slot select, each with its window run-set
+// select (+6, +3 without a window); per use of SuiteRowsNotRetired the same (+6). No statement gains a test_case_results scan.
 func TestTestopsRetiredSlotReadsStayInTheirScans(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
@@ -692,9 +692,11 @@ func TestTestopsRetiredSlotReadsStayInTheirScans(t *testing.T) {
 	start, end := retiredDay(), retiredDay().Add(24*time.Hour)
 	historyStart := retiredDay().AddDate(0, 0, -29)
 	accumulator := testops.NewTestAccumulator(repoID, "", nil)
-	const keptToday = 1 + 8 // the window source + SuiteRowsNewestAttempt with a window (newest x2, legacy-id, retired; each + its window run set)
-	const notRetired = 2    // the retired-slot select + its window run set
-	const offDefault = 2    // one reference to off_default: window_runs twice (and one ci_pipeline_runs scan)
+	// the window source + SuiteRowsNewestAttempt with a window: newest x2, legacy-id, retired, retired legacy-id + its retired,
+	// each + its window run set
+	const keptToday = 1 + 12
+	const notRetired = 6 // retired, retired legacy-id + its retired; each + its window run set
+	const offDefault = 2 // one reference to off_default: window_runs twice (and one ci_pipeline_runs scan)
 	statements := []struct {
 		name                                             string
 		suiteScans, caseScans, pipeScans, mks, repoScans uint64
@@ -726,7 +728,7 @@ func TestTestopsRetiredSlotReadsStayInTheirScans(t *testing.T) {
 			}
 			return err
 		}},
-		{"pooled", 1 + 4, 0, 0, 0, 0, func(ctx context.Context) error {
+		{"pooled", 1 + 6, 0, 0, 0, 0, func(ctx context.Context) error {
 			var count uint64
 			return stack.conn.QueryRow(ctx, "SELECT count() FROM "+testopspooled.SuiteRunsSource, clickhouse.Named("org_id", org),
 				clickhouse.Named("start_date", start.Format(time.DateOnly)), clickhouse.Named("end_date", end.Format(time.DateOnly))).Scan(&count)

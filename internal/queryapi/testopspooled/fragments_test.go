@@ -96,7 +96,7 @@ func TestAliasQualifiesTheOuterColumnsOnly(t *testing.T) {
 		sql := build("a", repoOnly)
 		required := []string{"a.report_slot", "a.repo_id", "a.run_id", "a.run_attempt"}
 		if name == "notRetired" {
-			required = []string{"a.report_slot", "a.repo_id", "a.run_id", "a.retracted"}
+			required = []string{"a.report_slot", "a.repo_id", "a.run_id", "a.retracted", "a.suite_id"}
 		}
 		for _, column := range required {
 			if !strings.Contains(sql, column) {
@@ -186,8 +186,14 @@ func TestRetiredSlotRuleIsAppliedAfterTheNewestAttempt(t *testing.T) {
 	if strings.Count(suite, newest+")") != 2 {
 		t.Errorf("the newest-attempt select is not the unfiltered one in both arms:\n%s", suite)
 	}
-	if got := SuiteRowsNotRetired("c", Scope{}); got != "(c.retracted = 0 AND (c.report_slot = '' OR (c.repo_id, c.run_id, c.report_slot) NOT IN ("+retired+")))" {
+	retiredLegacy := "SELECT repo_id, run_id, arrayJoin(legacy_suite_ids) FROM test_suite_results FINAL WHERE org_id = {org_id:String} AND report_slot != '' AND (repo_id, run_id, report_slot) IN (" + retired + ")"
+	if got := SuiteRowsNotRetired("c", Scope{}); got != "(c.retracted = 0 AND ((c.report_slot = '' AND (c.repo_id, c.run_id, c.suite_id) NOT IN ("+retiredLegacy+
+		")) OR (c.report_slot != '' AND (c.repo_id, c.run_id, c.report_slot) NOT IN ("+retired+"))))" {
 		t.Errorf("SuiteRowsNotRetired is\n%s", got)
+	}
+	// A pre-slot copy of a retired slot is retired with it, whichever attempt of the slot lists its id.
+	if !strings.Contains(suite, "AND (s.repo_id, s.run_id, s.suite_id) NOT IN ("+retiredLegacy+"))") {
+		t.Errorf("the legacy arm keeps a pre-slot copy of a retired slot:\n%s", suite)
 	}
 	if strings.Contains(CoverageRowsNewestAttempt("", Scope{}), "retracted") {
 		t.Errorf("the coverage fragment reads a retracted column coverage_snapshots does not have")

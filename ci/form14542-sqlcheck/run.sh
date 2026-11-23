@@ -75,17 +75,17 @@ run_variant() {
   else
     echo "PASS ${variant}: 37 rows = expected.tsv"
   fi
-  # FORM-TEMPLATE-3 PASS-path WANT: read_rows of the statement = the work math on the fixture (4 rows):
-  # 7 scans x 4 = 28 if the scalar WITH is read once per reference, 4 x 4 = 16 if once. Assert <= 28.
+  # FORM-TEMPLATE-3 PASS-path WANT: read_rows of the statement = the work math on the fixture (19 rows):
+  # 7 scans x 19 = 133 if the scalar WITH is read once per reference. Assert <= 133.
   docker exec ch clickhouse-client -q 'SYSTEM FLUSH LOGS'
   local rr
   rr=$(docker exec ch clickhouse-client -q "SELECT read_rows FROM system.query_log WHERE query_id = '${qid}' AND type = 'QueryFinish' AND is_initial_query")
-  echo "query_log ${variant}: initial query read_rows = ${rr} (fixture rows 4; WANT 28 if the WITH is read per reference, 16 if once)"
+  echo "query_log ${variant}: initial query read_rows = ${rr} (fixture rows 19; WANT <= 133)"
   docker exec ch clickhouse-client -q "SELECT 'secondary', count(), sum(read_rows) FROM system.query_log WHERE initial_query_id = '${qid}' AND type = 'QueryFinish' AND NOT is_initial_query" | sed "s/^/query_log ${variant}: /"
-  if [ -n "$rr" ] && [ "$rr" -le 28 ] && [ "$rr" -gt 0 ]; then
-    echo "PASS ${variant}: read_rows ${rr} <= 28"
+  if [ -n "$rr" ] && [ "$rr" -le 133 ] && [ "$rr" -gt 0 ]; then
+    echo "PASS ${variant}: read_rows ${rr} <= 133"
   else
-    echo "FAIL ${variant}: read_rows '${rr}' not in (0, 28]"; status=1
+    echo "FAIL ${variant}: read_rows '${rr}' not in (0, 133]"; status=1
   fi
   while IFS=$'\t' read -r sec span label want; do
     got=$(awk -F'\t' -v s="$sec" -v n="$span" -v l="$label" '$1==s && $2==n && $3==l {print $5}' "$work/out-${variant}.tsv")

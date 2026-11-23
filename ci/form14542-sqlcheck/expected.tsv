@@ -1,37 +1,37 @@
-agg	dev_health.github_tests.artifact_download	artifact_bytes	1
-agg	dev_health.github_tests.artifact_download	dur_ms	1
-agg	dev_health.github_tests.artifact_download	listed_bytes	1
-agg	dev_health.github_tests.artifact_download	requests	1
-agg	dev_health.job.execute	dur_ms	1
-agg	dev_health.provider.request	attempts	2
-agg	dev_health.provider.request	budget_ms	2
-agg	dev_health.provider.request	dur_ms	2
-agg	dev_health.provider.request	dur_ms_in_download	1
-agg	dev_health.provider.request	dur_ms_outside_download	1
-agg	dev_health.provider.request	dur_ms_redirect	1
-agg	dev_health.provider.request	gate_wait_ms	2
-agg	dev_health.provider.request	lease_ms	2
-control			4
+agg	dev_health.github_tests.artifact_download	artifact_bytes	2
+agg	dev_health.github_tests.artifact_download	dur_ms	2
+agg	dev_health.github_tests.artifact_download	listed_bytes	2
+agg	dev_health.github_tests.artifact_download	requests	2
+agg	dev_health.job.execute	dur_ms	3
+agg	dev_health.provider.request	attempts	4
+agg	dev_health.provider.request	budget_ms	4
+agg	dev_health.provider.request	dur_ms	4
+agg	dev_health.provider.request	dur_ms_in_download	2
+agg	dev_health.provider.request	dur_ms_outside_download	2
+agg	dev_health.provider.request	dur_ms_redirect	2
+agg	dev_health.provider.request	gate_wait_ms	4
+agg	dev_health.provider.request	lease_ms	4
+control			13
 keys	dev_health.github_tests.artifact_download	OUTSIDE_ALLOW_LIST	1
-keys	dev_health.github_tests.artifact_download	dev_health.artifact.bytes	1
-keys	dev_health.github_tests.artifact_download	dev_health.artifact.listed_bytes	1
-keys	dev_health.github_tests.artifact_download	dev_health.provider.requests	1
-keys	dev_health.github_tests.artifact_download	outcome	1
-keys	dev_health.provider.request	dev_health.provider.attempts	2
-keys	dev_health.provider.request	dev_health.provider.budget_ms	2
-keys	dev_health.provider.request	dev_health.provider.gate_wait_ms	2
-keys	dev_health.provider.request	dev_health.provider.lease_ms	2
-keys	dev_health.provider.request	dev_health.provider.target	2
-keys	dev_health.provider.request	family	2
-keys	dev_health.provider.request	http.request.method	2
-keys	dev_health.provider.request	http.response.status_code	2
-keys	dev_health.provider.request	http.route	2
-keys	dev_health.provider.request	outcome	2
-keys	dev_health.provider.request	provider	2
-presence	dev_health.github_tests.artifact_download		1
+keys	dev_health.github_tests.artifact_download	dev_health.artifact.bytes	3
+keys	dev_health.github_tests.artifact_download	dev_health.artifact.listed_bytes	3
+keys	dev_health.github_tests.artifact_download	dev_health.provider.requests	3
+keys	dev_health.github_tests.artifact_download	outcome	3
+keys	dev_health.provider.request	dev_health.provider.attempts	5
+keys	dev_health.provider.request	dev_health.provider.budget_ms	5
+keys	dev_health.provider.request	dev_health.provider.gate_wait_ms	5
+keys	dev_health.provider.request	dev_health.provider.lease_ms	5
+keys	dev_health.provider.request	dev_health.provider.target	5
+keys	dev_health.provider.request	family	5
+keys	dev_health.provider.request	http.request.method	5
+keys	dev_health.provider.request	http.response.status_code	5
+keys	dev_health.provider.request	http.route	5
+keys	dev_health.provider.request	outcome	5
+keys	dev_health.provider.request	provider	5
+presence	dev_health.github_tests.artifact_download		3
 presence	dev_health.github_tests.artifact_parse		0
-presence	dev_health.provider.request		2
+presence	dev_health.provider.request		5
 presence	dev_health.provider_unit.chunk_commit		0
 presence	dev_health.provider_unit.chunk_prepare		0
-traces		single_unit_tests_traces	1
-traces		tests_traces	1
+traces		single_unit_tests_traces	2
+traces		tests_traces	3

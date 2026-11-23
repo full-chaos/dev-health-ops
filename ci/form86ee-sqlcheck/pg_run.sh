@@ -4,7 +4,7 @@
 # AT THE WORKERS PIN (no FKs). Modes: PG_IMAGE set = docker (CI); LOCAL_PG="-h <dir> -p <port> -U postgres" = a local server.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-PIN=a7febdf50002
+PIN=a7febdf500025f5ac628a1bdf34d0f817a90e323
 FORM_SHA12=57935db8607c
 work=$(mktemp -d)
 status=0

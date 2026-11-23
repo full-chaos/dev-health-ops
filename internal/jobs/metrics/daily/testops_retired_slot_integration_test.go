@@ -1096,13 +1096,13 @@ func TestTestopsRetiredSlotSuiteRowsOnlyServesTheSyncedOnceNumbers(t *testing.T)
 	}
 }
 
-// PINNED LIMIT (not CONTROL): a retired slot that a later attempt brings back loses the failure history of its earlier
-// attempts. Attempt 1 stores total-b with case a failing; attempt 2 passes a in leg B's parts and drops total-b, whose case
-// retraction rows replace total-b's attempt-1 cases at their keys (no name); attempt 3 uploads a total-b of its own execution
-// (other durations, so no lossless aggregate of the attempt-2 parts) and the planner keeps it. The new readers count the slot
-// again, but its attempt-1 failure is gone: flake 0 of 2 names, where a run that never retired the slot serves 1 of 2 (CONTROL).
-// The superseded attempt-1 artifact is never read again (githubTestsKeepNewestArtifactPerName), so no later walk restores it.
-func TestTestopsRetiredSlotRevivalLosesEarlierFailureHistoryIsPinned(t *testing.T) {
+// PINNED LIMIT: a revival does not restore what the retired-slot rule hid. Attempt 1 stores total-b alone with case a failing;
+// attempt 2 passes a in leg B's parts and drops total-b, whose case retraction rows replace total-b's attempt-1 cases at their
+// keys (no name); attempt 3 uploads a total-b of its own execution (other durations, so no lossless aggregate of the
+// attempt-2 parts) and the planner keeps it. The slot is live again, and its attempt-1 failure stays hidden: flake 0 and no
+// failed name. One sync at attempt 3 serves the same, since it parses only the newest artifact of each name and never reads
+// total-b@1 (githubTestsKeepNewestArtifactPerName); K4 pins the same 0 for that failure before the revival.
+func TestTestopsRetiredSlotRevivalDoesNotRestoreWhatTheRuleHidIsPinned(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	env := startRetiredStack(t, ctx)
@@ -1129,9 +1129,19 @@ WHERE org_id = ? AND run_id = ? AND report_slot = 'total-b'`, org, runID).Scan(&
 	if live != 2 || retracted != 2 {
 		t.Fatalf("slot total-b: %d live attempt-3 rows and %d retraction rows, want 2 and 2 (revived at attempt 3)", live, retracted)
 	}
+	var attempt1Cases, named uint64
+	if err := stack.conn.QueryRow(ctx, `SELECT count(), countIf(case_name != '') FROM test_case_results FINAL
+WHERE org_id = ? AND run_id = ? AND suite_id IN (
+  SELECT suite_id FROM test_suite_results FINAL WHERE org_id = ? AND run_id = ? AND report_slot = 'total-b' AND run_attempt = 1)`,
+		org, runID, org, runID).Scan(&attempt1Cases, &named); err != nil {
+		t.Fatal(err)
+	}
+	if attempt1Cases != 2 || named != 0 {
+		t.Errorf("total-b attempt-1 case rows: %d, %d with a name; want 2, all with no name", attempt1Cases, named)
+	}
 	got := retiredMetricOf(t, stack, org, retiredDay())
-	t.Logf("revived run serves %+v (CONTROL flake 1 of 2)", got)
-	if got.flake != 0 || got.distinct != 2 {
-		t.Errorf("revived run serves flake %d of %d names; the pinned limit is 0 of 2 (CONTROL 1 of 2)", got.flake, got.distinct)
+	t.Logf("revived run serves %+v", got)
+	if got.flake != 0 || got.failedNames != 0 || got.distinct != 2 {
+		t.Errorf("revived run serves flake %d, failed names %d of %d names; the pinned limit is flake 0, failed names 0 of 2", got.flake, got.failedNames, got.distinct)
 	}
 }

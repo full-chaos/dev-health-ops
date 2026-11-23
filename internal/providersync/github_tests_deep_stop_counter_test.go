@@ -27,9 +27,15 @@ type deepStopWalk struct {
 
 func walkDeepStop(t *testing.T, handler GitHubTestsRouteHandler, claim Claim, runs []listingRun) deepStopWalk {
 	t.Helper()
+	return walkDeepStopReports(t, handler, claim, runs, false)
+}
+
+// walkDeepStopReports is walkDeepStop on a doer that serves one JUnit report artifact per run when withReports.
+func walkDeepStopReports(t *testing.T, handler GitHubTestsRouteHandler, claim Claim, runs []listingRun, withReports bool) deepStopWalk {
+	t.Helper()
 	records := captureMembershipLogs(t)
 	fake := newListingFake(t, runs)
-	client := githubTestsClient(t, fakehttp.Client(fake))
+	client := githubTestsClient(t, fakehttp.Client(deletionShiftDoer(t, fake, withReports)))
 	client.Metrics = providerfoundation.NewMetrics()
 	walk := deepStopWalk{}
 	finalSeen := false
@@ -69,8 +75,9 @@ func deepStopCount(t *testing.T, rendered, listing string) int {
 	return 0
 }
 
-// deepStopLines is the deep-stop Warn records of one listing. Each must carry the five fields and no error operand (D4270).
-func deepStopLines(t *testing.T, records []slog.Record, listing string, budget int) int {
+// deepStopLines is the deep-stop Warn records of one listing. Each must carry the five fields (pages: exactly the pages the
+// listing had entered at its stop) and no error operand (D4270).
+func deepStopLines(t *testing.T, records []slog.Record, listing string, budget, pages int) int {
 	t.Helper()
 	count := 0
 	for _, record := range records {
@@ -95,8 +102,8 @@ func deepStopLines(t *testing.T, records []slog.Record, listing string, budget i
 		if attrs["provider"].String() != "github" || attrs["dataset"].String() != "tests" {
 			t.Errorf("deep-stop line provider=%v dataset=%v, want github/tests", attrs["provider"], attrs["dataset"])
 		}
-		if pages, ok := attrs["pages"]; !ok || pages.Kind() != slog.KindInt64 || pages.Int64() < int64(budget) {
-			t.Errorf("deep-stop line pages=%v, want an int of at least the budget %d", attrs["pages"], budget)
+		if got, ok := attrs["pages"]; !ok || got.Kind() != slog.KindInt64 || got.Int64() != int64(pages) {
+			t.Errorf("deep-stop line pages=%v, want %d (the pages entered at the stop)", attrs["pages"], pages)
 		}
 		if got, ok := attrs["budget"]; !ok || got.Kind() != slog.KindInt64 || got.Int64() != int64(budget) {
 			t.Errorf("deep-stop line budget=%v, want %d", attrs["budget"], budget)
@@ -142,6 +149,7 @@ func TestGitHubTestsDeepStopIsCountedAndLogged(t *testing.T) {
 		claim    Claim
 		runs     []listingRun
 		budget   int
+		pages    int
 		stops    map[string]int
 		requests int
 	}{
@@ -149,21 +157,21 @@ func TestGitHubTestsDeepStopIsCountedAndLogged(t *testing.T) {
 		// main's counts: the fix changes no request.
 		// The runs deep range lists 150 late re-runs on a 1-page budget (the visit ends at the budget).
 		{"runs", GitHubTestsRouteHandler{LateRerunMaxPages: 1}, runsClaim,
-			append(lateRerunRuns(1, 150, runsClaim.SinceAt.UTC()), inWindow), 1, map[string]int{"runs": 1, "reports": 1}, 207},
+			append(lateRerunRuns(1, 150, runsClaim.SinceAt.UTC()), inWindow), 1, 1, map[string]int{"runs": 1, "reports": 1}, 207},
 		// The reports deep range: a visit that ends at the budget, and a peeled range that finds the budget spent.
 		{"reports", GitHubTestsRouteHandler{LateRerunMaxPages: 1}, reportsClaim,
-			append([]listingRun{late}, makeListingRuns(2000, 150, old, time.Minute)...), 1, map[string]int{"runs": 1, "reports": 1}, 7},
+			append([]listingRun{late}, makeListingRuns(2000, 150, old, time.Minute)...), 1, 1, map[string]int{"runs": 1, "reports": 1}, 7},
 		{"reports at a peel", GitHubTestsRouteHandler{LateRerunMaxPages: 10}, reportsClaim,
-			append([]listingRun{late}, makeListingRuns(3000, 1000, old, time.Minute)...), 10, map[string]int{"runs": 1, "reports": 1}, 25},
+			append([]listingRun{late}, makeListingRuns(3000, 1000, old, time.Minute)...), 10, 10, map[string]int{"runs": 1, "reports": 1}, 25},
 		// Control: both deep ranges end on their own (150 late re-runs, the default budget): no stop, no line, no count.
 		{"no stop", GitHubTestsRouteHandler{}, runsClaim,
-			append(lateRerunRuns(1, 150, runsClaim.SinceAt.UTC()), inWindow), githubTestsLateRerunMaxPages, map[string]int{"runs": 0, "reports": 0}, 309},
+			append(lateRerunRuns(1, 150, runsClaim.SinceAt.UTC()), inWindow), githubTestsLateRerunMaxPages, 0, map[string]int{"runs": 0, "reports": 0}, 309},
 	} {
 		t.Run(cell.name, func(t *testing.T) {
 			walk := walkDeepStop(t, cell.handler, cell.claim, cell.runs)
 			for listing, component := range map[string]string{"runs": githubTestsLateRerunRunsComponent, "reports": githubTestsLateRerunReportsComponent} {
 				observed := deepStopObservations(t, walk.final, component)
-				lines := deepStopLines(t, walk.records, listing, cell.budget)
+				lines := deepStopLines(t, walk.records, listing, cell.budget, cell.pages)
 				counted := deepStopCount(t, walk.metrics, listing)
 				if want := cell.stops[listing]; observed != want {
 					t.Errorf("%s: main recorded %d deep page-budget stop(s), want %d (the fixture)", listing, observed, want)
@@ -192,11 +200,38 @@ func TestGitHubTestsDeepWalkBoundIsNotCountedAsAPageBudgetStop(t *testing.T) {
 		t.Fatalf("late_rerun_runs observations=%d, want 1 (the fixture: a walk bound inside the deep range)", observed)
 	}
 	for _, listing := range []string{"runs", "reports"} {
-		if lines, counted := deepStopLines(t, walk.records, listing, 0), deepStopCount(t, walk.metrics, listing); lines != 0 || counted != 0 {
+		if lines, counted := deepStopLines(t, walk.records, listing, 0, 0), deepStopCount(t, walk.metrics, listing); lines != 0 || counted != 0 {
 			t.Errorf("%s: deep-stop lines=%d counter=%d at a walk bound, want 0", listing, lines, counted)
 		}
 	}
 	if walk.final.Watermark == nil || !walk.final.Watermark.Equal(*claim.BeforeAt) {
+		t.Errorf("watermark=%v, want the window end (main)", walk.final.Watermark)
+	}
+}
+
+// A walk record bound reached inside the REPORTS deep range is not a page-budget stop either: main records it as the
+// late_rerun_reports observation (the watermark advances), and the deep-stop line and counter stay at 0.
+func TestGitHubTestsDeepReportsWalkBoundIsNotCountedAsAPageBudgetStop(t *testing.T) {
+	chargedR1RaceSkip(t)
+	listing := deletionShiftListings()[3]
+	if listing.name != "deep_reports" {
+		t.Fatalf("premise: listing %q, want deep_reports", listing.name)
+	}
+	// 140 runs of one report each, under the default 1,000-page budget: only the record bound can stop the deep reports range.
+	bound := 100 * deletionShiftReportRecords(t, listing)
+	walk := walkDeepStopReports(t, GitHubTestsRouteHandler{MaxWalkRecords: bound}, listing.claim, listing.runs(1, 140), true)
+	if observed := deepStopObservations(t, walk.final, githubTestsLateRerunReportsComponent); observed != 1 {
+		t.Fatalf("late_rerun_reports observations=%d, want 1 (the fixture: a walk bound inside the deep reports range)", observed)
+	}
+	if observed := deepStopObservations(t, walk.final, githubTestsLateRerunRunsComponent); observed != 0 {
+		t.Fatalf("late_rerun_runs observations=%d, want 0 (the fixture: the runs deep range ends on its own)", observed)
+	}
+	for _, listing := range []string{"runs", "reports"} {
+		if lines, counted := deepStopLines(t, walk.records, listing, 0, 0), deepStopCount(t, walk.metrics, listing); lines != 0 || counted != 0 {
+			t.Errorf("%s: deep-stop lines=%d counter=%d at a walk bound, want 0", listing, lines, counted)
+		}
+	}
+	if walk.final.Watermark == nil || !walk.final.Watermark.Equal(*listing.claim.BeforeAt) {
 		t.Errorf("watermark=%v, want the window end (main)", walk.final.Watermark)
 	}
 }

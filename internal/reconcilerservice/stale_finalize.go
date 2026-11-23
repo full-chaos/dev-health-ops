@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -12,11 +13,12 @@ import (
 )
 
 // staleFinalizeRedriver is the domain-pool half of the stale-finalize stage:
-// the existing operator redrive, one run per call, never-attempted finalizes
-// only (allowPriorAttempt false).
+// the operator redrive's locked re-verify, one run per call, never-attempted
+// finalizes only, plus the survey's outbox re-check under the run lock.
 type staleFinalizeRedriver struct {
 	store     *daily.PostgresStore
 	publisher *daily.PostgresPublisher
+	clock     func() time.Time
 }
 
 func newStaleFinalizeRedriver(domainPool *pgxpool.Pool, registry joboutbox.PolicyRegistry) (staleFinalizeRedriver, error) {
@@ -28,18 +30,20 @@ func newStaleFinalizeRedriver(domainPool *pgxpool.Pool, registry joboutbox.Polic
 	if err != nil {
 		return staleFinalizeRedriver{}, err
 	}
-	return staleFinalizeRedriver{store: store, publisher: publisher}, nil
+	return staleFinalizeRedriver{store: store, publisher: publisher, clock: time.Now}, nil
 }
 
-// RedriveStaleFinalize calls RedriveStrandedFinalize with ONE run id, so its
-// return at the first error can never stop another run.
+// RedriveStaleFinalize redrives ONE run, so its return at the first error can
+// never stop another run. Under the run lock the redrive re-checks the
+// survey's outbox refusals (an unrelayed row, a row younger than the horizon).
 func (redriver staleFinalizeRedriver) RedriveStaleFinalize(ctx context.Context, runID, nonce string) (bool, error) {
-	outcome, err := redriver.store.RedriveStrandedFinalize(ctx, redriver.publisher, []string{runID}, nonce, false)
+	redriven, err := redriver.store.RedriveStaleFinalize(ctx, redriver.publisher, runID, nonce,
+		redriver.clock().UTC().Add(-joboutbox.StaleFinalizeHorizon))
 	if err != nil {
 		if errors.Is(err, daily.ErrInvalidState) {
 			return false, fmt.Errorf("%w: %w", joboutbox.ErrStaleFinalizeInvalidState, err)
 		}
 		return false, err
 	}
-	return len(outcome.FinalizedRunIDs) == 1, nil
+	return redriven, nil
 }

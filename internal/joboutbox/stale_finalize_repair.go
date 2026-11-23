@@ -97,9 +97,14 @@ type staleFinalizeCandidate struct {
 	updatedAt time.Time
 }
 
+// staleFinalizeCursor is the keyset position of one traversal of the base.
+// bound is the cutoff of the traversal's first pass: A reads no run written
+// after it until the cursor wraps, so runs that keep arriving cannot push the
+// wrap away and strand an older run behind the cursor.
 type staleFinalizeCursor struct {
 	updatedAt time.Time
 	runID     string
+	bound     time.Time
 }
 
 type staleFinalizeSurvey struct {
@@ -174,8 +179,13 @@ func (stage *staleFinalizeStage) step(ctx context.Context, now time.Time, limit 
 	remaining := func() time.Duration { return staleFinalizeBudget - stage.clock().Sub(start) }
 
 	surveyCtx, cancelSurvey := context.WithTimeout(passCtx, staleFinalizeSurveyBudget)
-	survey := stage.survey(surveyCtx, now.UTC().Add(-StaleFinalizeHorizon), limit, cursor)
+	cutoff := now.UTC().Add(-StaleFinalizeHorizon)
+	survey := stage.survey(surveyCtx, cutoff, limit, cursor)
 	cancelSurvey()
+	bound := cutoff
+	if cursor != nil {
+		bound = cursor.bound
+	}
 	pass := staleFinalizePass{levels: survey.levels, failures: survey.failures}
 
 	nonce := stage.newNonce()
@@ -190,7 +200,7 @@ func (stage *staleFinalizeStage) step(ctx context.Context, now time.Time, limit 
 		redriven, err := stage.redriver.RedriveStaleFinalize(runCtx, candidate.runID, nonce)
 		deadline := errors.Is(runCtx.Err(), context.DeadlineExceeded)
 		cancelRun()
-		lastTried = &staleFinalizeCursor{updatedAt: candidate.updatedAt, runID: candidate.runID}
+		lastTried = &staleFinalizeCursor{updatedAt: candidate.updatedAt, runID: candidate.runID, bound: bound}
 		if err != nil {
 			class := classifyStaleFinalizeRedrive(err, deadline)
 			if class == StaleFinalizeClassDeadline {
@@ -294,19 +304,18 @@ func surveyStaleFinalize(
 		return fail(StaleFinalizeStepSurvey, err)
 	}
 	if !inBase {
-		_ = tx.Commit(ctx)
 		return staleFinalizeSurvey{candidates: []staleFinalizeCandidate{}, levels: &StaleFinalizeLevels{}}
 	}
 	if _, err := tx.Exec(ctx, staleFinalizeCandidatesStatementTimeout); err != nil {
 		return fail(StaleFinalizeStepSurvey, err)
 	}
-	var cursorUpdated *time.Time
+	var cursorUpdated, cursorBound *time.Time
 	var cursorID *string
 	if cursor != nil {
-		updated, id := cursor.updatedAt, cursor.runID
-		cursorUpdated, cursorID = &updated, &id
+		updated, id, bound := cursor.updatedAt, cursor.runID, cursor.bound
+		cursorUpdated, cursorID, cursorBound = &updated, &id, &bound
 	}
-	rows, err := tx.Query(ctx, candidatesSQL, cutoff, limit, cursorUpdated, cursorID)
+	rows, err := tx.Query(ctx, candidatesSQL, cutoff, limit, cursorUpdated, cursorID, cursorBound)
 	if err != nil {
 		return fail(StaleFinalizeStepSurvey, err)
 	}
@@ -335,7 +344,6 @@ func surveyStaleFinalize(
 		return result
 	}
 	result.levels = levels
-	_ = tx.Commit(ctx)
 	return result
 }
 
@@ -352,11 +360,11 @@ func readStaleFinalizeLevels(ctx context.Context, tx pgx.Tx, levelsSQL string, c
 	read := 0
 	for rows.Next() {
 		var disposition string
-		var count int
-		if err := rows.Scan(&disposition, &count); err != nil {
+		var count, classRead int
+		if err := rows.Scan(&disposition, &count, &classRead); err != nil {
 			return nil, err
 		}
-		read += count
+		read += classRead
 		switch disposition {
 		case "live":
 			levels.Live = count
@@ -387,7 +395,8 @@ func readStaleFinalizeLevels(ctx context.Context, tx pgx.Tx, levelsSQL string, c
 // A puts every refusal in its WHERE clause, so ORDER BY and LIMIT apply to
 // runs that will be redriven only: standing refusals, which are the oldest
 // rows, can never hide a candidate behind the limit. Its keyset cursor
-// ($3, $4) is the last run the previous pass tried.
+// ($3, $4) is the last run the previous pass tried; $5 is the traversal's
+// frozen upper bound on run.updated_at.
 //
 // A delivered finalize row older than the horizon whose River job is gone
 // (River's cleaner removed it, retention has not pruned the row) is a
@@ -448,12 +457,16 @@ WHERE ` + staleFinalizeBaseSQL + `
 	AND NOT ` + staleFinalizeRecentSQL + `
 	AND NOT ` + staleFinalizeNoPartitionsSQL + `
 	AND ($3::timestamptz IS NULL OR (run.updated_at, run.id) > ($3::timestamptz, $4::uuid))
+	AND ($5::timestamptz IS NULL OR run.updated_at <= $5::timestamptz)
 ORDER BY run.updated_at, run.id
 LIMIT $2::int`
 	staleFinalizeLevelsSQLTemplate = `
-SELECT classified.disposition, count(*)::int
+SELECT classified.disposition,
+	count(*) FILTER (WHERE classified.ordinal < $2::int)::int,
+	count(*)::int
 FROM (
-	SELECT CASE
+	SELECT row_number() OVER (ORDER BY run.updated_at, run.id) AS ordinal,
+	CASE
 		WHEN ` + staleFinalizeLiveJobSQL + ` THEN 'live'
 		WHEN ` + staleFinalizeStrandShapeSQL + ` THEN 'strand_shape'
 		WHEN ` + staleFinalizeRecentSQL + ` THEN 'recent'

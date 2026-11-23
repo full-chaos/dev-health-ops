@@ -518,3 +518,81 @@ func TestAtomicPassUsesOneConnection(t *testing.T) {
 		})
 	}
 }
+
+// TestAtomicPassTailGivesUpALockWaitAtItsBound (CHAOS-14538): the tail (armPassWake) bounds its own lock waits with
+// dispatchTailLockTimeoutSQL. In a full pass the commit snapshot already holds every lock the tail takes (CHAOS-14523),
+// so the tail runs here on a transaction of its own while a second connection holds the run's dispatch row FOR UPDATE
+// and does not release it before the tail's 5 s deadline. The session has no lock_timeout of its own, so only the
+// tail's bound can end the wait: the re-arm's row lock must fail with lock_not_available (55P03) after about 1 s, and
+// the row is unchanged. Without the bound the tail waits on the row to its deadline.
+func TestAtomicPassTailGivesUpALockWaitAtItsBound(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		seedAtomicPassRun(t, ctx, pool, false, []string{atomicPassPlannedA}, nil)
+		var availableBefore time.Time
+		if err := pool.QueryRow(ctx, `SELECT available_at FROM sync_dispatch_outbox WHERE sync_run_id = $1 AND kind = $2`,
+			discoveryTestRun, outboxKindDispatchSyncRun).Scan(&availableBefore); err != nil {
+			t.Fatal(err)
+		}
+		service := newTestDispatchService(t, pool)
+
+		holder, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = holder.Rollback(ctx) }()
+		var heldStatus string
+		if err := holder.QueryRow(ctx, `SELECT status FROM sync_dispatch_outbox WHERE sync_run_id = $1 AND kind = $2 FOR UPDATE`,
+			discoveryTestRun, outboxKindDispatchSyncRun).Scan(&heldStatus); err != nil {
+			t.Fatalf("hold the dispatch row: %v", err)
+		}
+
+		tailCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		tx, err := pool.Begin(tailCtx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		var sessionBound string
+		if err := tx.QueryRow(tailCtx, `SELECT current_setting('lock_timeout')`).Scan(&sessionBound); err != nil {
+			t.Fatal(err)
+		}
+		if sessionBound != "0" {
+			t.Fatalf("precondition: session lock_timeout = %q, want 0 (only the tail's own bound may end the wait)", sessionBound)
+		}
+
+		began := time.Now()
+		end, _, err := service.armPassWake(tailCtx, tx, discoveryTestRun, time.Now().UTC(), 0, nil, false)
+		waited := time.Since(began)
+		_ = tx.Rollback(ctx)
+		_ = holder.Rollback(ctx)
+		t.Logf("tail on a held dispatch row: end=%d err=%v waited=%s", end, err, waited)
+
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "55P03" {
+			t.Fatalf("tail returned %v after %s, want lock_not_available (55P03) from its 1 s lock bound (dispatchTailLockTimeoutSQL)", err, waited)
+		}
+		//abstime:allow lower bound: lock_timeout fires only after 1 s of waiting on a row held before the tail began; load can only lengthen this, so it fails only a tail that did not wait
+		if waited < 900*time.Millisecond {
+			t.Fatalf("the tail gave up after %s, want a wait of its 1 s lock bound", waited)
+		}
+		//abstime:allow hang ceiling: without the tail bound the tail waits on the held row to its 5 s ctx deadline
+		if waited > 4*time.Second {
+			t.Fatalf("the tail waited %s on the held row, want its 1 s lock bound", waited)
+		}
+		var status string
+		var attempts int64
+		var availableAfter time.Time
+		if err := pool.QueryRow(ctx, `SELECT status, attempts, available_at FROM sync_dispatch_outbox WHERE sync_run_id = $1 AND kind = $2`,
+			discoveryTestRun, outboxKindDispatchSyncRun).Scan(&status, &attempts, &availableAfter); err != nil {
+			t.Fatal(err)
+		}
+		if status != heldStatus || status != "dispatched" || attempts != 1 || !availableAfter.Equal(availableBefore) {
+			t.Fatalf("row after the timed-out tail %s/%d at %s, want dispatched/1 at %s (the tail commits nothing)",
+				status, attempts, availableAfter.UTC().Format(time.RFC3339Nano), availableBefore.UTC().Format(time.RFC3339Nano))
+		}
+		if got := atomicPassPlannedCount(t, ctx, pool); got != 1 {
+			t.Fatalf("planned units after the timed-out tail = %d, want 1", got)
+		}
+	})
+}

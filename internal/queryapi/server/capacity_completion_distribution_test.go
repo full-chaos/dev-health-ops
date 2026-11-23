@@ -206,7 +206,7 @@ func TestCapacityCompletionDistributionDocument_ServesTheCapacityForecastShapePe
 	for i, n := range []uint64{2, 4, 6, 8, 10} {
 		throughput = append(throughput, []any{base.AddDate(0, 0, i), n})
 	}
-	client := &cdClient{responses: []*cdScanner{{rows: throughput}, {rows: [][]any{{uint64(30)}}}}}
+	client := &cdClient{responses: []*cdScanner{{rows: throughput}, {rows: [][]any{{uint64(30), uint64(1), uint64(0), base}}}}}
 	handler := newGraphQLServer(&graph.Resolver{ClickHouse: client})
 
 	body, _ := json.Marshal(map[string]any{

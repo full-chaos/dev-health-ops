@@ -5,6 +5,8 @@ query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {
     teamId
     workScopeId
     backlogSize
+    backlogState
+    backlogAsOfDay
     targetItems
     targetDate
     p50Date

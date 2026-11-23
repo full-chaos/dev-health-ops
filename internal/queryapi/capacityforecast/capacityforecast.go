@@ -244,10 +244,11 @@ func ResolveForecast(
 		return nil, nil
 	}
 
-	backlog, err := loadBacklog(ctx, client, orgID, teamIDs, workScopeID)
+	read, err := loadBacklog(ctx, client, orgID, teamIDs, workScopeID, historyDays, now)
 	if err != nil {
 		return nil, err
 	}
+	backlog := read.size
 
 	items := resolveTargetItems(targetItems, backlog)
 	if items <= 0 {
@@ -308,7 +309,7 @@ func ResolveForecast(
 		"duration_ms", time.Since(started).Milliseconds(),
 	)
 
-	return forecastToModel(now, teamID, workScopeID, backlog, items, targetDate, result), nil
+	return forecastToModel(now, teamID, workScopeID, read, items, targetDate, result), nil
 }
 
 // selectedTeams returns the teams the forecast reads and the single team the
@@ -362,11 +363,13 @@ func resolveTargetItems(targetItems *int, backlog int) int {
 func forecastToModel(
 	computedAt time.Time,
 	teamID, workScopeID *string,
-	backlog, targetItems int,
+	backlog backlogRead,
+	targetItems int,
 	targetDate *graphqldate.Date,
 	result numerical.ForecastResult,
 ) *model.CapacityForecast {
 	items := targetItems
+	state := backlog.state
 	return &model.CapacityForecast{
 		// uuid4 per call on both sides, and never compared.
 		ForecastID: newForecastID(),
@@ -379,7 +382,9 @@ func forecastToModel(
 		ComputedAt:          graphqldate.RFC3339UTC(computedAt),
 		TeamID:              teamID,
 		WorkScopeID:         workScopeID,
-		BacklogSize:         backlog,
+		BacklogSize:         backlog.size,
+		BacklogState:        &state,
+		BacklogAsOfDay:      dateOrNil(backlog.asOfDay),
 		TargetItems:         &items,
 		TargetDate:          targetDate,
 		P50Date:             dateOrNil(result.P50Date),

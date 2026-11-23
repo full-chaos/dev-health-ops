@@ -83,11 +83,11 @@ func TestCapacityReadsTakeTheOrgViewOfWorkItemMetrics(t *testing.T) {
 	if want := []int{2, 4}; !reflect.DeepEqual(history, want) {
 		t.Fatalf("throughput history = %v, want %v (the org row of the recomputed day, the legacy row of the other)", history, want)
 	}
-	backlog, err := loadBacklog(ctx, client, org, []string{"t1"}, nil)
+	backlog, err := loadBacklog(ctx, client, org, []string{"t1"}, nil, 90, today)
 	if err != nil {
 		t.Fatalf("loadBacklog: %v", err)
 	}
-	if backlog != 3 {
-		t.Fatalf("backlog = %d, want 3 (the org row of the newest day)", backlog)
+	if backlog.size != 3 {
+		t.Fatalf("backlog = %d, want 3 (the org row of the newest day)", backlog.size)
 	}
 }

@@ -415,6 +415,10 @@ type ProviderError struct {
 	// cause is set only by ResponseFailure, from a sentinel or a sanitised
 	// logging.TransportFailure / DecodeFailure error, so Error() may print it.
 	cause error
+
+	// cancelBesideFailure marks a transport failure of reason canceled whose
+	// cause also held a leaf that is not a cancellation; CallCancelled reads it.
+	cancelBesideFailure bool
 }
 
 // AfterResponse reports a failure raised after an HTTP response arrived, for

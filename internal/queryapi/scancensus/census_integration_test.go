@@ -924,6 +924,15 @@ const nullableIntoPlainSites = `
 //	queries_metrics.go fetchPRReworkView f2e5aa5edd0b -> 1403432e956f
 //	queries_metrics.go fetchRateDriverDelta b365611c6c29 -> f2372ec26b43
 //	clickhouse.go fetchCycleBreakdown (new pin) 566971fe4c3c
+//
+// CHAOS-14480: three compoundingrisk read.go pins re-pinned by hand; the id filter parameter of each reader became an
+// interface (a request list cut at maxRows, or a resolved set bound whole). Function text only: the evaluated statements
+// are byte-equal at base and head (statement digests c6cab394d615, 8f94719e3398, 0b2e10eba277 at both), scan targets
+// unchanged. Digests computed with siteKey's formula over LoadSites, not copied from a census run:
+//
+//	read.go latestDay 818fa20627a4 -> 8f7b3f43c903
+//	read.go latestRowsLimit 484e5d4507e3 -> 9e94c37b431b
+//	read.go repoTrend e90c541be45a -> a72217e8d045
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|566971fe4c3c|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|e67003e26fc2|not-describable
@@ -949,9 +958,9 @@ internal/queryapi/capacityforecast/clickhouse.go|loadThroughput|*time.Time,*uint
 internal/queryapi/cognitiveload/cognitiveload.go|fetchOwnershipCandidates|*string,*string,*uint8,*uint16|3dde681a6e0f|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchFileTimeseries|*time.Time,*string,*string,**uint32,**float64,**uint32,**uint32|69bcb13af3df|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchRepoTimeseries|*time.Time,*string,**uint64,**uint64,**float64,**uint64,**uint64|2d500256c88b|spliced-select-list
-internal/queryapi/compoundingrisk/read.go|latestDay|**time.Time|818fa20627a4|not-describable
-internal/queryapi/compoundingrisk/read.go|latestRowsLimit|*string,**float64,*string,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,*float64,*float64,*float64,*float64,*float64,*float64,*time.Time|484e5d4507e3|not-describable
-internal/queryapi/compoundingrisk/read.go|repoTrend|*time.Time,**float64|e90c541be45a|not-describable
+internal/queryapi/compoundingrisk/read.go|latestDay|**time.Time|8f7b3f43c903|not-describable
+internal/queryapi/compoundingrisk/read.go|latestRowsLimit|*string,**float64,*string,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,*float64,*float64,*float64,*float64,*float64,*float64,*time.Time|9e94c37b431b|not-describable
+internal/queryapi/compoundingrisk/read.go|repoTrend|*time.Time,**float64|a72217e8d045|not-describable
 internal/queryapi/datahealth/connectors.go|Connectors|*string,*string,*[]byte,**time.Time,**bool,**string,*[]byte,**time.Time,**int32,**time.Time,**time.Time,*[]byte,**string|d9838116a756|not-describable
 internal/queryapi/datahealth/coverage.go|MetricLineage|**time.Time,*uint64|bb9897d55705|not-describable
 internal/queryapi/datahealth/sourcehealth.go|SourceHealth|*string,**string,*bool,**time.Time,*bool,*string,*[]byte,**time.Time,**bool,*bool,**time.Time,**string,*bool,**time.Time,**time.Time,**string,**string|dabf0d087730|not-describable

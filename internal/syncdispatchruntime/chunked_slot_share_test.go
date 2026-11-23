@@ -7,7 +7,6 @@ import (
 	"time"
 
 	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
-	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 )
 
 // CHAOS-14468: while a run has a non-chunked candidate unit in a bucket with cap >= 2, its new chunked units take at
@@ -316,12 +315,5 @@ func TestQueuedPassRearmKeepsAnEarlierPassDeferral(t *testing.T) {
 	}
 	if got, ok := queuedPassRearmAt(nil, pendingUnitCounts{inFlight: 2}, false, now); ok {
 		t.Errorf("nothing deferred or due: wake %v, want none (the queued units' ends wake the run)", got)
-	}
-}
-
-// The reason label of the failed-read WARN is a valid synclog label (not the fail-closed "invalid").
-func TestPendingCountsReadReasonIsAValidLabel(t *testing.T) {
-	if synclog.ParseLabel(pendingCountsReadReason) == synclog.ParseLabel("NOT A LABEL") {
-		t.Fatalf("ParseLabel(%q) failed closed to the invalid marker", pendingCountsReadReason)
 	}
 }

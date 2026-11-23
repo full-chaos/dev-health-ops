@@ -528,14 +528,19 @@ func TestSizingReadFormExecutesAtTheChainHead(t *testing.T) {
 }
 
 // Second throwaway exec proof: the read-back form of the recompute card. readbackForm is READBACK-13902-3.sql byte for byte.
-const readbackFormSHA256 = "e6c31770951bb6fc9edca28407051726111a424b0ef6b7d6eaf4e9c98525c5ba"
+const readbackFormSHA256 = "b8dacbfe036b8586a39de567785bbe987a2c19d0c44576956e6fd65f62820b29"
 
-const readbackForm = `-- READBACK-13902-3 = READBACK-13902-2 (49b02f5013a6, acp FORM copy) in the SIZING-13902-4 form rules, lane l13902-card2, 2026-11-23.
--- Prod: NOT EXECUTED. Executed on CI (synthetic rows, before and after a simulated recompute): EXEC-PROOF-13902-READBACK-3.md.
+const readbackForm = `-- READBACK-13902-3 = READBACK-13902-2 (49b02f5013a6, acp FORM copy) in FORM-TEMPLATE-1 (pm-guard, e220dd03e6fc) shape (a)
+-- ClickHouse, lane l13902-card2, 2026-11-23. Template example: SIZING-13902-4 706d1c5d4de6.
+-- Prod: NOT EXECUTED. Executed on CI (synthetic rows, before and after a simulated recompute, CH 26.7; prod CH 26.6 = same
+-- major, SIZING-13902-4.out): EXEC-PROOF-13902-READBACK-3.md. This revision supersedes sha12 e6c31770951b (S0 had no gate).
 -- Card: CARD-13902-recompute-2.md section 6. Run AFTER the pass 1 recompute (and once BEFORE it, as the can-fail proof).
 -- Edits vs -2:
---   K1 Engine cost gate per heavy statement (SIZING-13902-4 H1 form): WITH (SELECT throwIf(...)) AS cost_gate over exactly
---      the tables the statement reads; caps 30M rows, 4 GiB on disk; error text STOP-COST-GATE. S0 = INFO cost inputs.
+--   K1 Engine cost gate in EVERY statement: stmt0..stmt2 WITH (SELECT throwIf(...)) AS cost_gate over exactly the tables
+--      the statement reads, caps 30M rows, 4 GiB on disk; S0 gated on system.one (system.parts part count of its 3 tables
+--      over 100000 = STOP). Error text STOP-COST-GATE in each.
+--   Status literals = the writer literals: 'deleted' testops/status_export.go:15, 'running' / 'queued' :21-22,
+--      NotOpenRunSQL :36 (at ops 340c3e05).
 --   K2 No placeholder: org prefix c6a38355, day range 2026-04-17..2026-11-22 (= the run range of the card), and the old-image
 --      cut '2026-11-23 03:08:08' UTC are literals. The cut = STEP 323 old-pod drain 0 (RECORD-323 8ff7c60b985f G3 line):
 --      a row computed at or after it is from a new-image pod (fix 9d88395188e6 in it); a row before it may be old-rule.
@@ -551,10 +556,15 @@ const readbackForm = `-- READBACK-13902-3 = READBACK-13902-2 (49b02f5013a6, acp 
 -- chg = a raw run of the key synced at/after the stored compute: left out of the value checks, counted as INFO.
 
 -- S0 INFO cost inputs. WANT 3 rows (one per table), table_rows > 0 in each. Unit: all orgs (upper bound for the org reads).
+-- Gate on system.one: the part count of the 3 tables (the rows this statement reads) over 100000 = STOP-COST-GATE.
+WITH (SELECT throwIf(
+    (SELECT count() FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('ci_pipeline_runs', 'cicd_metrics_daily', 'testops_pipeline_metrics_daily')) > 100000,
+    'STOP-COST-GATE') FROM system.one) AS cost_gate
 SELECT table, sum(rows) AS table_rows, sum(bytes_on_disk) AS disk_bytes, count() AS active_parts
 FROM system.parts
 WHERE active AND database = currentDatabase()
-  AND table IN ('ci_pipeline_runs', 'cicd_metrics_daily', 'testops_pipeline_metrics_daily')
+  AND table IN ('ci_pipeline_runs', 'cicd_metrics_daily', 'testops_pipeline_metrics_daily') AND cost_gate = 0
 GROUP BY table
 ORDER BY table;
 
@@ -756,23 +766,32 @@ func TestReadbackReadFormFailsBeforeAndPassesAfterARecompute(t *testing.T) {
 		t.Fatalf("readback form statements = %v", labels)
 	}
 	reads := map[string][]string{
+		"S0":    {"ci_pipeline_runs", "cicd_metrics_daily", "testops_pipeline_metrics_daily"},
 		"stmt0": {"ci_pipeline_runs", "cicd_metrics_daily", "testops_pipeline_metrics_daily"},
 		"stmt1": {"ci_pipeline_runs", "cicd_metrics_daily"},
 		"stmt2": {"ci_pipeline_runs", "testops_pipeline_metrics_daily"},
 	}
+	// Every statement holds exactly one gate: S0 one part-count cap on system.one, the others one rows + one bytes cap.
+	const partsCap = "> 100000"
+	gateCaps := func(label string) []struct{ name, literal string } {
+		if label == "S0" {
+			return []struct{ name, literal string }{{"parts", partsCap}}
+		}
+		return []struct{ name, literal string }{{"rows", rowsCap}, {"bytes", bytesCap}}
+	}
 	for _, s := range statements {
-		wantCaps := 1
+		wantRowsBytes, wantParts := 1, 0
 		if s.label == "S0" {
-			wantCaps = 0
+			wantRowsBytes, wantParts = 0, 1
 		}
-		if n := strings.Count(s.text, rowsCap); n != wantCaps {
-			t.Fatalf("%s: %d rows caps %q, want %d", s.label, n, rowsCap, wantCaps)
+		if n := strings.Count(s.text, rowsCap); n != wantRowsBytes {
+			t.Fatalf("%s: %d rows caps %q, want %d", s.label, n, rowsCap, wantRowsBytes)
 		}
-		if n := strings.Count(s.text, bytesCap); n != wantCaps {
-			t.Fatalf("%s: %d bytes caps %q, want %d", s.label, n, bytesCap, wantCaps)
+		if n := strings.Count(s.text, bytesCap); n != wantRowsBytes {
+			t.Fatalf("%s: %d bytes caps %q, want %d", s.label, n, bytesCap, wantRowsBytes)
 		}
-		if s.label == "S0" {
-			continue
+		if n := strings.Count(s.text, partsCap); n != wantParts {
+			t.Fatalf("%s: %d parts caps %q, want %d", s.label, n, partsCap, wantParts)
 		}
 		in := "table IN ('" + strings.Join(reads[s.label], "', '") + "')"
 		if n := strings.Count(s.text, in); n != 2 {
@@ -955,12 +974,12 @@ func TestReadbackReadFormFailsBeforeAndPassesAfterARecompute(t *testing.T) {
 		p                   uint64
 	}
 	var fires []fired
-	for _, statement := range statements[1:] {
+	for _, statement := range statements {
 		var p uint64
 		for _, table := range reads[statement.label] {
 			p += parts[table]
 		}
-		for _, c := range []struct{ name, literal string }{{"rows", rowsCap}, {"bytes", bytesCap}} {
+		for _, c := range gateCaps(statement.label) {
 			lowered := strings.Replace(statement.text, c.literal, "> 0", 1)
 			comment := fmt.Sprintf("readback13902-gate-%s-%s-%d", statement.label, c.name, time.Now().UnixNano())
 			var readRows uint64
@@ -1014,7 +1033,7 @@ func TestReadbackReadFormFailsBeforeAndPassesAfterARecompute(t *testing.T) {
 			t.Errorf("GATE %s %s: query_log read_rows %d over 2 x P + 1 = %d", f.label, f.cap, logRead, 2*f.p+1)
 		}
 	}
-	if len(fires) != 6 {
-		t.Errorf("gate fired %d times, want 6 (3 heavy statements x 2 caps)", len(fires))
+	if len(fires) != 7 {
+		t.Errorf("gate fired %d times, want 7 (S0 x 1 cap + 3 statements x 2 caps)", len(fires))
 	}
 }

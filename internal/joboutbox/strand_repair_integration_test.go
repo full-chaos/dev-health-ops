@@ -2793,9 +2793,10 @@ func TestStaleFinalizeLiveJobArmAnswersAsTheContainmentCheck(t *testing.T) {
 	}
 }
 
-// pm ruling on #6867 (3): at 1000 live runs the plans of statements A and B read river_job through no Seq Scan that
-// runs once per base run. The live-job River arm is a hashed subplan read once; the recent arm (unchanged) may still
-// probe river_job's args index per run.
+// pm ruling on #6867 (3): at a base of 1000 runs (500 with a live finalize job, 500 with none, so both the live-job
+// arm and the recent arm run) the plans of statements A and B read river_job through no Seq Scan that runs once per
+// base run. The live-job River arm is a hashed subplan read once; the recent arm (unchanged) probes river_job's args
+// index once per run that is not live, and must keep doing so through that index.
 func TestStaleFinalizeSurveyReadsRiverJobOnceAtTheCap(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -2808,7 +2809,7 @@ WITH run AS (
     INSERT INTO public.daily_metrics_runs (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at)
     SELECT gen_random_uuid(), '00000000-0000-4000-8000-0000000c1000'::uuid, DATE '2020-01-01' + n, 'live-level:' || n, 'running', 'pending', $1, $1
     FROM generate_series(1, 1000) AS n
-    RETURNING id
+    RETURNING id, target_day
 ), partition AS (
     INSERT INTO public.daily_metrics_partitions (id, run_id, ordinal, repo_ids, status, attempt_count, completed_at, created_at, updated_at)
     SELECT gen_random_uuid(), run.id, 0, '[]'::jsonb, 'succeeded', 1, $1, $1, $1 FROM run
@@ -2816,7 +2817,7 @@ WITH run AS (
 INSERT INTO river.river_job (args, attempt, created_at, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at)
 SELECT jsonb_build_object('domain', jsonb_build_object('type', 'daily_metrics_run', 'id', run.id::text)),
        0, $1, NULL, 'metrics.daily_finalize', 4, '{}'::jsonb, 2, 'metrics', 'scheduled', $1 + interval '30 days'
-FROM run`, old); err != nil {
+FROM run WHERE run.target_day <= DATE '2020-01-01' + 500`, old); err != nil {
 		t.Fatal(err)
 	}
 	jobTable := `"river"."river_job"`
@@ -2835,7 +2836,8 @@ FROM run`, old); err != nil {
 			t.Fatal(err)
 		}
 		var raw []byte
-		if err := tx.QueryRow(ctx, "EXPLAIN (ANALYZE, FORMAT JSON) "+statement.query, statement.args...).Scan(&raw); err != nil {
+		// VERBOSE: statement B evaluates the live-job arm in a target-list CASE, which only the Output lines show.
+		if err := tx.QueryRow(ctx, "EXPLAIN (ANALYZE, VERBOSE, FORMAT JSON) "+statement.query, statement.args...).Scan(&raw); err != nil {
 			t.Fatalf("EXPLAIN %s: %v", statement.name, err)
 		}
 		_ = tx.Rollback(ctx)
@@ -2845,7 +2847,7 @@ FROM run`, old); err != nil {
 		if err := json.Unmarshal(raw, &plans); err != nil || len(plans) != 1 {
 			t.Fatalf("EXPLAIN %s: %v", statement.name, err)
 		}
-		var riverNodes int
+		var riverNodes, perRunRiverReads int
 		var walk func(node explainNode)
 		walk = func(node explainNode) {
 			if node.RelationName == "river_job" {
@@ -2854,6 +2856,9 @@ FROM run`, old); err != nil {
 					t.Fatalf("%s scans river_job %.0f times (once per base run):\n%s", statement.name, node.ActualLoops, raw)
 				}
 				// A per-run read of river_job (the recent arm) must go through River's args index.
+				if node.ActualLoops > 1 {
+					perRunRiverReads++
+				}
 				if node.ActualLoops > 1 && !readsArgsIndex(node) {
 					t.Fatalf("%s reads river_job %.0f times through %s %q, not river_job_args_index:\n%s",
 						statement.name, node.ActualLoops, node.NodeType, node.IndexName, raw)
@@ -2864,8 +2869,9 @@ FROM run`, old); err != nil {
 			}
 		}
 		walk(plans[0].Plan)
-		if riverNodes == 0 {
-			t.Fatalf("%s: no river_job node in the plan:\n%s", statement.name, raw)
+		if riverNodes == 0 || perRunRiverReads == 0 {
+			t.Fatalf("%s: %d river_job nodes, %d of them per run (the recent arm): the seed does not reach both arms:\n%s",
+				statement.name, riverNodes, perRunRiverReads, raw)
 		}
 		// The live-job River arm is a HASHED subplan: a set larger than work_mem x hash_mem_multiplier falls back to a
 		// per-row subplan, which this names before the loops count shows it.

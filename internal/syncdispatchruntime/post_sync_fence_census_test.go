@@ -19,7 +19,7 @@ func TestPostSyncFenceUsesTheSharedCommitSnapshot(t *testing.T) {
 	}
 	lockText := []string{"FOR NO KEY UPDATE", "NOWAIT"}
 	ownText := []string{"FOR NO KEY UPDATE", "NOWAIT", "outbox.attempts", "delivery_attempt_mismatch", "outbox_not_dispatched", "route_generation_mismatch"}
-	used := map[string]bool{"transportReferencePredicate": false, "readCommitSnapshot": false, "decideCommit": false}
+	used := map[string]bool{"transportReferencePredicate": false, "lockCommitSnapshot": false, "decideCommit": false}
 	parsed := 0
 	for _, entry := range entries {
 		name := entry.Name()

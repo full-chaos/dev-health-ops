@@ -121,6 +121,12 @@ type snapshotTx struct {
 	barrier    func(n int) error
 	barriers   int
 	statements []snapshotStatement
+	// attempts is the outbox attempts read n (from 1) scans; nil scans 1.
+	attempts func(read int) int64
+	// beginErr fails savepoint n (from 1), rollbackErr the n-th rollback to a savepoint, releaseErr every release; nil fails
+	// nothing.
+	beginErr, rollbackErr func(n int) error
+	releaseErr            error
 }
 
 type snapshotStatement struct {
@@ -132,6 +138,11 @@ func (tx *snapshotTx) Begin(context.Context) (pgx.Tx, error) {
 	tx.savepoints++
 	if tx.onBegin != nil {
 		tx.onBegin(tx.savepoints)
+	}
+	if tx.beginErr != nil {
+		if err := tx.beginErr(tx.savepoints); err != nil {
+			return nil, err
+		}
 	}
 	return &snapshotSavepoint{parent: tx}, nil
 }
@@ -166,7 +177,11 @@ func (savepoint *snapshotSavepoint) QueryRow(_ context.Context, sql string, _ ..
 	if tx.onRead != nil {
 		tx.onRead(tx.reads)
 	}
-	return snapshotRow{tx.result(tx.reads)}
+	attempts := int64(1)
+	if tx.attempts != nil {
+		attempts = tx.attempts(tx.reads)
+	}
+	return snapshotRow{err: tx.result(tx.reads), attempts: attempts}
 }
 
 func (savepoint *snapshotSavepoint) Rollback(context.Context) error {
@@ -174,16 +189,23 @@ func (savepoint *snapshotSavepoint) Rollback(context.Context) error {
 	if savepoint.parent.onRollback != nil {
 		savepoint.parent.onRollback(savepoint.parent.reads)
 	}
+	if savepoint.parent.rollbackErr != nil {
+		return savepoint.parent.rollbackErr(savepoint.parent.rollbacks)
+	}
 	return nil
 }
 
 func (savepoint *snapshotSavepoint) Commit(context.Context) error {
 	savepoint.parent.released++
-	return nil
+	return savepoint.parent.releaseErr
 }
 
-// snapshotRow scans a row dispatched to River at generation 1 and attempt 1 (decideCommit commits it) or fails with err.
-type snapshotRow struct{ err error }
+// snapshotRow scans a row dispatched to River at generation 1 with its attempts (decideCommit commits attempt 1) or fails
+// with err.
+type snapshotRow struct {
+	err      error
+	attempts int64
+}
 
 func (row snapshotRow) Scan(dest ...any) error {
 	if row.err != nil {
@@ -194,7 +216,7 @@ func (row snapshotRow) Scan(dest ...any) error {
 	*dest[0].(*string) = "dispatched"
 	*dest[1].(**string) = &river
 	*dest[2].(**int64) = &generation
-	*dest[3].(*int64) = 1
+	*dest[3].(*int64) = row.attempts
 	*dest[4].(*bool) = true
 	*dest[5].(**string) = &river
 	*dest[6].(**int64) = &generation

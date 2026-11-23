@@ -21,20 +21,21 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// DO NOT MERGE. This file executes the text of the prod read FORM-14190-RESIDUAL-3.sql on the head schema with a
+// DO NOT MERGE. This file executes the text of the prod read FORM-14190-RESIDUAL-4.sql on the head schema with a
 // synthetic fixture. The text below is the .sql with its org prefix replaced by {{ORG_PREFIX}}, nothing else (its
 // sha256 is checked); the cell puts a synthetic prefix in at run time and checks the slot count first. It checks each
 // statement's rows in a loss phase and a healed phase, an org mutant and a rule mutant per statement, the pass-path
 // read_rows of each statement against its work math, and fires each cost gate cap once (pm-guard FORM-TEMPLATE-3).
 const (
 	formExecRes14190OrgSlot = "{{ORG_PREFIX}}"
-	formExecRes14190SHA256  = "3f7e425ecb2e7f4557a2ba87510d92c14eb77226e9c545e0093169ec2ad137fb"
-	formExecRes14190SQL     = `-- FORM-14190-RESIDUAL-3 (lane-14190r, 2026-11-23, ops pin a7febdf50002). ClickHouse prod, SELECT only, CHAOS-14190.
--- Replaces FORM-14190-RESIDUAL-2 (5610a01de90d) and -1 (1181a6d4fc41); both frozen, not to be run. -3 = -2 + R2 reads
--- the item's stored work_items row: stored_close_any = close time present OR a close transition at any instant.
+	formExecRes14190SHA256  = "b67d91c154f917e18ec6d7b28d82242fc535e32b193501b7af712436fcee909e"
+	formExecRes14190SQL     = `-- FORM-14190-RESIDUAL-4 (lane-14190r, 2026-11-23, ops pin a7febdf50002). ClickHouse prod, SELECT only, CHAOS-14190.
+-- Replaces FORM-14190-RESIDUAL-3 (71f0887a2d3c), -2 (5610a01de90d), -1 (1181a6d4fc41); all frozen, not to be run.
+-- -4 = -3 + the window's lower bound no longer reads rs[0]: for the first reopen (i = 1) it is 1970-01-01 by an
+-- explicit if, and the index is greatest(i - 1, 1), so no arrayElement call gets index 0 (same values as -3).
 -- Residual REPORT after READBACK POST = MISS (FORM-14190-READBACK-1 dd6cb67abd7a, POST out 3091612d0fe1): per affected
 -- Linear item (R1) and per missing close (R2), the F3 rule of FORM-14190-READBACK-1 grouped per item, plus the work_items
--- version count behind its S0 growth (S2). WANT text, work math and the output rule: FORM-14190-RESIDUAL-3.md.
+-- version count behind its S0 growth (S2). WANT text, work math and the output rule: FORM-14190-RESIDUAL-4.md.
 -- Shape: pm-guard/FORM-TEMPLATE-3.md (sha12 6b9e73a3c45a). Run each statement once, in order. A SQL error
 -- (STOP-COST-GATE included) = STOP and report.
 -- NAMED EXCEPTION (acp): R1 and R2 print the 8-char cut AND the full Linear key of each item, and workflow state
@@ -154,7 +155,7 @@ FROM (
                     arrayMap(x -> tupleElement(x, 1), rs), kept, found, prior))         AS last_at
     FROM (
         SELECT r.org_id AS org_id, r.work_item_id AS work_item_id, r.rs AS rs, length(t.ts) AS transitions_all,
-               arrayMap(i -> toUInt8(arrayExists(x -> tupleElement(x, 1) >= tupleElement(rs[i - 1], 1)
+               arrayMap(i -> toUInt8(arrayExists(x -> tupleElement(x, 1) >= if(i = 1, toDateTime64(0, 3), tupleElement(rs[greatest(i - 1, 1)], 1))
                         AND tupleElement(x, 1) <= tupleElement(rs[i], 1)
                         AND (has(['done', 'canceled'], tupleElement(x, 3)) OR tupleElement(x, 5) = tupleElement(rs[i], 2)), t.ts)),
                         arrayEnumerate(rs)) AS found,
@@ -229,12 +230,12 @@ SELECT substring(replaceOne(m.work_item_id, 'linear:', ''), 1, 8)            AS 
 FROM (
     SELECT j.work_item_id                                                     AS work_item_id,
            tupleElement(j.rs[i], 1)                                           AS reopen_at,
-           tupleElement(j.rs[i - 1], 1)                                       AS prev_reopen_at,
+           if(i = 1, toDateTime64(0, 3), tupleElement(j.rs[greatest(i - 1, 1)], 1)) AS prev_reopen_at,
            tupleElement(j.rs[i], 2)                                           AS reopen_from_raw,
            tupleElement(j.rs[i], 3)                                           AS reopen_to_raw,
            j.kept[i]                                                          AS reopen_kept,
            j.item_close_time                                                  AS item_close_time,
-           arrayCount(x -> tupleElement(x, 1) >= tupleElement(j.rs[i - 1], 1)
+           arrayCount(x -> tupleElement(x, 1) >= if(i = 1, toDateTime64(0, 3), tupleElement(j.rs[greatest(i - 1, 1)], 1))
                       AND tupleElement(x, 1) <= tupleElement(j.rs[i], 1), j.ts)  AS window_transitions,
            arrayReverseSort(x -> (tupleElement(x, 1), tupleElement(x, 8)),
                             arrayFilter(x -> tupleElement(x, 1) < tupleElement(j.rs[i], 1), j.ts))[1] AS last_before,
@@ -243,7 +244,7 @@ FROM (
                        OR tupleElement(x, 5) = tupleElement(j.rs[i], 2), j.ts)                 AS close_rows
     FROM (
         SELECT r.org_id AS org_id, r.work_item_id AS work_item_id, r.rs AS rs, t.ts AS ts, w.close_time AS item_close_time,
-               arrayMap(i -> toUInt8(arrayExists(x -> tupleElement(x, 1) >= tupleElement(rs[i - 1], 1)
+               arrayMap(i -> toUInt8(arrayExists(x -> tupleElement(x, 1) >= if(i = 1, toDateTime64(0, 3), tupleElement(rs[greatest(i - 1, 1)], 1))
                         AND tupleElement(x, 1) <= tupleElement(rs[i], 1)
                         AND (has(['done', 'canceled'], tupleElement(x, 3)) OR tupleElement(x, 5) = tupleElement(rs[i], 2)), t.ts)),
                         arrayEnumerate(rs)) AS found,
@@ -430,6 +431,8 @@ func formExecRes14190QueryLog(ctx context.Context, t *testing.T, conn driver.Con
 //	linear:RESID-104: like RESID-103 (07-01, 07-15) but its work_items row was written 11-01 (not re-read) and
 //	    holds state Done with a close time: the stored row has a close the transitions do not.
 //	linear:RESID-105: Done 08-01, reopened 08-05 (close found), In Progress 08-10, reopened 08-20: the second close missing.
+//	linear:RESID-106: its first and only reopen (06-10) is its first transition, nothing before it: no history (prior
+//	    0), not affected. It runs the first-reopen lower bound with no row before the window (the i = 1 guard).
 //	gh:rx/repo#1: a reopen with no close before it (not Linear: not read).
 //
 // Phase 2 re-reads RESID-101 and RESID-103 under the tie_ordinal key (close 0, reopen 1, newer last_synced) and writes their
@@ -450,7 +453,7 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 	)
 	sum := sha256.Sum256([]byte(formExecRes14190SQL))
 	if got := hex.EncodeToString(sum[:]); got != formExecRes14190SHA256 {
-		t.Fatalf("sha256 of the embedded text = %s, want %s (FORM-14190-RESIDUAL-3.sql with %s)", got, formExecRes14190SHA256, formExecRes14190OrgSlot)
+		t.Fatalf("sha256 of the embedded text = %s, want %s (FORM-14190-RESIDUAL-4.sql with %s)", got, formExecRes14190SHA256, formExecRes14190OrgSlot)
 	}
 	if got := strings.Count(formExecRes14190SQL, formExecRes14190OrgSlot); got != formSlots {
 		t.Fatalf("the text holds %s %d time(s), want %d", formExecRes14190OrgSlot, got, formSlots)
@@ -470,7 +473,7 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 
 	// The gate of each statement: the tables it reads (its IN list), its cap literals, how many times the IN list and
 	// cost_gate = 0 appear, the data tables it reads (each with the org filter), and fixtureReadRows, the query_log
-	// read_rows on the phase 1 fixture by the scan model of FORM-14190-RESIDUAL-3.md (E 8, T 17, W 6 rows, one part
+	// read_rows on the phase 1 fixture by the scan model of FORM-14190-RESIDUAL-4.md (E 9, T 18, W 7 rows, one part
 	// each; a gate evaluation reads 2 x P + 1, each further cost_gate reference 1 more row, a plain or FINAL read of a
 	// one-part table its rows once). S1 reads metadata only: its read_rows is bounded, not modelled.
 	gates := []struct {
@@ -479,14 +482,24 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 		fixtureReadRows               uint64
 		metadata                      bool
 	}{
-		{"S0", "'work_item_reopen_events'", "> 5000000", "> 4294967296", 2, 1, 1, 8 + 3, false},
+		{"S0", "'work_item_reopen_events'", "> 5000000", "> 4294967296", 2, 1, 1, 9 + 3, false},
 		{"S1", "'work_item_reopen_events', 'work_item_transitions', 'work_items'", "> 6000000", "> 4294967296", 3, 1, 0, 64, true},
-		{"S2", "'work_items'", "> 6000000", "> 4294967296", 2, 2, 1, 6 + 3 + 1, false},
-		{"R1", "'work_item_reopen_events', 'work_item_transitions', 'work_items'", "> 6000000", "> 4294967296", 2, 6, 3, 8 + 17 + 6 + 7 + 5, false},
-		{"R2", "'work_item_reopen_events', 'work_item_transitions', 'work_items'", "> 6000000", "> 4294967296", 2, 6, 3, 8 + 17 + 6 + 7 + 5, false},
+		{"S2", "'work_items'", "> 6000000", "> 4294967296", 2, 2, 1, 7 + 3 + 1, false},
+		{"R1", "'work_item_reopen_events', 'work_item_transitions', 'work_items'", "> 6000000", "> 4294967296", 2, 6, 3, 9 + 18 + 7 + 7 + 5, false},
+		{"R2", "'work_item_reopen_events', 'work_item_transitions', 'work_items'", "> 6000000", "> 4294967296", 2, 6, 3, 9 + 18 + 7 + 7 + 5, false},
+	}
+	// The static checks read the SQL lines only: the header comment of the first statement names the gate shape too.
+	sqlLines := func(statement string) string {
+		var sqlText strings.Builder
+		for _, line := range strings.Split(statement, "\n") {
+			if !strings.HasPrefix(strings.TrimSpace(line), "--") {
+				sqlText.WriteString(line + "\n")
+			}
+		}
+		return sqlText.String()
 	}
 	for _, gate := range gates {
-		statement := statements[gate.id]
+		statement := sqlLines(statements[gate.id])
 		checks := []struct {
 			what      string
 			got, want int
@@ -553,6 +566,7 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 		reopen(org, "linear:RESID-104", "Done", "Todo", "2026-07-15 10:00:00.000"),
 		reopen(org, "linear:RESID-105", "Done", "Todo", "2026-08-05 10:00:00.000"),
 		reopen(org, "linear:RESID-105", "Done", "Todo", "2026-08-20 10:00:00.000"),
+		reopen(org, "linear:RESID-106", "Done", "Todo", "2026-06-10 10:00:00.000"),
 		reopen(org, "gh:rx/repo#1", "closed", "reopened", "2026-10-02 10:00:00.000"),
 		reopen(other, "linear:RESID-102", "Done", "Todo", "2026-09-20 10:00:00.000"),
 	}, ", "))
@@ -570,6 +584,7 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 		transition(org, "linear:RESID-105", "linear", "done", "todo", "Done", "Todo", "2026-08-05 10:00:00.000", synced, 0),
 		transition(org, "linear:RESID-105", "linear", "todo", "in_progress", "Todo", "In Progress", "2026-08-10 10:00:00.000", synced, 0),
 		transition(org, "linear:RESID-105", "linear", "done", "todo", "Done", "Todo", "2026-08-20 10:00:00.000", synced, 0),
+		transition(org, "linear:RESID-106", "linear", "done", "todo", "Done", "Todo", "2026-06-10 10:00:00.000", synced, 0),
 		transition(org, "gh:rx/repo#1", "github", "todo", "in_progress", "open", "in_progress", "2026-10-01 10:00:00.000", synced, 0),
 		transition(org, "gh:rx/repo#1", "github", "done", "todo", "closed", "reopened", "2026-10-02 10:00:00.000", synced, 0),
 		transition(other, "linear:RESID-102", "linear", "todo", "in_progress", "Todo", "In Progress", "2026-09-10 10:00:00.000", synced, 0),
@@ -581,6 +596,7 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 		item(org, "linear:RESID-103", "Todo", "NULL", "2026-09-05 10:00:00.000", now),
 		item(org, "linear:RESID-104", "Done", "'2026-07-20 10:00:00.000'", "2026-07-15 10:00:00.000", old),
 		item(org, "linear:RESID-105", "Todo", "NULL", "2026-08-20 10:00:00.000", now),
+		item(org, "linear:RESID-106", "Todo", "NULL", "2026-06-10 10:00:00.000", now),
 		item(other, "linear:RESID-102", "Todo", "NULL", "2026-09-20 10:00:00.000", now),
 	}, ", "))
 
@@ -593,11 +609,11 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 			qctx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"log_comment": comment}))
 			result, err := formExecRes14190Query(qctx, conn, statements[id])
 			if err != nil {
-				t.Fatalf("FORM-14190-RESIDUAL-3 %s %s: %v", phase, id, err)
+				t.Fatalf("FORM-14190-RESIDUAL-4 %s %s: %v", phase, id, err)
 			}
-			t.Logf("FORM-14190-RESIDUAL-3 %s %s columns %v", phase, id, result.columns)
+			t.Logf("FORM-14190-RESIDUAL-4 %s %s columns %v", phase, id, result.columns)
 			for index, row := range result.rows {
-				t.Logf("FORM-14190-RESIDUAL-3 %s %s row %d %v", phase, id, index, row)
+				t.Logf("FORM-14190-RESIDUAL-4 %s %s row %d %v", phase, id, index, row)
 			}
 			results[id] = result
 		}
@@ -671,16 +687,16 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 	// Phase 1: the loss state.
 	results, passComments := run("phase1")
 	rowCount(results, "phase1", "S0", 1)
-	formExecRes14190Row(t, results["S0"], "phase1 S0", 0, map[string]string{"orgs": "1", "org_rows": "7"})
+	formExecRes14190Row(t, results["S0"], "phase1 S0", 0, map[string]string{"orgs": "1", "org_rows": "8"})
 	rowCount(results, "phase1", "S1", 3)
-	formExecRes14190Row(t, results["S1"], "phase1 S1", 0, map[string]string{"table_name": "work_item_reopen_events", "table_rows": "8", "active_parts": "1"})
-	formExecRes14190Row(t, results["S1"], "phase1 S1", 1, map[string]string{"table_name": "work_item_transitions", "table_rows": "17", "active_parts": "1",
+	formExecRes14190Row(t, results["S1"], "phase1 S1", 0, map[string]string{"table_name": "work_item_reopen_events", "table_rows": "9", "active_parts": "1"})
+	formExecRes14190Row(t, results["S1"], "phase1 S1", 1, map[string]string{"table_name": "work_item_transitions", "table_rows": "18", "active_parts": "1",
 		"sorting_key": "org_id, repo_id, work_item_id, occurred_at, tie_ordinal"})
-	formExecRes14190Row(t, results["S1"], "phase1 S1", 2, map[string]string{"table_name": "work_items", "table_rows": "6", "active_parts": "1"})
+	formExecRes14190Row(t, results["S1"], "phase1 S1", 2, map[string]string{"table_name": "work_items", "table_rows": "7", "active_parts": "1"})
 	rowCount(results, "phase1", "S2", 1)
 	formExecRes14190Row(t, results["S2"], "phase1 S2", 0, map[string]string{
-		"provider": "linear", "item_keys": "5", "items": "5", "version_rows": "5", "versions_over_keys": "0", "keys_with_versions": "0",
-		"keys_written_last_day": "4", "keys_one_version_last_day": "4", "keys_repo_not_nil": "0",
+		"provider": "linear", "item_keys": "6", "items": "6", "version_rows": "6", "versions_over_keys": "0", "keys_with_versions": "0",
+		"keys_written_last_day": "5", "keys_one_version_last_day": "5", "keys_repo_not_nil": "0",
 	})
 	rowCount(results, "phase1", "R1", 5)
 	r1(results, "phase1", 0, "linear:RESID-101", "1", "2", "1", "0", "2026-10-06", "", "yes", "2026-10-06 10:00", "2026-10-06 00:00:00.000")
@@ -712,7 +728,7 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 			}
 			result, err := formExecRes14190Query(ctx, conn, strings.ReplaceAll(statement, m.from, m.to))
 			if err != nil {
-				t.Logf("MUTANT %s %s: %v (an error kills it)", label, m.name, err)
+				t.Errorf("MUTANT %s %s: %v (want a wrong value, not an error)", label, m.name, err)
 				continue
 			}
 			got := fmt.Sprint(len(result.rows))
@@ -728,16 +744,20 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 	dropOrg := orgFilter + " AND "
 	runMutants("phase1", []mutant{
 		{"S0-org", "S0", dropOrg, "", 1, 0, "orgs", "1"},
-		{"S0-control", "S0", "count() AS org_rows", "countIf(work_item_id = '') AS org_rows", 1, 0, "org_rows", "7"},
-		{"S1-table-name", "S1", "'work_item_transitions', 'work_items'])", "'work_item_transitions', 'work_itemz'])", 1, 2, "table_rows", "6"},
-		{"S2-org", "S2", dropOrg, "", 1, 0, "item_keys", "5"},
+		{"S0-control", "S0", "count() AS org_rows", "countIf(work_item_id = '') AS org_rows", 1, 0, "org_rows", "8"},
+		{"S1-table-name", "S1", "'work_item_transitions', 'work_items'])", "'work_item_transitions', 'work_itemz'])", 1, 2, "table_rows", "7"},
+		{"S2-org", "S2", dropOrg, "", 1, 0, "item_keys", "6"},
 		{"R1-org", "R1", dropOrg, "", 3, 0, "", "5"},
-		{"R1-window-lower-bound", "R1", "tupleElement(x, 1) >= tupleElement(rs[i - 1], 1)", "tupleElement(x, 1) >= tupleElement(rs[0], 1)", 1, 0, "", "5"},
+		// The window's lower bound is the previous reopen: from 1970 for every reopen, RESID-105's 08-01 close is found.
+		{"R1-window-lower-bound", "R1", "tupleElement(x, 1) >= if(i = 1, toDateTime64(0, 3), tupleElement(rs[greatest(i - 1, 1)], 1))", "tupleElement(x, 1) >= toDateTime64(0, 3)", 1, 0, "", "5"},
+		// A missing close needs a transition before the reopen: without it RESID-106 (no history) counts.
+		{"R1-missing-without-prior", "R1", "arraySum(arrayMap((f, p) -> toUInt8(f = 0 AND p = 1), found, prior))", "arraySum(arrayMap((f, p) -> toUInt8(f = 0), found, prior))", 1, 0, "", "5"},
 		{"R1-reopen-tie-blind", "R1", "AND tupleElement(x, 5) = tupleElement(rs[i], 3), t.ts)), arrayEnumerate(rs)) AS kept", ", t.ts)), arrayEnumerate(rs)) AS kept", 1, 0, "", "5"},
 		{"R1-synced-cut", "R1", "w.synced >= now64(3) - INTERVAL 1 DAY", "w.synced >= now64(3) - INTERVAL 3650 DAY", 1, 3, "synced_last_day", "no"},
 		{"R2-org", "R2", dropOrg, "", 3, 0, "", "5"},
 		{"R2-at-instant", "R2", "arrayFilter(x -> tupleElement(x, 1) = tupleElement(j.rs[i], 1), j.ts)", "arrayFilter(x -> tupleElement(x, 1) <= tupleElement(j.rs[i], 1), j.ts)", 1, 0, "", "5"},
 		{"R2-missing-only", "R2", "j.found[i] = 0 AND j.prior[i] = 1", "j.prior[i] = 1", 1, 0, "", "5"},
+		{"R2-window-lower-bound", "R2", "tupleElement(x, 1) >= if(i = 1, toDateTime64(0, 3), tupleElement(rs[greatest(i - 1, 1)], 1))", "tupleElement(x, 1) >= toDateTime64(0, 3)", 1, 0, "", "5"},
 		// The card's --since is read: a cut two months later puts the not re-read item outside the window.
 		{"R1-since-literal", "R1", "w.updated >= toDateTime64('2026-06-01 00:00:00', 3, 'UTC')", "w.updated >= toDateTime64('2026-08-01 00:00:00', 3, 'UTC')", 1, 3, "not_reread_in_window", "yes"},
 		// provider_close_any reads every instant, not the F2 window: windowed, RESID-105's 08-01 close drops out.
@@ -771,9 +791,9 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 		parts[table], sizes[table] = count, rows
 	}
 	_ = partRows.Close()
-	if sizes["work_item_reopen_events"] != 8 || sizes["work_item_transitions"] != 17 || sizes["work_items"] != 6 ||
+	if sizes["work_item_reopen_events"] != 9 || sizes["work_item_transitions"] != 18 || sizes["work_items"] != 7 ||
 		parts["work_item_reopen_events"] != 1 || parts["work_item_transitions"] != 1 || parts["work_items"] != 1 {
-		t.Fatalf("fixture sizes %v parts %v, want E 8, T 17, W 6 rows in one part each", sizes, parts)
+		t.Fatalf("fixture sizes %v parts %v, want E 9, T 18, W 7 rows in one part each", sizes, parts)
 	}
 	gateParts := func(tables string) uint64 {
 		var p uint64
@@ -857,11 +877,11 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 		item(org, "linear:RESID-103", "Todo", "NULL", "2026-09-05 10:00:00.000", now),
 	}, ", "))
 	results, _ = run("phase2")
-	formExecRes14190Row(t, results["S0"], "phase2 S0", 0, map[string]string{"orgs": "1", "org_rows": "7"})
+	formExecRes14190Row(t, results["S0"], "phase2 S0", 0, map[string]string{"orgs": "1", "org_rows": "8"})
 	rowCount(results, "phase2", "S2", 1)
 	formExecRes14190Row(t, results["S2"], "phase2 S2", 0, map[string]string{
-		"provider": "linear", "item_keys": "5", "items": "5", "version_rows": "7", "versions_over_keys": "2", "keys_with_versions": "2",
-		"keys_written_last_day": "4", "keys_one_version_last_day": "2", "keys_repo_not_nil": "0",
+		"provider": "linear", "item_keys": "6", "items": "6", "version_rows": "8", "versions_over_keys": "2", "keys_with_versions": "2",
+		"keys_written_last_day": "5", "keys_one_version_last_day": "3", "keys_repo_not_nil": "0",
 	})
 	rowCount(results, "phase2", "R1", 3)
 	r1(results, "phase2", 0, "linear:RESID-102", "1", "3", "0", "1", "", "2026-09-20", "yes", "2026-09-20 10:00", "2026-09-20 00:00:00.000")

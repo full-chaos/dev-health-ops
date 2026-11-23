@@ -95,11 +95,13 @@ func scopeFilter(orgID string, scope Scope) (string, []clickhouse.Binding) {
 	var bindings []clickhouse.Binding
 	if len(scope.RepoIDs) > 0 {
 		filter = `
-          AND repo_id IN (
-              SELECT id FROM repos
-              WHERE org_id = {org_id:String}
-                AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
-          )`
+          AND (toString(repo_id) IN {repo_ids:Array(String)}
+              OR repo_id IN (
+                  SELECT id FROM repos FINAL
+                  WHERE org_id = {org_id:String}
+                    AND repo != ''
+                    AND repo IN {repo_ids:Array(String)}
+              ))`
 		bindings = append(bindings, clickhouse.Binding{Name: "repo_ids", Value: scope.RepoIDs})
 	}
 	asOf := scope.AsOf

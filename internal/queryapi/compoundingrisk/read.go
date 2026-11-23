@@ -86,8 +86,17 @@ func (l resolvedIDs) excludesEverything() bool { return l != nil && len(l) == 0 
 
 func (l resolvedIDs) values() []string { return append([]string(nil), l...) }
 
+// namedTeamIDs is the team ids a request names: bound whole, never cut at
+// maxRows, so every named team answers its row (CHAOS-14409).
+type namedTeamIDs []string
+
+func (l namedTeamIDs) excludesEverything() bool { return l != nil && len(l) == 0 }
+
+func (l namedTeamIDs) values() []string { return append([]string(nil), l...) }
+
 // repoFilter is the id filter of a read: a request list (idList, cut at
-// maxRows) or a resolved set (resolvedIDs). A nil filter is no filter.
+// maxRows), a resolved set (resolvedIDs) or the named teams (namedTeamIDs).
+// A nil filter is no filter.
 type repoFilter interface {
 	excludesEverything() bool
 	values() []string

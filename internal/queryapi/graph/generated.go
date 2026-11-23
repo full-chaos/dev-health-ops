@@ -12322,6 +12322,11 @@ type TestOpsRiskBreakdownItem {
 input TestOpsRiskInput {
   startDate: Date!
   endDate: Date!
+  repoIds: [String!] = null
+  """
+  Team ids. Narrows to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. With ` + "`" + `` + "`" + `repoIds` + "`" + `` + "`" + ` both apply.
+  """
+  teamIds: [String!] = null
 }
 
 type TestOpsRiskQuadrantPoint {
@@ -71235,7 +71240,7 @@ func (ec *executionContext) unmarshalInputTestOpsRiskInput(ctx context.Context, 
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"startDate", "endDate"}
+	fieldsInOrder := [...]string{"startDate", "endDate", "repoIds", "teamIds"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -71256,6 +71261,20 @@ func (ec *executionContext) unmarshalInputTestOpsRiskInput(ctx context.Context, 
 				return it, err
 			}
 			it.EndDate = data
+		case "repoIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("repoIds"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.RepoIds = data
+		case "teamIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("teamIds"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TeamIds = data
 		}
 	}
 

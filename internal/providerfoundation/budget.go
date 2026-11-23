@@ -470,8 +470,8 @@ func (m *Metrics) RecordInventoryPageCap(provider, dataset string) {
 }
 
 // RecordDeepListingStop counts ONE deep listing (the GitHub tests/cicd late re-run relist: listing "runs" or "reports")
-// that stopped at its page budget before its oldest runs (CHAOS-14520). The stop advances the watermark, as before; this
-// series is the only signal that it happened. An unknown listing collapses to "other".
+// that stopped at its page budget before its oldest runs (CHAOS-14520). This series is the only signal that it happened;
+// it says nothing about the watermark, which finalization decides. An unknown listing collapses to "other".
 func (m *Metrics) RecordDeepListingStop(provider, dataset, listing string) {
 	if m == nil {
 		return
@@ -1915,7 +1915,7 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	}
 	if err := writeProviderDatasetReasonCounter(
 		writer, "dev_health_provider_deep_stop_total",
-		"Deep listings (the late re-run relist of the runs or the reports) that stopped at their page budget; the watermark advances. By bounded provider, dataset, and listing (CHAOS-14520).",
+		"Deep listings (the late re-run relist of the runs or the reports) that stopped at their page budget, by bounded provider, dataset, and listing (CHAOS-14520).",
 		"listing", m.deepStop,
 	); err != nil {
 		return err

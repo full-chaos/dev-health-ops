@@ -446,13 +446,14 @@ const (
 
 // recordGitHubTestsDeepPageBudgetStop writes ONE Warn line and steps ONE counter for a deep listing (the late re-run relist
 // of the runs or the reports) that stopped at its page budget (CHAOS-14520). The stop itself keeps its behavior: the
-// watermark advances, and the requests, pages and rows do not change. The line carries no error operand (D4270).
+// requests, pages and rows do not change. The line states a fact about the listing only: finalization decides the watermark
+// (another component of the same walk can hold it). The line carries no error operand (D4270).
 func recordGitHubTestsDeepPageBudgetStop(client *providerfoundation.HTTPClient, claim Claim, listing string, pages, budget int) {
 	if client != nil {
 		client.Metrics.RecordDeepListingStop(claim.Provider, claim.Dataset, listing)
 	}
 	slog.Warn(
-		"deep listing stop: page budget reached; watermark advances",
+		"deep listing stop: page budget reached",
 		"provider", claim.Provider, "dataset", claim.Dataset, "listing", listing, "pages", pages, "budget", budget,
 	)
 }

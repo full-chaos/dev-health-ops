@@ -318,7 +318,7 @@ func surveyStaleFinalize(
 		updated, id, bound := cursor.updatedAt, cursor.runID, cursor.bound
 		cursorUpdated, cursorID, cursorBound = &updated, &id, &bound
 	}
-	rows, err := tx.Query(ctx, candidatesSQL, cutoff, limit, cursorUpdated, cursorID, cursorBound)
+	rows, err := tx.Query(ctx, candidatesSQL, cutoff, limit, cursorUpdated, cursorID, nil)
 	if err != nil {
 		return fail(StaleFinalizeStepSurvey, err)
 	}

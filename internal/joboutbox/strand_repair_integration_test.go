@@ -2793,9 +2793,10 @@ func TestStaleFinalizeLiveJobArmAnswersAsTheContainmentCheck(t *testing.T) {
 	}
 }
 
-// pm ruling on #6867 (3) and the recent-arm ruling: at a base of 1000 runs (500 with a live finalize job, 500 with
-// none, so both River arms are evaluated) the plans of statements A and B read river_job once each: no river_job node
-// runs more than once, and both River arms (live job, recent job) are hashed subplans.
+// At a base of 1000 runs (500 with a live finalize job, 500 with none, so both River arms are evaluated) the plans of
+// statements 0, A and B read river_job and daily_metrics_partitions once each: no node on either table runs more than
+// once, and every uncorrelated set is a hashed subplan (statement 0: the base's partitions set; A and B: live job,
+// recent job, partitions). The fixture is not ANALYZEd, as in the CI run that showed the per-run partitions scan.
 func TestStaleFinalizeSurveyReadsRiverJobOnceAtTheCap(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -2823,9 +2824,11 @@ FROM run WHERE run.target_day <= DATE '2020-01-01' + 500`, old); err != nil {
 	for _, statement := range []struct {
 		name, query string
 		args        []any
+		hashed      int
 	}{
-		{"statement A", fmt.Sprintf(staleFinalizeCandidatesSQLTemplate, jobTable), []any{cutoff, 100, nil, nil, nil}},
-		{"statement B", fmt.Sprintf(staleFinalizeLevelsSQLTemplate, jobTable), []any{cutoff, staleFinalizeLevelCap + 1}},
+		{"statement 0", staleFinalizeBaseExistsSQL, []any{cutoff}, 1},
+		{"statement A", fmt.Sprintf(staleFinalizeCandidatesSQLTemplate, jobTable), []any{cutoff, 100, nil, nil, nil}, 3},
+		{"statement B", fmt.Sprintf(staleFinalizeLevelsSQLTemplate, jobTable), []any{cutoff, staleFinalizeLevelCap + 1}, 3},
 	} {
 		tx, err := admin.Begin(ctx)
 		if err != nil {
@@ -2846,7 +2849,7 @@ FROM run WHERE run.target_day <= DATE '2020-01-01' + 500`, old); err != nil {
 		if err := json.Unmarshal(raw, &plans); err != nil || len(plans) != 1 {
 			t.Fatalf("EXPLAIN %s: %v", statement.name, err)
 		}
-		var riverNodes int
+		var riverNodes, partitionNodes int
 		var walk func(node explainNode)
 		walk = func(node explainNode) {
 			if node.RelationName == "river_job" {
@@ -2855,13 +2858,20 @@ FROM run WHERE run.target_day <= DATE '2020-01-01' + 500`, old); err != nil {
 					t.Fatalf("%s reads river_job %.0f times through %s (once per base run):\n%s", statement.name, node.ActualLoops, node.NodeType, raw)
 				}
 			}
+			if node.RelationName == "daily_metrics_partitions" {
+				partitionNodes++
+				if node.ActualLoops > 1 {
+					t.Fatalf("%s reads daily_metrics_partitions %.0f times through %s (once per base run):\n%s", statement.name, node.ActualLoops, node.NodeType, raw)
+				}
+			}
 			for _, child := range node.Plans {
 				walk(child)
 			}
 		}
 		walk(plans[0].Plan)
-		if riverNodes < 2 {
-			t.Fatalf("%s: %d river_job nodes, want both River arms in the plan:\n%s", statement.name, riverNodes, raw)
+		if (statement.name != "statement 0" && riverNodes < 2) || partitionNodes == 0 {
+			t.Fatalf("%s: %d river_job and %d daily_metrics_partitions nodes, want both River arms and the partitions set:\n%s",
+				statement.name, riverNodes, partitionNodes, raw)
 		}
 		// Both River arms are HASHED subplans: a set larger than work_mem x hash_mem_multiplier falls back to a per-row
 		// subplan, which this names before the loops count shows it.
@@ -2869,8 +2879,8 @@ FROM run WHERE run.target_day <= DATE '2020-01-01' + 500`, old); err != nil {
 		for _, name := range hashedSubPlan.FindAllString(string(raw), -1) {
 			hashed[name] = true
 		}
-		if len(hashed) < 2 {
-			t.Fatalf("%s: %d hashed subplans %v, want both River arms hashed:\n%s", statement.name, len(hashed), hashed, raw)
+		if len(hashed) < statement.hashed {
+			t.Fatalf("%s: %d hashed subplans %v, want %d:\n%s", statement.name, len(hashed), hashed, statement.hashed, raw)
 		}
 	}
 }
@@ -2971,5 +2981,109 @@ VALUES ($1::jsonb, 1, $2, $2, 'metrics.daily_partition', 4, '{}'::jsonb, 2, 'met
 	}
 	if survey.levels == nil || *survey.levels != (StaleFinalizeLevels{Recent: 1}) {
 		t.Fatalf("statement B levels %+v, want Recent 1 and nothing else", survey.levels)
+	}
+}
+
+// The base fragment's partition check is an uncorrelated set, `run.id NOT IN (SELECT partition.run_id ... WHERE
+// status <> 'succeeded' OR updated_at > $1)`, read once per statement. It answers as the old correlated NOT EXISTS for
+// every run of a matrix -- every partition succeeded and old; one partition not succeeded; one updated exactly at the
+// cutoff; one updated after it; no partition; two partitions, one succeeded and old and one pending -- never NULL. Then
+// the use sites: statement 0, A's candidates and B's levels. The partition columns are NOT NULL, so the
+// `partition.run_id IS NOT NULL` guard in the set is an equivalent mutant today: no cell kills it.
+func TestStaleFinalizeBasePartitionArmAnswersAsTheCorrelatedCheck(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	admin := startStaleFinalizeAdmin(t, ctx, "sfbase")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	old := now.Add(-72 * time.Hour)
+	cutoff := now.Add(-StaleFinalizeHorizon)
+	const (
+		allOld        = "00000000-0000-4000-8000-0000000e0001"
+		notSucceeded  = "00000000-0000-4000-8000-0000000e0002"
+		atCutoff      = "00000000-0000-4000-8000-0000000e0003"
+		afterCutoff   = "00000000-0000-4000-8000-0000000e0004"
+		noPartition   = "00000000-0000-4000-8000-0000000e0005"
+		twoPartitions = "00000000-0000-4000-8000-0000000e0006"
+	)
+	for index, runID := range []string{allOld, notSucceeded, atCutoff, afterCutoff, noPartition, twoPartitions} {
+		if _, err := admin.Exec(ctx, `
+INSERT INTO public.daily_metrics_runs (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at)
+VALUES ($1::uuid, '00000000-0000-4000-8000-0000000e0000'::uuid, DATE '2025-06-01' + $3::int, 'base-arm:' || $1, 'running', 'pending', $2, $2)`,
+			runID, old, index); err != nil {
+			t.Fatal(err)
+		}
+	}
+	partition := func(runID string, ordinal int, status string, at time.Time) {
+		t.Helper()
+		if _, err := admin.Exec(ctx, `
+INSERT INTO public.daily_metrics_partitions (id, run_id, ordinal, repo_ids, status, attempt_count, completed_at, created_at, updated_at)
+VALUES (gen_random_uuid(), $1::uuid, $2, '[]'::jsonb, $3, 1, $4, $4, $4)`, runID, ordinal, status, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	partition(allOld, 0, "succeeded", old)
+	partition(notSucceeded, 0, "pending", old)
+	partition(atCutoff, 0, "succeeded", cutoff)
+	partition(afterCutoff, 0, "succeeded", now.Add(-time.Hour))
+	partition(twoPartitions, 0, "succeeded", old)
+	partition(twoPartitions, 1, "pending", old)
+
+	const oldArm = `NOT EXISTS (
+		SELECT 1 FROM public.daily_metrics_partitions AS partition
+		WHERE partition.run_id = run.id
+			AND (partition.status <> 'succeeded' OR partition.updated_at > $1)
+	)`
+	// The production partition check, cut out of the base fragment: "... AND run.updated_at <= $1\n\tAND <check>".
+	parts := strings.SplitN(staleFinalizeBaseSQL, "AND run.updated_at <= $1\n\tAND ", 2)
+	if len(parts) != 2 || !strings.HasPrefix(parts[1], "run.id NOT IN (") {
+		t.Fatalf("the base fragment does not end in the uncorrelated partition set this cell compares: %q", staleFinalizeBaseSQL)
+	}
+	newArm := parts[1]
+	rows, err := admin.Query(ctx, `SELECT run.id::text, (`+oldArm+`), (`+newArm+`) FROM public.daily_metrics_runs AS run ORDER BY run.id`, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	inBase := map[string]bool{allOld: true, atCutoff: true, noPartition: true}
+	seen := 0
+	for rows.Next() {
+		var runID string
+		var oldAnswer, newAnswer *bool
+		if err := rows.Scan(&runID, &oldAnswer, &newAnswer); err != nil {
+			t.Fatal(err)
+		}
+		seen++
+		if oldAnswer == nil || newAnswer == nil {
+			t.Fatalf("run %s: old %v new %v, want two non-NULL answers", runID, oldAnswer, newAnswer)
+		}
+		if *oldAnswer != *newAnswer || *newAnswer != inBase[runID] {
+			t.Fatalf("run %s: old %v new %v, want both %v", runID, *oldAnswer, *newAnswer, inBase[runID])
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil || seen != 6 {
+		t.Fatalf("compared %d runs (err %v), want 6", seen, err)
+	}
+
+	var exists bool
+	if err := admin.QueryRow(ctx, staleFinalizeBaseExistsSQL, cutoff).Scan(&exists); err != nil || !exists {
+		t.Fatalf("statement 0 = %v (err %v), want true: three runs are in the base", exists, err)
+	}
+	jobTable := `"river"."river_job"`
+	survey := surveyStaleFinalize(ctx, admin.Begin, staleFinalizeBaseExistsSQL,
+		fmt.Sprintf(staleFinalizeCandidatesSQLTemplate, jobTable), fmt.Sprintf(staleFinalizeLevelsSQLTemplate, jobTable),
+		cutoff, 20, nil)
+	if len(survey.failures) != 0 {
+		t.Fatalf("survey failures %+v", survey.failures)
+	}
+	got := map[string]bool{}
+	for _, candidate := range survey.candidates {
+		got[candidate.runID] = true
+	}
+	if want := map[string]bool{allOld: true, atCutoff: true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("statement A candidates %v, want %v", got, want)
+	}
+	if survey.levels == nil || *survey.levels != (StaleFinalizeLevels{NoPartitions: 1}) {
+		t.Fatalf("statement B levels %+v, want NoPartitions 1 and nothing else", survey.levels)
 	}
 }

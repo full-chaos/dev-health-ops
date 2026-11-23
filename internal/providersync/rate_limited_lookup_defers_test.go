@@ -19,16 +19,24 @@ type statusLookupDoer struct {
 	inner  providerfoundation.HTTPDoer
 	path   string
 	status int
+	body   string
 }
 
 func (doer statusLookupDoer) Do(request *http.Request) (*http.Response, error) {
 	if doer.status != 0 && request.URL.Path == doer.path {
 		return &http.Response{
 			StatusCode: doer.status, Header: http.Header{},
-			Body: io.NopCloser(strings.NewReader(`{"message":"refused"}`)), Request: request,
+			Body: io.NopCloser(strings.NewReader(doer.responseBody())), Request: request,
 		}, nil
 	}
 	return doer.inner.Do(request)
+}
+
+func (doer statusLookupDoer) responseBody() string {
+	if doer.body != "" {
+		return doer.body
+	}
+	return `{"message":"refused"}`
 }
 
 type lookupRoute struct {
@@ -140,8 +148,8 @@ func TestRateLimitedLookupHoldsTheWatermarkAndTheNextRunStoresTheRows(t *testing
 	}
 }
 
-// Per class: an answer that says the source is absent is served empty; a
-// 5xx that outlasted the retries and a 401 return their own class.
+// Per class: only a 404 says the source is absent. A 5xx that outlasted the
+// retries, a 400, a 401, a 409 and a 403 with an undocumented body return their own class.
 func TestLookupFailureIsServedEmptyOnlyWhenTheSourceIsAbsent(t *testing.T) {
 	t.Parallel()
 	for _, route := range lookupRoutes() {
@@ -149,8 +157,12 @@ func TestLookupFailureIsServedEmptyOnlyWhenTheSourceIsAbsent(t *testing.T) {
 		t.Run(route.name, func(t *testing.T) {
 			t.Parallel()
 			for status, want := range map[int]providerfoundation.ErrorClass{
-				http.StatusServiceUnavailable: providerfoundation.ErrorTransient,
-				http.StatusUnauthorized:       providerfoundation.ErrorAuthentication,
+				http.StatusServiceUnavailable:  providerfoundation.ErrorTransient,
+				http.StatusUnauthorized:        providerfoundation.ErrorAuthentication,
+				http.StatusForbidden:           providerfoundation.ErrorAuthentication,
+				http.StatusBadRequest:          providerfoundation.ErrorPermanent,
+				http.StatusUnprocessableEntity: providerfoundation.ErrorPermanent,
+				http.StatusConflict:            providerfoundation.ErrorConflict,
 			} {
 				batch, err := route.collect(t, status)
 				var providerErr *providerfoundation.ProviderError
@@ -158,13 +170,35 @@ func TestLookupFailureIsServedEmptyOnlyWhenTheSourceIsAbsent(t *testing.T) {
 					t.Fatalf("status %d: err=%v watermark=%v, want class %s and no batch", status, err, batch.Watermark, want)
 				}
 			}
-			for _, status := range []int{http.StatusNotFound, http.StatusForbidden} {
-				batch, err := route.collect(t, status)
-				if err != nil || batch.Watermark == nil {
-					t.Fatalf("status %d: err=%v watermark=%v, want the absent source served as an empty success", status, err, batch.Watermark)
-				}
+			batch, err := route.collect(t, http.StatusNotFound)
+			if err != nil || batch.Watermark == nil {
+				t.Fatalf("404: err=%v watermark=%v, want the absent source served as an empty success", err, batch.Watermark)
 			}
 		})
+	}
+}
+
+// A GitHub 403 whose body is the documented feature-off message skips that one
+// source; the other sources still arrive. The same 403 with another body fails.
+func TestGitHubSecurityFeatureOffForbiddenSkipsOnlyThatSource(t *testing.T) {
+	t.Parallel()
+	collect := func(path, body string) (CompleteRouteBatch, error) {
+		doer := statusLookupDoer{inner: &gitHubSecurityDoer{}, path: path, status: http.StatusForbidden, body: body}
+		client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
+		return (GitHubSecurityRouteHandler{}).Collect(context.Background(), nativeTestClaim("github", "security"),
+			providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
+	}
+	batch, err := collect("/repos/acme/api/code-scanning/alerts", `{"message":"Advanced Security must be enabled for this repository to use code scanning."}`)
+	if err != nil || batch.Watermark == nil || storedRows(batch) != 2 {
+		t.Fatalf("code scanning off: err=%v watermark=%v rows=%d, want 2 rows (dependabot, advisory) and the watermark", err, batch.Watermark, storedRows(batch))
+	}
+	batch, err = collect("/repos/acme/api/code-scanning/alerts", `{"message":"Resource not accessible by integration"}`)
+	if err == nil || batch.Watermark != nil {
+		t.Fatalf("other 403 body: err=%v watermark=%v, want an error and no batch", err, batch.Watermark)
+	}
+	batch, err = collect("/repos/acme/api/dependabot/alerts", `{"message":"Dependabot alerts are disabled for this repository."}`)
+	if err != nil || batch.Watermark == nil || storedRows(batch) != 2 {
+		t.Fatalf("dependabot off: err=%v watermark=%v rows=%d, want 2 rows and the watermark", err, batch.Watermark, storedRows(batch))
 	}
 }
 
@@ -174,20 +208,23 @@ func TestLookupSourceAbsentByClass(t *testing.T) {
 		err  error
 		want bool
 	}{
-		"404":                 {&providerfoundation.ProviderError{Class: providerfoundation.ErrorNotFound, StatusCode: 404}, true},
-		"409":                 {&providerfoundation.ProviderError{Class: providerfoundation.ErrorConflict, StatusCode: 409}, true},
-		"410":                 {&providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: 410}, true},
-		"403 not rate limit":  {&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 403}, true},
-		"401":                 {&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 401}, false},
-		"429":                 {&providerfoundation.ProviderError{Class: providerfoundation.ErrorRateLimited, StatusCode: 429}, false},
-		"403 rate limit":      {&providerfoundation.ProviderError{Class: providerfoundation.ErrorRateLimited, StatusCode: 403}, false},
-		"503":                 {&providerfoundation.ProviderError{Class: providerfoundation.ErrorTransient, StatusCode: 503}, false},
-		"transport failure":   {&providerfoundation.ProviderError{Class: providerfoundation.ErrorTransient}, false},
-		"deadline":            {context.DeadlineExceeded, false},
-		"lease lost":          {providerfoundation.ErrLeaseLost, false},
-		"body failed to read": {providerfoundation.RouteFailure("/x", providerfoundation.ReasonBodyDecode, errors.New("bad body")), false},
+		"404":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorNotFound, StatusCode: 404}, true},
+		"409":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorConflict, StatusCode: 409}, false},
+		"400":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: 400}, false},
+		"410":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: 410}, false},
+		"422":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: 422}, false},
+		"403 other body":    {&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 403, Body: "forbidden"}, false},
+		"403 feature off":   {&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 403, Body: `{"message":"Feature X is DISABLED"}`}, true},
+		"401 feature body":  {&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 401, Body: "feature x is disabled"}, false},
+		"429":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorRateLimited, StatusCode: 429}, false},
+		"403 rate limit":    {&providerfoundation.ProviderError{Class: providerfoundation.ErrorRateLimited, StatusCode: 403, Body: "feature x is disabled"}, false},
+		"503":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorTransient, StatusCode: 503}, false},
+		"transport failure": {&providerfoundation.ProviderError{Class: providerfoundation.ErrorTransient}, false},
+		"deadline":          {context.DeadlineExceeded, false},
+		"lease lost":        {providerfoundation.ErrLeaseLost, false},
+		"body failed":       {providerfoundation.RouteFailure("/x", providerfoundation.ReasonBodyDecode, errors.New("bad body")), false},
 	} {
-		if got := lookupSourceAbsent(tc.err); got != tc.want {
+		if got := lookupSourceAbsent(tc.err, "feature x is disabled"); got != tc.want {
 			t.Errorf("%s: lookupSourceAbsent = %v, want %v", name, got, tc.want)
 		}
 	}

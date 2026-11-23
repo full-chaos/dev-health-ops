@@ -197,7 +197,7 @@ func TestLaunchDarklyRouteKeepsCodeReferencesBestEffort(t *testing.T) {
 	doer := &launchDarklyRouteDoer{responses: []launchDarklyRouteResponse{
 		{status: http.StatusOK, body: `{"items":[],"totalCount":0}`},
 		{status: http.StatusOK, body: `{"items":[]}`},
-		{status: http.StatusForbidden, body: `{"message":"forbidden"}`},
+		{status: http.StatusNotFound, body: `{"message":"not found"}`},
 	}}
 	client, err := providerfoundation.NewHTTPClient(
 		"launchdarkly",

@@ -106,14 +106,15 @@ func (handler GitHubSecurityRouteHandler) Collect(ctx context.Context, claim Cla
 	for _, source := range []struct {
 		name, route, path string
 		query             url.Values
+		featureOff        []string
 	}{
-		{"dependabot", githubDependabotRoute, root + "/dependabot/alerts", url.Values{"state": {"open"}, "per_page": {"100"}}},
-		{"code_scanning", githubCodeScanningRoute, root + "/code-scanning/alerts", url.Values{"state": {"open"}, "per_page": {"100"}}},
-		{"advisory", githubAdvisoriesRoute, root + "/security-advisories", url.Values{"per_page": {"100"}}},
+		{"dependabot", githubDependabotRoute, root + "/dependabot/alerts", url.Values{"state": {"open"}, "per_page": {"100"}}, githubDependabotOffBodies},
+		{"code_scanning", githubCodeScanningRoute, root + "/code-scanning/alerts", url.Values{"state": {"open"}, "per_page": {"100"}}, githubCodeScanningOffBodies},
+		{"advisory", githubAdvisoriesRoute, root + "/security-advisories", url.Values{"per_page": {"100"}}, nil},
 	} {
 		items, fetched, ok, fetchErr := fetchGitHubSecurityPage(ctx, &counted, source.route, source.path, source.query, pages)
 		decodedPages += fetched
-		if fetchErr != nil && !lookupSourceAbsent(fetchErr) {
+		if fetchErr != nil && !lookupSourceAbsent(fetchErr, source.featureOff...) {
 			return CompleteRouteBatch{}, fetchErr
 		}
 		if !ok {
@@ -217,3 +218,14 @@ func (row securityAlertRow) validate(claim Claim) error {
 }
 
 var _ CompleteRouteHandler = GitHubSecurityRouteHandler{}
+
+// GitHub's documented 403 bodies for a source that is switched off. Code scanning:
+// "Advanced Security must be enabled for this repository to use code scanning"
+// (docs.github.com, code-scanning troubleshooting: advanced-security-must-be-enabled;
+// newer wording says Code Security). Dependabot: "Dependabot alerts are disabled
+// for this repository"; if GitHub words it differently the 403 returns and the
+// unit fails instead of acknowledging an empty source.
+var (
+	githubCodeScanningOffBodies = []string{"advanced security must be enabled", "code security must be enabled"}
+	githubDependabotOffBodies   = []string{"dependabot alerts are disabled"}
+)

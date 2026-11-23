@@ -324,12 +324,12 @@ func gitLabDeploymentTraceResponses(t *testing.T, input map[string]any) []gitLab
 	responses := []gitLabDeploymentsResponse{
 		{body: gitLabRepositoryFixture},
 		{
-			status:  oracleGitLabDeploymentTraceStatus(t, input, "release", ""),
+			status:  goAbsentStatus(oracleGitLabDeploymentTraceStatus(t, input, "release", "")),
 			body:    oracleGitLabDeploymentTraceJSON(t, input["releases"]),
 			headers: oracleGitLabDeploymentTraceHeaders(input, "release"),
 		},
 		{
-			status:  oracleGitLabDeploymentTraceStatus(t, input, "deployment", ""),
+			status:  goAbsentStatus(oracleGitLabDeploymentTraceStatus(t, input, "deployment", "")),
 			body:    oracleGitLabDeploymentTraceJSON(t, input["deployments"]),
 			headers: oracleGitLabDeploymentTraceHeaders(input, "deployment"),
 		},
@@ -385,6 +385,16 @@ func oracleGitLabDeploymentTraceTime(t *testing.T, input map[string]any, key str
 		t.Fatal(err)
 	}
 	return &parsed
+}
+
+// goAbsentStatus: Python serves any release or deployments error as an empty
+// source; Go serves only a 404 that way (CHAOS-14552). The trace models "the
+// provider says the source is absent", so a Python error status is sent as 404.
+func goAbsentStatus(status int) int {
+	if status >= http.StatusBadRequest {
+		return http.StatusNotFound
+	}
+	return status
 }
 
 func oracleGitLabDeploymentTraceStatus(t *testing.T, input map[string]any, endpoint, sha string) int {

@@ -429,7 +429,13 @@ func TestFormExecFcc14531Size(t *testing.T) {
 			}
 		}
 	}
-	if strings.Contains(statements["S0"], "throwIf") || strings.Contains(statements["S0"], "FROM work_items") {
+	var s0SQL strings.Builder
+	for _, line := range strings.Split(statements["S0"], "\n") {
+		if !strings.HasPrefix(line, "--") {
+			s0SQL.WriteString(line + "\n")
+		}
+	}
+	if strings.Contains(s0SQL.String(), "throwIf") || strings.Contains(s0SQL.String(), "FROM work_items") {
 		t.Errorf("S0 must read metadata only")
 	}
 	var version string

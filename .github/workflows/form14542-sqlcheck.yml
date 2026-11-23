@@ -1,0 +1,35 @@
+# Throwaway (never merged): one execution of the FORM-14542-1 SQL on ClickHouse 25.12. Delete with the draft PR.
+name: form14542-sqlcheck
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/form14542-sqlcheck.yml"
+      - "ci/form14542-sqlcheck/**"
+
+permissions:
+  contents: read
+
+jobs:
+  form14542-sqlcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Prod SigNoz ClickHouse = 25.12.5.44. Use that tag if the registry has it, else 25.12; run it by the index
+      # digest read from the registry manifest here (no tag drift between the inspect and the run).
+      - name: Resolve the ClickHouse image digest
+        run: |
+          set -euo pipefail
+          for tag in 25.12.5.44 25.12; do
+            if digest=$(docker buildx imagetools inspect "clickhouse/clickhouse-server:${tag}" --format '{{.Manifest.Digest}}' 2>/dev/null) && [ -n "$digest" ]; then
+              echo "tag ${tag} index digest ${digest}"
+              docker buildx imagetools inspect "clickhouse/clickhouse-server:${tag}" | sed -n '1,40p'
+              echo "CH_IMAGE=clickhouse/clickhouse-server:${tag}@${digest}" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "tag ${tag}: not found"
+          done
+          echo "FAIL: neither 25.12.5.44 nor 25.12 exists"; exit 1
+      - name: Run the filled form SQL
+        run: bash ci/form14542-sqlcheck/run.sh

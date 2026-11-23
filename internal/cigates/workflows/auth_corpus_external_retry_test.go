@@ -207,6 +207,65 @@ func TestAuthCorpusExternalUpKeepsTheFirstAttemptOutput(t *testing.T) {
 	}
 }
 
+// CHAOS-14547: the retry cells put a no-op sleep first on PATH. The fake corpus test's wait for the flipped file must
+// not count calls of that sleep (300 no-op calls end before step 1f on a loaded runner), and a miss names itself.
+func TestFakeCorpusTestWaitForTheFlippedFileIgnoresThePathSleep(t *testing.T) {
+	t.Parallel()
+	fake := newFakeDocker(t)
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "corpus.test")
+	if out, err := exec.Command(filepath.Join(fake.dir, "go"), "test", "-c", "-o", bin, "./corpus").CombinedOutput(); err != nil {
+		t.Fatalf("fake go test -c: %v\n%s", err, out)
+	}
+	count := filepath.Join(dir, "sleeps")
+	front := t.TempDir()
+	if err := os.WriteFile(filepath.Join(front, "sleep"), []byte("#!/bin/sh\necho x >> \""+count+"\"\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bin)
+	cmd.Env = append(fake.env("FAKE_FLIP_TRIES=3", "DEVHEALTH_AUTH_ORACLE_SEEDED_FILE="+filepath.Join(dir, "seeded"),
+		"DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE="+filepath.Join(dir, "flipped")), "PATH="+front+":"+fake.dir+":"+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("want a failed fake corpus test without the flipped file:\n%s", out)
+	}
+	if want := "fake corpus test: no flipped file after 3 tries"; !strings.Contains(string(out), want) {
+		t.Errorf("want %q in the output, got:\n%s", want, out)
+	}
+	if raw, _ := os.ReadFile(count); len(raw) != 0 {
+		t.Errorf("the wait called the PATH sleep %d times, want 0", strings.Count(string(raw), "\n"))
+	}
+}
+
+// CHAOS-14547: the script calls `chmod 0600 -- PATH`; the chmod shim records PATH's mode, and a call without a path
+// fails by name, never with a bare `stat: missing operand`.
+func TestFakeChmodShimRecordsThePathAfterDashDashAndRefusesNoPath(t *testing.T) {
+	t.Parallel()
+	fake := newFakeDocker(t)
+	shim := filepath.Join(fake.dir, "chmod")
+	key := filepath.Join(t.TempDir(), "signing.pem")
+	if err := os.WriteFile(key, []byte("x"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(shim, "0600", "--", key).CombinedOutput(); err != nil {
+		t.Fatalf("chmod 0600 -- %s: %v\n%s", key, err, out)
+	}
+	raw, _ := os.ReadFile(fake.record + ".premode")
+	if got := strings.TrimSpace(string(raw)); got != "400" {
+		t.Errorf("premode = %q, want 400 (the mode before the chmod)", got)
+	}
+	if fi, err := os.Stat(key); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("the key file mode after the chmod: %v %v, want 0600", fi, err)
+	}
+	out, err := exec.Command(shim, "0600", "--").CombinedOutput()
+	if err == nil {
+		t.Errorf("chmod 0600 -- without a path must fail:\n%s", out)
+	}
+	if want := "fake chmod: no path after mode 0600"; !strings.Contains(string(out), want) {
+		t.Errorf("want %q in the output, got:\n%s", want, out)
+	}
+}
+
 // The class and product-line patterns are byte patterns: the grep calls run with LC_ALL=C, so a letter outside a
 // bracket range in the caller's locale cannot make a near-miss line a class line.
 func TestAuthCorpusExternalUpClassPatternsIgnoreTheLocale(t *testing.T) {

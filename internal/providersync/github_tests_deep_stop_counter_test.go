@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,7 +15,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
 
-const githubTestsDeepStopLineWant = "deep listing stop: page budget reached; watermark advances"
+// githubTestsDeepStopLineWant is a fact about the listing only: the watermark outcome is decided at finalization (another
+// component of the same walk can still hold it).
+const githubTestsDeepStopLineWant = "deep listing stop: page budget reached"
 
 // deepStopWalk is one whole CollectChunks walk (no yields) on a client whose metrics the cell reads, with every slog record
 // the walk wrote.
@@ -33,9 +36,19 @@ func walkDeepStop(t *testing.T, handler GitHubTestsRouteHandler, claim Claim, ru
 // walkDeepStopReports is walkDeepStop on a doer that serves one JUnit report artifact per run when withReports.
 func walkDeepStopReports(t *testing.T, handler GitHubTestsRouteHandler, claim Claim, runs []listingRun, withReports bool) deepStopWalk {
 	t.Helper()
+	return walkDeepStopWith(t, handler, claim, runs, func(fake *listingFake) providerfoundation.HTTPDoer {
+		return deletionShiftDoer(t, fake, withReports)
+	})
+}
+
+// walkDeepStopWith is walkDeepStop on the doer wrap builds around the listing fake.
+func walkDeepStopWith(
+	t *testing.T, handler GitHubTestsRouteHandler, claim Claim, runs []listingRun, wrap func(*listingFake) providerfoundation.HTTPDoer,
+) deepStopWalk {
+	t.Helper()
 	records := captureMembershipLogs(t)
 	fake := newListingFake(t, runs)
-	client := githubTestsClient(t, fakehttp.Client(deletionShiftDoer(t, fake, withReports)))
+	client := githubTestsClient(t, fakehttp.Client(wrap(fake)))
 	client.Metrics = providerfoundation.NewMetrics()
 	walk := deepStopWalk{}
 	finalSeen := false
@@ -81,6 +94,9 @@ func deepStopLines(t *testing.T, records []slog.Record, listing string, budget, 
 	t.Helper()
 	count := 0
 	for _, record := range records {
+		if strings.HasPrefix(record.Message, "deep listing stop") && record.Message != githubTestsDeepStopLineWant {
+			t.Errorf("deep-stop line %q, want %q (no claim about the watermark: finalization decides it)", record.Message, githubTestsDeepStopLineWant)
+		}
 		if record.Message != githubTestsDeepStopLineWant {
 			continue
 		}
@@ -233,5 +249,62 @@ func TestGitHubTestsDeepReportsWalkBoundIsNotCountedAsAPageBudgetStop(t *testing
 	}
 	if walk.final.Watermark == nil || !walk.final.Watermark.Equal(*listing.claim.BeforeAt) {
 		t.Errorf("watermark=%v, want the window end (main)", walk.final.Watermark)
+	}
+}
+
+// perRunArtifactPageDoer serves the listing fake, except that the artifacts of run blocked answer one non-report artifact and a
+// next link: the per-run artifact listing (one page) ends at its page budget, a per_run_page_budget blocker.
+type perRunArtifactPageDoer struct {
+	fake    *listingFake
+	blocked int
+}
+
+func (doer perRunArtifactPageDoer) Do(request *http.Request) (*http.Response, error) {
+	path := "/repos/acme/api/actions/runs/" + strconv.Itoa(doer.blocked) + "/artifacts"
+	if request.URL.Path != path {
+		return doer.fake.Do(request)
+	}
+	if _, err := doer.fake.Do(request); err != nil {
+		return nil, err
+	}
+	next := *request.URL
+	query := next.Query()
+	query.Set("page", "2")
+	next.RawQuery = query.Encode()
+	header := http.Header{"Content-Type": {"application/json"}, "Link": {"<" + next.String() + `>; rel="next"`}}
+	return doer.fake.respond(request, header, `{"artifacts":[{"id":77,"name":"image.dockerbuild","size_in_bytes":10,"archive_download_url":"https://api.github.com/repos/acme/api/actions/artifacts/77/zip"}]}`, 200), nil
+}
+
+// A deep page-budget stop in the same walk as a per-run artifact page-budget blocker: the final watermark is held (main),
+// and the deep stop still writes exactly one line and one count per listing. The line states only the listing fact; it
+// must not claim that the watermark advances.
+func TestGitHubTestsDeepStopLineMakesNoWatermarkClaim(t *testing.T) {
+	claim := lateRerunMidnightClaim("incremental")
+	inWindow := listingRun{id: 9000, created: claim.SinceAt.Add(10 * time.Minute), updated: claim.SinceAt.Add(15 * time.Minute),
+		status: "completed", conclusion: "success"}
+	runs := append(lateRerunRuns(1, 150, claim.SinceAt.UTC()), inWindow)
+	walk := walkDeepStopWith(t, GitHubTestsRouteHandler{LateRerunMaxPages: 1}, claim, runs, func(fake *listingFake) providerfoundation.HTTPDoer {
+		return perRunArtifactPageDoer{fake: fake, blocked: inWindow.id}
+	})
+	blocker := false
+	incomplete, _ := walk.final.Result[GitHubTestsResultKeyIncomplete].([]GitHubTestsIncomplete)
+	for _, observation := range incomplete {
+		blocker = blocker || observation.Component == githubTestsRunArtifactsComponent && observation.Cause == githubTestsPerRunPageBudgetCause
+	}
+	if !blocker || walk.final.Watermark != nil {
+		t.Fatalf("premise: incomplete=%v watermark=%v, want the run_artifacts per_run_page_budget blocker and a held watermark (main)",
+			incomplete, walk.final.Watermark)
+	}
+	for listing, component := range map[string]string{"runs": githubTestsLateRerunRunsComponent, "reports": githubTestsLateRerunReportsComponent} {
+		observed := deepStopObservations(t, walk.final, component)
+		lines, counted := deepStopLines(t, walk.records, listing, 1, 1), deepStopCount(t, walk.metrics, listing)
+		if observed != 1 || lines != 1 || counted != 1 {
+			t.Errorf("%s: main stops=%d deep-stop lines=%d counter=%d, want 1 each", listing, observed, lines, counted)
+		}
+	}
+	for _, record := range walk.records {
+		if strings.HasPrefix(record.Message, "deep listing stop") && strings.Contains(record.Message, "watermark") {
+			t.Errorf("deep-stop line %q claims a watermark outcome; the final watermark is %v", record.Message, walk.final.Watermark)
+		}
 	}
 }

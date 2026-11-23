@@ -187,13 +187,19 @@ type ReconcilerLoop struct {
 	undeliveredRaceLost          uint64
 	undeliveredBlocked           uint64
 	strandPassesSkippedIdle      uint64
-	claimed                      uint64
-	delivered                    uint64
-	retried                      uint64
-	dead                         uint64
-	leaseLost                    uint64
-	lastOK                       time.Time
-	up                           bool
+	staleFinalizeRedriven        uint64
+	staleFinalizeErrors          uint64
+	staleFinalizeDeferred        uint64
+	// staleFinalizeLevels is the last level read by a stale-finalize pass; it
+	// stands until a later pass reads it again.
+	staleFinalizeLevels StaleFinalizeLevels
+	claimed             uint64
+	delivered           uint64
+	retried             uint64
+	dead                uint64
+	leaseLost           uint64
+	lastOK              time.Time
+	up                  bool
 
 	// consecutiveFailures and stepFailures are the CHAOS-4429 telemetry pair:
 	// consecutiveFailures drives the readiness threshold above (reset to zero
@@ -448,6 +454,14 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 	if result.StrandPassSkippedIdle {
 		loop.strandPassesSkippedIdle++
 	}
+	loop.staleFinalizeRedriven += nonNegativeUint(len(result.StaleFinalizeRedriven))
+	loop.staleFinalizeErrors += nonNegativeUint(len(result.StaleFinalizeFailures))
+	loop.staleFinalizeDeferred += nonNegativeUint(result.StaleFinalizeDeferred)
+	var levelChanges []staleFinalizeLevelChange
+	if result.StaleFinalizeLevels != nil {
+		levelChanges = staleFinalizeWarnedLevelChanges(loop.staleFinalizeLevels, *result.StaleFinalizeLevels)
+		loop.staleFinalizeLevels = *result.StaleFinalizeLevels
+	}
 	loop.claimed += nonNegativeUint(result.Claimed)
 	loop.delivered += nonNegativeUint(result.Delivered)
 	loop.retried += nonNegativeUint(result.Retried)
@@ -535,6 +549,26 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 			"request_canceled", resolution.RequestCanceled,
 			"outbox_dead", resolution.OutboxDead,
 		)
+	}
+	// The stale-finalize stage is fail-open: its failures never fail the step,
+	// so these lines and errors_total are where they are seen.
+	for _, failure := range result.StaleFinalizeFailures {
+		loop.logger().WarnContext(
+			ctx, StaleFinalizeFailureLogMessage,
+			"step", failure.Step,
+			"class", failure.Class,
+		)
+	}
+	for _, change := range levelChanges {
+		loop.logger().WarnContext(
+			ctx, StaleFinalizeLevelChangedLogMessage,
+			"class", change.class,
+			"from", change.from,
+			"to", change.to,
+		)
+	}
+	for _, runID := range result.StaleFinalizeRedriven {
+		loop.logger().InfoContext(ctx, StaleFinalizeRedrivenLogMessage, "run_id", runID)
 	}
 	for _, dead := range result.DeadDeliveries {
 		loop.logger().WarnContext(
@@ -694,6 +728,10 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 	undeliveredRaceLost := loop.undeliveredRaceLost
 	undeliveredBlocked := loop.undeliveredBlocked
 	strandPassesSkippedIdle := loop.strandPassesSkippedIdle
+	staleFinalizeRedriven := loop.staleFinalizeRedriven
+	staleFinalizeErrors := loop.staleFinalizeErrors
+	staleFinalizeDeferred := loop.staleFinalizeDeferred
+	staleFinalizeLevels := loop.staleFinalizeLevels
 	claimed := loop.claimed
 	delivered := loop.delivered
 	retried := loop.retried
@@ -746,6 +784,18 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 	// held-back pass; this is the series that says why, and its rate against
 	// the tick rate is how much of the cadence the idle backoff is taking.
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_strand_passes_skipped_idle_total", "Strand-repair passes held back by the idle backoff because the passes before them found nothing.", strandPassesSkippedIdle)
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_stale_finalize_redriven_total", "Daily-metrics runs whose lost finalize the stale-finalize stage redrove.", staleFinalizeRedriven)
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_stale_finalize_errors_total", "Failures of the fail-open stale-finalize stage (survey, levels or one run's redrive).", staleFinalizeErrors)
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_stale_finalize_deferred_total", "Stale-finalize candidates left for a later pass because the pass budget ended.", staleFinalizeDeferred)
+	fmt.Fprintf(&text, "# HELP worker_outbox_reconciler_stale_finalize_standing_live Stale-finalize runs refused because a finalize job or undelivered row is still live, as of the last level read.\n# TYPE worker_outbox_reconciler_stale_finalize_standing_live gauge\nworker_outbox_reconciler_stale_finalize_standing_live %d\n", staleFinalizeLevels.Live)
+	fmt.Fprintf(&text, "# HELP worker_outbox_reconciler_stale_finalize_standing_strand_shape Stale-finalize runs left to the finalize strand shape (a delivered row whose River job still exists), as of the last level read.\n# TYPE worker_outbox_reconciler_stale_finalize_standing_strand_shape gauge\nworker_outbox_reconciler_stale_finalize_standing_strand_shape %d\n", staleFinalizeLevels.StrandShape)
+	fmt.Fprintf(&text, "# HELP worker_outbox_reconciler_stale_finalize_standing_recent Stale-finalize runs with a finalize row or job younger than the horizon, as of the last level read.\n# TYPE worker_outbox_reconciler_stale_finalize_standing_recent gauge\nworker_outbox_reconciler_stale_finalize_standing_recent %d\n", staleFinalizeLevels.Recent)
+	fmt.Fprintf(&text, "# HELP worker_outbox_reconciler_stale_finalize_standing_no_partitions Stale-finalize runs with no partition, never redriven by the stage, as of the last level read.\n# TYPE worker_outbox_reconciler_stale_finalize_standing_no_partitions gauge\nworker_outbox_reconciler_stale_finalize_standing_no_partitions %d\n", staleFinalizeLevels.NoPartitions)
+	truncated := 0
+	if staleFinalizeLevels.Truncated {
+		truncated = 1
+	}
+	fmt.Fprintf(&text, "# HELP worker_outbox_reconciler_stale_finalize_standing_truncated Whether the last stale-finalize level read hit its cap, so the standing counts are a floor.\n# TYPE worker_outbox_reconciler_stale_finalize_standing_truncated gauge\nworker_outbox_reconciler_stale_finalize_standing_truncated %d\n", truncated)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_claimed_total", "Outbox rows claimed by the reconciler.", claimed)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_delivered_total", "Outbox rows delivered to River by the reconciler.", delivered)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_retried_total", "Outbox rows scheduled for relay retry by the reconciler.", retried)
@@ -774,4 +824,32 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 
 func writeReconcilerCounter(output *strings.Builder, name, help string, value uint64) {
 	fmt.Fprintf(output, "# HELP %s %s\n# TYPE %s counter\n%s %d\n", name, help, name, name, value)
+}
+
+// The stale-finalize log lines.
+const (
+	StaleFinalizeFailureLogMessage      = "stale finalize stage failure"
+	StaleFinalizeLevelChangedLogMessage = "stale finalize standing refusals changed"
+	StaleFinalizeRedrivenLogMessage     = "stale finalize redriven"
+)
+
+type staleFinalizeLevelChange struct {
+	class    string
+	from, to int
+}
+
+// staleFinalizeWarnedLevelChanges is the WARN-on-change rule: only the two
+// classes nobody else acts on, no_partitions and strand_shape, and only when
+// their level moved. The first read of a process is a change from 0. live,
+// recent and truncated are gauges only: recent moves after every healthy
+// redrive.
+func staleFinalizeWarnedLevelChanges(previous, next StaleFinalizeLevels) []staleFinalizeLevelChange {
+	var changes []staleFinalizeLevelChange
+	if previous.NoPartitions != next.NoPartitions {
+		changes = append(changes, staleFinalizeLevelChange{class: "no_partitions", from: previous.NoPartitions, to: next.NoPartitions})
+	}
+	if previous.StrandShape != next.StrandShape {
+		changes = append(changes, staleFinalizeLevelChange{class: "strand_shape", from: previous.StrandShape, to: next.StrandShape})
+	}
+	return changes
 }

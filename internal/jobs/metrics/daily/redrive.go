@@ -454,7 +454,7 @@ func (store *PostgresStore) RedriveStrandedFinalize(
 		if !validUUID(runID) {
 			return outcome, ErrInvalidState
 		}
-		finalized, err := store.redriveOneStrandedFinalize(ctx, publisher, runID, nonce, now, allowPriorAttempt)
+		finalized, err := store.redriveOneStrandedFinalize(ctx, publisher, runID, nonce, now, allowPriorAttempt, nil)
 		if err != nil {
 			return outcome, err
 		}
@@ -467,15 +467,53 @@ func (store *PostgresStore) RedriveStrandedFinalize(
 	return outcome, nil
 }
 
+// RedriveStaleFinalize redrives one never-attempted ('pending') finalize, as
+// RedriveStrandedFinalize does with allowPriorAttempt false, and refuses it
+// when, under the run lock, the outbox already holds a finalize row of the run
+// that is not relayed yet or was written after outboxRecentSince. Two
+// reconcilers that both read the run as a candidate then publish once: the
+// second one blocks on the run lock and its own re-check sees the first one's
+// committed row (READ COMMITTED: each statement reads a new snapshot).
+func (store *PostgresStore) RedriveStaleFinalize(
+	ctx context.Context,
+	publisher *PostgresPublisher,
+	runID, nonce string,
+	outboxRecentSince time.Time,
+) (bool, error) {
+	if !store.valid() || publisher == nil || nonce == "" {
+		return false, ErrUnavailable
+	}
+	if !validUUID(runID) {
+		return false, ErrInvalidState
+	}
+	return store.redriveOneStrandedFinalize(ctx, publisher, runID, nonce, store.now().UTC(), false, &outboxRecentSince)
+}
+
+// staleFinalizeOutboxRecheckSQL is the survey's own outbox refusal (the
+// unrelayed arm of its live-job fragment and the outbox arm of its recent
+// fragment, internal/joboutbox/stale_finalize_repair.go), on the same
+// predicate, so one partial index on that predicate can serve both (the
+// index is not part of this change).
+const staleFinalizeOutboxRecheckSQL = `
+SELECT EXISTS (
+	SELECT 1 FROM public.worker_job_outbox AS outbox
+	WHERE outbox.job_kind = 'metrics.daily_finalize'
+		AND outbox.args #>> '{domain,id}' = $1
+		AND (outbox.status IN ('pending', 'claimed') OR outbox.created_at > $2)
+)`
+
 // redriveOneStrandedFinalize re-verifies and, if still eligible, redrives
 // exactly one run's finalize inside its own transaction, so one run's
 // dedupe/policy rejection cannot roll back an otherwise-successful batch.
+// outboxRecentSince, when set, adds the stale-finalize outbox re-check after
+// the run lock.
 func (store *PostgresStore) redriveOneStrandedFinalize(
 	ctx context.Context,
 	publisher *PostgresPublisher,
 	runID, nonce string,
 	now time.Time,
 	allowPriorAttempt bool,
+	outboxRecentSince *time.Time,
 ) (bool, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
@@ -528,6 +566,20 @@ FOR UPDATE OF run`, runID).Scan(
 	eligible := finalizationStatus == "pending" || (allowPriorAttempt && priorAttempt)
 	if !eligible {
 		return false, nil
+	}
+	if outboxRecentSince != nil {
+		// JIT off as in the survey: with no index on this predicate the planner
+		// prices this read above jit_above_cost, and JIT alone costs ~0.5 s.
+		if _, err := tx.Exec(ctx, "SET LOCAL jit = off"); err != nil {
+			return false, ErrUnavailable
+		}
+		var held bool
+		if err := tx.QueryRow(ctx, staleFinalizeOutboxRecheckSQL, run.ID, *outboxRecentSince).Scan(&held); err != nil {
+			return false, ErrUnavailable
+		}
+		if held {
+			return false, nil
+		}
 	}
 	if run.TargetDay, err = time.Parse(dailyTargetDayLayout, targetDay); err != nil {
 		return false, ErrInvalidState

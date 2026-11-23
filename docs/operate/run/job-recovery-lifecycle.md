@@ -446,6 +446,35 @@ verified>" --reason <code> --correlation-id <id>` closes this the same way: a fr
 re-verifying under a row lock that the run is still `running`, every
 partition is still `succeeded`, and finalization has not already settled.
 
+**The reconciler runs the same redrive by itself once the finalize is lost.**
+A run whose finalization stays `pending` for more than 24 hours, with every
+partition `succeeded` and nothing written to the run or its partitions in that
+time, is redriven by the reconciler's stale-finalize stage when no finalize
+job can run for it any more. That means no live River job, no undelivered
+outbox row, no delivered row whose River job still exists (the strand repair
+owns that one), and no finalize row or job younger than 24 hours. The stage
+surveys at most once every 10 minutes, as the queue role, and calls the same
+redrive with one run per call, as the domain role. It redrives a never-attempted
+finalize only, at most once per run per 24 hours. A `failed` or expired
+`running` finalization stays with `daily-finalize`. Its failures never fail the
+reconciler step: they are counted in
+`worker_outbox_reconciler_stale_finalize_errors_total` and logged at WARN.
+
+A run with **no partition** is never redriven by the stage. After outbox
+retention, a run that was materialized empty and then lost its finalize looks
+exactly like a run whose dispatch died before it materialized, and a finalize
+with no partition ends the run as `no_repositories`. Such runs are counted in
+`worker_outbox_reconciler_stale_finalize_standing_no_partitions` and need an
+operator.
+
+| Signal | Meaning |
+| --- | --- |
+| `worker_outbox_reconciler_stale_finalize_redriven_total` | Runs the stage redrove (one INFO line per run). |
+| `worker_outbox_reconciler_stale_finalize_errors_total` | Failed survey, level read or per-run redrive (one WARN line each, with its step and class). |
+| `worker_outbox_reconciler_stale_finalize_deferred_total` | Candidates left for a later pass because the pass budget ended or two redrives hit their deadline. |
+| `worker_outbox_reconciler_stale_finalize_standing_{live,strand_shape,recent,no_partitions}` | Gauges: standing refusals by class at the last pass that read them. A change of `no_partitions` or `strand_shape` is also one WARN line. |
+| `worker_outbox_reconciler_stale_finalize_standing_truncated` | 1 when the level read hit its cap of 1000 runs, so the gauges are a floor. |
+
 **A stuck finalize LEDGER row defeats a bare republish the same way it
 defeats a partition redrive.** The finalize ledger row (`metric_compatibility_executions`,
 `operation='finalize'`) can be left `ambiguous`/stuck-`executing` from the

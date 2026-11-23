@@ -190,6 +190,9 @@ var queueRowReadTable = map[string]queueRowRead{
 	"internal/joboutbox/strand_repair.go#repairStrandedWorkGraphSQL": {
 		"args, args#>>domain,id, args->>organization_id, dedupe_key",
 		roleInternal, "", "", "same as the partition shape"},
+	"internal/joboutbox/stale_finalize_repair.go#staleFinalizeLevelsSQLTemplate": {
+		"args#>>domain,id",
+		roleInternal, "", "", "the stale-finalize survey: join and filter on the domain link; only run ids and counts leave the survey"},
 	"internal/joboutbox/repository.go#rowColumns": {
 		"args, dedupe_key",
 		roleDecoded, "internal/joboutbox/inserter.go", "jobcontract.Decode(", "the relay claim row goes through Decode before any River insert"},
@@ -213,6 +216,8 @@ var queueRowReadTable = map[string]queueRowRead{
 		"dedupe_key", roleInternal, "", "", "EXISTS on a key built from the run id; only the boolean is read, never logged"},
 	"internal/jobs/metrics/daily/dispatch_fail.go#FailDispatchPermanently": {
 		"dedupe_key", roleInternal, "", "", "EXISTS on a key built from the run id; only the boolean is read, never logged"},
+	"internal/jobs/metrics/daily/redrive.go#staleFinalizeOutboxRecheckSQL": {
+		"args#>>domain,id", roleInternal, "", "", "equality with the locked run id inside EXISTS; only the boolean is read, never logged"},
 	"internal/jobs/metrics/daily/redrive.go#ReconcileOrphanedFinalizeRedriveRuns": {
 		"dedupe_key", roleInternal, "", "", "join key for the abandonment check; never logged"},
 	"internal/jobs/metrics/remaining/redrive.go#deadHandoffReasonSQL": {

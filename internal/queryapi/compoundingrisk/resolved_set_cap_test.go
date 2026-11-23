@@ -212,3 +212,68 @@ func TestTeamBreakoutWithADayReadsNoOwnershipOfNowForTheRows(t *testing.T) {
 		t.Errorf("served with the day given:\n%s\nwith the day picked:\n%s", strings.Join(withDay, "\n"), strings.Join(picked, "\n"))
 	}
 }
+
+func sweepAnswer(t *testing.T, world sweepWorld, filter *model.CompoundingRiskFilterInput) string {
+	t.Helper()
+	store := &sweepStore{world: world}
+	got, err := Resolve(context.Background(), store, sweepOrg, filter, sweepNow())
+	for _, st := range store.unknown {
+		t.Fatalf("a statement the model does not know:\n%s", st)
+	}
+	return strings.Join(sweepServed(got, err), "\n")
+}
+
+// A request list is cut at maxRows before the team scope resolves it: entry
+// 501 of repoIds or teamIds selects nothing. An explicit empty repoIds keeps
+// its answer of main.
+func TestARequestListOver500IsCutBeforeTheTeamScopeResolvesIt(t *testing.T) {
+	now := sweepNow()
+	d := time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC)
+	team := func(teamIDs, repoIDs []string) *model.CompoundingRiskFilterInput {
+		return &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TeamIds: teamIDs, RepoIds: repoIDs, TrendDays: 30}
+	}
+	t.Run("a-repoIds-entry-501", func(t *testing.T) {
+		world := bigTeamWorld(now, false)
+		var repoIDs []string
+		for i := 0; i < maxRows; i++ {
+			id := fmt.Sprintf("other-%03d", i)
+			world.repos = append(world.repos, sweepRepo{id, "acme/" + id})
+			world.risk = append(world.risk, bigRiskRow(d, id, .5, now))
+			repoIDs = append(repoIDs, id)
+		}
+		full := sweepAnswer(t, world, team([]string{"big"}, append(repoIDs, bigRepoID(maxRows))))
+		first := sweepAnswer(t, world, team([]string{"big"}, repoIDs))
+		if full != first || strings.Contains(full, "row ") {
+			t.Errorf("served with big-500 as entry 501:\n%s\nwith the first 500 entries:\n%s\nwant both equal, with no row", full, first)
+		}
+	})
+	t.Run("b-teamIds-entry-501", func(t *testing.T) {
+		world := sweepWorld{repos: []sweepRepo{{"repo-t", "acme/tail"}}, risk: []sweepRiskRow{bigRiskRow(d, "repo-t", .5, now)}}
+		var teamIDs []string
+		for i := 0; i < maxRows; i++ {
+			id := fmt.Sprintf("none-%03d", i)
+			world.teams = append(world.teams, sweepTeam{id: id, name: id, active: true})
+			teamIDs = append(teamIDs, id)
+		}
+		world.teams = append(world.teams, sweepTeam{id: "tail", name: "Tail", active: true, owns: []string{"repo-t"}})
+		full := sweepAnswer(t, world, team(append(teamIDs, "tail"), nil))
+		first := sweepAnswer(t, world, team(teamIDs, nil))
+		if full != first || strings.Contains(full, "row ") {
+			t.Errorf("served with team tail as entry 501:\n%s\nwith the first 500 entries:\n%s\nwant both equal, with no row", full, first)
+		}
+	})
+	t.Run("c-explicit-empty-repoIds", func(t *testing.T) {
+		world := bigTeamWorld(now, false)
+		none := `  served breakout="TEAM" rows=0 trend=0`
+		if got := sweepAnswer(t, world, team(nil, []string{})); got != none {
+			t.Errorf("TEAM, no team, repoIds []:\n%s\nwant\n%s", got, none)
+		}
+		zero := &model.CompoundingRiskFilterInput{TeamIds: []string{"big"}, RepoIds: []string{}, TrendDays: 30}
+		if got, want := sweepAnswer(t, world, zero), `  served breakout="" rows=0 trend=0`; got != want {
+			t.Errorf("zero breakout, teamIds [big], repoIds []:\n%s\nwant\n%s", got, want)
+		}
+		if got, absent := sweepAnswer(t, world, team([]string{"big"}, []string{})), sweepAnswer(t, world, team([]string{"big"}, nil)); got != absent || !strings.Contains(got, "row TEAM big") {
+			t.Errorf("TEAM, teamIds [big], repoIds []:\n%s\nwant the answer of repoIds absent, as on main:\n%s", got, absent)
+		}
+	})
+}

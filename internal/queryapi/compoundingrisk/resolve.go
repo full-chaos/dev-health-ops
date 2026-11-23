@@ -416,6 +416,14 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 		if len(teamIDs) == 0 {
 			teamIDs = nil
 		}
+		// A request list carries at most maxRows entries before the team scope
+		// resolves it; a resolved set is bound whole. Slicing keeps [] apart from nil.
+		if len(repoIDs) > maxRows {
+			repoIDs = repoIDs[:maxRows]
+		}
+		if len(teamIDs) > maxRows {
+			teamIDs = teamIDs[:maxRows]
+		}
 		if filter.Day != nil {
 			d := filter.Day.Time()
 			wantDay = &d

@@ -58,7 +58,8 @@ run_variant() {
     docker exec ch clickhouse-client -q 'SYSTEM FLUSH DISTRIBUTED signoz_traces.distributed_signoz_index_v3' || true
   fi
   docker exec ch clickhouse-client -q 'SELECT count() FROM signoz_traces.distributed_signoz_index_v3'
-  if ! docker exec ch clickhouse-client --format TSV --queries-file /tmp/query.sql > "$work/out-${variant}.tsv" 2> "$work/err-${variant}.txt"; then
+  local qid="form325-${variant}-$(date +%s)"
+  if ! docker exec ch clickhouse-client --query_id "$qid" --format TSV --queries-file /tmp/query.sql > "$work/out-${variant}.tsv" 2> "$work/err-${variant}.txt"; then
     echo "FAIL ${variant}: the form query errored:"; cat "$work/err-${variant}.txt"; status=1; return
   fi
   echo "--- result (section, span_name, label, n, s, a, p50, p95, mx, mn)"; cat "$work/out-${variant}.tsv"
@@ -68,6 +69,18 @@ run_variant() {
     echo "FAIL ${variant}: (section, span_name, label, n) differ from expected.tsv"; status=1
   else
     echo "PASS ${variant}: 37 rows = expected.tsv"
+  fi
+  # FORM-TEMPLATE-3 PASS-path WANT: read_rows of the statement = the work math on the fixture (4 rows):
+  # 7 scans x 4 = 28 if the scalar WITH is read once per reference, 4 x 4 = 16 if once. Assert <= 28.
+  docker exec ch clickhouse-client -q 'SYSTEM FLUSH LOGS'
+  local rr
+  rr=$(docker exec ch clickhouse-client -q "SELECT read_rows FROM system.query_log WHERE query_id = '${qid}' AND type = 'QueryFinish' AND is_initial_query")
+  echo "query_log ${variant}: initial query read_rows = ${rr} (fixture rows 4; WANT 28 if the WITH is read per reference, 16 if once)"
+  docker exec ch clickhouse-client -q "SELECT 'secondary', count(), sum(read_rows) FROM system.query_log WHERE initial_query_id = '${qid}' AND type = 'QueryFinish' AND NOT is_initial_query" | sed "s/^/query_log ${variant}: /"
+  if [ -n "$rr" ] && [ "$rr" -le 28 ] && [ "$rr" -gt 0 ]; then
+    echo "PASS ${variant}: read_rows ${rr} <= 28"
+  else
+    echo "FAIL ${variant}: read_rows '${rr}' not in (0, 28]"; status=1
   fi
   while IFS=$'\t' read -r sec span label want; do
     got=$(awk -F'\t' -v s="$sec" -v n="$span" -v l="$label" '$1==s && $2==n && $3==l {print $5}' "$work/out-${variant}.tsv")

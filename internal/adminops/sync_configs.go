@@ -21,6 +21,8 @@ import (
 // PATCH /api/v1/admin/sync-configs/{id}. The list applies to every sync config of this integration, and a write
 // replaces it whole. The organization is the configuration's own; ids are printed as 8-character prefixes only. Unlike
 // the PATCH, the verb does not snapshot the GitHub work-item options from its environment: it changes the list only.
+// The database is the admin one of the users and orgs verbs (accountOperator: MIGRATION_DATABASE_URI, then
+// API_DATABASE_URI, then POSTGRES_URI), so it runs in the go-api pod as the api role (CHAOS-14565).
 func syncConfigsGroup() cli.Command {
 	return cli.Command{
 		Name: "sync-configs", Summary: "sync configuration settings", Kind: cli.Group,
@@ -56,7 +58,7 @@ func parseConfigID(env cli.Env, typed optString) (uuid.UUID, bool) {
 }
 
 func runArtifactExcludesSet(ctx context.Context, env cli.Env) int {
-	flags := newFlags(env, "dho admin sync-configs artifact-excludes set")
+	flags := newAccountFlags(env, "dho admin sync-configs artifact-excludes set")
 	var configID, reason optString
 	var prefixes repeatedString
 	flags.Var(&configID, "config-id", "sync configuration id, a UUID (required)")
@@ -87,14 +89,14 @@ func runArtifactExcludesSet(ctx context.Context, env cli.Env) int {
 		}
 		value = items
 	}
-	op, closePool, code := operator(ctx, env)
+	op, closePool, code := accountOperator(ctx, env)
 	defer closePool()
 	if code != 0 {
 		return code
 	}
 	tx, err := op.Pool.Begin(ctx)
 	if err != nil {
-		return databaseFailure(env, err)
+		return accountDatabaseFailure(env, err)
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
 	result, err := setArtifactExcludesTx(ctx, tx, id, value, op.Now())
@@ -103,7 +105,7 @@ func runArtifactExcludesSet(ctx context.Context, env cli.Env) int {
 	}
 	if !*dryRun {
 		if err := tx.Commit(ctx); err != nil {
-			return databaseFailure(env, err)
+			return accountDatabaseFailure(env, err)
 		}
 	}
 	action := "set"
@@ -149,11 +151,11 @@ func artifactExcludeFailure(env cli.Env, err error) int {
 	case errors.Is(err, artifactexclude.ErrConfigNotFound):
 		return writeError(env.Stderr, "not_found", "no sync configuration has this id")
 	}
-	return databaseFailure(env, err)
+	return accountDatabaseFailure(env, err)
 }
 
 func runArtifactExcludesShow(ctx context.Context, env cli.Env) int {
-	flags := newFlags(env, "dho admin sync-configs artifact-excludes show")
+	flags := newAccountFlags(env, "dho admin sync-configs artifact-excludes show")
 	var configID optString
 	flags.Var(&configID, "config-id", "sync configuration id, a UUID (required)")
 	if code, ok := parseArgs(flags, env); !ok {
@@ -163,7 +165,7 @@ func runArtifactExcludesShow(ctx context.Context, env cli.Env) int {
 	if !ok {
 		return cli.ExitUsage
 	}
-	op, closePool, code := operator(ctx, env)
+	op, closePool, code := accountOperator(ctx, env)
 	defer closePool()
 	if code != 0 {
 		return code
@@ -179,7 +181,7 @@ WHERE config.id = $1`, id).Scan(&org, &integrationID, &options, &config)
 		return artifactExcludeFailure(env, artifactexclude.ErrConfigNotFound)
 	}
 	if err != nil {
-		return databaseFailure(env, err)
+		return accountDatabaseFailure(env, err)
 	}
 	integrationPrefix := ""
 	if integrationID != nil {

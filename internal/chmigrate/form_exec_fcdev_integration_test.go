@@ -23,7 +23,7 @@ import (
 
 // DO NOT MERGE. This file executes the text of two prod read FORMs (FORM-7829-2.sql, FORM-14259-SIZE-2.sql), byte for byte
 // (the sha256 below is the sha256 of each .sql file), on the head schema with synthetic fixtures. It checks each WANT, that
-// each GATE fires on an over-bound fixture, and that each CONTROL fails under a planted mutation.
+// each GATE fires on a copy of the text with only its bound lowered, and that each CONTROL fails under a planted mutation.
 const (
 	formExec7829SHA256  = "40ef1b5b79a51b3f697e258889e41a2bd80305f606c54a218faca37985609233"
 	formExec14259SHA256 = "de0218e62c17171557a3e7cce0ae562424694e9bdc829d7630587488d9d4c88c"
@@ -589,14 +589,37 @@ func formExecExec(ctx context.Context, t *testing.T, conn driver.Conn, statement
 	}
 }
 
-// formExecStatements splits the FORM text as pm runs it: the pieces between ";\n", each named by its "-- S<n> ..." line.
-// A piece with no SQL line (only comments) is not a statement.
+// formExecStatements checks the sha256 of the FORM text and splits it (formExecSplit).
 func formExecStatements(t *testing.T, name, text, wantSHA string, want int) []formExecStatement {
 	t.Helper()
 	sum := sha256.Sum256([]byte(text))
 	if got := hex.EncodeToString(sum[:]); got != wantSHA {
 		t.Fatalf("%s: sha256 of the embedded text = %s, want %s (the .sql file)", name, got, wantSHA)
 	}
+	return formExecSplit(t, name, text, want)
+}
+
+// formExecLowered is a copy of the FORM text with one gate's bound literal(s) replaced by a small value: old must occur
+// exactly n times, the replacement nowhere, so the copy differs from the FORM only in those literals.
+func formExecLowered(t *testing.T, text, old, replacement string, n int) string {
+	t.Helper()
+	if got := strings.Count(text, old); got != n {
+		t.Fatalf("gate literal %q occurs %d times, want %d", old, got, n)
+	}
+	if strings.Contains(text, replacement) {
+		t.Fatalf("lowered literal %q already occurs in the FORM text", replacement)
+	}
+	lowered := strings.ReplaceAll(text, old, replacement)
+	if strings.Count(lowered, replacement) != n || strings.ReplaceAll(lowered, replacement, old) != text {
+		t.Fatalf("lowered copy differs from the FORM text in more than the %d literal(s) %q", n, old)
+	}
+	return lowered
+}
+
+// formExecSplit splits the FORM text as pm runs it: the pieces between ";\n", each named by its "-- S<n> ..." line.
+// A piece with no SQL line (only comments) is not a statement.
+func formExecSplit(t *testing.T, name, text string, want int) []formExecStatement {
+	t.Helper()
 	var statements []formExecStatement
 	for _, piece := range strings.Split(text, ";\n") {
 		statement := strings.TrimSpace(piece)
@@ -898,22 +921,32 @@ func TestFormExecFcdevCHAOS7829(t *testing.T) {
 		}
 	})
 
+	// Gate cells: a copy of the FORM text with only that gate's bound literal(s) lowered, on a fixture just over it.
+	membership := func(ctx context.Context, t *testing.T, conn driver.Conn, orgID, subject, occurred, eventID string, n int) {
+		t.Helper()
+		formExecExec(ctx, t, conn, fmt.Sprintf(`INSERT INTO project_membership_transitions (`+formExec7829Cols+`) SELECT '%s', toUUID('00000000-0000-0000-0000-000000000000'), 'work_item', %s, 'linear', '', 'P1', '', '', '', %s, toDateTime64('2026-09-02 00:00:00', 3), %s FROM numbers(%d)`,
+			orgID, subject, occurred, eventID, n))
+	}
+
 	t.Run("gate_parts", func(t *testing.T) {
 		ctx, conn := formExecOpen(t)
-		formExecExec(ctx, t, conn, `INSERT INTO project_membership_transitions (`+formExec7829Cols+`) SELECT '`+formExec7829Other+`', toUUID('00000000-0000-0000-0000-000000000000'), 'work_item', 'linear:BIG', 'linear', '', 'P1', '', '', '', addMilliseconds(toDateTime64('2026-09-01 00:00:00', 3), number), toDateTime64('2026-09-02 00:00:00', 3), 'linear:big' FROM numbers(20000001)`)
-		formExecGateCell(ctx, t, conn, "FORM-7829-2", statements, "FORM-7829-2 GATE parts", "S0", "S1", "S2", "S3", "S4")
+		lowered := formExecSplit(t, "FORM-7829-2 parts>50", formExecLowered(t, formExec7829SQL, "sum(rows) > 20000000", "sum(rows) > 50", 7), 5)
+		membership(ctx, t, conn, formExec7829Other, "'linear:BIG'", "addMilliseconds(toDateTime64('2026-09-01 00:00:00', 3), number)", "'linear:big'", 51)
+		formExecGateCell(ctx, t, conn, "FORM-7829-2 parts>50", lowered, "FORM-7829-2 GATE parts", "S0", "S1", "S2", "S3", "S4")
 	})
 
 	t.Run("gate_events", func(t *testing.T) {
 		ctx, conn := formExecOpen(t)
-		formExecExec(ctx, t, conn, `INSERT INTO project_membership_transitions (`+formExec7829Cols+`) SELECT '`+formExec7829Org+`', toUUID('00000000-0000-0000-0000-000000000000'), 'work_item', concat('linear:FX-', toString(number)), 'linear', '', 'P1', '', '', '', toDateTime64('2026-09-01 00:00:00', 3), toDateTime64('2026-09-02 00:00:00', 3), concat('linear:ev-', toString(number)) FROM numbers(2200000)`)
-		formExecGateCell(ctx, t, conn, "FORM-7829-2", statements, "FORM-7829-2 GATE events", "S1", "S2", "S3", "S4")
+		lowered := formExecSplit(t, "FORM-7829-2 events>5", formExecLowered(t, formExec7829SQL, "uniq(event_id) > 2000000", "uniq(event_id) > 5", 6), 5)
+		membership(ctx, t, conn, formExec7829Org, "concat('linear:FX-', toString(number))", "toDateTime64('2026-09-01 00:00:00', 3)", "concat('linear:ev-', toString(number))", 6)
+		formExecGateCell(ctx, t, conn, "FORM-7829-2 events>5", lowered, "FORM-7829-2 GATE events", "S1", "S2", "S3", "S4")
 	})
 
 	t.Run("gate_multi", func(t *testing.T) {
 		ctx, conn := formExecOpen(t)
-		formExecExec(ctx, t, conn, `INSERT INTO project_membership_transitions (`+formExec7829Cols+`) SELECT '`+formExec7829Org+`', toUUID('00000000-0000-0000-0000-000000000000'), 'work_item', 'linear:FX-1', 'linear', '', 'P1', '', '', '', addMilliseconds(toDateTime64('2026-09-01 00:00:00', 3), number), toDateTime64('2026-09-02 00:00:00', 3), 'linear:hist-big' FROM numbers(1000001)`)
-		formExecGateCell(ctx, t, conn, "FORM-7829-2", statements, "FORM-7829-2 GATE multi", "S3", "S4")
+		lowered := formExecSplit(t, "FORM-7829-2 multi>1/5", formExecLowered(t, formExec7829SQL, "count() > 10000 OR sum(g.n) > 1000000", "count() > 1 OR sum(g.n) > 5", 4), 5)
+		membership(ctx, t, conn, formExec7829Org, "'linear:FX-1'", "addMilliseconds(toDateTime64('2026-09-01 00:00:00', 3), number)", "concat('linear:hist-', toString(number % 2))", 6)
+		formExecGateCell(ctx, t, conn, "FORM-7829-2 multi>1/5", lowered, "FORM-7829-2 GATE multi", "S3", "S4")
 	})
 }
 
@@ -1106,38 +1139,47 @@ func TestFormExecFcdevCHAOS14259(t *testing.T) {
 		}
 	})
 
+	// Gate cells: a copy of the FORM text with only that gate's bound literal(s) lowered, on a fixture just over it.
 	bulk := func(ctx context.Context, t *testing.T, conn driver.Conn, run, suiteID, suiteName, slot string, n int) {
 		t.Helper()
 		formExecExec(ctx, t, conn, fmt.Sprintf(`INSERT INTO test_suite_results (org_id, repo_id, run_id, suite_id, suite_name, total_count, passed_count, failed_count, skipped_count, last_synced, report_slot, run_attempt) SELECT '%s', toUUID('%s'), %s, %s, %s, 1, 1, 0, 0, toDateTime64('2026-11-21 00:00:00', 3, 'UTC'), %s, 1 FROM numbers(%d)`,
 			formExec14259Org, formExec14259GitHub, run, suiteID, suiteName, slot, n))
 	}
+	lowered := func(t *testing.T, old, replacement string, n int) []formExecStatement {
+		t.Helper()
+		return formExecSplit(t, "FORM-14259-SIZE-2 "+replacement, formExecLowered(t, formExec14259SQL, old, replacement, n), 4)
+	}
 
 	t.Run("gate_suites", func(t *testing.T) {
 		ctx, conn := formExecOpen(t)
+		statements := lowered(t, "throwIf(count() > 3000000,", "throwIf(count() > 20,", 4)
 		formExec14259Repos(ctx, t, conn)
-		bulk(ctx, t, conn, "concat('big-', toString(intDiv(number, 100)))", "toString(number)", "'pkg'", "concat('s', toString(number % 100))", 3000001)
-		formExecGateCell(ctx, t, conn, "FORM-14259-SIZE-2", statements, "FORM-14259-SIZE-2 GATE suites", "S1", "S2", "S3")
+		bulk(ctx, t, conn, "concat('big-', toString(intDiv(number, 3)))", "toString(number)", "concat('pkg', toString(number))", "concat('s', toString(number % 3))", 21)
+		formExecGateCell(ctx, t, conn, "FORM-14259-SIZE-2 suites>20", statements, "FORM-14259-SIZE-2 GATE suites", "S1", "S2", "S3")
 	})
 
 	t.Run("gate_slots", func(t *testing.T) {
 		ctx, conn := formExecOpen(t)
+		statements := lowered(t, "max(x.slots) > 500", "max(x.slots) > 3", 4)
 		formExec14259Repos(ctx, t, conn)
-		bulk(ctx, t, conn, "'many'", "toString(number)", "concat('pkg', toString(number))", "concat('s', toString(number))", 501)
-		formExecGateCell(ctx, t, conn, "FORM-14259-SIZE-2", statements, "FORM-14259-SIZE-2 GATE slots", "S1", "S2", "S3")
+		bulk(ctx, t, conn, "'many'", "toString(number)", "concat('pkg', toString(number))", "concat('s', toString(number))", 4)
+		formExecGateCell(ctx, t, conn, "FORM-14259-SIZE-2 slots>3", statements, "FORM-14259-SIZE-2 GATE slots", "S1", "S2", "S3")
 	})
 
 	t.Run("gate_heads", func(t *testing.T) {
 		ctx, conn := formExecOpen(t)
+		statements := lowered(t, "max(z.c) > 16", "max(z.c) > 2", 4)
 		formExec14259Repos(ctx, t, conn)
-		bulk(ctx, t, conn, "'heads'", "toString(number)", "'pkg'", "concat('s', toString(number))", 17)
-		formExecGateCell(ctx, t, conn, "FORM-14259-SIZE-2", statements, "FORM-14259-SIZE-2 GATE heads", "S1", "S2", "S3")
+		bulk(ctx, t, conn, "'heads'", "toString(number)", "'pkg'", "concat('s', toString(number))", 3)
+		formExecGateCell(ctx, t, conn, "FORM-14259-SIZE-2 heads>2", statements, "FORM-14259-SIZE-2 GATE heads", "S1", "S2", "S3")
 	})
 
 	t.Run("gate_cases", func(t *testing.T) {
 		ctx, conn := formExecOpen(t)
+		statements := lowered(t, "count() > 10000000", "count() > 5", 1)
 		formExec14259Repos(ctx, t, conn)
 		bulk(ctx, t, conn, "'cases'", "concat('c', toString(number + 1), '@1/0-pkg')", "'pkg'", "concat('c', toString(number + 1))", 2)
-		formExecExec(ctx, t, conn, `INSERT INTO test_case_results (org_id, repo_id, run_id, suite_id, case_id, case_name, status, last_synced) SELECT '`+formExec14259Org+`', toUUID('`+formExec14259GitHub+`'), 'cases', 'c1@1/0-pkg', toString(number), 'x', 'passed', toDateTime64('2026-11-21 00:00:00', 3, 'UTC') FROM numbers(10000001)`)
-		formExecGateCell(ctx, t, conn, "FORM-14259-SIZE-2", statements, "FORM-14259-SIZE-2 GATE cases", "S2")
+		formExecExec(ctx, t, conn, `INSERT INTO test_case_results (org_id, repo_id, run_id, suite_id, case_id, case_name, status, last_synced) SELECT '`+formExec14259Org+`', toUUID('`+formExec14259GitHub+`'), 'cases', 'c1@1/0-pkg', toString(number), 'x', 'passed', toDateTime64('2026-11-21 00:00:00', 3, 'UTC') FROM numbers(6)`)
+		formExecGateCell(ctx, t, conn, "FORM-14259-SIZE-2 cases>5", statements, "FORM-14259-SIZE-2 GATE cases", "S2")
 	})
 }

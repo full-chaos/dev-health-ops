@@ -407,13 +407,15 @@ func spanChunkRun(t *testing.T, ctx context.Context, store EffectLedger, handler
 	return err
 }
 
-// requireOneStepOutcome: exactly one span of name, its outcome is want, and it has an Error status only on failed.
-func requireOneStepOutcome(t *testing.T, pipeline *spantest.Pipeline, name string, allowed []string, want string) {
+// requireOneStepOutcome: exactly one span of name, its key set is keys (raw and exported), its outcome is want, and it
+// has an Error status only on failed.
+func requireOneStepOutcome(t *testing.T, pipeline *spantest.Pipeline, name string, keys, allowed []string, want string) {
 	t.Helper()
 	pairs := pipeline.Pairs(name)
 	if len(pairs) != 1 {
 		t.Fatalf("%s spans = %d, want 1", name, len(pairs))
 	}
+	spantest.Check(t, pairs[0], keys)
 	if got := spanOutcome(t, pairs[0], allowed); got != want {
 		t.Errorf("%s outcome = %q, want %q", name, got, want)
 	}
@@ -467,7 +469,7 @@ func TestStepSpansOfACancelledStepAreCancelled(t *testing.T) {
 		if _, _, _, err := downloadGitHubTestsListedArtifact(ctx, client, spanRoot, spanArtifactRead, spanArtifactCapped, -1); err == nil {
 			t.Fatal("download err = nil, want the cancelled read")
 		}
-		requireOneStepOutcome(t, pipeline, spanDownloadName, spanDownloadOutcomes, spanOutcomeCancelled)
+		requireOneStepOutcome(t, pipeline, spanDownloadName, spanDownloadKeys, spanDownloadOutcomes, spanOutcomeCancelled)
 	})
 	t.Run("download transport cancelled", func(t *testing.T) {
 		pipeline := spantest.Install(t)
@@ -480,7 +482,20 @@ func TestStepSpansOfACancelledStepAreCancelled(t *testing.T) {
 		if _, _, _, err := downloadGitHubTestsListedArtifact(ctx, client, spanRoot, spanArtifactRead, spanArtifactCapped, -1); err == nil {
 			t.Fatal("download err = nil, want the cancelled request")
 		}
-		requireOneStepOutcome(t, pipeline, spanDownloadName, spanDownloadOutcomes, spanOutcomeCancelled)
+		requireOneStepOutcome(t, pipeline, spanDownloadName, spanDownloadKeys, spanDownloadOutcomes, spanOutcomeCancelled)
+	})
+	t.Run("download transport cancel joined with a failure", func(t *testing.T) {
+		pipeline := spantest.Install(t)
+		ctx, cancel := context.WithCancel(pipeline.Parent)
+		defer cancel()
+		client := githubTestsClient(t, spanDoer(func(*http.Request) (*http.Response, error) {
+			cancel()
+			return nil, errors.Join(context.Canceled, io.ErrUnexpectedEOF)
+		}))
+		if _, _, _, err := downloadGitHubTestsListedArtifact(ctx, client, spanRoot, spanArtifactRead, spanArtifactCapped, -1); err == nil {
+			t.Fatal("download err = nil, want the failed request")
+		}
+		requireOneStepOutcome(t, pipeline, spanDownloadName, spanDownloadKeys, spanDownloadOutcomes, spanOutcomeFailed)
 	})
 	for _, tc := range []struct {
 		name   string
@@ -491,6 +506,7 @@ func TestStepSpansOfACancelledStepAreCancelled(t *testing.T) {
 		{"prepare store cancelled", true, NewChunkStoreError(context.Canceled), spanOutcomeCancelled},
 		{"prepare store cancel error under a live context", false, NewChunkStoreError(context.Canceled), spanOutcomeFailed},
 		{"prepare bare conflict under a cancelled context", true, ErrChunkCheckpointConflict, spanOutcomeFailed},
+		{"prepare plain cancel error under a live context", false, context.Canceled, spanOutcomeFailed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pipeline := spantest.Install(t)
@@ -503,7 +519,7 @@ func TestStepSpansOfACancelledStepAreCancelled(t *testing.T) {
 			if err := spanChunkRun(t, ctx, store, nil, nil); err == nil {
 				t.Fatal("execute err = nil, want the prepare failure")
 			}
-			requireOneStepOutcome(t, pipeline, spanPrepareName, spanPrepareOutcomes, tc.want)
+			requireOneStepOutcome(t, pipeline, spanPrepareName, spanChunkKeys, spanPrepareOutcomes, tc.want)
 		})
 	}
 }

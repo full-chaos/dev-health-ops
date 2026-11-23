@@ -461,6 +461,23 @@ func onlyRequestSpan(t *testing.T, pipeline *spantest.Pipeline) spantest.Pair {
 	return pairs[0]
 }
 
+// spanTestTransport is a transport that answers in place: it writes nothing on a wire, so no WroteRequest fires.
+type spanTestTransport func(*http.Request) (*http.Response, error)
+
+func (f spanTestTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+// spanTestRedirectThenFail follows redirects: the first request gets a same-origin 302, the hop fails in the transport.
+func spanTestRedirectThenFail() *http.Client {
+	return &http.Client{Transport: spanTestTransport(func(request *http.Request) (*http.Response, error) {
+		if request.Response == nil {
+			return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": {"/hop"}}, Body: io.NopCloser(strings.NewReader("")), Request: request}, nil
+		}
+		return nil, errors.New("aaaa")
+	})}
+}
+
 func spanTestStatusDoer(status int, header http.Header) HTTPDoerFunc {
 	return func(request *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: status, Header: header, Body: io.NopCloser(strings.NewReader(`{}`)), Request: request}, nil
@@ -527,7 +544,7 @@ func TestProviderRequestSpanKeepsTheStatusOfTheLastAttempt(t *testing.T) {
 			closeBody(response)
 			return err
 		}, attempts: 0, outcome: "failed", errorType: "authentication"},
-		{name: "503 then a transport failure on the last attempt", call: func(t *testing.T, ctx context.Context) error {
+		{name: "503 then a retry that fails before it is written", call: func(t *testing.T, ctx context.Context) error {
 			calls := 0
 			unavailable := spanTestStatusDoer(http.StatusServiceUnavailable, nil)
 			client := spanTestClient(t, "https://api.example.test", fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
@@ -540,7 +557,39 @@ func TestProviderRequestSpanKeepsTheStatusOfTheLastAttempt(t *testing.T) {
 			response, err := client.Do(ctx, http.MethodGet, "/repos/"+spanTestOwner+"/"+spanTestRepo, nil)
 			closeBody(response)
 			return err
+		}, status: http.StatusServiceUnavailable, attempts: 2, outcome: "failed", errorType: "transient"},
+		{name: "503 then a retry that is written and gets no response", call: func(t *testing.T, ctx context.Context) error {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) == 1 {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				connection, _, err := http.NewResponseController(w).Hijack()
+				if err != nil {
+					t.Errorf("hijack: %v", err)
+					return
+				}
+				_ = connection.Close()
+			}))
+			t.Cleanup(server.Close)
+			client := spanTestClient(t, server.URL, &http.Client{}, RetryPolicy{MaxAttempts: 2, InitialWait: time.Millisecond, MaxWait: 2 * time.Millisecond})
+			response, err := client.Do(ctx, http.MethodGet, "/repos/"+spanTestOwner+"/"+spanTestRepo, nil)
+			closeBody(response)
+			return err
 		}, attempts: 2, outcome: "failed", errorType: "transient"},
+		{name: "a redirect, then the next hop fails before it is written", call: func(t *testing.T, ctx context.Context) error {
+			client := spanTestClient(t, "https://api.example.test", spanTestRedirectThenFail(), oneAttempt())
+			response, err := client.Do(ctx, http.MethodGet, "/repos/"+spanTestOwner+"/"+spanTestRepo, nil)
+			closeBody(response)
+			return err
+		}, status: http.StatusFound, attempts: 1, outcome: "failed", errorType: "transient"},
+		{name: "an unauthenticated redirect, then the next hop fails before it is written", call: func(t *testing.T, ctx context.Context) error {
+			client := spanTestClient(t, "https://api.example.test", spanTestRedirectThenFail(), oneAttempt())
+			response, err := client.DoUnauthenticated(ctx, http.MethodGet, "https://objects.example.test/blob")
+			closeBody(response)
+			return err
+		}, status: http.StatusFound, attempts: 1, outcome: "failed", errorType: "transient"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -575,13 +624,15 @@ func TestProviderRequestSpanKeepsTheStatusOfTheLastAttempt(t *testing.T) {
 // code cancelled itself) and a cancellation joined with a failed budget release stay failures.
 func TestProviderRequestSpanOfACancelledCallIsCancelled(t *testing.T) {
 	cases := []struct {
-		name      string
-		cancel    bool
-		budget    BudgetStore
-		outcome   string
-		errorType string
+		name         string
+		cancel       bool
+		budget       BudgetStore
+		transportErr error
+		outcome      string
+		errorType    string
 	}{
 		{name: "cancelled during the attempt", cancel: true, outcome: "cancelled"},
+		{name: "cancelled with a failure leaf in the transport error", cancel: true, transportErr: errors.Join(context.Canceled, io.ErrUnexpectedEOF), outcome: "failed", errorType: "transient"},
 		{name: "a cancel error under a live context", outcome: "failed", errorType: "transient"},
 		{name: "cancelled and the budget release fails", cancel: true, budget: spanTestBudget{releaseErr: errors.New("aaaa")}, outcome: "failed", errorType: "transient"},
 	}
@@ -593,6 +644,9 @@ func TestProviderRequestSpanOfACancelledCallIsCancelled(t *testing.T) {
 				client := spanTestClient(t, "https://api.example.test", fakehttp.Client(HTTPDoerFunc(func(*http.Request) (*http.Response, error) {
 					if tc.cancel {
 						cancel()
+					}
+					if tc.transportErr != nil {
+						return nil, tc.transportErr
 					}
 					return nil, context.Canceled
 				})), oneAttempt())

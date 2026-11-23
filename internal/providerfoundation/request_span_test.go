@@ -1,11 +1,16 @@
 package providerfoundation
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"net/url"
 	"reflect"
 	"slices"
@@ -16,8 +21,10 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/spantest"
 )
@@ -288,7 +295,8 @@ func (b spanTestBudget) Acquire(context.Context, BudgetKey) (Reservation, error)
 // C4: the span changes no return value. Each case runs the same call twice, under a recording parent with the real
 // provider and with a noop provider: the errors are deeply equal, errors.Is keeps its answer and the response is nil
 // both times. error.type is the closed class; ErrBudgetContended is no failure (outcome budget_contended, no Error
-// status, no error.type).
+// status, no error.type). status is the status that arrived on the wire (0: none): a budget release that fails after a
+// 200 keeps the 200 on the span although the call returns no response.
 func TestProviderRequestSpanChangesNoReturnValue(t *testing.T) {
 	ok := HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(io.MultiReader()), Request: request}, nil
@@ -300,12 +308,13 @@ func TestProviderRequestSpanChangesNoReturnValue(t *testing.T) {
 		is        error
 		outcome   string
 		errorType string
+		status    int64
 	}{
 		{name: "transport failure", doer: HTTPDoerFunc(func(*http.Request) (*http.Response, error) {
 			return nil, errors.New("dial tcp 10.9.8.7:443: refused near " + spanTestSecret)
 		}), outcome: "failed", errorType: "transient"},
 		{name: "budget contended", doer: ok, budget: spanTestBudget{acquireErr: ErrBudgetContended}, is: ErrBudgetContended, outcome: "budget_contended"},
-		{name: "budget release failure", doer: ok, budget: spanTestBudget{releaseErr: errors.New("valkey down " + spanTestSecret)}, is: ErrBudgetUnavailable, outcome: "failed", errorType: "other"},
+		{name: "budget release failure", doer: ok, budget: spanTestBudget{releaseErr: errors.New("valkey down " + spanTestSecret)}, is: ErrBudgetUnavailable, outcome: "failed", errorType: "other", status: http.StatusOK},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -337,11 +346,14 @@ func TestProviderRequestSpanChangesNoReturnValue(t *testing.T) {
 					t.Fatalf("request spans = %d, want 1", len(pairs))
 				}
 				pair := pairs[0]
-				var providerErr *ProviderError
-				status := errors.As(traced, &providerErr) && providerErr.StatusCode > 0
-				spantest.Check(t, pair, spanTestWantKeys(status, tc.errorType != ""), spanTestSecret, "10.9.8.7", "refused", "dial tcp",
+				spantest.Check(t, pair, spanTestWantKeys(tc.status > 0, tc.errorType != ""), spanTestSecret, "10.9.8.7", "refused", "dial tcp",
 					"valkey", "api.example.test", "objects.example.test", spanTestOwner, spanTestRepo)
 				requireRequestEnums(t, pair, "github", "unrouted", LedgerUnclassified)
+				if tc.status > 0 {
+					if got := spanTestInt(t, pair, "http.response.status_code"); got != tc.status {
+						t.Errorf("status = %d, want %d", got, tc.status)
+					}
+				}
 				if got := spanTestString(t, pair, "outcome"); got != tc.outcome {
 					t.Errorf("outcome = %q, want %q", got, tc.outcome)
 				}
@@ -413,13 +425,475 @@ func TestRequestSpanGuardTakesANilContext(t *testing.T) {
 	})), oneAttempt())
 	var nilCtx context.Context
 	for _, target := range []string{requestTargetAPI, requestTargetRedirect} {
-		ctx, probe := client.startRequestSpan(nilCtx, http.MethodGet, target)
-		if ctx != nil || probe != nil {
-			t.Fatalf("target %s: ctx=%v probe=%v, want nil and nil", target, ctx, probe)
+		probe := client.startRequestSpan(nilCtx, http.MethodGet, target)
+		if probe != nil {
+			t.Fatalf("target %s: probe=%v, want nil", target, probe)
 		}
-		probe.end(nil, nil)
+		probe.end(nilCtx, nil)
 	}
 	if spans := pipeline.Ended(); len(spans) != 0 {
 		t.Fatalf("spans = %d, want 0", len(spans))
+	}
+}
+
+// spanTestGate answers its scripted waits in order, then 0; Penalize returns penalizeErr.
+type spanTestGate struct {
+	waits       []time.Duration
+	calls       int
+	penalizeErr error
+}
+
+func (g *spanTestGate) Wait(context.Context) (time.Duration, error) {
+	g.calls++
+	if g.calls <= len(g.waits) {
+		return g.waits[g.calls-1], nil
+	}
+	return 0, nil
+}
+
+func (g *spanTestGate) Penalize(context.Context, time.Duration) error { return g.penalizeErr }
+
+func onlyRequestSpan(t *testing.T, pipeline *spantest.Pipeline) spantest.Pair {
+	t.Helper()
+	pairs := pipeline.Pairs(spanTestRequestName)
+	if len(pairs) != 1 {
+		t.Fatalf("request spans = %d, want 1", len(pairs))
+	}
+	return pairs[0]
+}
+
+// spanTestTransport is a transport that answers in place: it writes nothing on a wire, so no WroteRequest fires.
+type spanTestTransport func(*http.Request) (*http.Response, error)
+
+func (f spanTestTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+// spanTestRedirectThenFail follows redirects: the first request gets a same-origin 302, the hop fails in the transport.
+func spanTestRedirectThenFail() *http.Client {
+	return &http.Client{Transport: spanTestTransport(func(request *http.Request) (*http.Response, error) {
+		if request.Response == nil {
+			return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": {"/hop"}}, Body: io.NopCloser(strings.NewReader("")), Request: request}, nil
+		}
+		return nil, errors.New("aaaa")
+	})}
+}
+
+// spanTestLateWrite answers the first request with status at once and holds back its write report; the next request
+// (a redirect hop, or a retry when retry is set) first delivers that late report, then fails before it is written, as
+// HTTP/1 can report a write after the response arrived.
+func spanTestLateWrite(status int, retry bool) *http.Client {
+	var held *httptrace.ClientTrace
+	answered := false
+	transport := spanTestTransport(func(request *http.Request) (*http.Response, error) {
+		if !answered {
+			answered = true
+			held = httptrace.ContextClientTrace(request.Context())
+			header := http.Header{}
+			if !retry {
+				header.Set("Location", "/hop")
+			}
+			return &http.Response{StatusCode: status, Header: header, Body: io.NopCloser(strings.NewReader("")), Request: request}, nil
+		}
+		if held != nil && held.WroteRequest != nil {
+			held.WroteRequest(httptrace.WroteRequestInfo{})
+		}
+		return nil, errors.New("aaaa")
+	})
+	if retry {
+		return fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) { return transport(request) })).(*http.Client)
+	}
+	return &http.Client{Transport: transport}
+}
+
+func spanTestStatusDoer(status int, header http.Header) HTTPDoerFunc {
+	return func(request *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: status, Header: header, Body: io.NopCloser(strings.NewReader(`{}`)), Request: request}, nil
+	}
+}
+
+// The status on the request span is the status of the response to the LAST wire attempt sent, read at the wire: a
+// status that arrived stays on the span when the call fails after it (a gate write, a cancelled backoff, a refused
+// redirect), and a status this request never received (a token exchange 401 before the request was sent) is never on it.
+func TestProviderRequestSpanKeepsTheStatusOfTheLastAttempt(t *testing.T) {
+	cases := []struct {
+		name      string
+		call      func(t *testing.T, ctx context.Context) error
+		status    int64
+		attempts  int64
+		outcome   string
+		errorType string
+	}{
+		{name: "429 then the gate write fails", call: func(t *testing.T, ctx context.Context) error {
+			client := spanTestClient(t, "https://api.example.test", fakehttp.Client(spanTestStatusDoer(http.StatusTooManyRequests, http.Header{"Retry-After": {"1"}})), oneAttempt())
+			client.Gate = &spanTestGate{penalizeErr: errors.New("aaaa")}
+			response, err := client.Do(ctx, http.MethodGet, "/repos/"+spanTestOwner+"/"+spanTestRepo, nil)
+			closeBody(response)
+			return err
+		}, status: http.StatusTooManyRequests, attempts: 1, outcome: "failed", errorType: "other"},
+		{name: "503 then a cancelled backoff", call: func(t *testing.T, ctx context.Context) error {
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			unavailable := spanTestStatusDoer(http.StatusServiceUnavailable, nil)
+			client := spanTestClient(t, "https://api.example.test", fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+				cancel()
+				return unavailable(request)
+			})), RetryPolicy{MaxAttempts: 2, InitialWait: 10 * time.Second, MaxWait: 10 * time.Second})
+			response, err := client.Do(ctx, http.MethodGet, "/repos/"+spanTestOwner+"/"+spanTestRepo, nil)
+			closeBody(response)
+			return err
+		}, status: http.StatusServiceUnavailable, attempts: 1, outcome: "cancelled"},
+		{name: "302 refused by the origin guard", call: func(t *testing.T, ctx context.Context) error {
+			other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, `{}`) }))
+			t.Cleanup(other.Close)
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, other.URL+"/elsewhere", http.StatusFound)
+			}))
+			t.Cleanup(api.Close)
+			client := spanTestClient(t, api.URL, &http.Client{}, oneAttempt())
+			response, err := client.Do(ctx, http.MethodGet, "/repos/"+spanTestOwner+"/"+spanTestRepo, nil)
+			closeBody(response)
+			if !errors.Is(err, ErrCredentialInvalid) {
+				t.Fatalf("err = %v, want ErrCredentialInvalid", err)
+			}
+			return err
+		}, status: http.StatusFound, attempts: 1, outcome: "failed", errorType: "other"},
+		{name: "a token exchange 401 before the request is sent", call: func(t *testing.T, ctx context.Context) error {
+			client, err := NewHTTPClient("github", "https://api.example.test", fakehttp.Client(HTTPDoerFunc(func(*http.Request) (*http.Response, error) {
+				t.Error("the request was sent")
+				return nil, errors.New("aaaa")
+			})), func(*http.Request) error {
+				return &ProviderError{Class: ErrorAuthentication, StatusCode: http.StatusUnauthorized}
+			}, oneAttempt(), LeaseGuardFunc(func(context.Context) error { return nil }))
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := client.Do(ctx, http.MethodGet, "/repos/"+spanTestOwner+"/"+spanTestRepo, nil)
+			closeBody(response)
+			return err
+		}, attempts: 0, outcome: "failed", errorType: "authentication"},
+		{name: "503 then a retry that fails before it is written", call: func(t *testing.T, ctx context.Context) error {
+			calls := 0
+			unavailable := spanTestStatusDoer(http.StatusServiceUnavailable, nil)
+			client := spanTestClient(t, "https://api.example.test", fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				if calls == 1 {
+					return unavailable(request)
+				}
+				return nil, errors.New("aaaa")
+			})), RetryPolicy{MaxAttempts: 2, InitialWait: time.Millisecond, MaxWait: 2 * time.Millisecond})
+			response, err := client.Do(ctx, http.MethodGet, "/repos/"+spanTestOwner+"/"+spanTestRepo, nil)
+			closeBody(response)
+			return err
+		}, status: http.StatusServiceUnavailable, attempts: 2, outcome: "failed", errorType: "transient"},
+		{name: "503 then a retry that is written and gets no response", call: func(t *testing.T, ctx context.Context) error {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) == 1 {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				connection, _, err := http.NewResponseController(w).Hijack()
+				if err != nil {
+					t.Errorf("hijack: %v", err)
+					return
+				}
+				_ = connection.Close()
+			}))
+			t.Cleanup(server.Close)
+			client := spanTestClient(t, server.URL, &http.Client{}, RetryPolicy{MaxAttempts: 2, InitialWait: time.Millisecond, MaxWait: 2 * time.Millisecond})
+			response, err := client.Do(ctx, http.MethodGet, "/repos/"+spanTestOwner+"/"+spanTestRepo, nil)
+			closeBody(response)
+			return err
+		}, attempts: 2, outcome: "failed", errorType: "transient"},
+		{name: "a redirect, then the next hop fails before it is written", call: func(t *testing.T, ctx context.Context) error {
+			client := spanTestClient(t, "https://api.example.test", spanTestRedirectThenFail(), oneAttempt())
+			response, err := client.Do(ctx, http.MethodGet, "/repos/"+spanTestOwner+"/"+spanTestRepo, nil)
+			closeBody(response)
+			return err
+		}, status: http.StatusFound, attempts: 1, outcome: "failed", errorType: "transient"},
+		{name: "a redirect whose write reports late, then the next hop fails before it is written", call: func(t *testing.T, ctx context.Context) error {
+			client := spanTestClient(t, "https://api.example.test", spanTestLateWrite(http.StatusFound, false), oneAttempt())
+			response, err := client.Do(ctx, http.MethodGet, "/repos/"+spanTestOwner+"/"+spanTestRepo, nil)
+			closeBody(response)
+			return err
+		}, status: http.StatusFound, attempts: 1, outcome: "failed", errorType: "transient"},
+		{name: "an unauthenticated redirect whose write reports late, then the next hop fails before it is written", call: func(t *testing.T, ctx context.Context) error {
+			client := spanTestClient(t, "https://api.example.test", spanTestLateWrite(http.StatusFound, false), oneAttempt())
+			response, err := client.DoUnauthenticated(ctx, http.MethodGet, "https://objects.example.test/blob")
+			closeBody(response)
+			return err
+		}, status: http.StatusFound, attempts: 1, outcome: "failed", errorType: "transient"},
+		{name: "503 whose write reports late, then a retry that fails before it is written", call: func(t *testing.T, ctx context.Context) error {
+			client := spanTestClient(t, "https://api.example.test", spanTestLateWrite(http.StatusServiceUnavailable, true),
+				RetryPolicy{MaxAttempts: 2, InitialWait: time.Millisecond, MaxWait: 2 * time.Millisecond})
+			response, err := client.Do(ctx, http.MethodGet, "/repos/"+spanTestOwner+"/"+spanTestRepo, nil)
+			closeBody(response)
+			return err
+		}, status: http.StatusServiceUnavailable, attempts: 2, outcome: "failed", errorType: "transient"},
+		{name: "an unauthenticated redirect, then the next hop fails before it is written", call: func(t *testing.T, ctx context.Context) error {
+			client := spanTestClient(t, "https://api.example.test", spanTestRedirectThenFail(), oneAttempt())
+			response, err := client.DoUnauthenticated(ctx, http.MethodGet, "https://objects.example.test/blob")
+			closeBody(response)
+			return err
+		}, status: http.StatusFound, attempts: 1, outcome: "failed", errorType: "transient"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pipeline := spantest.Install(t)
+			if err := tc.call(t, pipeline.Parent); err == nil {
+				t.Fatal("call err = nil, want the failure")
+			}
+			pair := onlyRequestSpan(t, pipeline)
+			spantest.Check(t, pair, spanTestWantKeys(tc.status > 0, tc.errorType != ""), spanTestOwner, spanTestRepo, "127.0.0.1", "elsewhere")
+			if tc.status > 0 {
+				if got := spanTestInt(t, pair, "http.response.status_code"); got != tc.status {
+					t.Errorf("status = %d, want %d", got, tc.status)
+				}
+			}
+			if got := spanTestInt(t, pair, "dev_health.provider.attempts"); got != tc.attempts {
+				t.Errorf("attempts = %d, want %d", got, tc.attempts)
+			}
+			if got := spanTestString(t, pair, "outcome"); got != tc.outcome {
+				t.Errorf("outcome = %q, want %q", got, tc.outcome)
+			}
+			if tc.errorType != "" {
+				if got := spanTestString(t, pair, "error.type"); got != tc.errorType {
+					t.Errorf("error.type = %q, want %q", got, tc.errorType)
+				}
+			}
+		})
+	}
+}
+
+// A call that ended only because its context was cancelled is outcome cancelled with no Error status, also when the
+// transport turned the cancellation into a transient ProviderError. A cancel error under a live context (a context the
+// code cancelled itself) and a cancellation joined with a failed budget release stay failures.
+func TestProviderRequestSpanOfACancelledCallIsCancelled(t *testing.T) {
+	cases := []struct {
+		name         string
+		cancel       bool
+		budget       BudgetStore
+		transportErr error
+		outcome      string
+		errorType    string
+	}{
+		{name: "cancelled during the attempt", cancel: true, outcome: "cancelled"},
+		{name: "cancelled with a failure leaf in the transport error", cancel: true, transportErr: errors.Join(context.Canceled, io.ErrUnexpectedEOF), outcome: "failed", errorType: "transient"},
+		{name: "a cancel error under a live context", outcome: "failed", errorType: "transient"},
+		{name: "cancelled and the budget release fails", cancel: true, budget: spanTestBudget{releaseErr: errors.New("aaaa")}, outcome: "failed", errorType: "transient"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, unauthenticated := range []bool{false, true} {
+				pipeline := spantest.Install(t)
+				ctx, cancel := context.WithCancel(pipeline.Parent)
+				client := spanTestClient(t, "https://api.example.test", fakehttp.Client(HTTPDoerFunc(func(*http.Request) (*http.Response, error) {
+					if tc.cancel {
+						cancel()
+					}
+					if tc.transportErr != nil {
+						return nil, tc.transportErr
+					}
+					return nil, context.Canceled
+				})), oneAttempt())
+				if tc.budget != nil {
+					client.Budget = tc.budget
+				}
+				var response *http.Response
+				var err error
+				if unauthenticated {
+					response, err = client.DoUnauthenticated(ctx, http.MethodGet, "https://objects.example.test/blob")
+				} else {
+					response, err = client.Do(ctx, http.MethodGet, "/repos/"+spanTestOwner+"/"+spanTestRepo, nil)
+				}
+				closeBody(response)
+				cancel()
+				if err == nil {
+					t.Fatalf("unauthenticated=%v: err = nil, want the cancellation", unauthenticated)
+				}
+				pair := onlyRequestSpan(t, pipeline)
+				spantest.Check(t, pair, spanTestWantKeys(false, tc.errorType != ""), spanTestOwner, spanTestRepo, "objects.example.test")
+				if got := spanTestString(t, pair, "outcome"); got != tc.outcome {
+					t.Errorf("unauthenticated=%v: outcome = %q, want %q", unauthenticated, got, tc.outcome)
+				}
+				if failed := pair.Raw.Status().Code == codes.Error; failed != (tc.errorType != "") {
+					t.Errorf("unauthenticated=%v: Error status = %v, want %v", unauthenticated, failed, tc.errorType != "")
+				}
+				if tc.errorType != "" {
+					if got := spanTestString(t, pair, "error.type"); got != tc.errorType {
+						t.Errorf("unauthenticated=%v: error.type = %q, want %q", unauthenticated, got, tc.errorType)
+					}
+				}
+			}
+		})
+	}
+}
+
+// gate_wait_ms is the time in the gate reads and the in-place gate sleeps only; the lease assert after a gate sleep is
+// lease time like every other assert of the call. Both sides are durations measured in this process: the span against
+// the asserts' own clock (D6418).
+func TestProviderRequestGateWaitExcludesTheLeaseAssert(t *testing.T) {
+	const assertTime = 100 * time.Millisecond
+	for _, tc := range []struct {
+		name            string
+		unauthenticated bool
+		asserts         int
+	}{{"Do", false, 3}, {"DoUnauthenticated", true, 2}} {
+		t.Run(tc.name, func(t *testing.T) {
+			pipeline := spantest.Install(t)
+			client := spanTestClient(t, "https://api.example.test", fakehttp.Client(spanTestStatusDoer(http.StatusOK, nil)), oneAttempt())
+			client.Gate = &spanTestGate{waits: []time.Duration{time.Millisecond}}
+			client.GateWaitMax = time.Second
+			asserts := 0
+			var assertTotal, assertShortest time.Duration
+			client.Lease = LeaseGuardFunc(func(context.Context) error {
+				started := time.Now()
+				time.Sleep(assertTime)
+				took := time.Since(started)
+				asserts++
+				assertTotal += took
+				if assertShortest == 0 || took < assertShortest {
+					assertShortest = took
+				}
+				return nil
+			})
+			var response *http.Response
+			var err error
+			if tc.unauthenticated {
+				response, err = client.DoUnauthenticated(pipeline.Parent, http.MethodGet, "https://objects.example.test/blob")
+			} else {
+				response, err = client.Do(pipeline.Parent, http.MethodGet, "/items", nil)
+			}
+			closeBody(response)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pair := onlyRequestSpan(t, pipeline)
+			if asserts != tc.asserts {
+				t.Fatalf("lease asserts = %d, want %d", asserts, tc.asserts)
+			}
+			// spent and waited are durations the probe measured in this process, compared with the asserts' own clock.
+			spent, waited := spanTestInt(t, pair, "dev_health.provider.lease_ms"), spanTestInt(t, pair, "dev_health.provider.gate_wait_ms")
+			if spent < assertTotal.Milliseconds() {
+				t.Errorf("lease_ms = %d, want >= %d (the time of every assert, measured by the asserts)", spent, assertTotal.Milliseconds())
+			}
+			if waited >= assertShortest.Milliseconds() {
+				t.Errorf("gate_wait_ms = %d, want < %d (shorter than one assert: no assert in it)", waited, assertShortest.Milliseconds())
+			}
+		})
+	}
+}
+
+// Existing log lines written during a provider call keep the caller's span: the request span is never the span of the
+// context those lines read.
+func TestExistingProviderLogLinesKeepTheCallersSpan(t *testing.T) {
+	for _, unauthenticated := range []bool{false, true} {
+		pipeline := spantest.Install(t)
+		client := spanTestClient(t, "https://api.example.test", fakehttp.Client(spanTestStatusDoer(http.StatusOK, nil)), oneAttempt())
+		client.Gate = &spanTestGate{waits: []time.Duration{time.Millisecond}}
+		client.GateWaitMax = time.Second
+		var out bytes.Buffer
+		func() {
+			restore := logging.InstallDefault(logging.NewJSON(&out, slog.LevelInfo))
+			defer restore()
+			var response *http.Response
+			var err error
+			if unauthenticated {
+				response, err = client.DoUnauthenticated(pipeline.Parent, http.MethodGet, "https://objects.example.test/blob")
+			} else {
+				response, err = client.Do(pipeline.Parent, http.MethodGet, "/items", nil)
+			}
+			closeBody(response)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}()
+		onlyRequestSpan(t, pipeline)
+		parent := trace.SpanContextFromContext(pipeline.Parent)
+		lines := 0
+		for _, raw := range bytes.Split(out.Bytes(), []byte("\n")) {
+			if len(bytes.TrimSpace(raw)) == 0 {
+				continue
+			}
+			var line map[string]any
+			if err := json.Unmarshal(raw, &line); err != nil {
+				t.Fatalf("log line is not JSON: %v", err)
+			}
+			if line["msg"] != "provider_gate_wait_slept" {
+				continue
+			}
+			lines++
+			if line["span_id"] != parent.SpanID().String() || line["trace_id"] != parent.TraceID().String() {
+				t.Errorf("unauthenticated=%v: gate line span_id=%v trace_id=%v, want the caller's %s %s",
+					unauthenticated, line["span_id"], line["trace_id"], parent.SpanID(), parent.TraceID())
+			}
+		}
+		if lines != 1 {
+			t.Fatalf("unauthenticated=%v: provider_gate_wait_slept lines = %d, want 1", unauthenticated, lines)
+		}
+	}
+}
+
+type spanTestJoinErr []error
+
+func (e spanTestJoinErr) Error() string   { return "aaaa" }
+func (e spanTestJoinErr) Unwrap() []error { return e }
+
+// CallCancelled: a cancelled context AND only cancellation leaves (raw, wrapped, the transport's canceled reason, or a
+// named label beside one). Anything else is a failure.
+func TestCallCancelledNeedsACancelledContextAndOnlyCancellationLeaves(t *testing.T) {
+	label := errors.New("label")
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	expired, stop := context.WithDeadline(context.Background(), time.Unix(1, 0))
+	defer stop()
+	transportCanceled := &ProviderError{Class: ErrorTransient, Reason: TransportReasonCanceled}
+	cases := []struct {
+		name   string
+		ctx    context.Context
+		err    error
+		labels []error
+		want   bool
+	}{
+		{"raw cancel", cancelled, context.Canceled, nil, true},
+		{"wrapped cancel", cancelled, &url.Error{Op: "Get", URL: "x", Err: context.Canceled}, nil, true},
+		{"wrapped failure under a cancelled context", cancelled, fmt.Errorf("aaaa: %w", errors.New("aaaa")), nil, false},
+		{"transport canceled reason", cancelled, transportCanceled, nil, true},
+		{"label beside a cancel", cancelled, spanTestJoinErr{label, context.Canceled}, []error{label}, true},
+		{"cancel under a live context", context.Background(), context.Canceled, nil, false},
+		{"nil context", nil, context.Canceled, nil, false},
+		{"nil error", cancelled, nil, nil, false},
+		{"deadline", expired, context.DeadlineExceeded, nil, false},
+		{"label alone", cancelled, label, []error{label}, false},
+		{"label not named", cancelled, spanTestJoinErr{label, context.Canceled}, nil, false},
+		{"cancel joined with a failure", cancelled, errors.Join(transportCanceled, ErrBudgetUnavailable), nil, false},
+		{"other transport reason", cancelled, &ProviderError{Class: ErrorTransient, Reason: TransportReasonTimeout}, nil, false},
+		{"empty join", cancelled, spanTestJoinErr{}, nil, false},
+	}
+	for _, tc := range cases {
+		if got := CallCancelled(tc.ctx, tc.err, tc.labels...); got != tc.want {
+			t.Errorf("%s: CallCancelled = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A plain Do under a recording caller span is a child of that span in the caller's trace: never a new root.
+func TestProviderRequestSpanIsAChildOfTheCallersSpan(t *testing.T) {
+	pipeline := spantest.Install(t)
+	client := spanTestClient(t, "https://api.example.test", fakehttp.Client(spanTestStatusDoer(http.StatusOK, nil)), oneAttempt())
+	response, err := client.Do(pipeline.Parent, http.MethodGet, "/items", nil)
+	closeBody(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair := onlyRequestSpan(t, pipeline)
+	caller := trace.SpanContextFromContext(pipeline.Parent)
+	if pair.Raw.Parent().SpanID() != caller.SpanID() || pair.Raw.SpanContext().TraceID() != caller.TraceID() {
+		t.Errorf("request span parent=%s trace=%s, want the caller's span %s in the caller's trace %s",
+			pair.Raw.Parent().SpanID(), pair.Raw.SpanContext().TraceID(), caller.SpanID(), caller.TraceID())
+	}
+	if pair.Exported.Parent.SpanID() != caller.SpanID() || pair.Exported.SpanContext.TraceID() != caller.TraceID() {
+		t.Errorf("exported request span parent=%s trace=%s, want the caller's", pair.Exported.Parent.SpanID(), pair.Exported.SpanContext.TraceID())
 	}
 }

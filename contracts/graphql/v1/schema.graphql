@@ -2344,6 +2344,11 @@ type TestOpsRiskBreakdownItem {
 input TestOpsRiskInput {
   startDate: Date!
   endDate: Date!
+  repoIds: [String!] = null
+  """
+  Team ids. Narrows to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. With ``repoIds`` both apply.
+  """
+  teamIds: [String!] = null
 }
 
 type TestOpsRiskQuadrantPoint {

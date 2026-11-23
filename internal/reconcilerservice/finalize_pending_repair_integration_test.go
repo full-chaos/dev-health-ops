@@ -1297,3 +1297,110 @@ INSERT INTO public.worker_job_runs (
 		}
 	}
 }
+
+// Round 1 P1 (pm/acp ruling): two reconcilers read the same run as a candidate and both redrive it. Under the run lock
+// the redrive re-checks the outbox (READ COMMITTED: a new snapshot per statement), so the one that waited on the lock
+// sees the other's committed pending row and publishes nothing: exactly one redrive row. The admin transaction holds
+// the run lock until both redrives wait on it, so the order is fixed by the lock, not by timing.
+func TestTwoConcurrentStaleFinalizeRedrivesOfOneRunPublishOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	venue := startFinalizePendingVenue(t, ctx)
+	orgID, runID := uuid.NewString(), uuid.NewString()
+	venue.seedShapeD(t, ctx, orgID, runID, "2026-03-01", time.Now().UTC().Add(-48*time.Hour))
+	redriver, err := newStaleFinalizeRedriver(venue.domain, venue.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := venue.holdRunLock(t, ctx, runID)
+	type outcome struct {
+		redriven bool
+		err      error
+	}
+	results := make(chan outcome, 2)
+	for range 2 {
+		go func() {
+			redriven, err := redriver.RedriveStaleFinalize(ctx, runID, uuid.NewString())
+			results <- outcome{redriven, err}
+		}()
+	}
+	for {
+		var waiting int
+		if err := venue.admin.QueryRow(ctx, `
+SELECT count(*) FROM pg_catalog.pg_stat_activity
+WHERE wait_event_type = 'Lock' AND query LIKE '%FOR UPDATE OF run%'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting == 2 {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("%d of 2 redrives wait on the run lock", waiting)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	release()
+	published := 0
+	for range 2 {
+		got := <-results
+		if got.err != nil {
+			t.Fatalf("redrive: %v", got.err)
+		}
+		if got.redriven {
+			published++
+		}
+	}
+	if rows := venue.redriveRows(t, ctx, runID); published != 1 || rows != 1 {
+		t.Fatalf("two concurrent redrives: %d reported a publish, %d redrive rows, want 1 and 1", published, rows)
+	}
+}
+
+// seedLiveRuns writes n base runs (shape D, one succeeded partition) under one org, each with a scheduled River
+// finalize job, so statement B classes every one of them live.
+func (venue *finalizePendingVenue) seedLiveRuns(t *testing.T, ctx context.Context, orgID string, firstDay, n int, at time.Time) {
+	t.Helper()
+	if _, err := venue.admin.Exec(ctx, `
+WITH run AS (
+    INSERT INTO public.daily_metrics_runs (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at)
+    SELECT gen_random_uuid(), $1::uuid, DATE '2020-01-01' + n, 'live-level:' || n, 'running', 'pending', $4, $4
+    FROM generate_series($2::int, $2::int + $3::int - 1) AS n
+    RETURNING id
+), partition AS (
+    INSERT INTO public.daily_metrics_partitions (id, run_id, ordinal, repo_ids, status, attempt_count, completed_at, created_at, updated_at)
+    SELECT gen_random_uuid(), run.id, 0, '[]'::jsonb, 'succeeded', 1, $4, $4, $4 FROM run
+)
+INSERT INTO river.river_job (args, attempt, created_at, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at)
+SELECT jsonb_build_object('domain', jsonb_build_object('type', 'daily_metrics_run', 'id', run.id::text)),
+       0, $4, NULL, 'metrics.daily_finalize', 4, '{}'::jsonb, 2, 'metrics', 'scheduled', $4 + interval '30 days'
+FROM run`, orgID, firstDay, n, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Round 1 P2 (pm ruling): statement B reads cap + 1 rows only to learn that the base is larger than the cap; the
+// row past the cap is not counted into a level. At exactly 1000 live runs: Live 1000, not truncated. At 1001 (the
+// newest is live too): Live still 1000, truncated.
+func TestStaleFinalizeLevelsCountTheCapAndNotTheLookaheadRow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	venue := startFinalizePendingVenue(t, ctx)
+	orgID := uuid.NewString()
+	old := time.Now().UTC().Add(-72 * time.Hour)
+	venue.seedLiveRuns(t, ctx, orgID, 1, 1000, old)
+	start := time.Now().UTC()
+	result, err := venue.relay.Step(ctx, start, 10)
+	if err != nil {
+		t.Fatalf("reconciler Step: %v", err)
+	}
+	if result.StaleFinalizeLevels == nil || *result.StaleFinalizeLevels != (joboutbox.StaleFinalizeLevels{Live: 1000}) {
+		t.Fatalf("1000 live runs: levels %+v failures %+v, want Live 1000, not truncated", result.StaleFinalizeLevels, result.StaleFinalizeFailures)
+	}
+	venue.seedLiveRuns(t, ctx, orgID, 1001, 1, old.Add(time.Second))
+	result, err = venue.relay.Step(ctx, start.Add(11*time.Minute), 10)
+	if err != nil {
+		t.Fatalf("reconciler Step: %v", err)
+	}
+	if result.StaleFinalizeLevels == nil || *result.StaleFinalizeLevels != (joboutbox.StaleFinalizeLevels{Live: 1000, Truncated: true}) {
+		t.Fatalf("1001 live runs: levels %+v failures %+v, want Live 1000, truncated", result.StaleFinalizeLevels, result.StaleFinalizeFailures)
+	}
+}

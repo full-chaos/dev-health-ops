@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -523,5 +525,89 @@ func TestStaleFinalizeStatementZeroFailureIsAFailureNotAnEmptyBase(t *testing.T)
 	}
 	if len(tx.queries) != 0 {
 		t.Fatalf("statements sent after a failed statement 0: %v", tx.queries)
+	}
+}
+
+// movingSurvey emulates statement A over a base that grows in every pass: perPass newer runs arrive at the pass's
+// cutoff, and on pass 2 an older run becomes a candidate behind the cursor (it lost its last refusal). It applies the
+// cutoff, the keyset and the cursor's frozen bound as A does (a zero bound is A's NULL $5: no bound).
+type movingSurvey struct {
+	runs    []staleFinalizeCandidate
+	perPass int
+	pass    int
+	late    staleFinalizeCandidate
+}
+
+func (survey *movingSurvey) read(_ context.Context, cutoff time.Time, limit int, cursor *staleFinalizeCursor) staleFinalizeSurvey {
+	survey.pass++
+	for i := survey.perPass; i >= 1; i-- {
+		survey.runs = append(survey.runs, staleFinalizeCandidate{
+			runID:     fmt.Sprintf("00000000-0000-4000-8000-%012d", survey.pass*1000+i),
+			updatedAt: cutoff.Add(-time.Duration(i) * time.Second),
+		})
+	}
+	if survey.pass == 2 {
+		survey.runs = append(survey.runs, survey.late)
+	}
+	sort.Slice(survey.runs, func(i, j int) bool {
+		if !survey.runs[i].updatedAt.Equal(survey.runs[j].updatedAt) {
+			return survey.runs[i].updatedAt.Before(survey.runs[j].updatedAt)
+		}
+		return survey.runs[i].runID < survey.runs[j].runID
+	})
+	out := []staleFinalizeCandidate{}
+	for _, run := range survey.runs {
+		if run.updatedAt.After(cutoff) {
+			continue
+		}
+		if cursor != nil {
+			if !cursor.bound.IsZero() && run.updatedAt.After(cursor.bound) {
+				continue
+			}
+			if !(run.updatedAt.After(cursor.updatedAt) || (run.updatedAt.Equal(cursor.updatedAt) && run.runID > cursor.runID)) {
+				continue
+			}
+		}
+		if len(out) == limit {
+			break
+		}
+		out = append(out, run)
+	}
+	return staleFinalizeSurvey{candidates: out, levels: &StaleFinalizeLevels{}}
+}
+
+// Round 1 P2 (pm ruling): new runs arrive ahead of the cursor in every pass, so every page is full (or every pass
+// defers its tail after two deadlines). The traversal's frozen upper bound keeps those arrivals out until the cursor
+// wraps, so an older run that became a candidate behind the cursor is tried within a bounded number of passes.
+func TestStaleFinalizeCursorReachesAnOlderRunWhileNewerRunsKeepArriving(t *testing.T) {
+	const limit, passes = 3, 12
+	for name, failFirstTwo := range map[string]bool{"full pages": false, "two deadlines defer the tail": true} {
+		t.Run(name, func(t *testing.T) {
+			survey := &movingSurvey{perPass: limit + 1, late: staleFinalizeCandidate{
+				runID:     "00000000-0000-4000-8000-00000000aaaa",
+				updatedAt: staleFinalizeTestNow.Add(-30 * 24 * time.Hour),
+			}}
+			redriver := &scriptedStaleFinalizeRedriver{}
+			calls := 0
+			if failFirstTwo {
+				redriver.before = func(context.Context, string) error {
+					calls++
+					if calls%limit != 0 {
+						return context.DeadlineExceeded
+					}
+					return nil
+				}
+			}
+			stage := &staleFinalizeStage{survey: survey.read, redriver: redriver, clock: time.Now, newNonce: func() string { return "nonce" }}
+			for pass := 0; pass < passes; pass++ {
+				stage.step(context.Background(), staleFinalizeTestNow.Add(time.Duration(pass)*staleFinalizeInterval), limit)
+				for _, call := range redriver.takeCalls() {
+					if call == survey.late.runID {
+						return
+					}
+				}
+			}
+			t.Fatalf("the older run was not tried in %d passes", passes)
+		})
 	}
 }

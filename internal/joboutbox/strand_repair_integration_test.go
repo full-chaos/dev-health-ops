@@ -2819,6 +2819,9 @@ SELECT jsonb_build_object('domain', jsonb_build_object('type', 'daily_metrics_ru
 FROM run`, old); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := admin.Exec(ctx, "DROP INDEX river.river_job_args_index"); err != nil {
+		t.Fatal(err)
+	}
 	jobTable := `"river"."river_job"`
 	for _, statement := range []struct {
 		name, query string

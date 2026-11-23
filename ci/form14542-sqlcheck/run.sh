@@ -136,7 +136,71 @@ run_variant() {
   done < "$here/expected_sums.tsv"
   run_precheck "$variant"
 }
+# PRE-TTL-14542-1.sql (fe48b20a1f06) and PRE-SHARDS-14542-1.sql (ba5d41d666e5). Run after the two variants, on the
+# one-shard cluster `cluster` (cluster.xml). Local table = ddl_local.sql (PARTITION BY toDate(timestamp), the real SigNoz key).
+expect_395() {
+  local label=$1 errfile=$2 text=$3
+  if grep -q 'Code: 395' "$errfile" && grep -q "$text" "$errfile"; then
+    echo "PASS ${label}: throwIf fires, code 395 ${text}"
+  else
+    echo "FAIL ${label}: error is not code 395 ${text}:"; head -3 "$errfile"; status=1
+  fi
+}
+run_pre2() {
+  [ "$(sha256sum "$here/pre_ttl.sql" | cut -c1-12)" = fe48b20a1f06 ] || { echo "FAIL: pre_ttl.sql sha12 differs"; status=1; return; }
+  [ "$(sha256sum "$here/pre_shards.sql" | cut -c1-12)" = ba5d41d666e5 ] || { echo "FAIL: pre_shards.sql sha12 differs"; status=1; return; }
+  docker cp "$here/pre_ttl.sql" ch:/tmp/pre_ttl.sql
+  docker cp "$here/pre_shards.sql" ch:/tmp/pre_shards.sql
+  echo "=== PRE-SHARDS"
+  local got
+  got=$(docker exec ch clickhouse-client --format TSV --queries-file /tmp/pre_shards.sql 2>"$work/ps-err.txt") || { echo "FAIL PRE-SHARDS errored:"; cat "$work/ps-err.txt"; status=1; }
+  echo "PRE-SHARDS rows/shards: ${got}"
+  if [ "$got" = "$(printf '1\t1')" ]; then echo "PASS PRE-SHARDS: rows 1, shards 1 on the CI cluster.xml"; else echo "FAIL PRE-SHARDS: want 1 1"; status=1; fi
+  sed -e "s/= 'cluster'/= 'nope'/" "$here/pre_shards.sql" > "$work/pre_shards_bad.sql"
+  grep -q "= 'nope'" "$work/pre_shards_bad.sql" || { echo "FAIL: cluster name sed did not apply"; status=1; }
+  docker cp "$work/pre_shards_bad.sql" ch:/tmp/pre_shards_bad.sql
+  if docker exec ch clickhouse-client --queries-file /tmp/pre_shards_bad.sql >/dev/null 2>"$work/ps-bad.txt"; then
+    echo "FAIL PRE-SHARDS: a wrong cluster name did not throw"; status=1
+  else expect_395 "PRE-SHARDS wrong cluster name" "$work/ps-bad.txt" STOP-NO-CLUSTER; fi
+
+  echo "=== PRE-TTL"
+  docker exec ch clickhouse-client -q 'DROP DATABASE IF EXISTS signoz_traces SYNC'
+  docker exec ch clickhouse-client -q 'CREATE DATABASE signoz_traces'
+  docker cp "$here/ddl_local.sql" ch:/tmp/ddl_local.sql
+  docker exec ch clickhouse-client --queries-file /tmp/ddl_local.sql || { echo "FAIL PRE-TTL: DDL errored"; status=1; return; }
+  grep -q 'PARTITION BY toDate(timestamp)' "$here/ddl_local.sql" || { echo "FAIL: ddl_local.sql has no PARTITION BY toDate(timestamp)"; status=1; }
+  sed -e "s/TABLE_NAME/signoz_traces.signoz_index_v3/" -e "s/__START_S__/${start_s}/g" "$here/rows.sql" > "$work/rows_pre.sql"
+  docker cp "$work/rows_pre.sql" ch:/tmp/rows_pre.sql
+  docker exec ch clickhouse-client --queries-file /tmp/rows_pre.sql || { echo "FAIL PRE-TTL: insert errored"; status=1; return; }
+  echo "system.parts of the real-key table (PARTITION BY toDate(timestamp)):"
+  docker exec ch clickhouse-client -q "SELECT partition, min_time, max_time FROM system.parts WHERE database = 'signoz_traces' AND table = 'signoz_index_v3' AND active ORDER BY partition"
+  local filled
+  filled=$(docker exec ch clickhouse-client -q "SELECT countIf(min_time >= toDateTime('2020-01-01')) = count() AND count() > 0 FROM system.parts WHERE database = 'signoz_traces' AND table = 'signoz_index_v3' AND active")
+  if [ "$filled" = 1 ]; then echo "PASS PRE-TTL: min_time is filled for every active part of the toDate(timestamp) key on CH ${ch_version}"; else echo "FAIL PRE-TTL: min_time not filled"; status=1; fi
+  got=$(docker exec ch clickhouse-client --format TSV --queries-file /tmp/pre_ttl.sql 2>"$work/pt-err.txt") || { echo "FAIL PRE-TTL errored:"; cat "$work/pt-err.txt"; status=1; }
+  echo "PRE-TTL active_parts/oldest_days with the fixture rows only (CI clock ${now_s}): ${got}"
+  # old row: 3 days before the CI clock, inside the 15 d TTL
+  docker exec ch clickhouse-client -q "INSERT INTO signoz_traces.signoz_index_v3 (ts_bucket_start, timestamp, trace_id, span_id, name) VALUES (intDiv(toUInt64(toUnixTimestamp(now() - toIntervalDay(3))), 1800) * 1800, toDateTime64(now() - toIntervalDay(3), 9, 'UTC'), '00000000000000000000000000000009', '0000000000000099', 'dev_health.job.execute')"
+  got=$(docker exec ch clickhouse-client --format TSV --queries-file /tmp/pre_ttl.sql 2>"$work/pt-err.txt") || { echo "FAIL PRE-TTL errored:"; cat "$work/pt-err.txt"; status=1; }
+  echo "PRE-TTL active_parts/oldest_days with a row 3 days old: ${got}"
+  if awk -F'\t' -v g="$got" 'BEGIN{split(g,a,"\t"); exit !(a[1]+0 > 0 && a[2]+0 >= 2)}'; then echo "PASS PRE-TTL: active_parts > 0 AND oldest_days >= 2"; else echo "FAIL PRE-TTL: want active_parts > 0 and oldest_days >= 2"; status=1; fi
+  # honest throw: table of the same name partitioned by a NON-time key keeps min_time at 1970
+  docker exec ch clickhouse-client -q 'DROP DATABASE IF EXISTS signoz_traces SYNC'
+  docker exec ch clickhouse-client -q 'CREATE DATABASE signoz_traces'
+  docker exec ch clickhouse-client -q "CREATE TABLE signoz_traces.signoz_index_v3 (id UInt64, ts DateTime) ENGINE = MergeTree PARTITION BY intDiv(id, 10) ORDER BY id"
+  docker exec ch clickhouse-client -q "INSERT INTO signoz_traces.signoz_index_v3 VALUES (1, now())"
+  echo "non-time key table, system.parts min_time:"
+  docker exec ch clickhouse-client -q "SELECT partition, min_time FROM system.parts WHERE database = 'signoz_traces' AND table = 'signoz_index_v3' AND active"
+  if docker exec ch clickhouse-client --queries-file /tmp/pre_ttl.sql >/dev/null 2>"$work/pt-throw.txt"; then
+    echo "FAIL PRE-TTL: unfilled min_time did not throw"; status=1
+  else expect_395 "PRE-TTL non-time partition key (min_time 1970)" "$work/pt-throw.txt" STOP-MIN-TIME-UNFILLED; fi
+  docker exec ch clickhouse-client -q 'TRUNCATE TABLE signoz_traces.signoz_index_v3'
+  if docker exec ch clickhouse-client --queries-file /tmp/pre_ttl.sql >/dev/null 2>"$work/pt-empty.txt"; then
+    echo "FAIL PRE-TTL: a table with no active part did not throw"; status=1
+  else expect_395 "PRE-TTL no active part" "$work/pt-empty.txt" STOP-MIN-TIME-UNFILLED; fi
+}
 run_variant plain signoz_traces.distributed_signoz_index_v3 ddl_plain.sql
 run_variant distributed signoz_traces.signoz_index_v3 ddl_local.sql ddl_distributed.sql
+run_pre2
 docker rm -f ch >/dev/null
 exit "$status"

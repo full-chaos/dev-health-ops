@@ -382,7 +382,7 @@ func (s *fenceServer) serve(connection net.Conn) error {
 				fenceCommand(backend, "SAVEPOINT")
 			case strings.HasPrefix(sql, "release savepoint "):
 				fenceCommand(backend, "RELEASE")
-			case sql == commitBarrierSQL:
+			case sql == "LOCK TABLE public.sync_dispatch_outbox IN ROW EXCLUSIVE MODE NOWAIT":
 				s.trace = append(s.trace, "route-barrier")
 				fenceCommand(backend, "LOCK TABLE")
 			default:

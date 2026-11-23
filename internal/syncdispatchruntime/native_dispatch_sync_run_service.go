@@ -681,10 +681,11 @@ const (
 	passEndFinalize
 )
 
-// dispatchTailLockTimeoutSQL bounds every lock wait of the pass's tail. The re-arm takes ROW EXCLUSIVE on
-// sync_dispatch_outbox, which waits on a route mutation's SHARE ROW EXCLUSIVE barrier (syncroute/control.go
-// routeMutationLockSQL) while the pass holds its dispatch row, units and bucket locks. Transaction-local: the body
-// and the commit snapshot keep their own rules. A timeout rolls the pass back and River redelivers it.
+// dispatchTailLockTimeoutSQL bounds every lock wait of the pass's tail, which runs while the pass holds its dispatch
+// row, units and bucket locks. The re-arm takes ROW EXCLUSIVE on sync_dispatch_outbox, but the commit snapshot already
+// holds it (commitBarrierSQL), so a route mutation's SHARE ROW EXCLUSIVE barrier (syncroute/control.go
+// routeMutationLockSQL) cannot make the tail wait (CHAOS-14523). Transaction-local: the body and the commit snapshot
+// keep their own rules. A timeout rolls the pass back and River redelivers it.
 const dispatchTailLockTimeoutSQL = `SET LOCAL lock_timeout = '1000ms'`
 
 // armPassWake is the pass's tail (passTail): it reads the run's pending units on the pass transaction and re-arms

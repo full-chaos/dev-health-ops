@@ -22,8 +22,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-// Throwaway exec proof of a prod read form (READ-14548-PLAN-2): not for merge. p2x14548Form is the form file byte for byte.
-const p2x14548FormSHA256 = "8b4525e8c63c5f48ba8d0f17c4eb3584c3e8f4cf6b94aad1d628ba7a7910a99c"
+// Throwaway exec proof of a prod read form (READ-14548-PLAN-2): not for merge. p2x14548Form is the form file byte for byte,
+// except the app org prefix, swapped to f0f0f0f0 (range end f0f0f0f1) in every place; the sha pins this swapped copy.
+const p2x14548FormSHA256 = "a7ca640be2ca5262f02fd6103959de3be676f87b733bd51ffe43a993089645be"
 
 const p2x14548Form = `-- NOT EXECUTED. READ-14548-PLAN-2 (system tables and part index only; numbers and static names only). acr-mcp, 2026-11-23. acp FORM read first; then pm runs it once.
 -- Exec leg: a throwaway CI leg runs each statement (FORM-TEMPLATE-3); its run id and job id are in READ-14548-PLAN-2.md only.
@@ -39,7 +40,7 @@ const p2x14548Form = `-- NOT EXECUTED. READ-14548-PLAN-2 (system tables and part
 -- Output: no query text, no query_id, no key value, no org id, no String setting value. Names are static (event names, table names,
 --   processor names, the 3 run sides).
 -- Org scope: S0-S3a read system tables only (no org rows). S3b reads the part index of 2 data tables; each granule range is cut to the
---   org range ['c6a38355', 'c6a38356') (the prefix filter in range form, because a mark holds the FIRST key of its granule) and only counts leave.
+--   org range ['f0f0f0f0', 'f0f0f0f1') (the prefix filter in range form, because a mark holds the FIRST key of its granule) and only counts leave.
 -- Gates: a log-table read is gated on the rows of the granules that can hold the window (part index, upper bound of a primary-key read);
 --   the part index read is gated first on the marks of the table (system.parts). part_log (S3a) is gated on its day parts. S3b is gated on
 --   the marks of each data table. Every gate throws code 395 STOP-COST-GATE before a data row is read. WORK MATH: READ-14548-PLAN-2.md.
@@ -309,10 +310,10 @@ FROM (
       SELECT part_name, max_block, granule_rows, k_lo, k_hi, max(max_block) OVER () AS newest_block
       FROM (
         SELECT part_name, toUInt64OrZero(splitByChar('_', part_name)[3]) AS max_block, rows_in_granule AS granule_rows,
-               if(k > CAST(tuple('c6a38355', '00000000-0000-0000-0000-000000000000', ''), 'Tuple(String, UUID, String)'), k,
-                  CAST(tuple('c6a38355', '00000000-0000-0000-0000-000000000000', ''), 'Tuple(String, UUID, String)')) AS k_lo,
-               if(is_last OR k_next > CAST(tuple('c6a38356', '00000000-0000-0000-0000-000000000000', ''), 'Tuple(String, UUID, String)'),
-                  CAST(tuple('c6a38356', '00000000-0000-0000-0000-000000000000', ''), 'Tuple(String, UUID, String)'), k_next) AS k_hi
+               if(k > CAST(tuple('f0f0f0f0', '00000000-0000-0000-0000-000000000000', ''), 'Tuple(String, UUID, String)'), k,
+                  CAST(tuple('f0f0f0f0', '00000000-0000-0000-0000-000000000000', ''), 'Tuple(String, UUID, String)')) AS k_lo,
+               if(is_last OR k_next > CAST(tuple('f0f0f0f1', '00000000-0000-0000-0000-000000000000', ''), 'Tuple(String, UUID, String)'),
+                  CAST(tuple('f0f0f0f1', '00000000-0000-0000-0000-000000000000', ''), 'Tuple(String, UUID, String)'), k_next) AS k_hi
         FROM (
           WITH (SELECT throwIf((SELECT sum(marks) FROM system.parts WHERE active AND database = currentDatabase() AND table = 'work_items') > 100000, 'STOP-COST-GATE')) AS cost_gate
           SELECT part_name, rows_in_granule, tuple(org_id, repo_id, work_item_id) AS k,
@@ -338,10 +339,10 @@ FROM (
       SELECT part_name, max_block, granule_rows, k_lo, k_hi, max(max_block) OVER () AS newest_block
       FROM (
         SELECT part_name, toUInt64OrZero(splitByChar('_', part_name)[3]) AS max_block, rows_in_granule AS granule_rows,
-               if(k > CAST(tuple('c6a38355', '', '00000000-0000-0000-0000-000000000000', '', '1970-01-01 00:00:00.000', ''), 'Tuple(String, String, UUID, String, DateTime64(3), String)'), k,
-                  CAST(tuple('c6a38355', '', '00000000-0000-0000-0000-000000000000', '', '1970-01-01 00:00:00.000', ''), 'Tuple(String, String, UUID, String, DateTime64(3), String)')) AS k_lo,
-               if(is_last OR k_next > CAST(tuple('c6a38356', '', '00000000-0000-0000-0000-000000000000', '', '1970-01-01 00:00:00.000', ''), 'Tuple(String, String, UUID, String, DateTime64(3), String)'),
-                  CAST(tuple('c6a38356', '', '00000000-0000-0000-0000-000000000000', '', '1970-01-01 00:00:00.000', ''), 'Tuple(String, String, UUID, String, DateTime64(3), String)'), k_next) AS k_hi
+               if(k > CAST(tuple('f0f0f0f0', '', '00000000-0000-0000-0000-000000000000', '', '1970-01-01 00:00:00.000', ''), 'Tuple(String, String, UUID, String, DateTime64(3), String)'), k,
+                  CAST(tuple('f0f0f0f0', '', '00000000-0000-0000-0000-000000000000', '', '1970-01-01 00:00:00.000', ''), 'Tuple(String, String, UUID, String, DateTime64(3), String)')) AS k_lo,
+               if(is_last OR k_next > CAST(tuple('f0f0f0f1', '', '00000000-0000-0000-0000-000000000000', '', '1970-01-01 00:00:00.000', ''), 'Tuple(String, String, UUID, String, DateTime64(3), String)'),
+                  CAST(tuple('f0f0f0f1', '', '00000000-0000-0000-0000-000000000000', '', '1970-01-01 00:00:00.000', ''), 'Tuple(String, String, UUID, String, DateTime64(3), String)'), k_next) AS k_hi
         FROM (
           WITH (SELECT throwIf((SELECT sum(marks) FROM system.parts WHERE active AND database = currentDatabase() AND table = 'project_membership_transitions') > 100000, 'STOP-COST-GATE')) AS cost_gate
           SELECT part_name, rows_in_granule, tuple(org_id, toString(subject_kind), repo_id, subject_id, occurred_at, event_id) AS k,
@@ -356,7 +357,7 @@ ORDER BY data_table;
 `
 
 const (
-	p2x14548OrgA = "c6a38355-0000-4000-8000-000000014548"
+	p2x14548OrgA = "f0f0f0f0-0000-4000-8000-000000014548"
 	p2x14548OrgB = "14548000-0000-4000-8000-0000000000bb"
 )
 
@@ -976,7 +977,7 @@ func TestReadPlan2Form14548ExecutesAtTheChainHead(t *testing.T) {
 	if got := mutateWith("S3a-prefix", replaced("S3a", prefix, wrongPrefix)); len(got) != 2 {
 		t.Errorf("MUTATE S3a prefix: %d rows, want 2 ('now' only)", len(got))
 	}
-	orgMutant := strings.ReplaceAll(replaced("S3b", "'c6a38355'", "'d6a38355'"), "'c6a38356'", "'d6a38356'")
+	orgMutant := strings.ReplaceAll(replaced("S3b", "'f0f0f0f0'", "'fff0f0f0'"), "'f0f0f0f1'", "'fff0f0f1'")
 	if got := mutateWith("S3b-org", orgMutant); len(got) != 2 || got[0]["org_parts"] != "0" || got[1]["org_parts"] != "0" {
 		t.Errorf("MUTATE S3b org range: %v, want org_parts 0 and 0", got)
 	}

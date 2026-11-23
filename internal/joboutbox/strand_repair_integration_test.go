@@ -809,7 +809,7 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 				t.Fatal(err)
 			}
 			now := time.Now().UTC().Truncate(time.Microsecond)
-			var templateOutbox string
+			var templateOutbox, finalizeOutbox string
 			var templateJob int64
 			for index, shape := range shapes {
 				id := shape.seed(t, now)
@@ -817,6 +817,12 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 				if index == 0 {
 					templateOutbox, templateJob = outboxID, jobID
 				}
+				if shape.kind == jobcontract.KindDailyMetricsFinalize {
+					finalizeOutbox = outboxID
+				}
+			}
+			if templateOutbox == finalizeOutbox || finalizeOutbox == "" {
+				t.Fatal("the fixture needs a finalize delivery apart from the template delivery")
 			}
 			// The fixture has the shape production has: far more delivered outbox
 			// rows than River jobs, because River's cleaner removes a finished job
@@ -826,9 +832,13 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 			// one real job, each with its own domain id and key, so every
 			// constraint the two tables carry still holds. Copying through the row
 			// type keeps this independent of either table's column list.
+			// One filler in finalizeEvery is a finalize delivery, about production's share (49,014 of 473,084 rows,
+			// SIZING-14090-2): with no finalize rows besides the seeded one, the finalize partial index holds one entry
+			// and a walk of it looks cheaper than any probe.
 			const (
 				cleanedOutboxRows = 16000
 				liveRiverJobs     = 5000
+				finalizeEvery     = 10
 			)
 			if _, err := admin.Exec(ctx, `
 				INSERT INTO river.river_job
@@ -868,7 +878,8 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 						SELECT string_agg(md5(filler::text || ':' || part::text), '') AS text
 						FROM generate_series(1, 28) AS part
 					) AS pad
-				WHERE template.id = $1`, templateOutbox, cleanedOutboxRows); err != nil {
+				WHERE template.id = CASE WHEN filler % $4::int = 0 THEN $3 ELSE $1 END::uuid`,
+				templateOutbox, cleanedOutboxRows, finalizeOutbox, finalizeEvery); err != nil {
 				t.Fatal(err)
 			}
 			var outboxRows int
@@ -886,6 +897,24 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 			}
 			if riverJobs != liveRiverJobs+len(shapes) {
 				t.Fatalf("river_job holds %d rows, want %d", riverJobs, liveRiverJobs+len(shapes))
+			}
+			// The fixture's own shape, so a later edit cannot quietly put the finalize plan back on a one-entry index
+			// or the River ids back below the cleaned ones.
+			var finalizeRows int
+			var lowestJob, highestCleaned int64
+			if err := admin.QueryRow(ctx, `
+				SELECT (SELECT count(*) FROM public.worker_job_outbox
+				        WHERE status = 'delivered' AND job_kind = 'metrics.daily_finalize'),
+				       (SELECT min(id) FROM river.river_job),
+				       (SELECT max(river_job_id) FROM public.worker_job_outbox WHERE dedupe_key LIKE 'filler-row:%')`,
+			).Scan(&finalizeRows, &lowestJob, &highestCleaned); err != nil {
+				t.Fatal(err)
+			}
+			if want := cleanedOutboxRows/finalizeEvery + 1; finalizeRows != want {
+				t.Fatalf("the outbox holds %d delivered finalize rows, want %d", finalizeRows, want)
+			}
+			if lowestJob <= highestCleaned {
+				t.Fatalf("the lowest River id %d is not above every cleaned delivery's River id (%d)", lowestJob, highestCleaned)
 			}
 			// VACUUM, not only ANALYZE, on the two bulk-loaded tables. A GIN index
 			// keeps new entries in a pending list that every search must read in
@@ -2860,7 +2889,7 @@ FROM run WHERE run.target_day <= DATE '2020-01-01' + 500`, old); err != nil {
 			}
 			if node.RelationName == "daily_metrics_partitions" {
 				partitionNodes++
-				if node.ActualLoops > 1 {
+				if node.ActualLoops > 1 && !partitionsRunProbe(node.NodeType, node.IndexCond) {
 					t.Fatalf("%s reads daily_metrics_partitions %.0f times through %s (once per base run):\n%s", statement.name, node.ActualLoops, node.NodeType, raw)
 				}
 			}
@@ -2887,10 +2916,20 @@ FROM run WHERE run.target_day <= DATE '2020-01-01' + 500`, old); err != nil {
 
 var hashedSubPlan = regexp.MustCompile(`hashed SubPlan \d+`)
 
+// partitionsRunProbeCond is the no-partitions arm's lookup: an index-only probe keyed on the base run's id. Run once
+// per base run it costs one index descent each, not a read of the table, so it is the one per-run partitions node
+// allowed. The base check cannot pass as it: it reads updated_at, which no partitions index holds.
+var partitionsRunProbeCond = regexp.MustCompile(`^\(partition(_\d+)?\.run_id = run\.id\)$`)
+
+func partitionsRunProbe(nodeType, indexCond string) bool {
+	return nodeType == "Index Only Scan" && partitionsRunProbeCond.MatchString(indexCond)
+}
+
 // explainNode is one node of EXPLAIN (ANALYZE, FORMAT JSON).
 type explainNode struct {
 	NodeType     string        `json:"Node Type"`
 	RelationName string        `json:"Relation Name"`
+	IndexCond    string        `json:"Index Cond"`
 	ActualLoops  float64       `json:"Actual Loops"`
 	Plans        []explainNode `json:"Plans"`
 }

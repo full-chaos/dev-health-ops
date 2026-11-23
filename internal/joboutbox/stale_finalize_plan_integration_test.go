@@ -279,6 +279,7 @@ type planNode struct {
 	NodeType         string     `json:"Node Type"`
 	RelationName     string     `json:"Relation Name"`
 	IndexName        string     `json:"Index Name"`
+	IndexCond        string     `json:"Index Cond"`
 	ActualRows       float64    `json:"Actual Rows"`
 	ActualLoops      float64    `json:"Actual Loops"`
 	RemovedByFilter  float64    `json:"Rows Removed by Filter"`
@@ -431,7 +432,8 @@ FROM job`, at)
 }
 
 // checkGenericPlanReadsOnce runs the statement as a prepared statement forced onto its generic plan (JIT off, as the
-// survey runs) and fails on any node on daily_metrics_partitions or river_job that runs more than once.
+// survey runs) and fails on any node on daily_metrics_partitions or river_job that runs more than once, except the
+// no-partitions arm's keyed probe (partitionsRunProbe).
 func checkGenericPlanReadsOnce(t *testing.T, ctx context.Context, admin *pgxpool.Pool, name, query, types, args string) {
 	t.Helper()
 	conn, err := admin.Acquire(ctx)
@@ -463,7 +465,10 @@ func checkGenericPlanReadsOnce(t *testing.T, ctx context.Context, admin *pgxpool
 	}
 	var walk func(node planNode)
 	walk = func(node planNode) {
-		if (node.RelationName == "daily_metrics_partitions" || node.RelationName == "river_job") && node.ActualLoops > 1 {
+		perRun := node.ActualLoops > 1 &&
+			(node.RelationName == "river_job" ||
+				node.RelationName == "daily_metrics_partitions" && !partitionsRunProbe(node.NodeType, node.IndexCond))
+		if perRun {
 			t.Fatalf("%s (generic plan) reads %s %.0f times through %s:\n%s", name, node.RelationName, node.ActualLoops, node.NodeType, raw)
 		}
 		for _, child := range node.Plans {
@@ -471,5 +476,5 @@ func checkGenericPlanReadsOnce(t *testing.T, ctx context.Context, admin *pgxpool
 		}
 	}
 	walk(plans[0].Plan)
-	t.Logf("INFO generic plan of %s: no per-run partitions or river_job read", name)
+	t.Logf("INFO generic plan of %s: no per-run partitions or river_job read but the keyed no-partitions probe", name)
 }

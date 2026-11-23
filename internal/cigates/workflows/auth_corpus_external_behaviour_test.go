@@ -106,10 +106,11 @@ if [ -n "$FAKE_GO_TEST_EXITS" ]; then exit 0; fi
 printf '%s\n' "$$" > "$FAKE_TEST_PID_FILE"
 printf 'SEEDED\n' >> "$FAKE_RECORD"
 : > "$DEVHEALTH_AUTH_ORACLE_SEEDED_FILE"
-# /bin/sleep, not the PATH sleep: the retry cells put a no-op sleep first on PATH, which made this bound a call count.
+# command -p sleep (the default PATH), not the PATH sleep: the retry cells put a no-op sleep first on PATH, which made
+# this bound a call count.
 tries="${FAKE_FLIP_TRIES:-300}"
 i=0
-while [ ! -e "$DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE" ] && [ "$i" -lt "$tries" ]; do /bin/sleep 0.1; i=$((i+1)); done
+while [ ! -e "$DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE" ] && [ "$i" -lt "$tries" ]; do command -p sleep 0.1; i=$((i+1)); done
 [ -e "$DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE" ] || { echo "fake corpus test: no flipped file after $tries tries of 0.1 s: $DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE" >&2; exit 1; }
 printf 'FLIPPED %s\n' "$(cat "$DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE")" >> "$FAKE_RECORD"
 BIN

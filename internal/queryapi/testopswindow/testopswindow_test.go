@@ -284,8 +284,8 @@ func TestResolve_ScopeReachesBothReads(t *testing.T) {
 		return
 	}
 	for name, text := range map[string]string{"coverage": client.coverageText, "cases": client.casesText} {
-		if !strings.Contains(text, "toString(id) IN {repo_ids:Array(String)}") {
-			t.Errorf("%s: no repository scope", name)
+		if !strings.Contains(text, "toString(repo_id) IN {repo_ids:Array(String)}") || !strings.Contains(text, "FROM repos FINAL") {
+			t.Errorf("%s: no repository scope (an id on the rows, a name against the latest catalog row)", name)
 		}
 		if !strings.Contains(text, "team_repo_ownership") {
 			t.Errorf("%s: no team ownership scope (membership is never read)", name)

@@ -169,18 +169,23 @@ func TestRealClickHouse_TestopsRiskRepoIdsMatch(t *testing.T) {
 
 	t.Run("a blank entry beside an id drops out; an id is matched as sent, so an upper-case UUID selects nothing", func(t *testing.T) {
 		const org = "org-mixed"
+		// An id with hex letters: strings.ToUpper changes it (the digit-only ids above would not change).
+		const letters = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 		repo(org, rA, "acme/a", t1)
-		repo(org, rB, "acme/b", t1)
+		repo(org, letters, "acme/b", t1)
 		seed(org, rA, 0.8, 2, 0.9)
-		seed(org, rB, 0.4, 7, 0.3)
-		mixed, err := Resolve(ctx, client, org, window("", rB))
+		seed(org, letters, 0.4, 7, 0.3)
+		mixed, err := Resolve(ctx, client, org, window("", letters))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !near(mixed.ReleaseConfidence, 0.4) || !near(mixed.QualityDragHours, 7) || len(mixed.QuadrantData) != 1 {
 			t.Errorf("blank and an id: confidence %v drag %v quadrant %#v, want only that repository", mixed.ReleaseConfidence, mixed.QualityDragHours, mixed.QuadrantData)
 		}
-		upper, err := Resolve(ctx, client, org, window(strings.ToUpper(rB)))
+		if strings.ToUpper(letters) == letters {
+			t.Fatal("the upper-case control id equals the lower-case one: the cell would prove nothing")
+		}
+		upper, err := Resolve(ctx, client, org, window(strings.ToUpper(letters)))
 		if err != nil {
 			t.Fatal(err)
 		}

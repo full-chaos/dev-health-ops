@@ -400,8 +400,7 @@ WHERE id = ANY($1::uuid[]) AND status = $7`,
 // way to construct -- the outbox-wakeup path is what lets the SAME relay
 // infrastructure build that context properly.
 //
-// Runs in the CALLER's transaction (unlike scheduleRedispatch's own
-// separate session) at BOTH call sites: the denial branch commits it
+// Runs in the CALLER's transaction at BOTH call sites: the denial branch commits it
 // together with failPlannedUnits/failStaleDispatchingUnits as one atomic
 // "terminal state + wakeup" unit; the tail branch commits it as the sole
 // content of dispatch_sync_run's own third transaction. Neither is an

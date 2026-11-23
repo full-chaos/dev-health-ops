@@ -700,7 +700,7 @@ func TestShortUnitsShareUnitEndWakeInsideTheDeferralQueuesNothing(t *testing.T) 
 	})
 }
 
-// A retried delivery after a committed queued pass (the shape of a failed post-commit read): the delivery's outbox row
+// A retried delivery after a committed queued pass (the shape of a retry of a committed attempt): the delivery's outbox row
 // is set back to 'dispatched' with the same attempts and the same job runs again. It claims nothing new, publishes
 // nothing new, and arms a wake.
 func TestShortUnitsShareRetriedDeliveryAfterAQueuedPass(t *testing.T) {
@@ -754,7 +754,7 @@ WHERE id = $1::uuid`, outboxID, dispatchRouteGeneration); err != nil {
 }
 
 // flipClockTracer moves the service clock past a deadline when the pass reaches its commit snapshot: the guard and the
-// claim run on the old clock, the post-commit pending-counts read and the arm on the new one.
+// claim run on the old clock, the tail's pending-counts read and the arm on the new one.
 type flipClockTracer struct{ armed, flipped atomic.Bool }
 
 func (tracer *flipClockTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
@@ -766,7 +766,7 @@ func (tracer *flipClockTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn,
 
 func (tracer *flipClockTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-// Class 2 (round 1 of PR #6804): s0's deferral (1 s) expires between the guard and the post-commit pending-counts read
+// Class 2 (round 1 of PR #6804): s0's deferral (1 s) expires between the guard and the tail's pending-counts read
 // (the clock moves 2 s at the commit snapshot). The arm must be at once or at the deadline, never one countdown late.
 func runShortShareDeferralExpiresDuringThePass(t *testing.T, mode string) {
 	withDispatchServicePool(t, func(ctx context.Context, base *pgxpool.Pool) {
@@ -835,7 +835,7 @@ func TestShortUnitsShareDeferralExpiresDuringTheNoQueueOnlyDeferredPass(t *testi
 	runShortShareDeferralExpiresDuringThePass(t, "no_queue_only_deferred")
 }
 
-// failCountsTracer breaks the connection when the post-commit pending-counts read starts, so that read fails.
+// failCountsTracer breaks the connection when the pass's pending-counts read starts, so that read fails.
 type failCountsTracer struct{ armed, failed atomic.Bool }
 
 func (tracer *failCountsTracer) TraceQueryStart(ctx context.Context, conn *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
@@ -848,10 +848,10 @@ func (tracer *failCountsTracer) TraceQueryStart(ctx context.Context, conn *pgx.C
 
 func (tracer *failCountsTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-// Class 1 (round 1 of PR #6804): the pending-counts read fails after a committed queued pass (l0 and l1 queued, l2
-// capped). The pass returns nil (no retried delivery runs admission again under the same attempt) and arms from its own
-// values (the capped l2: the countdown); the committed claims and publishes stay as they are.
-func TestShortUnitsShareQueuedPassReadFailureArmsFromThePass(t *testing.T) {
+// Class 1 (round 1 of PR #6804), reversed by CHAOS-14479: the pending-counts read of a queued pass (l0 and l1 queued,
+// l2 capped) fails. The read is in the pass transaction, so the pass commits nothing and returns the error; River's
+// retry of that same attempt then queues l0 and l1 and arms from the run's state (the capped l2: the countdown).
+func TestShortUnitsShareQueuedPassReadFailureCommitsNothingAndTheRetryArms(t *testing.T) {
 	withDispatchServicePool(t, func(ctx context.Context, base *pgxpool.Pool) {
 		tracer := &failCountsTracer{}
 		cfg := base.Config().Copy()
@@ -867,37 +867,60 @@ func TestShortUnitsShareQueuedPassReadFailureArmsFromThePass(t *testing.T) {
 		if !ok {
 			t.Fatal("no due dispatch row")
 		}
-		tracer.armed.Store(true)
-		start := time.Now().UTC()
-		err = cell.svc.Dispatch(ctx, DispatchSyncRunArgs{TransportArgs: TransportArgs{
+		args := DispatchSyncRunArgs{TransportArgs: TransportArgs{
 			Version: ContractVersionV1, OrgID: discoveryTestOrg, RunID: discoveryTestRun,
 			DispatchOutbox: outboxID, RouteGeneration: dispatchRouteGeneration,
-		}})
+		}}
+		publishes := func() int {
+			var count int
+			if err := base.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE dedupe_key IN ($1, $2)`, "sync.provider_unit:"+denialL0, "sync.provider_unit:"+denialL1).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			return count
+		}
+		tracer.armed.Store(true)
+		err = cell.svc.Dispatch(ctx, args)
 		tracer.armed.Store(false)
 		if !tracer.failed.Load() {
 			t.Fatal("the pending-counts read was not reached")
 		}
-		if err != nil {
-			t.Fatalf("Dispatch returned %v, want nil after a failed post-commit read", err)
+		if err == nil {
+			t.Fatal("Dispatch returned nil after a failed pending-counts read, want the error of a pass that committed nothing")
+		}
+		for _, id := range []string{denialL0, denialL1, denialL2} {
+			if got, _ := cell.status(id); got != syncRunUnitStatusPlanned {
+				t.Errorf("after the failed pass %s: %s, want planned (nothing committed)", id[len(id)-8:], got)
+			}
+		}
+		if got := publishes(); got != 0 {
+			t.Errorf("after the failed pass publishes of l0 and l1 = %d, want 0", got)
+		}
+		var rowStatus string
+		if err := base.QueryRow(ctx, `SELECT status FROM sync_dispatch_outbox WHERE id = $1::uuid`, outboxID).Scan(&rowStatus); err != nil {
+			t.Fatal(err)
+		}
+		if rowStatus != "dispatched" {
+			t.Errorf("after the failed pass the delivery's row is %s, want dispatched (nothing committed)", rowStatus)
+		}
+
+		start := time.Now().UTC()
+		if err := cell.svc.Dispatch(ctx, args); err != nil {
+			t.Fatalf("retry of the same attempt: %v, want nil", err)
 		}
 		for id, want := range map[string]string{denialL0: syncRunUnitStatusDispatching, denialL1: syncRunUnitStatusDispatching, denialL2: syncRunUnitStatusPlanned} {
 			if got, _ := cell.status(id); got != want {
-				t.Errorf("%s: %s, want %s", id[len(id)-8:], got, want)
+				t.Errorf("after the retry %s: %s, want %s", id[len(id)-8:], got, want)
 			}
 		}
-		var publishes int
-		if err := base.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE dedupe_key IN ($1, $2)`, "sync.provider_unit:"+denialL0, "sync.provider_unit:"+denialL1).Scan(&publishes); err != nil {
-			t.Fatal(err)
-		}
-		if publishes != 2 {
-			t.Errorf("publishes of l0 and l1 = %d, want 2", publishes)
+		if got := publishes(); got != 2 {
+			t.Errorf("after the retry publishes of l0 and l1 = %d, want 2", got)
 		}
 		armed := cell.armedAt()
 		if armed == nil {
-			t.Fatal("no wake armed after the failed read")
+			t.Fatal("no wake armed after the retry")
 		}
 		if armed.Before(start.Add(59*time.Second)) || armed.After(time.Now().UTC().Add(61*time.Second)) {
-			t.Errorf("wake %s, want the countdown (60 s) from the pass", armed.UTC().Format(time.RFC3339Nano))
+			t.Errorf("wake %s, want the countdown (60 s) from the retry", armed.UTC().Format(time.RFC3339Nano))
 		}
 	})
 }
@@ -906,9 +929,10 @@ func TestShortUnitsShareDeferralExpiresDuringTheNoQueueCappedPass(t *testing.T) 
 	runShortShareDeferralExpiresDuringThePass(t, "no_queue_capped")
 }
 
-// M15: a deferral-only queued pass (l0 queued, s0 budget-deferred 5 s, nothing concurrency-capped) whose post-commit
-// read fails arms s0's deferral, not the countdown (2 s): the pass's deferred ids are deferrals, not due work.
-func TestShortUnitsShareQueuedPassReadFailureArmsTheDeferral(t *testing.T) {
+// M15, with CHAOS-14479: a deferral-only queued pass (l0 queued, s0 budget-deferred 5 s, nothing concurrency-capped)
+// whose pending-counts read fails commits nothing; the retry of that same attempt arms s0's deferral, not the
+// countdown (2 s): the pass's deferred ids are deferrals, not due work.
+func TestShortUnitsShareQueuedPassReadFailureRetryArmsTheDeferral(t *testing.T) {
 	withDispatchServicePool(t, func(ctx context.Context, base *pgxpool.Pool) {
 		tracer := &failCountsTracer{}
 		cfg := base.Config().Copy()
@@ -919,14 +943,31 @@ func TestShortUnitsShareQueuedPassReadFailureArmsTheDeferral(t *testing.T) {
 		}
 		defer pool.Close()
 		cell := newShortShareDenialWith(t, ctx, pool, denialConfig{countdown: "2", deferral: "5", jitter: "0", lateL1: true})
+		outboxID, _, ok := shortShareRelay(t, ctx, base, nil)
+		if !ok {
+			t.Fatal("no due dispatch row")
+		}
+		args := DispatchSyncRunArgs{TransportArgs: TransportArgs{
+			Version: ContractVersionV1, OrgID: discoveryTestOrg, RunID: discoveryTestRun,
+			DispatchOutbox: outboxID, RouteGeneration: dispatchRouteGeneration,
+		}}
 		tracer.armed.Store(true)
-		cell.pass("pass 1 (l0 queued, s0 deferred, the read fails)")
+		err = cell.svc.Dispatch(ctx, args)
 		tracer.armed.Store(false)
 		if !tracer.failed.Load() {
 			t.Fatal("the pending-counts read was not reached")
 		}
+		if err == nil {
+			t.Fatal("Dispatch returned nil after a failed pending-counts read, want the error of a pass that committed nothing")
+		}
+		if got, _ := cell.status(denialL0); got != syncRunUnitStatusPlanned {
+			t.Fatalf("after the failed pass l0 %s, want planned (nothing committed)", got)
+		}
+		if err := cell.svc.Dispatch(ctx, args); err != nil {
+			t.Fatalf("retry of the same attempt: %v, want nil", err)
+		}
 		if got, _ := cell.status(denialL0); got != syncRunUnitStatusDispatching {
-			t.Fatalf("l0 %s, want queued", got)
+			t.Fatalf("after the retry l0 %s, want queued", got)
 		}
 		s0At := cell.availableAt(denialS0)
 		armed := cell.armedAt()

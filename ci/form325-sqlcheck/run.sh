@@ -2,12 +2,16 @@
 # One execution of the filled FORM-325-14486-5 SQL on ClickHouse $CH_IMAGE, against the SigNoz v3 trace index
 # (DDL from signoz-otel-collector 0476e453f957 traces_migrations.go:14-135) holding 4 synthetic spans.
 # Variant "plain": distributed_signoz_index_v3 is a plain MergeTree. Variant "distributed": it is a Distributed table over
-# signoz_index_v3 on the server's test_shard_localhost cluster (the scalar WITH then also crosses a shard query).
+# signoz_index_v3 on a one-shard cluster `cluster` (cluster.xml; SigNoz names its cluster `cluster`) (the scalar WITH then also crosses a shard query).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 : "${CH_IMAGE:?CH_IMAGE is required}"
-start_ms=1764000000000
-end_ms=1764003600000
+now_s=$(date -u +%s)
+start_s=$(( (now_s / 3600 - 1) * 3600 ))
+bucket_s=$(( start_s / 1800 * 1800 ))
+start_ms=$(( start_s * 1000 ))
+end_ms=$(( (start_s + 3600) * 1000 ))
+echo "window [${start_ms}, ${end_ms}) ms"
 work=$(mktemp -d)
 
 echo "form.json sha256: $(sha256sum "$here/form.json" | cut -c1-64)"
@@ -23,7 +27,7 @@ PY
 if grep -q '\${' "$work/query.sql"; then echo "FAIL: an unfilled token is left"; exit 1; fi
 echo "filled query sha256: $(sha256sum "$work/query.sql" | cut -c1-64)"
 
-docker run -d --name ch --ulimit nofile=262144:262144 "$CH_IMAGE" >/dev/null
+docker run -d --name ch --ulimit nofile=262144:262144 -v "$here/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro" "$CH_IMAGE" >/dev/null
 for _ in $(seq 1 90); do
   if docker exec ch clickhouse-client -q 'SELECT 1' >/dev/null 2>&1; then break; fi
   sleep 2
@@ -47,7 +51,7 @@ run_variant() {
     docker cp "$here/$ddl" "ch:/tmp/$ddl"
     docker exec ch clickhouse-client --queries-file "/tmp/$ddl" || { echo "FAIL ${variant}: DDL ${ddl} errored"; status=1; return; }
   done
-  sed -e "s/TABLE_NAME/${target}/" "$here/rows.sql" > "$work/rows.sql"
+  sed -e "s/TABLE_NAME/${target}/" -e "s/__START_S__/${start_s}/g" -e "s/__BUCKET_S__/${bucket_s}/g" "$here/rows.sql" > "$work/rows.sql"
   docker cp "$work/rows.sql" ch:/tmp/rows.sql
   docker exec ch clickhouse-client --queries-file /tmp/rows.sql || { echo "FAIL ${variant}: insert errored"; status=1; return; }
   if [ "$variant" = distributed ]; then

@@ -230,6 +230,16 @@ FROM generate_series(1, $2::int) AS n`, old, riverRows)
 		}
 		checkSubplanReads(t, ctx, admin, name, query, args, float64(k*base), finalizeEntries)
 	}
+	// The GENERIC plans too (the plan a prepared statement can settle on): no per-run read of the partitions or of
+	// river_job in statement 0, A or B.
+	literalCutoff := "'" + cutoff.Format(time.RFC3339Nano) + "'::timestamptz"
+	for _, statement := range []struct{ name, query, types, args string }{
+		{"statement 0", baseSQL, "timestamptz", literalCutoff},
+		{"statement A", candidatesSQL, "timestamptz, int, timestamptz, uuid, timestamptz", literalCutoff + ", " + fmt.Sprint(base) + ", NULL, NULL, NULL"},
+		{"statement B", levelsSQL, "timestamptz, int", literalCutoff + ", " + fmt.Sprint(staleFinalizeLevelCap+1)},
+	} {
+		checkGenericPlanReadsOnce(t, ctx, admin, statement.name, statement.query, statement.types, statement.args)
+	}
 	var candidates int
 	if err := admin.QueryRow(ctx, "SELECT count(*) FROM ("+candidatesSQL+") AS a", cutoff, base, nil, nil, nil).Scan(&candidates); err != nil {
 		t.Fatal(err)
@@ -418,4 +428,48 @@ SELECT gen_random_uuid(), 'plan-strand:' || job.run_id || ':' || job.copy, 'metr
        json_build_object('contract_version', 1, 'domain', json_build_object('type', 'daily_metrics_run', 'id', job.run_id)),
        'sha256:' || repeat('0', 64), 'metrics', 2, 4, $1, 'delivered', 1, $1, job.id, $1, $1, $1
 FROM job`, at)
+}
+
+// checkGenericPlanReadsOnce runs the statement as a prepared statement forced onto its generic plan (JIT off, as the
+// survey runs) and fails on any node on daily_metrics_partitions or river_job that runs more than once.
+func checkGenericPlanReadsOnce(t *testing.T, ctx context.Context, admin *pgxpool.Pool, name, query, types, args string) {
+	t.Helper()
+	conn, err := admin.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+	script := "BEGIN; SET LOCAL jit = off; SET LOCAL plan_cache_mode = force_generic_plan; PREPARE generic_check(" + types + ") AS " +
+		query + "; EXPLAIN (ANALYZE, FORMAT JSON) EXECUTE generic_check(" + args + "); DEALLOCATE generic_check; ROLLBACK"
+	results, err := conn.Conn().PgConn().Exec(ctx, script).ReadAll()
+	if err != nil {
+		_, _ = conn.Conn().PgConn().Exec(context.WithoutCancel(ctx), "ROLLBACK").ReadAll()
+		t.Fatalf("generic plan of %s: %v", name, err)
+	}
+	var raw []byte
+	for _, result := range results {
+		if result.Err != nil {
+			t.Fatalf("generic plan of %s: %v", name, result.Err)
+		}
+		if len(result.Rows) == 1 && len(result.Rows[0]) == 1 && strings.HasPrefix(strings.TrimSpace(string(result.Rows[0][0])), "[") {
+			raw = result.Rows[0][0]
+		}
+	}
+	var plans []struct {
+		Plan planNode `json:"Plan"`
+	}
+	if err := json.Unmarshal(raw, &plans); err != nil || len(plans) != 1 {
+		t.Fatalf("generic plan of %s: %v, %d plans", name, err, len(plans))
+	}
+	var walk func(node planNode)
+	walk = func(node planNode) {
+		if (node.RelationName == "daily_metrics_partitions" || node.RelationName == "river_job") && node.ActualLoops > 1 {
+			t.Fatalf("%s (generic plan) reads %s %.0f times through %s:\n%s", name, node.RelationName, node.ActualLoops, node.NodeType, raw)
+		}
+		for _, child := range node.Plans {
+			walk(child)
+		}
+	}
+	walk(plans[0].Plan)
+	t.Logf("INFO generic plan of %s: no per-run partitions or river_job read", name)
 }

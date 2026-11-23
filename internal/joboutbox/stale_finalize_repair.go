@@ -406,13 +406,18 @@ func readStaleFinalizeLevels(ctx context.Context, tx pgx.Tx, levelsSQL string, c
 // candidate: no live job, not the strand shape (that shape JOINs the River
 // row), not recent. Nothing else can deliver that finalize again.
 const (
+	// The partition check is an uncorrelated set, read once per statement (a
+	// hashed subplan): as a correlated NOT EXISTS the planner could scan the
+	// partitions once per base run. partitions.run_id, status and updated_at
+	// are NOT NULL, so NOT IN equals the NOT EXISTS; the IS NOT NULL guard
+	// keeps it so if that ever changes.
 	staleFinalizeBaseSQL = `run.status = 'running'
 	AND run.finalization_status = 'pending'
 	AND run.updated_at <= $1
-	AND NOT EXISTS (
-		SELECT 1 FROM public.daily_metrics_partitions AS partition
-		WHERE partition.run_id = run.id
-			AND (partition.status <> 'succeeded' OR partition.updated_at > $1)
+	AND run.id NOT IN (
+		SELECT partition.run_id FROM public.daily_metrics_partitions AS partition
+		WHERE (partition.status <> 'succeeded' OR partition.updated_at > $1)
+			AND partition.run_id IS NOT NULL
 	)`
 	// The River arm is an uncorrelated IN, so it reads river_job once per
 	// statement (a hashed subplan), not once per base run: as a correlated

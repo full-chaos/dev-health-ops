@@ -2820,6 +2820,9 @@ SELECT jsonb_build_object('domain', jsonb_build_object('type', 'daily_metrics_ru
 FROM run WHERE run.target_day <= DATE '2020-01-01' + 500`, old); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := admin.Exec(ctx, "DROP INDEX river.river_job_args_index"); err != nil {
+		t.Fatal(err)
+	}
 	jobTable := `"river"."river_job"`
 	for _, statement := range []struct {
 		name, query string

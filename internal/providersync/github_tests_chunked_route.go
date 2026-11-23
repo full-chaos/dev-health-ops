@@ -62,11 +62,16 @@ type githubTestsRateFloorGate struct {
 
 var errGitHubTestsRateFloor = errors.New("github tests open phase: retry refused under the rate-limit floor")
 
-// check reads the floor on the answer's OWN headers, never on an earlier reading: an answer that cannot show headroom
-// stops the gate (fail closed). The invocation's observer still keeps the latest usable reading for the per-run check.
+// check reads the floor on the answer's OWN headers, never on an earlier reading: a 429 or a 403 that cannot show headroom,
+// or a 5xx whose rate headers are not a usable pair, stops the gate (fail closed). The invocation's observer still keeps the latest usable reading for the per-run check.
 func (gate *githubTestsRateFloorGate) check(status int, header http.Header) {
 	if gate == nil || !gate.armed || gate.stopped ||
 		status < http.StatusInternalServerError && status != http.StatusTooManyRequests && status != http.StatusForbidden {
+		return
+	}
+	// A 5xx with no rate header at all (an edge or gateway answer) keeps main's path: the client retries it, and a last
+	// failure takes the open phase's transient skip, so one such run never ends the phase for the runs after it.
+	if status >= http.StatusInternalServerError && header.Get("X-RateLimit-Remaining") == "" && header.Get("X-RateLimit-Limit") == "" {
 		return
 	}
 	var current githubTestsRateObserver

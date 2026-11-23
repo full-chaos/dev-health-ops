@@ -330,23 +330,28 @@ SELECT
 FROM public.sync_runs AS run
 WHERE run.id = $1::uuid`
 
+// heldBackSignalStatementTimeout bounds the recheck, which runs while the guard holds the bucket locks. Its probes stop
+// at their first row on one run, so it normally takes well under a millisecond.
+const heldBackSignalStatementTimeout = "200ms"
+
 // readHeldBackSignal rechecks, after the decision is made, which liveness probe of the held-for run matches, with
-// readOlderRuns' now and bound. It reads in a savepoint of the guard transaction: a failed read is rolled back to the
-// savepoint, so it cannot abort the guard transaction, and it gives read_failed; the decision never depends on it.
-// A run gone since the first read gives rechecked_none.
+// readOlderRuns' now and bound. It is for the log line only: it reads in a savepoint of the guard transaction with a
+// transaction-local statement_timeout, and it ALWAYS rolls back to that savepoint, so neither an error nor a timeout
+// can abort the guard transaction and the timeout never outlives the read (a released savepoint would keep the
+// SET LOCAL for the rest of the transaction). A failed or timed-out read gives read_failed; a run gone since the first
+// read gives rechecked_none.
 func readHeldBackSignal(ctx context.Context, tx pgx.Tx, runID string, now time.Time) heldBackSignal {
 	savepoint, err := tx.Begin(ctx)
 	if err != nil {
 		return heldBackSignalReadFailed
 	}
 	var probes [6]bool
-	err = savepoint.QueryRow(ctx, heldBackSignalSQL, runID, now, admissionLivenessBound().Seconds()).
-		Scan(&probes[0], &probes[1], &probes[2], &probes[3], &probes[4], &probes[5])
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		_ = savepoint.Rollback(ctx)
-		return heldBackSignalReadFailed
+	_, err = savepoint.Exec(ctx, `SELECT set_config('statement_timeout', $1, true)`, heldBackSignalStatementTimeout)
+	if err == nil {
+		err = savepoint.QueryRow(ctx, heldBackSignalSQL, runID, now, admissionLivenessBound().Seconds()).
+			Scan(&probes[0], &probes[1], &probes[2], &probes[3], &probes[4], &probes[5])
 	}
-	if err := savepoint.Commit(ctx); err != nil {
+	if rollbackErr := savepoint.Rollback(ctx); rollbackErr != nil || (err != nil && !errors.Is(err, pgx.ErrNoRows)) {
 		return heldBackSignalReadFailed
 	}
 	return pickHeldBackSignal(probes)

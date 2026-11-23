@@ -327,9 +327,22 @@ func TestHeldBackSignalStatementRunsOnlyWhenSlotsWereHeldBack(t *testing.T) {
 	})
 }
 
-// A failed recheck logs read_failed, leaves the decision as it is, and does not abort the guard transaction: the
-// pass's later statements (the second unit fold, the claim UPDATE) and its COMMIT succeed.
-func TestHeldBackSignalReadFailureKeepsTheDecisionAndTheTransaction(t *testing.T) {
+// guardStatementTimeout is the guard transaction's statement_timeout as the next statement of the pass sees it.
+func guardStatementTimeout(t *testing.T, ctx context.Context, tx pgx.Tx) string {
+	t.Helper()
+	var value string
+	if err := tx.QueryRow(ctx, `SHOW statement_timeout`).Scan(&value); err != nil {
+		t.Fatalf("read statement_timeout in the guard transaction: %v", err)
+	}
+	return value
+}
+
+// assertRecheckKeepsTheDecision runs the pass with heldBackSignalSQL set to planted (empty = the real statement): the
+// decision and held count equal the control decision, the line carries wantSignal, the guard transaction keeps its
+// statement_timeout and stays usable (the second unit fold, the claim UPDATE, COMMIT), and no error text is logged.
+func assertRecheckKeepsTheDecision(t *testing.T, planted, wantSignal string) time.Duration {
+	t.Helper()
+	var elapsed time.Duration
 	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		now := pgNow()
 		seedHeldBackCase(t, ctx, pool, now, heldBackOlderRun, heldBackSigns{wake: true})
@@ -337,36 +350,67 @@ func TestHeldBackSignalReadFailureKeepsTheDecisionAndTheTransaction(t *testing.T
 		control, line, raw := bucketDecisionLine(t, ctx, pool, now)
 		assertHeldBackLine(t, line, raw, 2, "14403a0e", "wake_armed")
 
-		planted := heldBackSignalSQL
-		t.Cleanup(func() { heldBackSignalSQL = planted })
-		heldBackSignalSQL = `SELECT (1 / 0) = 1, false, false, false, false, false
-WHERE $1::uuid IS NOT NULL AND $2::timestamptz IS NOT NULL AND $3::double precision IS NOT NULL`
-
+		if planted != "" {
+			real := heldBackSignalSQL
+			t.Cleanup(func() { heldBackSignalSQL = real })
+			heldBackSignalSQL = planted
+		}
 		var logs bytes.Buffer
 		tx, err := pool.Begin(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
+		before := guardStatementTimeout(t, ctx, tx)
+		started := time.Now()
 		decision, err := authorizeRun(ctx, tx, synclog.New(slog.New(slog.NewJSONHandler(&logs, nil))), guardTestOrg, guardTestRun, now)
+		elapsed = time.Since(started)
 		if err != nil {
-			t.Fatalf("authorizeRun with a failing recheck: %v", err)
+			t.Fatalf("authorizeRun: %v", err)
 		}
 		if !reflect.DeepEqual(decision, control) {
-			t.Fatalf("decision with a failing recheck = %+v, want the control decision %+v", decision, control)
+			t.Fatalf("decision = %+v, want the control decision %+v", decision, control)
 		}
-		if !strings.Contains(logs.String(), `"guard.held_back":2,"guard.held_back_run":"14403a0e","guard.held_back_signal":"read_failed"`) {
-			t.Fatalf("no read_failed bucket_decision line:\n%s", logs.String())
+		if want := `"guard.held_back":2,"guard.held_back_run":"14403a0e","guard.held_back_signal":"` + wantSignal + `"`; !strings.Contains(logs.String(), want) {
+			t.Fatalf("no %s bucket_decision line:\n%s", wantSignal, logs.String())
 		}
-		if strings.Contains(logs.String(), "division") || strings.Contains(logs.String(), "22012") {
-			t.Fatalf("the recheck error reached the log:\n%s", logs.String())
+		for _, leaked := range []string{"division", "22012", "57014", "cancel", "timeout"} {
+			if strings.Contains(logs.String(), leaked) {
+				t.Fatalf("recheck error text %q reached the log:\n%s", leaked, logs.String())
+			}
+		}
+		if after := guardStatementTimeout(t, ctx, tx); after != before {
+			t.Fatalf("guard statement_timeout after the recheck = %q, want %q (the recheck's SET LOCAL leaked)", after, before)
 		}
 		if _, err := tx.Exec(ctx, `UPDATE public.sync_run_units SET status = 'dispatching', updated_at = $2 WHERE sync_run_id = $1::uuid AND status = 'planned' AND id = ANY($3::uuid[])`,
 			guardTestRun, now, []string{guardUnitID("00014403b0", 0)}); err != nil {
-			t.Fatalf("claim after a failed recheck: %v", err)
+			t.Fatalf("claim after the recheck: %v", err)
 		}
 		if err := tx.Commit(ctx); err != nil {
-			t.Fatalf("commit after a failed recheck: %v", err)
+			t.Fatalf("commit after the recheck: %v", err)
 		}
 	})
+	return elapsed
+}
+
+// A recheck that succeeds keeps the guard transaction's statement_timeout (its SET LOCAL is rolled back with the
+// savepoint).
+func TestHeldBackSignalRecheckLeavesTheGuardTransactionAsItWas(t *testing.T) {
+	assertRecheckKeepsTheDecision(t, "", "wake_armed")
+}
+
+// A failed recheck (a statement error) logs read_failed and changes nothing else.
+func TestHeldBackSignalReadFailureKeepsTheDecisionAndTheTransaction(t *testing.T) {
+	assertRecheckKeepsTheDecision(t, `SELECT (1 / 0) = 1, false, false, false, false, false
+WHERE $1::uuid IS NOT NULL AND $2::timestamptz IS NOT NULL AND $3::double precision IS NOT NULL`, "read_failed")
+}
+
+// A recheck that runs past heldBackSignalStatementTimeout is cancelled by it: read_failed, nothing else changes, and
+// the pass does not wait for the slow statement.
+func TestHeldBackSignalTimeoutKeepsTheDecisionAndTheTransaction(t *testing.T) {
+	elapsed := assertRecheckKeepsTheDecision(t, `SELECT (SELECT true FROM pg_sleep(5)), false, false, false, false, false
+WHERE $1::uuid IS NOT NULL AND $2::timestamptz IS NOT NULL AND $3::double precision IS NOT NULL`, "read_failed")
+	if elapsed >= 2*time.Second {
+		t.Fatalf("pass with a 5 s recheck took %v; heldBackSignalStatementTimeout did not cut it", elapsed)
+	}
 }

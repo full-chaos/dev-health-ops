@@ -29,7 +29,7 @@ type QueryClient interface {
 }
 
 const (
-	// maxRows bounds the rows returned and the ids a filter may carry.
+	// maxRows bounds the rows returned and the ids a request filter may carry.
 	maxRows = 500
 	// maxTrendDays bounds the trend window.
 	maxTrendDays = 365
@@ -76,6 +76,31 @@ func (l idList) bounded() []string {
 	return append([]string(nil), l...)
 }
 
+func (l idList) values() []string { return l.bounded() }
+
+// resolvedIDs is a repository id set the team scope resolved from the org's
+// ownership rows, not a request list: it is bound whole, never cut at maxRows.
+type resolvedIDs []string
+
+func (l resolvedIDs) excludesEverything() bool { return l != nil && len(l) == 0 }
+
+func (l resolvedIDs) values() []string { return append([]string(nil), l...) }
+
+// repoFilter is the id filter of a read: a request list (idList, cut at
+// maxRows) or a resolved set (resolvedIDs). A nil filter is no filter.
+type repoFilter interface {
+	excludesEverything() bool
+	values() []string
+}
+
+// filterIDs is the ids a read binds and whether the filter excludes everything.
+func filterIDs(f repoFilter) (ids []string, excludesEverything bool) {
+	if f == nil {
+		return nil, false
+	}
+	return f.values(), f.excludesEverything()
+}
+
 // measuredRowHaving keeps a scope id only when its newest row of the day is a
 // measurement (package liverow). The daily family writes a retraction row over
 // the key of a team id it no longer produces. That row has a NULL score, like
@@ -99,8 +124,9 @@ const repoIDFilter = `
 
 // latestDay returns the newest day in [start, end] holding at least one
 // scored row for the scope, or nil.
-func latestDay(ctx context.Context, client QueryClient, orgID, scope string, ids idList, start, end time.Time) (*time.Time, error) {
-	if ids.excludesEverything() {
+func latestDay(ctx context.Context, client QueryClient, orgID, scope string, filter repoFilter, start, end time.Time) (*time.Time, error) {
+	ids, none := filterIDs(filter)
+	if none {
 		return nil, nil
 	}
 	query := `
@@ -129,10 +155,10 @@ func latestDay(ctx context.Context, client QueryClient, orgID, scope string, ids
 	if len(ids) > 0 {
 		if scope == "repo" {
 			query += repoIDFilter
-			bindings = append(bindings, clickhouse.Binding{Name: "repo_ids", Value: ids.bounded()})
+			bindings = append(bindings, clickhouse.Binding{Name: "repo_ids", Value: ids})
 		} else {
 			query += "\n                  AND scope_id IN {scope_ids:Array(String)}"
-			bindings = append(bindings, clickhouse.Binding{Name: "scope_ids", Value: ids.bounded()})
+			bindings = append(bindings, clickhouse.Binding{Name: "scope_ids", Value: ids})
 		}
 	}
 	query += `
@@ -169,8 +195,9 @@ func latestRows(ctx context.Context, client QueryClient, orgID string, day time.
 
 // latestRowsLimit is latestRows with a row cap of limit; limit <= 0 reads every
 // row, for a caller that aggregates the rows before it applies a cap.
-func latestRowsLimit(ctx context.Context, client QueryClient, orgID string, day time.Time, scope string, ids idList, limit int) ([]storedRow, error) {
-	if ids.excludesEverything() {
+func latestRowsLimit(ctx context.Context, client QueryClient, orgID string, day time.Time, scope string, filter repoFilter, limit int) ([]storedRow, error) {
+	ids, none := filterIDs(filter)
+	if none {
 		return nil, nil
 	}
 	query := `
@@ -235,10 +262,10 @@ func latestRowsLimit(ctx context.Context, client QueryClient, orgID string, day 
 	if len(ids) > 0 {
 		if scope == "repo" {
 			query += repoIDFilter
-			bindings = append(bindings, clickhouse.Binding{Name: "repo_ids", Value: ids.bounded()})
+			bindings = append(bindings, clickhouse.Binding{Name: "repo_ids", Value: ids})
 		} else {
 			query += "\n  AND scope_id IN {scope_ids:Array(String)}"
-			bindings = append(bindings, clickhouse.Binding{Name: "scope_ids", Value: ids.bounded()})
+			bindings = append(bindings, clickhouse.Binding{Name: "scope_ids", Value: ids})
 		}
 	}
 	query += fmt.Sprintf("\n    GROUP BY scope_id%s\n)\nORDER BY score DESC NULLS LAST", measuredRowHaving)
@@ -277,8 +304,9 @@ type trendRow struct {
 
 // repoTrend returns, per day of [end-(days-1), end], the mean over repos of
 // the latest score computed that day.
-func repoTrend(ctx context.Context, client QueryClient, orgID string, end time.Time, days int, ids idList) ([]trendRow, error) {
-	if ids.excludesEverything() {
+func repoTrend(ctx context.Context, client QueryClient, orgID string, end time.Time, days int, filter repoFilter) ([]trendRow, error) {
+	ids, none := filterIDs(filter)
+	if none {
 		return nil, nil
 	}
 	if days < 1 {
@@ -310,7 +338,7 @@ func repoTrend(ctx context.Context, client QueryClient, orgID string, end time.T
                   WHERE org_id = {org_id:String}
                     AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
               )`
-		bindings = append(bindings, clickhouse.Binding{Name: "repo_ids", Value: ids.bounded()})
+		bindings = append(bindings, clickhouse.Binding{Name: "repo_ids", Value: ids})
 	}
 	query += `
             GROUP BY day, scope_id

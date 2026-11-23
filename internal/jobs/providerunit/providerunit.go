@@ -196,8 +196,9 @@ const (
 	// serialization failure, lost connection; providersync.ErrStoreTransient)
 	// after its bounded in-place retry. Not capped: the registry ceiling holds.
 	causeClassStoreTransient = "store_transient"
-	// A chunk effect write whose ClickHouse connection dropped while the work
-	// context was live (providersync.SinkConnectionDroppedError): the effect
+	// A chunk effect write whose ClickHouse connection dropped on an INSERT
+	// call while the work context was live (providersync.SinkConnectionDroppedError;
+	// a dropped read inside the write stays unclassified): the effect
 	// recovery makes the retry safe. Not capped: the registry ceiling holds.
 	causeClassSinkConnectionDropped = "sink_connection_dropped"
 	// "provider_" + providerfoundation.ErrorClass for the rest.

@@ -2311,6 +2311,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			// late_rerun_runs pair and the phase goes on.
 			allowance, budgetErr := githubTestsListingAllowance(lateMaxPages, cursor.LateRunPages, githubTestsFreePages(cursor))
 			exhausted := errors.Is(budgetErr, ErrPaginationCapExceeded)
+			walkBound := false
 			if budgetErr != nil && !exhausted {
 				return budgetErr
 			}
@@ -2336,7 +2337,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				if errors.Is(visitErr, errGitHubTestsWalkBound) {
 					logGitHubTestsWalkBound(cursor, claim, githubTestsLateRerunRunsComponent, maxWalkRecords)
 					cursor = githubTestsHoldDeepStopAfterDeletion(cursor, client, claim, githubTestsRunInventoryComponent)
-					visitErr, exhausted = nil, true
+					visitErr, exhausted, walkBound = nil, true, true
 				}
 				if visitErr != nil {
 					return visitErr
@@ -2344,6 +2345,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				exhausted = exhausted || collection.PageBudgetExhausted
 			}
 			if exhausted {
+				if !walkBound {
+					recordGitHubTestsDeepPageBudgetStop(client, claim, githubTestsDeepListingRuns, cursor.LateRunPages, lateMaxPages)
+				}
 				cursor = recordGitHubTestsLateRerunRunsStop(cursor, client, claim, githubTestsPageBudgetCause, cursor.LateRunPages)
 				cursor = nextRunsListing(cursor)
 				cursor.NextURL, cursor.Index = "", 0
@@ -3259,6 +3263,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			}
 		}
 		if errors.Is(budgetErr, ErrPaginationCapExceeded) && cursor.Relist == githubTestsRelistWalking {
+			recordGitHubTestsDeepPageBudgetStop(client, claim, githubTestsDeepListingReports, cursor.ArtifactPages, lateMaxPages)
 			cursor = recordGitHubTestsRelistStop(cursor, client, claim, githubTestsPageBudgetCause, cursor.RangeHi, cursor.RangeItems)
 			break
 		}
@@ -3283,6 +3288,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			return visitErr
 		}
 		if collection.PageBudgetExhausted && cursor.Relist == githubTestsRelistWalking {
+			recordGitHubTestsDeepPageBudgetStop(client, claim, githubTestsDeepListingReports, cursor.ArtifactPages, lateMaxPages)
 			cursor = recordGitHubTestsRelistStop(cursor, client, claim, githubTestsPageBudgetCause, cursor.RangeHi, cursor.RangeItems)
 			break
 		}

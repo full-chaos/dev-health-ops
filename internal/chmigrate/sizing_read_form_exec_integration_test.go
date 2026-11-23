@@ -528,23 +528,28 @@ func TestSizingReadFormExecutesAtTheChainHead(t *testing.T) {
 	}
 }
 
-// Second throwaway exec proof: the read-back form of the recompute card. readbackForm is READBACK-13902-4.sql byte for byte.
-const readbackFormSHA256 = "17d5b2baef688c77e0d3a90b2d192f45d09873d2f7eec977bca96de38838b8e4"
+// Second throwaway exec proof: the read-back form of the recompute card. readbackForm is READBACK-13902-5.sql byte for byte.
+const readbackFormSHA256 = "8a95fef669a888ca108a35736b7057e9ed36fcc757be14cebc7cb867f6adc30e"
 
-const readbackForm = `-- READBACK-13902-4 = READBACK-13902-3 (b8dacbfe036b, acp FORM OK) with the cut as a placeholder. Lane l13902-cutfix
--- (lead fcsup), 2026-11-23. ClickHouse. Shape: FORM-TEMPLATE-1 (pm-guard, e220dd03e6fc) (a), as -3.
--- Prod: NOT EXECUTED. CI exec: EXEC-PROOF-13902-READBACK-4.md. Fill rule + WANT lines: READBACK-13902-4.md.
+const readbackForm = `-- READBACK-13902-5 = READBACK-13902-4 (17d5b2baef68) with the rows caps at the FORM-TEMPLATE-3 budget. Lane l13902-cutfix
+-- (lead fcsup), 2026-11-23. ClickHouse. Shape: FORM-TEMPLATE-3 (pm-guard, 6b9e73a3c45a) (a) + pass-path budget.
+-- Prod: NOT EXECUTED. CI exec: EXEC-PROOF-13902-READBACK-5.md. Fill rule, work math, WANT lines: READBACK-13902-5.md.
 -- Card: CARD-13902-recompute-3 (30f972dfa124) step 0 (BEFORE, can-fail proof) and step 4 (AFTER the pass 1 recompute).
--- -3 is SUPERSEDED: do not run it.
--- Edit vs -3 (the only one):
+-- -3 and -4 are SUPERSEDED: do not run them.
+-- Edit vs -4 (the only one):
+--   B1 Rows cap of stmt0..stmt2 30000000 -> 20000000 = the FORM-TEMPLATE-3 pass-path budget. Every table is read once per
+--      statement (k = 1: stmt0 3 scalar subqueries, one table each; stmt1 ci_pipeline_runs FINAL + cicd_metrics_daily;
+--      stmt2 ci_pipeline_runs FINAL + testops_pipeline_metrics_daily; no CTE, no self-join), so the plain system.parts sum
+--      IS the work sum. Bytes cap 4 GiB and S0 parts cap 100000 kept.
+-- Edit of -4 vs -3 (kept):
 --   T1 The cut literal '2026-11-23 03:08:08' (stmt1 and stmt2: stale_rerun, stale_live, rewritten, retracted_after_cut)
 --      is the placeholder T0_UTC in double braces (8 places). pm fills it with the card T0 (md fill rule). Why: a row an
 --      old-image pod wrote after 03:08:08 but before T0 counted as "rewritten" under -3 and could give a false pass (the
 --      STEP 323 drain-0 read skipped Terminating pods; old go-heavy grace 7260 s). With the cut = T0, every row computed
 --      before the recompute start counts as stale; only rows written at or after T0 count as rewritten.
--- Edits of -3 vs -2 (kept; K2 now reads: the cut is T0, not a literal):
+-- Edits of -3 vs -2 (kept; K2 now reads: the cut is T0, not a literal; K1 rows cap now 20M, B1):
 --   K1 Engine cost gate in EVERY statement: stmt0..stmt2 WITH (SELECT throwIf(...)) AS cost_gate over exactly the tables
---      the statement reads, caps 30M rows, 4 GiB on disk; S0 gated on system.one (system.parts part count of its 3 tables
+--      the statement reads, caps 20M rows (B1), 4 GiB on disk; S0 gated on system.one (system.parts part count of its 3 tables
 --      over 100000 = STOP). Error text STOP-COST-GATE in each.
 --   Status literals = the writer literals: 'deleted' testops/status_export.go:15, 'running' / 'queued' :21-22,
 --      NotOpenRunSQL :36 (at ops 340c3e05).
@@ -557,6 +562,8 @@ const readbackForm = `-- READBACK-13902-4 = READBACK-13902-3 (b8dacbfe036b, acp 
 --      rewritten, retracted_after_cut, rerun_keys, to_null_checked. Aliases on every derived table.
 -- Run rule: each statement once, in order. A SQL error (STOP-COST-GATE included) = STOP. A timeout (30 s) = STOP, no re-run.
 -- read_rows WANT after each of stmt0..stmt2: read_rows <= 1.1 x G + 2 x P + 2 (G, P = S0 rows, parts of the gate tables).
+--   CI pass path (B1): G + 2 x P + 1 - O <= query_log read_rows <= G + (1 + s) x (2 x P + 1), s = 3 (stmt0) else 0,
+--   O = rows outside the day range (a part wholly outside it is pruned). Work math per statement: md.
 -- New rule = cicd/compute.go:158-165 (retry_count = 0, queued_at set, started - queued >= 0), testops/compute.go:637-644
 -- (retry_count = 0, explicit queue_seconds >= 0 else started - queued >= 0); mean :698-701. Sources: cicd/clickhouse.go:51-57,
 -- testops_native_clickhouse.go:126-130. All at ops 340c3e05. Tolerance |stored - new| <= 1e-6 x max(1, new).
@@ -578,7 +585,7 @@ ORDER BY table;
 -- stmt0 ORG-1. WANT raw_orgs = 1, cicd_orgs = 1, testops_orgs = 1. Gate tables: raw + cicd + testops.
 WITH (SELECT throwIf(
     (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
-      AND table IN ('ci_pipeline_runs', 'cicd_metrics_daily', 'testops_pipeline_metrics_daily')) > 30000000
+      AND table IN ('ci_pipeline_runs', 'cicd_metrics_daily', 'testops_pipeline_metrics_daily')) > 20000000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
       AND table IN ('ci_pipeline_runs', 'cicd_metrics_daily', 'testops_pipeline_metrics_daily')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
@@ -593,7 +600,7 @@ SELECT
 -- INFO rerun_keys, rewritten, to_null_checked, raw_changed_after. BEFORE the recompute it must FAIL: stale_rerun > 0, mismatch > 0.
 WITH (SELECT throwIf(
     (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
-      AND table IN ('ci_pipeline_runs', 'cicd_metrics_daily')) > 30000000
+      AND table IN ('ci_pipeline_runs', 'cicd_metrics_daily')) > 20000000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
       AND table IN ('ci_pipeline_runs', 'cicd_metrics_daily')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
@@ -640,7 +647,7 @@ WHERE cost_gate = 0;
 -- WANT / INFO / must-fail-before: as stmt1.
 WITH (SELECT throwIf(
     (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
-      AND table IN ('ci_pipeline_runs', 'testops_pipeline_metrics_daily')) > 30000000
+      AND table IN ('ci_pipeline_runs', 'testops_pipeline_metrics_daily')) > 20000000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
       AND table IN ('ci_pipeline_runs', 'testops_pipeline_metrics_daily')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
@@ -814,21 +821,33 @@ func TestReadbackReadFormFailsBeforeAndPassesAfterARecompute(t *testing.T) {
 		"stmt1": {"ci_pipeline_runs", "cicd_metrics_daily"},
 		"stmt2": {"ci_pipeline_runs", "testops_pipeline_metrics_daily"},
 	}
-	// Every statement holds exactly one gate: S0 one part-count cap on system.one, the others one rows + one bytes cap.
+	// Every statement holds exactly one gate: S0 one part-count cap on system.one, the others one rows budget (20M,
+	// FORM-TEMPLATE-3; every table read once, k = 1) + one bytes cap.
 	const partsCap = "> 100000"
+	const readbackRowsCap = "> 20000000"
 	gateCaps := func(label string) []struct{ name, literal string } {
 		if label == "S0" {
 			return []struct{ name, literal string }{{"parts", partsCap}}
 		}
-		return []struct{ name, literal string }{{"rows", rowsCap}, {"bytes", bytesCap}}
+		return []struct{ name, literal string }{{"rows", readbackRowsCap}, {"bytes", bytesCap}}
 	}
+	// s = scalar subqueries that read a table (each can run the gate once more).
+	readbackScalars := map[string]uint64{"stmt0": 3}
 	for _, s := range statements {
 		wantRowsBytes, wantParts := 1, 0
 		if s.label == "S0" {
 			wantRowsBytes, wantParts = 0, 1
 		}
-		if n := strings.Count(s.text, rowsCap); n != wantRowsBytes {
-			t.Fatalf("%s: %d rows caps %q, want %d", s.label, n, rowsCap, wantRowsBytes)
+		if n := strings.Count(s.text, readbackRowsCap); n != wantRowsBytes {
+			t.Fatalf("%s: %d rows budget caps %q, want %d", s.label, n, readbackRowsCap, wantRowsBytes)
+		}
+		if n := strings.Count(s.text, rowsCap); n != 0 {
+			t.Fatalf("%s: %d old rows caps %q, want 0", s.label, n, rowsCap)
+		}
+		if s.label != "S0" {
+			if n := uint64(strings.Count(chmigrate.StripLineComments(s.text), "AND cost_gate = 0) AS ")); n != readbackScalars[s.label] {
+				t.Fatalf("%s: %d scalar subqueries use cost_gate, want %d", s.label, n, readbackScalars[s.label])
+			}
 		}
 		if n := strings.Count(s.text, bytesCap); n != wantRowsBytes {
 			t.Fatalf("%s: %d bytes caps %q, want %d", s.label, n, bytesCap, wantRowsBytes)
@@ -894,9 +913,13 @@ func TestReadbackReadFormFailsBeforeAndPassesAfterARecompute(t *testing.T) {
 	run := func(phase string, statements []formStatement, want map[string]map[string]string) (map[string]uint64, map[string]uint64) {
 		tableRows := map[string]uint64{}
 		tableParts := map[string]uint64{}
+		comments := map[string]string{}
 		for _, statement := range statements {
 			var readRows uint64
-			qctx := clickhouse.Context(ctx, clickhouse.WithProgress(func(p *clickhouse.Progress) { readRows += p.Rows }))
+			comments[statement.label] = fmt.Sprintf("readback13902-pass-%s-%d", statement.label, time.Now().UnixNano())
+			qctx := clickhouse.Context(ctx,
+				clickhouse.WithSettings(clickhouse.Settings{"log_comment": comments[statement.label]}),
+				clickhouse.WithProgress(func(p *clickhouse.Progress) { readRows += p.Rows }))
 			rows, err := conn.Query(qctx, statement.text)
 			if err != nil {
 				t.Fatalf("%s %s: SQL error: %v", phase, statement.label, err)
@@ -968,6 +991,60 @@ func TestReadbackReadFormFailsBeforeAndPassesAfterARecompute(t *testing.T) {
 				if _, ok := want[statement.label][name]; !ok {
 					t.Errorf("%s %s: column %s has no WANT in the cell", phase, statement.label, name)
 				}
+			}
+		}
+
+		// PASS path (FORM-TEMPLATE-3): the scan count from query_log. WANT [QueryFinish] and
+		// G + 2 x P + 1 - O <= read_rows <= G + (1 + s) x (2 x P + 1); O = rows of the read tables outside the day range
+		// (a part wholly outside it is pruned; stmt0 has no day filter: O = 0).
+		outside := map[string]string{
+			"stmt1": "(SELECT count() FROM cicd_metrics_daily WHERE day < '2026-04-17' OR day > '2026-11-22') + " +
+				"(SELECT count() FROM ci_pipeline_runs WHERE finished_at IS NULL OR toDate(assumeNotNull(finished_at)) < '2026-04-17' OR toDate(assumeNotNull(finished_at)) > '2026-11-22')",
+			"stmt2": "(SELECT count() FROM testops_pipeline_metrics_daily WHERE day < '2026-04-17' OR day > '2026-11-22') + " +
+				"(SELECT count() FROM ci_pipeline_runs WHERE toDate(started_at) < '2026-04-17' OR toDate(started_at) > '2026-11-22')",
+		}
+		if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
+			t.Fatalf("the query log is not readable by this user: %v", err)
+		}
+		for _, statement := range statements[1:] {
+			var g, p, o uint64
+			for _, table := range reads[statement.label] {
+				g += tableRows[table]
+				p += tableParts[table]
+			}
+			if q, ok := outside[statement.label]; ok {
+				if err := conn.QueryRow(ctx, "SELECT "+q).Scan(&o); err != nil {
+					t.Fatalf("%s PASS %s: outside rows: %v", phase, statement.label, err)
+				}
+			}
+			s := readbackScalars[statement.label]
+			var types []string
+			var logRead uint64
+			rows, err := conn.Query(ctx, `SELECT toString(type), read_rows FROM system.query_log
+				WHERE log_comment = ? AND type != 'QueryStart' ORDER BY event_time_microseconds`, comments[statement.label])
+			if err != nil {
+				t.Fatalf("%s PASS %s: query log: %v", phase, statement.label, err)
+			}
+			for rows.Next() {
+				var typ string
+				var r uint64
+				if err := rows.Scan(&typ, &r); err != nil {
+					t.Fatalf("%s PASS %s: query log scan: %v", phase, statement.label, err)
+				}
+				types = append(types, typ)
+				logRead += r
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatalf("%s PASS %s: query log: %v", phase, statement.label, err)
+			}
+			_ = rows.Close()
+			low, high := g+2*p+1-o, g+(1+s)*(2*p+1)
+			t.Logf("%s PASS %s query_log types=%v read_rows=%d G=%d P=%d O=%d s=%d band=[%d, %d]", phase, statement.label, types, logRead, g, p, o, s, low, high)
+			if len(types) != 1 || types[0] != "QueryFinish" {
+				t.Errorf("%s PASS %s: query_log types %v, want [QueryFinish]", phase, statement.label, types)
+			}
+			if logRead < low || logRead > high {
+				t.Errorf("%s PASS %s: query_log read_rows %d outside [%d, %d]", phase, statement.label, logRead, low, high)
 			}
 		}
 		return tableRows, tableParts

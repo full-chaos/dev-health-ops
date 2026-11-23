@@ -342,6 +342,8 @@ ORDER BY id`, runID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A Fatal inside the loop must not leave the connection busy: the pool's Close in the cleanup would wait forever.
+	defer rows.Close()
 	type job struct {
 		id   int64
 		args string

@@ -2932,6 +2932,8 @@ VALUES ($1::jsonb, 1, $2, $2, 'metrics.daily_partition', 4, '{}'::jsonb, 2, 'met
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A Fatalf inside the loop must not leave the connection busy: the pool's Close in the cleanup would wait forever.
+	defer rows.Close()
 	wantRecent := map[string]bool{recent: true}
 	seen := 0
 	for rows.Next() {

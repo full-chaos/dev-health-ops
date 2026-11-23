@@ -408,6 +408,48 @@ WHERE schemaname = 'public' AND relname IN ('daily_metrics_runs', 'daily_metrics
 	return out
 }
 
+// rfIndexStats reads pg_stat_user_indexes of the two tables on a fresh session: name -> idx_scan, idx_tup_read, idx_tup_fetch.
+func rfIndexStats(t *testing.T, uri string) map[string][3]int64 {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(context.Background()) }()
+	rows, err := conn.Query(ctx, `
+SELECT relname || '.' || indexrelname, COALESCE(idx_scan, 0), COALESCE(idx_tup_read, 0), COALESCE(idx_tup_fetch, 0)
+FROM pg_catalog.pg_stat_user_indexes
+WHERE schemaname = 'public' AND relname IN ('daily_metrics_runs', 'daily_metrics_partitions')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[string][3]int64{}
+	for rows.Next() {
+		var name string
+		var v [3]int64
+		if err := rows.Scan(&name, &v[0], &v[1], &v[2]); err != nil {
+			t.Fatal(err)
+		}
+		out[name] = v
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func rfSortedKeys(m map[string][3]int64) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // rfWaitScans polls the statistics until done says the flush landed (backends flush at exit or when idle).
 func rfWaitScans(t *testing.T, uri, what string, done func(map[string]rfScan) bool) map[string]rfScan {
 	t.Helper()
@@ -661,20 +703,39 @@ func TestRunsReadFormGivesTheChunkStateAndStopsOnItsGate(t *testing.T) {
 	before := rfWaitScans(t, uri, "seed flush", func(s map[string]rfScan) bool {
 		return s["daily_metrics_runs"].inserted == runsIn && s["daily_metrics_partitions"].inserted == partsIn
 	})
+	beforeIdx := rfIndexStats(t, uri)
 	rows := rfRead(t, uri, "RUNS pass", form, labels...)
 	after := rfWaitScans(t, uri, "pass read flush", func(s map[string]rfScan) bool {
 		return s["daily_metrics_runs"].seqScan >= before["daily_metrics_runs"].seqScan+2
 	})
+	afterIdx := rfIndexStats(t, uri)
+	for _, name := range rfSortedKeys(afterIdx) {
+		a, b := afterIdx[name], beforeIdx[name]
+		if d := [3]int64{a[0] - b[0], a[1] - b[1], a[2] - b[2]}; d != [3]int64{} {
+			t.Logf("PASS-PATH RUNS index delta %s: idx_scan +%d idx_tup_read +%d idx_tup_fetch +%d", name, d[0], d[1], d[2])
+		}
+	}
 	runScans := after["daily_metrics_runs"].seqScan - before["daily_metrics_runs"].seqScan
 	runRead := after["daily_metrics_runs"].seqRead - before["daily_metrics_runs"].seqRead
 	runIdx := after["daily_metrics_runs"].idxFetch - before["daily_metrics_runs"].idxFetch
-	partRead := after["daily_metrics_partitions"].seqRead - before["daily_metrics_partitions"].seqRead +
-		after["daily_metrics_partitions"].idxFetch - before["daily_metrics_partitions"].idxFetch
-	t.Logf("PASS-PATH RUNS: table rows runs=%d partitions=%d; runs seq_scan +%d seq_tup_read +%d idx_tup_fetch +%d; partitions read +%d; math: RUNS 1 x runs, PART <= 1 x runs + 1 x partitions (+ <= 1 runs probe per partition), DAY 1 x runs",
-		runsIn, partsIn, runScans, runRead, runIdx, partRead)
-	if runScans < 2 || runScans > 3 || runRead != runScans*runsIn || runIdx > partsIn || partRead > partsIn || partRead < 6 {
-		t.Errorf("pass-path scan count: runs scans %d (want 2..3) read %d (want scans x %d) idx %d (want <= %d), partitions read %d (want 6..%d)",
-			runScans, runRead, runsIn, runIdx, partsIn, partRead, partsIn)
+	partScans := after["daily_metrics_partitions"].seqScan - before["daily_metrics_partitions"].seqScan
+	partSeq := after["daily_metrics_partitions"].seqRead - before["daily_metrics_partitions"].seqRead
+	partIdx := after["daily_metrics_partitions"].idxFetch - before["daily_metrics_partitions"].idxFetch
+	t.Logf("PASS-PATH RUNS: table rows runs=%d partitions=%d; runs seq_scan +%d seq_tup_read +%d idx_tup_fetch +%d; partitions seq_scan +%d seq_tup_read +%d idx_tup_fetch +%d; math: RUNS 1 x runs, PART 1 x runs + <= 1 x partitions (seq) or <= 1 index fetch per partition, DAY 1 x runs",
+		runsIn, partsIn, runScans, runRead, runIdx, partScans, partSeq, partIdx)
+	// Bounds, each read kind apart: runs seq = scans x runs (scans 2..3), runs idx <= partitions (one probe per
+	// partition), partitions seq <= 1 scan x partitions, partitions idx <= partitions.
+	if runScans < 2 || runScans > 3 || runRead != runScans*runsIn || runIdx > partsIn ||
+		partScans > 1 || partSeq > partsIn || partIdx > partsIn || partSeq+partIdx < 6 {
+		t.Errorf("pass-path bound: runs scans %d (2..3) seq %d (= scans x %d) idx %d (<= %d); partitions scans %d (<= 1) seq %d (<= %d) idx %d (<= %d), read >= 6",
+			runScans, runRead, runsIn, runIdx, partsIn, partScans, partSeq, partsIn, partIdx, partsIn)
+	}
+	// Mutant that matters: a nested loop with a full seq scan of the inner table per outer row.
+	mutantParts, mutantRuns := runsIn*partsIn, partsIn*runsIn
+	t.Logf("MUTANT nested seq loop: partitions inner = %d x %d = %d rows (bound %d); runs inner = %d x %d = %d rows (bound %d)",
+		runsIn, partsIn, mutantParts, partsIn, partsIn, runsIn, mutantRuns, 3*runsIn)
+	if mutantParts <= partsIn || mutantRuns <= 3*runsIn {
+		t.Errorf("the bound does not catch a nested seq loop on this fixture: %d <= %d or %d <= %d", mutantParts, partsIn, mutantRuns, 3*runsIn)
 	}
 	var vector string
 	if err := conn.QueryRow(context.Background(), `SELECT generation FROM public.daily_metrics_runs WHERE id = $1::uuid`, card["2026-11-10"]).Scan(&vector); err != nil || vector != rfVector1110 {

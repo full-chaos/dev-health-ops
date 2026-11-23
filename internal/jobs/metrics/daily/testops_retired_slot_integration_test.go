@@ -685,8 +685,9 @@ func TestTestopsRetiredSlotReadsStayInTheirScans(t *testing.T) {
 		}
 		return count
 	}
-	suites, cases, pipelines, marks := rowsOf("test_suite_results"), rowsOf("test_case_results"), rowsOf("ci_pipeline_runs"), rowsOf("testops_run_report_completeness")
-	t.Logf("raw rows: suites %d, cases %d, pipelines %d, marks %d", suites, cases, pipelines, marks)
+	suites, cases, pipelines, marks, repos := rowsOf("test_suite_results"), rowsOf("test_case_results"), rowsOf("ci_pipeline_runs"),
+		rowsOf("testops_run_report_completeness"), rowsOf("repos")
+	t.Logf("raw rows: suites %d, cases %d, pipelines %d, marks %d, repos %d", suites, cases, pipelines, marks, repos)
 
 	start, end := retiredDay(), retiredDay().Add(24*time.Hour)
 	historyStart := retiredDay().AddDate(0, 0, -29)
@@ -695,36 +696,37 @@ func TestTestopsRetiredSlotReadsStayInTheirScans(t *testing.T) {
 	const notRetired = 2    // the retired-slot select + its window run set
 	const offDefault = 2    // one reference to off_default: window_runs twice (and one ci_pipeline_runs scan)
 	statements := []struct {
-		name                                  string
-		suiteScans, caseScans, pipeScans, mks uint64
-		run                                   func(context.Context) error
+		name                                             string
+		suiteScans, caseScans, pipeScans, mks, repoScans uint64
+		run                                              func(context.Context) error
 	}{
-		{"suite read", keptToday, 0, 0, 0, func(ctx context.Context) error {
+		{"suite read", keptToday, 0, 0, 0, 0, func(ctx context.Context) error {
 			return loadNativeTestopsSuites(ctx, stack.conn, accumulator, org, repoID, start, end)
 		}},
-		{"case aggregate", keptToday + (1 + notRetired) + (1 + notRetired) + 2*offDefault, 1, 2, 0, func(ctx context.Context) error {
+		// The case aggregate reads the default branch first (repos), under the same query id.
+		{"case aggregate", keptToday + (1 + notRetired) + (1 + notRetired) + 2*offDefault, 1, 2, 0, 1, func(ctx context.Context) error {
 			_, err := loadNativeTestopsCaseAggregate(ctx, stack.conn, accumulator, org, repoID, historyStart, start, end)
 			return err
 		}},
-		{"off-default check", offDefault + keptToday + (1 + notRetired), 1, 1, 0, func(ctx context.Context) error {
+		{"off-default check", offDefault + keptToday + (1 + notRetired), 1, 1, 0, 0, func(ctx context.Context) error {
 			_, err := hasNativeTestopsOffDefaultCaseToday(ctx, stack.conn, org, repoID, "main", historyStart, start, end)
 			return err
 		}},
-		{"completeness read", 2 * keptToday, 0, 0, 1, func(ctx context.Context) error {
+		{"completeness read", 2 * keptToday, 0, 0, 1, 0, func(ctx context.Context) error {
 			rows, err := stack.conn.Query(ctx, testopsReportCompletenessStatement, testopsSourceArgs(org, []uuid.UUID{repoID}, start, end)...)
 			if err == nil {
 				rows.Close()
 			}
 			return err
 		}},
-		{"unknown tests", keptToday, 0, 0, 0, func(ctx context.Context) error {
+		{"unknown tests", keptToday, 0, 0, 0, 0, func(ctx context.Context) error {
 			rows, err := stack.conn.Query(ctx, "SELECT DISTINCT repo_id"+testopsKeptSuitesToday, testopsSourceArgs(org, []uuid.UUID{repoID}, historyStart, start)...)
 			if err == nil {
 				rows.Close()
 			}
 			return err
 		}},
-		{"pooled", 1 + 4, 0, 0, 0, func(ctx context.Context) error {
+		{"pooled", 1 + 4, 0, 0, 0, 0, func(ctx context.Context) error {
 			var count uint64
 			return stack.conn.QueryRow(ctx, "SELECT count() FROM "+testopspooled.SuiteRunsSource, clickhouse.Named("org_id", org),
 				clickhouse.Named("start_date", start.Format(time.DateOnly)), clickhouse.Named("end_date", end.Format(time.DateOnly))).Scan(&count)
@@ -741,13 +743,13 @@ func TestTestopsRetiredSlotReadsStayInTheirScans(t *testing.T) {
 		t.Fatal(err)
 	}
 	for index, statement := range statements {
-		var read uint64
-		if err := stack.conn.QueryRow(ctx, `SELECT read_rows FROM system.query_log WHERE query_id = ? AND type = 'QueryFinish'`, ids[index]).Scan(&read); err != nil {
+		var read, queries uint64
+		if err := stack.conn.QueryRow(ctx, `SELECT sum(read_rows), count() FROM system.query_log WHERE query_id = ? AND type = 'QueryFinish'`, ids[index]).Scan(&read, &queries); err != nil {
 			t.Fatalf("%s: query_log: %v", statement.name, err)
 		}
-		scans := statement.suiteScans*suites + statement.caseScans*cases + statement.pipeScans*pipelines + statement.mks*marks
+		scans := statement.suiteScans*suites + statement.caseScans*cases + statement.pipeScans*pipelines + statement.mks*marks + statement.repoScans*repos
 		bound := scans + scans/2
-		t.Logf("%s: read %d rows, named scans %d rows, bound %d", statement.name, read, scans, bound)
+		t.Logf("%s: %d queries read %d rows, named scans %d rows, bound %d", statement.name, queries, read, scans, bound)
 		if read == 0 || read > bound {
 			t.Errorf("%s read %d rows, want 1..%d (its named scans + 50 %%)", statement.name, read, bound)
 		}

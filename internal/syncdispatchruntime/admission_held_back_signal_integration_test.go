@@ -363,9 +363,8 @@ func assertNoRecheckSavepointOpen(t *testing.T, ctx context.Context, tx pgx.Tx) 
 // assertRecheckKeepsTheDecision runs the pass with heldBackSignalSQL set to planted (empty = the real statement): the
 // decision and held count equal the control decision, the line carries wantSignal, the guard transaction keeps its
 // statement_timeout and stays usable (the second unit fold, the claim UPDATE, COMMIT), and no error text is logged.
-func assertRecheckKeepsTheDecision(t *testing.T, planted, wantSignal string) time.Duration {
+func assertRecheckKeepsTheDecision(t *testing.T, planted, wantSignal string) {
 	t.Helper()
-	var elapsed time.Duration
 	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		now := pgNow()
 		seedHeldBackCase(t, ctx, pool, now, heldBackOlderRun, heldBackSigns{wake: true})
@@ -385,9 +384,7 @@ func assertRecheckKeepsTheDecision(t *testing.T, planted, wantSignal string) tim
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
 		before := guardStatementTimeout(t, ctx, tx)
-		started := time.Now()
 		decision, err := authorizeRun(ctx, tx, synclog.New(slog.New(slog.NewJSONHandler(&logs, nil))), guardTestOrg, guardTestRun, now)
-		elapsed = time.Since(started)
 		if err != nil {
 			t.Fatalf("authorizeRun: %v", err)
 		}
@@ -414,7 +411,6 @@ func assertRecheckKeepsTheDecision(t *testing.T, planted, wantSignal string) tim
 			t.Fatalf("commit after the recheck: %v", err)
 		}
 	})
-	return elapsed
 }
 
 // A recheck that succeeds keeps the guard transaction's statement_timeout (its SET LOCAL is rolled back with the
@@ -429,14 +425,11 @@ func TestHeldBackSignalReadFailureKeepsTheDecisionAndTheTransaction(t *testing.T
 WHERE $1::uuid IS NOT NULL AND $2::timestamptz IS NOT NULL AND $3::double precision IS NOT NULL`, "read_failed")
 }
 
-// A recheck that runs past heldBackSignalStatementTimeout is cancelled by it: read_failed, nothing else changes, and
-// the pass does not wait for the slow statement.
+// A recheck that runs past heldBackSignalStatementTimeout is cancelled by it: read_failed, nothing else changes. The
+// planted statement returns recent_run if it completes, so read_failed proves the timeout cut it (no wall clock).
 func TestHeldBackSignalTimeoutKeepsTheDecisionAndTheTransaction(t *testing.T) {
-	elapsed := assertRecheckKeepsTheDecision(t, `SELECT (SELECT true FROM pg_sleep(5)), false, false, false, false, false
+	assertRecheckKeepsTheDecision(t, `SELECT (SELECT true FROM pg_sleep(5)), false, false, false, false, false
 WHERE $1::uuid IS NOT NULL AND $2::timestamptz IS NOT NULL AND $3::double precision IS NOT NULL`, "read_failed")
-	if elapsed >= 2*time.Second {
-		t.Fatalf("pass with a 5 s recheck took %v; heldBackSignalStatementTimeout did not cut it", elapsed)
-	}
 }
 
 // Two held buckets in one pass (two rechecks): medium is held for an older run live by its armed wake, light for

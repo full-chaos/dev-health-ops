@@ -60,7 +60,7 @@ def tid(i):
 S = 1000
 UA = "aaaaaaaa-0000-4000-8000-000000000001"
 UB = "bbbbbbbb-0000-4000-8000-000000000002"
-# T1 kept: snooze (2 job.execute, same job id 42); D0 L1 D1 D2 D3 L2 L3+D4 (list and download share one timestamp)
+# T1 kept: snooze (2 job.execute, same job id 42); D0 L1 D1 D2 D3 L2 L3+D4 D5 (L3 and D4 share a timestamp; D5 makes the tie change pairs)
 t = tid(1)
 j1 = job(t, 600 * S, 30000, UA, 42)
 j2 = job(t, 700 * S, 20000, UA, 42)
@@ -74,6 +74,7 @@ dl(t, 605 * S, 1000, j1, 240, 0, 700)
 req(t, 607 * S, 130, LIST, "api", 2, j1)
 req(t, 608 * S, 140, LIST, "api", 3, j1)
 dl(t, 608 * S, 500, j1, 250, 3, 600)
+dl(t, 609 * S, 400, j1, 260, 0, 500)
 req(t, 610 * S, 150, REPO, "api", 4, j1)
 req(t, 611 * S, 300, RUNS, "api", 5, j1)
 req(t, 710 * S, 400, ZIP, "api", 7, j2)

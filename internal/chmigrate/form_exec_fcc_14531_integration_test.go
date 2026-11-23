@@ -20,20 +20,21 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// DO NOT MERGE. This file executes the text of the prod read FORM-14531-6.sql byte for byte (the sha256 below is the
+// DO NOT MERGE. This file executes the text of the prod read FORM-14531-7.sql byte for byte (the sha256 below is the
 // sha256 of the .sql file) on the head schema with a synthetic fixture, checks each WANT, checks each data statement's
 // pass-path read_rows against its work math, and fires each cost gate cap once (pm-guard FORM-TEMPLATE-3).
 const (
-	formExecFcc14531SHA256 = "b4358ee1f8a3a600fa2ea7339a31a9963548e9c11a2ed783120dd2fb91292150"
-	formExecFcc14531SQL    = `-- FORM-14531-6 (lane-14531, 2026-11-23, ops base 92df42e9f210). ClickHouse prod, SELECT only, CHAOS-14531 SIZE.
--- Shape: pm-guard/FORM-TEMPLATE-3.md (sha12 6b9e73a3c45a). Replaces FORM-14531-5 (7a58a825be13): caps set from the prod
--- S0 sizes (FORM-14531-S0-1 100856e91c3c), and the work math counts each cost_gate reference as its own gate read.
+	formExecFcc14531SHA256 = "1df9c572df3838e345ff6f4c15d55e6b5c35dbdf366653addd2d57245af0657e"
+	formExecFcc14531SQL    = `-- FORM-14531-7 (lane-14531, 2026-11-23, ops base 92df42e9f210). ClickHouse prod, SELECT only, CHAOS-14531 SIZE.
+-- Shape: pm-guard/FORM-TEMPLATE-3.md (sha12 6b9e73a3c45a). Replaces FORM-14531-6 (b4358ee1f8a3): the same statements, the
+-- F3/F5 rows cap lowered from 10000000 to 6000000, because the measured scan model (FORM-14531-7.md, CI run 45121078331)
+-- has a FINAL read of work_items reading up to 2 x its rows.
 -- No SET, SETTINGS, EXPLAIN, FORMAT or write. Org prefix c6a38355 by startsWith on every FROM with org_id.
 -- Each data statement starts with WITH (SELECT throwIf(...)) AS cost_gate over exactly the tables it reads (system.parts
 -- and system.one only) and uses cost_gate = 0 in the outer WHERE and in the WHERE of every subquery that reads a table.
--- No data CTE: each table is scanned once per statement. Rows cap on the sum of the active rows of the statement's
--- tables: 5000000 (work_items only) or 10000000 (work_items + work_item_transitions). Bytes cap 4294967296 on the
--- same sum. Work math per statement: FORM-14531-6.md.
+-- No data CTE: each table is named once per statement. Rows cap on the sum of the active rows of the statement's
+-- tables: 5000000 (work_items only) or 6000000 (work_items + work_item_transitions). Bytes cap 4294967296 on the
+-- same sum. Work math per statement: FORM-14531-7.md.
 -- Run each statement once, in order. A SQL error (STOP-COST-GATE included) = STOP and report.
 -- work_items = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id), read FINAL as the daily readers
 -- read it. work_item_transitions is read raw (counts, existence and max only).
@@ -101,7 +102,7 @@ GROUP BY provider ORDER BY provider;
 
 -- F3 transitions of the items with a done copy that has no completed_at. Control: items > 0 in >= 1 row.
 WITH (SELECT throwIf(
-    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items', 'work_item_transitions')) > 10000000
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items', 'work_item_transitions')) > 6000000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items', 'work_item_transitions')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
 SELECT w.provider AS provider,
@@ -148,7 +149,7 @@ GROUP BY provider, source_kind ORDER BY provider, source_kind;
 -- of each table: the item's copies are counted in the same work_items read that lists its done copies with no
 -- completed_at. Control: done_null_copies > 0 in >= 1 row. Row-vs-history control: not_done_after_last_done WANT 0.
 WITH (SELECT throwIf(
-    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items', 'work_item_transitions')) > 10000000
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items', 'work_item_transitions')) > 6000000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items', 'work_item_transitions')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
 SELECT d.provider AS provider, d.source_kind AS source_kind,
@@ -184,23 +185,22 @@ GROUP BY d.provider, d.source_kind ORDER BY provider, source_kind;
 )
 
 // formExecFcc14531Gates are the cost gates of the data statements: the tables each reads (the gate's IN list), its cap
-// literals, how many times it holds cost_gate = 0 (the outer WHERE plus each subquery that reads a table), and its work
-// math: the scans of work_items (W rows) and work_item_transitions (T rows). The gate reads system.parts twice and
-// system.one once (2 x P + 1 rows, P = active parts of its tables) each time it is evaluated. FORM-TEMPLATE-3 counts an
-// evaluation per reference (uses), so the math is work x W + transitions x T + uses x (2 x P + 1); fixtureReadRows is
-// that number on this fixture (W 11, T 6, P 2 + 1, merges stopped).
+// literals, how many times it holds cost_gate = 0 (the outer WHERE plus each subquery that reads a table), and
+// fixtureReadRows, the query_log read_rows of the statement on this fixture as CI measured it (run 45121078331, CH
+// 26.7.38.18; merges stopped, W 11, T 6, P 2 + 1). The measured model (FORM-14531-7.md): a plain read of work_items
+// reads W (11), a FINAL read of work_items reads 21 here, work_item_transitions reads T (6), the gate reads 2 x P + 1
+// once, and each further cost_gate reference reads 1 more row (system.one).
 var formExecFcc14531Gates = []struct {
 	id, tables, rowsCap, bytesCap string
-	uses                          uint64
-	work, transitions             uint64
+	uses                          int
 	fixtureReadRows               uint64
 }{
-	{"F0", "'work_items'", "> 5000000", "> 4294967296", 1, 1, 0, 16},
-	{"F1", "'work_items'", "> 5000000", "> 4294967296", 1, 1, 0, 16},
-	{"F2", "'work_items'", "> 5000000", "> 4294967296", 2, 1, 0, 21},
-	{"F3", "'work_items', 'work_item_transitions'", "> 10000000", "> 4294967296", 3, 1, 1, 38},
-	{"F4", "'work_items'", "> 5000000", "> 4294967296", 1, 1, 0, 16},
-	{"F5", "'work_items', 'work_item_transitions'", "> 10000000", "> 4294967296", 3, 1, 1, 38},
+	{"F0", "'work_items'", "> 5000000", "> 4294967296", 1, 16},
+	{"F1", "'work_items'", "> 5000000", "> 4294967296", 1, 26},
+	{"F2", "'work_items'", "> 5000000", "> 4294967296", 2, 27},
+	{"F3", "'work_items', 'work_item_transitions'", "> 6000000", "> 4294967296", 3, 36},
+	{"F4", "'work_items'", "> 5000000", "> 4294967296", 1, 26},
+	{"F5", "'work_items', 'work_item_transitions'", "> 6000000", "> 4294967296", 3, 36},
 }
 
 type formExecFcc14531Result struct {
@@ -324,6 +324,40 @@ func formExecFcc14531Cell(t *testing.T, results map[string]formExecFcc14531Resul
 	return ""
 }
 
+// formExecFcc14531QueryLog reads the finished query_log rows of one log_comment: their types and the read_rows of
+// the last one. It logs read_rows and the ProfileEvents that explain it.
+func formExecFcc14531QueryLog(ctx context.Context, t *testing.T, conn driver.Conn, label, comment string) ([]string, uint64) {
+	t.Helper()
+	rows, err := conn.Query(ctx, `SELECT toString(type), read_rows, ProfileEvents['SelectedRows'], ProfileEvents['SelectedParts'],
+		ProfileEvents['SelectedMarks'], ProfileEvents['SelectedRanges'], ProfileEvents['ScalarSubqueriesCacheMiss'],
+		ProfileEvents['ScalarSubqueriesLocalCacheHit'], ProfileEvents['ScalarSubqueriesGlobalCacheHit'],
+		arrayStringConcat(tables, ',')
+		FROM system.query_log WHERE log_comment = ? AND type != 'QueryStart' ORDER BY event_time_microseconds`, comment)
+	if err != nil {
+		t.Fatalf("%s: query log: %v", label, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var types []string
+	var read uint64
+	for rows.Next() {
+		var typ, tables string
+		var readRows, selectedRows, selectedParts, selectedMarks, selectedRanges, scalarMiss, scalarLocal, scalarGlobal uint64
+		if err := rows.Scan(&typ, &readRows, &selectedRows, &selectedParts, &selectedMarks, &selectedRanges,
+			&scalarMiss, &scalarLocal, &scalarGlobal, &tables); err != nil {
+			t.Fatalf("%s: query log scan: %v", label, err)
+		}
+		types = append(types, typ)
+		read = readRows
+		t.Logf("%s type=%s read_rows=%d SelectedRows=%d SelectedParts=%d SelectedMarks=%d SelectedRanges=%d "+
+			"ScalarSubqueriesCacheMiss=%d LocalCacheHit=%d GlobalCacheHit=%d tables=%s", label, typ, readRows, selectedRows,
+			selectedParts, selectedMarks, selectedRanges, scalarMiss, scalarLocal, scalarGlobal, tables)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("%s: query log: %v", label, err)
+	}
+	return types, read
+}
+
 // formExecFcc14531Row checks the named columns of one row; a value ending in "*" is a prefix, "a|b" is either value.
 func formExecFcc14531Row(t *testing.T, results map[string]formExecFcc14531Result, id string, row int, want map[string]string) {
 	t.Helper()
@@ -432,7 +466,7 @@ func TestFormExecFcc14531Size(t *testing.T) {
 			{gate.rowsCap, strings.Count(text, gate.rowsCap), 1},
 			{gate.bytesCap, strings.Count(text, gate.bytesCap), 1},
 			{in, strings.Count(text, in), 2},
-			{"cost_gate = 0", strings.Count(text, "cost_gate = 0"), int(gate.uses)},
+			{"cost_gate = 0", strings.Count(text, "cost_gate = 0"), gate.uses},
 		}
 		for _, check := range checks {
 			if check.got != check.want {
@@ -463,11 +497,11 @@ func TestFormExecFcc14531Size(t *testing.T) {
 		qctx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"log_comment": comment}))
 		result, err := formExecFcc14531Query(qctx, conn, statements[id])
 		if err != nil {
-			t.Fatalf("FORM-14531-6 %s: %v", id, err)
+			t.Fatalf("FORM-14531-7 %s: %v", id, err)
 		}
-		t.Logf("FORM-14531-6 %s columns %v", id, result.columns)
+		t.Logf("FORM-14531-7 %s columns %v", id, result.columns)
 		for index, row := range result.rows {
-			t.Logf("FORM-14531-6 %s row %d %v", id, index, row)
+			t.Logf("FORM-14531-7 %s row %d %v", id, index, row)
 		}
 		results[id] = result
 	}
@@ -565,57 +599,47 @@ func TestFormExecFcc14531Size(t *testing.T) {
 	}
 
 	// PASS-path cells (FORM-TEMPLATE-3): each data statement completed at its real caps (above); its query_log
-	// QueryFinish read_rows must equal its work math on the fixture sizes, which proves the scan count of each table.
-	// The math counts one gate evaluation per cost_gate reference (FORM-TEMPLATE-3). If the engine evaluates the scalar
-	// gate once per statement, read_rows is the data scans plus ONE gate read: that value is also accepted and logged as
-	// "gate evaluations 1", because the data scan count it proves is the same.
+	// QueryFinish read_rows must equal the measured number on this fixture. The ProfileEvents of each query are logged
+	// (rows and parts selected from MergeTree, scalar subquery cache hits and misses) so that the scan model of
+	// FORM-14531-7.md can be read from CI, not guessed.
 	if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 		t.Fatalf("the query log is not readable by this user: %v", err)
 	}
 	for _, gate := range formExecFcc14531Gates {
-		data := gate.work*sizes["work_items"] + gate.transitions*sizes["work_item_transitions"]
-		gateRead := 2*gateParts(gate.tables) + 1
-		want := data + gate.uses*gateRead
-		if want != gate.fixtureReadRows {
-			t.Errorf("PASS %s: the work math gives %d, the stated fixture number is %d", gate.id, want, gate.fixtureReadRows)
-		}
-		var types []string
-		var read uint64
-		rows, err := conn.Query(ctx, `SELECT toString(type), read_rows FROM system.query_log
-			WHERE log_comment = ? AND type != 'QueryStart' ORDER BY event_time_microseconds`, passComments[gate.id])
-		if err != nil {
-			t.Fatalf("PASS %s: query log: %v", gate.id, err)
-		}
-		for rows.Next() {
-			var typ string
-			var r uint64
-			if err := rows.Scan(&typ, &r); err != nil {
-				t.Fatalf("PASS %s: query log scan: %v", gate.id, err)
-			}
-			types = append(types, typ)
-			read = r
-		}
-		if err := rows.Err(); err != nil {
-			t.Fatalf("PASS %s: query log: %v", gate.id, err)
-		}
-		_ = rows.Close()
-		evaluations := "none"
-		switch read {
-		case want:
-			evaluations = fmt.Sprint(gate.uses)
-		case data + gateRead:
-			evaluations = "1"
-		}
-		t.Logf("PASS %s query_log types=%v read_rows=%d math=%d x %d + %d x %d + %d x (2 x %d + 1) = %d, gate evaluations %s",
-			gate.id, types, read, gate.work, sizes["work_items"], gate.transitions, sizes["work_item_transitions"],
-			gate.uses, gateParts(gate.tables), want, evaluations)
+		types, read := formExecFcc14531QueryLog(ctx, t, conn, "PASS "+gate.id, passComments[gate.id])
 		if len(types) != 1 || types[0] != "QueryFinish" {
 			t.Errorf("PASS %s: query_log types %v, want [QueryFinish]", gate.id, types)
 		}
-		if evaluations == "none" {
-			t.Errorf("PASS %s: query_log read_rows %d, want the work math %d (or %d with one gate evaluation)",
-				gate.id, read, want, data+gateRead)
+		if read != gate.fixtureReadRows {
+			t.Errorf("PASS %s: query_log read_rows %d, want %d (measured on this fixture)", gate.id, read, gate.fixtureReadRows)
 		}
+	}
+
+	// Probes of the scan model (INFO, logged only): the gate alone, a plain read and a FINAL read of work_items, and one
+	// read of work_item_transitions, each with the same org filter as the FORM.
+	gateText := statements["F0"][strings.Index(statements["F0"], "WITH (SELECT throwIf(") : strings.Index(statements["F0"], "AS cost_gate")+len("AS cost_gate")]
+	probes := []struct{ name, sql string }{
+		{"gate-only", gateText + "\nSELECT cost_gate"},
+		{"gate-2-refs", gateText + "\nSELECT count() FROM (SELECT 1 AS x FROM system.one WHERE cost_gate = 0) WHERE cost_gate = 0"},
+		{"work_items-plain", "SELECT count() FROM work_items WHERE startsWith(org_id, 'c6a38355')"},
+		{"work_items-final", "SELECT count() FROM work_items FINAL WHERE startsWith(org_id, 'c6a38355')"},
+		{"work_items-final-all-orgs", "SELECT count() FROM work_items FINAL"},
+		{"work_item_transitions-plain", "SELECT count() FROM work_item_transitions WHERE startsWith(org_id, 'c6a38355')"},
+	}
+	probeComments := map[string]string{}
+	for _, probe := range probes {
+		comment := fmt.Sprintf("form14531-probe-%s-%d", probe.name, time.Now().UnixNano())
+		probeComments[probe.name] = comment
+		qctx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"log_comment": comment}))
+		if _, err := formExecFcc14531Query(qctx, conn, probe.sql); err != nil {
+			t.Logf("PROBE %s: %v", probe.name, err)
+		}
+	}
+	if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
+		t.Fatalf("the query log is not readable by this user: %v", err)
+	}
+	for _, probe := range probes {
+		formExecFcc14531QueryLog(ctx, t, conn, "PROBE "+probe.name, probeComments[probe.name])
 	}
 
 	// The gates fire (FORM-TEMPLATE-3): each cap literal of each data statement lowered to 0 in a test copy only (the

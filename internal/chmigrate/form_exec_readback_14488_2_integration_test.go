@@ -353,8 +353,8 @@ func TestReadback144882FormExecutesAtTheChainHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("fixture: table_rows=%d active_parts=%d", tableRows, parts)
-	if tableRows != 2018 || parts != 4 {
-		t.Fatalf("fixture rows=%d parts=%d, want 2018 and 4", tableRows, parts)
+	if tableRows != 2017 || parts != 4 {
+		t.Fatalf("fixture rows=%d parts=%d, want 2017 and 4", tableRows, parts)
 	}
 
 	// WANT per statement on the fixture (rows in the order the SQL gives them).

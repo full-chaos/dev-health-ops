@@ -529,6 +529,13 @@ func (c *HTTPClient) doRequest(ctx context.Context, probe *requestProbe, method,
 		if !classification.Retryable() || attempt == c.Retry.MaxAttempts {
 			return nil, classification
 		}
+		if deadlineWithin(ctx, retryDelay) {
+			slog.InfoContext(ctx, "provider_retry_wait_deferred", "provider", c.Provider, "class", string(classification.Class), "wait_ms", retryDelay.Milliseconds())
+			if classification.Class == ErrorRateLimited && classification.RetryAfter <= 0 {
+				classification.RetryAfter = retryDelay
+			}
+			return nil, classification
+		}
 		if err := c.wait(ctx, retryDelay); err != nil {
 			return nil, err
 		}
@@ -812,6 +819,17 @@ func (c *HTTPClient) awaitGate(ctx context.Context, probe *requestProbe) error {
 			return err
 		}
 	}
+}
+
+// deadlineWithin reports whether the context deadline falls inside the wait: the
+// same comparison awaitGate makes.
+func deadlineWithin(ctx context.Context, wait time.Duration) bool {
+	return deadlineWithinAt(ctx, time.Now(), wait)
+}
+
+func deadlineWithinAt(ctx context.Context, now time.Time, wait time.Duration) bool {
+	deadline, ok := ctx.Deadline()
+	return ok && deadline.Sub(now) <= wait
 }
 
 func (c *HTTPClient) wait(ctx context.Context, wait time.Duration) error {

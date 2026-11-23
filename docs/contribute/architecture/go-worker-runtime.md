@@ -563,7 +563,11 @@ properties of that listing shape the walk:
   pipeline rows leaves `deleted` out (one exported helper). The phase reads the
   rate-limit headers of the unit's own responses and stops, with the marker
   `open_phase_rate_floor`, when fewer than the larger of 500 and a fifth of the
-  limit remain, or when no header was seen.
+  limit remain, or when no header was seen. It also reads them on each
+  answer the client would retry (a 5xx, a 429 or a 403): under the floor, the
+  retry is not sent and the phase stops with the same marker. A success
+  answer under the floor still lets the next request of that run go; the
+  check before the next run stops the phase.
   A re-read that fails with an error of that run alone (410, 422, 409, another
   4xx, a payload that does not decode, a 404 on its jobs pages, or a transient
   error) skips the run: nothing is written for it, the walk moves past it, and

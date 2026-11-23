@@ -102,9 +102,12 @@ type GitHubProjectV2StoredTransitionsClickHouseReader struct{ Conn driver.Conn }
 // One row per distinct event, the identity the daily loaders read
 // (jobs/metrics/daily/work_item_state_native_clickhouse.go): re-synced copies
 // collapse, two events at one instant do not, and a stale pre-170 board row is
-// dropped (workitemmetrics.StaleBoardTieZeroSQL).
+// dropped (workitemmetrics.StaleBoardTieZeroSQL). Each row carries the
+// tie_ordinal of every copy (one event content can sit at two keys: two boards
+// of one issue, or a first label and a board column of the same name), so the
+// settle step can tell which stored copies a batch row replaces.
 const gitHubProjectV2StoredTransitionsQuery = `
-SELECT work_item_id, occurred_at, from_status, to_status, to_status_raw
+SELECT work_item_id, occurred_at, from_status, to_status, to_status_raw, arraySort(groupUniqArray(tie_ordinal))
 FROM (
 	SELECT ` + workitemmetrics.StoredTransitionColumnsSQL + `
 	FROM work_item_transitions
@@ -126,15 +129,14 @@ func (reader GitHubProjectV2StoredTransitionsClickHouseReader) StoredTransitions
 			return nil, err
 		}
 		for rows.Next() {
-			var row githubWorkItemTransitionRow
-			var raw string
-			if err := rows.Scan(&row.WorkItemID, &row.OccurredAt, &row.FromStatus, &row.ToStatus, &raw); err != nil {
+			var workItemID, from, to, raw string
+			var occurredAt time.Time
+			var tieOrdinals []uint32
+			if err := rows.Scan(&workItemID, &occurredAt, &from, &to, &raw, &tieOrdinals); err != nil {
 				rows.Close()
 				return nil, err
 			}
-			row.OccurredAt = row.OccurredAt.UTC()
-			row.ToStatusRaw = nullableString(raw)
-			stored = append(stored, row)
+			stored = append(stored, githubStoredTransitionRow(workItemID, occurredAt, from, to, raw, tieOrdinals))
 		}
 		err = rows.Err()
 		rows.Close()
@@ -143,6 +145,16 @@ func (reader GitHubProjectV2StoredTransitionsClickHouseReader) StoredTransitions
 		}
 	}
 	return stored, nil
+}
+
+// githubStoredTransitionRow is one row of the stored read.
+func githubStoredTransitionRow(
+	workItemID string, occurredAt time.Time, from, to, raw string, tieOrdinals []uint32,
+) githubWorkItemTransitionRow {
+	return githubWorkItemTransitionRow{
+		WorkItemID: workItemID, OccurredAt: occurredAt.UTC(), FromStatus: from, ToStatus: to,
+		ToStatusRaw: nullableString(raw), storedTieOrdinals: tieOrdinals,
+	}
 }
 
 // mergeGitHubProjectV2RowsWithStored is the route's board merge: the union of
@@ -159,6 +171,9 @@ func mergeGitHubProjectV2RowsWithStored(
 	stored, err := reader.StoredTransitions(ctx, orgID, ids)
 	if err != nil {
 		return githubWorkItemRows{}, err
+	}
+	for index := range stored {
+		stored[index].OrgID = orgID
 	}
 	return settleGitHubProjectV2Status(merged, projects, stored), nil
 }
@@ -178,10 +193,11 @@ func githubProjectV2EventItemIDs(projects githubWorkItemRows) []string {
 }
 
 // settleGitHubProjectV2Status sets the status of every board item that has a
-// board event in this batch to the last event of its history: the stored
-// transitions plus the merged batch, ordered by workitemmetrics.OrderTransitions
-// (the order the state segments use). The history itself is not changed. An
-// item with no board event keeps the status the board row already has.
+// board event in this batch to the last event of its history: the transitions
+// the table holds once the batch is written (transitionsAfterWrite), ordered by
+// workitemmetrics.OrderTransitions (the order the state segments use). The
+// history itself is not changed. An item with no board event keeps the status
+// the board row already has.
 func settleGitHubProjectV2Status(
 	merged, projects githubWorkItemRows, stored []githubWorkItemTransitionRow,
 ) githubWorkItemRows {
@@ -193,11 +209,9 @@ func settleGitHubProjectV2Status(
 	for _, id := range ids {
 		history[id] = nil
 	}
-	for _, list := range [][]githubWorkItemTransitionRow{stored, merged.StatusTransitions} {
-		for _, transition := range list {
-			if _, wanted := history[transition.WorkItemID]; wanted {
-				history[transition.WorkItemID] = append(history[transition.WorkItemID], transition)
-			}
+	for _, transition := range transitionsAfterWrite(stored, merged.StatusTransitions) {
+		if _, wanted := history[transition.WorkItemID]; wanted {
+			history[transition.WorkItemID] = append(history[transition.WorkItemID], transition)
 		}
 	}
 	merged.WorkItems = append([]githubWorkItemRow{}, merged.WorkItems...)
@@ -213,6 +227,37 @@ func settleGitHubProjectV2Status(
 		}
 	}
 	return merged
+}
+
+// transitionsAfterWrite is the history work_item_transitions holds once the
+// batch is written, read as its readers read it: each stored event at every
+// key it holds, the writer's rows (rankTransitionTies) replacing the stored
+// rows of their sorting key (the engine keeps the newer last_synced), then one
+// row per event content. A stored event stays while any of its keys does.
+func transitionsAfterWrite(stored, batch []githubWorkItemTransitionRow) []githubWorkItemTransitionRow {
+	rows := make([]workItemTransitionStoredRow, 0, len(stored)+len(batch))
+	for _, row := range stored {
+		for _, tieOrdinal := range row.storedTieOrdinals {
+			projected := projectWorkItemTransition(row)
+			projected.TieOrdinal = tieOrdinal
+			rows = append(rows, projected)
+		}
+	}
+	rows = append(rows, rankTransitionTies(projectRows(batch, projectWorkItemTransition))...)
+	rows = dedupeBySortingKey(rows, transitionSortingKey)
+	rows = dedupeBySortingKey(rows, func(row workItemTransitionStoredRow) string {
+		return transitionInstantKey(row) + workItemKeySeparator + transitionTieOrder(row)
+	})
+	out := make([]githubWorkItemTransitionRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, githubWorkItemTransitionRow{
+			WorkItemID: row.WorkItemID, Provider: row.Provider, OccurredAt: row.OccurredAt,
+			FromStatusRaw: nullableString(row.FromStatusRaw), ToStatusRaw: nullableString(row.ToStatusRaw),
+			FromStatus: row.FromStatus, ToStatus: row.ToStatus, Actor: nullableString(row.Actor),
+			OrgID: row.OrgID, LastSynced: row.LastSynced,
+		})
+	}
+	return out
 }
 
 // lastGitHubTransition is the last element of workitemmetrics.OrderTransitions,

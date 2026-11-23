@@ -438,6 +438,14 @@ func TestReadback14488FormExecutesAtTheChainHead(t *testing.T) {
 		}
 	}
 
+	// The defect INSERT added a part: P for the gate cells is read again.
+	var firePartsN uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM system.parts
+		WHERE active AND database = currentDatabase() AND table = 'testops_quality_drag'`).Scan(&firePartsN); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("gate cells: active_parts=%d", firePartsN)
+
 	// Gate fires: each cap literal lowered to 0 in a test copy. WANT code 395 STOP-COST-GATE before any table read.
 	type fired struct{ label, cap, comment string }
 	var fires []fired
@@ -463,12 +471,12 @@ func TestReadback14488FormExecutesAtTheChainHead(t *testing.T) {
 	}
 	for _, f := range fires {
 		types, read := rb14488Log(ctx, t, conn, f.comment)
-		t.Logf("GATE %s %s query_log types=%v read_rows=%d bound=%d", f.label, f.cap, types, read, 2*parts+1)
+		t.Logf("GATE %s %s query_log types=%v read_rows=%d bound=%d", f.label, f.cap, types, read, 2*firePartsN+1)
 		if len(types) != 1 || types[0] != "ExceptionBeforeStart" {
 			t.Errorf("GATE %s %s: query_log types %v, want [ExceptionBeforeStart]", f.label, f.cap, types)
 		}
-		if read > 2*parts+1 {
-			t.Errorf("GATE %s %s: read_rows %d over 2 x P + 1 = %d", f.label, f.cap, read, 2*parts+1)
+		if read > 2*firePartsN+1 {
+			t.Errorf("GATE %s %s: read_rows %d over 2 x P + 1 = %d", f.label, f.cap, read, 2*firePartsN+1)
 		}
 	}
 	if len(fires) != 10 {

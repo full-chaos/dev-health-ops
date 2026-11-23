@@ -81,10 +81,27 @@ func (served githubTestsPrefixGuardServed) clean() bool {
 
 func githubTestsPrefixGuardRun(t *testing.T, artifacts []githubTestsPrefixGuardArtifact, prefixes []string) githubTestsPrefixGuardServed {
 	t.Helper()
+	served, _ := githubTestsPrefixGuardRunWith(t, artifacts, prefixes, nil)
+	return served
+}
+
+// githubTestsPrefixGuardRunWith runs the shape with the code list set to prefixes and the sync configuration's own list
+// (the integration config the unit carries) set to configPrefixes; nil leaves the key out.
+func githubTestsPrefixGuardRunWith(
+	t *testing.T, artifacts []githubTestsPrefixGuardArtifact, prefixes, configPrefixes []string,
+) (githubTestsPrefixGuardServed, githubTestsWalk) {
+	t.Helper()
 	saved := githubTestsNonReportArtifactPrefixes
 	githubTestsNonReportArtifactPrefixes = prefixes
 	defer func() { githubTestsNonReportArtifactPrefixes = saved }()
 	claim := nativeTestClaim("github", "cicd")
+	if configPrefixes != nil {
+		items := make([]any, len(configPrefixes))
+		for index, prefix := range configPrefixes {
+			items[index] = prefix
+		}
+		claim.IntegrationConfig = map[string]any{"ci_artifact_exclude_prefixes": items}
+	}
 	doer := &githubTestsPrefixGuardDoer{t: t, artifacts: artifacts}
 	final, effects := walkGitHubTestsChunksCapturingEffects(t, GitHubTestsRouteHandler{}, claim, githubTestsClient(t, fakehttp.Client(doer)), 50)
 	walk := walkGitHubTestsChunks(t, GitHubTestsRouteHandler{}, claim, githubTestsClient(t, fakehttp.Client(&githubTestsPrefixGuardDoer{t: t, artifacts: artifacts})), 50)
@@ -101,7 +118,7 @@ func githubTestsPrefixGuardRun(t *testing.T, artifacts []githubTestsPrefixGuardA
 		}
 	}
 	sort.Strings(served.caseKeys)
-	return served
+	return served, walk
 }
 
 func githubTestsPrefixGuardSuite(name string, cases ...string) string {
@@ -147,6 +164,12 @@ func TestGitHubTestsArtifactNamePrefixesAreLoadBearing(t *testing.T) {
 				shape.name, withList)
 			continue
 		}
+		// The configuration's own list alone, with the code list emptied, carries the same load (CHAOS-14559).
+		byConfig, _ := githubTestsPrefixGuardRunWith(t, shape.artifacts, nil, []string{"go-images-", "go-test-timings-", "go-junit-part-"})
+		if byConfig.excludedPrefix != withList.excludedPrefix || !byConfig.clean() || !byConfig.sameRows(withList) || byConfig.downloads != withList.downloads {
+			t.Errorf("the prefix list is load-bearing: %s: the sync configuration's list must serve what the code list serves, with=%+v config=%+v",
+				shape.name, withList, byConfig)
+		}
 		if shape.loadedRows {
 			if emptied.clean() && emptied.sameRows(withList) {
 				t.Errorf("the prefix list is load-bearing: %s: with the list emptied the run should show a false incompleteness or moved case keys, got the same rows %+v",
@@ -157,6 +180,62 @@ func TestGitHubTestsArtifactNamePrefixesAreLoadBearing(t *testing.T) {
 		if !emptied.sameRows(withList) || emptied.downloads != withList.downloads+1 {
 			t.Errorf("the prefix list is load-bearing: %s: with the list emptied the content rule should serve the same rows at one more download, with=%+v emptied=%+v",
 				shape.name, withList, emptied)
+		}
+	}
+}
+
+// The seam joins the code list with the sync configuration's list: each excludes its own names, and a configuration never
+// takes a code name away.
+func TestGitHubTestsArtifactExcludeJoinsTheCodeListWithTheConfigList(t *testing.T) {
+	suite := githubTestsPrefixGuardSuite("pkg/a", "TestA1", "TestA2")
+	artifacts := []githubTestsPrefixGuardArtifact{
+		{name: "go-images-amd64-9-1", members: map[string]string{"images.tar": "not-a-report"}},
+		{name: "ci-extra-1", members: map[string]string{"extra.xml": "<testsuites>" + githubTestsPrefixGuardSuite("pkg/x", "TestX") + "</testsuites>"}},
+		{name: "test-results", members: map[string]string{"junit.xml": "<testsuites>" + suite + "</testsuites>"}},
+	}
+	for _, cell := range []struct {
+		name           string
+		configPrefixes []string
+		wantExcluded   int
+		wantDownloads  int
+		wantCases      int
+	}{
+		{name: "code list only", wantExcluded: 1, wantDownloads: 2, wantCases: 3},
+		{name: "code list and a configured prefix", configPrefixes: []string{"ci-extra-"}, wantExcluded: 2, wantDownloads: 1, wantCases: 2},
+		{name: "a configured list without the code names keeps them", configPrefixes: []string{"CI-EXTRA-"}, wantExcluded: 2, wantDownloads: 1, wantCases: 2},
+		{name: "an invalid configured value excludes nothing more", configPrefixes: []string{""}, wantExcluded: 1, wantDownloads: 2, wantCases: 3},
+	} {
+		served, _ := githubTestsPrefixGuardRunWith(t, artifacts, githubTestsNonReportArtifactPrefixes, cell.configPrefixes)
+		if served.excludedPrefix != cell.wantExcluded || served.downloads != cell.wantDownloads || len(served.caseKeys) != cell.wantCases {
+			t.Errorf("%s: excluded=%d downloads=%d cases=%d, want %d, %d, %d (the code list and the configuration's list both apply)",
+				cell.name, served.excludedPrefix, served.downloads, len(served.caseKeys), cell.wantExcluded, cell.wantDownloads, cell.wantCases)
+		}
+	}
+}
+
+// The prefix exclusion is counted and sampled under the fixed reason token only: no result key, counter name or sample
+// reason carries a configured prefix.
+func TestGitHubTestsConfiguredPrefixNeverLabelsTheExclusionCounter(t *testing.T) {
+	const configured = "ci-zz9-"
+	artifacts := []githubTestsPrefixGuardArtifact{
+		{name: configured + "1", members: map[string]string{"x.xml": "<testsuites>" + githubTestsPrefixGuardSuite("pkg/x", "TestX") + "</testsuites>"}},
+		{name: "test-results", members: map[string]string{"junit.xml": "<testsuites>" + githubTestsPrefixGuardSuite("pkg/a", "TestA") + "</testsuites>"}},
+	}
+	served, walk := githubTestsPrefixGuardRunWith(t, artifacts, githubTestsNonReportArtifactPrefixes, []string{configured})
+	if served.excludedPrefix != 1 || walk.final.Result["excluded_non_report_prefix"] != 1 {
+		t.Fatalf("excluded cursor=%d result=%v, want 1 and 1", served.excludedPrefix, walk.final.Result["excluded_non_report_prefix"])
+	}
+	for key := range walk.final.Result {
+		if strings.Contains(key, configured) || strings.Contains(key, "zz9") {
+			t.Errorf("result key %q carries the configured prefix", key)
+		}
+	}
+	for _, entry := range walk.cursor.ExcludedArtifactSample {
+		if !strings.HasSuffix(entry, " ("+githubTestsExclusionReasonPrefix+")") {
+			t.Errorf("sample entry %q: the reason must be the fixed token %q", entry, githubTestsExclusionReasonPrefix)
+		}
+		if reason := entry[strings.LastIndex(entry, " ("):]; strings.Contains(reason, "zz9") {
+			t.Errorf("sample entry %q: the reason carries the configured prefix", entry)
 		}
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/artifactexclude"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/synccoverage"
@@ -246,6 +247,13 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 		}
 	}
 	optionsProvided := in.syncOptions != nil || in.provided["schedule_cron"] || in.provided["timezone"] || in.provided["initial_sync_depth"]
+	// ci_artifact_exclude_prefixes is written by artifactexclude.WriteTx below (the writer of the dho verb too), into
+	// the configuration and its integration; the generic merge and the child cascade do not carry it.
+	excludeChange, err := artifactExcludeChange(config.Provider, options)
+	if err != nil {
+		return nil, err
+	}
+	options.Delete(artifactexclude.Key)
 
 	if cron, _ := options.Get("schedule_cron"); pyjson.Truthy(cron) {
 		orgUUID, err := pythonparity.ParseUUID(org)
@@ -332,6 +340,16 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 
 	if err := writeConfigChanges(ctx, tx, config, storedTargetsValue, newTargets, storedOptionsValue, newOptions, newActive, now); err != nil {
 		return nil, err
+	}
+	if excludeChange != nil {
+		written, err := artifactexclude.WriteTx(ctx, tx, org, config.ID, *excludeChange, now)
+		if err != nil {
+			return nil, artifactExcludeAnswer(err)
+		}
+		if written.SyncOptionsChanged {
+			config.SyncOptions = &written.SyncOptions
+			config.UpdatedAt = now
+		}
 	}
 	discover := config.IntegrationID != nil && jiraKeyNorm(config.Provider) == "jira" &&
 		(optionsProvided || (wasInactive && config.IsActive))

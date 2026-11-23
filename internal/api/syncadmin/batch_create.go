@@ -177,6 +177,9 @@ func (h *handlers) batchCreateSyncConfigsTx(ctx context.Context, tx pgx.Tx, org 
 		detail.Set("unsupported_auto_import_categories", unsupported)
 		return nil, refuse(http.StatusUnprocessableEntity, detail)
 	}
+	if err := createArtifactExclude(provider, parentOptions); err != nil {
+		return nil, err
+	}
 	if err := h.checkDepthAndSchedule(ctx, tx, org, inputs, parentOptions); err != nil {
 		return nil, err
 	}

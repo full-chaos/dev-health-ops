@@ -81,7 +81,7 @@ func (doer *githubTestsNonReportArtifactDoer) Do(request *http.Request) (*http.R
 		id := githubTestsArtifactIDFromPath(doer.t, path)
 		doer.downloadIDs = append(doer.downloadIDs, strconv.Itoa(id))
 		name := doer.names[id-1]
-		if selected, reason := githubTestsArtifactSelectionSeam(name); !selected {
+		if selected, reason := githubTestsArtifactSelectionSeam(name, nil); !selected {
 			// The selection seam must run BEFORE any download -- an excluded
 			// name reaching here at all is the regression this doer exists to
 			// catch, whichever of the two closed reasons excluded it.
@@ -211,7 +211,7 @@ func TestGitHubTestsDockerBuildArtifactExclusionBookkeeping(t *testing.T) {
 // go-junit-part-; see its doc); this test pins that "digests-" is not in it, so a
 // new global prefix default fails loudly and waits for a per-config exclude.
 func TestGitHubTestsDigestArtifactsAreNotExcludedByDefault(t *testing.T) {
-	if selected, reason := githubTestsArtifactSelectionSeam("digests-api-3"); !selected {
+	if selected, reason := githubTestsArtifactSelectionSeam("digests-api-3", nil); !selected {
 		t.Fatalf(
 			"digests-api-3 was excluded (reason=%s), want it selected: the default prefix list "+
 				"must stay empty (codex round 1, P1) -- digests-* exclusion belongs to CHAOS-4591's "+
@@ -225,12 +225,12 @@ func TestGitHubTestsDigestArtifactsAreNotExcludedByDefault(t *testing.T) {
 // candidates; go-test-* artifacts carry the JUnit XML and must stay selected.
 func TestGitHubTestsGoImagesArtifactsExcludedGoTestSelected(t *testing.T) {
 	for _, name := range []string{"go-images-api", "go-images-worker-3", "GO-IMAGES-x"} {
-		if selected, _ := githubTestsArtifactSelectionSeam(name); selected {
+		if selected, _ := githubTestsArtifactSelectionSeam(name, nil); selected {
 			t.Fatalf("%s was selected, want excluded: image tarballs are not report candidates", name)
 		}
 	}
 	for _, name := range []string{"go-test-providersync-1", "go-test-json-race", "go-images"} {
-		if selected, reason := githubTestsArtifactSelectionSeam(name); !selected {
+		if selected, reason := githubTestsArtifactSelectionSeam(name, nil); !selected {
 			t.Fatalf("%s was excluded (reason=%s), want selected", name, reason)
 		}
 	}
@@ -361,7 +361,7 @@ func TestGitHubTestsShardTimingJUnitPartAndSBOMArtifactsExcluded(t *testing.T) {
 		"go-junit-part-packages-3", "go-junit-part-daily-1", "go-junit-part-race-2-of-16", "GO-JUNIT-PART-test-1-of-13",
 		"go-auth-service-sbom.spdx.json", "go-migrate-sbom.spdx.json", "X.SPDX.JSON",
 	} {
-		if selected, _ := githubTestsArtifactSelectionSeam(name); selected {
+		if selected, _ := githubTestsArtifactSelectionSeam(name, nil); selected {
 			t.Fatalf("%s was selected, want excluded: not a test report candidate", name)
 		}
 	}
@@ -369,7 +369,7 @@ func TestGitHubTestsShardTimingJUnitPartAndSBOMArtifactsExcluded(t *testing.T) {
 		"go-test-providersync-1", "go-test-json-race-1-of-6", "go-test-junit-integration", "go-test-junit-quality",
 		"go-test-junit-test-1-of-10", "coverage-lcov-1-1", "playwright-results-default-1-1-1", "sbom.json",
 	} {
-		if selected, reason := githubTestsArtifactSelectionSeam(name); !selected {
+		if selected, reason := githubTestsArtifactSelectionSeam(name, nil); !selected {
 			t.Fatalf("%s was excluded (reason=%s), want selected", name, reason)
 		}
 	}

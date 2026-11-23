@@ -358,6 +358,8 @@ type InProcessRun struct {
 	// DatasetOptions are the unit's dataset options (the integration's sync
 	// options, e.g. jira fetch_dev_status); nil is none.
 	DatasetOptions map[string]any
+	// IntegrationConfig is the unit's integration config (e.g. ci_artifact_exclude_prefixes); nil is none.
+	IntegrationConfig map[string]any
 }
 
 // ErrNotAGitFamilyRoute is returned for a (provider, dataset) pair that has no
@@ -429,7 +431,7 @@ func RunRouteInProcess(ctx context.Context, run InProcessRun, selectRoute InProc
 			SourceExternalID: run.SourceExternalID, SourceName: run.SourceName,
 			Provider: run.Provider, Dataset: run.Dataset, CostClass: capability.CostClass,
 			Mode: "incremental", SinceAt: run.SinceAt, BeforeAt: &run.BeforeAt,
-			ProcessorFlags: processorFlags, DatasetOptions: run.DatasetOptions,
+			ProcessorFlags: processorFlags, DatasetOptions: run.DatasetOptions, IntegrationConfig: run.IntegrationConfig,
 			CredentialID: newID(), AuthSource: "cli",
 		},
 		Owner: newID(), Attempt: 1, LeaseExpiresAt: started.Add(10 * time.Minute),

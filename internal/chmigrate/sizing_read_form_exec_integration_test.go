@@ -528,23 +528,29 @@ func TestSizingReadFormExecutesAtTheChainHead(t *testing.T) {
 	}
 }
 
-// Second throwaway exec proof: the read-back form of the recompute card. readbackForm is READBACK-13902-3.sql byte for byte.
-const readbackFormSHA256 = "b8dacbfe036b8586a39de567785bbe987a2c19d0c44576956e6fd65f62820b29"
+// Second throwaway exec proof: the read-back form of the recompute card. readbackForm is READBACK-13902-4.sql byte for byte.
+const readbackFormSHA256 = "17d5b2baef688c77e0d3a90b2d192f45d09873d2f7eec977bca96de38838b8e4"
 
-const readbackForm = `-- READBACK-13902-3 = READBACK-13902-2 (49b02f5013a6, acp FORM copy) in FORM-TEMPLATE-1 (pm-guard, e220dd03e6fc) shape (a)
--- ClickHouse, lane l13902-card2, 2026-11-23. Template example: SIZING-13902-4 706d1c5d4de6.
--- Prod: NOT EXECUTED. Executed on CI (synthetic rows, before and after a simulated recompute, CH 26.7; prod CH 26.6 = same
--- major, SIZING-13902-4.out): EXEC-PROOF-13902-READBACK-3.md. This revision supersedes sha12 e6c31770951b (S0 had no gate).
--- Card: CARD-13902-recompute-2.md section 6. Run AFTER the pass 1 recompute (and once BEFORE it, as the can-fail proof).
--- Edits vs -2:
+const readbackForm = `-- READBACK-13902-4 = READBACK-13902-3 (b8dacbfe036b, acp FORM OK) with the cut as a placeholder. Lane l13902-cutfix
+-- (lead fcsup), 2026-11-23. ClickHouse. Shape: FORM-TEMPLATE-1 (pm-guard, e220dd03e6fc) (a), as -3.
+-- Prod: NOT EXECUTED. CI exec: EXEC-PROOF-13902-READBACK-4.md. Fill rule + WANT lines: READBACK-13902-4.md.
+-- Card: CARD-13902-recompute-3 (30f972dfa124) step 0 (BEFORE, can-fail proof) and step 4 (AFTER the pass 1 recompute).
+-- -3 is SUPERSEDED: do not run it.
+-- Edit vs -3 (the only one):
+--   T1 The cut literal '2026-11-23 03:08:08' (stmt1 and stmt2: stale_rerun, stale_live, rewritten, retracted_after_cut)
+--      is the placeholder T0_UTC in double braces (8 places). pm fills it with the card T0 (md fill rule). Why: a row an
+--      old-image pod wrote after 03:08:08 but before T0 counted as "rewritten" under -3 and could give a false pass (the
+--      STEP 323 drain-0 read skipped Terminating pods; old go-heavy grace 7260 s). With the cut = T0, every row computed
+--      before the recompute start counts as stale; only rows written at or after T0 count as rewritten.
+-- Edits of -3 vs -2 (kept; K2 now reads: the cut is T0, not a literal):
 --   K1 Engine cost gate in EVERY statement: stmt0..stmt2 WITH (SELECT throwIf(...)) AS cost_gate over exactly the tables
 --      the statement reads, caps 30M rows, 4 GiB on disk; S0 gated on system.one (system.parts part count of its 3 tables
 --      over 100000 = STOP). Error text STOP-COST-GATE in each.
 --   Status literals = the writer literals: 'deleted' testops/status_export.go:15, 'running' / 'queued' :21-22,
 --      NotOpenRunSQL :36 (at ops 340c3e05).
---   K2 No placeholder: org prefix c6a38355, day range 2026-04-17..2026-11-22 (= the run range of the card), and the old-image
---      cut '2026-11-23 03:08:08' UTC are literals. The cut = STEP 323 old-pod drain 0 (RECORD-323 8ff7c60b985f G3 line):
---      a row computed at or after it is from a new-image pod (fix 9d88395188e6 in it); a row before it may be old-rule.
+--   K2 Literals: org prefix c6a38355, day range 2026-04-17..2026-11-22 (= the run range of the card). The cut is T0 (T1):
+--      a row computed at or after T0 is written by the recompute or a new-image pod (the card s4a check before T0 proves
+--      no old pod runs then); a row before T0 is stale.
 --   K3 LEFT JOIN (was INNER): live keys with no raw run today are counted (no_raw_live), not dropped. ifNull on every raw
 --      column, so the result does not depend on join_use_nulls.
 --   K4 New lines: stale_rerun (lead WANT: re-run keys computed before the cut = 0), stale_live (every live key in range),
@@ -592,11 +598,11 @@ WITH (SELECT throwIf(
       AND table IN ('ci_pipeline_runs', 'cicd_metrics_daily')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
 SELECT countIf(rr > 0) AS rerun_keys, countIf(rr > 0 AND NOT chg) AS keys_checked,
-  countIf(rr > 0 AND c < toDateTime('2026-11-23 03:08:08', 'UTC')) AS stale_rerun,
-  countIf(r = 0 AND c < toDateTime('2026-11-23 03:08:08', 'UTC')) AS stale_live,
-  countIf(c >= toDateTime('2026-11-23 03:08:08', 'UTC')) AS rewritten,
+  countIf(rr > 0 AND c < toDateTime('{{T0_UTC}}', 'UTC')) AS stale_rerun,
+  countIf(r = 0 AND c < toDateTime('{{T0_UTC}}', 'UTC')) AS stale_live,
+  countIf(c >= toDateTime('{{T0_UTC}}', 'UTC')) AS rewritten,
   countIf(rr > 0 AND r = 1) AS retracted_rerun,
-  countIf(r = 1 AND c >= toDateTime('2026-11-23 03:08:08', 'UTC')) AS retracted_after_cut,
+  countIf(r = 1 AND c >= toDateTime('{{T0_UTC}}', 'UTC')) AS retracted_after_cut,
   countIf(r = 0 AND runs = 0) AS no_raw_live, countIf(chg) AS raw_changed_after,
   countIf(rr > 0 AND NOT chg AND r = 0 AND NOT ok) AS mismatch,
   countIf(rr > 0 AND NOT chg AND r = 0 AND n_new = 0) AS to_null_checked,
@@ -639,11 +645,11 @@ WITH (SELECT throwIf(
       AND table IN ('ci_pipeline_runs', 'testops_pipeline_metrics_daily')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
 SELECT countIf(rr > 0) AS rerun_keys, countIf(rr > 0 AND NOT chg) AS keys_checked,
-  countIf(rr > 0 AND c < toDateTime('2026-11-23 03:08:08', 'UTC')) AS stale_rerun,
-  countIf(r = 0 AND c < toDateTime('2026-11-23 03:08:08', 'UTC')) AS stale_live,
-  countIf(c >= toDateTime('2026-11-23 03:08:08', 'UTC')) AS rewritten,
+  countIf(rr > 0 AND c < toDateTime('{{T0_UTC}}', 'UTC')) AS stale_rerun,
+  countIf(r = 0 AND c < toDateTime('{{T0_UTC}}', 'UTC')) AS stale_live,
+  countIf(c >= toDateTime('{{T0_UTC}}', 'UTC')) AS rewritten,
   countIf(rr > 0 AND r = 1) AS retracted_rerun,
-  countIf(r = 1 AND c >= toDateTime('2026-11-23 03:08:08', 'UTC')) AS retracted_after_cut,
+  countIf(r = 1 AND c >= toDateTime('{{T0_UTC}}', 'UTC')) AS retracted_after_cut,
   countIf(r = 0 AND runs = 0) AS no_raw_live, countIf(chg) AS raw_changed_after,
   countIf(rr > 0 AND NOT chg AND r = 0 AND NOT ok) AS mismatch,
   countIf(rr > 0 AND NOT chg AND r = 0 AND n_new = 0) AS to_null_checked,
@@ -683,8 +689,8 @@ WHERE cost_gate = 0;
 // Synthetic rows. Org c6a38355-0000-..., other org b0000000-... (filter control). Keys in the form range, per table:
 // 11-10 re-run move (old 6 min / 360 s, new 2 / 120), 11-11 control (+ a deleted re-run that must not count),
 // 11-12 re-run-only day (new NULL), 11-13 re-run whose raw syncs after every compute (chg), 11-14 control, 11-15 live key
-// with no raw, 11-22 re-run-only day computed in the rollout window before the cut (old value), 11-21 re-run key a new-image
-// pod wrote after the cut (new value). 04-16 = a re-run key outside the range. Merges are stopped.
+// with no raw, 11-22 re-run-only day computed in the rollout window (old value), 11-21 re-run key a new-image pod wrote
+// after 03:08:08 but before T0 (new value: stale under the T0 cut). 04-16 = a re-run key outside the range. Merges are stopped.
 const readbackFixtureBefore = `
 SYSTEM STOP MERGES ci_pipeline_runs;
 SYSTEM STOP MERGES cicd_metrics_daily;
@@ -750,6 +756,23 @@ INSERT INTO testops_pipeline_metrics_daily (org_id, repo_id, day, pipelines_coun
 ('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', '2026-11-22', 1, NULL, '2026-11-24 10:00:00', 0, 1, [NULL]);
 `
 
+// The card T0 as pm records it: T0_UTC.txt, one line 'YYYY-MM-DD HH:MM:SS' UTC (chunk-start.sh:63-66), before the
+// simulated recompute (2026-11-24 10:00).
+const readbackT0File = "2026-11-24 09:00:00\n"
+
+// Old-pod case: a re-run key (repo 4, 11-20) that an old-image pod stored at 2026-11-23 05:00 (after the -3 cut 03:08:08,
+// before T0) with the old value, whose raw run synced after that stamp (06:00: chg, so mismatch leaves it out), and that the
+// recompute did not rewrite. WANT it counted stale (stale_rerun 1 = STOP). Under the -3 cut it counted as rewritten and
+// every card WANT held: a false pass.
+const readbackFixtureOldPodAfterCut = `
+INSERT INTO ci_pipeline_runs (org_id, repo_id, run_id, provider, status, queued_at, started_at, finished_at, last_synced, retry_count, queue_seconds) VALUES
+('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000004', 'rb-m', 'github_actions', 'success', '2026-11-20 10:00:00', '2026-11-20 10:05:00', '2026-11-20 10:20:00', '2026-11-23 06:00:00', 1, 300);
+INSERT INTO cicd_metrics_daily (org_id, repo_id, day, pipelines_count, success_rate, avg_queue_minutes, computed_at, retracted, pooled_samples_stored, pooled_queue_minutes) VALUES
+('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000004', '2026-11-20', 1, 1, 5, '2026-11-23 05:00:00', 0, 1, [5]);
+INSERT INTO testops_pipeline_metrics_daily (org_id, repo_id, day, pipelines_count, avg_queue_seconds, computed_at, retracted, pooled_samples_stored, pooled_queues) VALUES
+('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000004', '2026-11-20', 1, 300, '2026-11-23 05:00:00', 0, 1, [300]);
+`
+
 func TestReadbackReadFormFailsBeforeAndPassesAfterARecompute(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -758,7 +781,26 @@ func TestReadbackReadFormFailsBeforeAndPassesAfterARecompute(t *testing.T) {
 	if got := hex.EncodeToString(sum[:]); got != readbackFormSHA256 {
 		t.Fatalf("readback form sha256 = %s, want %s", got, readbackFormSHA256)
 	}
-	statements := splitForm(readbackForm)
+	// Fill rule (READBACK-13902-4.md): every T0 placeholder := the one line of T0_UTC.txt, nothing else changes.
+	const placeholder = "{{T0_UTC}}"
+	if n := strings.Count(readbackForm, placeholder); n != 8 {
+		t.Fatalf("readback form: %d T0 placeholders, want 8", n)
+	}
+	if strings.Contains(chmigrate.StripLineComments(readbackForm), "03:08:08") {
+		t.Fatalf("readback form: the -3 cut literal is still in the SQL")
+	}
+	fill := func(t0 string) string {
+		filled := strings.ReplaceAll(readbackForm, placeholder, t0)
+		if strings.Contains(filled, "{{") || strings.Count(filled, "toDateTime('"+t0+"', 'UTC')") != 8 {
+			t.Fatalf("readback form fill with %q: placeholder left or cut count != 8", t0)
+		}
+		return filled
+	}
+	t0 := strings.TrimSpace(readbackT0File)
+	t.Logf("T0 fill %q", t0)
+	statements := splitForm(fill(t0))
+	// The same form filled with the -3 literal cut: the -3 SQL, for the old-pod contrast run.
+	statementsCut3 := splitForm(fill("2026-11-23 03:08:08"))
 	labels := make([]string, 0, len(statements))
 	for _, s := range statements {
 		labels = append(labels, s.label)
@@ -849,7 +891,7 @@ func TestReadbackReadFormFailsBeforeAndPassesAfterARecompute(t *testing.T) {
 	}
 
 	// run executes every statement once, asserts each value and the read_rows bound, and returns S0's R and P per table.
-	run := func(phase string, want map[string]map[string]string) (map[string]uint64, map[string]uint64) {
+	run := func(phase string, statements []formStatement, want map[string]map[string]string) (map[string]uint64, map[string]uint64) {
 		tableRows := map[string]uint64{}
 		tableParts := map[string]uint64{}
 		for _, statement := range statements {
@@ -933,16 +975,17 @@ func TestReadbackReadFormFailsBeforeAndPassesAfterARecompute(t *testing.T) {
 
 	orgWant := map[string]string{"raw_orgs": "1", "cicd_orgs": "1", "testops_orgs": "1"}
 
-	// BEFORE: the stored rows hold the old rule. The form must fail: stale_rerun > 0, mismatch > 0.
+	// BEFORE: the stored rows hold the old rule. The form must fail: stale_rerun > 0, mismatch > 0. Cut = T0: every stored
+	// row is before T0, the 11-21 key written after 03:08:08 included (it was "rewritten" under -3).
 	exec(readbackFixtureBefore)
 	versions("before", 9, 9, 0)
 	before := map[string]string{
-		"rerun_keys": "5", "keys_checked": "4", "stale_rerun": "4", "stale_live": "7", "rewritten": "1",
+		"rerun_keys": "5", "keys_checked": "4", "stale_rerun": "5", "stale_live": "8", "rewritten": "0",
 		"retracted_rerun": "0", "retracted_after_cut": "0", "no_raw_live": "1", "raw_changed_after": "1",
 		"mismatch": "3", "to_null_checked": "2", "pooled_mismatch": "2", "pooled_unchecked": "1",
 		"ctrl_checked": "2", "ctrl_mismatch": "0",
 	}
-	run("before", map[string]map[string]string{"stmt0": orgWant, "stmt1": before, "stmt2": before})
+	run("before", statements, map[string]map[string]string{"stmt0": orgWant, "stmt1": before, "stmt2": before})
 
 	// AFTER the simulated recompute: every WANT of the card holds.
 	exec(readbackFixtureRecompute)
@@ -966,7 +1009,7 @@ func TestReadbackReadFormFailsBeforeAndPassesAfterARecompute(t *testing.T) {
 		"mismatch": "0", "to_null_checked": "2", "pooled_mismatch": "0", "pooled_unchecked": "0",
 		"ctrl_checked": "2", "ctrl_mismatch": "0",
 	}
-	_, parts := run("after", map[string]map[string]string{"stmt0": orgWant, "stmt1": after, "stmt2": after})
+	_, parts := run("after", statements, map[string]map[string]string{"stmt0": orgWant, "stmt1": after, "stmt2": after})
 
 	// Gate fires: ONE cap literal lowered to 0 per run. WANT STOP-COST-GATE, query_log [ExceptionBeforeStart] and
 	// query_log read_rows <= 2 x P + 1 (system.parts twice + system.one: no data-table row read).
@@ -1037,18 +1080,47 @@ func TestReadbackReadFormFailsBeforeAndPassesAfterARecompute(t *testing.T) {
 	if len(fires) != 7 {
 		t.Errorf("gate fired %d times, want 7 (S0 x 1 cap + 3 statements x 2 caps)", len(fires))
 	}
+
+	// Old-pod case (after the gate fires, so their part bounds hold): an old-image row stored after 03:08:08, before T0, not
+	// rewritten, raw synced after its stamp. T0 cut: stale_rerun 1, stale_live 1 = STOP. -3 cut: stale_rerun 0, rewritten 9,
+	// mismatch 0 = every card WANT holds (the false pass this revision closes).
+	exec(readbackFixtureOldPodAfterCut)
+	versions("oldpod", 18, 10, 8)
+	oldPod := map[string]string{
+		"rerun_keys": "6", "keys_checked": "4", "stale_rerun": "1", "stale_live": "1", "rewritten": "8",
+		"retracted_rerun": "0", "retracted_after_cut": "1", "no_raw_live": "0", "raw_changed_after": "2",
+		"mismatch": "0", "to_null_checked": "2", "pooled_mismatch": "0", "pooled_unchecked": "0",
+		"ctrl_checked": "2", "ctrl_mismatch": "0",
+	}
+	run("oldpod T0", statements, map[string]map[string]string{"stmt0": orgWant, "stmt1": oldPod, "stmt2": oldPod})
+	oldPodCut3 := map[string]string{}
+	for k, v := range oldPod {
+		oldPodCut3[k] = v
+	}
+	oldPodCut3["stale_rerun"], oldPodCut3["stale_live"], oldPodCut3["rewritten"] = "0", "0", "9"
+	run("oldpod cut3", statementsCut3, map[string]map[string]string{"stmt0": orgWant, "stmt1": oldPodCut3, "stmt2": oldPodCut3})
 }
 
-// Third throwaway exec proof: SIZING-14285-4 (CHAOS-14285 sizing). sizing14285Form is SIZING-14285-4.sql byte for byte.
-const sizing14285FormSHA256 = "0e668c288a69515897b5c47329aa359a938e5f43290cff122ec3730b2382fb91"
+// Third throwaway exec proof: SIZING-14285-5 (CHAOS-14285 sizing). sizing14285Form is SIZING-14285-5.sql byte for byte.
+const sizing14285FormSHA256 = "13cebc9f7b6bd1a9350669a9ffebdd5f7c0bc5fe738a10108e010fb27bddff4b"
 
-const sizing14285Form = `-- SIZING-14285-4 = SIZING-14285-3 in FORM-TEMPLATE-3 (pm-guard, 6b9e73a3c45a) shape (a) + pass-path budget. ClickHouse,
---   SELECT only. Lane l14285-form3 (lead fcsup), 2026-11-23. Item 3 (CHAOS-14285) of CARD-13902-recompute-3 (30f972dfa124)
---   P6. Base chain: SIZING-14285-2 406b0f9dd2d7 (acp FORM OK, never gated, never executed) -> -3 0b545d0c495b (CI exec 1,
---   job 137509282135: every value WANT and all 17 gate fires held; stmt6 read 79 rows over the -3 read bound 78.2) ->
---   -3 fbf0a3691866 (bound fix, never pushed) -> this file. -3 is SUPERSEDED: do not run it.
--- Prod: NOT EXECUTED. Executed on CI (synthetic rows, schema head 170): EXEC-PROOF-14285-3.md. md: SIZING-14285-4.md.
--- Edits vs -3 (FORM-TEMPLATE-3):
+const sizing14285Form = `-- SIZING-14285-5 = SIZING-14285-4 (0e668c288a69) with a later old-rule cut. FORM-TEMPLATE-3 (pm-guard, 6b9e73a3c45a) shape
+--   (a) + pass-path budget. ClickHouse, SELECT only. Lane l13902-cutfix (lead fcsup), 2026-11-23. Item 3 (CHAOS-14285) of
+--   CARD-13902-recompute-3 (30f972dfa124) P6. Chain: SIZING-14285-2 406b0f9dd2d7 -> -3 0b545d0c495b -> -4 0e668c288a69
+--   (CI exec, acp READ-FORM-14285-4 429a7a26eed0: FORM NOT OK, P2-1 cut) -> this file. -3 and -4 are SUPERSEDED: do not run.
+-- Prod: NOT EXECUTED. CI exec: EXEC-PROOF-14285-5.md. md: SIZING-14285-5.md.
+-- Edits vs -4 (acp READ-FORM-14285-4):
+--   C1 (P2-1) Cut '2026-11-23 03:08:08' -> '2026-11-23 05:10:00' UTC in stmt1, stmt2, stmt3. Why: the STEP 323 drain-0 read
+--      at 03:08:08Z (G3-read-s323-25-1.sh ef39b1593a28:11) skipped Terminating pods. The first new pod started 02:58:22Z
+--      (RECORD-323 8ff7c60b985f); an old-image go-heavy pod (grace 7260 s) can write until 02:58:22Z + 7260 s = 04:59:22Z.
+--      05:10:00 = that + margin: no old-image pod writes at or after it. A cut too early hid old-pod rows with c >= cut and
+--      ls >= c in no count; a later cut cannot make a wrong count (a new-rule row before the cut matches, never doubled).
+--   C2 (P2-1) stmt2 and stmt3 new INFO after_raw_changed (c >= cut, ls >= c) and after_doubled_raw_changed (same AND
+--      sl > rl; > 0 = acp reads): the after side has no hidden class now.
+--   C3 (P3-3) Cite pin wording: the live workers pin is 340c3e05 (STEP 323). Cites are read at a7febdf50002; acp checked
+--      git diff a7febdf50002 340c3e05 over every cited path = only testops files: the same lines hold at 340c3e05.
+--   No other SQL change: gates, caps, k weights, scans and every other column are the -4 text.
+-- Edits of -4 vs -3 (FORM-TEMPLATE-3, kept):
 --   M1 Budget gate: each statement's rows cap is the PASS-PATH BUDGET 20M rows read. The gate sums the system.parts rows
 --      of each table it reads times k = the scans of that table in the statement (stmt5 git_pull_requests 2, stmt6
 --      git_commit_stats 2 + git_commits 2, stmt7 git_commit_stats 2, else 1): sum(rows x k) over 20M or sum(bytes on disk
@@ -1063,19 +1135,19 @@ const sizing14285Form = `-- SIZING-14285-4 = SIZING-14285-3 in FORM-TEMPLATE-3 (
 --   L1 Engine cost gate in EVERY statement (now the M1 budget gate), cost_gate = 0 in the outer WHERE and in every scalar
 --      subquery that reads a table.
 --   L2 New S0, gated on system.one (part count of its 7 tables over 100000 = STOP-COST-GATE): one row per table read here.
---   L3 No placeholder: the old-rule cut placeholder of -2 (ROLL_END_14285_UTC) is the literal '2026-11-23 03:08:08' UTC (STEP 323 old-pod
---      drain 0, RECORD-323 8ff7c60b985f; the READBACK-13902-3 cut). ops 340c3e05 (STEP 323) holds ceee575af360
---      (merge-base --is-ancestor rc 0); the COMBINED-8 build 5aa4b332 does not (rc 1). A row computed before the cut can
---      be old rule (raw read) or new rule (an earlier fixed build matches: it lands in match, never in doubled). A row at
---      or after it is new rule. An old pod still writing after the cut (Terminating, CARD-3 s4a) lands in after_mismatch:
---      STOP, the safe side.
---   L4 Cites re-read at the live workers pin a7febdf50002 ("git show a7febdf50002:<path>"). "git diff 84d6c394e23f
---      a7febdf50002" is empty for repouser/, repo_user_commit_native_executor.go, icfinalize/executor.go,
---      teamkeytables/teamkeytables.go, providersync/github_commit_stats_route.go, baseline/head.json: same line numbers.
+--   L3 No placeholder: the old-rule cut placeholder of -2 (ROLL_END_14285_UTC) is a literal, now '2026-11-23 05:10:00' UTC
+--      (C1). ops 340c3e05 (STEP 323) holds ceee575af360 (merge-base --is-ancestor rc 0); the COMBINED-8 build 5aa4b332 does
+--      not (rc 1). A row computed before the cut can be old rule (raw read) or new rule (an earlier fixed build matches: it
+--      lands in match, never in doubled). A row at or after it is new rule (C1). Check: an after-cut row that does not match
+--      the recompute = after_mismatch > 0: STOP, acp reads; an after-cut row with raw synced after it = after_raw_changed
+--      (INFO), after_doubled_raw_changed (acp reads).
+--   L4 Cites read with "git show a7febdf50002:<path>"; the live STEP 323 workers pin is 340c3e05 and the cited lines are the
+--      same there (C3). "git diff 84d6c394e23f a7febdf50002" is empty for repouser/, repo_user_commit_native_executor.go,
+--      icfinalize/executor.go, teamkeytables/teamkeytables.go, providersync/github_commit_stats_route.go, baseline/head.json.
 --   L5 stmt3: new INFO doubled_commit_first_day / doubled_commit_last_day (range input of the decision rule).
 -- Run rule: each statement once, in order. A SQL error (STOP-COST-GATE included) = STOP. A timeout (30 s) = STOP, no re-run.
 -- read_rows WANT: M3. Work math per statement: md.
--- -2 notes (kept; paths at a7febdf50002):
+-- -2 notes (kept; paths at a7febdf50002, same lines at 340c3e05: C3):
 --   F1 stmt0: prs_orgs / reviews_orgs 0 = INFO (stmt5 arm empty: no_raw can only grow), not a STOP. > 1 = STOP.
 --   F2/F3 every derived table has an alias; every outer name is alias.<col>.
 --   F4 stmt3 groups by the full commit_metrics key (repo_id, commit_hash, day, author_email): head.json:251 ORDER BY
@@ -1103,7 +1175,7 @@ const sizing14285Form = `-- SIZING-14285-4 = SIZING-14285-3 in FORM-TEMPLATE-3 (
 -- Why a compare: the old unmerged state is not stored and merges removed most duplicates. So: newest stored row vs the same
 --   value recomputed NOW by the code rule. stored > recomputed = the doubled case (this defect). stored < recomputed = raw
 --   arrived after the compute (INFO, not this defect).
--- Code rule (recompute), repouser/ at a7febdf50002:
+-- Code rule (recompute), repouser/ at a7febdf50002 (same lines at 340c3e05: C3):
 --   R1 day = UTC day of git_commits.committer_when, [00:00, +24h) (clickhouse.go:90; compute.go:23-26; executor
 --      repo_user_commit_native_executor.go:94-95). committer_when is DateTime64(3, 'UTC') (head.json:351).
 --   R2 one aggregate per (repo_id, hash) (compute.go:213-228). LOC of a commit = sum over its stat rows of max(0, additions)
@@ -1121,7 +1193,7 @@ const sizing14285Form = `-- SIZING-14285-4 = SIZING-14285-3 in FORM-TEMPLATE-3 (
 --   :104). A commit doubled at the day's compute makes total_loc_touched of THAT day mismatch; a 30-day value made wrong by
 --   a duplicate that existed only at a LATER day's compute is not found (CARD ADDENDUM-2 R2).
 -- Exclusion: a key with a raw commit or stat row synced at/after the stored compute (ls >= c) is left out of every check
---   and counted as INFO raw_changed_after.
+--   and counted as INFO raw_changed_after (before the cut) or after_raw_changed (at/after the cut, C2).
 -- argMax: every stored value read here is NOT Nullable (UInt32 / UInt8 / LowCardinality(String)): plain argMax(v,
 --   computed_at) = the newest row's value. computed_at is DateTime('UTC'), second precision (clickhouse.go:413-419).
 -- LEFT JOIN miss: every test goes through ifNull first: no dependence on join_use_nulls (no SETTINGS).
@@ -1166,8 +1238,8 @@ WITH (SELECT throwIf(
       AND table IN ('repo_metrics_daily')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
 SELECT count() AS live_repo_days, min(s.day) AS first_day, max(s.day) AS last_day, uniqExact(s.day) AS days,
-  countIf(s.c < toDateTime('2026-11-23 03:08:08', 'UTC')) AS before_roll_repo_days,
-  countIf(s.c >= toDateTime('2026-11-23 03:08:08', 'UTC')) AS after_roll_repo_days
+  countIf(s.c < toDateTime('2026-11-23 05:10:00', 'UTC')) AS before_roll_repo_days,
+  countIf(s.c >= toDateTime('2026-11-23 05:10:00', 'UTC')) AS after_roll_repo_days
 FROM (SELECT repo_id, day, max(computed_at) AS c, argMax(retracted, computed_at) AS r FROM repo_metrics_daily
       WHERE startsWith(org_id, 'c6a38355') GROUP BY repo_id, day) AS s
 WHERE s.r = 0 AND cost_gate = 0;
@@ -1182,6 +1254,8 @@ WHERE s.r = 0 AND cost_gate = 0;
 -- GATE doubled_repo_days, affected_days (0 + stmt3 doubled_commits 0 = NO rerun for item 3).
 -- INFO doubled_first_day/last_day, ratio2_repo_days, loc_excess, under_repo_days, raw_changed_after, doubled_raw_changed
 --   (F5), no_commit_now (stored commits_count > 0, no raw commit on the day today).
+-- INFO after_raw_changed (computed at/after the cut, raw synced at/after the compute: left out of after_checked, C2);
+--   after_doubled_raw_changed (same AND stored > recomputed) > 0 = acp reads.
 WITH (SELECT throwIf(
     (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
       AND table IN ('git_commit_stats', 'git_commits', 'repo_metrics_daily')) > 20000000
@@ -1191,31 +1265,34 @@ WITH (SELECT throwIf(
 SELECT count() AS live_repo_days,
   countIf(ifNull(raw.n, 0) > 0) AS with_commits,
   countIf(ifNull(raw.n, 0) = 0 AND s.sn > 0) AS no_commit_now,
-  countIf(ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls >= s.c) AS raw_changed_after,
-  countIf(ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls >= s.c
+  countIf(ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls >= s.c) AS raw_changed_after,
+  countIf(ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls >= s.c
           AND s.sl > raw.rl) AS doubled_raw_changed,
-  countIf(ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c) AS keys_checked,
-  countIf(ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
+  countIf(ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c) AS keys_checked,
+  countIf(ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
           AND s.sl = raw.rl) AS match_keys,
-  countIf(ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
+  countIf(ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
           AND s.sl > raw.rl) AS doubled_repo_days,
-  uniqExactIf(s.day, ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
+  uniqExactIf(s.day, ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
           AND s.sl > raw.rl) AS affected_days,
-  minIf(s.day, ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
+  minIf(s.day, ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
           AND s.sl > raw.rl) AS doubled_first_day,
-  maxIf(s.day, ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
+  maxIf(s.day, ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
           AND s.sl > raw.rl) AS doubled_last_day,
-  countIf(ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
+  countIf(ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
           AND raw.rl > 0 AND s.sl = 2 * raw.rl) AS ratio2_repo_days,
-  sumIf(s.sl - raw.rl, ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
+  sumIf(s.sl - raw.rl, ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
           AND s.sl > raw.rl) AS loc_excess,
-  countIf(ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
+  countIf(ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
           AND s.sl < raw.rl) AS under_repo_days,
-  countIf(ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
+  countIf(ifNull(raw.n, 0) > 0 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
           AND s.sn != raw.n) AS count_mismatch,
-  countIf(ifNull(raw.n, 0) > 0 AND s.c >= toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c) AS after_checked,
-  countIf(ifNull(raw.n, 0) > 0 AND s.c >= toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
-          AND (s.sl != raw.rl OR s.sn != raw.n)) AS after_mismatch
+  countIf(ifNull(raw.n, 0) > 0 AND s.c >= toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c) AS after_checked,
+  countIf(ifNull(raw.n, 0) > 0 AND s.c >= toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
+          AND (s.sl != raw.rl OR s.sn != raw.n)) AS after_mismatch,
+  countIf(ifNull(raw.n, 0) > 0 AND s.c >= toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls >= s.c) AS after_raw_changed,
+  countIf(ifNull(raw.n, 0) > 0 AND s.c >= toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls >= s.c
+          AND s.sl > raw.rl) AS after_doubled_raw_changed
 FROM (SELECT repo_id, day, max(computed_at) AS c, argMax(retracted, computed_at) AS r,
         toInt64(argMax(total_loc_touched, computed_at)) AS sl, toInt64(argMax(commits_count, computed_at)) AS sn
       FROM repo_metrics_daily WHERE startsWith(org_id, 'c6a38355') GROUP BY repo_id, day) AS s
@@ -1241,7 +1318,8 @@ WHERE s.r = 0 AND cost_gate = 0;
 -- GATE doubled_commits. INFO commit_rhd_keys, doubled_commit_days, doubled_commit_repo_days, doubled_commit_first_day,
 --   doubled_commit_last_day (L5), ratio2_commits, under_commits, bucket_move (stored size_bucket != bucket of the
 --   recomputed LOC), large_flag_move (> 300 LOC flag of large_commits_count moves, compute.go:258), commit_no_raw (stored
---   key, no raw commit on that day: never retracted, a recompute leaves it), raw_changed_after.
+--   key, no raw commit on that day: never retracted, a recompute leaves it), raw_changed_after, after_raw_changed (C2).
+--   after_doubled_raw_changed > 0 = acp reads (C2).
 WITH (SELECT throwIf(
     (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
       AND table IN ('commit_metrics', 'git_commit_stats', 'git_commits')) > 20000000
@@ -1252,33 +1330,36 @@ SELECT count() AS stored_commits,
   uniqExact(tuple(s.repo_id, s.commit_hash, s.day)) AS commit_rhd_keys,
   countIf(ifNull(raw.present, 0) = 1) AS with_raw,
   countIf(ifNull(raw.present, 0) = 0) AS commit_no_raw,
-  countIf(ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls >= s.c) AS raw_changed_after,
-  countIf(ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls >= s.c
+  countIf(ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls >= s.c) AS raw_changed_after,
+  countIf(ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls >= s.c
           AND s.sl > raw.rl) AS doubled_raw_changed,
-  countIf(ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c) AS commits_checked,
-  countIf(ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
+  countIf(ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c) AS commits_checked,
+  countIf(ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
           AND s.sl = raw.rl) AS match_commits,
-  countIf(ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
+  countIf(ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
           AND s.sl > raw.rl) AS doubled_commits,
-  uniqExactIf(s.day, ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
+  uniqExactIf(s.day, ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
           AND s.sl > raw.rl) AS doubled_commit_days,
-  uniqExactIf(tuple(s.repo_id, s.day), ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC')
+  uniqExactIf(tuple(s.repo_id, s.day), ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC')
           AND raw.ls < s.c AND s.sl > raw.rl) AS doubled_commit_repo_days,
-  minIf(s.day, ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
+  minIf(s.day, ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
           AND s.sl > raw.rl) AS doubled_commit_first_day,
-  maxIf(s.day, ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
+  maxIf(s.day, ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
           AND s.sl > raw.rl) AS doubled_commit_last_day,
-  countIf(ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
+  countIf(ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
           AND raw.rl > 0 AND s.sl = 2 * raw.rl) AS ratio2_commits,
-  countIf(ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
+  countIf(ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
           AND s.sl < raw.rl) AS under_commits,
-  countIf(ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
+  countIf(ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
           AND s.sl > raw.rl AND s.sb != multiIf(raw.rl <= 50, 'small', raw.rl <= 300, 'medium', 'large')) AS bucket_move,
-  countIf(ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
+  countIf(ifNull(raw.present, 0) = 1 AND s.c < toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
           AND s.sl > 300 AND raw.rl <= 300) AS large_flag_move,
-  countIf(ifNull(raw.present, 0) = 1 AND s.c >= toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c) AS after_checked,
-  countIf(ifNull(raw.present, 0) = 1 AND s.c >= toDateTime('2026-11-23 03:08:08', 'UTC') AND raw.ls < s.c
-          AND s.sl != raw.rl) AS after_mismatch
+  countIf(ifNull(raw.present, 0) = 1 AND s.c >= toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c) AS after_checked,
+  countIf(ifNull(raw.present, 0) = 1 AND s.c >= toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls < s.c
+          AND s.sl != raw.rl) AS after_mismatch,
+  countIf(ifNull(raw.present, 0) = 1 AND s.c >= toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls >= s.c) AS after_raw_changed,
+  countIf(ifNull(raw.present, 0) = 1 AND s.c >= toDateTime('2026-11-23 05:10:00', 'UTC') AND raw.ls >= s.c
+          AND s.sl > raw.rl) AS after_doubled_raw_changed
 FROM (SELECT repo_id, commit_hash, day, max(computed_at) AS c, toInt64(argMax(total_loc, computed_at)) AS sl,
         argMax(size_bucket, computed_at) AS sb
       FROM commit_metrics WHERE startsWith(org_id, 'c6a38355') GROUP BY repo_id, commit_hash, day, author_email) AS s
@@ -1434,7 +1515,7 @@ WHERE cost_gate = 0;
 // key is its own INSERT. Commits: hash-01 (11-10, 2 unmerged commit versions: old rule doubles its LOC, stored doubled),
 // hash-02 + hash-03 (11-11 control; hash-03 has no stat row and its identity is the trimmed author name), hash-04 (11-12, a
 // stat version synced after the compute: left out), hash-05 (11-13, stored under the recompute, a negative additions term),
-// hash-06 (11-14, 2 stat versions, stored doubled over 300 LOC), hash-08 (11-22, computed after the cut with the new rule).
+// hash-06 (11-14, 2 stat versions, stored doubled over 300 LOC), hash-08 (11-22, computed after the 05:10:00 cut, new rule).
 // Stored keys with no raw commit: hash-07 / R2 11-15 (a PR created that day), R2 11-16 (nothing: no_raw), R2 11-17 (a
 // review), R2 11-18 (a PR merged that day). R3 11-19 = retracted key.
 const sizing14285Fixture = `
@@ -1490,7 +1571,7 @@ INSERT INTO repo_metrics_daily (org_id, repo_id, day, commits_count, total_loc_t
 ('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000002', '2026-11-17', 0, 0, '2026-11-18 01:00:00', 0),
 ('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000002', '2026-11-18', 0, 0, '2026-11-19 01:00:00', 0),
 ('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', '2026-11-19', 1, 3, '2026-11-19 23:00:00', 0),
-('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', '2026-11-22', 1, 10, '2026-11-23 05:00:00', 0),
+('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', '2026-11-22', 1, 10, '2026-11-23 06:00:00', 0),
 ('b0000000-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000001', '2026-11-10', 1, 999, '2026-11-11 01:00:00', 0);
 INSERT INTO repo_metrics_daily (org_id, repo_id, day, commits_count, total_loc_touched, computed_at, retracted) VALUES
 ('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000001', '2026-11-11', 2, 5, '2026-11-12 01:00:00', 0),
@@ -1504,7 +1585,7 @@ INSERT INTO commit_metrics (org_id, repo_id, commit_hash, day, author_email, tot
 ('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000001', 'hash-05', '2026-11-13', 'dev2@example.com', 4, 'small', '2026-11-14 01:00:00'),
 ('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000002', 'hash-06', '2026-11-14', 'dev3@example.com', 400, 'large', '2026-11-15 01:00:00'),
 ('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000002', 'hash-07', '2026-11-15', 'dev3@example.com', 7, 'small', '2026-11-16 01:00:00'),
-('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', 'hash-08', '2026-11-22', 'dev4@example.com', 10, 'small', '2026-11-23 05:00:00'),
+('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', 'hash-08', '2026-11-22', 'dev4@example.com', 10, 'small', '2026-11-23 06:00:00'),
 ('b0000000-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000001', 'hash-01', '2026-11-10', 'dev1@example.com', 999, 'large', '2026-11-11 01:00:00');
 INSERT INTO commit_metrics (org_id, repo_id, commit_hash, day, author_email, total_loc, size_bucket, computed_at) VALUES
 ('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000001', 'hash-02', '2026-11-11', 'dev2@example.com', 5, 'small', '2026-11-12 01:00:00');
@@ -1517,10 +1598,32 @@ INSERT INTO user_metrics_daily (org_id, repo_id, day, author_email, commits_coun
 ('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000002', '2026-11-14', 'dev3@example.com', 1, 400, 0, '2026-11-15 01:00:00', 0),
 ('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000002', '2026-11-15', 'dev3@example.com', 1, 7, 0, '2026-11-16 01:00:00', 0),
 ('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', '2026-11-19', 'dev4@example.com', 1, 3, 0, '2026-11-19 23:00:00', 0),
-('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', '2026-11-22', 'dev4@example.com', 1, 8, 2, '2026-11-23 05:00:00', 0),
+('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', '2026-11-22', 'dev4@example.com', 1, 8, 2, '2026-11-23 06:00:00', 0),
 ('b0000000-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000001', '2026-11-10', 'dev1@example.com', 1, 999, 0, '2026-11-11 01:00:00', 0);
 INSERT INTO user_metrics_daily (org_id, repo_id, day, author_email, commits_count, loc_added, loc_deleted, computed_at, retracted) VALUES
 ('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', '2026-11-19', 'dev4@example.com', 0, 0, 0, '2026-11-20 01:00:00', 1);
+`
+
+// Mutation sub-run rows (acp READ-FORM-14285-4 P2-2, P2-1), repo 3, added after the main run and the gate fires:
+// 11-22 hash-08 stored again at 07:00 (after the cut) with old-rule LOC 20 = 2 x 10: after_mismatch 1.
+// 11-21 hash-10 stored at 06:30 (after the cut) with LOC 20, raw synced at 08:00: after_raw_changed 1,
+// after_doubled_raw_changed 1. 11-20 hash-11 stored at 03:40 by an old pod (after the -4 cut 03:08:08, before 05:10:00)
+// with LOC 20, raw synced at 04:10 (the acp P2-1 case: in no count under -4): raw_changed_after +1, doubled_raw_changed +1.
+const sizing14285Mutation = `
+INSERT INTO git_commits (org_id, repo_id, hash, author_name, author_email, committer_when, last_synced) VALUES
+('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', 'hash-10', 'Dev Four', 'dev4@example.com', '2026-11-21 10:00:00', '2026-11-23 08:00:00'),
+('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', 'hash-11', 'Dev Four', 'dev4@example.com', '2026-11-20 10:00:00', '2026-11-23 04:10:00');
+INSERT INTO git_commit_stats (org_id, repo_id, commit_hash, file_path, additions, deletions, last_synced) VALUES
+('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', 'hash-10', 'f1.go', 6, 4, '2026-11-23 08:00:00'),
+('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', 'hash-11', 'f1.go', 5, 5, '2026-11-23 04:10:00');
+INSERT INTO repo_metrics_daily (org_id, repo_id, day, commits_count, total_loc_touched, computed_at, retracted) VALUES
+('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', '2026-11-22', 1, 20, '2026-11-23 07:00:00', 0),
+('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', '2026-11-21', 1, 20, '2026-11-23 06:30:00', 0),
+('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', '2026-11-20', 1, 20, '2026-11-23 03:40:00', 0);
+INSERT INTO commit_metrics (org_id, repo_id, commit_hash, day, author_email, total_loc, size_bucket, computed_at) VALUES
+('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', 'hash-08', '2026-11-22', 'dev4@example.com', 20, 'small', '2026-11-23 07:00:00'),
+('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', 'hash-10', '2026-11-21', 'dev4@example.com', 20, 'small', '2026-11-23 06:30:00'),
+('c6a38355-0000-4000-8000-000000000000', '00000000-0000-4000-8000-000000000003', 'hash-11', '2026-11-20', 'dev4@example.com', 20, 'small', '2026-11-23 03:40:00');
 `
 
 func TestSizing14285ReadFormExecutesAndEveryGateFires(t *testing.T) {
@@ -1529,7 +1632,15 @@ func TestSizing14285ReadFormExecutesAndEveryGateFires(t *testing.T) {
 
 	sum := sha256.Sum256([]byte(sizing14285Form))
 	if got := hex.EncodeToString(sum[:]); got != sizing14285FormSHA256 {
-		t.Fatalf("SIZING-14285-4 form sha256 = %s, want %s", got, sizing14285FormSHA256)
+		t.Fatalf("SIZING-14285-5 form sha256 = %s, want %s", got, sizing14285FormSHA256)
+	}
+	// The cut: one literal, 05:10:00 UTC, in every cut test of the SQL; the -4 cut 03:08:08 only in comments.
+	code14285 := chmigrate.StripLineComments(sizing14285Form)
+	if n := strings.Count(code14285, "toDateTime('2026-11-23 05:10:00', 'UTC')"); n != 35 {
+		t.Fatalf("SIZING-14285-5: %d cut literals in the SQL, want 35", n)
+	}
+	if n := strings.Count(code14285, "toDateTime("); n != 35 || strings.Contains(code14285, "03:08:08") {
+		t.Fatalf("SIZING-14285-5: %d toDateTime in the SQL (want 35) or the -4 cut is still in the SQL", n)
 	}
 	statements := splitForm(sizing14285Form)
 	labels := make([]string, 0, len(statements))
@@ -1537,7 +1648,7 @@ func TestSizing14285ReadFormExecutesAndEveryGateFires(t *testing.T) {
 		labels = append(labels, s.label)
 	}
 	if strings.Join(labels, ",") != "S0,stmt0,stmt1,stmt2,stmt3,stmt4,stmt5,stmt6,stmt7" {
-		t.Fatalf("SIZING-14285-4 statements = %v", labels)
+		t.Fatalf("SIZING-14285-5 statements = %v", labels)
 	}
 	// Table scans per statement (table -> k = times read). The gate list = the keys, sorted; G = sum of k x table rows.
 	all := map[string]uint64{"commit_metrics": 1, "git_commit_stats": 1, "git_commits": 1, "git_pull_request_reviews": 1,
@@ -1670,12 +1781,14 @@ func TestSizing14285ReadFormExecutesAndEveryGateFires(t *testing.T) {
 		"stmt2": {"live_repo_days": "10", "with_commits": "6", "no_commit_now": "1", "raw_changed_after": "1",
 			"doubled_raw_changed": "1", "keys_checked": "4", "match_keys": "1", "doubled_repo_days": "2", "affected_days": "2",
 			"doubled_first_day": "2026-11-10", "doubled_last_day": "2026-11-14", "ratio2_repo_days": "2", "loc_excess": "235",
-			"under_repo_days": "1", "count_mismatch": "1", "after_checked": "1", "after_mismatch": "0"},
+			"under_repo_days": "1", "count_mismatch": "1", "after_checked": "1", "after_mismatch": "0",
+			"after_raw_changed": "0", "after_doubled_raw_changed": "0"},
 		"stmt3": {"stored_commits": "9", "commit_rhd_keys": "8", "with_raw": "8", "commit_no_raw": "1", "raw_changed_after": "1",
 			"doubled_raw_changed": "1", "commits_checked": "6", "match_commits": "2", "doubled_commits": "3",
 			"doubled_commit_days": "2", "doubled_commit_repo_days": "2", "doubled_commit_first_day": "2026-11-10",
 			"doubled_commit_last_day": "2026-11-14", "ratio2_commits": "3", "under_commits": "1", "bucket_move": "3",
-			"large_flag_move": "1", "after_checked": "1", "after_mismatch": "0"},
+			"large_flag_move": "1", "after_checked": "1", "after_mismatch": "0", "after_raw_changed": "0",
+			"after_doubled_raw_changed": "0"},
 		"stmt4": {"live_user_keys": "8", "with_commits": "7", "raw_changed_after": "1", "user_checked": "6", "user_match": "3",
 			"user_over": "2", "user_over_days": "2", "user_ratio2": "2", "user_under": "1", "user_count_mismatch": "1"},
 		"stmt5": {"live_repo_days": "10", "with_raw": "9", "no_raw": "1", "no_raw_first_day": "2026-11-16",
@@ -1873,5 +1986,78 @@ func TestSizing14285ReadFormExecutesAndEveryGateFires(t *testing.T) {
 	}
 	if len(fires) != 17 {
 		t.Errorf("gate fired %d times, want 17 (S0 x 1 cap + 8 statements x 2 caps)", len(fires))
+	}
+
+	// Mutation sub-run (after the pass path and the fires, so their counts hold): the after-cut controls fire.
+	for _, statement := range chmigrate.SplitStatements(sizing14285Mutation) {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("mutation fixture: %v\n%s", err, statement)
+		}
+	}
+	mutationWant := map[string]map[string]string{
+		"stmt2": {"live_repo_days": "12", "with_commits": "8", "no_commit_now": "1", "raw_changed_after": "2",
+			"doubled_raw_changed": "2", "keys_checked": "4", "match_keys": "1", "doubled_repo_days": "2", "affected_days": "2",
+			"doubled_first_day": "2026-11-10", "doubled_last_day": "2026-11-14", "ratio2_repo_days": "2", "loc_excess": "235",
+			"under_repo_days": "1", "count_mismatch": "1", "after_checked": "1", "after_mismatch": "1",
+			"after_raw_changed": "1", "after_doubled_raw_changed": "1"},
+		"stmt3": {"stored_commits": "11", "commit_rhd_keys": "10", "with_raw": "10", "commit_no_raw": "1",
+			"raw_changed_after": "2", "doubled_raw_changed": "2", "commits_checked": "6", "match_commits": "2",
+			"doubled_commits": "3", "doubled_commit_days": "2", "doubled_commit_repo_days": "2",
+			"doubled_commit_first_day": "2026-11-10", "doubled_commit_last_day": "2026-11-14", "ratio2_commits": "3",
+			"under_commits": "1", "bucket_move": "3", "large_flag_move": "1", "after_checked": "1", "after_mismatch": "1",
+			"after_raw_changed": "1", "after_doubled_raw_changed": "1"},
+	}
+	mutated := 0
+	for _, statement := range statements {
+		want, ok := mutationWant[statement.label]
+		if !ok {
+			continue
+		}
+		mutated++
+		rows, err := conn.Query(ctx, statement.text)
+		if err != nil {
+			t.Fatalf("MUTATION %s: SQL error: %v", statement.label, err)
+		}
+		columns := rows.Columns()
+		types := rows.ColumnTypes()
+		var got []map[string]string
+		for rows.Next() {
+			cells := make([]any, len(types))
+			for i, ct := range types {
+				cells[i] = reflect.New(ct.ScanType()).Interface()
+			}
+			if err := rows.Scan(cells...); err != nil {
+				t.Fatalf("MUTATION %s: scan: %v", statement.label, err)
+			}
+			row := map[string]string{}
+			parts := make([]string, 0, len(columns))
+			for i, name := range columns {
+				row[name] = renderCell(cells[i])
+				parts = append(parts, name+"="+row[name])
+			}
+			t.Logf("MUTATION %s ROW %s", statement.label, strings.Join(parts, " "))
+			got = append(got, row)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("MUTATION %s: SQL error: %v", statement.label, err)
+		}
+		_ = rows.Close()
+		if len(got) != 1 {
+			t.Errorf("MUTATION %s: %d rows, want 1", statement.label, len(got))
+			continue
+		}
+		for name, value := range want {
+			if got[0][name] != value {
+				t.Errorf("MUTATION %s: %s = %s, want %s", statement.label, name, got[0][name], value)
+			}
+		}
+		for _, name := range columns {
+			if _, ok := want[name]; !ok {
+				t.Errorf("MUTATION %s: column %s has no WANT in the cell", statement.label, name)
+			}
+		}
+	}
+	if mutated != 2 {
+		t.Errorf("mutation sub-run ran %d statements, want 2 (stmt2, stmt3)", mutated)
 	}
 }

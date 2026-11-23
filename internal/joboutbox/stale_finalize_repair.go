@@ -439,16 +439,19 @@ const (
 			AND outbox.status = 'delivered'
 			AND outbox.args #>> '{domain,id}' = run.id::text
 	)`
+	// The River arm has the live-job arm's uncorrelated form (one read of
+	// river_job per statement, the same IS NOT NULL guard): correlated, the
+	// planner probed river_job by kind for every base run.
 	staleFinalizeRecentSQL = `(EXISTS (
 		SELECT 1 FROM public.worker_job_outbox AS outbox
 		WHERE outbox.job_kind = 'metrics.daily_finalize'
 			AND outbox.args #>> '{domain,id}' = run.id::text
 			AND outbox.created_at > $1
-	) OR EXISTS (
-		SELECT 1 FROM %[1]s AS job
+	) OR run.id::text IN (
+		SELECT job.args #>> '{domain,id}' FROM %[1]s AS job
 		WHERE job.kind = 'metrics.daily_finalize'
-			AND job.args @> jsonb_build_object('domain', jsonb_build_object('id', run.id::text))
 			AND job.created_at > $1
+			AND job.args #>> '{domain,id}' IS NOT NULL
 	))`
 	staleFinalizeNoPartitionsSQL = `NOT EXISTS (
 		SELECT 1 FROM public.daily_metrics_partitions AS partition

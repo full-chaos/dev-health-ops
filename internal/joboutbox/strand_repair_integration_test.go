@@ -2793,10 +2793,9 @@ func TestStaleFinalizeLiveJobArmAnswersAsTheContainmentCheck(t *testing.T) {
 	}
 }
 
-// pm ruling on #6867 (3): at a base of 1000 runs (500 with a live finalize job, 500 with none, so both the live-job
-// arm and the recent arm run) the plans of statements A and B read river_job through no Seq Scan that runs once per
-// base run. The live-job River arm is a hashed subplan read once; the recent arm (unchanged) probes river_job's args
-// index once per run that is not live, and must keep doing so through that index.
+// pm ruling on #6867 (3) and the recent-arm ruling: at a base of 1000 runs (500 with a live finalize job, 500 with
+// none, so both River arms are evaluated) the plans of statements A and B read river_job once each: no river_job node
+// runs more than once, and both River arms (live job, recent job) are hashed subplans.
 func TestStaleFinalizeSurveyReadsRiverJobOnceAtTheCap(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -2847,21 +2846,13 @@ FROM run WHERE run.target_day <= DATE '2020-01-01' + 500`, old); err != nil {
 		if err := json.Unmarshal(raw, &plans); err != nil || len(plans) != 1 {
 			t.Fatalf("EXPLAIN %s: %v", statement.name, err)
 		}
-		var riverNodes, perRunRiverReads int
+		var riverNodes int
 		var walk func(node explainNode)
 		walk = func(node explainNode) {
 			if node.RelationName == "river_job" {
 				riverNodes++
-				if node.NodeType == "Seq Scan" && node.ActualLoops > 1 {
-					t.Fatalf("%s scans river_job %.0f times (once per base run):\n%s", statement.name, node.ActualLoops, raw)
-				}
-				// A per-run read of river_job (the recent arm) must go through River's args index.
 				if node.ActualLoops > 1 {
-					perRunRiverReads++
-				}
-				if node.ActualLoops > 1 && !readsArgsIndex(node) {
-					t.Fatalf("%s reads river_job %.0f times through %s %q, not river_job_args_index:\n%s",
-						statement.name, node.ActualLoops, node.NodeType, node.IndexName, raw)
+					t.Fatalf("%s reads river_job %.0f times through %s (once per base run):\n%s", statement.name, node.ActualLoops, node.NodeType, raw)
 				}
 			}
 			for _, child := range node.Plans {
@@ -2869,48 +2860,114 @@ FROM run WHERE run.target_day <= DATE '2020-01-01' + 500`, old); err != nil {
 			}
 		}
 		walk(plans[0].Plan)
-		if riverNodes == 0 || perRunRiverReads == 0 {
-			t.Fatalf("%s: %d river_job nodes, %d of them per run (the recent arm): the seed does not reach both arms:\n%s",
-				statement.name, riverNodes, perRunRiverReads, raw)
+		if riverNodes < 2 {
+			t.Fatalf("%s: %d river_job nodes, want both River arms in the plan:\n%s", statement.name, riverNodes, raw)
 		}
-		// The live-job River arm is a HASHED subplan: a set larger than work_mem x hash_mem_multiplier falls back to a
-		// per-row subplan, which this names before the loops count shows it.
-		if !strings.Contains(string(raw), "hashed SubPlan") {
-			t.Fatalf("%s: the live-job River arm is not a hashed subplan:\n%s", statement.name, raw)
+		// Both River arms are HASHED subplans: a set larger than work_mem x hash_mem_multiplier falls back to a per-row
+		// subplan, which this names before the loops count shows it.
+		hashed := map[string]bool{}
+		for _, name := range hashedSubPlan.FindAllString(string(raw), -1) {
+			hashed[name] = true
+		}
+		if len(hashed) < 2 {
+			t.Fatalf("%s: %d hashed subplans %v, want both River arms hashed:\n%s", statement.name, len(hashed), hashed, raw)
 		}
 	}
 }
 
-// readsArgsIndex reports whether the node reads river_job_args_index: an index scan on it, or a bitmap heap scan over a
-// bitmap index scan on it.
-func readsArgsIndex(node explainNode) bool {
-	if node.IndexName == "river_job_args_index" {
-		return true
-	}
-	if node.NodeType != "Bitmap Heap Scan" {
-		return false
-	}
-	var found bool
-	var walk func(child explainNode)
-	walk = func(child explainNode) {
-		if child.IndexName == "river_job_args_index" {
-			found = true
-		}
-		for _, grand := range child.Plans {
-			walk(grand)
-		}
-	}
-	for _, child := range node.Plans {
-		walk(child)
-	}
-	return found
-}
+var hashedSubPlan = regexp.MustCompile(`hashed SubPlan \d+`)
 
 // explainNode is one node of EXPLAIN (ANALYZE, FORMAT JSON).
 type explainNode struct {
 	NodeType     string        `json:"Node Type"`
 	RelationName string        `json:"Relation Name"`
-	IndexName    string        `json:"Index Name"`
 	ActualLoops  float64       `json:"Actual Loops"`
 	Plans        []explainNode `json:"Plans"`
+}
+
+// Recent-arm ruling (a): the River arm of the recent fragment, now an uncorrelated IN, answers as the old correlated
+// EXISTS did for every run of a matrix -- no job, a finalize job at created_at exactly the cutoff, one after it, a job
+// of another kind with the run's id, and (for every run) a finalize job with no domain id and one whose domain id is
+// JSON null -- and never answers NULL, so "NOT (... OR run.id IN (...))" in statement A cannot turn unknown. Then both
+// use sites: A's candidates and B's levels.
+func TestStaleFinalizeRecentJobArmAnswersAsTheContainmentCheck(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	admin := startStaleFinalizeAdmin(t, ctx, "sfrecent")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	old := now.Add(-72 * time.Hour)
+	cutoff := now.Add(-StaleFinalizeHorizon)
+	const (
+		noJob     = "00000000-0000-4000-8000-0000000d0001"
+		atCutoff  = "00000000-0000-4000-8000-0000000d0002"
+		recent    = "00000000-0000-4000-8000-0000000d0003"
+		otherKind = "00000000-0000-4000-8000-0000000d0004"
+	)
+	seedStaleFinalizeRuns(t, ctx, admin, old, noJob, atCutoff, recent, otherKind)
+	domain := func(id string) string {
+		return `{"domain": {"type": "daily_metrics_run", "id": "` + id + `"}}`
+	}
+	seedRiverFinalizeJob(t, ctx, admin, `{"domain": {"type": "daily_metrics_run"}}`, "completed", now)
+	seedRiverFinalizeJob(t, ctx, admin, `{"domain": {"type": "daily_metrics_run", "id": null}}`, "completed", now)
+	seedRiverFinalizeJob(t, ctx, admin, domain(atCutoff), "completed", cutoff)
+	seedRiverFinalizeJob(t, ctx, admin, domain(recent), "completed", now)
+	if _, err := admin.Exec(ctx, `
+INSERT INTO river.river_job (args, attempt, created_at, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at)
+VALUES ($1::jsonb, 1, $2, $2, 'metrics.daily_partition', 4, '{}'::jsonb, 2, 'metrics', 'completed', $2)`, domain(otherKind), now); err != nil {
+		t.Fatal(err)
+	}
+	const oldArm = `EXISTS (
+		SELECT 1 FROM river.river_job AS job
+		WHERE job.kind = 'metrics.daily_finalize'
+			AND job.args @> jsonb_build_object('domain', jsonb_build_object('id', run.id::text))
+			AND job.created_at > $1
+	)`
+	// The production River arm, cut out of the fragment: "(EXISTS (<outbox>) OR <river arm>)".
+	parts := strings.SplitN(fmt.Sprintf(staleFinalizeRecentSQL, `"river"."river_job"`), ") OR ", 2)
+	if len(parts) != 2 || !strings.HasPrefix(parts[1], "run.id::text IN (") {
+		t.Fatalf("the recent fragment no longer has the shape this cell cuts: %q", parts)
+	}
+	newArm := strings.TrimSuffix(strings.TrimSpace(parts[1]), ")")
+	rows, err := admin.Query(ctx, `SELECT run.id::text, (`+oldArm+`), (`+newArm+`) FROM public.daily_metrics_runs AS run ORDER BY run.id`, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRecent := map[string]bool{recent: true}
+	seen := 0
+	for rows.Next() {
+		var runID string
+		var oldAnswer, newAnswer *bool
+		if err := rows.Scan(&runID, &oldAnswer, &newAnswer); err != nil {
+			t.Fatal(err)
+		}
+		seen++
+		if oldAnswer == nil || newAnswer == nil {
+			t.Fatalf("run %s: old %v new %v, want two non-NULL answers", runID, oldAnswer, newAnswer)
+		}
+		if *oldAnswer != *newAnswer || *newAnswer != wantRecent[runID] {
+			t.Fatalf("run %s: old %v new %v, want both %v", runID, *oldAnswer, *newAnswer, wantRecent[runID])
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil || seen != 4 {
+		t.Fatalf("compared %d runs (err %v), want 4", seen, err)
+	}
+
+	jobTable := `"river"."river_job"`
+	survey := surveyStaleFinalize(ctx, admin.Begin, staleFinalizeBaseExistsSQL,
+		fmt.Sprintf(staleFinalizeCandidatesSQLTemplate, jobTable), fmt.Sprintf(staleFinalizeLevelsSQLTemplate, jobTable),
+		cutoff, 20, nil)
+	if len(survey.failures) != 0 {
+		t.Fatalf("survey failures %+v", survey.failures)
+	}
+	got := map[string]bool{}
+	for _, candidate := range survey.candidates {
+		got[candidate.runID] = true
+	}
+	if want := map[string]bool{noJob: true, atCutoff: true, otherKind: true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("statement A candidates %v, want %v (every run but the one with a recent finalize job)", got, want)
+	}
+	if survey.levels == nil || *survey.levels != (StaleFinalizeLevels{Recent: 1}) {
+		t.Fatalf("statement B levels %+v, want Recent 1 and nothing else", survey.levels)
+	}
 }

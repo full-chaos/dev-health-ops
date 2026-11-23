@@ -1095,3 +1095,43 @@ func TestTestopsRetiredSlotSuiteRowsOnlyServesTheSyncedOnceNumbers(t *testing.T)
 		t.Errorf("stale run serves %+v, want CONTROL %+v (50,002 cases, 2 suites)", stale, control)
 	}
 }
+
+// PINNED LIMIT (not CONTROL): a retired slot that a later attempt brings back loses the failure history of its earlier
+// attempts. Attempt 1 stores total-b with case a failing; attempt 2 passes a in leg B's parts and drops total-b, whose case
+// retraction rows replace total-b's attempt-1 cases at their keys (no name); attempt 3 uploads a total-b of its own execution
+// (other durations, so no lossless aggregate of the attempt-2 parts) and the planner keeps it. The new readers count the slot
+// again, but its attempt-1 failure is gone: flake 0 of 2 names, where a run that never retired the slot serves 1 of 2 (CONTROL).
+// The superseded attempt-1 artifact is never read again (githubTestsKeepNewestArtifactPerName), so no later walk restores it.
+func TestTestopsRetiredSlotRevivalLosesEarlierFailureHistoryIsPinned(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	env := startRetiredStack(t, ctx)
+	stack := env.stack
+	org := "org-chaos14259-revival-" + uuid.NewString()[:8]
+	const runID = "43600014265"
+	retiredTwoAttemptRun(t, stack, org, runID, retiredDay(), false)
+	stamp := func(clock string) string { return "2026-07-22T" + clock + "Z" }
+	attempt3Total := []matrixTotalsSuite{{"left", "4.0", []matrixTotalsCase{{"a", "", "0.3"}}}, {"right", "4.0", []matrixTotalsCase{{"b", "", "0.3"}}}}
+	attempt2Leg := []matrixTotalsSuite{{"left", "3.0", []matrixTotalsCase{{"a", "", "0.25"}}}, {"right", "3.0", []matrixTotalsCase{{"b", "", "0.25"}}}}
+	ts2, ts3 := "2026-07-22T11:12:00", "2026-07-22T12:12:00"
+	stack.pass(t, org, runID, retiredDay().Add(12*time.Hour), attemptsRunState{created: stamp("10:01:00"), attempt: 3, started: stamp("12:10:00"),
+		updated: stamp("12:40:00"), artifacts: []attemptsArtifact{
+			{13, "leg-b-left", stamp("11:30:00"), false, retiredArchive(t, ts2, attempt2Leg[0])},
+			{14, "leg-b-right", stamp("11:30:00"), false, retiredArchive(t, ts2, attempt2Leg[1])},
+			{16, "total-b", stamp("11:30:00"), false, retiredArchive(t, ts2, attempt2Leg...)},
+			{26, "total-b", stamp("12:30:00"), false, retiredArchive(t, ts3, attempt3Total...)},
+		}})
+	var live, retracted uint64
+	if err := stack.conn.QueryRow(ctx, `SELECT countIf(retracted = 0 AND run_attempt = 3), countIf(retracted = 1) FROM test_suite_results FINAL
+WHERE org_id = ? AND run_id = ? AND report_slot = 'total-b'`, org, runID).Scan(&live, &retracted); err != nil {
+		t.Fatal(err)
+	}
+	if live != 2 || retracted != 2 {
+		t.Fatalf("slot total-b: %d live attempt-3 rows and %d retraction rows, want 2 and 2 (revived at attempt 3)", live, retracted)
+	}
+	got := retiredMetricOf(t, stack, org, retiredDay())
+	t.Logf("revived run serves %+v (CONTROL flake 1 of 2)", got)
+	if got.flake != 0 || got.distinct != 2 {
+		t.Errorf("revived run serves flake %d of %d names; the pinned limit is 0 of 2 (CONTROL 1 of 2)", got.flake, got.distinct)
+	}
+}

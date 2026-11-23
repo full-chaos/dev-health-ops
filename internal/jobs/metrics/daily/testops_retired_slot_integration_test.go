@@ -6,13 +6,19 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"maps"
 	"math"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -756,4 +762,242 @@ func TestTestopsRetiredSlotReadsStayInTheirScans(t *testing.T) {
 			t.Errorf("%s read %d rows, want 1..%d (its named scans + 50 %%)", statement.name, read, bound)
 		}
 	}
+}
+
+// The base reader's case read, taken from the base source, not copied: testdata/chaos14259_base_testops_native_clickhouse.go.txt
+// is `git show 85378e468f250a75e3dcd61250bc489eba6fee79:internal/jobs/metrics/daily/testops_native_clickhouse.go` (the blob
+// 14d8a684a379aa42d7a099d81463c0df73979c03), pinned by its sha256. The SQL is the second argument of the conn.Query call in
+// loadNativeTestopsCaseAggregate, its concatenation evaluated with the base's kept-suite text (the window source and the base
+// rule) and no default branch.
+const (
+	retiredBaseReaderFile   = "chaos14259_base_testops_native_clickhouse.go.txt"
+	retiredBaseReaderSHA256 = "34c048123f0872bed807e2e1c2115afc8525d322846247a851f2dad7ecb72794"
+)
+
+func retiredBaseCaseAggregateSQL(t *testing.T) string {
+	t.Helper()
+	source, err := os.ReadFile(filepath.Join("testdata", retiredBaseReaderFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum := sha256.Sum256(source); hex.EncodeToString(sum[:]) != retiredBaseReaderSHA256 {
+		t.Fatalf("%s sha256 %x, pinned %s: the base reader source was edited", retiredBaseReaderFile, sum, retiredBaseReaderSHA256)
+	}
+	file, err := parser.ParseFile(token.NewFileSet(), "testops_native_clickhouse.go", source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{
+		"offDefaultCTE":          "",
+		"offDefaultExclusion":    "",
+		"testopsKeptSuitesToday": testopsSuiteResultsSource + "\n  AND " + retiredBaseRule(t, "window"),
+	}
+	var evaluate func(ast.Expr) string
+	evaluate = func(expression ast.Expr) string {
+		switch typed := expression.(type) {
+		case *ast.BinaryExpr:
+			if typed.Op != token.ADD {
+				t.Fatalf("base SQL holds operator %s", typed.Op)
+			}
+			return evaluate(typed.X) + evaluate(typed.Y)
+		case *ast.BasicLit:
+			text, err := strconv.Unquote(typed.Value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return text
+		case *ast.Ident:
+			value, known := values[typed.Name]
+			if !known {
+				t.Fatalf("base SQL names %s, which the cell does not evaluate", typed.Name)
+			}
+			return value
+		}
+		t.Fatalf("base SQL holds a %T", expression)
+		return ""
+	}
+	query := ""
+	ast.Inspect(file, func(node ast.Node) bool {
+		function, isFunction := node.(*ast.FuncDecl)
+		if !isFunction || function.Name.Name != "loadNativeTestopsCaseAggregate" {
+			return true
+		}
+		ast.Inspect(function.Body, func(inner ast.Node) bool {
+			call, isCall := inner.(*ast.CallExpr)
+			if selector, isSelector := callSelector(call, isCall); isSelector && selector == "Query" && query == "" {
+				query = evaluate(call.Args[1])
+			}
+			return true
+		})
+		return false
+	})
+	if !strings.Contains(query, "FROM test_case_results FINAL") {
+		t.Fatalf("no case read found in the base loadNativeTestopsCaseAggregate:\n%s", query)
+	}
+	return query
+}
+
+func callSelector(call *ast.CallExpr, isCall bool) (string, bool) {
+	if !isCall {
+		return "", false
+	}
+	selector, isSelector := call.Fun.(*ast.SelectorExpr)
+	if !isSelector {
+		return "", false
+	}
+	return selector.Sel.Name, true
+}
+
+// retiredOldReaderCaseMeasures runs the base case read over the stored rows: today's flake and distinct names, today's failed
+// names and those of them that failed in history (testops.TestAccumulator's rules).
+func retiredOldReaderCaseMeasures(t *testing.T, stack attemptsStack, org string, day time.Time) (flake, distinct, failedToday, recurrent int) {
+	t.Helper()
+	args := append(testopsCaseArgs(org, stack.repoID(t, org), "", day.AddDate(0, 0, -29), day, day.Add(24*time.Hour)),
+		clickhouse.Named("failure_statuses", testopsFailureStatuses))
+	rows, err := stack.conn.Query(stack.ctx, retiredBaseCaseAggregateSQL(t), args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		var statuses []string
+		var maxRetry uint32
+		var seenToday, failedBefore uint8
+		if err := rows.Scan(&name, &statuses, &maxRetry, &seenToday, &failedBefore); err != nil {
+			t.Fatal(err)
+		}
+		if seenToday == 0 {
+			continue
+		}
+		passed, failed := false, false
+		for _, status := range statuses {
+			switch strings.ToLower(strings.TrimSpace(status)) {
+			case "passed":
+				passed = true
+			case "failed":
+				failed = true
+			}
+		}
+		distinct++
+		if passed && failed {
+			flake++
+		}
+		if failed {
+			failedToday++
+			if failedBefore != 0 {
+				recurrent++
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return flake, distinct, failedToday, recurrent
+}
+
+// A rollback to the base binary serves what the run synced once serves on the case side: the case retraction rows of every
+// attempt label of the dropped slot hide its stale cases from the base case read (a row with no name). K4: the slot's
+// attempt-1 failure of case a is no flake (1 flake, c, of 3 names). K5: the slot's attempt-1 failure on a history day is no
+// recurrence of today's failure of a (0 of 1).
+func TestTestopsRetiredSlotOldReaderServesTheSyncedOnceCaseMeasures(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	env := startRetiredStack(t, ctx)
+	stack := env.stack
+	newOrg := func(name string) string { return "org-chaos14259-" + name + "-" + uuid.NewString()[:8] }
+
+	flakeOrg := newOrg("old-reader-flake")
+	retiredTwoAttemptRun(t, stack, flakeOrg, "43600014261", retiredDay(), true)
+	if flake, distinct, _, _ := retiredOldReaderCaseMeasures(t, stack, flakeOrg, retiredDay()); flake != 1 || distinct != 3 {
+		t.Errorf("K4 base reader: flake %d of %d names, want CONTROL 1 of 3", flake, distinct)
+	}
+
+	historyOrg := newOrg("old-reader-history")
+	retiredTwoAttemptRun(t, stack, historyOrg, "43600014262", retiredDay().AddDate(0, 0, -1), false)
+	stack.pass(t, historyOrg, "43600014263", retiredDay().Add(10*time.Hour), retiredState(false, []attemptsArtifact{
+		{21, "today", "2026-07-22T10:20:00Z", false, retiredArchive(t, "2026-07-22T10:02:00", matrixTotalsSuite{"t", "1.0", []matrixTotalsCase{{"a", "failed", "0.5"}}})},
+	}))
+	if _, _, failedToday, recurrent := retiredOldReaderCaseMeasures(t, stack, historyOrg, retiredDay()); failedToday != 1 || recurrent != 0 {
+		t.Errorf("K5 base reader: recurrent %d of %d failed names, want CONTROL 0 of 1", recurrent, failedToday)
+	}
+}
+
+// retiredAttemptLegacyID is the pre-slot id total-b's attempt-1 left suite lists (artifact 6, no superseded copy).
+func retiredAttemptLegacyID(t *testing.T, stack attemptsStack, org, runID string) string {
+	t.Helper()
+	var ids []string
+	if err := stack.conn.QueryRow(stack.ctx, `SELECT legacy_suite_ids FROM test_suite_results FINAL
+WHERE org_id = ? AND run_id = ? AND report_slot = 'total-b' AND run_attempt = 1 AND suite_name = 'left' AND retracted = 0`, org, runID).Scan(&ids); err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] == "" {
+		t.Fatalf("total-b attempt 1 lists legacy ids %v, want one", ids)
+	}
+	return ids[0]
+}
+
+// A pre-slot copy of a retired slot is retired with it, in the suite reads and the case reads: a copy of the slot's attempt-1
+// failure (listed by every attempt), and a copy whose id only the slot's attempt-1 rows list (the attempt-1 artifact had left the
+// listing when attempt 2 dropped the report).
+func TestTestopsRetiredSlotRetiresItsPreSlotCopies(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	env := startRetiredStack(t, ctx)
+	stack := env.stack
+	newOrg := func(name string) string { return "org-chaos14259-" + name + "-" + uuid.NewString()[:8] }
+	insertLegacy := func(org, runID, id string, withFailedCase bool) {
+		t.Helper()
+		repoID := stack.repoID(t, org)
+		started, synced := retiredDay().Add(10*time.Hour+time.Minute), retiredDay().Add(9*time.Hour)
+		if err := stack.conn.Exec(ctx, `INSERT INTO test_suite_results
+(org_id, repo_id, run_id, suite_id, suite_name, total_count, passed_count, failed_count, skipped_count, error_count, quarantined_count,
+ duration_seconds, started_at, last_synced)
+VALUES (?, ?, ?, ?, 'left', 1, 0, 1, 0, 0, 0, 3.0, ?, ?)`, org, repoID, runID, id, started, synced); err != nil {
+			t.Fatal(err)
+		}
+		if withFailedCase {
+			if err := stack.conn.Exec(ctx, `INSERT INTO test_case_results
+(org_id, repo_id, run_id, suite_id, case_id, case_name, status, retry_attempt, last_synced)
+VALUES (?, ?, ?, ?, 'legacy-a', 'a', 'failed', 0, ?)`, org, repoID, runID, id, synced); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	t.Run("pre-slot copy of a failed case", func(t *testing.T) {
+		org := newOrg("legacy-copy")
+		retiredTwoAttemptRun(t, stack, org, "43600014261", retiredDay(), true)
+		insertLegacy(org, "43600014261", retiredAttemptLegacyID(t, stack, org, "43600014261"), true)
+		want := retiredMetric{total: 3, passed: 3, suites: 3, flake: 1, distinct: 3, failedNames: 1}
+		if got := retiredMetricOf(t, stack, org, retiredDay()); got != want {
+			t.Errorf("served %+v, want CONTROL %+v", got, want)
+		}
+	})
+
+	t.Run("legacy id of an older attempt only", func(t *testing.T) {
+		org := newOrg("legacy-older")
+		runID := "43600014264"
+		date := retiredDay().Format(time.DateOnly)
+		stamp := func(clock string) string { return date + "T" + clock + "Z" }
+		ts1, ts2 := date+"T10:02:00", date+"T11:12:00"
+		attempt1Total := []matrixTotalsSuite{{"left", "3.0", []matrixTotalsCase{{"a", "failed", "0.25"}}}, {"right", "3.0", []matrixTotalsCase{{"b", "", "0.25"}}}}
+		attempt2Leg := []matrixTotalsSuite{{"left", "3.0", []matrixTotalsCase{{"a", "", "0.25"}}}, {"right", "3.0", []matrixTotalsCase{{"b", "", "0.25"}}}}
+		stack.pass(t, org, runID, retiredDay().Add(10*time.Hour), attemptsRunState{attempt: 1, started: stamp("10:01:00"), updated: stamp("10:30:00"),
+			artifacts: []attemptsArtifact{{6, "total-b", stamp("10:20:00"), false, retiredArchive(t, ts1, attempt1Total...)}}})
+		listed := retiredAttemptLegacyID(t, stack, org, runID)
+		stack.pass(t, org, runID, retiredDay().Add(11*time.Hour), attemptsRunState{created: stamp("10:01:00"), attempt: 2, started: stamp("11:10:00"),
+			updated: stamp("11:40:00"), artifacts: []attemptsArtifact{
+				{13, "leg-b-left", stamp("11:30:00"), false, retiredArchive(t, ts2, attempt2Leg[0])},
+				{14, "leg-b-right", stamp("11:30:00"), false, retiredArchive(t, ts2, attempt2Leg[1])},
+				{16, "total-b", stamp("11:30:00"), false, retiredArchive(t, ts2, attempt2Leg...)},
+			}})
+		insertLegacy(org, runID, listed, false)
+		if got := retiredMetricOf(t, stack, org, retiredDay()); got.total != 2 || got.suites != 2 || got.failed != 0 {
+			t.Errorf("served total %d, suites %d, failed %d; want CONTROL 2, 2, 0", got.total, got.suites, got.failed)
+		}
+		if retiredKeptSuites(t, stack, org)[listed] {
+			t.Errorf("the pooled rule keeps the pre-slot copy %s of the retired slot", listed)
+		}
+	})
 }

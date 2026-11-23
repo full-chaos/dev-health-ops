@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -180,8 +179,7 @@ func (handler LaunchDarklyRouteHandler) Collect(
 		if leaseErr := client.Lease.Assert(ctx); leaseErr != nil {
 			return CompleteRouteBatch{}, leaseErr
 		}
-		var providerErr *providerfoundation.ProviderError
-		if !errors.As(codeReferenceErr, &providerErr) || providerErr.AfterResponse() {
+		if !lookupSourceAbsent(codeReferenceErr) {
 			return CompleteRouteBatch{}, codeReferenceErr
 		}
 		codeReferencePayload = json.RawMessage(`{"items":[]}`)

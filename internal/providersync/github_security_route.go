@@ -111,8 +111,11 @@ func (handler GitHubSecurityRouteHandler) Collect(ctx context.Context, claim Cla
 		{"code_scanning", githubCodeScanningRoute, root + "/code-scanning/alerts", url.Values{"state": {"open"}, "per_page": {"100"}}},
 		{"advisory", githubAdvisoriesRoute, root + "/security-advisories", url.Values{"per_page": {"100"}}},
 	} {
-		items, fetched, ok := fetchGitHubSecurityPage(ctx, &counted, source.route, source.path, source.query, pages)
+		items, fetched, ok, fetchErr := fetchGitHubSecurityPage(ctx, &counted, source.route, source.path, source.query, pages)
 		decodedPages += fetched
+		if fetchErr != nil && !lookupSourceAbsent(fetchErr) {
+			return CompleteRouteBatch{}, fetchErr
+		}
 		if !ok {
 			continue
 		}
@@ -134,10 +137,10 @@ func (handler GitHubSecurityRouteHandler) Collect(ctx context.Context, claim Cla
 	return CompleteRouteBatch{Effects: []EffectBatch{effect}, Result: map[string]any{"security_alerts_synced": len(rows), "repo": repo.FullName}, Watermark: claim.BeforeAt, Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests, Pages: decodedPages, Records: len(rows)}}, nil
 }
 
-func fetchGitHubSecurityPage(ctx context.Context, client *providerfoundation.HTTPClient, route, path string, query url.Values, maxPages int) ([]gitHubSecurityPayload, int, bool) {
+func fetchGitHubSecurityPage(ctx context.Context, client *providerfoundation.HTTPClient, route, path string, query url.Values, maxPages int) ([]gitHubSecurityPayload, int, bool, error) {
 	page, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{Path: path, Route: route, Query: query, MaxPages: maxPages})
 	if err != nil {
-		return nil, 0, false
+		return nil, 0, false, err
 	}
 	items := make([]gitHubSecurityPayload, 0, len(page.Items))
 	for _, raw := range page.Items {
@@ -145,11 +148,11 @@ func fetchGitHubSecurityPage(ctx context.Context, client *providerfoundation.HTT
 		decoder := json.NewDecoder(strings.NewReader(string(raw)))
 		decoder.UseNumber()
 		if decoder.Decode(&item) != nil {
-			return nil, page.Pages, false
+			return nil, page.Pages, false, nil
 		}
 		items = append(items, item)
 	}
-	return items, page.Pages, true
+	return items, page.Pages, true, nil
 }
 
 func normalizeGitHubSecurityAlert(claim Claim, repoID, source string, item gitHubSecurityPayload, normalizedAt time.Time) (securityAlertRow, bool) {

@@ -97,6 +97,9 @@ func (handler GitLabDeploymentsRouteHandler) Collect(
 		return CompleteRouteBatch{}, controlErr
 	}
 	if releaseErr != nil {
+		if !lookupSourceAbsent(releaseErr) {
+			return CompleteRouteBatch{}, releaseErr
+		}
 		// Python logs and discards only this release-ref enrichment input.
 		releases = nil
 		releasePages = 0
@@ -114,6 +117,9 @@ func (handler GitLabDeploymentsRouteHandler) Collect(
 		return CompleteRouteBatch{}, controlErr
 	}
 	if deploymentsErr != nil {
+		if !lookupSourceAbsent(deploymentsErr) {
+			return CompleteRouteBatch{}, deploymentsErr
+		}
 		// D16: the Python producer catches an error spanning the deployments
 		// collection and returns the successful empty list. It must not retain
 		// release-derived partial state or manufacture partial deployment rows.

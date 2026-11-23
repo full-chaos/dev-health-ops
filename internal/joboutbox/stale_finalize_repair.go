@@ -425,7 +425,6 @@ const (
 		SELECT job.args #>> '{domain,id}' FROM %[1]s AS job
 		WHERE job.kind = 'metrics.daily_finalize'
 			AND job.state::text NOT IN ('completed', 'discarded', 'cancelled')
-			AND job.args #>> '{domain,id}' IS NOT NULL
 	) OR EXISTS (
 		SELECT 1 FROM public.worker_job_outbox AS outbox
 		WHERE outbox.job_kind = 'metrics.daily_finalize'

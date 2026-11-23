@@ -33,7 +33,7 @@ func TestCapacityForecastRoute_IsServedByTheCatalog(t *testing.T) {
 	for i, n := range []uint64{2, 4, 6, 8, 10} {
 		throughput = append(throughput, []any{base.AddDate(0, 0, i), n})
 	}
-	client := &cdClient{responses: []*cdScanner{{rows: throughput}, {rows: [][]any{{uint64(30)}}}}}
+	client := &cdClient{responses: []*cdScanner{{rows: throughput}, {rows: [][]any{{uint64(30), uint64(1), uint64(0), base}}}}}
 
 	handler, _, _, _, _ := newQueryHandler(client, pool, verifier, itTestSchemaDigest, withIssuer)
 	token := iaHeaders("org-1", "member", false, false)

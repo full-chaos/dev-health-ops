@@ -79,7 +79,7 @@
   },
   {
     "operation": "capacityForecast",
-    "digest": "d95197012e32056fcece1f8975d953e7465bb112354cf4201e87b39375f933ef"
+    "digest": "61534928326d9e7c1ad83451056cec1d73b66e89a5eca9c6170d60ecf8bbdeb6"
   },
   {
     "operation": "capacityForecast",
@@ -92,8 +92,18 @@
     "legacy": true
   },
   {
+    "operation": "capacityForecast",
+    "digest": "d95197012e32056fcece1f8975d953e7465bb112354cf4201e87b39375f933ef",
+    "legacy": true
+  },
+  {
     "operation": "capacityForecasts",
-    "digest": "43890adbbf75ac3ad71c29f728a82e35d035c3f2c701f0ced116559fa28b6c20"
+    "digest": "976b1a117d82f699eef98bcee1a1fc5cec44086026706fd501eddc4f2ba6fd77"
+  },
+  {
+    "operation": "capacityForecasts",
+    "digest": "43890adbbf75ac3ad71c29f728a82e35d035c3f2c701f0ced116559fa28b6c20",
+    "legacy": true
   },
   {
     "operation": "catalogValues",
@@ -465,7 +475,7 @@
   },
   {
     "operation": "throughputForecast",
-    "digest": "a265a9550e4cdab2bc77395257777ec366ac554b19c617af094de47c7a9e2b03"
+    "digest": "9ace3bd179910a7c79ec8dade33c8f93c7244fc45fe455d4f844a5838eb6a18f"
   },
   {
     "operation": "throughputForecast",
@@ -475,6 +485,11 @@
   {
     "operation": "throughputForecast",
     "digest": "933efa3840bb7afb600135bc4470d6523842a908f0ffb949a35439e15a76e09d",
+    "legacy": true
+  },
+  {
+    "operation": "throughputForecast",
+    "digest": "a265a9550e4cdab2bc77395257777ec366ac554b19c617af094de47c7a9e2b03",
     "legacy": true
   },
   {

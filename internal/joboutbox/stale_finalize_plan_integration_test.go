@@ -6,10 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
@@ -122,9 +125,19 @@ FROM generate_series(1, $2::int) AS n`, old, riverRows)
 	candidatesSQL := fmt.Sprintf(staleFinalizeCandidatesSQLTemplate, jobTable)
 	levelsSQL := fmt.Sprintf(staleFinalizeLevelsSQLTemplate, jobTable)
 	cutoff := now.Add(-StaleFinalizeHorizon)
-	explain := func(name, query string, args ...any) string {
+	// explain runs EXPLAIN (ANALYZE, BUFFERS) with JIT off, as the survey and the redrive re-check run, and checks the
+	// statement's Execution Time against half of its server-side timeout (50 % margin).
+	explain := func(name, query string, bound float64, args ...any) string {
 		t.Helper()
-		rows, err := admin.Query(ctx, "EXPLAIN (ANALYZE, BUFFERS) "+query, args...)
+		tx, err := admin.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+		if _, err := tx.Exec(ctx, staleFinalizeJITOff); err != nil {
+			t.Fatal(err)
+		}
+		rows, err := tx.Query(ctx, "EXPLAIN (ANALYZE, BUFFERS) "+query, args...)
 		if err != nil {
 			t.Fatalf("EXPLAIN %s: %v", name, err)
 		}
@@ -141,19 +154,41 @@ FROM generate_series(1, $2::int) AS n`, old, riverRows)
 			t.Fatalf("EXPLAIN %s: %v, %d bytes", name, err, plan.Len())
 		}
 		t.Logf("INFO plan of %s:\n%s", name, plan.String())
+		match := executionTime.FindStringSubmatch(plan.String())
+		if match == nil {
+			t.Fatalf("EXPLAIN %s: no Execution Time line", name)
+		}
+		executed, err := strconv.ParseFloat(match[1], 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if executed > bound {
+			t.Fatalf("%s executed in %.1f ms with JIT off, bound %.0f ms (half its statement timeout):\n%s", name, executed, bound, plan.String())
+		}
 		return plan.String()
 	}
 	survey := func(name string) staleFinalizeSurvey {
 		t.Helper()
 		started := time.Now()
-		result := surveyStaleFinalize(ctx, admin.Begin, baseSQL, candidatesSQL, levelsSQL, cutoff, base, nil)
+		var jitInA []string
+		begin := func(ctx context.Context) (pgx.Tx, error) {
+			tx, err := admin.Begin(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return &jitProbeTx{Tx: tx, probeBefore: candidatesSQL, seen: &jitInA}, nil
+		}
+		result := surveyStaleFinalize(ctx, begin, baseSQL, candidatesSQL, levelsSQL, cutoff, base, nil)
+		if len(result.candidates) > 0 && (len(jitInA) != 1 || jitInA[0] != "off") {
+			t.Fatalf("survey at %s: jit inside the survey transaction at statement A = %v, want [off]", name, jitInA)
+		}
 		t.Logf("INFO survey at %s: %s, %d candidates, levels %+v, failures %+v", name, time.Since(started),
 			len(result.candidates), result.levels, result.failures)
 		return result
 	}
 
 	// Base 0.
-	explain("statement 0 at base 0", baseSQL, cutoff)
+	explain("statement 0 at base 0", baseSQL, 75, cutoff)
 	if result := survey("base 0"); len(result.candidates) != 0 || result.levels == nil || *result.levels != (StaleFinalizeLevels{}) {
 		t.Fatalf("base 0: %+v, want no candidate and exact zero levels", result)
 	}
@@ -166,23 +201,37 @@ FROM generate_series(1, $2::int) AS n`, old, riverRows)
 	if err := admin.QueryRow(ctx, `SELECT count(*) FROM public.worker_job_outbox WHERE job_kind = 'metrics.daily_finalize'`).Scan(&finalizeEntries); err != nil {
 		t.Fatal(err)
 	}
-	explain("statement 0 at base", baseSQL, cutoff)
-	for name, query := range map[string]string{"statement A": candidatesSQL, "statement B": levelsSQL} {
-		args := []any{cutoff, base, nil, nil}
-		if name == "statement B" {
-			args = []any{cutoff, staleFinalizeLevelCap + 1}
-		}
-		plan := explain(name+" at base", query, args...)
+	explain("statement 0 at base", baseSQL, 75, cutoff)
+	var recheckRun string
+	if err := admin.QueryRow(ctx, `SELECT id::text FROM public.daily_metrics_runs WHERE generation = 'plan-candidate:1'`).Scan(&recheckRun); err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []struct {
+		name  string
+		query string
+		bound float64
+		args  []any
+	}{
+		{"statement A", candidatesSQL, 200, []any{cutoff, base, nil, nil, nil}},
+		{"statement B", levelsSQL, 125, []any{cutoff, staleFinalizeLevelCap + 1}},
+		// The redrive's re-check runs under the 200 ms per-run deadline.
+		{"redrive re-check", StaleFinalizeOutboxRecheckSQL, 100, []any{recheckRun, cutoff}},
+	} {
+		name, query, args := statement.name, statement.query, statement.args
+		plan := explain(name+" at base", query, statement.bound, args...)
 		if strings.Contains(plan, "Seq Scan on worker_job_outbox") {
 			t.Fatalf("%s at base scans the whole outbox:\n%s", name, plan)
 		}
 		if !strings.Contains(plan, "ix_worker_job_outbox_finalize_domain_id") {
 			t.Fatalf("%s at base does not read the outbox through ix_worker_job_outbox_finalize_domain_id:\n%s", name, plan)
 		}
+		if name == "redrive re-check" {
+			continue
+		}
 		checkSubplanReads(t, ctx, admin, name, query, args, float64(k*base), finalizeEntries)
 	}
 	var candidates int
-	if err := admin.QueryRow(ctx, "SELECT count(*) FROM ("+candidatesSQL+") AS a", cutoff, base, nil, nil).Scan(&candidates); err != nil {
+	if err := admin.QueryRow(ctx, "SELECT count(*) FROM ("+candidatesSQL+") AS a", cutoff, base, nil, nil, nil).Scan(&candidates); err != nil {
 		t.Fatal(err)
 	}
 	if candidates != perClass {
@@ -193,6 +242,26 @@ FROM generate_series(1, $2::int) AS n`, old, riverRows)
 	if len(result.candidates) != perClass || result.levels == nil || *result.levels != want {
 		t.Fatalf("survey at base: %d candidates, levels %+v, want %d and %+v", len(result.candidates), result.levels, perClass, want)
 	}
+}
+
+var executionTime = regexp.MustCompile(`Execution Time: ([0-9.]+) ms`)
+
+// jitProbeTx reads the session's jit setting inside the survey transaction just before statement A runs.
+type jitProbeTx struct {
+	pgx.Tx
+	probeBefore string
+	seen        *[]string
+}
+
+func (tx *jitProbeTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	if sql == tx.probeBefore {
+		var setting string
+		if err := tx.Tx.QueryRow(ctx, "SHOW jit").Scan(&setting); err != nil {
+			return nil, err
+		}
+		*tx.seen = append(*tx.seen, setting)
+	}
+	return tx.Tx.Query(ctx, sql, args...)
 }
 
 // planNode is one node of EXPLAIN (ANALYZE, FORMAT JSON). Actual Rows is the average per loop.
@@ -214,7 +283,15 @@ type planNode struct {
 func checkSubplanReads(t *testing.T, ctx context.Context, admin *pgxpool.Pool, name, query string, args []any, perProbeBound, indexEntries float64) {
 	t.Helper()
 	var raw []byte
-	if err := admin.QueryRow(ctx, "EXPLAIN (ANALYZE, FORMAT JSON) "+query, args...).Scan(&raw); err != nil {
+	tx, err := admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, staleFinalizeJITOff); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, "EXPLAIN (ANALYZE, FORMAT JSON) "+query, args...).Scan(&raw); err != nil {
 		t.Fatalf("EXPLAIN JSON %s: %v", name, err)
 	}
 	var plans []struct {

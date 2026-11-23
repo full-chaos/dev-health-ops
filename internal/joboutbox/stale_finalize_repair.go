@@ -46,6 +46,9 @@ const (
 	staleFinalizeCandidatesStatementTimeout = "SET LOCAL statement_timeout = '400ms'"
 	staleFinalizeLevelsStatementTimeout     = "SET LOCAL statement_timeout = '250ms'"
 	staleFinalizeLockTimeout                = "SET LOCAL lock_timeout = '100ms'"
+	// JIT off for the whole survey: A and B price above jit_above_cost at prod
+	// sizes, and JIT compilation alone cost 543 ms of a 781 ms statement A.
+	staleFinalizeJITOff = "SET LOCAL jit = off"
 )
 
 // Failure steps and classes of the stage. A failure is counted, never returned:
@@ -294,7 +297,7 @@ func surveyStaleFinalize(
 		defer cancel()
 		_ = tx.Rollback(rollbackCtx)
 	}()
-	for _, statement := range []string{"SET TRANSACTION READ ONLY", staleFinalizeLockTimeout, staleFinalizeBaseStatementTimeout} {
+	for _, statement := range []string{"SET TRANSACTION READ ONLY", staleFinalizeLockTimeout, staleFinalizeJITOff, staleFinalizeBaseStatementTimeout} {
 		if _, err := tx.Exec(ctx, statement); err != nil {
 			return fail(StaleFinalizeStepSurvey, err)
 		}
@@ -444,6 +447,18 @@ const (
 		SELECT 1 FROM public.daily_metrics_partitions AS partition
 		WHERE partition.run_id = run.id
 	)`
+	// StaleFinalizeOutboxRecheckSQL is the redrive's re-check under the run
+	// lock (daily.PostgresStore.RedriveStaleFinalize): the outbox arms of the
+	// live-job and recent refusals, on the same predicate, so the partial index
+	// ix_worker_job_outbox_finalize_domain_id serves it. $1 is the run id, $2
+	// the horizon cutoff.
+	StaleFinalizeOutboxRecheckSQL = `
+SELECT EXISTS (
+	SELECT 1 FROM public.worker_job_outbox AS outbox
+	WHERE outbox.job_kind = 'metrics.daily_finalize'
+		AND outbox.args #>> '{domain,id}' = $1
+		AND (outbox.status IN ('pending', 'claimed') OR outbox.created_at > $2)
+)`
 	// Statement 0: the base alone, the same fragment A and B use. It reads
 	// daily_metrics_runs and daily_metrics_partitions only.
 	staleFinalizeBaseExistsSQL = `

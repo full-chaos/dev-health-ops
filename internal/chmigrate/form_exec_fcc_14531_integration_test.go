@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -239,6 +240,8 @@ func formExecFcc14531Exec(ctx context.Context, t *testing.T, conn driver.Conn, s
 
 // formExecFcc14531Statements splits the FORM text as pm runs it: the pieces between ";\n", each named by its first
 // line "-- S<n>" or "-- F<n>". A piece with no SQL line (only comments) is not a statement.
+var formExecFcc14531StatementID = regexp.MustCompile(`^[SF][0-9]+$`)
+
 func formExecFcc14531Statements(t *testing.T, text string) ([]string, map[string]string) {
 	t.Helper()
 	var ids []string
@@ -248,9 +251,8 @@ func formExecFcc14531Statements(t *testing.T, text string) ([]string, map[string
 		id, hasSQL := "", false
 		for _, line := range strings.Split(statement, "\n") {
 			if strings.HasPrefix(line, "--") {
-				if id == "" && len(line) > 4 && (strings.HasPrefix(line, "-- S") || strings.HasPrefix(line, "-- F")) &&
-					line[4] >= '0' && line[4] <= '9' {
-					id = strings.Fields(line)[1]
+				if fields := strings.Fields(line); id == "" && len(fields) > 1 && formExecFcc14531StatementID.MatchString(fields[1]) {
+					id = fields[1]
 				}
 				continue
 			}

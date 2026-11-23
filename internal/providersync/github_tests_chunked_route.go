@@ -44,26 +44,54 @@ func (doer githubTestsChunkCountingDoer) Do(request *http.Request) (*http.Respon
 	return response, err
 }
 
-// githubTestsRateFloorGate reads the open phase's rate floor on every wire attempt (CHAOS-14518). The HTTP client retries a
-// 5xx or a 429 inside one call, so a check after the call would see only the headers of the last attempt: a retry sent
-// under the floor, and its success headers hiding the low reading. While armed (the open phase only), a retryable answer
-// whose headers put the remaining requests under the floor (or carry none: fail closed, as belowFloor) cancels the
-// invocation's context, which ends the client's retry wait before the next attempt. Disarmed, it does nothing.
+// githubTestsRateFloorGate stops an open-phase retry under the rate floor (CHAOS-14518). The HTTP client retries a
+// retryable answer (5xx, 429, a 403 rate limit) inside one call, so the per-run floor check after the call saw only the
+// last attempt's headers: a retry sent under the floor, and its success headers hiding the low reading. While armed (the
+// open phase only), the counting doer marks the gate stopped when a 5xx, a 429 or a 403 reports the remaining requests
+// under the floor. Every 403 counts: the client classes a 403 as a retryable rate limit by its headers or by its body text
+// (providerfoundation ClassifyHTTPWithMessage), and the doer reads no body (response_read census); a 403 the client does
+// not retry is not refused, as nothing follows it in that call. The client then refuses its next attempt in its own
+// pre-attempt gate wait (githubTestsFloorBackoffGate): the call ends before any wire request, and the context stays live,
+// so a 429 still penalizes the shared backoff gate. Disarmed, it does nothing.
 type githubTestsRateFloorGate struct {
 	armed, stopped bool
-	stop           context.CancelCauseFunc
 }
 
-var errGitHubTestsRateFloor = errors.New("github tests open phase: rate-limit floor reached on a retryable answer")
+var errGitHubTestsRateFloor = errors.New("github tests open phase: retry refused under the rate-limit floor")
 
 func (gate *githubTestsRateFloorGate) check(status int, observed *githubTestsRateObserver) {
-	if gate == nil || !gate.armed || gate.stopped || status < http.StatusInternalServerError && status != http.StatusTooManyRequests {
+	if gate == nil || !gate.armed || gate.stopped ||
+		status < http.StatusInternalServerError && status != http.StatusTooManyRequests && status != http.StatusForbidden {
 		return
 	}
 	if hit, _ := observed.belowFloor(); hit {
 		gate.stopped = true
-		gate.stop(errGitHubTestsRateFloor)
 	}
+}
+
+// githubTestsFloorBackoffGate is the client's backoff gate while the open phase runs: the client waits on it before every
+// attempt after the first (and before each call), ahead of the wire request. A stopped floor refuses there, which ends the
+// call; otherwise it is the shared gate unchanged (none: no wait, no penalty).
+type githubTestsFloorBackoffGate struct {
+	inner providerfoundation.BackoffGate
+	floor *githubTestsRateFloorGate
+}
+
+func (gate githubTestsFloorBackoffGate) Wait(ctx context.Context) (time.Duration, error) {
+	if gate.floor.armed && gate.floor.stopped {
+		return 0, errGitHubTestsRateFloor
+	}
+	if gate.inner == nil {
+		return 0, nil
+	}
+	return gate.inner.Wait(ctx)
+}
+
+func (gate githubTestsFloorBackoffGate) Penalize(ctx context.Context, penalty time.Duration) error {
+	if gate.inner == nil {
+		return nil
+	}
+	return gate.inner.Penalize(ctx, penalty)
 }
 
 // githubTestsMaxJobsPerRun bounds the jobs committed for ONE run (a hard bound). It is not the report-row bound: that is
@@ -1667,10 +1695,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	requests := 0
 	counted := *client
 	var rateObserved githubTestsRateObserver
-	floorCtx, floorStop := context.WithCancelCause(ctx)
-	defer floorStop(nil)
-	ctx = floorCtx
-	rateFloor := &githubTestsRateFloorGate{stop: floorStop}
+	rateFloor := &githubTestsRateFloorGate{}
 	counted.Doer = githubTestsChunkCountingDoer{delegate: client.Doer, attempts: &requests, observed: &rateObserved, floor: rateFloor}
 	client = &counted
 	emitFinalMetadata := func(cursor githubTestsChunkCursor) error {
@@ -2394,7 +2419,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		if stopAtWalkBound() {
 			return nil
 		}
-		// The floor is read before each run and, through rateFloor, on every wire attempt of the phase (CHAOS-14518).
+		// The floor is read before each run and, through rateFloor, on every retryable answer of the phase (CHAOS-14518).
 		stopAtRateFloor := func() bool {
 			hit, remaining := rateObserved.belowFloor()
 			if !hit {
@@ -2409,8 +2434,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			cursor.Phase = "done"
 			return true
 		}
+		sharedGate := client.Gate
+		client.Gate = githubTestsFloorBackoffGate{inner: sharedGate, floor: rateFloor}
 		rateFloor.armed = true
-		defer func() { rateFloor.armed = false }()
+		defer func() { rateFloor.armed, client.Gate = false, sharedGate }()
 		startedBefore := claim.SinceAt.UTC().Add(-lookback)
 		if cursor.OpenCap == 0 {
 			backlog, err := handler.OpenRuns.OpenRunBacklog(ctx, claim, repoID, startedBefore, githubTestsOpenRunBacklogThreshold+1)
@@ -2452,7 +2479,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				run, found, fetchErr := fetchGitHubTestsRun(ctx, client, root, row.RunID)
 				cursor.Requests = invocationBaseRequests + requests
 				if fetchErr != nil {
-					if rateFloor.stopped && stopAtRateFloor() {
+					if errors.Is(fetchErr, errGitHubTestsRateFloor) && stopAtRateFloor() {
 						return nil
 					}
 					if err := skipOpenRun(before, row, fetchErr, false); err != nil {
@@ -2476,7 +2503,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					var detailErr error
 					jobs, acceptance, _, detailErr = collectRunDetail(run, pipeline)
 					if detailErr != nil {
-						if rateFloor.stopped && stopAtRateFloor() {
+						if errors.Is(detailErr, errGitHubTestsRateFloor) && stopAtRateFloor() {
 							return nil
 						}
 						if err := skipOpenRun(before, row, detailErr, true); err != nil {

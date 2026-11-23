@@ -1,0 +1,7 @@
+agg	dev_health.provider.request	dur_ms	3000
+agg	dev_health.provider.request	dur_ms_in_download	1000
+agg	dev_health.provider.request	dur_ms_outside_download	2000
+agg	dev_health.provider.request	dur_ms_redirect	1000
+agg	dev_health.provider.request	gate_wait_ms	3
+agg	dev_health.job.execute	dur_ms	30000
+agg	dev_health.github_tests.artifact_download	dur_ms	5000

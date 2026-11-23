@@ -1,0 +1,36 @@
+# Throwaway (never merged): one execution of the FORM-325-14486-5 SigNoz SQL on ClickHouse at the prod SigNoz
+# ClickHouse version, for the acp form read (READ-FORM-325-SIGNOZ-5 P2-A1). Delete with the draft PR.
+name: form325-sqlcheck
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/form325-sqlcheck.yml"
+      - "ci/form325-sqlcheck/**"
+
+permissions:
+  contents: read
+
+jobs:
+  form325-sqlcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Prod SigNoz ClickHouse = 25.12.5.44. Use that tag if the registry has it, else 25.12; run it by the index
+      # digest read from the registry manifest here (no tag drift between the inspect and the run).
+      - name: Resolve the ClickHouse image digest
+        run: |
+          set -euo pipefail
+          for tag in 25.12.5.44 25.12; do
+            if digest=$(docker buildx imagetools inspect "clickhouse/clickhouse-server:${tag}" --format '{{.Manifest.Digest}}' 2>/dev/null) && [ -n "$digest" ]; then
+              echo "tag ${tag} index digest ${digest}"
+              docker buildx imagetools inspect "clickhouse/clickhouse-server:${tag}" | sed -n '1,40p'
+              echo "CH_IMAGE=clickhouse/clickhouse-server:${tag}@${digest}" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "tag ${tag}: not found"
+          done
+          echo "FAIL: neither 25.12.5.44 nor 25.12 exists"; exit 1
+      - name: Run the filled form SQL
+        run: bash ci/form325-sqlcheck/run.sh

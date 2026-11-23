@@ -523,6 +523,16 @@ const nullableIntoPlainSites = `
 // ExecuteTimeseries). The readers of the four pooled daily tables (migration 164) add the live-row rule (a WHERE or HAVING
 // predicate, or the live-row wrapper of the dedup source), which changes the file's SQL digest of every site; no select list,
 // scan target or column type changed, and the reason class of each pin is kept.
+//
+// CHAOS-7508: six forecast pins re-pinned by hand, digests copied from the hosted TestScanTypeCensus failure output of
+// job 137387914420 (not computed). The reads add the newest day they already pick and two counts to their select lists;
+// the file SQL digest of every site moved. loadThroughput (capacity) and loadBacklog, loadThroughputHistory
+// (throughput): select lists unchanged, digest only. Read by hand against the column types: capacity loadBacklog
+// sum() of the UInt32 wip is UInt64 (*uint64), countIf() is UInt64 (*uint64, twice), minIf() of the Date day is Date
+// (*time.Time); its countIf/minIf take the live-row rule as a spliced fragment, so it is now spliced-select-list.
+// loadStaleWIP: avg() of the Nullable(Float64) ages stays Nullable (**float64, twice), count() and countIf() are UInt64
+// (*uint64), min() of max(day) is Date (*time.Time). loadWorkItemOverlay: avg() of the UInt32 day sums is Float64
+// (*float64), sum() and countIf() are UInt64 (*uint64), minIf() of the Date day is Date (*time.Time).
 // unverifiedSites is `file|func|destinations|digest|reason`; see reasonClass.
 //
 // CHAOS-14406: two capacityforecast pins re-pinned by hand, digests copied from the local TestScanTypeCensus failure
@@ -914,6 +924,15 @@ const nullableIntoPlainSites = `
 //	queries_metrics.go fetchPRReworkView f2e5aa5edd0b -> 1403432e956f
 //	queries_metrics.go fetchRateDriverDelta b365611c6c29 -> f2372ec26b43
 //	clickhouse.go fetchCycleBreakdown (new pin) 566971fe4c3c
+//
+// CHAOS-14480: three compoundingrisk read.go pins re-pinned by hand; the id filter parameter of each reader became an
+// interface (a request list cut at maxRows, or a resolved set bound whole). Function text only: the evaluated statements
+// are byte-equal at base and head (statement digests c6cab394d615, 8f94719e3398, 0b2e10eba277 at both), scan targets
+// unchanged. Digests computed with siteKey's formula over LoadSites, not copied from a census run:
+//
+//	read.go latestDay 818fa20627a4 -> 8f7b3f43c903
+//	read.go latestRowsLimit 484e5d4507e3 -> 9e94c37b431b
+//	read.go repoTrend e90c541be45a -> a72217e8d045
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|566971fe4c3c|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|e67003e26fc2|not-describable
@@ -934,14 +953,14 @@ internal/queryapi/analytics/sankeycoverage.go|runSankeyCoverageQuery|*float64,*f
 internal/queryapi/analytics/sankeygrouped.go|executeSankeyGrouped|[]any|06df22123891|variadic-destinations
 internal/queryapi/analytics/timeseries.go|ExecuteOrgTimeseries|**time.Time,**float64,**float64|06967e304c8f|statement-not-static
 internal/queryapi/analytics/timeseries.go|ExecuteTimeseries|**time.Time,**string,**float64|d06318794cbb|statement-not-static
-internal/queryapi/capacityforecast/clickhouse.go|loadBacklog|*uint64|351faa81d67b|not-describable
-internal/queryapi/capacityforecast/clickhouse.go|loadThroughput|*time.Time,*uint64|e8a0485f064b|not-describable
+internal/queryapi/capacityforecast/clickhouse.go|loadBacklog|*uint64,*uint64,*uint64,*time.Time|0122f460e38c|spliced-select-list
+internal/queryapi/capacityforecast/clickhouse.go|loadThroughput|*time.Time,*uint64|364edc17515f|not-describable
 internal/queryapi/cognitiveload/cognitiveload.go|fetchOwnershipCandidates|*string,*string,*uint8,*uint16|3dde681a6e0f|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchFileTimeseries|*time.Time,*string,*string,**uint32,**float64,**uint32,**uint32|69bcb13af3df|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchRepoTimeseries|*time.Time,*string,**uint64,**uint64,**float64,**uint64,**uint64|2d500256c88b|spliced-select-list
-internal/queryapi/compoundingrisk/read.go|latestDay|**time.Time|818fa20627a4|not-describable
-internal/queryapi/compoundingrisk/read.go|latestRowsLimit|*string,**float64,*string,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,*float64,*float64,*float64,*float64,*float64,*float64,*time.Time|484e5d4507e3|not-describable
-internal/queryapi/compoundingrisk/read.go|repoTrend|*time.Time,**float64|e90c541be45a|not-describable
+internal/queryapi/compoundingrisk/read.go|latestDay|**time.Time|8f7b3f43c903|not-describable
+internal/queryapi/compoundingrisk/read.go|latestRowsLimit|*string,**float64,*string,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,*float64,*float64,*float64,*float64,*float64,*float64,*time.Time|9e94c37b431b|not-describable
+internal/queryapi/compoundingrisk/read.go|repoTrend|*time.Time,**float64|a72217e8d045|not-describable
 internal/queryapi/datahealth/connectors.go|Connectors|*string,*string,*[]byte,**time.Time,**bool,**string,*[]byte,**time.Time,**int32,**time.Time,**time.Time,*[]byte,**string|d9838116a756|not-describable
 internal/queryapi/datahealth/coverage.go|MetricLineage|**time.Time,*uint64|bb9897d55705|not-describable
 internal/queryapi/datahealth/sourcehealth.go|SourceHealth|*string,**string,*bool,**time.Time,*bool,*string,*[]byte,**time.Time,**bool,*bool,**time.Time,**string,*bool,**time.Time,**time.Time,**string,**string|dabf0d087730|not-describable
@@ -988,11 +1007,11 @@ internal/queryapi/routeswitch/class_decision_switch.go|Enabled|*string|7a40513e2
 internal/queryapi/sankey/queries.go|fetchExpenseCounts|*float64,*float64,*float64|e965eeadaf1b|not-describable
 internal/queryapi/sankey/queries.go|fetchStateStatusCounts|*string,*float64|0ef755127f61|not-describable
 internal/queryapi/server/mcp_route.go|Scan|[]any|073743d6899c|variadic-destinations
-internal/queryapi/testopsrisk/testopsrisk.go|readDaily|**time.Time,**float64,**float64,**float64,**float64,**float64,**float64,**uint64,**float64|2072b04aaa64|not-describable
-internal/queryapi/throughputforecast/clickhouse.go|loadBacklog|*uint64,*uint64,*uint64,*time.Time|2d4d80074e2b|not-describable
-internal/queryapi/throughputforecast/clickhouse.go|loadStaleWIP|**float64,**float64|3dd402e56d1e|not-describable
-internal/queryapi/throughputforecast/clickhouse.go|loadThroughputHistory|*time.Time,*uint64|a930dc834fd5|not-describable
-internal/queryapi/throughputforecast/clickhouse.go|loadWorkItemOverlay|*float64,*uint64|740708b6aca9|not-describable
+internal/queryapi/testopsrisk/testopsrisk.go|readDaily|**time.Time,**float64,**float64,**float64,**float64,**float64,**float64,**uint64,**float64|d5ba164a1f0e|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadBacklog|*uint64,*uint64,*uint64,*time.Time|79caad338fa0|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadStaleWIP|**float64,**float64,*uint64,*uint64,*time.Time|bcc98d8022ae|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadThroughputHistory|*time.Time,*uint64|d7bdbe999ab7|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadWorkItemOverlay|*float64,*uint64,*uint64,*time.Time|da3c300a51fd|not-describable
 internal/queryapi/workgraph/edges.go|countMatchingEdges|*uint64|8d8175642fa2|not-describable
 internal/queryapi/workgraph/edges.go|fetchDedupedEdgeRows|*string,*string,*string,*string,*string,*string,*string,*string,*string,*float64,*string|9ec6525b760f|statement-not-static
 internal/queryapi/workgraph/edges.go|queryDependencyEdges|*string,*string,*string,*string,*string,*string,*string,*string,*string,*float64,*string|c998ded583fc|statement-not-static

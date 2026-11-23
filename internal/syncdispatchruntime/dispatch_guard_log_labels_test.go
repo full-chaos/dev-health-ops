@@ -24,7 +24,7 @@ func TestGuardReasonCodesAreValidLogLabels(t *testing.T) {
 func TestBucketDecisionLogCarriesAReadableBucketLabel(t *testing.T) {
 	var buf bytes.Buffer
 	logger := synclog.New(slog.New(slog.NewTextHandler(&buf, nil)))
-	emitBucketDecision(context.Background(), logger, dispatchBucket{orgID: "123e4567-e89b-12d3-a456-426614174000", provider: "github", costClass: "heavy"}, 1, 0, 0, 0, 0, 0)
+	emitBucketDecision(context.Background(), logger, dispatchBucket{orgID: "123e4567-e89b-12d3-a456-426614174000", provider: "github", costClass: "heavy"}, 1, 0, 0, 0, 0, 0, "", heldBackSignalNone)
 	line := buf.String()
 	if !strings.Contains(line, "bucket=github:heavy") || strings.Contains(line, "bucket=invalid") {
 		t.Fatalf("bucket label not readable: %s", line)

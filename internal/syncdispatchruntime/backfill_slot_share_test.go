@@ -27,7 +27,7 @@ func slotSharePass(t *testing.T, self runOrder, costClass string, waiting int, s
 		lockBuckets: func([]dispatchBucket) error { return nil },
 		totalCap:    func() int { return 0 },
 		activeCount: func(dispatchBucket) (int, int, int, error) { return state.active, state.activeBackfill, 0, nil },
-		emit:        func(dispatchBucket, int, int, int, int, int, int) {},
+		emit:        func(dispatchBucket, int, int, int, int, int, int, string, heldBackSignal) {},
 		self:        self,
 		olderRuns: func(dispatchBucket) ([]olderRun, error) {
 			// olderRunsInBucketSQL lists older backfill runs only to a backfill run.

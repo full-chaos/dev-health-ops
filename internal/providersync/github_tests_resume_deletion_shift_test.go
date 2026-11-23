@@ -343,7 +343,8 @@ func deletionShiftReportRecords(t *testing.T, listing deletionShiftListing) int 
 	if err != nil {
 		t.Fatal(err)
 	}
-	records := cursor.Suites + cursor.Cases + cursor.Coverage
+	// The run's report rows and its run-report completeness row: the walk bound charges both (CHAOS-14487).
+	records := cursor.Suites + cursor.Cases + cursor.Coverage + cursor.ExtraRecords
 	if records < 1 {
 		t.Fatal("premise: a run's report writes no rows")
 	}

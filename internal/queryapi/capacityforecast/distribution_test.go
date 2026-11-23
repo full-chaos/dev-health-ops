@@ -36,7 +36,7 @@ func TestResolveForecastCarriesTheDistributionOfItsOwnSimulation(t *testing.T) {
 	}
 	client := &fakeClient{responses: []*fakeRowScanner{
 		throughputRows(t, 2, 4, 6, 8, 10),
-		{rows: [][]any{{uint64(30)}}},
+		backlogRows(30),
 	}}
 
 	got, err := ResolveForecast(context.Background(), client, "org-7", input, day(t, "2026-09-01"))
@@ -70,7 +70,7 @@ func TestResolveForecastCarriesTheDistributionOfItsOwnSimulation(t *testing.T) {
 func TestResolveForecastHasNoItemsDistributionWithoutATargetDate(t *testing.T) {
 	client := &fakeClient{responses: []*fakeRowScanner{
 		throughputRows(t, 2, 4, 6, 8, 10),
-		{rows: [][]any{{uint64(30)}}},
+		backlogRows(30),
 	}}
 	got, err := ResolveForecast(context.Background(), client, "org-7", nil, day(t, "2026-09-01"))
 	if err != nil || got == nil {
@@ -111,7 +111,7 @@ func TestSingularAndPersistedPathsGiveTheSameDistributionForOneSeed(t *testing.T
 		t.Fatal("the kernel gave no histogram for a both-modes request")
 	}
 
-	singular := forecastToModel(day(t, "2026-09-01"), nil, nil, 100, items, nil, result)
+	singular := forecastToModel(day(t, "2026-09-01"), nil, nil, backlogRead{size: 100}, items, nil, result)
 
 	var daysValues []uint16
 	var daysCounts, itemsValues, itemsCounts []uint32

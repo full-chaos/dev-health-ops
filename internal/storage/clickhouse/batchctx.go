@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/connerr"
 )
 
 // DefaultBatchWriteBound is the floor of a batch's total bound when
@@ -41,6 +43,10 @@ var ErrBatchWriteBound = errors.New("clickhouse batch write bound exceeded")
 // has its own deadline: min(caller deadline, bound). It is cancelled only
 // batchWatchdogGrace after Send returns (or at once when no Send ran), never right
 // after Send. A done caller context refuses PrepareBatch, Flush and Send.
+//
+// It is also the INSERT boundary of every service conn (CHAOS-14493): the driver
+// error of PrepareBatch and of the batch's Send, Flush and Close is marked
+// connerr.AtWrite, so a dropped INSERT can be told from a dropped read.
 type detachedBatchConn struct {
 	driver.Conn
 	bound time.Duration
@@ -57,7 +63,7 @@ func (c detachedBatchConn) PrepareBatch(ctx context.Context, query string, opts 
 	driverCtx, cancel := context.WithDeadlineCause(context.WithoutCancel(ctx), deadline, cause)
 	batch, err := c.Conn.PrepareBatch(driverCtx, query, opts...)
 	if err != nil || batch == nil {
-		err = boundErr(driverCtx, cause, err)
+		err = connerr.AtWrite(boundErr(driverCtx, cause, err))
 		cancel()
 		return batch, err
 	}
@@ -89,7 +95,7 @@ func (b *detachedBatch) Send() error {
 		return err
 	}
 	b.sent = true
-	err := boundErr(b.driverCtx, b.cause, b.Batch.Send())
+	err := connerr.AtWrite(boundErr(b.driverCtx, b.cause, b.Batch.Send()))
 	b.release()
 	return err
 }
@@ -98,7 +104,7 @@ func (b *detachedBatch) Flush() error {
 	if err := b.ctx.Err(); err != nil {
 		return err
 	}
-	return boundErr(b.driverCtx, b.cause, b.Batch.Flush())
+	return connerr.AtWrite(boundErr(b.driverCtx, b.cause, b.Batch.Flush()))
 }
 
 func (b *detachedBatch) Abort() error {
@@ -108,7 +114,7 @@ func (b *detachedBatch) Abort() error {
 }
 
 func (b *detachedBatch) Close() error {
-	err := boundErr(b.driverCtx, b.cause, b.Batch.Close())
+	err := connerr.AtWrite(boundErr(b.driverCtx, b.cause, b.Batch.Close()))
 	b.release()
 	return err
 }

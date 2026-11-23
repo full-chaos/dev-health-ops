@@ -89,11 +89,11 @@ func capacityReads(ctx context.Context, t *testing.T, client QueryClient, org st
 	if err != nil {
 		t.Fatalf("%v throughput: %v", teams, err)
 	}
-	backlog, err := loadBacklog(ctx, client, org, teamIDs, nil)
+	backlog, err := loadBacklog(ctx, client, org, teamIDs, nil, 10, capacityTeamViewToday())
 	if err != nil {
 		t.Fatalf("%v backlog: %v", teams, err)
 	}
-	return fmt.Sprintf("throughput=%v backlog=%d", history, backlog)
+	return fmt.Sprintf("throughput=%v backlog=%d", history, backlog.size)
 }
 
 // capacityServed is the served forecast of a team selection, in two parts, because the resolver draws a fresh random
@@ -135,19 +135,21 @@ func capacityServed(ctx context.Context, t *testing.T, client QueryClient, org s
 	if len(history) == 0 {
 		return fields + " seeded=no-history"
 	}
-	backlog, err := loadBacklog(ctx, client, org, teamIDs, nil)
+	backlog, err := loadBacklog(ctx, client, org, teamIDs, nil, input.HistoryDays, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	result, err := numerical.ForecastCapacity(numerical.ForecastRequest{
 		History:     numerical.Throughput{DailyThroughputs: history, DaysOfHistory: len(history)},
-		TargetItems: &target, BacklogSize: backlog, Simulations: input.Simulations, Seed: 7,
+		TargetItems: &target, BacklogSize: backlog.size, Simulations: input.Simulations, Seed: 7,
 	}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	seeded := forecastToModel(now, teamID, nil, backlog, target, nil, result)
 	seeded.ForecastID = ""
+	// The digests below are pinned from main, before backlogState and backlogAsOfDay existed (CHAOS-7508).
+	seeded.BacklogState, seeded.BacklogAsOfDay = nil, nil
 	served, err := json.Marshal(seeded)
 	if err != nil {
 		t.Fatal(err)

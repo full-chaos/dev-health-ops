@@ -563,7 +563,28 @@ properties of that listing shape the walk:
   pipeline rows leaves `deleted` out (one exported helper). The phase reads the
   rate-limit headers of the unit's own responses and stops, with the marker
   `open_phase_rate_floor`, when fewer than the larger of 500 and a fifth of the
-  limit remain, or when no header was seen.
+  limit remain, or when no header was seen. On every answer the client
+  retries (a 5xx, a 429, or a 403 it classes as a rate limit by its headers
+  or its body) it also reads that answer's own rate headers with the same
+  parser (the `X-RateLimit-*` names and their `RateLimit-*` aliases), not an
+  earlier reading. To that parser an empty or malformed header value counts
+  as absent: a 5xx with empty rate headers keeps the usual path, and a 429
+  with empty ones stops the requests (headroom unknown). The answer stops the phase's requests when it shows fewer
+  remaining than the floor (strictly under, as the check before each run), or
+  when it does not carry a usable remaining count and limit. A 5xx with
+  neither a remaining count nor a limit is the exception: it keeps the usual
+  path (retried, then a transient skip of the run, or an unknown branch
+  policy). A 403 the client does not class as a rate limit (a permission
+  denial) never stops it. After such a stop the client sends no further
+  request of the phase, and a refused request ends the phase with the same
+  marker (the low reading, or -1 when the headroom is unknown).
+  When the stopping answer ends its request on its own error (a 5xx or a rate
+  limit on the last attempt), that error takes its usual
+  path first (a skip of the run, or a unit failure). The phase then stops
+  before the next run: at the check before that run when the last usable
+  reading is under the floor, or else when that run's first request is
+  refused (marker -1). A success answer under the floor still lets the next
+  request of that run go; the check before the next run stops the phase.
   A re-read that fails with an error of that run alone (410, 422, 409, another
   4xx, a payload that does not decode, a 404 on its jobs pages, or a transient
   error) skips the run: nothing is written for it, the walk moves past it, and

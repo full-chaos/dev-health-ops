@@ -478,11 +478,15 @@ func TestGitHubTestsBackfillDeletionCreditCeilingScales(t *testing.T) {
 
 // boundsWidestBackfillCounters sets the record counters a backfill walk can carry at their widest: four of the five
 // row counters at 10,000,000 sum to the 40,000,000 bound (pipelines count runs, at most 25,000), and the deep range's
-// record count at the bound.
+// record count at the bound. The extra record count (completeness and deleted pipeline rows, CHAOS-14487) rides only an
+// artifacts- or open-phase cursor; where the cell carries it, it is widened to the bound too.
 func boundsWidestBackfillCounters(cursor *githubTestsChunkCursor) {
 	cursor.Jobs, cursor.Acceptance, cursor.Suites, cursor.Cases = 10_000_000, 10_000_000, 10_000_000, 10_000_000
 	if cursor.LateRecords != 0 {
 		cursor.LateRecords = backfillWalkRecordsPin
+	}
+	if cursor.ExtraRecords != 0 {
+		cursor.ExtraRecords = backfillWalkRecordsPin
 	}
 }
 

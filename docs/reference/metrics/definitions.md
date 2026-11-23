@@ -75,6 +75,40 @@ also stores the pull requests merged in the window, how many of them had a first
 review, and that share (no share when nothing merged). The share is stored, not
 scored.
 
+On the team breakout, the rows and the trend point of the selected day cover
+the same repositories. With no repository filter, or a filter that keeps every
+repository with a row that day (with teams named: every repository of those
+teams with a row that day), a team that has a persisted team score is listed
+with that score. A team's persisted review latency also covers a repository the
+team owns that merged pull requests in the window but has no repository row
+that day, while the trend covers only repositories with a row. A filter that
+leaves out a repository with a row that day gives each team the mean of the
+scores of its selected repositories. An empty filter with no team named gives
+no rows and no trend; with teams named it means the same as no filter (the
+teams' own repositories).
+
+A team that owns a repository with a row that day but has no persisted team
+score for the day (not computed yet, or withdrawn) is listed with the mean of
+the scores of those repositories, the same rule as the filtered case. With no
+team named this applies to the active teams; with teams named, to those teams.
+It does not apply when the answer reads 500 persisted team scores, the most one
+answer reads: a team missing from them may still have a score. A mean of
+repository scores is a plain mean, while a persisted team score is computed
+again from the team's inputs weighted by ownership share, so the two can
+differ for the same repositories. A team that has a persisted score keeps it
+until the next daily run replaces it, also when newer repository rows of the
+day exist.
+
+Every team score of the breakout groups repositories by the team that owned
+each of them on the selected day, the ownership the daily run uses for the
+persisted team scores. With teams named, the rows and every day of the trend
+use the repositories those teams owned on the selected day. This is not the
+rule of the TestOps series of a team, which attributes every day of its window
+to the owners as of the request. The selected day itself is picked with the
+ownership of the request: with teams named and no persisted team score in the
+window, it is the newest day with a row of a repository those teams own at the
+request.
+
 Every definition publishes its unit, aggregation, display precision, null and
 zero semantics, supported scopes and dimensions, range limits, comparison
 rule, definition version, query version, source version, and freshness policy.
@@ -525,6 +559,11 @@ An unknown day leaves the flake and recurrence factors out, as a day that measur
 lower than the not-applicable reading.
 
 Residual: a repository whose last test report is older than 29 days reads as not applicable.
+
+The queue part of quality drag has the same unknown form. A pipeline group with runs but no queue sample (for example,
+a group whose only runs are re-runs) stores `avg_queue_seconds` as null in `factors_json` and `queue_wait_hours` as
+NULL, so `drag_hours` is the sum of the known parts and the served drag of the day is marked partial. A group with no
+runs keeps a queue wait of 0.
 
 ## TestOps release confidence: coverage
 

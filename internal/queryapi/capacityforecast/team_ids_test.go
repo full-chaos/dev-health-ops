@@ -52,7 +52,7 @@ func runWith(t *testing.T, input *model.CapacityForecastInput) (*model.CapacityF
 	input.HistoryDays, input.Simulations = 30, 50
 	client := &fakeClient{responses: []*fakeRowScanner{
 		throughputRows(t, 2, 4, 6, 8, 10),
-		{rows: [][]any{{uint64(30)}}},
+		backlogRows(30),
 	}}
 	got, err := ResolveForecast(context.Background(), client, "org-7", input, day(t, "2026-09-01"))
 	if err != nil {

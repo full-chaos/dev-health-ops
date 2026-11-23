@@ -108,6 +108,29 @@ func backlogRow(size uint64) *fakeRowScanner {
 	return oneRow(size, uint64(1), uint64(0), time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC))
 }
 
+// freshDay is the newest day of every key of the rows below: inside the window of every test here.
+func freshDay() time.Time { return time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC) }
+
+// coverageRow is the coverage read's one row: the three sums, the grain count, no stale grain, the oldest newest day.
+func coverageRow(estimated, unestimated, backlog, grains uint64) *fakeRowScanner {
+	return oneRow(estimated, unestimated, backlog, grains, uint64(0), freshDay())
+}
+
+// overlayRow is the work item overlay's one row: average_wip, current_wip, one measured key, its newest day.
+func overlayRow(average float64, current uint64) *fakeRowScanner {
+	return oneRow(average, current, uint64(1), freshDay())
+}
+
+// staleRow is the stale wip read's one row: the two ages, one key with an age (none when both are null), no stale
+// key, its newest day.
+func staleRow(p50, p90 any) *fakeRowScanner {
+	grains := uint64(1)
+	if p50 == nil && p90 == nil {
+		grains = 0
+	}
+	return oneRow(p50, p90, grains, uint64(0), freshDay())
+}
+
 // fullResponseSet returns the seven scanners a complete, history-bearing call
 // consumes, in the exact order Resolve issues them. Ordering IS the contract
 // here: Python loads history, then backlog, then coverage, then the four
@@ -116,13 +139,13 @@ func backlogRow(size uint64) *fakeRowScanner {
 func fullResponseSet(t *testing.T, days int, perDay uint64) []*fakeRowScanner {
 	t.Helper()
 	return []*fakeRowScanner{
-		historyRows(t, days, perDay), // 1 throughput history
-		backlogRow(500),              // 2 backlog
-		oneRow(uint64(40), uint64(60), uint64(100), uint64(3)), // 3 estimate coverage
-		oneRow(12.5, uint64(20)),                               // 4 work item overlay
-		oneRow(floatPointer(30.0), floatPointer(90.0)),         // 5 stale wip
-		oneRow(floatPointer(12.0)),                             // 6 review overlay
-		oneRow(2.5),                                            // 7 incident overlay
+		historyRows(t, days, perDay),                     // 1 throughput history
+		backlogRow(500),                                  // 2 backlog
+		coverageRow(40, 60, 100, 3),                      // 3 estimate coverage
+		overlayRow(12.5, 20),                             // 4 work item overlay
+		staleRow(floatPointer(30.0), floatPointer(90.0)), // 5 stale wip
+		oneRow(floatPointer(12.0)),                       // 6 review overlay
+		oneRow(2.5),                                      // 7 incident overlay
 	}
 }
 
@@ -336,8 +359,8 @@ func TestResolveAnExplicitZeroBacklogIsSuppliedNotAbsent(t *testing.T) {
 // never null. The gate no longer decides whether coverage is read.
 func TestResolveCoverageIsBuiltFromItsOwnRowsWhenTheDerivedBacklogIsZero(t *testing.T) {
 	responses := fullResponseSet(t, 120, 7)
-	responses[1] = backlogRow(0)                                      // derived backlog 0
-	responses[2] = oneRow(uint64(0), uint64(1), uint64(1), uint64(1)) // coverage rows: est 0 / unest 1 / backlog 1
+	responses[1] = backlogRow(0)           // derived backlog 0
+	responses[2] = coverageRow(0, 1, 1, 1) // coverage rows: est 0 / unest 1 / backlog 1
 	client := &fakeClient{responses: responses}
 
 	got, err := Resolve(context.Background(), client, "org-1",
@@ -384,7 +407,7 @@ func TestResolveWithNoCoverageRowsAnswersTheZeroObjectNeverNull(t *testing.T) {
 	t.Run("an aggregate over zero grains (the real engine's shape)", func(t *testing.T) {
 		responses := fullResponseSet(t, 120, 7)
 		responses[1] = backlogRow(0)
-		responses[2] = oneRow(uint64(0), uint64(0), uint64(0), uint64(0)) // sum() over nothing: one row of zeros, grains 0
+		responses[2] = coverageRow(0, 0, 0, 0) // sum() over nothing: one row of zeros, grains 0
 		client := &fakeClient{responses: responses}
 		got, err := Resolve(context.Background(), client, "org-1",
 			model.ThroughputForecastInput{HistoryWeeks: 12}, mustDay(t, "2026-09-01"))
@@ -434,9 +457,9 @@ func TestResolveRejectsANegativeSuppliedBacklog(t *testing.T) {
 
 func TestResolveEmptyScopeReturnsTheStructuredNoHistoryPayload(t *testing.T) {
 	client := &fakeClient{responses: []*fakeRowScanner{
-		{},              // 1 no throughput rows
-		backlogRow(500), // 2 backlog
-		oneRow(uint64(40), uint64(60), uint64(100), uint64(3)), // 3 estimate coverage
+		{},                          // 1 no throughput rows
+		backlogRow(500),             // 2 backlog
+		coverageRow(40, 60, 100, 3), // 3 estimate coverage
 	}}
 
 	got, err := Resolve(context.Background(), client, "org-1",
@@ -485,7 +508,7 @@ func TestResolveEmptyScopeReturnsTheStructuredNoHistoryPayload(t *testing.T) {
 
 func TestResolveStaleWIPIsAbsentWhenBothAgesAreNull(t *testing.T) {
 	responses := fullResponseSet(t, 120, 7)
-	responses[4] = oneRow(nil, nil)
+	responses[4] = staleRow(nil, nil)
 	client := &fakeClient{responses: responses}
 
 	got, err := Resolve(context.Background(), client, "org-1",
@@ -502,7 +525,7 @@ func TestResolveStaleWIPIsAbsentWhenBothAgesAreNull(t *testing.T) {
 
 func TestResolveStaleWIPSurvivesOneNullAge(t *testing.T) {
 	responses := fullResponseSet(t, 120, 7)
-	responses[4] = oneRow(nil, floatPointer(48.0))
+	responses[4] = staleRow(nil, floatPointer(48.0))
 	client := &fakeClient{responses: responses}
 
 	got, err := Resolve(context.Background(), client, "org-1",
@@ -524,7 +547,7 @@ func TestResolveStaleWIPSurvivesOneNullAge(t *testing.T) {
 func TestResolveEstimateCoverageRatioIsNullForAZeroBacklogRow(t *testing.T) {
 	responses := fullResponseSet(t, 120, 7)
 	// A non-empty request backlog, but the coverage table reports zero.
-	responses[2] = oneRow(uint64(0), uint64(0), uint64(0), uint64(1)) // one grain whose backlog_size is 0
+	responses[2] = coverageRow(0, 0, 0, 1) // one grain whose backlog_size is 0
 	client := &fakeClient{responses: responses}
 
 	got, err := Resolve(context.Background(), client, "org-1",
@@ -578,7 +601,7 @@ func TestResolveWorkItemOverlayReadsBothColumnsFromOneRow(t *testing.T) {
 	// average_wip first, current_wip second -- the SELECT's own order. Swapping
 	// them changes which value the 1.25 threshold is compared against and
 	// nothing else in the response reveals it.
-	responses[3] = oneRow(10.0, uint64(20))
+	responses[3] = overlayRow(10.0, 20)
 	client := &fakeClient{responses: responses}
 
 	got, err := Resolve(context.Background(), client, "org-1",
@@ -654,7 +677,7 @@ func TestToModelRendersComputedAtAsRFC3339(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			got := toModel("forecast-1", testCase.moment, forecastResult{}, backlogRead{}, nil, nil, nil)
+			got := toModel("forecast-1", testCase.moment, forecastResult{}, backlogRead{}, newestDayRead{}, nil, nil, newestDayRead{}, nil)
 			if got.ComputedAt != testCase.want {
 				t.Errorf("computedAt: got %q, want %q", got.ComputedAt, testCase.want)
 			}

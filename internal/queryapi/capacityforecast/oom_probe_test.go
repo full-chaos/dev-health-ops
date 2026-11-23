@@ -72,7 +72,7 @@ func TestSimulationCapPreventsAProcessKillingAllocation(t *testing.T) {
 	// test.
 	client := &fakeClient{responses: []*fakeRowScanner{
 		throughputRows(t, 2, 4, 6, 8, 10),
-		{rows: [][]any{{uint64(30)}}},
+		backlogRows(30),
 	}}
 	input := &model.CapacityForecastInput{
 		HistoryDays: 90,

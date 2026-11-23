@@ -100,6 +100,61 @@ func TestRealClickHouse_TestopsRiskDragNullParts(t *testing.T) {
 	}
 }
 
+// A row whose only NULL part is the queue (no queue sample) marks the day
+// partial; the Queue Wait item stays on a mixed day and is omitted when no row
+// of the day has a queue value.
+func TestRealClickHouse_TestopsRiskDragQueueOnlyNull(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	run := func(q string) {
+		t.Helper()
+		if err := conn.Exec(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	const n = nullHours
+	dragRow(t, run, rA, "2026-02-01", "3", "1", "1", n, "1", "2026-02-01 02:00:00")
+	dragRow(t, run, rB, "2026-02-01", "4", "1", "1", "1", "1", "2026-02-01 02:00:00")
+	dragRow(t, run, rA, "2026-02-02", "3", "1", "1", n, "1", "2026-02-02 02:00:00")
+	dragRow(t, run, rB, "2026-02-02", "3", "1", "1", n, "1", "2026-02-02 02:00:00")
+	dragRow(t, run, rA, "2026-02-03", "4", "1", "1", "1", "1", "2026-02-03 02:00:00")
+
+	cells := []struct {
+		name, day string
+		drag      float64
+		partial   bool
+		breakdown map[string]float64
+	}{
+		{"mixed day keeps Queue Wait", "2026-02-01", 7, true, map[string]float64{"Failure Rework": 2, "Flake Investigation": 2, "Queue Wait": 1, "Retry Overhead": 2}},
+		{"all queue unknown omits Queue Wait", "2026-02-02", 6, true, map[string]float64{"Failure Rework": 2, "Flake Investigation": 2, "Retry Overhead": 2}},
+		{"all known is not partial", "2026-02-03", 4, false, map[string]float64{"Failure Rework": 1, "Flake Investigation": 1, "Queue Wait": 1, "Retry Overhead": 1}},
+	}
+	for _, c := range cells {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := Resolve(ctx, client, "org-1", model.TestOpsRiskInput{StartDate: date(c.day), EndDate: date(c.day)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.QualityDragHours == nil || *got.QualityDragHours != c.drag {
+				t.Errorf("QualityDragHours %v, want %v", deref(got.QualityDragHours), c.drag)
+			}
+			if got.QualityDragPartial != c.partial {
+				t.Errorf("QualityDragPartial %v, want %v", got.QualityDragPartial, c.partial)
+			}
+			gotB := breakdownByCategory(got)
+			if len(gotB) != len(c.breakdown) {
+				t.Errorf("breakdown %v, want %v", gotB, c.breakdown)
+				return
+			}
+			for k, v := range c.breakdown {
+				if g, ok := gotB[k]; !ok || g != v {
+					t.Errorf("breakdown %v, want %v", gotB, c.breakdown)
+					return
+				}
+			}
+		})
+	}
+}
+
 func deref(v *float64) string {
 	if v == nil {
 		return "absent"

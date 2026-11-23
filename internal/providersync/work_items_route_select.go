@@ -72,9 +72,13 @@ func SelectWorkItemsRouteHandler(provider, dataset string, deps WorkItemsRouteDe
 		// (gitLabWorkItemsNestedHardMaxPages, CHAOS-8777). A limit set here could
 		// only lower the ceiling (the route clamps it), never raise it.
 		return GitLabWorkItemsRouteHandler{
-			StatusMapping: deps.StatusMapping,
-			FetchEpics:    gitLabFetchEpicsFromEnv(),
-			RepoIdentity:  GitLabRepoIdentityClickHouseReader{Conn: deps.Conn, Lease: deps.Lease},
+			StatusMapping:   deps.StatusMapping,
+			FetchEpics:      gitLabFetchEpicsFromEnv(),
+			IncludeMRs:      gitLabIncludeMRsFromEnv(),
+			FetchComments:   gitLabFetchNotesFromEnv(),
+			FetchLinks:      gitLabFetchLinksFromEnv(),
+			FetchMilestones: gitLabFetchMilestonesFromEnv(),
+			RepoIdentity:    GitLabRepoIdentityClickHouseReader{Conn: deps.Conn, Lease: deps.Lease},
 		}, true
 	case "jira":
 		return JiraAtlassianRouteHandler{StatusMapping: deps.StatusMapping}, true

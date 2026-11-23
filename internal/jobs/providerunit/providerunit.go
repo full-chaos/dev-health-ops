@@ -196,6 +196,11 @@ const (
 	// serialization failure, lost connection; providersync.ErrStoreTransient)
 	// after its bounded in-place retry. Not capped: the registry ceiling holds.
 	causeClassStoreTransient = "store_transient"
+	// A chunk effect write whose ClickHouse connection dropped on an INSERT
+	// call while the work context was live (providersync.SinkConnectionDroppedError;
+	// a dropped read inside the write stays unclassified): the effect
+	// recovery makes the retry safe. Not capped: the registry ceiling holds.
+	causeClassSinkConnectionDropped = "sink_connection_dropped"
 	// "provider_" + providerfoundation.ErrorClass for the rest.
 	causeClassProviderPrefix = "provider_"
 )
@@ -233,6 +238,10 @@ func causeClass(err error, timedOut bool) string {
 	}
 	if errors.Is(err, providersync.ErrStoreTransient) {
 		return causeClassStoreTransient
+	}
+	var sinkDropErr *providersync.SinkConnectionDroppedError
+	if errors.As(err, &sinkDropErr) {
+		return causeClassSinkConnectionDropped
 	}
 	var providerErr *providerfoundation.ProviderError
 	if errors.As(err, &providerErr) && !providerErr.AfterResponse() {

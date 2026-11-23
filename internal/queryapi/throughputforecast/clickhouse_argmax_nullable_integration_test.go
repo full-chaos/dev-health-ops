@@ -70,7 +70,7 @@ func TestLoadStaleWIPReturnsNewestNullAgesNotStaleValues(t *testing.T) {
 		t.Fatalf("insert newer NULL row: %v", err)
 	}
 
-	p50, p90, err := loadStaleWIP(ctx, client, "org-4547", []string{"team-a"}, nil)
+	p50, p90, _, err := loadStaleWIP(ctx, client, "org-4547", []string{"team-a"}, nil, 12, day)
 	if err != nil {
 		t.Fatalf("loadStaleWIP: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestLoadEstimateCoverageRowsAndNoRowsOnARealEngine(t *testing.T) {
 		t.Fatalf("insert zero-backlog grain: %v", err)
 	}
 
-	got, err := loadEstimateCoverage(ctx, client, "org-7867", []string{"team-with-rows"}, nil)
+	got, err := loadEstimateCoverage(ctx, client, "org-7867", []string{"team-with-rows"}, nil, 12, day)
 	if err != nil {
 		t.Fatalf("loadEstimateCoverage (rows): %v", err)
 	}
@@ -143,7 +143,7 @@ func TestLoadEstimateCoverageRowsAndNoRowsOnARealEngine(t *testing.T) {
 		t.Fatalf("team with a grain: got %+v, want est 0 / unest 1 / backlog 1 / ratio 0", got)
 	}
 
-	got, err = loadEstimateCoverage(ctx, client, "org-7867", []string{"team-zero-backlog"}, nil)
+	got, err = loadEstimateCoverage(ctx, client, "org-7867", []string{"team-zero-backlog"}, nil, 12, day)
 	if err != nil {
 		t.Fatalf("loadEstimateCoverage (zero-backlog grain): %v", err)
 	}
@@ -151,7 +151,7 @@ func TestLoadEstimateCoverageRowsAndNoRowsOnARealEngine(t *testing.T) {
 		t.Fatalf("team with a zero-backlog grain: got %+v, want counts 0 and a NULL ratio (a real grain, parity kept)", got)
 	}
 
-	got, err = loadEstimateCoverage(ctx, client, "org-7867", []string{"team-without-rows"}, nil)
+	got, err = loadEstimateCoverage(ctx, client, "org-7867", []string{"team-without-rows"}, nil, 12, day)
 	if err != nil {
 		t.Fatalf("loadEstimateCoverage (no rows): %v", err)
 	}

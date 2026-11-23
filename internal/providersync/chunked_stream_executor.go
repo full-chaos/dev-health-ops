@@ -72,7 +72,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 			if commitErr != nil {
 				return commitErr
 			}
-			if err := executor.markChunkCommitted(workContext, session.Claim, store, observer, ordinal, chunk); err != nil {
+			if _, err := executor.markChunkCommitted(workContext, session.Claim, store, observer, ordinal, chunk); err != nil {
 				return err
 			}
 			committedThisAttempt++
@@ -163,22 +163,25 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 		finalSeen := false
 		var finalComparison ShadowComparison
 		var callbackErr error
-		// prepareEmission makes a whole emission durable as one group BEFORE any of it reaches the sink.
-		prepareEmission := func(emission ChunkRouteEmission) ([]PreparedProviderChunk, error) {
+		// confirmedThisAttempt counts the chunks this attempt confirmed committed, a lost acknowledgement the read back
+		// settled included; the commit span reports it. committedThisAttempt keeps deciding the attempt bounds.
+		confirmedThisAttempt := 0
+		// finalizeEmission validates a final emission and strips the unit metadata off a non-final one.
+		finalizeEmission := func(emission ChunkRouteEmission) (CompleteRouteBatch, error) {
 			batch := emission.Batch
 			if emission.Final {
 				batch.Result, batch.Watermark, callbackErr = applyGitHubWorkItemsIncompletePolicy(
 					session.Claim.Provider, session.Claim.Dataset, batch.Result, batch.Watermark,
 				)
 				if callbackErr != nil {
-					return nil, callbackErr
+					return CompleteRouteBatch{}, callbackErr
 				}
 				finalComparison, callbackErr = executor.Comparator.CompareCompleteRoute(workContext, session.Claim, batch)
 				if callbackErr != nil {
-					return nil, callbackErr
+					return CompleteRouteBatch{}, callbackErr
 				}
 				if !finalComparison.Match {
-					return nil, ErrShadowMismatch
+					return CompleteRouteBatch{}, ErrShadowMismatch
 				}
 				finalSeen = true
 			} else {
@@ -188,6 +191,10 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 				batch.Evidence = FetchEvidence{}
 				batch.WorklogObservations = nil
 			}
+			return batch, nil
+		}
+		// prepareGroup makes a whole emission durable as one group BEFORE any of it reaches the sink.
+		prepareGroup := func(emission ChunkRouteEmission, batch CompleteRouteBatch) ([]PreparedProviderChunk, error) {
 			// ONE instant stamps the chunks' ledger: the split measures with it and the store writes with it. The lease fence
 			// reads a fresh clock after the split.
 			stampAt := executor.now()
@@ -217,7 +224,19 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 			nextOrdinal += len(preparedGroup)
 			return preparedGroup, nil
 		}
-		commitGroup := func(emission ChunkRouteEmission, preparedGroup []PreparedProviderChunk) error {
+		// prepareEmission is finalizeEmission, then prepareGroup inside its chunk_prepare span: the final validation is
+		// not prepare time.
+		prepareEmission := func(emission ChunkRouteEmission) ([]PreparedProviderChunk, error) {
+			batch, err := finalizeEmission(emission)
+			if err != nil {
+				return nil, err
+			}
+			span := startChunkPrepareSpan(workContext)
+			preparedGroup, err := prepareGroup(emission, batch)
+			endChunkPrepareSpan(workContext, span, preparedGroup, err)
+			return preparedGroup, err
+		}
+		commitPrepared := func(emission ChunkRouteEmission, preparedGroup []PreparedProviderChunk) error {
 			for position, prepared := range preparedGroup {
 				commitResult, commitErr := commitPreparedChunk(
 					workContext, session.Claim, prepared, executor.Committer.Sink,
@@ -231,7 +250,11 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 				if commitErr != nil {
 					return commitErr
 				}
-				if err := executor.markChunkCommitted(workContext, session.Claim, store, observer, prepared.Ordinal, prepared); err != nil {
+				confirmed, err := executor.markChunkCommitted(workContext, session.Claim, store, observer, prepared.Ordinal, prepared)
+				if confirmed {
+					confirmedThisAttempt++
+				}
+				if err != nil {
 					return err
 				}
 				committedThisAttempt++
@@ -245,6 +268,15 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 				}
 			}
 			return nil
+		}
+		// commitGroup is commitPrepared inside its chunk_commit span; the span counts the chunks this call confirmed (a
+		// prefix of the group: the chunks commit in order and the first error ends the call).
+		commitGroup := func(emission ChunkRouteEmission, preparedGroup []PreparedProviderChunk) error {
+			span := startChunkCommitSpan(workContext)
+			before := confirmedThisAttempt
+			err := commitPrepared(emission, preparedGroup)
+			endChunkCommitSpan(workContext, span, preparedGroup[:confirmedThisAttempt-before], err)
+			return err
 		}
 		prepareAndCommit := func(emission ChunkRouteEmission) error {
 			preparedGroup, err := prepareEmission(emission)
@@ -367,27 +399,28 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 // ChunkCommitObserver (nil: none) of a commit it confirmed. A failed mark may
 // still be durable (a lost acknowledgement), and no later recovery drains a
 // chunk the checkpoint already moved past, so the checkpoint read back decides;
-// a read back that fails too leaves the commit unknown.
+// a read back that fails too leaves the commit unknown. confirmed says the commit is known durable (the mark returned
+// nil, or the read back moved past the chunk); err is the mark's error either way.
 func (executor CompleteRouteExecutor) markChunkCommitted(
 	ctx context.Context, claim Claim, store ChunkedEffectStore, observer ChunkCommitObserver,
 	ordinal int, chunk PreparedProviderChunk,
-) error {
-	err := store.MarkChunkCommitted(ctx, claim, ordinal, chunk.ManifestDigest, executor.now())
+) (confirmed bool, err error) {
+	err = store.MarkChunkCommitted(ctx, claim, ordinal, chunk.ManifestDigest, executor.now())
 	if observer == nil {
-		return err
+		return err == nil, err
 	}
 	if err != nil {
 		checkpoint, loadErr := store.LoadChunkCheckpoint(ctx, claim, executor.now())
 		if loadErr != nil {
 			observer.ObserveUnconfirmedChunk(claim, chunk)
-			return err
+			return false, err
 		}
 		if checkpoint.NextOrdinal <= ordinal {
-			return err
+			return false, err
 		}
 	}
 	observer.ObserveCommittedChunk(claim, chunk, executor.Metrics)
-	return err
+	return true, err
 }
 
 func checkpointTime(checkpoint ChunkCheckpoint, fallback time.Time) time.Time {

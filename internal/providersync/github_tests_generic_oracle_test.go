@@ -12,6 +12,12 @@ var githubTestsOracleGoOnlyFields = map[string]string{
 	"last_synced": "ClickHouse sinks stamp persistence time after Python's active report-ingestion boundary; Go stabilizes it in the effect row for crash recovery",
 }
 
+// githubTestsOracleCaseGoOnlyFields adds the retraction flag of a case row (CHAOS-14259).
+var githubTestsOracleCaseGoOnlyFields = map[string]string{
+	"last_synced": githubTestsOracleGoOnlyFields["last_synced"],
+	"retracted":   "CHAOS-14259: Go-only column, Python writer frozen: a row neutralising a dropped report's stored case",
+}
+
 // githubTestsOracleSlotGoOnlyFields adds the report slot columns of the suite and coverage rows (CHAOS-13873).
 var githubTestsOracleSlotGoOnlyFields = map[string]string{
 	"last_synced": githubTestsOracleGoOnlyFields["last_synced"],
@@ -25,6 +31,7 @@ var githubTestsOracleSuiteGoOnlyFields = map[string]string{
 	"report_slot":      githubTestsOracleSlotGoOnlyFields["report_slot"],
 	"run_attempt":      githubTestsOracleSlotGoOnlyFields["run_attempt"],
 	"legacy_suite_ids": "CHAOS-13925: Go-only columns, Python writer frozen: the pre-slot suite keys a slotted row replaces",
+	"retracted":        "CHAOS-14259: Go-only column, Python writer frozen: a zero-measure row retiring a dropped report's slot",
 }
 
 var githubTestsOracleCoverageGoOnlyFields = map[string]string{
@@ -228,7 +235,7 @@ func TestGenericOracleMatchesFrozenPythonForGitHubTestsCaseRow(t *testing.T) {
 				t.Fatalf("cases=%+v", rows.Cases)
 			}
 			return rows.Cases[1]
-		}, githubTestsOracleGoOnlyFields)
+		}, githubTestsOracleCaseGoOnlyFields)
 }
 
 func TestGenericOracleMatchesFrozenPythonForGitHubTestsCoverageRow(t *testing.T) {

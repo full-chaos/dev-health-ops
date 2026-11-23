@@ -29,7 +29,8 @@ type QueryClient interface {
 }
 
 const (
-	// maxRows bounds the rows returned and the ids a request filter may carry.
+	// maxRows bounds the rows a read returns and the entries of a caller
+	// repoIds list: Resolve refuses a longer list.
 	maxRows = 500
 	// maxTrendDays bounds the trend window.
 	maxTrendDays = 365
@@ -94,9 +95,9 @@ func (l namedTeamIDs) excludesEverything() bool { return l != nil && len(l) == 0
 
 func (l namedTeamIDs) values() []string { return append([]string(nil), l...) }
 
-// repoFilter is the id filter of a read: a request list (idList, cut at
-// maxRows), a resolved set (resolvedIDs) or the named teams (namedTeamIDs).
-// A nil filter is no filter.
+// repoFilter is the id filter of a read: a request list (idList, at most
+// maxRows entries, as Resolve refuses a longer one), a resolved set
+// (resolvedIDs) or the named teams (namedTeamIDs). A nil filter is no filter.
 type repoFilter interface {
 	excludesEverything() bool
 	values() []string

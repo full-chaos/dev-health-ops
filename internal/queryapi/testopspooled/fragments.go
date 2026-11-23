@@ -5,11 +5,15 @@ import (
 	"regexp"
 )
 
-// SuiteScopeUses and CoverageScopeUses are the number of inner selects that carry the caller's Scope. Coverage has 2: its
-// legacy arm is one run-set select, not the listed-id select and its newest-attempt select (CHAOS-14146).
+// SuiteScopeUses, NotRetiredScopeUses and CoverageScopeUses are the number of inner selects that carry the caller's Scope. Suites
+// have 6: the newest-attempt select twice, the legacy-id select, the retired-slot select, and the retired slots' legacy-id select
+// with its own retired-slot select (CHAOS-14259). The not-retired rule has 3: the retired-slot select and the retired slots'
+// legacy-id select with its own. Coverage has 2: its legacy arm is one run-set select, not the listed-id select and its
+// newest-attempt select (CHAOS-14146), and it has no retired slot.
 const (
-	SuiteScopeUses    = 3
-	CoverageScopeUses = 2
+	SuiteScopeUses      = 6
+	NotRetiredScopeUses = 3
+	CoverageScopeUses   = 2
 )
 
 var (
@@ -71,6 +75,9 @@ type attemptTable struct {
 	windowRuns           func(repo, start, end string) string
 	// legacyByRun keeps a legacy row only when its run has no slotted row, instead of when no kept slotted row lists its id.
 	legacyByRun bool
+	// retractable: the table holds the retracted flag (CHAOS-14259). A slot whose newest row of its newest attempt is retracted
+	// is retired, and a retracted row is never kept.
+	retractable bool
 }
 
 func suiteWindowRuns(repo, start, end string) string {
@@ -82,7 +89,59 @@ func suiteWindowRuns(repo, start, end string) string {
 // table in the caller's statement ("" = unqualified columns); the inner selects read the table unqualified. It binds
 // {org_id:String} and the parameters named by scope.
 func SuiteRowsNewestAttempt(alias string, scope Scope) string {
-	return rowsNewestAttempt(attemptTable{"test_suite_results", "suite_id", "legacy_suite_ids", suiteWindowRuns, false}, alias, scope)
+	return rowsNewestAttempt(suiteTable, alias, scope)
+}
+
+var suiteTable = attemptTable{table: "test_suite_results", id: "suite_id", legacyIDs: "legacy_suite_ids", windowRuns: suiteWindowRuns, retractable: true}
+
+// SuiteRowsNotRetired is the boolean SQL expression that keeps the suite rows of every attempt except a retracted row, the rows
+// of a retired slot, and a pre-slot copy of a retired slot (a legacy row whose id any row of the slot lists, at any attempt)
+// (CHAOS-14259): the suite subselects of the case reads, which keep the older attempts of a kept slot and the pre-slot rows of
+// a kept slot for the flake measures. alias names the table in the caller's statement ("" = unqualified columns); the inner
+// selects read the table unqualified. It binds {org_id:String} and the parameters named by scope, which must bound the runs of
+// the rows it tests.
+func SuiteRowsNotRetired(alias string, scope Scope) string {
+	column, bound := outerColumns(alias, scope), suiteTable.bound(scope)
+	return fmt.Sprintf("(%s = 0 AND ((%s = '' AND (%s, %s, %s) NOT IN (%s)) OR (%s != '' AND (%s, %s, %s) NOT IN (%s))))", column("retracted"),
+		column("report_slot"), column("repo_id"), column("run_id"), column("suite_id"), retiredLegacyIDs(suiteTable, bound),
+		column("report_slot"), column("repo_id"), column("run_id"), column("report_slot"), retiredSlots(suiteTable, bound))
+}
+
+// retiredSlots names the slots whose newest row of the newest attempt is a retraction row (CHAOS-14259). One scan: the slot NAME
+// groups every attempt, and argMax takes the row of the highest (run_attempt, last_synced); at equal last_synced across keys of
+// one slot the retraction row wins.
+func retiredSlots(t attemptTable, bound string) string {
+	return fmt.Sprintf("SELECT repo_id, run_id, report_slot FROM %s FINAL WHERE org_id = {org_id:String}%s AND report_slot != '' GROUP BY repo_id, run_id, report_slot HAVING argMax(retracted, (run_attempt, last_synced, retracted)) = 1", t.table, bound)
+}
+
+// retiredLegacyIDs names the pre-slot keys that any row of a retired slot lists, at any attempt (CHAOS-14259): a legacy copy of a
+// retired slot is retired with it, also when only an older attempt of the slot lists its id.
+func retiredLegacyIDs(t attemptTable, bound string) string {
+	return fmt.Sprintf("SELECT repo_id, run_id, arrayJoin(%s) FROM %s FINAL WHERE org_id = {org_id:String}%s AND report_slot != '' AND (repo_id, run_id, report_slot) IN (%s)",
+		t.legacyIDs, t.table, bound, retiredSlots(t, bound))
+}
+
+// outerColumns validates alias and scope and returns the namer of the outer columns.
+func outerColumns(alias string, scope Scope) func(string) string {
+	if alias != "" && !aliasPattern.MatchString(alias) {
+		panic(fmt.Sprintf("testopspooled: alias %q is not an identifier", alias))
+	}
+	scope.validate()
+	return func(name string) string {
+		if alias == "" {
+			return name
+		}
+		return alias + "." + name
+	}
+}
+
+// bound is the predicate every inner select of t carries: the repository list and, with a window, the window's runs.
+func (t attemptTable) bound(scope Scope) string {
+	bound := scope.repoPredicate()
+	if scope.WindowStartParam != "" {
+		bound += " AND run_id IN (" + t.windowRuns(scope.RepoIDsParam, scope.WindowStartParam, scope.WindowEndParam) + ")"
+	}
+	return bound
 }
 
 // CoverageRowsNewestAttempt keeps the newest attempt of each coverage slot, and a legacy row only when its run has no slotted
@@ -90,29 +149,27 @@ func SuiteRowsNewestAttempt(alias string, scope Scope) string {
 // did not list is an older copy (the daily read serves one snapshot per repo-day, so it must never win). Its window bound is
 // the runs of ci_pipeline_runs started in the window.
 func CoverageRowsNewestAttempt(alias string, scope Scope) string {
-	return rowsNewestAttempt(attemptTable{"coverage_snapshots", "snapshot_id", "legacy_snapshot_ids", pipelineWindowRuns, true}, alias, scope)
+	return rowsNewestAttempt(attemptTable{table: "coverage_snapshots", id: "snapshot_id", legacyIDs: "legacy_snapshot_ids", windowRuns: pipelineWindowRuns, legacyByRun: true}, alias, scope)
 }
 
 func rowsNewestAttempt(t attemptTable, alias string, scope Scope) string {
-	if alias != "" && !aliasPattern.MatchString(alias) {
-		panic(fmt.Sprintf("testopspooled: alias %q is not an identifier", alias))
-	}
-	scope.validate()
-	column := func(name string) string {
-		if alias == "" {
-			return name
-		}
-		return alias + "." + name
-	}
-	bound := scope.repoPredicate()
-	if scope.WindowStartParam != "" {
-		bound += " AND run_id IN (" + t.windowRuns(scope.RepoIDsParam, scope.WindowStartParam, scope.WindowEndParam) + ")"
-	}
+	column, bound := outerColumns(alias, scope), t.bound(scope)
 	newest := fmt.Sprintf("SELECT repo_id, run_id, report_slot, max(run_attempt) FROM %s FINAL WHERE org_id = {org_id:String}%s AND report_slot != '' GROUP BY repo_id, run_id, report_slot", t.table, bound)
-	slotted := fmt.Sprintf("(%s != '' AND (%s, %s, %s, %s) IN (%s))",
-		column("report_slot"), column("repo_id"), column("run_id"), column("report_slot"), column("run_attempt"), newest)
-	legacy := fmt.Sprintf("(%s = '' AND (%s, %s, %s) NOT IN (SELECT repo_id, run_id, arrayJoin(%s) FROM %s FINAL WHERE org_id = {org_id:String}%s AND report_slot != '' AND (repo_id, run_id, report_slot, run_attempt) IN (%s)))",
-		column("report_slot"), column("repo_id"), column("run_id"), column(t.id), t.legacyIDs, t.table, bound, newest)
+	retired := ""
+	if t.retractable {
+		// After the newest attempt is chosen: a retracted newest attempt still hides the older attempts of its slot, and its
+		// legacy ids (the legacy arm reads `newest`) still hide the pre-slot copy.
+		retired = fmt.Sprintf(" AND %s = 0 AND (%s, %s, %s) NOT IN (%s)", column("retracted"),
+			column("repo_id"), column("run_id"), column("report_slot"), retiredSlots(t, bound))
+	}
+	slotted := fmt.Sprintf("(%s != '' AND (%s, %s, %s, %s) IN (%s)%s)",
+		column("report_slot"), column("repo_id"), column("run_id"), column("report_slot"), column("run_attempt"), newest, retired)
+	retiredLegacy := ""
+	if t.retractable {
+		retiredLegacy = fmt.Sprintf(" AND (%s, %s, %s) NOT IN (%s)", column("repo_id"), column("run_id"), column(t.id), retiredLegacyIDs(t, bound))
+	}
+	legacy := fmt.Sprintf("(%s = '' AND (%s, %s, %s) NOT IN (SELECT repo_id, run_id, arrayJoin(%s) FROM %s FINAL WHERE org_id = {org_id:String}%s AND report_slot != '' AND (repo_id, run_id, report_slot, run_attempt) IN (%s))%s)",
+		column("report_slot"), column("repo_id"), column("run_id"), column(t.id), t.legacyIDs, t.table, bound, newest, retiredLegacy)
 	if t.legacyByRun {
 		legacy = fmt.Sprintf("(%s = '' AND (%s, %s) NOT IN (SELECT repo_id, run_id FROM %s FINAL WHERE org_id = {org_id:String}%s AND report_slot != ''))",
 			column("report_slot"), column("repo_id"), column("run_id"), t.table, bound)

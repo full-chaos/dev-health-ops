@@ -199,8 +199,10 @@ var defaultedColumnsAfterTheCapture = map[string]map[string]defaultedColumn{
 // zeroColumnsAfterTheCapture names the unsigned integer columns (DEFAULT 0) a migration added after the capture: table ->
 // column -> migration. A captured row has no value for them, so the load must leave them 0.
 var zeroColumnsAfterTheCapture = map[string]map[string]string{
-	// The run attempt of a GitHub test-report row (CHAOS-13873): a captured row predates it.
-	"test_suite_results": {"run_attempt": "151_testops_report_slot_attempt.sql"},
+	// The run attempt of a GitHub test-report row (CHAOS-13873): a captured row predates it. The retraction flag of a dropped
+	// report's zero-measure row (CHAOS-14259): a captured row is a live row.
+	"test_suite_results": {"run_attempt": "151_testops_report_slot_attempt.sql", "retracted": "171_test_suite_results_retracted.sql"},
+	"test_case_results":  {"retracted": "171_test_suite_results_retracted.sql"},
 	"coverage_snapshots": {"run_attempt": "151_testops_report_slot_attempt.sql"},
 	// The rank of a transition among its item's transitions at one instant (CHAOS-14190): a captured row is the only
 	// transition of its instant as the Python sink wrote it, so it reads 0.

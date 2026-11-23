@@ -285,8 +285,9 @@ func TestPostSyncFenceHoldsTheRowFromCheckToCommit(t *testing.T) {
 	})
 }
 
-// TestPostSyncFenceRetriesWhenTheRowIsBusy: the commit-time check never waits for the row. A row held elsewhere makes
-// the pass return ErrPostSyncUnavailable (River retries the same delivery) with nothing committed.
+// TestPostSyncFenceRetriesWhenTheRowIsBusy: the commit-time check never waits on a lock; it reads again (NOWAIT) only
+// within the fence's bound. A row held elsewhere past that bound makes the pass return ErrPostSyncUnavailable (River
+// retries the same delivery) with nothing committed.
 func TestPostSyncFenceRetriesWhenTheRowIsBusy(t *testing.T) {
 	kind := postSyncFenceKind(postSyncPassOptions{})
 	withFenceRig(t, kind, 1, func(ctx context.Context, rig *fenceRig) {
@@ -349,8 +350,9 @@ func TestPostSyncFenceBusyIsOneFailedAttempt(t *testing.T) {
 	kind := postSyncFenceKind(postSyncPassOptions{logs: logs, observer: observer})
 	withFenceRig(t, kind, 1, func(ctx context.Context, rig *fenceRig) {
 		rig.on(isStartGuard, func(ctx context.Context) { holdOutboxRow(t, ctx, rig) })
-		// The bound only detects a wait: with NOWAIT the check fails at once with 55P03; a waiting check would end in
-		// a cancel (57014) when the bound expires, so the line below would not name 55P03.
+		// The bound only detects a wait: each NOWAIT read fails at once with 55P03 and the fence gives up after its own
+		// bound, far inside this one; a waiting check would end in a cancel (57014) when this bound expires, so the
+		// line below would not name 55P03.
 		passCtx, cancel := context.WithTimeout(ctx, busyPassBound)
 		defer cancel()
 		if err := kind.pass(t, passCtx, rig.pool, 1); !errors.Is(err, ErrPostSyncUnavailable) {

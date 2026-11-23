@@ -243,8 +243,8 @@ func TestARequestListOver500IsCutBeforeTheTeamScopeResolvesIt(t *testing.T) {
 		}
 		full := sweepAnswer(t, world, team([]string{"big"}, append(repoIDs, bigRepoID(maxRows))))
 		first := sweepAnswer(t, world, team([]string{"big"}, repoIDs))
-		if full != first || strings.Contains(full, "row ") {
-			t.Errorf("served with big-500 as entry 501:\n%s\nwith the first 500 entries:\n%s\nwant both equal, with no row", full, first)
+		if full != first || !strings.HasPrefix(full, "  served ") || strings.Contains(full, "row ") {
+			t.Errorf("served with big-500 as entry 501:\n%s\nwith the first 500 entries:\n%s\nwant both equal, a served answer, with no row", full, first)
 		}
 	})
 	t.Run("b-teamIds-entry-501", func(t *testing.T) {
@@ -258,8 +258,8 @@ func TestARequestListOver500IsCutBeforeTheTeamScopeResolvesIt(t *testing.T) {
 		world.teams = append(world.teams, sweepTeam{id: "tail", name: "Tail", active: true, owns: []string{"repo-t"}})
 		full := sweepAnswer(t, world, team(append(teamIDs, "tail"), nil))
 		first := sweepAnswer(t, world, team(teamIDs, nil))
-		if full != first || strings.Contains(full, "row ") {
-			t.Errorf("served with team tail as entry 501:\n%s\nwith the first 500 entries:\n%s\nwant both equal, with no row", full, first)
+		if full != first || !strings.HasPrefix(full, "  served ") || strings.Contains(full, "row ") {
+			t.Errorf("served with team tail as entry 501:\n%s\nwith the first 500 entries:\n%s\nwant both equal, a served answer, with no row", full, first)
 		}
 	})
 	t.Run("c-explicit-empty-repoIds", func(t *testing.T) {

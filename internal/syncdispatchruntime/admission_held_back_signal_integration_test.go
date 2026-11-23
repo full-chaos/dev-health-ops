@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -18,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -337,6 +339,27 @@ func guardStatementTimeout(t *testing.T, ctx context.Context, tx pgx.Tx) string 
 	return value
 }
 
+// assertNoRecheckSavepointOpen fails if readHeldBackSignal's savepoint is still open in the guard transaction: with
+// it released, ROLLBACK TO it fails with 3B001 (no such savepoint). The probe runs in its own savepoint, so the guard
+// transaction stays usable either way.
+func assertNoRecheckSavepointOpen(t *testing.T, ctx context.Context, tx pgx.Tx) {
+	t.Helper()
+	if _, err := tx.Exec(ctx, "SAVEPOINT held_back_probe"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+heldBackSignalSavepoint)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "3B001" {
+		t.Fatalf("ROLLBACK TO SAVEPOINT %s after the pass: %v, want 3B001: the recheck left its savepoint open", heldBackSignalSavepoint, err)
+	}
+	if _, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT held_back_probe"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT held_back_probe"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // assertRecheckKeepsTheDecision runs the pass with heldBackSignalSQL set to planted (empty = the real statement): the
 // decision and held count equal the control decision, the line carries wantSignal, the guard transaction keeps its
 // statement_timeout and stays usable (the second unit fold, the claim UPDATE, COMMIT), and no error text is logged.
@@ -382,6 +405,7 @@ func assertRecheckKeepsTheDecision(t *testing.T, planted, wantSignal string) tim
 		if after := guardStatementTimeout(t, ctx, tx); after != before {
 			t.Fatalf("guard statement_timeout after the recheck = %q, want %q (the recheck's SET LOCAL leaked)", after, before)
 		}
+		assertNoRecheckSavepointOpen(t, ctx, tx)
 		if _, err := tx.Exec(ctx, `UPDATE public.sync_run_units SET status = 'dispatching', updated_at = $2 WHERE sync_run_id = $1::uuid AND status = 'planned' AND id = ANY($3::uuid[])`,
 			guardTestRun, now, []string{guardUnitID("00014403b0", 0)}); err != nil {
 			t.Fatalf("claim after the recheck: %v", err)
@@ -413,4 +437,64 @@ WHERE $1::uuid IS NOT NULL AND $2::timestamptz IS NOT NULL AND $3::double precis
 	if elapsed >= 2*time.Second {
 		t.Fatalf("pass with a 5 s recheck took %v; heldBackSignalStatementTimeout did not cut it", elapsed)
 	}
+}
+
+// Two held buckets in one pass (two rechecks): medium is held for an older run live by its armed wake, light for
+// another live by a heartbeat. Each line names its own run and signal; afterwards the guard transaction has its
+// statement_timeout back and no recheck savepoint open, and the claim and COMMIT succeed.
+func TestTwoHeldBucketsInOnePassRecheckEachAndLeaveNoSavepoint(t *testing.T) {
+	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := pgNow()
+		const lightRun = "14403d0e-0000-4000-8000-000000014406"
+		seedHeldBackCase(t, ctx, pool, now, heldBackOlderRun, heldBackSigns{wake: true})
+		seedHeldBackCase(t, ctx, pool, now, lightRun, heldBackSigns{heartbeat: true})
+		if _, err := pool.Exec(ctx, `UPDATE public.sync_run_units SET cost_class = 'light' WHERE sync_run_id = $1::uuid AND status = 'planned'`, lightRun); err != nil {
+			t.Fatal(err)
+		}
+		seedHeldBackNewerRun(t, ctx, pool, now)
+		for i := 0; i < 3; i++ {
+			insertGuardUnit(t, ctx, pool, guardUnitID("00014403b1", i), "github", "light", syncRunUnitStatusPlanned, now, nil, nil, nil)
+		}
+		var logs bytes.Buffer
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		before := guardStatementTimeout(t, ctx, tx)
+		decision, err := authorizeRun(ctx, tx, synclog.New(slog.New(slog.NewJSONHandler(&logs, nil))), guardTestOrg, guardTestRun, now)
+		if err != nil {
+			t.Fatalf("authorizeRun: %v", err)
+		}
+		if !reflect.DeepEqual(decision.heldBackRunIDs, []string{lightRun, heldBackOlderRun}) {
+			t.Fatalf("heldBackRunIDs = %v, want [%s %s] (buckets in light, medium order)", decision.heldBackRunIDs, lightRun, heldBackOlderRun)
+		}
+		lines := map[string]map[string]any{}
+		for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+			var record map[string]any
+			if json.Unmarshal([]byte(line), &record) == nil && record["msg"] == "dispatch_guard.bucket_decision" {
+				lines[record["bucket"].(string)] = record
+			}
+		}
+		for bucket, want := range map[string][3]any{
+			"github:medium": {float64(2), "14403a0e", "wake_armed"},
+			"github:light":  {float64(2), "14403d0e", "unit_heartbeat"},
+		} {
+			line := lines[bucket]
+			if line == nil || line["guard.held_back"] != want[0] || line["guard.oldest_held_run"] != want[1] || line["guard.oldest_held_signal"] != want[2] {
+				t.Fatalf("%s line = %v, want held_back=%v run=%v signal=%v:\n%s", bucket, line, want[0], want[1], want[2], logs.String())
+			}
+		}
+		if after := guardStatementTimeout(t, ctx, tx); after != before {
+			t.Fatalf("guard statement_timeout after two rechecks = %q, want %q", after, before)
+		}
+		assertNoRecheckSavepointOpen(t, ctx, tx)
+		if _, err := tx.Exec(ctx, `UPDATE public.sync_run_units SET status = 'dispatching', updated_at = $2 WHERE sync_run_id = $1::uuid AND status = 'planned' AND id = ANY($3::uuid[])`,
+			guardTestRun, now, []string{guardUnitID("00014403b0", 0), guardUnitID("00014403b1", 0)}); err != nil {
+			t.Fatalf("claim after two rechecks: %v", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("commit after two rechecks: %v", err)
+		}
+	})
 }

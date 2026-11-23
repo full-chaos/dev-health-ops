@@ -122,7 +122,7 @@ func (table sameSecondReader) StoredTransitions(_ context.Context, _ string, ids
 		row := read.event
 		if slices.Contains(ids, row.WorkItemID) {
 			out = append(out, githubStoredTransitionRow(
-				row.WorkItemID, row.OccurredAt, row.FromStatus, row.ToStatus, row.ToStatusRaw, slices.Max(read.keys),
+				row.WorkItemID, row.OccurredAt, row.FromStatus, row.ToStatus, row.ToStatusRaw, read.keys,
 			))
 		}
 	}

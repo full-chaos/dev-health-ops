@@ -102,11 +102,12 @@ type GitHubProjectV2StoredTransitionsClickHouseReader struct{ Conn driver.Conn }
 // One row per distinct event, the identity the daily loaders read
 // (jobs/metrics/daily/work_item_state_native_clickhouse.go): re-synced copies
 // collapse, two events at one instant do not, and a stale pre-170 board row is
-// dropped (workitemmetrics.StaleBoardTieZeroSQL). Each row carries the largest
-// tie_ordinal of its copies (a board slot over a tie_ordinal 0 copy), so the
-// settle step can tell which stored row a batch row replaces.
+// dropped (workitemmetrics.StaleBoardTieZeroSQL). Each row carries the
+// tie_ordinal of every copy (one event content can sit at two keys: two boards
+// of one issue, or a first label and a board column of the same name), so the
+// settle step can tell which stored copies a batch row replaces.
 const gitHubProjectV2StoredTransitionsQuery = `
-SELECT work_item_id, occurred_at, from_status, to_status, to_status_raw, max(tie_ordinal)
+SELECT work_item_id, occurred_at, from_status, to_status, to_status_raw, arraySort(groupUniqArray(tie_ordinal))
 FROM (
 	SELECT ` + workitemmetrics.StoredTransitionColumnsSQL + `
 	FROM work_item_transitions
@@ -130,12 +131,12 @@ func (reader GitHubProjectV2StoredTransitionsClickHouseReader) StoredTransitions
 		for rows.Next() {
 			var workItemID, from, to, raw string
 			var occurredAt time.Time
-			var tieOrdinal uint32
-			if err := rows.Scan(&workItemID, &occurredAt, &from, &to, &raw, &tieOrdinal); err != nil {
+			var tieOrdinals []uint32
+			if err := rows.Scan(&workItemID, &occurredAt, &from, &to, &raw, &tieOrdinals); err != nil {
 				rows.Close()
 				return nil, err
 			}
-			stored = append(stored, githubStoredTransitionRow(workItemID, occurredAt, from, to, raw, tieOrdinal))
+			stored = append(stored, githubStoredTransitionRow(workItemID, occurredAt, from, to, raw, tieOrdinals))
 		}
 		err = rows.Err()
 		rows.Close()
@@ -147,10 +148,12 @@ func (reader GitHubProjectV2StoredTransitionsClickHouseReader) StoredTransitions
 }
 
 // githubStoredTransitionRow is one row of the stored read.
-func githubStoredTransitionRow(workItemID string, occurredAt time.Time, from, to, raw string, tieOrdinal uint32) githubWorkItemTransitionRow {
+func githubStoredTransitionRow(
+	workItemID string, occurredAt time.Time, from, to, raw string, tieOrdinals []uint32,
+) githubWorkItemTransitionRow {
 	return githubWorkItemTransitionRow{
 		WorkItemID: workItemID, OccurredAt: occurredAt.UTC(), FromStatus: from, ToStatus: to,
-		ToStatusRaw: nullableString(raw), storedTieOrdinal: tieOrdinal,
+		ToStatusRaw: nullableString(raw), storedTieOrdinals: tieOrdinals,
 	}
 }
 
@@ -226,27 +229,32 @@ func settleGitHubProjectV2Status(
 	return merged
 }
 
-// transitionsAfterWrite is what work_item_transitions holds once the batch is
-// written: the writer's rows (rankTransitionTies) replace the stored rows of
-// their sorting key, as the engine keeps the newer last_synced. Without it a
-// stored board value the batch re-moves inside one second could stay the last
-// event.
+// transitionsAfterWrite is the history work_item_transitions holds once the
+// batch is written, read as its readers read it: each stored event at every
+// key it holds, the writer's rows (rankTransitionTies) replacing the stored
+// rows of their sorting key (the engine keeps the newer last_synced), then one
+// row per event content. A stored event stays while any of its keys does.
 func transitionsAfterWrite(stored, batch []githubWorkItemTransitionRow) []githubWorkItemTransitionRow {
 	rows := make([]workItemTransitionStoredRow, 0, len(stored)+len(batch))
 	for _, row := range stored {
-		projected := projectWorkItemTransition(row)
-		projected.TieOrdinal = row.storedTieOrdinal
-		rows = append(rows, projected)
+		for _, tieOrdinal := range row.storedTieOrdinals {
+			projected := projectWorkItemTransition(row)
+			projected.TieOrdinal = tieOrdinal
+			rows = append(rows, projected)
+		}
 	}
 	rows = append(rows, rankTransitionTies(projectRows(batch, projectWorkItemTransition))...)
 	rows = dedupeBySortingKey(rows, transitionSortingKey)
+	rows = dedupeBySortingKey(rows, func(row workItemTransitionStoredRow) string {
+		return transitionInstantKey(row) + workItemKeySeparator + transitionTieOrder(row)
+	})
 	out := make([]githubWorkItemTransitionRow, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, githubWorkItemTransitionRow{
 			WorkItemID: row.WorkItemID, Provider: row.Provider, OccurredAt: row.OccurredAt,
 			FromStatusRaw: nullableString(row.FromStatusRaw), ToStatusRaw: nullableString(row.ToStatusRaw),
 			FromStatus: row.FromStatus, ToStatus: row.ToStatus, Actor: nullableString(row.Actor),
-			OrgID: row.OrgID, LastSynced: row.LastSynced, storedTieOrdinal: row.TieOrdinal,
+			OrgID: row.OrgID, LastSynced: row.LastSynced,
 		})
 	}
 	return out

@@ -118,8 +118,8 @@ func TestChaos14184StoredTransitionsReadsDistinctEventsOfTheAskedItems(t *testin
 	}
 	sort.Slice(got, func(i, j int) bool { return got[i].OccurredAt.Before(got[j].OccurredAt) })
 	want := []githubWorkItemTransitionRow{
-		{WorkItemID: "gh:acme/api#9", OccurredAt: at, FromStatus: "unknown", ToStatus: "done", ToStatusRaw: &done},
-		{WorkItemID: "gh:acme/api#9", OccurredAt: later, FromStatus: "done", ToStatus: "in_progress", ToStatusRaw: &progress},
+		{WorkItemID: "gh:acme/api#9", OccurredAt: at, FromStatus: "unknown", ToStatus: "done", ToStatusRaw: &done, storedTieOrdinals: []uint32{0}},
+		{WorkItemID: "gh:acme/api#9", OccurredAt: later, FromStatus: "done", ToStatus: "in_progress", ToStatusRaw: &progress, storedTieOrdinals: []uint32{0}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("stored=%+v\nwant=%+v", got, want)

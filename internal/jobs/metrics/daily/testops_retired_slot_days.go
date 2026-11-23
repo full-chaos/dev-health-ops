@@ -48,7 +48,7 @@ func LoadRetiredSlotRepoDays(
 	}
 	rows, err := conn.Query(ctx, RetiredSlotRepoDaysSQL,
 		clickhouse.Named("org_id", organizationID), clickhouse.Named("day_from", from.UTC().Format(time.DateOnly)),
-		clickhouse.Named("day_to", to.UTC().Format(time.DateOnly)), clickhouse.Named("repo_ids", repoIDs), clickhouse.Named("row_cap", limit))
+		clickhouse.Named("day_to", to.UTC().Format(time.DateOnly)), clickhouse.Named("repo_ids", repoIDs), clickhouse.Named("row_cap", uint32(limit)))
 	if err != nil {
 		return nil, fmt.Errorf("read the retired-slot repository days: %w", err)
 	}

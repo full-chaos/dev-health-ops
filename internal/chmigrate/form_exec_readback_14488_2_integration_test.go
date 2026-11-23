@@ -517,6 +517,7 @@ func TestReadback144882FormExecutesAtTheChainHead(t *testing.T) {
 		types, read := rb14488bLog(ctx, t, conn, c)
 		t.Logf("DIAG %s types=%v read_rows=%d", name, types, read)
 	}
+	t.Error("DIAG-ONLY failing run: shows logs; revert next commit")
 
 	// Gate fires: each cap literal lowered to 0 in a test copy. WANT code 395 STOP-COST-GATE before any table read.
 	type fired struct{ label, cap, comment string }

@@ -163,7 +163,7 @@ func matrixTotalsRead(t *testing.T, stack attemptsStack, client *dhclickhouse.Cl
 	var served matrixTotalsServed
 	// Live rows only: a dropped report's zero-measure retraction rows (CHAOS-14259) are no suite of the run.
 	must(conn.QueryRow(ctx, "SELECT countIf(retracted = 0), uniqExactIf(report_slot, retracted = 0) FROM test_suite_results FINAL WHERE org_id = ?", org).Scan(&served.suites, &served.slots))
-	must(conn.QueryRow(ctx, "SELECT count() FROM test_case_results FINAL WHERE org_id = ?", org).Scan(&served.cases))
+	must(conn.QueryRow(ctx, "SELECT countIf(retracted = 0) FROM test_case_results FINAL WHERE org_id = ?", org).Scan(&served.cases))
 	var reasons []string
 	must(conn.QueryRow(ctx, `SELECT complete, reasons FROM testops_run_report_completeness FINAL WHERE org_id = ? AND run_id = ?`, org, runID).Scan(&served.complete, &reasons))
 	served.reasons = strings.Join(reasons, ",")

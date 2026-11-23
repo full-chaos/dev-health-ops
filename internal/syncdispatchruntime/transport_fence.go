@@ -225,7 +225,25 @@ func (fence *transportFence) current(ctx context.Context, tx pgx.Tx) (bool, erro
 // commitSnapshotLockBackoff; one still held after it, or any other read error,
 // returns the service's unavailable error, so River retries the same delivery.
 func (fence *transportFence) commit(ctx context.Context, tx pgx.Tx) (commitOutcome, error) {
+	return fence.commitAfter(ctx, tx, nil)
+}
+
+// passTail is the last step of a pass, run in its transaction after the commit
+// snapshot accepted the delivery and before COMMIT. The snapshot holds the
+// delivery's outbox row, so no newer delivery can own the row while the tail
+// writes it.
+type passTail func(ctx context.Context, tx pgx.Tx) error
+
+// commitAfter is commit with a tail: a tail error is returned as it is and
+// nothing commits (the caller's deferred Rollback discards the whole pass), so
+// River retries an attempt that committed nothing.
+func (fence *transportFence) commitAfter(ctx context.Context, tx pgx.Tx, tail passTail) (commitOutcome, error) {
 	if fence == nil {
+		if tail != nil {
+			if err := tail(ctx, tx); err != nil {
+				return commitOutcome{}, err
+			}
+		}
 		return commitOutcome{committed: true}, tx.Commit(ctx)
 	}
 	snapshot, err := fence.lockCommitSnapshot(ctx, tx)
@@ -235,6 +253,11 @@ func (fence *transportFence) commit(ctx context.Context, tx pgx.Tx) (commitOutco
 	commit, reason := decideCommit(snapshot, fence.args.RouteGeneration(), fence.args.Attempt())
 	if !commit {
 		return commitOutcome{reason: reason, routeGeneration: snapshot.currentRouteGeneration()}, nil
+	}
+	if tail != nil {
+		if err := tail(ctx, tx); err != nil {
+			return commitOutcome{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return commitOutcome{}, fence.unavailable

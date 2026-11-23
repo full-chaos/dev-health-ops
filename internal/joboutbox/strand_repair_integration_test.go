@@ -839,6 +839,7 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 				cleanedOutboxRows = 16000
 				liveRiverJobs     = 5000
 				finalizeEvery     = 10
+				finishedRuns      = 20000
 			)
 			if _, err := admin.Exec(ctx, `
 				INSERT INTO river.river_job
@@ -882,6 +883,23 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 				templateOutbox, cleanedOutboxRows, finalizeOutbox, finalizeEvery); err != nil {
 				t.Fatal(err)
 			}
+			// Finished daily runs, two succeeded partitions each, about production's ratio (49,009 runs, 95,410
+			// partitions, SIZING-14090-2). With only the seeded runs the planner drives the finalize survey from a
+			// two-row runs table, probes the finalize index by run id and walks river_job end to end.
+			if _, err := admin.Exec(ctx, `
+				WITH filler AS (
+					INSERT INTO public.daily_metrics_runs
+						(id, org_id, target_day, generation, status, finalization_status, finalized_at, created_at, updated_at)
+					SELECT gen_random_uuid(), $1::uuid, DATE '2000-01-01' + n, 'filler-run:' || n, 'succeeded', 'succeeded',
+						$2, $2, $2
+					FROM generate_series(1, $3::int) AS n
+					RETURNING id)
+				INSERT INTO public.daily_metrics_partitions
+					(id, run_id, ordinal, repo_ids, status, attempt_count, completed_at, created_at, updated_at)
+				SELECT gen_random_uuid(), filler.id, ordinal, '[]'::json, 'succeeded', 1, $2, $2, $2
+				FROM filler, generate_series(0, 1) AS ordinal`, fixture.orgID, now.Add(-48*time.Hour), finishedRuns); err != nil {
+				t.Fatal(err)
+			}
 			var outboxRows int
 			if err := admin.QueryRow(ctx,
 				"SELECT count(*) FROM public.worker_job_outbox WHERE status = 'delivered'").Scan(&outboxRows); err != nil {
@@ -900,15 +918,19 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 			}
 			// The fixture's own shape, so a later edit cannot quietly put the finalize plan back on a one-entry index
 			// or the River ids back below the cleaned ones.
-			var finalizeRows int
+			var finalizeRows, runs int
 			var lowestJob, highestCleaned int64
 			if err := admin.QueryRow(ctx, `
 				SELECT (SELECT count(*) FROM public.worker_job_outbox
 				        WHERE status = 'delivered' AND job_kind = 'metrics.daily_finalize'),
+				       (SELECT count(*) FROM public.daily_metrics_runs),
 				       (SELECT min(id) FROM river.river_job),
 				       (SELECT max(river_job_id) FROM public.worker_job_outbox WHERE dedupe_key LIKE 'filler-row:%')`,
-			).Scan(&finalizeRows, &lowestJob, &highestCleaned); err != nil {
+			).Scan(&finalizeRows, &runs, &lowestJob, &highestCleaned); err != nil {
 				t.Fatal(err)
+			}
+			if runs <= finishedRuns {
+				t.Fatalf("daily_metrics_runs holds %d rows, want more than the %d finished fillers", runs, finishedRuns)
 			}
 			if want := cleanedOutboxRows/finalizeEvery + 1; finalizeRows != want {
 				t.Fatalf("the outbox holds %d delivered finalize rows, want %d", finalizeRows, want)
@@ -2919,7 +2941,7 @@ var hashedSubPlan = regexp.MustCompile(`hashed SubPlan \d+`)
 // partitionsRunProbeCond is the no-partitions arm's lookup: an index-only probe keyed on the base run's id. Run once
 // per base run it costs one index descent each, not a read of the table, so it is the one per-run partitions node
 // allowed. The base check cannot pass as it: it reads updated_at, which no partitions index holds.
-var partitionsRunProbeCond = regexp.MustCompile(`^\(partition(_\d+)?\.run_id = run\.id\)$`)
+var partitionsRunProbeCond = regexp.MustCompile(`^\((partition(_\d+)?\.)?run_id = run\.id\)$`)
 
 func partitionsRunProbe(nodeType, indexCond string) bool {
 	return nodeType == "Index Only Scan" && partitionsRunProbeCond.MatchString(indexCond)

@@ -1,10 +1,13 @@
 package providersync
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
+	"math/rand/v2"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
@@ -314,5 +317,79 @@ func TestGitHubTestsHeldRowBoundKeepsItsBaseValue(t *testing.T) {
 	}
 	if githubTestsMaxHeldReportRowsPerRun != 2*maxEffectRows {
 		t.Errorf("held-row bound %d, want 2 x maxEffectRows = %d", githubTestsMaxHeldReportRowsPerRun, 2*maxEffectRows)
+	}
+}
+
+// retiredLetters is n deterministic letters: a field that neither compresses nor needs XML escaping.
+func retiredLetters(n int) string {
+	samples := rand.NewPCG(14259, 4)
+	out := make([]byte, n)
+	for index := range out {
+		out[index] = byte('a' + samples.Uint64()%26)
+	}
+	return string(out)
+}
+
+// The retraction rows join the run's suite batch, whose rows the chunk split pairs with the case rows at the same offsets. A
+// full retraction row that carries a large field and lands next to a large case must not fail the unit at chunk preparation:
+// the route then retires the slot with a minimal row that sorts after every live suite row and holds no large field.
+// Input (round r1-6906 finding 4): leg A's right case b fails with a 1.1 MiB failure message (total-a carries the same case), and leg B's
+// right suite and total-b's copy of it name a 1.1 MiB service path.
+func TestGitHubTestsRetractionRowsDoNotBreakTheChunkSplit(t *testing.T) {
+	large := retiredLetters(1_153_434)
+	legA := []retiredFxSuite{{"left", "1.0", []retiredFxCase{{"a", "", "0.125"}}}, {"right", "1.0", []retiredFxCase{{"b", "failed", "0.125"}}}}
+	legB := []retiredFxSuite{{"left", "3.0", []retiredFxCase{{"a", "", "0.25"}}}, {"right", "3.0", []retiredFxCase{{"b", "", "0.25"}}}}
+	totalA := []retiredFxSuite{{"left", "1.0", []retiredFxCase{{"a", "failed", "0.125"}}}, legA[1]}
+	body := func(suites ...retiredFxSuite) string {
+		junit := retiredFxJUnit(suites...)
+		junit = strings.ReplaceAll(junit, `<testcase name="b" classname="pkg" time="0.125"><failure message="boom"/>`,
+			`<testcase name="b" classname="pkg" time="0.125"><failure message="`+large+`"/>`)
+		junit = strings.ReplaceAll(junit, `<testsuite name="right" time="3.0"`, `<testsuite name="right" time="3.0" file="services/`+large+`/b_test.go"`)
+		return junit
+	}
+	artifacts := []rowsArtifact{
+		{id: "1", size: 10, body: body(legA[0])}, {id: "2", size: 11, body: body(legA[1])},
+		{id: "3", size: 12, body: body(legB[0])}, {id: "4", size: 13, body: body(legB[1])},
+		{id: "5", size: 20, body: body(totalA...)}, {id: "6", size: 21, body: body(legB...)},
+	}
+	client := githubTestsClient(t, fakehttp.Client(&githubTestsRowsDoer{t: t, runs: 1, artifacts: artifacts}))
+	client.Metrics = providerfoundation.NewMetrics()
+	var emissions []CompleteRouteBatch
+	err := GitHubTestsRouteHandler{}.CollectChunks(context.Background(), nativeTestClaim("github", "cicd"), providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), "", func(emission ChunkRouteEmission) error {
+			emissions = append(emissions, emission.Batch)
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("CollectChunks: %v", err)
+	}
+	retired, largeSuites, largeCases := 0, 0, 0
+	for index, batch := range emissions {
+		if len(batch.Effects) == 0 {
+			continue
+		}
+		if _, err := splitCompleteRouteBatch(CompleteRouteBatch{Effects: batch.Effects}, ShadowComparison{}, TestOpsRouteChunkPolicy()); err != nil {
+			t.Errorf("emission %d does not split into prepared chunks: %v", index, err)
+		}
+		for _, effect := range batch.Effects {
+			for _, raw := range effect.Rows {
+				row := map[string]any{}
+				if err := json.Unmarshal(raw, &row); err != nil {
+					t.Fatal(err)
+				}
+				switch {
+				case effect.Destination == "test_suite_results" && row["retracted"] == true && row["report_slot"] == "test-results-6":
+					retired++
+				case effect.Destination == "test_suite_results" && len(raw) > len(large):
+					largeSuites++
+				case effect.Destination == "test_case_results" && len(raw) > len(large):
+					largeCases++
+				}
+			}
+		}
+	}
+	if retired == 0 || largeSuites != 1 || largeCases != 2 {
+		t.Errorf("retraction rows of total-b %d, large live suites %d, large cases %d; want total-b retired, 1 and 2 (the fixture's large rows)",
+			retired, largeSuites, largeCases)
 	}
 }

@@ -563,17 +563,22 @@ properties of that listing shape the walk:
   pipeline rows leaves `deleted` out (one exported helper). The phase reads the
   rate-limit headers of the unit's own responses and stops, with the marker
   `open_phase_rate_floor`, when fewer than the larger of 500 and a fifth of the
-  limit remain, or when no header was seen. It also reads them on every 5xx,
-  429 and 403 answer, retryable or not, including one on the last attempt.
-  It reads that answer's own headers, not an earlier reading. Such an answer
-  under the floor, or one whose headers do not carry both the remaining count
-  and the limit, marks the stop: the client sends no further
-  attempt of that request, and the phase stops with the same marker (-1 when
-  the headroom is unknown) when the request ends on that refusal. A request that ends on its own error (a 403
-  that is not a rate limit, a 5xx on the last attempt) keeps that error's path,
-  and the check before the next run decides whether the phase goes on. A success answer under
-  the floor still lets the next request of that run go; the check before the
-  next run stops the phase.
+  limit remain, or when no header was seen. On every 5xx, 429 and 403
+  answer (retryable or not, the last attempt too) it also reads that
+  answer's own headers, not an earlier reading. The answer stops the phase's
+  requests when it shows fewer than the floor, or when its headers do not
+  carry both the remaining count and the limit. A 5xx with no rate header at
+  all is the exception: it keeps the usual path (retried, then a transient
+  skip of the run, or an unknown branch policy). After such a stop the client
+  sends no further request of the phase, and a refused request ends the phase
+  with the same marker (the low reading, or -1 when the headroom is unknown).
+  When the stopping answer ends its request on its own error (a 403 that is
+  not a rate limit, a 5xx on the last attempt), that error takes its usual
+  path first (a skip of the run, or a unit failure). The phase then stops
+  before the next run: at the check before that run when the last usable
+  reading is under the floor, or else when that run's first request is
+  refused (marker -1). A success answer under the floor still lets the next
+  request of that run go; the check before the next run stops the phase.
   A re-read that fails with an error of that run alone (410, 422, 409, another
   4xx, a payload that does not decode, a 404 on its jobs pages, or a transient
   error) skips the run: nothing is written for it, the walk moves past it, and

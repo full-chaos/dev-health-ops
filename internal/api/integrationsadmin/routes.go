@@ -259,7 +259,7 @@ func (h handlers) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	orgID := orgOf(r)
-	config, err := dumps(request.config)
+	config, err := createConfigText(request.provider, request.config)
 	if err != nil {
 		h.fail(w, r, "encode config", err)
 		return
@@ -363,7 +363,7 @@ func (h handlers) update(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if request.config != nil {
-			stored, err := keepArtifactExcludeAndDecode(current, request.config)
+			stored, err := keepArtifactExcludeAndDecode(r.Context(), tx, orgID, current, request.config)
 			if err != nil {
 				return fmt.Errorf("decode stored config: %w", err)
 			}

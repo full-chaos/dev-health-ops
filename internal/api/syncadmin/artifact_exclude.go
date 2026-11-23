@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/artifactexclude"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
 
 // artifactExcludeChange validates the body's sync_options.ci_artifact_exclude_prefixes for a configuration of
@@ -56,13 +57,24 @@ func takeArtifactExclude(provider string, options *pyjson.Object) (*artifactexcl
 	return change, nil
 }
 
+// listOnlyPatch: the PATCH changes ci_artifact_exclude_prefixes and nothing else (its body is only sync_options holding
+// only that key). It is a list edit: it skips the GitHub work-item runtime refresh, so it writes what the dho verb
+// writes. Any other PATCH keeps the refresh.
+func listOnlyPatch(in syncConfigUpdate) bool {
+	if in.syncOptions == nil || len(in.provided) != 1 || !in.provided["sync_options"] || in.syncOptions.Len() != 1 {
+		return false
+	}
+	_, present := in.syncOptions.Get(artifactexclude.Key)
+	return present
+}
+
 // writeArtifactExclude writes a create's or a PATCH's list into the configuration's integration (artifactexclude.WriteTx,
 // the writer of the dho verb too); config takes the stored sync_options when the write removed an old copy from them.
 func writeArtifactExclude(ctx context.Context, tx pgx.Tx, org string, config *syncConfig, change *artifactexclude.Change, now time.Time) error {
 	if change == nil {
 		return nil
 	}
-	written, err := artifactexclude.WriteTx(ctx, tx, org, config.ID, *change, now)
+	written, err := artifactexclude.WriteTx(ctx, tx, selectionLock, org, config.ID, *change, now)
 	if err != nil {
 		return artifactExcludeAnswer(err)
 	}
@@ -71,6 +83,12 @@ func writeArtifactExclude(ctx context.Context, tx pgx.Tx, org string, config *sy
 		config.UpdatedAt = now
 	}
 	return nil
+}
+
+// selectionLock is providersync.LockIntegrationSelection as artifactexclude.WriteTx takes it: the first lock of every
+// writer of an integration's config (the PATCH already holds it; it is re-entrant in one transaction).
+func selectionLock(ctx context.Context, tx pgx.Tx, org string, integrationID uuid.UUID) error {
+	return providersync.LockIntegrationSelection(ctx, tx, org, integrationID)
 }
 
 // excludeListReader is the read deriveShown makes for the list; store has it (below), and a test reader may.

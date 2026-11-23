@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
@@ -139,6 +140,39 @@ func TestSyncConfigResponseShowsTheIntegrationListAndIsByteEqualWithoutOne(t *te
 	for _, c := range []*syncConfig{withA, withB} {
 		if got := render(c); !strings.Contains(got, `"ci_artifact_exclude_prefixes":["ci-z-"]`) || strings.Contains(got, "old-") {
 			t.Errorf("a sibling of the integration with the list: %s, want the integration's list and no copy of its own", got)
+		}
+	}
+}
+
+// A PATCH whose only change is ci_artifact_exclude_prefixes is a list edit (no GitHub runtime refresh); any other key in
+// the body, or none, keeps today's PATCH.
+func TestListOnlyPatchIsOnlyTheArtifactExcludeKey(t *testing.T) {
+	body := func(text string) syncConfigUpdate {
+		value, err := pyjson.DecodeString(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		in, problems := decodeSyncConfigUpdate(pybody.Body{Value: value})
+		if len(problems) > 0 {
+			t.Fatalf("%s: %v", text, problems)
+		}
+		return in
+	}
+	for text, want := range map[string]bool{
+		`{"sync_options":{"ci_artifact_exclude_prefixes":["ci-x-"]}}`:                             true,
+		`{"sync_options":{"ci_artifact_exclude_prefixes":null}}`:                                  true,
+		`{"sync_options":{"ci_artifact_exclude_prefixes":[]}}`:                                    true,
+		`{"sync_options":{"ci_artifact_exclude_prefixes":["ci-x-"],"fetch_comments":false}}`:      false,
+		`{"sync_options":{"ci_artifact_exclude_prefixes":["ci-x-"],"schedule_cron":"0 * * * *"}}`: false,
+		`{"sync_options":{"ci_artifact_exclude_prefixes":["ci-x-"]},"sync_targets":["tests"]}`:    false,
+		`{"sync_options":{"ci_artifact_exclude_prefixes":["ci-x-"]},"is_active":true}`:            false,
+		`{"sync_options":{"ci_artifact_exclude_prefixes":["ci-x-"]},"timezone":"UTC"}`:            false,
+		`{"sync_options":{"fetch_comments":false}}`:                                               false,
+		`{"sync_options":{}}`: false,
+		`{}`:                  false,
+	} {
+		if got := listOnlyPatch(body(text)); got != want {
+			t.Errorf("%s: list only = %v, want %v", text, got, want)
 		}
 	}
 }

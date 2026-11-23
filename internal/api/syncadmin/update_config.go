@@ -310,7 +310,7 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 	}
 
 	lower := pythonparity.Lower(config.Provider)
-	if lower == "github" && config.IntegrationID != nil {
+	if lower == "github" && config.IntegrationID != nil && !listOnlyPatch(in) {
 		current, err := plainDict(newOptions)
 		if err != nil {
 			return nil, err
@@ -456,7 +456,7 @@ func (h *handlers) writeGitHubRuntimeOptions(ctx context.Context, tx pgx.Tx, org
 	var integrationOrg string
 	var integrationConfigText *string
 	integrationFound := true
-	err := tx.QueryRow(ctx, `SELECT org_id, config::text FROM integrations WHERE id = $1`, integrationID).Scan(&integrationOrg, &integrationConfigText)
+	err := tx.QueryRow(ctx, `SELECT org_id, config::text FROM integrations WHERE id = $1 FOR NO KEY UPDATE`, integrationID).Scan(&integrationOrg, &integrationConfigText)
 	if errors.Is(err, pgx.ErrNoRows) {
 		integrationFound = false
 	} else if err != nil {

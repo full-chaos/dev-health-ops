@@ -1,10 +1,16 @@
 package artifactexclude
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
@@ -270,6 +276,85 @@ func TestArtifactExcludeKeepOnReplace(t *testing.T) {
 		got, _ := pyjson.Dumps(next)
 		if err != nil || got != cell.want {
 			t.Errorf("%s: %s (err %v), want %s", cell.name, got, err, cell.want)
+		}
+	}
+}
+
+// recordingTx is a pgx.Tx that records the statements it is sent and answers the reads WriteTx makes.
+type recordingTx struct {
+	pgx.Tx
+	log         []string
+	integration uuid.UUID
+}
+
+type recordedRow struct{ values []any }
+
+func (r recordedRow) Scan(dest ...any) error {
+	for index, target := range dest {
+		switch typed := target.(type) {
+		case *string:
+			*typed = r.values[index].(string)
+		case **string:
+			text := r.values[index].(string)
+			*typed = &text
+		case **uuid.UUID:
+			id := r.values[index].(uuid.UUID)
+			*typed = &id
+		}
+	}
+	return nil
+}
+
+func (r *recordingTx) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+	r.log = append(r.log, sql)
+	switch {
+	case strings.Contains(sql, "FROM integrations"):
+		return recordedRow{values: []any{`{"fetch_comments": true}`}}
+	case strings.Contains(sql, "integration_id, sync_options::text"):
+		return recordedRow{values: []any{r.integration, `{"all_repos": true}`}}
+	default:
+		return recordedRow{values: []any{"github", r.integration}}
+	}
+}
+
+func (r *recordingTx) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+	r.log = append(r.log, sql)
+	return pgconn.CommandTag{}, nil
+}
+
+// One lock order for every writer of an integration's config: the selection lock, then the integration row, then the
+// configuration row, each row read under its lock; the old order (configuration row first) deadlocks against a PATCH.
+func TestWriteTxLocksTheIntegrationBeforeTheConfig(t *testing.T) {
+	tx := &recordingTx{integration: uuid.New()}
+	lock := func(_ context.Context, locked pgx.Tx, _ string, id uuid.UUID) error {
+		if id != tx.integration {
+			t.Errorf("locked integration %s, want %s", id, tx.integration)
+		}
+		tx.log = append(tx.log, "SELECTION LOCK")
+		return nil
+	}
+	if _, err := WriteTx(context.Background(), tx, lock, "org", uuid.New(), Change{Prefixes: []string{"ci-x-"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	position := func(want string) int {
+		for index, sql := range tx.log {
+			if strings.Contains(sql, want) {
+				return index
+			}
+		}
+		t.Fatalf("no statement holds %q in %q", want, tx.log)
+		return -1
+	}
+	selection := position("SELECTION LOCK")
+	integrationRow := position("FROM integrations WHERE org_id = $1 AND id = $2 FOR NO KEY UPDATE")
+	configRow := position("FROM sync_configurations\nWHERE org_id = $1 AND id = $2 FOR NO KEY UPDATE")
+	if !(selection < integrationRow && integrationRow < configRow) {
+		t.Fatalf("lock order %d, %d, %d in %q: want the selection lock, then the integration row, then the configuration row",
+			selection, integrationRow, configRow, tx.log)
+	}
+	for index, sql := range tx.log[:selection] {
+		if strings.Contains(sql, "FOR ") {
+			t.Errorf("statement %d locks a row before the selection lock: %s", index, sql)
 		}
 	}
 }

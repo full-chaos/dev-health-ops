@@ -149,17 +149,24 @@ type Result struct {
 	SyncOptions string
 }
 
+// SelectionLock takes the dataset-selection lock of one integration (providersync.LockIntegrationSelection, which this
+// package cannot import: providersync imports it). Every writer of an integration's config takes it first.
+type SelectionLock func(ctx context.Context, tx pgx.Tx, orgID string, integrationID uuid.UUID) error
+
 // WriteTx applies change to the configuration's integration config, the one store of the list, on tx: the whole list
 // is replaced (or removed on Clear), every other key stays as it is. It also removes the key from the configuration's
 // own sync_options if a row still holds it there. A row is updated (with updated_at = now) only when its document
 // changed. The configuration must belong to org, be a GitHub configuration and have an integration; the list then
 // applies to every sync config of that integration.
-func WriteTx(ctx context.Context, tx pgx.Tx, org string, configID uuid.UUID, change Change, now time.Time) (Result, error) {
+//
+// Lock order, the one every writer of an integration's config keeps: the integration's selection lock (lock), then
+// the integration row, then the configuration row. Both rows are read under their lock (FOR NO KEY UPDATE, the lock a
+// non-key UPDATE takes: writers wait for each other, inserts that only reference the row do not).
+func WriteTx(ctx context.Context, tx pgx.Tx, lock SelectionLock, org string, configID uuid.UUID, change Change, now time.Time) (Result, error) {
 	var provider string
 	var integrationID *uuid.UUID
-	var optionsText *string
-	err := tx.QueryRow(ctx, `SELECT provider, integration_id, sync_options::text FROM sync_configurations
-WHERE org_id = $1 AND id = $2 FOR UPDATE`, org, configID).Scan(&provider, &integrationID, &optionsText)
+	err := tx.QueryRow(ctx, `SELECT provider, integration_id FROM sync_configurations WHERE org_id = $1 AND id = $2`,
+		org, configID).Scan(&provider, &integrationID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Result{}, ErrConfigNotFound
 	}
@@ -172,10 +179,26 @@ WHERE org_id = $1 AND id = $2 FOR UPDATE`, org, configID).Scan(&provider, &integ
 	if integrationID == nil {
 		return Result{}, refusal(-1, "the sync configuration has no integration")
 	}
+	if err := lock(ctx, tx, org, *integrationID); err != nil {
+		return Result{}, err
+	}
 	var configText *string
-	if err := tx.QueryRow(ctx, `SELECT config::text FROM integrations WHERE org_id = $1 AND id = $2 FOR UPDATE`,
+	if err := tx.QueryRow(ctx, `SELECT config::text FROM integrations WHERE org_id = $1 AND id = $2 FOR NO KEY UPDATE`,
 		org, *integrationID).Scan(&configText); err != nil {
 		return Result{}, fmt.Errorf("read integration: %w", err)
+	}
+	var lockedIntegration *uuid.UUID
+	var optionsText *string
+	err = tx.QueryRow(ctx, `SELECT integration_id, sync_options::text FROM sync_configurations
+WHERE org_id = $1 AND id = $2 FOR NO KEY UPDATE`, org, configID).Scan(&lockedIntegration, &optionsText)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Result{}, ErrConfigNotFound
+	}
+	if err != nil {
+		return Result{}, fmt.Errorf("read sync configuration: %w", err)
+	}
+	if lockedIntegration == nil || *lockedIntegration != *integrationID {
+		return Result{}, refusal(-1, "the sync configuration moved to another integration; retry")
 	}
 	result := Result{ConfigIDPrefix: idPrefix(configID.String()), OrgIDPrefix: idPrefix(org), IntegrationIDPrefix: idPrefix(integrationID.String())}
 	nextOptions, optionsChanged, err := apply(optionsText, Change{Clear: true})

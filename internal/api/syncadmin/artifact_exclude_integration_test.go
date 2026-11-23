@@ -5,6 +5,7 @@ package syncadmin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -71,7 +72,7 @@ func (v *cascadeVenue) verbWrite(one cascadeSeeded, provider string, prefixes []
 		v.t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := artifactexclude.WriteTx(ctx, tx, v.org, one.config, change, time.Now().UTC()); err != nil {
+	if _, err := artifactexclude.WriteTx(ctx, tx, selectionLock, v.org, one.config, change, time.Now().UTC()); err != nil {
 		v.t.Fatal(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -143,15 +144,16 @@ FROM sync_configurations WHERE id = $1`, config).Scan(&has); err != nil {
 	return has
 }
 
-// The PATCH and the dho verb write the same bytes: the list goes into the integration's config only (it applies to
-// every sync config of this integration), the configuration's sync_options and the GitHub work-item runtime options
-// (configuration, integration, work-items dataset) stay byte-equal, and the PATCH answer shows the list. A clear
-// removes it and leaves every other key as it was.
+// The PATCH and the dho verb write the same bytes: a list-only PATCH is a list edit (no GitHub runtime refresh), so
+// with the environment set to other runtime values the configuration's sync_options and the work-item runtime options
+// (configuration, integration, work-items dataset) stay byte-equal, the list goes into the integration's config only
+// (it applies to every sync config of this integration), and the PATCH answer shows the list. A clear removes it and
+// leaves every other key as it was.
 func TestArtifactExcludePatchAndVerbWriteByteEqualConfig(t *testing.T) {
 	v := startCascadeVenue(t, true)
-	for _, name := range []string{"GITHUB_FETCH_COMMENTS", "GITHUB_FETCH_MILESTONES", "GITHUB_COMMENTS_LIMIT"} {
-		t.Setenv(name, "")
-	}
+	t.Setenv("GITHUB_FETCH_COMMENTS", "false")
+	t.Setenv("GITHUB_FETCH_MILESTONES", "false")
+	t.Setenv("GITHUB_COMMENTS_LIMIT", "7")
 	byPatch, byVerb := v.seedArtifactExclude("github"), v.seedArtifactExclude("github")
 	before := v.artifactExcludeTexts(byPatch)
 	if verbBefore := v.artifactExcludeTexts(byVerb); verbBefore != before {
@@ -184,6 +186,140 @@ func TestArtifactExcludePatchAndVerbWriteByteEqualConfig(t *testing.T) {
 	patched, verbed = v.artifactExcludeTexts(byPatch), v.artifactExcludeTexts(byVerb)
 	if patched != verbed || patched != before {
 		t.Fatalf("after the clear: PATCH %+v verb %+v, want both equal to the seeded documents %+v", patched, verbed, before)
+	}
+}
+
+// Codex round 1: an integration whose config was replaced by {} (integration PATCH) while its sync configs keep the
+// runtime options. A list-only sync PATCH and the verb still write the same bytes (no runtime refresh), for set,
+// replace, repeat and clear.
+func TestArtifactExcludeListOnlyPatchMatchesTheVerbAfterAnEmptiedIntegration(t *testing.T) {
+	v := startCascadeVenue(t, true)
+	byPatch, byVerb := v.seedArtifactExclude("github"), v.seedArtifactExclude("github")
+	for _, one := range []cascadeSeeded{byPatch, byVerb} {
+		if status, body := v.call("PATCH", "/api/v1/admin/integrations/"+one.integration.String(), `{"config":{}}`); status != 200 {
+			t.Fatalf("integration PATCH {}: %d %s", status, body)
+		}
+	}
+	for _, step := range []struct {
+		label, body string
+		verb        []string
+	}{
+		{"set", `["ci-x-","ci-y-"]`, []string{"ci-x-", "ci-y-"}},
+		{"replace", `["ci-z-"]`, []string{"ci-z-"}},
+		{"repeat", `["ci-z-"]`, []string{"ci-z-"}},
+		{"clear", `null`, nil},
+	} {
+		if status, body := v.call("PATCH", "/api/v1/admin/sync-configs/"+byPatch.config.String(),
+			`{"sync_options":{"ci_artifact_exclude_prefixes":`+step.body+`}}`); status != 200 {
+			t.Fatalf("%s: PATCH %d %s", step.label, status, body)
+		}
+		v.verbWrite(byVerb, "github", step.verb)
+		if patched, verbed := v.artifactExcludeTexts(byPatch), v.artifactExcludeTexts(byVerb); patched != verbed {
+			t.Errorf("%s: the PATCH and the verb wrote different documents:\nPATCH %+v\nverb  %+v", step.label, patched, verbed)
+		}
+	}
+}
+
+// A MIXED PATCH (the list and another key) keeps today's GitHub runtime refresh: the runtime keys follow the body.
+func TestArtifactExcludeMixedPatchStillRefreshesTheRuntimeKeys(t *testing.T) {
+	v := startCascadeVenue(t, true)
+	one := v.seedArtifactExclude("github")
+	status, body := v.call("PATCH", "/api/v1/admin/sync-configs/"+one.config.String(),
+		`{"sync_options":{"ci_artifact_exclude_prefixes":["ci-x-"],"fetch_comments":false}}`)
+	if status != 200 {
+		t.Fatalf("PATCH: %d %s", status, body)
+	}
+	after := v.artifactExcludeTexts(one)
+	for name, text := range map[string]string{"integration": after.config, "work-items dataset": after.workItems, "sync_options": after.options} {
+		if !strings.Contains(text, `"fetch_comments": false`) {
+			t.Errorf("%s %s: want the runtime refresh to carry fetch_comments false", name, text)
+		}
+	}
+	if !strings.Contains(after.config, `"ci_artifact_exclude_prefixes": ["ci-x-"]`) {
+		t.Errorf("integration %s: want the list", after.config)
+	}
+}
+
+// openVerbWrite is verbWrite with its transaction left open: it holds what the verb holds until commit is called.
+func (v *cascadeVenue) openVerbWrite(one cascadeSeeded, prefixes []string) (commit func()) {
+	v.t.Helper()
+	ctx := context.Background()
+	items := make([]pyjson.Value, len(prefixes))
+	for index, prefix := range prefixes {
+		items[index] = prefix
+	}
+	change, err := artifactexclude.Parse("github", items)
+	if err != nil {
+		v.t.Fatal(err)
+	}
+	tx, err := v.pool.Begin(ctx)
+	if err != nil {
+		v.t.Fatal(err)
+	}
+	if _, err := artifactexclude.WriteTx(ctx, tx, selectionLock, v.org, one.config, change, time.Now().UTC()); err != nil {
+		_ = tx.Rollback(ctx)
+		v.t.Fatal(err)
+	}
+	return func() {
+		if err := tx.Commit(ctx); err != nil {
+			v.t.Fatal(err)
+		}
+	}
+}
+
+// waitForALockWait returns once a backend waits for a lock (the request under test reached the lock held open).
+func (v *cascadeVenue) waitForALockWait() {
+	v.t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting int
+		if err := v.pool.QueryRow(context.Background(), `SELECT count(*) FROM pg_locks WHERE NOT granted`).Scan(&waiting); err != nil {
+			v.t.Fatal(err)
+		}
+		if waiting > 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	v.t.Fatal("no backend waited for a lock: the request did not reach the held lock")
+}
+
+// Lost update (Codex round 1): a list write commits while an integrations PATCH that omits the list is between its
+// read and its write. The PATCH waits for the writer's locks, reads the config after the commit and keeps the list;
+// the same for a sync-config PATCH that changes a runtime option. On the old code the PATCH read the config with no
+// lock, waited only at its UPDATE, and wrote the stale document back: the list was lost.
+func TestArtifactExcludeNoLostUpdateUnderConcurrentWriters(t *testing.T) {
+	v := startCascadeVenue(t, true)
+	for _, cell := range []struct {
+		label, path, body string
+		target            func(cascadeSeeded) string
+	}{
+		{"integrations PATCH without the key", "integrations", `{"config":{"fetch_comments": true, "fetch_milestones": true, "comments_limit": 500, "note": 1}}`,
+			func(one cascadeSeeded) string { return one.integration.String() }},
+		{"sync-config PATCH of a runtime option", "sync-configs", `{"sync_options":{"comments_limit":9}}`,
+			func(one cascadeSeeded) string { return one.config.String() }},
+	} {
+		one := v.seedArtifactExclude("github")
+		commit := v.openVerbWrite(one, []string{"ci-x-"})
+		answered := make(chan string, 1)
+		path := "/api/v1/admin/" + cell.path + "/" + cell.target(one)
+		go func() {
+			status, body, err := v.callCtx(context.Background(), "PATCH", path, cell.body)
+			answered <- fmt.Sprintf("%d %s %v", status, body, err)
+		}()
+		v.waitForALockWait()
+		commit()
+		select {
+		case answer := <-answered:
+			if !strings.HasPrefix(answer, "200 ") {
+				t.Fatalf("%s: %s", cell.label, answer)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatalf("%s: the PATCH did not answer after the writer committed", cell.label)
+		}
+		if got := shownList(t, v.get(one.config)); got != "ci-x-" {
+			t.Errorf("%s: the list is %s after both committed, want ci-x- (a lost update)", cell.label, got)
+		}
 	}
 }
 
@@ -398,5 +534,56 @@ WHERE config.id = $1::uuid`, created.ID).Scan(&options, &config); err != nil {
 		`{"name":"ax gitlab","provider":"gitlab","sync_targets":["tests"],"sync_options":{"all_repos":true,"ci_artifact_exclude_prefixes":["ci-zz9-"]}}`)
 	if status != 422 || strings.Contains(body, "zz9") {
 		t.Errorf("gitlab create: %d %s, want a 422 without the value", status, body)
+	}
+}
+
+// Integration create validates and clears the list by the update's rule: every provider but github is a 422, every
+// bound is a 422 (no value named, no row written), null or [] stores no key, a valid list is stored as sent.
+func TestIntegrationCreateOverHTTPValidatesTheArtifactExcludeList(t *testing.T) {
+	v := startCascadeVenue(t, true)
+	post := func(name, provider, list string) (int, string) {
+		t.Helper()
+		return v.call("POST", "/api/v1/admin/integrations",
+			fmt.Sprintf(`{"name":%q,"provider":%q,"config":{"fetch_comments":true,"ci_artifact_exclude_prefixes":%s}}`, name, provider, list))
+	}
+	stored := func(name string) (string, bool) {
+		t.Helper()
+		var text string
+		err := v.pool.QueryRow(context.Background(), `SELECT config::text FROM integrations WHERE org_id = $1 AND name = $2`, v.org, name).Scan(&text)
+		if err != nil {
+			return "", false
+		}
+		return text, true
+	}
+	for index, cell := range []struct {
+		provider, list string
+	}{
+		{"gitlab", `["ci-zz9-"]`}, {"jira", `["ci-zz9-"]`}, {"linear", `["ci-zz9-"]`}, {"launchdarkly", `["ci-zz9-"]`}, {"pagerduty", `["ci-zz9-"]`},
+		{"github", `"ci-zz9-"`}, {"github", `{}`}, {"github", `[""]`}, {"github", `["zz9 x"]`}, {"github", `["zz9-","ZZ9-"]`},
+		{"github", `["` + strings.Repeat("z", 101) + `"]`}, {"github", `[1]`},
+	} {
+		name := fmt.Sprintf("ax refused %d", index)
+		status, body := post(name, cell.provider, cell.list)
+		if status != 422 || strings.Contains(body, "zz9") || strings.Contains(body, "zzzz") {
+			t.Errorf("%s %s: %d %s, want a 422 without the value", cell.provider, cell.list, status, body)
+		}
+		if _, written := stored(name); written {
+			t.Errorf("%s %s: a refused create wrote a row", cell.provider, cell.list)
+		}
+	}
+	for index, list := range []string{`null`, `[]`} {
+		name := fmt.Sprintf("ax clear %d", index)
+		if status, body := post(name, "github", list); status != 201 {
+			t.Fatalf("clear %s: %d %s", list, status, body)
+		}
+		if text, _ := stored(name); text != `{"fetch_comments": true}` {
+			t.Errorf("clear %s: stored %s, want the key absent", list, text)
+		}
+	}
+	if status, body := post("ax valid", "github", `["ci-images-"]`); status != 201 {
+		t.Fatalf("valid: %d %s", status, body)
+	}
+	if text, _ := stored("ax valid"); text != `{"fetch_comments": true, "ci_artifact_exclude_prefixes": ["ci-images-"]}` {
+		t.Errorf("valid: stored %s, want the list as sent", text)
 	}
 }

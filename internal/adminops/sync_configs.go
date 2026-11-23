@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/artifactexclude"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
 
 // `admin sync-configs artifact-excludes set|show` write and read the ci_artifact_exclude_prefixes list of a GitHub sync
@@ -131,7 +132,13 @@ func setArtifactExcludesTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, value p
 	if err != nil {
 		return artifactexclude.Result{}, err
 	}
-	return artifactexclude.WriteTx(ctx, tx, org, id, change, now)
+	return artifactexclude.WriteTx(ctx, tx, selectionLock, org, id, change, now)
+}
+
+// selectionLock is providersync.LockIntegrationSelection as artifactexclude.WriteTx takes it, so the verb waits for the
+// admin API's writers of the same integration in the same lock order.
+func selectionLock(ctx context.Context, tx pgx.Tx, org string, integrationID uuid.UUID) error {
+	return providersync.LockIntegrationSelection(ctx, tx, org, integrationID)
 }
 
 func artifactExcludeFailure(env cli.Env, err error) int {

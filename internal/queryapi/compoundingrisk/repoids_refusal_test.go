@@ -24,7 +24,11 @@ func wantRepoIdsRefused(t *testing.T, got *model.CompoundingRiskResult, err erro
 	t.Helper()
 	var gqlErr *gqlerror.Error
 	if got != nil || !errors.As(err, &gqlErr) {
-		t.Fatalf("result %v err %v; want no result and a *gqlerror.Error", got, err)
+		served := "none"
+		if got != nil {
+			served = fmt.Sprintf("rows=%d trend=%d", len(got.Rows), len(got.Trend))
+		}
+		t.Fatalf("%d repoIds: served %s, err %v; want no result and a *gqlerror.Error", n, served, err)
 	}
 	if gqlErr.Message != repoIdsRefusal(n) {
 		t.Errorf("message %q; want %q", gqlErr.Message, repoIdsRefusal(n))
@@ -148,6 +152,44 @@ func TestNoCallerRepoIdsOnAnOrgOver500RepositoriesKeepsTheBaseAnswer(t *testing.
 			}
 			if len(got.Rows) != maxRows || first != bigRepoID(maxRows) || strings.Join(missing, ",") != bigRepoID(maxRows-1) {
 				t.Errorf("rows=%d first=%s missing=%v; want the base: %d rows, big-500 first, only big-499 missing", len(got.Rows), first, missing, maxRows)
+			}
+		})
+	}
+}
+
+// The limit counts the entries as sent, duplicates included: 501 entries that
+// name 300 distinct repositories are refused and the message names 501. 500
+// entries that name 250 distinct repositories are served, the same answer as
+// the 250 distinct ids.
+func TestRepoIdsLimitCountsEntriesAsSentWithDuplicates(t *testing.T) {
+	now := sweepNow()
+	var over []string
+	for i := 0; i < maxRows+1; i++ {
+		over = append(over, bigRepoID(i%300))
+	}
+	var twice, distinct []string
+	for i := 0; i < maxRows/2; i++ {
+		distinct = append(distinct, bigRepoID(i))
+	}
+	twice = append(append(twice, distinct...), distinct...)
+	for _, a := range repoIdsArms() {
+		t.Run(a.name+"/501-entries-300-distinct", func(t *testing.T) {
+			rec := &sweepRecorder{sweepStore: &sweepStore{world: bigTeamWorld(now, false)}}
+			got, err := Resolve(context.Background(), rec, sweepOrg, a.filter(over), now)
+			wantRepoIdsRefused(t, got, err, maxRows+1)
+			if len(rec.statements) != 0 {
+				t.Errorf("%d statements ran; want 0 (refused before any read)", len(rec.statements))
+			}
+		})
+		t.Run(a.name+"/500-entries-250-distinct", func(t *testing.T) {
+			got := sweepAnswer(t, bigTeamWorld(now, false), a.filter(twice))
+			want := sweepAnswer(t, bigTeamWorld(now, false), a.filter(distinct))
+			rows := 1
+			if a.breakout == model.CompoundingRiskScopeRepo {
+				rows = maxRows / 2
+			}
+			if got != want || !strings.HasPrefix(got, fmt.Sprintf("  served breakout=%q rows=%d trend=1", string(a.breakout), rows)) {
+				t.Errorf("500 entries, 250 distinct:\n%.300s\nwant the answer of the 250 distinct ids (%d rows):\n%.300s", got, rows, want)
 			}
 		})
 	}

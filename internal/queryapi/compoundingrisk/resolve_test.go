@@ -215,7 +215,7 @@ func TestResolve_TrendWindowClamp(t *testing.T) {
 
 // A filter carries at most maxRows ids to the store; Resolve refuses a caller
 // list over maxRows before any statement.
-func TestIDList_BoundedAtMaxRows(t *testing.T) {
+func TestIDListBindsAtMostMaxRowsAndResolveRefuses501RepoIds(t *testing.T) {
 	long := make([]string, 501)
 	for i := range long {
 		long[i] = "r"

@@ -199,3 +199,19 @@ func TestRetiredSlotRuleIsAppliedAfterTheNewestAttempt(t *testing.T) {
 		t.Errorf("the coverage fragment reads a retracted column coverage_snapshots does not have")
 	}
 }
+
+// CHAOS-14555: the revived-slot count takes the slots that hold a retraction row and whose newest row is live, one select over
+// the suite table bounded like the others (the repository list and, with a window, the window's runs).
+func TestRevivedSlotsCountsTheSlotsLiveAgainAfterARetraction(t *testing.T) {
+	sql := RevivedSlots(repoWindow)
+	if !strings.HasPrefix(sql, "SELECT count() FROM (SELECT repo_id, run_id, report_slot FROM test_suite_results FINAL WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}") ||
+		!strings.HasSuffix(sql, "GROUP BY repo_id, run_id, report_slot HAVING max(retracted) = 1 AND argMax(retracted, (run_attempt, last_synced, retracted)) = 0)") {
+		t.Errorf("RevivedSlots is\n%s", sql)
+	}
+	if got := strings.Count(sql, "FROM test_suite_results FINAL"); got != 2 {
+		t.Errorf("%d selects over the suite table, want the slot select and its window run set", got)
+	}
+	if strings.Count(RevivedSlots(Scope{}), "{") != 1 {
+		t.Errorf("an empty scope binds more than the organization:\n%s", RevivedSlots(Scope{}))
+	}
+}

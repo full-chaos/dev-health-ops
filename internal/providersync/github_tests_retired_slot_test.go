@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"maps"
 	"math/rand/v2"
@@ -157,14 +158,21 @@ func TestGitHubTestsRouteRetractsTheSlotOfADroppedAggregate(t *testing.T) {
 			t.Errorf("a retracted row shares the key of a live row: %v", row["suite_id"])
 		}
 	}
-	// Its cases get a row each at their keys under the report's suites (attempt 1 is the slot's only label): no name, no status,
-	// retracted. A live case row is never under a retracted suite.
+	// Its cases get a row each at their keys under the report's suites (attempt 1 is the slot's only label) and under the suites'
+	// pre-slot keys (CHAOS-14555): no name, no status, retracted. A live case row is never under a retracted suite.
+	legacyIDs := map[any]bool{}
+	for _, row := range retracted {
+		for _, id := range row["legacy_suite_ids"].([]any) {
+			legacyIDs[id] = true
+		}
+	}
 	liveCases, retractedCases := 0, 0
 	for _, row := range cases {
 		if row["retracted"] == true {
 			retractedCases++
-			if !retractedIDs[row["suite_id"]] || row["case_name"] != "" || row["status"] != "" || row["failure_message"] != nil {
-				t.Errorf("case retraction row %v, want one under a retracted suite with no name, status or failure text", row)
+			under := retractedIDs[row["suite_id"]] || legacyIDs[row["suite_id"]]
+			if !under || row["case_name"] != "" || row["status"] != "" || row["failure_message"] != nil {
+				t.Errorf("case retraction row %v, want one under a retracted suite or its pre-slot key with no name, status or failure text", row)
 			}
 			continue
 		}
@@ -173,8 +181,8 @@ func TestGitHubTestsRouteRetractsTheSlotOfADroppedAggregate(t *testing.T) {
 			t.Errorf("a live case row was written under a retracted suite: %v", row)
 		}
 	}
-	if liveCases != 2 || retractedCases != 2 {
-		t.Errorf("case rows: %d live, %d retracted; want leg B's 2 parts and total-b's 2 cases retracted", liveCases, retractedCases)
+	if liveCases != 2 || retractedCases != 4 {
+		t.Errorf("case rows: %d live, %d retracted; want leg B's 2 parts and total-b's 2 cases retracted at 2 keys each", liveCases, retractedCases)
 	}
 }
 
@@ -585,20 +593,219 @@ func TestGitHubTestsRouteWritesSuiteRowsOnlyWhenTheCaseRowsDoNotFit(t *testing.T
 	t.Logf("one case retraction row is %d bytes", len(row))
 }
 
-// PINNED LIMIT (1a): a minimal retraction row lists only the legacy ids of the dropped report's first suite. For a slot whose
-// only stored rows are pre-slot rows (no older slotted row lists the other ids), the pre-slot copies of its other suites are
-// not hidden by the new readers.
-func TestGitHubTestsMinimalRetractionRowListsOnlyTheFirstSuitesLegacyIDsIsPinned(t *testing.T) {
+// CHAOS-14555: a minimal retraction row lists the legacy ids of every suite of the dropped report (deduplicated, in parse
+// order), so a pre-slot copy of any of its suites is hidden with the slot, not only the first suite's.
+func TestGitHubTestsMinimalRetractionRowsListEveryDroppedSuitesLegacyIDs(t *testing.T) {
 	at := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
-	suite := func(id, legacy string) testSuiteResultRow {
+	suite := func(id string, legacy ...string) testSuiteResultRow {
 		return testSuiteResultRow{OrgID: "org", RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", RunID: "1", SuiteID: id, SuiteName: id,
-			LastSynced: at, ReportSlot: "total-b", RunAttempt: 1, LegacySuiteIDs: []string{legacy}}
+			LastSynced: at, ReportSlot: "total-b", RunAttempt: 1, LegacySuiteIDs: legacy}
 	}
 	rows := githubTestsMinimalRetractionRows(githubTestsRetirement{
-		parsed:  []githubTestsParsedReport{{Suites: []testSuiteResultRow{suite("left", "legacy-left"), suite("right", "legacy-right")}}},
+		parsed: []githubTestsParsedReport{{Suites: []testSuiteResultRow{
+			suite("left", "legacy-left", "legacy-shared"), suite("right", "legacy-right", "legacy-shared"),
+		}}},
 		dropped: []githubTestsReportDrop{{Index: 0, Cause: githubTestsAggregateOfPartsCause}},
 	})
-	if len(rows) != 1 || !slices.Equal(rows[0].LegacySuiteIDs, []string{"legacy-left"}) {
-		t.Fatalf("minimal rows %+v; the pinned limit is one row listing only the first suite's legacy id", rows)
+	if len(rows) != 1 || !slices.Equal(rows[0].LegacySuiteIDs, []string{"legacy-left", "legacy-shared", "legacy-right"}) {
+		t.Fatalf("minimal rows %+v, want one row listing every suite's legacy ids once, in parse order", rows)
+	}
+}
+
+// A large union is split into rows of at most 16,384 ids, each keyed with the retired-slot prefix (its own chunks): 20,000 ids
+// make 2 rows, the first at the slot's retired key.
+func TestGitHubTestsMinimalRetractionRowsSplitALargeLegacyUnion(t *testing.T) {
+	at := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	suites := make([]testSuiteResultRow, 20_000)
+	for index := range suites {
+		id := fmt.Sprintf("suite-%05d", index)
+		suites[index] = testSuiteResultRow{OrgID: "org", RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", RunID: "1", SuiteID: id, SuiteName: id,
+			LastSynced: at, ReportSlot: "total-b", RunAttempt: 2, LegacySuiteIDs: []string{"legacy-" + id}}
+	}
+	rows := githubTestsMinimalRetractionRows(githubTestsRetirement{
+		parsed:  []githubTestsParsedReport{{Suites: suites}},
+		dropped: []githubTestsReportDrop{{Index: 0, Cause: githubTestsAggregateOfPartsCause}},
+	})
+	if len(rows) != 2 || len(rows[0].LegacySuiteIDs) != 16_384 || len(rows[1].LegacySuiteIDs) != 20_000-16_384 {
+		t.Fatalf("%d minimal rows, want 2 of 16,384 and 3,616 legacy ids", len(rows))
+	}
+	if rows[0].SuiteID != githubTestsRetiredSlotKey("total-b", 2) || rows[1].SuiteID == rows[0].SuiteID ||
+		!strings.HasPrefix(rows[1].SuiteID, "~retired-") || !rows[1].Retracted || rows[0].RunAttempt != 2 || rows[1].RunAttempt != 0 {
+		t.Errorf("minimal rows %q at attempt %d and %q at attempt %d, want the slot's retired key at its attempt, then another retired key at attempt 0",
+			rows[0].SuiteID, rows[0].RunAttempt, rows[1].SuiteID, rows[1].RunAttempt)
+	}
+	for _, row := range rows {
+		effect, err := effectBatchFromValues("test_suite_results", EffectReadbackRequired, []testSuiteResultRow{row})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, own := effectOwnChunkRows(effect); len(own) != 1 {
+			t.Errorf("minimal row %s does not take a chunk of its own", row.SuiteID)
+		}
+	}
+}
+
+// CHAOS-14555: a dropped report's cases are also neutralised at their pre-slot keys (the artifact-id scope of a build before
+// slots, and each superseded artifact's), so an old reader after a rollback drops a stale pre-slot copy of a case too.
+func TestGitHubTestsCaseRetractionRowsCoverThePreSlotKeys(t *testing.T) {
+	_, cases := retiredWalk(t, retiredFxListing("3", "4", "6")...)
+	legB := []retiredFxSuite{{"left", "3.0", []retiredFxCase{{"a", "", "0.25"}}}, {"right", "3.0", []retiredFxCase{{"b", "", "0.25"}}}}
+	at := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	archive := githubTestsZip(t, map[string]string{"junit.xml": retiredFxJUnit(legB...)})
+	want := map[string]bool{}
+	slotted, err := parseGitHubTestsReportArtifact(archive, "6", githubTestsReportSlot{Name: "test-results-6", Attempt: 1}, nil,
+		"c7198fbc-1945-3717-05d8-eb78866b4e79", "1", "org-acme", nil, nil, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preSlot, err := parseGitHubTestsArtifact(archive, "6", "c7198fbc-1945-3717-05d8-eb78866b4e79", "1", "org-acme", nil, nil, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range append(slotted.Cases, preSlot.Cases...) {
+		want[row.SuiteID+"/"+row.CaseID] = true
+	}
+	got := map[string]bool{}
+	for _, row := range cases {
+		if row["retracted"] == true {
+			got[row["suite_id"].(string)+"/"+row["case_id"].(string)] = true
+		}
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("case retraction keys %v, want the slotted and the pre-slot keys of total-b's cases %v", got, want)
+	}
+}
+
+// The case batch holds the slot-label and pre-slot case retraction rows up to 33,333 admitted cases (3 x 33,333 = 99,999 rows);
+// at 33,334 the pre-slot rows are skipped (counter and Warn reason legacy_case_rows_skipped) and the slot-label rows stay.
+func TestGitHubTestsLegacyCaseRowsFitUpTo33333Cases(t *testing.T) {
+	matrix := func(left, right int) []rowsArtifact {
+		suite := func(name string, count int) retiredFxSuite {
+			out := retiredFxSuite{name: name, time: "3.0"}
+			for index := 0; index < count; index++ {
+				out.cases = append(out.cases, retiredFxCase{name + "-" + strconv.Itoa(index), "", "0.01"})
+			}
+			return out
+		}
+		l, r := suite("left", left), suite("right", right)
+		return []rowsArtifact{{id: "1", size: 10, body: retiredFxJUnit(l)}, {id: "2", size: 11, body: retiredFxJUnit(r)}, {id: "3", size: 20, body: retiredFxJUnit(l, r)}}
+	}
+	for _, cell := range []struct {
+		left, right, slotRows, legacyRows int
+		limited                           bool
+	}{{16_666, 16_667, 33_333, 33_333, false}, {16_667, 16_667, 33_334, 0, true}} {
+		suites, cases, metrics := retiredWalkWith(t, GitHubTestsRouteHandler{}, matrix(cell.left, cell.right)...)
+		retracted := map[any]bool{}
+		for _, row := range suites {
+			if row["retracted"] == true {
+				retracted[row["suite_id"]] = true
+			}
+		}
+		slotRows, legacyRows := 0, 0
+		for _, row := range cases {
+			if row["retracted"] != true {
+				continue
+			}
+			if retracted[row["suite_id"]] {
+				slotRows++
+			} else {
+				legacyRows++
+			}
+		}
+		limited := strings.Contains(metrics, `dev_health_provider_report_retraction_limited_total{provider="github",reason="legacy_case_rows_skipped"} 1`)
+		if slotRows != cell.slotRows || legacyRows != cell.legacyRows || limited != cell.limited {
+			t.Errorf("%d cases: %d slot-label and %d pre-slot case retraction rows, legacy_case_rows_skipped %t; want %d, %d, %t",
+				cell.left+cell.right, slotRows, legacyRows, limited, cell.slotRows, cell.legacyRows, cell.limited)
+		}
+	}
+}
+
+// When even the minimal rows with every legacy id do not fit the suite batch (the effect contract's 64 MiB), the slot is retired
+// by today's minimal row (the first suite's legacy ids), counted as legacy_ids_capped.
+func TestGitHubTestsRunReportEffectsCapsTheMinimalLegacyIDs(t *testing.T) {
+	at := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	base := testSuiteResultRow{OrgID: "org", RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", RunID: "1", LastSynced: at, ReportSlot: "kept", RunAttempt: 1}
+	live := base
+	live.SuiteID, live.SuiteName = "live", retiredLetters(60<<20)
+	dropped := make([]testSuiteResultRow, 100_000)
+	for index := range dropped {
+		dropped[index] = base
+		dropped[index].ReportSlot = "dropped"
+		dropped[index].SuiteID = fmt.Sprintf("d%06d", index)
+		dropped[index].SuiteName = dropped[index].SuiteID
+		dropped[index].LegacySuiteIDs = []string{fmt.Sprintf("%064d", index)}
+	}
+	effects, limited, err := githubTestsRunReportEffects(githubTestsRetractionRoom{rows: 1}, githubTestsRetirement{
+		parsed:  []githubTestsParsedReport{{Suites: []testSuiteResultRow{live}}, {Suites: dropped}},
+		dropped: []githubTestsReportDrop{{Index: 1, Cause: githubTestsAggregateOfPartsCause}},
+	}, []testSuiteResultRow{live}, nil, nil, nil)
+	if err != nil || limited != "legacy_ids_capped" {
+		t.Fatalf("limited %q (%v), want legacy_ids_capped", limited, err)
+	}
+	for _, effect := range effects {
+		if effect.Destination == "test_suite_results" && len(effect.Rows) != 2 {
+			t.Errorf("%d suite rows, want the live row and one capped minimal row", len(effect.Rows))
+		}
+	}
+}
+
+// Each minimal retraction row takes a prepared chunk of its own, apart from every other report row and from the other minimal
+// rows: one slot whose legacy union takes two rows (20,000 ids), and three slots with one small row each.
+func TestGitHubTestsEveryMinimalRetractionRowTakesItsOwnChunk(t *testing.T) {
+	at := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	report := func(slot string, suites int) githubTestsParsedReport {
+		rows := make([]testSuiteResultRow, suites)
+		for index := range rows {
+			id := fmt.Sprintf("%s-%05d", slot, index)
+			rows[index] = testSuiteResultRow{OrgID: "org", RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", RunID: "1", SuiteID: id, SuiteName: id,
+				TotalCount: 1, PassedCount: 1, LastSynced: at, ReportSlot: slot, RunAttempt: 2, LegacySuiteIDs: []string{"legacy-" + id}}
+		}
+		return githubTestsParsedReport{Suites: rows}
+	}
+	live := report("kept", 3)
+	for _, cell := range []struct {
+		name    string
+		dropped []githubTestsParsedReport
+		rows    int
+	}{
+		{"one slot, a two-row union", []githubTestsParsedReport{report("total", 20_000)}, 2},
+		{"three slots, small rows", []githubTestsParsedReport{report("total-a", 2), report("total-b", 2), report("total-c", 2)}, 3},
+	} {
+		retirement := githubTestsRetirement{parsed: append([]githubTestsParsedReport{live}, cell.dropped...)}
+		for index := range cell.dropped {
+			retirement.dropped = append(retirement.dropped, githubTestsReportDrop{Index: index + 1, Cause: githubTestsAggregateOfPartsCause})
+		}
+		effects, limited, err := githubTestsRunReportEffects(githubTestsRetractionRoom{rows: 1}, retirement, live.Suites, nil, nil, nil)
+		if err != nil || limited != "one_row_per_slot" {
+			t.Fatalf("%s: limited %q (%v), want one_row_per_slot", cell.name, limited, err)
+		}
+		chunks, err := splitCompleteRouteBatch(CompleteRouteBatch{Effects: effects}, ShadowComparison{}, TestOpsRouteChunkPolicy())
+		if err != nil {
+			t.Fatalf("%s: %v", cell.name, err)
+		}
+		own := 0
+		for ordinal, chunk := range chunks {
+			minimal, others := 0, 0
+			for _, effect := range chunk.Effects {
+				for _, row := range effect.Rows {
+					switch {
+					case strings.Contains(string(row), `"suite_id":"~retired-`):
+						minimal++
+					case effect.Destination != testOpsRunReportCompletenessDestination:
+						others++
+					}
+				}
+			}
+			if minimal == 0 {
+				continue
+			}
+			own++
+			if minimal != 1 || others != 0 {
+				t.Errorf("%s: chunk %d holds %d minimal rows and %d other report rows, want 1 and 0", cell.name, ordinal, minimal, others)
+			}
+		}
+		if own != cell.rows {
+			t.Errorf("%s: %d chunks hold a minimal row, want %d", cell.name, own, cell.rows)
+		}
 	}
 }

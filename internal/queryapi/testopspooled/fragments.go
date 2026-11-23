@@ -121,6 +121,16 @@ func retiredLegacyIDs(t attemptTable, bound string) string {
 		t.legacyIDs, t.table, bound, retiredSlots(t, bound))
 }
 
+// RevivedSlots is the statement that counts the report slots a later sync brought back after their retirement (CHAOS-14555): a
+// slot that holds a retraction row and whose newest row of its newest attempt is live again. The cases of its retired attempts
+// stay hidden (their case rows were retracted at their keys), so the daily read makes the revival loud. It binds {org_id:String}
+// and the parameters named by scope.
+func RevivedSlots(scope Scope) string {
+	scope.validate()
+	return fmt.Sprintf("SELECT count() FROM (SELECT repo_id, run_id, report_slot FROM %s FINAL WHERE org_id = {org_id:String}%s AND report_slot != '' GROUP BY repo_id, run_id, report_slot HAVING max(retracted) = 1 AND argMax(retracted, (run_attempt, last_synced, retracted)) = 0)",
+		suiteTable.table, suiteTable.bound(scope))
+}
+
 // outerColumns validates alias and scope and returns the namer of the outer columns.
 func outerColumns(alias string, scope Scope) func(string) string {
 	if alias != "" && !aliasPattern.MatchString(alias) {

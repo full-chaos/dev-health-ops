@@ -99,6 +99,16 @@ differ for the same repositories. A team that has a persisted score keeps it
 until the next daily run replaces it, also when newer repository rows of the
 day exist.
 
+Every team score of the breakout groups repositories by the team that owned
+each of them on the selected day, the ownership the daily run uses for the
+persisted team scores. With teams named, the rows and every day of the trend
+use the repositories those teams owned on the selected day. This is not the
+rule of the TestOps series of a team, which attributes every day of its window
+to the owners as of the request. The selected day itself is picked with the
+ownership of the request: with teams named and no persisted team score in the
+window, it is the newest day with a row of a repository those teams own at the
+request.
+
 Every definition publishes its unit, aggregation, display precision, null and
 zero semantics, supported scopes and dimensions, range limits, comparison
 rule, definition version, query version, source version, and freshness policy.
@@ -549,6 +559,11 @@ An unknown day leaves the flake and recurrence factors out, as a day that measur
 lower than the not-applicable reading.
 
 Residual: a repository whose last test report is older than 29 days reads as not applicable.
+
+The queue part of quality drag has the same unknown form. A pipeline group with runs but no queue sample (for example,
+a group whose only runs are re-runs) stores `avg_queue_seconds` as null in `factors_json` and `queue_wait_hours` as
+NULL, so `drag_hours` is the sum of the known parts and the served drag of the day is marked partial. A group with no
+runs keeps a queue wait of 0.
 
 ## TestOps release confidence: coverage
 

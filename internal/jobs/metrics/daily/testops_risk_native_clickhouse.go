@@ -433,6 +433,21 @@ func flakeHoursOrUnknown(hours float64, unknown bool) *float64 {
 	return nullablePyRound("testops_quality_drag", "flake_investigation_hours", hours, 4)
 }
 
+func queueHoursOrUnknown(hours float64, unknown bool) *float64 {
+	if unknown {
+		return nil
+	}
+	return nullablePyRound("testops_quality_drag", "queue_wait_hours", hours, 4)
+}
+
+func knownQueueSeconds(value float64, unknown bool) *float64 {
+	if unknown {
+		return nil
+	}
+	rounded := pyRound(value, 2)
+	return &rounded
+}
+
 // clampUnit ports Python's `_clamp(value, lo=0.0, hi=1.0) -> max(lo, min(hi,
 // value))` (compute_testops_risk.py:20-21) bit-for-bit, including its NaN
 // behavior, via pythonparity.Min2/Max2, which replicate CPython's
@@ -695,6 +710,8 @@ func computeQualityDrag(
 		}
 		rerunRate = pipe.RerunRate
 	}
+	// Pipelines with no queue sample (all re-runs) leave the queue part unknown; 0 pipelines wait a known 0 h.
+	queueUnknown := pipe != nil && pipe.PipelinesCount > 0 && pipe.AvgQueueSeconds == nil
 	var flakeRate float64
 	var totalCases int
 	flakeUnknown := test != nil && test.DistinctCases == 0
@@ -717,7 +734,7 @@ func computeQualityDrag(
 		fi("failure_count", failureCount),
 		ff("median_duration_seconds", pyRound(medianDur, 2)),
 		fi("pipelines_count", pipelinesCount),
-		ff("avg_queue_seconds", pyRound(avgQueue, 2)),
+		ffRate("avg_queue_seconds", knownQueueSeconds(avgQueue, queueUnknown)),
 		ff("rerun_rate", pyRound(rerunRate, 4)),
 		ffRate("flake_rate", knownRate(flakeRate, flakeUnknown)),
 		fi("total_cases", totalCases),
@@ -728,7 +745,7 @@ func computeQualityDrag(
 		DragHours:               nullablePyRound("testops_quality_drag", "drag_hours", dragHours, 4),
 		FailureReworkHours:      nullablePyRound("testops_quality_drag", "failure_rework_hours", failureReworkHours, 4),
 		FlakeInvestigationHours: flakeHoursOrUnknown(flakeInvestigationHours, flakeUnknown),
-		QueueWaitHours:          nullablePyRound("testops_quality_drag", "queue_wait_hours", queueWaitHours, 4),
+		QueueWaitHours:          queueHoursOrUnknown(queueWaitHours, queueUnknown),
 		RetryOverheadHours:      nullablePyRound("testops_quality_drag", "retry_overhead_hours", retryOverheadHours, 4),
 		FactorsJSON:             factors,
 		ComputedAt:              computedAt,

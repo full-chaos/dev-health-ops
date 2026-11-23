@@ -13,6 +13,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"log/slog"
 	"maps"
 	"math"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,6 +29,8 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/google/uuid"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -1105,11 +1109,17 @@ func TestTestopsRetiredSlotSuiteRowsOnlyServesTheSyncedOnceNumbers(t *testing.T)
 func TestTestopsRetiredSlotRevivalDoesNotRestoreWhatTheRuleHidIsPinned(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
+	reader := manualMeterProvider(t)
+	warns := retiredCaptureRevivalWarns(t)
 	env := startRetiredStack(t, ctx)
 	stack := env.stack
 	org := "org-chaos14259-revival-" + uuid.NewString()[:8]
 	const runID = "43600014265"
 	retiredTwoAttemptRun(t, stack, org, runID, retiredDay(), false)
+	retiredMetricOf(t, stack, org, retiredDay())
+	if revived, lines := retiredRevivedCount(t, reader), warns(); revived != 0 || lines != 0 {
+		t.Fatalf("before the revival: revived counter %d, %d Warn lines; want 0 and 0", revived, lines)
+	}
 	stamp := func(clock string) string { return "2026-07-22T" + clock + "Z" }
 	attempt3Total := []matrixTotalsSuite{{"left", "4.0", []matrixTotalsCase{{"a", "", "0.3"}}}, {"right", "4.0", []matrixTotalsCase{{"b", "", "0.3"}}}}
 	attempt2Leg := []matrixTotalsSuite{{"left", "3.0", []matrixTotalsCase{{"a", "", "0.25"}}}, {"right", "3.0", []matrixTotalsCase{{"b", "", "0.25"}}}}
@@ -1144,6 +1154,89 @@ WHERE org_id = ? AND run_id = ? AND suite_id IN (
 	if got.flake != 0 || got.failedNames != 0 || got.distinct != 2 {
 		t.Errorf("revived run serves flake %d, failed names %d of %d names; the pinned limit is flake 0, failed names 0 of 2", got.flake, got.failedNames, got.distinct)
 	}
+	// The revival is loud (CHAOS-14555): the test-day read counts the revived slot and warns, with counts only.
+	if revived, lines := retiredRevivedCount(t, reader), warns(); revived != 1 || lines != 1 {
+		t.Errorf("after the revival: revived counter %d, %d Warn lines with slots 1; want 1 and 1", revived, lines)
+	}
+	// No false revival: a re-run of one leg (K3's shape) keeps total-b retired at every attempt.
+	rerunOrg := "org-chaos14555-rerun-" + uuid.NewString()[:8]
+	both, _, _ := retiredArtifacts(t)
+	stack.pass(t, rerunOrg, retiredRunID, retiredDay().Add(10*time.Hour), retiredState(false, both))
+	rerun := slices.Clone(both)
+	for _, index := range []int{0, 1} {
+		again := both[index]
+		again.id, again.created = again.id+10, "2026-07-22T11:30:00Z"
+		rerun = append(rerun, again)
+	}
+	stack.pass(t, rerunOrg, retiredRunID, retiredDay().Add(11*time.Hour), attemptsRunState{created: "2026-07-22T10:01:00Z", attempt: 2,
+		started: "2026-07-22T11:10:00Z", updated: "2026-07-22T11:40:00Z", artifacts: rerun})
+	retiredMetricOf(t, stack, rerunOrg, retiredDay())
+	if revived, lines := retiredRevivedCount(t, reader), warns(); revived != 1 || lines != 1 {
+		t.Errorf("after a re-run of one leg: revived counter %d, %d Warn lines; want them unchanged at 1 and 1", revived, lines)
+	}
+}
+
+// retiredRevivedCount is the sum of the revived-slot counter's points (CHAOS-14555).
+func retiredRevivedCount(t *testing.T, reader *sdkmetric.ManualReader) int64 {
+	t.Helper()
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &collected); err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, scope := range collected.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name != "dev_health_testops_report_slots_revived_total" {
+				continue
+			}
+			for _, point := range m.Data.(metricdata.Sum[int64]).DataPoints {
+				total += point.Value
+			}
+		}
+	}
+	return total
+}
+
+// retiredCaptureRevivalWarns captures the default logger and returns a counter of the revival Warn lines that carry counts
+// only (slots 1, no id field).
+func retiredCaptureRevivalWarns(t *testing.T) func() int {
+	t.Helper()
+	var captured bytes.Buffer
+	var mu sync.Mutex
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&lockedWriter{mu: &mu, w: &captured}, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		lines := 0
+		for _, line := range strings.Split(captured.String(), "\n") {
+			if !strings.Contains(line, "report slots revived after their retirement") {
+				continue
+			}
+			var record map[string]any
+			if err := json.Unmarshal([]byte(line), &record); err != nil {
+				t.Fatal(err)
+			}
+			_, org := record["org_id"]
+			_, repo := record["repo_id"]
+			if record["level"] == "WARN" && record["slots"] == float64(1) && !org && !repo {
+				lines++
+			}
+		}
+		return lines
+	}
+}
+
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  *bytes.Buffer
+}
+
+func (writer *lockedWriter) Write(p []byte) (int, error) {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	return writer.w.Write(p)
 }
 
 // retiredOldReaderSuiteSums is the base suite read (from the base source) over the stored rows: the sums of the counts and
@@ -1337,27 +1430,53 @@ WHERE org_id = ? AND run_id = ? AND report_slot = 'total-b' AND suite_name = 'le
 		}
 	})
 
-	// 2: the stale case also stored under its pre-slot key (the artifact-id scope), BASE reader. The case retraction rows use the
-	// slot scope only, so the pre-slot case keeps its name: K4 flake 2 of 3 (CONTROL 1 of 3), K5 recurrent 1 of 1 (CONTROL 0 of
-	// 1). The new readers hide the copy (TestTestopsRetiredSlotRetiresItsPreSlotCopies).
-	t.Run("pre-slot case key old reader", func(t *testing.T) {
-		flakeOrg := newOrg("pre-slot-flake")
-		retiredTwoAttemptRun(t, stack, flakeOrg, "43600014261", retiredDay(), true)
-		retiredInsertPreSlotCopy(t, stack, flakeOrg, "43600014261", retiredAttemptLegacyID(t, stack, flakeOrg, "43600014261"),
-			retiredDay().Add(10*time.Hour+time.Minute), "a")
-		if flake, distinct, _, _ := retiredOldReaderCaseMeasures(t, stack, flakeOrg, retiredDay()); flake != 2 || distinct != 3 {
-			t.Errorf("K4 old reader serves flake %d of %d names; pinned 2 of 3 (CONTROL 1 of 3)", flake, distinct)
-		}
-		historyOrg := newOrg("pre-slot-history")
-		historyDay := retiredDay().AddDate(0, 0, -1)
-		retiredTwoAttemptRun(t, stack, historyOrg, "43600014262", historyDay, false)
-		retiredInsertPreSlotCopy(t, stack, historyOrg, "43600014262", retiredAttemptLegacyID(t, stack, historyOrg, "43600014262"),
-			historyDay.Add(10*time.Hour+time.Minute), "a")
-		stack.pass(t, historyOrg, "43600014263", retiredDay().Add(10*time.Hour), retiredState(false, []attemptsArtifact{
-			{21, "today", "2026-07-22T10:20:00Z", false, retiredArchive(t, "2026-07-22T10:02:00", matrixTotalsSuite{"t", "1.0", []matrixTotalsCase{{"a", "failed", "0.5"}}})},
-		}))
-		if _, _, failedToday, recurrent := retiredOldReaderCaseMeasures(t, stack, historyOrg, retiredDay()); failedToday != 1 || recurrent != 1 {
-			t.Errorf("K5 old reader serves recurrent %d of %d failed names; pinned 1 of 1 (CONTROL 0 of 1)", recurrent, failedToday)
-		}
-	})
+}
+
+// retiredPreSlotCaseKey is the case key the pre-slot writer gives case name in the suite suiteID: sha256 of "suiteID::name" in hex,
+// computed here, apart from providersync, as the oracle of the key the retraction must hit.
+func retiredPreSlotCaseKey(suiteID, name string) string {
+	sum := sha256.Sum256([]byte(suiteID + "::" + name))
+	return hex.EncodeToString(sum[:])
+}
+
+// retiredInsertPreSlotCaseCopy stores a pre-slot copy (report_slot = ”) of total-b's attempt-1 left suite under its pre-slot
+// suite key, with its failed case a at the pre-slot case key.
+func retiredInsertPreSlotCaseCopy(t *testing.T, stack attemptsStack, org, runID string, started time.Time) {
+	t.Helper()
+	suiteID := retiredAttemptLegacyID(t, stack, org, runID)
+	retiredInsertPreSlotCopy(t, stack, org, runID, suiteID, started, "")
+	if err := stack.conn.Exec(stack.ctx, `INSERT INTO test_case_results
+(org_id, repo_id, run_id, suite_id, case_id, case_name, status, retry_attempt, last_synced)
+VALUES (?, ?, ?, ?, ?, 'a', 'failed', 0, ?)`, org, stack.repoID(t, org), runID, suiteID, retiredPreSlotCaseKey(suiteID, "a"), started.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// CHAOS-14555: the stale case also stored under its pre-slot key (the artifact-id scope of a build before slots) is neutralised by
+// a case retraction row at that key, so a rollback to the base binary serves CONTROL: K4 flake 1 of 3, K5 recurrent 0 of 1. (The
+// base reader takes every suite row in its case sets and drops only a case with no name.)
+func TestTestopsRetiredSlotOldReaderHidesThePreSlotCaseKey(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	env := startRetiredStack(t, ctx)
+	stack := env.stack
+	newOrg := func(name string) string { return "org-chaos14555-" + name + "-" + uuid.NewString()[:8] }
+
+	flakeOrg := newOrg("pre-slot-flake")
+	retiredTwoAttemptRun(t, stack, flakeOrg, "43600014261", retiredDay(), true)
+	retiredInsertPreSlotCaseCopy(t, stack, flakeOrg, "43600014261", retiredDay().Add(10*time.Hour+time.Minute))
+	if flake, distinct, _, _ := retiredOldReaderCaseMeasures(t, stack, flakeOrg, retiredDay()); flake != 1 || distinct != 3 {
+		t.Errorf("K4 old reader serves flake %d of %d names, want CONTROL 1 of 3", flake, distinct)
+	}
+
+	historyOrg := newOrg("pre-slot-history")
+	historyDay := retiredDay().AddDate(0, 0, -1)
+	retiredTwoAttemptRun(t, stack, historyOrg, "43600014262", historyDay, false)
+	retiredInsertPreSlotCaseCopy(t, stack, historyOrg, "43600014262", historyDay.Add(10*time.Hour+time.Minute))
+	stack.pass(t, historyOrg, "43600014263", retiredDay().Add(10*time.Hour), retiredState(false, []attemptsArtifact{
+		{21, "today", "2026-07-22T10:20:00Z", false, retiredArchive(t, "2026-07-22T10:02:00", matrixTotalsSuite{"t", "1.0", []matrixTotalsCase{{"a", "failed", "0.5"}}})},
+	}))
+	if _, _, failedToday, recurrent := retiredOldReaderCaseMeasures(t, stack, historyOrg, retiredDay()); failedToday != 1 || recurrent != 0 {
+		t.Errorf("K5 old reader serves recurrent %d of %d failed names, want CONTROL 0 of 1", recurrent, failedToday)
+	}
 }

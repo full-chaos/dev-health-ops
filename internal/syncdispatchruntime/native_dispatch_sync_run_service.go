@@ -603,6 +603,7 @@ WHERE id = $1::uuid`,
 	var end passEnd
 	var counts pendingUnitCounts
 	// MUTANT M2b: the whole tail runs after the commit in its own transaction and returns its errors.
+	_ = fmt.Errorf
 	if committed, err := service.commitFencedAfter(ctx, tx, fence, nil); err != nil {
 		return err
 	} else if !committed {

@@ -568,7 +568,8 @@ func TestRunStampsAreDistinctPerOrgUnderContention(t *testing.T) {
 // advisory namespace in the repo (internal/jobs/metrics/remaining/
 // manual_recompute.go:168-170, manual_backfill.go:392-394, postgres.go:347-348
 // and :1056-1057, internal/jobs/metrics/daily/manual_run.go:197-198,
-// internal/syncdispatchruntime/touched_days_drain.go:515 and :519).
+// internal/syncdispatchruntime/touched_days_drain.go touchedDrainLockNamespace, touchedCheckLockNamespace and the
+// testops window pair).
 func TestRunStampLockNamespaceCollidesWithNoOtherTwoKeyLock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	t.Cleanup(cancel)
@@ -577,7 +578,8 @@ func TestRunStampLockNamespaceCollidesWithNoOtherTwoKeyLock(t *testing.T) {
 	if err := pg.Domain.QueryRow(ctx, `SELECT hashtext($1)`, RunStampLockNamespace).Scan(&ours); err != nil {
 		t.Fatal(err)
 	}
-	others := map[string]int32{"touchedDrainLockNamespace": 8846, "touchedCheckLockNamespace": 8847}
+	others := map[string]int32{"touchedDrainLockNamespace": 8846, "touchedCheckLockNamespace": 8847,
+		"testopsWindowDrainLockNamespace": 8848, "testopsWindowCheckLockNamespace": 8849}
 	for _, name := range []string{"remaining_metrics_manual_backfill_day", "remaining_metrics_dora_day", "remaining_metrics_fresh_scope", "daily_metrics_manual_day"} {
 		var key int32
 		if err := pg.Domain.QueryRow(ctx, `SELECT hashtext($1)`, name).Scan(&key); err != nil {

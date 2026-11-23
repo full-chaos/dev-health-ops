@@ -177,7 +177,7 @@ type windowCellStore interface {
 
 // windowCellLanes are the lanes of the record a daily run is started for.
 func windowCellLanes(store *syncdispatchruntime.ClickHouseTouchedDaysStore) []windowCellStore {
-	return []windowCellStore{store}
+	return []windowCellStore{store, store.TestopsWindowLane()}
 }
 
 func TestTestopsRetractionRecomputesTheTrailingWindowDays(t *testing.T) {

@@ -880,6 +880,9 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 	blocked := make(map[string]struct{}, len(handler.nativeFamilyNames))
 	computed := make([]string, 0, len(handler.nativeFamilyNames))
 	for _, name := range handler.nativeFamilyNames {
+		if !familyInRunScope(run, name) {
+			continue
+		}
 		executor := handler.nativeFamilies[name]
 		if executor == nil {
 			// CHAOS-3092 (PR-A, r1 finding): a name in nativeFamilyNames
@@ -1109,6 +1112,9 @@ func (handler *PartitionHandler) computePostBridgeNativeFamilies(ctx context.Con
 	}
 	var incomplete []string
 	for _, name := range handler.postBridgeFamilyNames {
+		if !familyInRunScope(run, name) {
+			continue
+		}
 		executor := handler.postBridgeFamilies[name]
 		if executor == nil {
 			// A nil post_bridge executor means NO writer produces this family's
@@ -1397,6 +1403,8 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 		if checkErr != nil {
 			return sourceCheckFailure(ctx, execution, handler.store, *claim, checkErr)
 		}
+		// A family the run did not compute has no output of this run to judge.
+		families = familiesInRunScope(run, families)
 		if len(families) > 0 {
 			if handler.zeroRowsObserver != nil {
 				for _, family := range families {
@@ -1997,6 +2005,11 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 			if err != nil {
 				return err
 			}
+			// A run of the testops window lane owns no finalize measure: the retraction recomputes the work-item tables and
+			// the finalize families read the whole organization-day.
+			if IsTestopsWindowGeneration(claim.Run.Generation) {
+				return nil
+			}
 			if err := handler.retractStaleKeys(workCtx, claim.Run); err != nil {
 				return err
 			}
@@ -2150,7 +2163,9 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 	handler.drainTouchedDaysAfterEnd(ctx, claim.Run)
 	// The completion is written and the drain has started: the activity
 	// projection is refreshed last, so it can neither fail nor delay either.
-	handler.refreshOrgActivity(ctx, claim.Run)
+	if !IsTestopsWindowGeneration(claim.Run.Generation) {
+		handler.refreshOrgActivity(ctx, claim.Run)
+	}
 	return nil
 }
 

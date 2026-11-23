@@ -84,7 +84,7 @@ func insertTouchedTestTransition(
 // reader contract of the table, sorted, as "2006-01-02|repository".
 func pendingTouchedTestKeys(t *testing.T, ctx context.Context, conn driver.Conn, org string) []string {
 	t.Helper()
-	rows, err := conn.Query(ctx, `SELECT toString(day), toString(repo_id) FROM (`+pendingTouchedKeysSQL+`)`, org)
+	rows, err := conn.Query(ctx, (&ClickHouseTouchedDaysStore{}).laneSQL(`SELECT toString(day), toString(repo_id) FROM (`+pendingTouchedKeysSQL+`)`), org)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -36,6 +36,18 @@ import (
 type dailyPostSyncWriter struct {
 	store     *daily.PostgresStore
 	publisher daily.RunPublisher
+	// lane is the lane of the touched-day record whose runs StartTouchedDayTx
+	// starts. The zero value is the touched-day lane.
+	lane daily.TouchedLane
+}
+
+// touchedGeneration is the generation of the runs the writer starts for the
+// touched keys of a sync run.
+func (writer dailyPostSyncWriter) touchedGeneration(plan syncdispatchruntime.PostSyncPlan) string {
+	if writer.lane == (daily.TouchedLane{}) {
+		return "post-sync:" + plan.SyncRunID
+	}
+	return writer.lane.PostSyncGeneration(plan.SyncRunID)
 }
 
 func (writer dailyPostSyncWriter) StartRunTx(
@@ -94,7 +106,7 @@ func (writer dailyPostSyncWriter) StampTakeTx(
 	ctx context.Context, tx pgx.Tx, plan syncdispatchruntime.PostSyncPlan, takenAt time.Time,
 ) error {
 	return unwrittenTake(writer.store.StampTouchedTakeTx(
-		ctx, tx, plan.OrganizationID, "post-sync:"+plan.SyncRunID, takenAt))
+		ctx, tx, plan.OrganizationID, writer.touchedGeneration(plan), takenAt))
 }
 
 // StartTouchedDayTx starts the run of one day that stored raw rows touched,
@@ -113,7 +125,7 @@ func (writer dailyPostSyncWriter) StartTouchedDayTx(
 	day time.Time,
 	repositoryIDs []string,
 ) (bool, error) {
-	generation := "post-sync:" + plan.SyncRunID
+	generation := writer.touchedGeneration(plan)
 	exists, err := writer.store.RunExistsTx(ctx, tx, plan.OrganizationID, day, generation)
 	if err != nil {
 		return false, err
@@ -141,6 +153,16 @@ func (writer dailyPostSyncWriter) StartTouchedDayTx(
 type touchedDrainRuns struct {
 	store     *daily.PostgresStore
 	publisher daily.RunPublisher
+	// lane is the lane of the touched-day record the drain serves. The zero
+	// value is the touched-day lane.
+	lane daily.TouchedLane
+}
+
+func (runs touchedDrainRuns) touchedLane() daily.TouchedLane {
+	if runs.lane == (daily.TouchedLane{}) {
+		return daily.TouchedLaneDays
+	}
+	return runs.lane
 }
 
 func (touchedDrainRuns) RepositoryLimit() int { return daily.MaxRepositoriesPerRun }
@@ -148,7 +170,7 @@ func (touchedDrainRuns) RepositoryLimit() int { return daily.MaxRepositoriesPerR
 func (runs touchedDrainRuns) OwnedKeysOfRunsWithoutResult(
 	ctx context.Context, organizationID string, notEndedAfter time.Duration, limit int,
 ) ([]syncdispatchruntime.TouchedRunKeys, bool, error) {
-	owned, truncated, err := runs.store.OwnedKeysOfTouchedRunsWithoutResult(ctx, organizationID, notEndedAfter, limit)
+	owned, truncated, err := runs.store.OwnedKeysOfTouchedLaneRunsWithoutResult(ctx, runs.touchedLane(), organizationID, notEndedAfter, limit)
 	if err != nil {
 		return nil, false, err
 	}
@@ -158,7 +180,7 @@ func (runs touchedDrainRuns) OwnedKeysOfRunsWithoutResult(
 func (runs touchedDrainRuns) MarkingRunsToCheck(
 	ctx context.Context, organizationID, endedRunID string, window time.Duration, limit int,
 ) ([]syncdispatchruntime.TouchedRunKeys, bool, error) {
-	listed, truncated, err := runs.store.TouchedMarkingRunsToCheck(ctx, organizationID, endedRunID, window, limit)
+	listed, truncated, err := runs.store.TouchedLaneMarkingRunsToCheck(ctx, runs.touchedLane(), organizationID, endedRunID, window, limit)
 	if err != nil {
 		return nil, false, err
 	}
@@ -179,7 +201,7 @@ func (runs touchedDrainRuns) StampTakeTx(
 	ctx context.Context, tx pgx.Tx, organizationID, passID string, takenAt time.Time,
 ) error {
 	return unwrittenTake(runs.store.StampTouchedTakeTx(
-		ctx, tx, organizationID, daily.TouchedDrainGenerationPrefix+passID, takenAt))
+		ctx, tx, organizationID, runs.touchedLane().DrainGeneration(passID), takenAt))
 }
 
 // unwrittenTake names the one error of a stamp that the caller goes on after.
@@ -201,7 +223,7 @@ func touchedRunKeys(runs []daily.TouchedRunKeys) []syncdispatchruntime.TouchedRu
 func (runs touchedDrainRuns) DaysWithOnlyFailedRuns(
 	ctx context.Context, organizationID string, days []time.Time, threshold int, notEndedAfter, retryAfter time.Duration,
 ) (map[string]bool, error) {
-	return runs.store.TouchedDaysWithOnlyFailedRuns(ctx, organizationID, days, threshold, notEndedAfter, retryAfter)
+	return runs.store.TouchedLaneDaysWithOnlyFailedRuns(ctx, runs.touchedLane(), organizationID, days, threshold, notEndedAfter, retryAfter)
 }
 
 func (runs touchedDrainRuns) RunsStateTx(ctx context.Context, tx pgx.Tx, organizationID string) (string, error) {
@@ -211,7 +233,7 @@ func (runs touchedDrainRuns) RunsStateTx(ctx context.Context, tx pgx.Tx, organiz
 func (runs touchedDrainRuns) InFlightTx(
 	ctx context.Context, tx pgx.Tx, organizationID string, since time.Time,
 ) (int, error) {
-	return runs.store.TouchedDrainRunsInFlightTx(ctx, tx, organizationID, since)
+	return runs.store.TouchedLaneDrainRunsInFlightTx(ctx, tx, runs.touchedLane(), organizationID, since)
 }
 
 // StartTx starts the run of one pending day for the listed repositories. The
@@ -226,7 +248,7 @@ func (runs touchedDrainRuns) StartTx(
 		// a generation that deferred discovery refuses.
 		return false, syncdispatchruntime.ErrPostSyncUnavailable
 	}
-	generation := daily.TouchedDrainGenerationPrefix + passID
+	generation := runs.touchedLane().DrainGeneration(passID)
 	exists, err := runs.store.RunExistsTx(ctx, tx, organizationID, day, generation)
 	if err != nil {
 		return false, err
@@ -696,6 +718,12 @@ func buildSyncCoordinatorWorker(
 	if err == nil {
 		err = postSync.SetTouchedDays(touchedDays, dailyPostSyncWriter{store: dailyStore, publisher: dailyPublisher})
 	}
+	// CHAOS-14562: the days after a retraction whose trailing window holds it,
+	// in a lane of their own whose runs compute the testops window families.
+	if err == nil {
+		err = postSync.SetTestopsWindowDays(touchedDays.TestopsWindowLane(),
+			dailyPostSyncWriter{store: dailyStore, publisher: dailyPublisher, lane: daily.TouchedLaneTestopsWindow})
+	}
 	if err != nil {
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
@@ -988,7 +1016,8 @@ func buildFinalizeSyncRunService(
 
 // newTouchedDaysDrain builds the drain of the pending touched days
 // (CHAOS-8846) for the daily worker family, over the family's own ClickHouse
-// connection and daily store.
+// connection and daily store. A trigger runs the pass of the touched-day lane
+// and then the pass of the testops window lane (CHAOS-14562).
 func newTouchedDaysDrain(
 	pool *pgxpool.Pool,
 	clickhouseConnection driver.Conn,
@@ -996,7 +1025,7 @@ func newTouchedDaysDrain(
 	publisher daily.RunPublisher,
 	observer jobruntime.TouchedDaysDrainObserver,
 	logger *slog.Logger,
-) (*syncdispatchruntime.TouchedDaysDrain, error) {
+) (daily.TouchedDaysDrainer, error) {
 	if store == nil || publisher == nil {
 		return nil, syncdispatchruntime.ErrPostSyncUnavailable
 	}
@@ -1010,7 +1039,27 @@ func newTouchedDaysDrain(
 		return nil, err
 	}
 	drain.SetObserver(observer)
-	return drain, nil
+	window, err := syncdispatchruntime.NewTestopsWindowDrain(pool, touchedDays.TestopsWindowLane(),
+		touchedDrainRuns{store: store, publisher: publisher, lane: daily.TouchedLaneTestopsWindow}, synclog.New(logger))
+	if err != nil {
+		return nil, err
+	}
+	window.SetObserver(observer)
+	return touchedDaysDrains{days: drain, testopsWindow: window}, nil
+}
+
+// touchedDaysDrains runs the passes of the two lanes of the touched-day record
+// for one trigger, in order. The pass of the testops window lane comes second:
+// a pass reads the state of the daily runs first and starts nothing when a run
+// was created before its lock, so the window pass, which starts runs, must not
+// run between the reads and the lock of the touched-day pass.
+type touchedDaysDrains struct {
+	days, testopsWindow daily.TouchedDaysDrainer
+}
+
+func (drains touchedDaysDrains) DrainTouchedDays(ctx context.Context, organizationID, passID string) {
+	drains.days.DrainTouchedDays(ctx, organizationID, passID)
+	drains.testopsWindow.DrainTouchedDays(ctx, organizationID, passID)
 }
 
 // newProductionTeamCatalogCollectors is the registry the worker runs: every collector behind

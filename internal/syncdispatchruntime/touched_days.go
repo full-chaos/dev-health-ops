@@ -21,6 +21,14 @@ import (
 // newest first too.
 const PostSyncTouchedDaysPerFanout = 31
 
+// PostSyncTestopsWindowRepoDaysPerFanout is the number of (day, repository)
+// keys of the testops window lane that one post-sync fan-out, and one pass of
+// its drain, starts runs for: the window of 29 days of PostSyncTouchedDaysPerFanout
+// retraction days. A run of the lane computes two families of a repository-day
+// (testops_test and testops_risk), not every family. The keys over the cap stay
+// pending for the drain, newest first; the cut is logged and counted.
+const PostSyncTestopsWindowRepoDaysPerFanout = PostSyncTouchedDaysPerFanout * 29
+
 // postSyncTouchedPendingDayReadLimit bounds the read of the pending days of
 // one organization (ten years of days). A fan-out that hits the bound logs an
 // error and counts it: the days older than the bound are not seen until the
@@ -202,6 +210,27 @@ func (service *NativePostSyncService) SetTouchedDays(store TouchedDaysStore, wri
 	return nil
 }
 
+// SetTestopsWindowDays wires the testops window lane (CHAOS-14562): the
+// fan-out then starts runs for the pending keys of that lane, as for the
+// touched days, under the writer's own generations. The record of the lane is
+// written by RecordTouchedTests of the touched-day store.
+func (service *NativePostSyncService) SetTestopsWindowDays(store TouchedDaysStore, writer TouchedDayPostSyncWriter) error {
+	if service == nil || store == nil || writer == nil || writer.RepositoryLimit() < 1 {
+		return unavailable(stageTouchedSetup, nil)
+	}
+	service.testopsWindow = store
+	service.testopsWindowWriter = writer
+	return nil
+}
+
+// SetTestopsWindowRepoDayCap replaces PostSyncTestopsWindowRepoDaysPerFanout
+// for this fan-out. It is for tests; n < 1 keeps the default.
+func (service *NativePostSyncService) SetTestopsWindowRepoDayCap(n int) {
+	if service != nil {
+		service.testopsWindowBudget = n
+	}
+}
+
 // SetTouchedDaysObserver wires the optional touched-day counters. A nil
 // observer (the default) means the fan-out still logs its line.
 func (service *NativePostSyncService) SetTouchedDaysObserver(observer jobruntime.PostSyncTouchedDaysObserver) {
@@ -222,10 +251,16 @@ type touchedDayStart struct {
 // its Postgres transaction.
 type touchedDaysTake struct {
 	organizationID string
+	plan           *PostSyncPlan
 	recorded       uint64
-	window         TouchedWindowReport
-	takenAt        time.Time
-	starts         []touchedDayStart
+	// testopsWindow is what the record wrote to the testops window lane.
+	testopsWindow TestopsWindowReport
+	// budgetCut is the number of days a repository-day budget took in part:
+	// the rest of their keys stays pending.
+	budgetCut int
+	window    TouchedWindowReport
+	takenAt   time.Time
+	starts    []touchedDayStart
 	// windowPending are the pending days that DailyPostSyncWriter.StartRunTx
 	// computes for every repository.
 	windowPending []time.Time
@@ -266,18 +301,50 @@ func (service *NativePostSyncService) takeTouchedDays(
 	if err != nil || plan == nil {
 		return nil, err
 	}
-	take := &touchedDaysTake{organizationID: plan.OrganizationID}
-	if err := recordPlanTouchedDays(ctx, service.touched, plan, take); err != nil {
+	take := &touchedDaysTake{organizationID: plan.OrganizationID, plan: plan}
+	if err := recordPlanTouchedDays(WithTestopsWindowSink(ctx, &take.testopsWindow), service.touched, plan, take); err != nil {
 		return nil, err
 	}
-	pending, err := service.touched.PendingDays(ctx, plan.OrganizationID, postSyncTouchedPendingDayReadLimit)
-	if err != nil {
+	if err := service.takePendingDays(ctx, service.touched, service.touchedWriter, 0, take); err != nil {
 		return nil, err
+	}
+	return take, nil
+}
+
+// takeTestopsWindowDays reads the pending keys of the testops window lane this
+// fan-out starts runs for, after the take of the touched days (which loaded the
+// plan and wrote the record of both lanes). It returns nil when the lane is not
+// wired or the fan-out starts no daily run.
+func (service *NativePostSyncService) takeTestopsWindowDays(ctx context.Context, touched *touchedDaysTake) (*touchedDaysTake, error) {
+	if service.testopsWindow == nil || touched == nil || touched.plan == nil {
+		return nil, nil
+	}
+	budget := service.testopsWindowBudget
+	if budget < 1 {
+		budget = PostSyncTestopsWindowRepoDaysPerFanout
+	}
+	take := &touchedDaysTake{organizationID: touched.organizationID, plan: touched.plan, testopsWindow: touched.testopsWindow}
+	if err := service.takePendingDays(ctx, service.testopsWindow, service.testopsWindowWriter, budget, take); err != nil {
+		return nil, err
+	}
+	return take, nil
+}
+
+// takePendingDays reads the pending days of one lane of the record and chooses
+// the runs the fan-out starts for them. budget, when above zero, bounds the
+// (day, repository) keys taken.
+func (service *NativePostSyncService) takePendingDays(
+	ctx context.Context, store TouchedDaysStore, writer TouchedDayPostSyncWriter, budget int, take *touchedDaysTake,
+) error {
+	plan := take.plan
+	pending, err := store.PendingDays(ctx, plan.OrganizationID, postSyncTouchedPendingDayReadLimit)
+	if err != nil {
+		return err
 	}
 	take.takenAt = pending.TakenAt
 	take.truncated = pending.Truncated
 	window := make(map[string]struct{})
-	for _, day := range service.touchedWriter.FullOrganizationDays(*plan) {
+	for _, day := range writer.FullOrganizationDays(*plan) {
 		window[day.UTC().Format("2006-01-02")] = struct{}{}
 	}
 	var candidates []time.Time
@@ -288,10 +355,7 @@ func (service *NativePostSyncService) takeTouchedDays(
 		}
 		candidates = append(candidates, day)
 	}
-	if err := service.chooseTouchedDayStarts(ctx, plan.OrganizationID, candidates, take); err != nil {
-		return nil, err
-	}
-	return take, nil
+	return chooseTouchedDayStarts(ctx, store, writer, budget, plan.OrganizationID, candidates, take)
 }
 
 // chooseTouchedDayStarts walks the pending days newest first and keeps the
@@ -307,20 +371,27 @@ func (service *NativePostSyncService) takeTouchedDays(
 // at postSyncTouchedPendingDayReadLimit days (at most 119 reads). When every
 // scanned day is over the limit, no run starts and all of them are reported
 // once. Days the walk did not reach count as carried over.
-func (service *NativePostSyncService) chooseTouchedDayStarts(
-	ctx context.Context, organizationID string, candidates []time.Time, take *touchedDaysTake,
+//
+// A budget above zero bounds the (day, repository) keys the walk takes: the day
+// that reaches it is taken in part (its first repositories), and the walk ends
+// there. The keys it leaves stay pending.
+func chooseTouchedDayStarts(
+	ctx context.Context, store TouchedDaysStore, writer TouchedDayPostSyncWriter, budget int,
+	organizationID string, candidates []time.Time, take *touchedDaysTake,
 ) error {
-	limit := service.touchedWriter.RepositoryLimit()
+	limit := writer.RepositoryLimit()
 	scanned := 0
-	for scanned < len(candidates) && len(take.starts) < PostSyncTouchedDaysPerFanout {
+	remaining := budget
+	spent := func() bool { return budget > 0 && remaining <= 0 }
+	for scanned < len(candidates) && len(take.starts) < PostSyncTouchedDaysPerFanout && !spent() {
 		end := min(scanned+PostSyncTouchedDaysPerFanout, len(candidates))
 		chunk := candidates[scanned:end]
-		repositories, err := service.touched.PendingRepositories(ctx, organizationID, chunk, limit+1)
+		repositories, err := store.PendingRepositories(ctx, organizationID, chunk, limit+1)
 		if err != nil {
 			return err
 		}
 		for _, day := range chunk {
-			if len(take.starts) >= PostSyncTouchedDaysPerFanout {
+			if len(take.starts) >= PostSyncTouchedDaysPerFanout || spent() {
 				break
 			}
 			scanned++
@@ -332,6 +403,13 @@ func (service *NativePostSyncService) chooseTouchedDayStarts(
 			if len(identifiers) > limit {
 				take.overLimit = append(take.overLimit, day)
 				continue
+			}
+			if budget > 0 {
+				if len(identifiers) > remaining {
+					identifiers = identifiers[:remaining]
+					take.budgetCut++
+				}
+				remaining -= len(identifiers)
 			}
 			take.starts = append(take.starts, touchedDayStart{day: day, repositories: identifiers})
 		}
@@ -398,11 +476,11 @@ func (service *NativePostSyncService) touchedDaysPlan(
 
 // startTouchedDaysTx starts the runs of a take inside the fan-out transaction.
 func (service *NativePostSyncService) startTouchedDaysTx(
-	ctx context.Context, tx pgx.Tx, plan PostSyncPlan, take *touchedDaysTake, result *touchedDaysResult,
+	ctx context.Context, tx pgx.Tx, writer TouchedDayPostSyncWriter, plan PostSyncPlan, take *touchedDaysTake, result *touchedDaysResult,
 ) error {
 	result.dailyStarted = true
 	for _, start := range take.starts {
-		started, err := service.touchedWriter.StartTouchedDayTx(ctx, tx, plan, start.day, start.repositories)
+		started, err := writer.StartTouchedDayTx(ctx, tx, plan, start.day, start.repositories)
 		if err != nil {
 			return err
 		}
@@ -417,7 +495,7 @@ func (service *NativePostSyncService) startTouchedDaysTx(
 	}
 	// The take time goes in the transaction of the runs, so no run exists without
 	// it, and the drain judges the mark against it.
-	switch err := service.touchedWriter.StampTakeTx(ctx, tx, plan, take.takenAt); {
+	switch err := writer.StampTakeTx(ctx, tx, plan, take.takenAt); {
 	case errors.Is(err, ErrTouchedTakeTimeUnwritten):
 		result.takeUnwritten = true
 	case err != nil:
@@ -535,5 +613,80 @@ func (service *NativePostSyncService) observeTouchedDaysFailure(
 	)
 	if service.touchedObserver != nil {
 		_ = service.touchedObserver.ObservePostSyncTouchedDays(event, 1)
+	}
+}
+
+// finishTestopsWindowDays runs after the fan-out transaction committed. It
+// marks the started keys of the testops window lane and reports what the
+// record wrote to the lane and what the cap left pending. Counts only: no line
+// names a day, a repository or an error.
+func (service *NativePostSyncService) finishTestopsWindowDays(
+	ctx context.Context, args PostSyncArgs, recorded TestopsWindowReport, take *touchedDaysTake, result touchedDaysResult,
+) {
+	org := synclog.Org(synclog.ParseID(args.OrganizationID()))
+	run := synclog.Run(synclog.ParseID(args.SyncRunID()))
+	if recorded.OverBound() {
+		service.logger.Warn(ctx, synclog.MsgPostSyncTestopsWindowOverBound, org, run,
+			synclog.Count(synclog.KeyTestopsWindowKeysRecorded, int64(recorded.Keys)),
+			synclog.Count(synclog.KeyTestopsWindowKeysBound, TestopsWindowKeysBound),
+		)
+		service.observeTouchedDays(jobruntime.PostSyncTouchedDaysTestopsWindowOverBound, 1)
+	}
+	service.observeTouchedDays(jobruntime.PostSyncTouchedDaysTestopsWindowKeysRecorded, recorded.Keys)
+	if take == nil {
+		return
+	}
+	var (
+		fullDays []time.Time
+		keys     []TouchedDayKey
+	)
+	if result.dailyStarted {
+		fullDays = append(fullDays, take.windowPending...)
+	}
+	keysTaken := 0
+	for _, start := range result.started {
+		keysTaken += len(start.repositories)
+		for _, repositoryID := range start.repositories {
+			keys = append(keys, TouchedDayKey{Day: start.day, RepositoryID: repositoryID})
+		}
+	}
+	if len(fullDays) > 0 || len(keys) > 0 {
+		if err := service.testopsWindow.MarkDispatched(ctx, take.organizationID, take.takenAt, fullDays, keys); err != nil {
+			service.observeTouchedDaysFailure(ctx, args, "testops_window_mark", jobruntime.PostSyncTouchedDaysTestopsWindowMarkFailed)
+		}
+	}
+	budget := service.testopsWindowBudget
+	if budget < 1 {
+		budget = PostSyncTestopsWindowRepoDaysPerFanout
+	}
+	cut := take.carriedOver + take.budgetCut + len(take.overLimit)
+	if cut > 0 {
+		// One line for each fan-out: the keys left are pending, and the drain
+		// takes them, newest first.
+		service.logger.Warn(ctx, synclog.MsgPostSyncTestopsWindowCut, org, run,
+			synclog.Count(synclog.KeyTestopsWindowRepoDaysTaken, keysTaken),
+			synclog.Count(synclog.KeyTestopsWindowDaysCut, cut),
+			synclog.Count(synclog.KeyTestopsWindowRepoDaysCap, budget),
+		)
+		service.observeTouchedDays(jobruntime.PostSyncTouchedDaysTestopsWindowDaysCut, uint64(cut))
+	}
+	if recorded.Keys > 0 || len(result.started) > 0 || cut > 0 || len(take.windowPending) > 0 {
+		service.logger.Info(ctx, synclog.MsgPostSyncTestopsWindowDays, org, run,
+			synclog.Count(synclog.KeyTestopsWindowKeysRecorded, int64(recorded.Keys)),
+			synclog.Count(synclog.KeyTouchedDaysDispatched, len(result.started)),
+			synclog.Count(synclog.KeyTestopsWindowRepoDaysTaken, keysTaken),
+			synclog.Count(synclog.KeyTestopsWindowDaysCut, cut),
+			synclog.Count(synclog.KeyTouchedDaysAlreadyStarted, result.alreadyStarted),
+			synclog.Flag(synclog.KeyTouchedDaysReadTruncated, take.truncated),
+		)
+	}
+	service.observeTouchedDays(jobruntime.PostSyncTouchedDaysTestopsWindowDaysDispatched, uint64(len(result.started)))
+}
+
+// observeTouchedDays adds count to one touched-day counter, when an observer is
+// wired.
+func (service *NativePostSyncService) observeTouchedDays(event jobruntime.PostSyncTouchedDaysEvent, count uint64) {
+	if service.touchedObserver != nil {
+		_ = service.touchedObserver.ObservePostSyncTouchedDays(event, count)
 	}
 }

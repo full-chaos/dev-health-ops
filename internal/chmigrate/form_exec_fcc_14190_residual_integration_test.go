@@ -21,19 +21,20 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// DO NOT MERGE. This file executes the text of the prod read FORM-14190-RESIDUAL-2.sql on the head schema with a
+// DO NOT MERGE. This file executes the text of the prod read FORM-14190-RESIDUAL-3.sql on the head schema with a
 // synthetic fixture. The text below is the .sql with its org prefix replaced by {{ORG_PREFIX}}, nothing else (its
 // sha256 is checked); the cell puts a synthetic prefix in at run time and checks the slot count first. It checks each
 // statement's rows in a loss phase and a healed phase, an org mutant and a rule mutant per statement, the pass-path
 // read_rows of each statement against its work math, and fires each cost gate cap once (pm-guard FORM-TEMPLATE-3).
 const (
 	formExecRes14190OrgSlot = "{{ORG_PREFIX}}"
-	formExecRes14190SHA256  = "b95d450a079accf0fdfccbdbb24c554003866ab568c713d86ec995a54bdc82d6"
-	formExecRes14190SQL     = `-- FORM-14190-RESIDUAL-2 (lane-14190r, 2026-11-23, ops pin a7febdf50002). ClickHouse prod, SELECT only, CHAOS-14190.
--- Replaces FORM-14190-RESIDUAL-1 (1181a6d4fc41; frozen, not to be run): acp's added columns in R1 and R2.
+	formExecRes14190SHA256  = "3f7e425ecb2e7f4557a2ba87510d92c14eb77226e9c545e0093169ec2ad137fb"
+	formExecRes14190SQL     = `-- FORM-14190-RESIDUAL-3 (lane-14190r, 2026-11-23, ops pin a7febdf50002). ClickHouse prod, SELECT only, CHAOS-14190.
+-- Replaces FORM-14190-RESIDUAL-2 (5610a01de90d) and -1 (1181a6d4fc41); both frozen, not to be run. -3 = -2 + R2 reads
+-- the item's stored work_items row: stored_close_any = close time present OR a close transition at any instant.
 -- Residual REPORT after READBACK POST = MISS (FORM-14190-READBACK-1 dd6cb67abd7a, POST out 3091612d0fe1): per affected
 -- Linear item (R1) and per missing close (R2), the F3 rule of FORM-14190-READBACK-1 grouped per item, plus the work_items
--- version count behind its S0 growth (S2). WANT text, work math and the output rule: FORM-14190-RESIDUAL-2.md.
+-- version count behind its S0 growth (S2). WANT text, work math and the output rule: FORM-14190-RESIDUAL-3.md.
 -- Shape: pm-guard/FORM-TEMPLATE-3.md (sha12 6b9e73a3c45a). Run each statement once, in order. A SQL error
 -- (STOP-COST-GATE included) = STOP and report.
 -- NAMED EXCEPTION (acp): R1 and R2 print the 8-char cut AND the full Linear key of each item, and workflow state
@@ -197,9 +198,11 @@ ORDER BY linear_key;
 -- close test without the window: to done or canceled, or to_status_raw = the reopen's from_status_raw): 'no' = the
 -- provider served no close; 'yes' = a close exists outside [prev_reopen_at, reopen_at] (the window cut it).
 -- last_close_before_at = the newest such close strictly before the reopen (1970-01-01 = none).
+-- item_close_time_present = the item's stored work_items row (FINAL, newest) has closed_at set. stored_close_any = yes
+-- when provider_close_any or item_close_time_present: 'no' = the provider served no close anywhere for the item.
 WITH (SELECT throwIf(
-    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_item_reopen_events', 'work_item_transitions')) > 6000000
-    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_item_reopen_events', 'work_item_transitions')) > 4294967296,
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_item_reopen_events', 'work_item_transitions', 'work_items')) > 6000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_item_reopen_events', 'work_item_transitions', 'work_items')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
 SELECT substring(replaceOne(m.work_item_id, 'linear:', ''), 1, 8)            AS id_cut8,
        replaceOne(m.work_item_id, 'linear:', '')                              AS linear_key,
@@ -211,7 +214,9 @@ SELECT substring(replaceOne(m.work_item_id, 'linear:', ''), 1, 8)            AS 
        if(length(m.close_rows) > 0, 'yes', 'no')                              AS provider_close_any,
        arrayReverseSort(arrayMap(x -> tupleElement(x, 1),
                 arrayFilter(x -> tupleElement(x, 1) < m.reopen_at, m.close_rows)))[1] AS last_close_before_at,
-       m.window_transitions                                                   AS window_transitions,
+       if(m.item_close_time = 1, 'yes', 'no')                                 AS item_close_time_present,
+       if(length(m.close_rows) > 0 OR m.item_close_time = 1, 'yes', 'no')     AS stored_close_any,
+       m.window_transitions                                                  AS window_transitions,
        tupleElement(m.last_before, 1)                                         AS last_before_at,
        tupleElement(m.last_before, 3)                                         AS last_before_to,
        tupleElement(m.last_before, 5)                                         AS last_before_to_raw,
@@ -228,6 +233,7 @@ FROM (
            tupleElement(j.rs[i], 2)                                           AS reopen_from_raw,
            tupleElement(j.rs[i], 3)                                           AS reopen_to_raw,
            j.kept[i]                                                          AS reopen_kept,
+           j.item_close_time                                                  AS item_close_time,
            arrayCount(x -> tupleElement(x, 1) >= tupleElement(j.rs[i - 1], 1)
                       AND tupleElement(x, 1) <= tupleElement(j.rs[i], 1), j.ts)  AS window_transitions,
            arrayReverseSort(x -> (tupleElement(x, 1), tupleElement(x, 8)),
@@ -236,7 +242,7 @@ FROM (
            arrayFilter(x -> has(['done', 'canceled'], tupleElement(x, 3))
                        OR tupleElement(x, 5) = tupleElement(j.rs[i], 2), j.ts)                 AS close_rows
     FROM (
-        SELECT r.org_id AS org_id, r.work_item_id AS work_item_id, r.rs AS rs, t.ts AS ts,
+        SELECT r.org_id AS org_id, r.work_item_id AS work_item_id, r.rs AS rs, t.ts AS ts, w.close_time AS item_close_time,
                arrayMap(i -> toUInt8(arrayExists(x -> tupleElement(x, 1) >= tupleElement(rs[i - 1], 1)
                         AND tupleElement(x, 1) <= tupleElement(rs[i], 1)
                         AND (has(['done', 'canceled'], tupleElement(x, 3)) OR tupleElement(x, 5) = tupleElement(rs[i], 2)), t.ts)),
@@ -259,6 +265,12 @@ FROM (
             WHERE startsWith(org_id, '{{ORG_PREFIX}}') AND cost_gate = 0 AND startsWith(work_item_id, 'linear:')
             GROUP BY org_id, work_item_id
         ) AS t ON t.org_id = r.org_id AND t.work_item_id = r.work_item_id
+        LEFT JOIN (
+            SELECT org_id, work_item_id, argMax(toUInt8(isNotNull(closed_at)), last_synced) AS close_time
+            FROM work_items FINAL
+            WHERE startsWith(org_id, '{{ORG_PREFIX}}') AND cost_gate = 0 AND startsWith(work_item_id, 'linear:')
+            GROUP BY org_id, work_item_id
+        ) AS w ON w.org_id = r.org_id AND w.work_item_id = r.work_item_id
         WHERE cost_gate = 0
     ) AS j
     ARRAY JOIN arrayEnumerate(j.rs) AS i
@@ -433,12 +445,12 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 		synced     = "2026-11-20 03:00:00.000"
 		newKey     = "2026-11-24 01:00:00.000"
 		oldItem    = "2026-11-01 00:00:00.000"
-		formSlots  = 8
-		orgFilters = 7
+		formSlots  = 9
+		orgFilters = 8
 	)
 	sum := sha256.Sum256([]byte(formExecRes14190SQL))
 	if got := hex.EncodeToString(sum[:]); got != formExecRes14190SHA256 {
-		t.Fatalf("sha256 of the embedded text = %s, want %s (FORM-14190-RESIDUAL-2.sql with %s)", got, formExecRes14190SHA256, formExecRes14190OrgSlot)
+		t.Fatalf("sha256 of the embedded text = %s, want %s (FORM-14190-RESIDUAL-3.sql with %s)", got, formExecRes14190SHA256, formExecRes14190OrgSlot)
 	}
 	if got := strings.Count(formExecRes14190SQL, formExecRes14190OrgSlot); got != formSlots {
 		t.Fatalf("the text holds %s %d time(s), want %d", formExecRes14190OrgSlot, got, formSlots)
@@ -458,7 +470,7 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 
 	// The gate of each statement: the tables it reads (its IN list), its cap literals, how many times the IN list and
 	// cost_gate = 0 appear, the data tables it reads (each with the org filter), and fixtureReadRows, the query_log
-	// read_rows on the phase 1 fixture by the scan model of FORM-14190-RESIDUAL-2.md (E 8, T 17, W 6 rows, one part
+	// read_rows on the phase 1 fixture by the scan model of FORM-14190-RESIDUAL-3.md (E 8, T 17, W 6 rows, one part
 	// each; a gate evaluation reads 2 x P + 1, each further cost_gate reference 1 more row, a plain or FINAL read of a
 	// one-part table its rows once). S1 reads metadata only: its read_rows is bounded, not modelled.
 	gates := []struct {
@@ -471,7 +483,7 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 		{"S1", "'work_item_reopen_events', 'work_item_transitions', 'work_items'", "> 6000000", "> 4294967296", 3, 1, 0, 64, true},
 		{"S2", "'work_items'", "> 6000000", "> 4294967296", 2, 2, 1, 6 + 3 + 1, false},
 		{"R1", "'work_item_reopen_events', 'work_item_transitions', 'work_items'", "> 6000000", "> 4294967296", 2, 6, 3, 8 + 17 + 6 + 7 + 5, false},
-		{"R2", "'work_item_reopen_events', 'work_item_transitions'", "> 6000000", "> 4294967296", 2, 5, 2, 8 + 17 + 5 + 4, false},
+		{"R2", "'work_item_reopen_events', 'work_item_transitions', 'work_items'", "> 6000000", "> 4294967296", 2, 6, 3, 8 + 17 + 6 + 7 + 5, false},
 	}
 	for _, gate := range gates {
 		statement := statements[gate.id]
@@ -581,11 +593,11 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 			qctx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"log_comment": comment}))
 			result, err := formExecRes14190Query(qctx, conn, statements[id])
 			if err != nil {
-				t.Fatalf("FORM-14190-RESIDUAL-2 %s %s: %v", phase, id, err)
+				t.Fatalf("FORM-14190-RESIDUAL-3 %s %s: %v", phase, id, err)
 			}
-			t.Logf("FORM-14190-RESIDUAL-2 %s %s columns %v", phase, id, result.columns)
+			t.Logf("FORM-14190-RESIDUAL-3 %s %s columns %v", phase, id, result.columns)
 			for index, row := range result.rows {
-				t.Logf("FORM-14190-RESIDUAL-2 %s %s row %d %v", phase, id, index, row)
+				t.Logf("FORM-14190-RESIDUAL-3 %s %s row %d %v", phase, id, index, row)
 			}
 			results[id] = result
 		}
@@ -627,8 +639,13 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 	r2 := func(results map[string]formExecRes14190Result, label string, row int, id, reopenAt, prevAt, closeAny, lastCloseBefore, window, lastBeforeAt, lastBeforeTo, lastBeforeToRaw, atInstant, ordinal, from, to, fromRaw, toRaw string) {
 		t.Helper()
 		key := strings.TrimPrefix(id, "linear:")
+		itemClose, storedClose := "no", closeAny
+		if key == "RESID-104" {
+			itemClose, storedClose = "yes", "yes"
+		}
 		formExecRes14190Row(t, results["R2"], label+" R2", row, map[string]string{
 			"id_cut8": key[:8], "linear_key": key, "provider_close_any": closeAny, "last_close_before_at": lastCloseBefore,
+			"item_close_time_present": itemClose, "stored_close_any": storedClose,
 			"reopen_at": reopenAt, "prev_reopen_at": prevAt, "reopen_from_raw": "Done",
 			"reopen_to_raw": "Todo", "reopen_kept": "1", "window_transitions": window, "last_before_at": lastBeforeAt,
 			"last_before_to": lastBeforeTo, "last_before_to_raw": lastBeforeToRaw, "rows_at_instant": atInstant,
@@ -718,13 +735,24 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 		{"R1-window-lower-bound", "R1", "tupleElement(x, 1) >= tupleElement(rs[i - 1], 1)", "tupleElement(x, 1) >= tupleElement(rs[0], 1)", 1, 0, "", "5"},
 		{"R1-reopen-tie-blind", "R1", "AND tupleElement(x, 5) = tupleElement(rs[i], 3), t.ts)), arrayEnumerate(rs)) AS kept", ", t.ts)), arrayEnumerate(rs)) AS kept", 1, 0, "", "5"},
 		{"R1-synced-cut", "R1", "w.synced >= now64(3) - INTERVAL 1 DAY", "w.synced >= now64(3) - INTERVAL 3650 DAY", 1, 3, "synced_last_day", "no"},
-		{"R2-org", "R2", dropOrg, "", 2, 0, "", "5"},
+		{"R2-org", "R2", dropOrg, "", 3, 0, "", "5"},
 		{"R2-at-instant", "R2", "arrayFilter(x -> tupleElement(x, 1) = tupleElement(j.rs[i], 1), j.ts)", "arrayFilter(x -> tupleElement(x, 1) <= tupleElement(j.rs[i], 1), j.ts)", 1, 0, "", "5"},
 		{"R2-missing-only", "R2", "j.found[i] = 0 AND j.prior[i] = 1", "j.prior[i] = 1", 1, 0, "", "5"},
 		// The card's --since is read: a cut two months later puts the not re-read item outside the window.
 		{"R1-since-literal", "R1", "w.updated >= toDateTime64('2026-06-01 00:00:00', 3, 'UTC')", "w.updated >= toDateTime64('2026-08-01 00:00:00', 3, 'UTC')", 1, 3, "not_reread_in_window", "yes"},
 		// provider_close_any reads every instant, not the F2 window: windowed, RESID-105's 08-01 close drops out.
 		{"R2-close-any-windowed", "R2", "if(length(m.close_rows) > 0, 'yes', 'no')", "if(length(arrayFilter(x -> tupleElement(x, 1) >= m.prev_reopen_at, m.close_rows)) > 0, 'yes', 'no')", 1, 4, "provider_close_any", "yes"},
+		// One mutant per added column where it can be wrong: each reads another column or flips its test.
+		{"R1-cut8-length", "R1", "substring(replaceOne(a.work_item_id, 'linear:', ''), 1, 8)", "substring(replaceOne(a.work_item_id, 'linear:', ''), 1, 9)", 1, 0, "id_cut8", "RESID-10"},
+		{"R1-last-synced-day-from-updated", "R1", "toString(toDate(w.synced, 'UTC'))", "toString(toDate(w.updated, 'UTC'))", 1, 3, "last_synced_day", "2026-11-01"},
+		{"R1-status-normalized", "R1", "argMax(status_raw, last_synced) AS state_raw", "argMax(status, last_synced) AS state_raw", 1, 3, "status_raw", "Done"},
+		{"R1-close-time-from-completed", "R1", "isNotNull(closed_at)", "isNotNull(completed_at)", 1, 3, "close_time_present", "yes"},
+		{"R1-lost-days-flipped", "R1", "arrayFilter((o, k) -> k = 0,", "arrayFilter((o, k) -> k = 1,", 1, 0, "lost_reopen_days", "2026-10-06"},
+		{"R1-missing-days-without-prior", "R1", "arrayFilter((o, f, p) -> f = 0 AND p = 1,", "arrayFilter((o, f, p) -> f = 1,", 1, 1, "missing_close_days", "2026-09-20"},
+		{"R2-cut8-length", "R2", "substring(replaceOne(m.work_item_id, 'linear:', ''), 1, 8)", "substring(replaceOne(m.work_item_id, 'linear:', ''), 1, 9)", 1, 0, "id_cut8", "RESID-10"},
+		{"R2-item-close-from-completed", "R2", "isNotNull(closed_at)", "isNotNull(completed_at)", 1, 3, "item_close_time_present", "yes"},
+		{"R2-stored-close-without-item", "R2", "length(m.close_rows) > 0 OR m.item_close_time = 1", "length(m.close_rows) > 0", 1, 3, "stored_close_any", "yes"},
+		{"R2-last-close-after", "R2", "arrayFilter(x -> tupleElement(x, 1) < m.reopen_at, m.close_rows)", "arrayFilter(x -> tupleElement(x, 1) > m.reopen_at, m.close_rows)", 1, 4, "last_close_before_at", "2026-08-01 10:00:00.000"},
 	})
 
 	// Sizes of the work math: active rows and parts per table (system.parts, as the gate reads them).

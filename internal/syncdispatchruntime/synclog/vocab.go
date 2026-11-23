@@ -131,6 +131,8 @@ var (
 	KeyGuardCappedStale             = Key{"guard.capped_stale"}
 	KeyGuardSlotHeadroom            = Key{"guard.slot_headroom"}
 	KeyGuardHeldBack                = Key{"guard.held_back"}
+	KeyGuardOldestHeldRun           = Key{"guard.oldest_held_run"}
+	KeyGuardOldestHeldSignal        = Key{"guard.oldest_held_signal"}
 	KeyLockWaitBudget               = Key{"lock_wait_budget"}
 	KeyInvalidClaimUnits            = Key{"invalid_claim_units"}
 	KeyCappedCount                  = Key{"capped_count"}
@@ -230,4 +232,19 @@ var (
 	LabelReclaimedUnitsWhoseDeliveriesAreAlreadyTerminalNothingWasDel = Label{"reclaimed units whose deliveries are already terminal; nothing was delivered"}
 	LabelFailed                                                       = Label{"failed"}
 	LabelInvalid                                                      = Label{"invalid"}
+)
+
+// Held-back signals (CHAOS-14403): why the older run a bucket decision held slots for was live. The six liveness
+// signals in the order the guard picks the first true one, then none (nothing held back), rechecked_none (no signal
+// was true on the recheck: state moved between the two reads) and read_failed (the recheck failed).
+var (
+	LabelHeldBackNone            = Label{"none"}
+	LabelHeldBackRecentRun       = Label{"recent_run"}
+	LabelHeldBackFinalizePending = Label{"finalize_pending"}
+	LabelHeldBackUnitHeartbeat   = Label{"unit_heartbeat"}
+	LabelHeldBackUnitLease       = Label{"unit_lease"}
+	LabelHeldBackUnitDispatching = Label{"unit_dispatching"}
+	LabelHeldBackWakeArmed       = Label{"wake_armed"}
+	LabelHeldBackRecheckedNone   = Label{"rechecked_none"}
+	LabelHeldBackReadFailed      = Label{"read_failed"}
 )

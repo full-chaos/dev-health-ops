@@ -292,8 +292,11 @@ func TestResolve_ScopeFilters(t *testing.T) {
 			if tc.team {
 				wantTeam = 3
 			}
-			if got := strings.Count(statement, "SELECT id FROM repos"); got != wantRepo {
-				t.Errorf("%s, %s statement: %d repository filter(s), want %d (job rows, pipeline rows, pipeline bound)", name, which, got, wantRepo)
+			// Each repository filter is the id on the rows, or a non-blank name in the latest catalog row (FINAL).
+			for _, part := range []string{"toString(repo_id) IN {repo_ids:Array(String)}", "SELECT id FROM repos FINAL", "AND repo != ''", "AND repo IN {repo_ids:Array(String)}"} {
+				if got := strings.Count(statement, part); got != wantRepo {
+					t.Errorf("%s, %s statement: %d of %q, want %d (job rows, pipeline rows, pipeline bound)", name, which, got, part, wantRepo)
+				}
 			}
 			if got := strings.Count(statement, teamCondition); got != wantTeam {
 				t.Errorf("%s, %s statement: %d team ownership condition(s), want %d", name, which, got, wantTeam)

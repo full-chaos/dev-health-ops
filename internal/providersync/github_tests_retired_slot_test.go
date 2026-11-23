@@ -630,8 +630,9 @@ func TestGitHubTestsMinimalRetractionRowsSplitALargeLegacyUnion(t *testing.T) {
 		t.Fatalf("%d minimal rows, want 2 of 16,384 and 3,616 legacy ids", len(rows))
 	}
 	if rows[0].SuiteID != githubTestsRetiredSlotKey("total-b", 2) || rows[1].SuiteID == rows[0].SuiteID ||
-		!strings.HasPrefix(rows[1].SuiteID, "~retired-") || !rows[1].Retracted {
-		t.Errorf("minimal row keys %q and %q, want the slot's retired key, then another retired key", rows[0].SuiteID, rows[1].SuiteID)
+		!strings.HasPrefix(rows[1].SuiteID, "~retired-") || !rows[1].Retracted || rows[0].RunAttempt != 2 || rows[1].RunAttempt != 0 {
+		t.Errorf("minimal rows %q at attempt %d and %q at attempt %d, want the slot's retired key at its attempt, then another retired key at attempt 0",
+			rows[0].SuiteID, rows[0].RunAttempt, rows[1].SuiteID, rows[1].RunAttempt)
 	}
 	for _, row := range rows {
 		effect, err := effectBatchFromValues("test_suite_results", EffectReadbackRequired, []testSuiteResultRow{row})

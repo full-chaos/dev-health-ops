@@ -530,7 +530,7 @@ type githubTestsRetirement struct {
 // framework, environment, team or service, and is keyed githubTestsRetiredSlotKey: the key sorts after every parsed suite key,
 // and the chunk split gives it a chunk of its own (effectOwnChunkRows). It lists the legacy ids of every suite of the report
 // (deduplicated, in parse order; CHAOS-14555), githubTestsMinimalLegacyIDsPerRow per row, so a pre-slot copy of any suite of the
-// slot is hidden with it; a union over that bound takes more rows, the later ones keyed githubTestsRetiredSlotPartKey.
+// slot is hidden with it; a union over that bound takes more rows, the later ones keyed githubTestsRetiredSlotPartKey at attempt 0.
 func githubTestsMinimalRetractionRows(retirement githubTestsRetirement) []testSuiteResultRow {
 	return githubTestsMinimalRetractionRowsListing(retirement, true)
 }
@@ -572,7 +572,10 @@ func githubTestsMinimalRetractionRowsListing(retirement githubTestsRetirement, e
 		for part := 0; part == 0 || part*githubTestsMinimalLegacyIDsPerRow < len(legacy); part++ {
 			partRow := row
 			if part > 0 {
-				partRow.SuiteID = githubTestsRetiredSlotPartKey(row.ReportSlot, row.RunAttempt, part)
+				// An overflow row sits at attempt 0, below every attempt a run labels: a reader that takes the slot's newest
+				// attempt (the base binary after a rollback) never counts it as a suite, and the retired-slot rule reads the
+				// legacy ids of every attempt (retiredLegacyIDs). One rollback-visible marker per slot.
+				partRow.SuiteID, partRow.RunAttempt = githubTestsRetiredSlotPartKey(row.ReportSlot, row.RunAttempt, part), 0
 			}
 			partRow.LegacySuiteIDs = legacy[part*githubTestsMinimalLegacyIDsPerRow : min((part+1)*githubTestsMinimalLegacyIDsPerRow, len(legacy))]
 			if len(partRow.LegacySuiteIDs) == 0 {

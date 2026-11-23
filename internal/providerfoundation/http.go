@@ -452,7 +452,7 @@ func (c *HTTPClient) doRequest(ctx context.Context, probe *requestProbe, method,
 			return nil, ErrCredentialInvalid
 		}
 		if err := c.Auth(request); err != nil {
-			return nil, c.authFailure(ctx, err, attempt)
+			return nil, markAuthStep(c.authFailure(ctx, err, attempt))
 		}
 		request = probe.watch(request)
 		setByteRange(ctx, request)
@@ -836,6 +836,18 @@ func (c *HTTPClient) releaseReservation(ctx context.Context, reservation Reserva
 		return ErrBudgetUnavailable
 	}
 	return nil
+}
+
+// markAuthStep tags a ProviderError raised by the auth step (a credential or
+// token-refresh exchange) so a caller can tell it from the answer to the request
+// it was meant to sign, which was never sent.
+func markAuthStep(err error) error {
+	var providerErr *ProviderError
+	var already *AuthStepError
+	if err == nil || !errors.As(err, &providerErr) || errors.As(err, &already) {
+		return err
+	}
+	return &AuthStepError{Err: err}
 }
 
 // authFailure records an auth-step ProviderError (for example a rate-limited

@@ -23,7 +23,7 @@ import (
 )
 
 // Throwaway exec proof of a prod read form (READ-14548-PLAN-2): not for merge. p2x14548Form is the form file byte for byte.
-const p2x14548FormSHA256 = "d58b827590faaf2ccc5db619786422e3e9149f2e9703db07c867bb0ef745c0dd"
+const p2x14548FormSHA256 = "dffad83828fdf6de9f441de9821d7ae6c3d7121942ae84631e06116ed53ad841"
 
 const p2x14548Form = `-- NOT EXECUTED. READ-14548-PLAN-2 (system tables and part index only; numbers and static names only). acr-mcp, 2026-11-23. acp FORM read first; then pm runs it once.
 -- Exec leg: a throwaway CI leg runs each statement (FORM-TEMPLATE-3); its run id and job id are in READ-14548-PLAN-2.md only.
@@ -209,7 +209,7 @@ ORDER BY run_side DESC, step_table, step_id, processor;
 --   of the day, else its system.parts modification_time, else before the day. Removed = the first merge that consumed it, its RemovePart
 --   event, or its system.parts remove_time. Level and max block come from the part name. WANT 6 rows. Read: before vs after: parts,
 --   levels, level0_parts, newest_level / newest_rows; the hypothesis needs a new small part at 'after' that 'before' does not have.
---   Control that can fail: on 'now', parts = active_now (else limit c). Gates: part_log day parts 9,000,000 rows / 4,000,000,000 bytes;
+--   Control that can fail: on 'now', parts = active_now (else limit c). Gates: part_log day parts 6,000,000 rows / 3,000,000,000 bytes;
 --   query_log window 1,000,000 rows.
 SELECT r.run_side AS run_side, u.table AS data_table, count() AS parts, sum(u.part_rows) AS rows, countIf(NOT u.rows_known) AS parts_rows_unknown,
        arraySort(groupArray(u.level)) AS levels, arrayReverseSort(groupArray(u.part_rows)) AS part_rows, countIf(u.level = 0) AS level0_parts,
@@ -230,8 +230,8 @@ FROM (
     SELECT toString(table) AS table, tupleElement(e, 1) AS name, tupleElement(e, 2) AS kind, tupleElement(e, 3) AS t, tupleElement(e, 4) AS n
     FROM (
       WITH (SELECT throwIf(
-        (SELECT sum(rows) FROM system.parts WHERE active AND database = 'system' AND table = 'part_log' AND min_date <= toDate('2026-11-23') AND max_date >= toDate('2026-11-23')) > 9000000
-        OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = 'system' AND table = 'part_log' AND min_date <= toDate('2026-11-23') AND max_date >= toDate('2026-11-23')) > 4000000000,
+        (SELECT sum(rows) FROM system.parts WHERE active AND database = 'system' AND table = 'part_log' AND min_date <= toDate('2026-11-23') AND max_date >= toDate('2026-11-23')) > 6000000
+        OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = 'system' AND table = 'part_log' AND min_date <= toDate('2026-11-23') AND max_date >= toDate('2026-11-23')) > 3000000000,
         'STOP-COST-GATE')) AS cost_gate
       SELECT table, arrayConcat(
                if(event_type IN ('NewPart', 'MergeParts', 'MutatePart', 'DownloadPart'), [tuple(part_name, 'create', event_time, rows)], []),
@@ -529,7 +529,7 @@ func p2x14548Uint(s string) uint64 {
 
 // p2x14548Caps returns the byte offsets of every cap literal "> N" (N a cap of this form) in text.
 func p2x14548Caps(text string) [][2]int {
-	caps := map[string]bool{"400000": true, "1000000": true, "4000000": true, "9000000": true, "4000000000": true, "100000": true}
+	caps := map[string]bool{"400000": true, "1000000": true, "4000000": true, "6000000": true, "3000000000": true, "100000": true}
 	var out [][2]int
 	for _, m := range regexp.MustCompile(`> (\d+)\b`).FindAllStringSubmatchIndex(text, -1) {
 		if caps[text[m[2]:m[3]]] {
@@ -575,7 +575,7 @@ func TestReadPlan2Form14548ExecutesAtTheChainHead(t *testing.T) {
 		"S0":  {"400000": 2},
 		"S1":  {"400000": 1, "1000000": 1},
 		"S2":  {"400000": 2, "4000000": 1, "1000000": 1},
-		"S3a": {"9000000": 1, "4000000000": 1, "400000": 1, "1000000": 1},
+		"S3a": {"6000000": 1, "3000000000": 1, "400000": 1, "1000000": 1},
 		"S3b": {"100000": 2},
 	}
 	wantReads := map[string]map[string]int{

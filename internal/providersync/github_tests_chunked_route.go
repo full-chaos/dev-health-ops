@@ -39,7 +39,7 @@ func (doer githubTestsChunkCountingDoer) Do(request *http.Request) (*http.Respon
 	response, err := doer.delegate.Do(request)
 	if response != nil && doer.observed != nil {
 		doer.observed.observe(response.Header)
-		doer.floor.check(response.StatusCode, doer.observed)
+		doer.floor.check(response.StatusCode, response.Header)
 	}
 	return response, err
 }
@@ -55,17 +55,24 @@ func (doer githubTestsChunkCountingDoer) Do(request *http.Request) (*http.Respon
 // so a 429 still penalizes the shared backoff gate. Disarmed, it does nothing.
 type githubTestsRateFloorGate struct {
 	armed, stopped bool
+	// remaining is the reading of the answer that stopped the gate: -1 when that answer cannot show headroom (no rate
+	// headers, or not both of remaining and limit): fail closed.
+	remaining int64
 }
 
 var errGitHubTestsRateFloor = errors.New("github tests open phase: retry refused under the rate-limit floor")
 
-func (gate *githubTestsRateFloorGate) check(status int, observed *githubTestsRateObserver) {
+// check reads the floor on the answer's OWN headers, never on an earlier reading: an answer that cannot show headroom
+// stops the gate (fail closed). The invocation's observer still keeps the latest usable reading for the per-run check.
+func (gate *githubTestsRateFloorGate) check(status int, header http.Header) {
 	if gate == nil || !gate.armed || gate.stopped ||
 		status < http.StatusInternalServerError && status != http.StatusTooManyRequests && status != http.StatusForbidden {
 		return
 	}
-	if hit, _ := observed.belowFloor(); hit {
-		gate.stopped = true
+	var current githubTestsRateObserver
+	current.observe(header)
+	if hit, remaining := current.belowFloor(); hit {
+		gate.stopped, gate.remaining = true, remaining
 	}
 }
 
@@ -2048,16 +2055,16 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		// remainder was never seen, which must not advance the
 		// watermark. Item cap is checked first: if both are somehow
 		// set, the observed boundary is the more specific fact.
+		// The truncation is recorded (observation, metric, log) only after the branch policy read succeeded, so a run that
+		// returns an error here (and is not emitted) publishes none (CHAOS-14518).
 		jobItems := jobPage.Items
+		truncation := ""
 		switch {
 		case jobPage.ItemCapReached:
 			if len(jobItems) > githubTestsMaxJobsPerRun {
 				jobItems = jobItems[:githubTestsMaxJobsPerRun]
 			}
-			cursor = recordGitHubTestsPerRunTruncation(
-				cursor, client, claim, githubTestsRunJobsComponent,
-				githubTestsPerRunCapCause, pipeline.RunID, len(jobItems),
-			)
+			truncation = githubTestsPerRunCapCause
 		// UNREACHABLE through configuration, and KEPT anyway.
 		// validatePerRunPageBudget refuses any jobPages that cannot
 		// outrun the item cap, so with full pages the cap above always
@@ -2068,10 +2075,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		// validation. A branch that cannot fire is honest; a missing
 		// branch is a trapdoor (CHAOS-4142, codex round 2).
 		case jobPage.PageBudgetExhausted:
-			cursor = recordGitHubTestsPerRunTruncation(
-				cursor, client, claim, githubTestsRunJobsComponent,
-				githubTestsPerRunPageBudgetCause, pipeline.RunID, len(jobItems),
-			)
+			truncation = githubTestsPerRunPageBudgetCause
 		}
 		for _, jobRaw := range jobItems {
 			var job githubTestsJobPayload
@@ -2105,6 +2109,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				policyCache[*targetBranch] = cached
 			}
 			policy = cached
+		}
+		if truncation != "" {
+			cursor = recordGitHubTestsPerRunTruncation(
+				cursor, client, claim, githubTestsRunJobsComponent, truncation, pipeline.RunID, len(jobItems),
+			)
 		}
 		acceptance := projectGitHubTestsChecks(claim, repoID, pipeline, jobs, policy, targetBranch, prNumber, testsOptionalString(stringValue(run.HTMLURL)), normalizedAt)
 		return jobs, acceptance, complete, nil
@@ -2420,19 +2429,23 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			return nil
 		}
 		// The floor is read before each run and, through rateFloor, on every retryable answer of the phase (CHAOS-14518).
-		stopAtRateFloor := func() bool {
-			hit, remaining := rateObserved.belowFloor()
-			if !hit {
-				return false
-			}
+		stopAtFloorReading := func(remaining int64) {
 			cursor.OpenFloorHit, cursor.OpenFloorRemaining = true, remaining
+			// A refused retry ends its call before the caller stamps the wire count: stamp it here.
+			cursor.Requests = invocationBaseRequests + requests
 			slog.Warn(
 				"open phase stopped: the installation's rate-limit headroom is under the floor, or its headers are missing",
 				"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", logging.ProviderText(cursor.Repo),
 				"remaining", remaining, "limit", rateObserved.limit, "floor", rateObserved.floor(), "reread", cursor.OpenDone,
 			)
 			cursor.Phase = "done"
-			return true
+		}
+		stopAtRateFloor := func() bool {
+			hit, remaining := rateObserved.belowFloor()
+			if hit {
+				stopAtFloorReading(remaining)
+			}
+			return hit
 		}
 		sharedGate := client.Gate
 		client.Gate = githubTestsFloorBackoffGate{inner: sharedGate, floor: rateFloor}
@@ -2479,7 +2492,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				run, found, fetchErr := fetchGitHubTestsRun(ctx, client, root, row.RunID)
 				cursor.Requests = invocationBaseRequests + requests
 				if fetchErr != nil {
-					if errors.Is(fetchErr, errGitHubTestsRateFloor) && stopAtRateFloor() {
+					if errors.Is(fetchErr, errGitHubTestsRateFloor) {
+						stopAtFloorReading(rateFloor.remaining)
 						return nil
 					}
 					if err := skipOpenRun(before, row, fetchErr, false); err != nil {
@@ -2503,7 +2517,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					var detailErr error
 					jobs, acceptance, _, detailErr = collectRunDetail(run, pipeline)
 					if detailErr != nil {
-						if errors.Is(detailErr, errGitHubTestsRateFloor) && stopAtRateFloor() {
+						if errors.Is(detailErr, errGitHubTestsRateFloor) {
+							stopAtFloorReading(rateFloor.remaining)
 							return nil
 						}
 						if err := skipOpenRun(before, row, detailErr, true); err != nil {

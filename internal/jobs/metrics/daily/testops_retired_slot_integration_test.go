@@ -1480,3 +1480,99 @@ func TestTestopsRetiredSlotOldReaderHidesThePreSlotCaseKey(t *testing.T) {
 		t.Errorf("K5 old reader serves recurrent %d of %d failed names, want CONTROL 0 of 1", recurrent, failedToday)
 	}
 }
+
+// CHAOS-14555: above 33,333 admitted cases at attempt 1 the pre-slot case retraction rows do not fit the case batch beside the
+// slot-label ones (the counter reason legacy_case_rows_skipped); the run keeps today's rows, and the new readers serve CONTROL.
+// Two parts of 16,667 cases and their exact aggregate (33,334 cases); the stale run stored the aggregate first.
+func TestTestopsRetiredSlotLegacyCaseRowsSkippedServesTheSyncedOnceNumbers(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	env := startRetiredStack(t, ctx)
+	stack := env.stack
+	suite := func(name string) matrixTotalsSuite {
+		out := matrixTotalsSuite{name: name, time: "3.0"}
+		for index := 0; index < 16_667; index++ {
+			out.cases = append(out.cases, matrixTotalsCase{name + "-" + strconv.Itoa(index), "", "0.01"})
+		}
+		return out
+	}
+	left, right := suite("left"), suite("right")
+	const made, timestamp = "2026-07-22T10:20:00Z", "2026-07-22T10:02:00"
+	total := attemptsArtifact{6, "total", made, false, retiredArchive(t, timestamp, left, right)}
+	all := []attemptsArtifact{
+		{1, "part-left", made, false, retiredArchive(t, timestamp, left)},
+		{2, "part-right", made, false, retiredArchive(t, timestamp, right)},
+		total,
+	}
+	controlOrg, staleOrg := "org-chaos14555-legacy-skip-control-"+uuid.NewString()[:8], "org-chaos14555-legacy-skip-stale-"+uuid.NewString()[:8]
+	stack.pass(t, controlOrg, retiredRunID, retiredDay().Add(11*time.Hour), retiredState(true, all))
+	stack.pass(t, staleOrg, retiredRunID, retiredDay().Add(10*time.Hour), retiredState(false, []attemptsArtifact{total}))
+	stack.pass(t, staleOrg, retiredRunID, retiredDay().Add(11*time.Hour), retiredState(true, all))
+	for _, org := range []string{controlOrg, staleOrg} {
+		var suites, slotCases, legacyCases uint64
+		if err := stack.conn.QueryRow(ctx, `SELECT
+  (SELECT countIf(retracted = 1) FROM test_suite_results FINAL WHERE org_id = ?),
+  (SELECT countIf(retracted = 1) FROM test_case_results FINAL WHERE org_id = ? AND suite_id IN (
+     SELECT suite_id FROM test_suite_results FINAL WHERE org_id = ? AND retracted = 1)),
+  (SELECT countIf(retracted = 1) FROM test_case_results FINAL WHERE org_id = ? AND suite_id NOT IN (
+     SELECT suite_id FROM test_suite_results FINAL WHERE org_id = ? AND retracted = 1))`, org, org, org, org, org).Scan(&suites, &slotCases, &legacyCases); err != nil {
+			t.Fatal(err)
+		}
+		if suites != 2 || slotCases != 33_334 || legacyCases != 0 {
+			t.Fatalf("%s: %d suite, %d slot-label case and %d pre-slot case retraction rows; want the legacy_case_rows_skipped arm: 2, 33,334, 0",
+				org, suites, slotCases, legacyCases)
+		}
+	}
+	control, stale := retiredMetricOf(t, stack, controlOrg, retiredDay()), retiredMetricOf(t, stack, staleOrg, retiredDay())
+	t.Logf("CONTROL %+v, stale %+v", control, stale)
+	if control.total != 33_334 || control.suites != 2 || stale != control {
+		t.Errorf("stale run serves %+v, want CONTROL %+v (33,334 cases, 2 suites)", stale, control)
+	}
+}
+
+// The revived-slot count adds one statement to the test-day read. Its cost, read from system.query_log on one fixture (one
+// container, one org, merges stopped): the read's rows and peak memory without the statement (before) and with it (after). The
+// statement reads the suite table twice at most (the slot select and its window run set), so after - before <= 2 x the table's
+// rows x 1.5. A records bound, not wall time.
+func TestTestopsRevivedSlotReadCost(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	env := startRetiredStack(t, ctx)
+	stack := env.stack
+	for _, table := range []string{"test_suite_results", "test_case_results", "ci_pipeline_runs", "testops_run_report_completeness"} {
+		if err := stack.conn.Exec(ctx, "SYSTEM STOP MERGES "+table); err != nil {
+			t.Fatal(err)
+		}
+	}
+	org := "org-chaos14555-read-cost"
+	retiredTwoAttemptRun(t, stack, org, "43600014261", retiredDay(), true)
+	var suites uint64
+	if err := stack.conn.QueryRow(ctx, "SELECT count() FROM test_suite_results").Scan(&suites); err != nil {
+		t.Fatal(err)
+	}
+	id := "chaos14555-read-cost-" + uuid.NewString()
+	day := retiredDay()
+	if _, err := computeTestopsTestMetricsWithoutTeams(clickhouse.Context(ctx, clickhouse.WithQueryID(id)), stack.conn, org, stack.repoID(t, org),
+		day.AddDate(0, 0, -29), day, day.Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := stack.conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
+		t.Fatal(err)
+	}
+	var beforeRows, afterRows, beforeMemory, afterMemory, statements, revived uint64
+	if err := stack.conn.QueryRow(ctx, `SELECT
+  sumIf(read_rows, NOT revived), sum(read_rows), toUInt64(maxIf(memory_usage, NOT revived)), toUInt64(max(memory_usage)), count(), countIf(revived)
+FROM (SELECT read_rows, memory_usage, position(query, 'HAVING max(retracted) = 1') > 0 AS revived
+      FROM system.query_log WHERE query_id = ? AND type = 'QueryFinish')`, id).
+		Scan(&beforeRows, &afterRows, &beforeMemory, &afterMemory, &statements, &revived); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("test-day read: %d statements; read rows before %d, after %d; peak memory before %d, after %d bytes; suite table %d rows",
+		statements, beforeRows, afterRows, beforeMemory, afterMemory, suites)
+	if revived != 1 || beforeRows == 0 {
+		t.Fatalf("query_log holds %d revived-slot statements and %d rows before it, want 1 and some", revived, beforeRows)
+	}
+	if bound := 2 * suites * 3 / 2; afterRows-beforeRows > bound {
+		t.Errorf("the revived-slot statement read %d rows, want at most %d (2 scans of %d rows + 50 %%)", afterRows-beforeRows, bound, suites)
+	}
+}

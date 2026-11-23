@@ -102,8 +102,8 @@ func (h *handlers) batchCreateSyncConfigs(w http.ResponseWriter, r *http.Request
 		h.answerOrFail(w, r, "batch_create_sync_configs", err)
 		return
 	}
-	if err := deriveShownTargets(ctx, h.store.enabledDatasetKeys, org, created.config); err != nil {
-		h.fail(w, r, "enabled_datasets", err)
+	if step, err := h.deriveShown(ctx, org, created.config); err != nil {
+		h.fail(w, r, step, err)
 		return
 	}
 	parent, err := syncConfigResponse(created.config, int64(0), created.credentialID)
@@ -177,6 +177,10 @@ func (h *handlers) batchCreateSyncConfigsTx(ctx context.Context, tx pgx.Tx, org 
 		detail.Set("unsupported_auto_import_categories", unsupported)
 		return nil, refuse(http.StatusUnprocessableEntity, detail)
 	}
+	excludeChange, err := takeArtifactExclude(provider, parentOptions)
+	if err != nil {
+		return nil, err
+	}
 	if err := h.checkDepthAndSchedule(ctx, tx, org, inputs, parentOptions); err != nil {
 		return nil, err
 	}
@@ -218,6 +222,9 @@ func (h *handlers) batchCreateSyncConfigsTx(ctx context.Context, tx pgx.Tx, org 
 		return nil, buildErr
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err := writeArtifactExclude(ctx, tx, org, created.config, excludeChange, h.now().UTC()); err != nil {
 		return nil, err
 	}
 	return created, nil

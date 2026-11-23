@@ -838,21 +838,23 @@ func TestReadbackReadFormFailsBeforeAndPassesAfterARecompute(t *testing.T) {
 		if s.label == "S0" {
 			wantRowsBytes, wantParts = 0, 1
 		}
-		if n := strings.Count(s.text, readbackRowsCap); n != wantRowsBytes {
+		// Count caps in the SQL only: the header comments ride in the S0 chunk ("30000000 -> 20000000" holds "> 20000000").
+		code := chmigrate.StripLineComments(s.text)
+		if n := strings.Count(code, readbackRowsCap); n != wantRowsBytes {
 			t.Fatalf("%s: %d rows budget caps %q, want %d", s.label, n, readbackRowsCap, wantRowsBytes)
 		}
-		if n := strings.Count(s.text, rowsCap); n != 0 {
+		if n := strings.Count(code, rowsCap); n != 0 {
 			t.Fatalf("%s: %d old rows caps %q, want 0", s.label, n, rowsCap)
 		}
 		if s.label != "S0" {
-			if n := uint64(strings.Count(chmigrate.StripLineComments(s.text), "AND cost_gate = 0) AS ")); n != readbackScalars[s.label] {
+			if n := uint64(strings.Count(code, "AND cost_gate = 0) AS ")); n != readbackScalars[s.label] {
 				t.Fatalf("%s: %d scalar subqueries use cost_gate, want %d", s.label, n, readbackScalars[s.label])
 			}
 		}
-		if n := strings.Count(s.text, bytesCap); n != wantRowsBytes {
+		if n := strings.Count(code, bytesCap); n != wantRowsBytes {
 			t.Fatalf("%s: %d bytes caps %q, want %d", s.label, n, bytesCap, wantRowsBytes)
 		}
-		if n := strings.Count(s.text, partsCap); n != wantParts {
+		if n := strings.Count(code, partsCap); n != wantParts {
 			t.Fatalf("%s: %d parts caps %q, want %d", s.label, n, partsCap, wantParts)
 		}
 		in := "table IN ('" + strings.Join(reads[s.label], "', '") + "')"

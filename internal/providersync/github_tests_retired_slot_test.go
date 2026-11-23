@@ -158,14 +158,21 @@ func TestGitHubTestsRouteRetractsTheSlotOfADroppedAggregate(t *testing.T) {
 			t.Errorf("a retracted row shares the key of a live row: %v", row["suite_id"])
 		}
 	}
-	// Its cases get a row each at their keys under the report's suites (attempt 1 is the slot's only label): no name, no status,
-	// retracted. A live case row is never under a retracted suite.
+	// Its cases get a row each at their keys under the report's suites (attempt 1 is the slot's only label) and under the suites'
+	// pre-slot keys (CHAOS-14555): no name, no status, retracted. A live case row is never under a retracted suite.
+	legacyIDs := map[any]bool{}
+	for _, row := range retracted {
+		for _, id := range row["legacy_suite_ids"].([]any) {
+			legacyIDs[id] = true
+		}
+	}
 	liveCases, retractedCases := 0, 0
 	for _, row := range cases {
 		if row["retracted"] == true {
 			retractedCases++
-			if !retractedIDs[row["suite_id"]] || row["case_name"] != "" || row["status"] != "" || row["failure_message"] != nil {
-				t.Errorf("case retraction row %v, want one under a retracted suite with no name, status or failure text", row)
+			under := retractedIDs[row["suite_id"]] || legacyIDs[row["suite_id"]]
+			if !under || row["case_name"] != "" || row["status"] != "" || row["failure_message"] != nil {
+				t.Errorf("case retraction row %v, want one under a retracted suite or its pre-slot key with no name, status or failure text", row)
 			}
 			continue
 		}
@@ -174,8 +181,8 @@ func TestGitHubTestsRouteRetractsTheSlotOfADroppedAggregate(t *testing.T) {
 			t.Errorf("a live case row was written under a retracted suite: %v", row)
 		}
 	}
-	if liveCases != 2 || retractedCases != 2 {
-		t.Errorf("case rows: %d live, %d retracted; want leg B's 2 parts and total-b's 2 cases retracted", liveCases, retractedCases)
+	if liveCases != 2 || retractedCases != 4 {
+		t.Errorf("case rows: %d live, %d retracted; want leg B's 2 parts and total-b's 2 cases retracted at 2 keys each", liveCases, retractedCases)
 	}
 }
 

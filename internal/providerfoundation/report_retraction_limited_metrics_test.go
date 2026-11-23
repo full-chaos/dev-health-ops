@@ -13,6 +13,8 @@ func TestReportRetractionLimitedCounterRendersPerBoundedProviderAndReason(t *tes
 	metrics.RecordReportRetractionLimited("github", "one_row_per_slot")
 	metrics.RecordReportRetractionLimited("github", "one_row_per_slot")
 	metrics.RecordReportRetractionLimited("github", "suite_rows_only")
+	metrics.RecordReportRetractionLimited("github", "legacy_case_rows_skipped")
+	metrics.RecordReportRetractionLimited("github", "legacy_ids_capped")
 	metrics.RecordReportRetractionLimited("org-4711-provider", "run 43600014259")
 	var nilMetrics *Metrics
 	nilMetrics.RecordReportRetractionLimited("github", "one_row_per_slot")
@@ -26,6 +28,8 @@ func TestReportRetractionLimitedCounterRendersPerBoundedProviderAndReason(t *tes
 		"# TYPE dev_health_provider_report_retraction_limited_total counter",
 		`dev_health_provider_report_retraction_limited_total{provider="github",reason="one_row_per_slot"} 2`,
 		`dev_health_provider_report_retraction_limited_total{provider="github",reason="suite_rows_only"} 1`,
+		`dev_health_provider_report_retraction_limited_total{provider="github",reason="legacy_case_rows_skipped"} 1`,
+		`dev_health_provider_report_retraction_limited_total{provider="github",reason="legacy_ids_capped"} 1`,
 		`dev_health_provider_report_retraction_limited_total{provider="other",reason="other"} 1`,
 	} {
 		if !strings.Contains(rendered, want) {

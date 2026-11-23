@@ -137,14 +137,15 @@ func (gate githubTestsFloorBackoffGate) Penalize(ctx context.Context, penalty ti
 // githubTestsMaxReportRowsPerRun (CHAOS-13794; before it, the same 500 also capped the report rows and dropped whole artifacts).
 const githubTestsMaxJobsPerRun = 500
 
-// githubTestsMaxReportRowsPerRun bounds the suites+cases+coverage rows admitted for ONE run, and
+// githubTestsMaxReportRowsPerRun bounds the suites+cases+coverage rows admitted for ONE run (githubTestsMaxArtifacts rows under
+// maxEffectRows: the room of one retraction row per dropped report, githubTestsRetractionsWithin), and
 // githubTestsMaxReportPayloadBytesPerDestination the JSON bytes of any one destination's rows (CHAOS-13794). They sit under the
 // effect contract that one run's rows go through as ONE batch per destination before the split into chunks (maxEffectRows,
 // maxEffectPayloadBytes): a run over either is a failing unit, not a truncated one, so the bound is the contract ceiling, not a
 // guess. Sized from prod: the largest run is 71,896 rows (7b9583ee), the web run with vitest is about 17,300. The payload bound
 // keeps the same 9/10 headroom as the blame route.
 const (
-	githubTestsMaxReportRowsPerRun                 = maxEffectRows
+	githubTestsMaxReportRowsPerRun                 = maxEffectRows - githubTestsMaxArtifacts
 	githubTestsMaxReportPayloadBytesPerDestination = 57 << 20
 )
 
@@ -3178,14 +3179,15 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						cases = append(cases, parsedReports[index].Cases...)
 						coverage = append(coverage, parsedReports[index].Coverage...)
 					}
-					retractions = githubTestsRetractionRows(parsedReports, plan.Dropped)
-					if !githubTestsRetractionsFit(len(suites), retractions) {
+					var limited bool
+					retractions, limited = githubTestsRetractionsWithin(handler.retractionRoom, len(suites), parsedReports, plan.Dropped)
+					if limited {
+						client.Metrics.RecordReportRetractionLimited(claim.Provider, "one_row_per_slot")
 						slog.Warn(
-							"dropped report retraction rows do not fit the run's suite batch; the dropped reports' slots are not retired",
+							"dropped report retraction rows limited to one row per slot to fit the run's suite batch",
 							"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-							"repository", logging.ProviderText(cursor.Repo), logging.ProviderIDAttr("run", pipeline.RunID), "rows", len(retractions),
+							"repository", logging.ProviderText(cursor.Repo), logging.ProviderIDAttr("run", pipeline.RunID), "slots", len(retractions),
 						)
-						retractions = nil
 					}
 					// One verdict row per run, after its last emission's rows are decided (CHAOS-13826).
 					lossAfter := githubTestsTakeRunLossCounts(cursor)

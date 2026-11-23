@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -55,9 +56,16 @@ func retiredFxMatrix() map[string]rowsArtifact {
 // objects, in emission order.
 func retiredWalk(t *testing.T, artifacts ...rowsArtifact) (suites, cases []map[string]any) {
 	t.Helper()
+	suites, cases, _ = retiredWalkWith(t, GitHubTestsRouteHandler{}, artifacts...)
+	return suites, cases
+}
+
+// retiredWalkWith is retiredWalk through handler; it also returns the rendered provider metrics of the walk.
+func retiredWalkWith(t *testing.T, handler GitHubTestsRouteHandler, artifacts ...rowsArtifact) (suites, cases []map[string]any, metrics string) {
+	t.Helper()
 	client := githubTestsClient(t, fakehttp.Client(&githubTestsRowsDoer{t: t, runs: 1, artifacts: artifacts}))
 	client.Metrics = providerfoundation.NewMetrics()
-	final, effects := walkGitHubTestsChunksCapturingEffects(t, GitHubTestsRouteHandler{}, nativeTestClaim("github", "cicd"), client, 8)
+	final, effects := walkGitHubTestsChunksCapturingEffects(t, handler, nativeTestClaim("github", "cicd"), client, 8)
 	for _, effect := range append(effects, final.Effects...) {
 		var into *[]map[string]any
 		switch effect.Destination {
@@ -76,7 +84,11 @@ func retiredWalk(t *testing.T, artifacts ...rowsArtifact) (suites, cases []map[s
 			*into = append(*into, row)
 		}
 	}
-	return suites, cases
+	var rendered strings.Builder
+	if err := client.Metrics.WritePrometheus(&rendered); err != nil {
+		t.Fatal(err)
+	}
+	return suites, cases, rendered.String()
 }
 
 func retiredFxListing(ids ...string) []rowsArtifact {
@@ -178,28 +190,103 @@ func TestGitHubTestsRouteRetractsOnlyAPlannerDrop(t *testing.T) {
 	}
 }
 
-// The retraction rows of a run never take its suite batch past the effect contract: past either bound they are not written.
-func TestGitHubTestsRetractionRowsFitTheEffectContract(t *testing.T) {
-	row := testSuiteResultRow{OrgID: "org", RepoID: "repo", RunID: "run", SuiteID: "suite", Retracted: true}
-	if !githubTestsRetractionsFit(maxEffectRows-2, []testSuiteResultRow{row, row}) {
-		t.Errorf("two rows that fit the row bound were refused")
+// When one row per suite does not fit the run's suite batch, the dropped report's slot is still retired in the same walk: one
+// minimal row (the key of its first suite, no name), a counter and a Warn line, and the unit finishes. A walk with the room
+// of the effect contract writes one row per suite again.
+func TestGitHubTestsRouteRetiresTheSlotWithOneRowWhenTheSuiteRowsDoNotFit(t *testing.T) {
+	records := captureMembershipLogs(t)
+	// Leg B's two parts are admitted (2 suites); total-b's 2 retraction rows would make 4, the room is 3.
+	limited := GitHubTestsRouteHandler{retractionRoom: githubTestsRetractionRoom{rows: 3}}
+	suites, _, metrics := retiredWalkWith(t, limited, retiredFxListing("3", "4", "6")...)
+	var retracted []map[string]any
+	for _, row := range suites {
+		if row["retracted"] == true {
+			retracted = append(retracted, row)
+		}
 	}
-	if githubTestsRetractionsFit(maxEffectRows-1, []testSuiteResultRow{row, row}) {
-		t.Errorf("rows past maxEffectRows were accepted")
+	if len(suites) != 3 || len(retracted) != 1 {
+		t.Fatalf("suite rows %d (%d retracted), want leg B's 2 parts and 1 minimal retraction row:\n%v", len(suites), len(retracted), suites)
 	}
-	encoded, err := json.Marshal(row)
-	if err != nil {
-		t.Fatal(err)
+	row := retracted[0]
+	if row["report_slot"] != "test-results-6" || row["suite_name"] != "" || row["framework"] != nil || row["total_count"] != float64(0) || row["duration_seconds"] != nil {
+		t.Errorf("minimal retraction row %v, want slot test-results-6, no name or framework, zero measures", row)
 	}
-	room := (maxEffectPayloadBytes - githubTestsMaxReportPayloadBytesPerDestination) / len(encoded)
-	many := make([]testSuiteResultRow, room+1)
-	for index := range many {
-		many[index] = row
+	want := `dev_health_provider_report_retraction_limited_total{provider="github",reason="one_row_per_slot"} 1`
+	if !strings.Contains(metrics, want) {
+		t.Errorf("want %q in:\n%s", want, metrics)
 	}
-	if room+1 <= maxEffectRows && githubTestsRetractionsFit(0, many) {
-		t.Errorf("%d rows of %d bytes past the payload headroom were accepted", len(many), len(encoded))
+	warned := 0
+	for _, record := range *records {
+		if record.Message != "dropped report retraction rows limited to one row per slot to fit the run's suite batch" {
+			continue
+		}
+		warned++
+		attrs := membershipLogAttrs(record)
+		if record.Level != slog.LevelWarn || attrs["slots"] != int64(1) || attrs["provider"] != "github" {
+			t.Errorf("limit line level %s attrs %v, want WARN with slots 1", record.Level, attrs)
+		}
+		for key, value := range attrs {
+			if _, isError := value.(error); isError {
+				t.Errorf("limit line carries an error operand %s", key)
+			}
+		}
 	}
-	if !githubTestsRetractionsFit(0, many[:room]) {
-		t.Errorf("%d rows of %d bytes inside the payload headroom were refused", room, len(encoded))
+	if warned != 1 {
+		t.Errorf("%d limit lines, want 1", warned)
+	}
+
+	full, _, metrics := retiredWalkWith(t, GitHubTestsRouteHandler{}, retiredFxListing("3", "4", "6")...)
+	retracted = nil
+	for _, row := range full {
+		if row["retracted"] == true {
+			retracted = append(retracted, row)
+		}
+	}
+	if len(retracted) != 2 || strings.Contains(metrics, "dev_health_provider_report_retraction_limited_total{") {
+		t.Errorf("a walk with the contract's room wrote %d retraction rows and limited %t, want 2 and no limit", len(retracted),
+			strings.Contains(metrics, "dev_health_provider_report_retraction_limited_total{"))
+	}
+}
+
+// The minimal rows always fit: the run bound keeps one row of the effect contract per listed artifact free, and the largest
+// minimal row set (every listed artifact but one dropped, each row listing every artifact as a legacy id) is far inside the
+// payload headroom.
+func TestGitHubTestsMinimalRetractionRowsAlwaysFitTheEffectContract(t *testing.T) {
+	if githubTestsMaxReportRowsPerRun+githubTestsMaxArtifacts-1 > maxEffectRows {
+		t.Fatalf("run bound %d + %d minimal rows passes maxEffectRows %d", githubTestsMaxReportRowsPerRun, githubTestsMaxArtifacts-1, maxEffectRows)
+	}
+	legacy := make([]string, githubTestsMaxArtifacts)
+	for index := range legacy {
+		legacy[index] = strings.Repeat("f", 64)
+	}
+	team, service := strings.Repeat("t", 256), strings.Repeat("s", 256)
+	parsed := make([]githubTestsParsedReport, githubTestsMaxArtifacts)
+	var dropped []githubTestsReportDrop
+	for index := range parsed {
+		long := strings.Repeat("n", 1<<20) // a suite name of 1 MiB: the minimal row drops it
+		parsed[index].Suites = []testSuiteResultRow{{OrgID: strings.Repeat("o", 64), RepoID: strings.Repeat("r", 36), RunID: strings.Repeat("9", 20),
+			SuiteID: strings.Repeat("a", 64), SuiteName: long, TeamID: &team, ServiceID: &service, ReportSlot: strings.Repeat("x", 256),
+			RunAttempt: 1, LegacySuiteIDs: legacy}}
+		if index > 0 {
+			dropped = append(dropped, githubTestsReportDrop{Index: index, Cause: githubTestsAggregateOfPartsCause})
+		}
+	}
+	rows, limited := githubTestsRetractionsWithin(githubTestsRetractionRoom{}, githubTestsMaxReportRowsPerRun, parsed, dropped)
+	if !limited || len(rows) != len(dropped) {
+		t.Fatalf("limited %t with %d rows, want the minimal rows of %d dropped reports", limited, len(rows), len(dropped))
+	}
+	size := 0
+	for _, row := range rows {
+		encoded, err := json.Marshal(row)
+		if err != nil {
+			t.Fatal(err)
+		}
+		size += len(encoded)
+	}
+	if githubTestsMaxReportRowsPerRun+len(rows) > maxEffectRows || size > maxEffectPayloadBytes-githubTestsMaxReportPayloadBytesPerDestination {
+		t.Fatalf("%d minimal rows of %d bytes do not fit the room left by a full run", len(rows), size)
+	}
+	if rows, limited := githubTestsRetractionsWithin(githubTestsRetractionRoom{}, 2, parsed[:2], dropped[:1]); limited || len(rows) != 1 || rows[0].SuiteName == "" {
+		t.Fatalf("a small run took the fallback (limited %t, %d rows)", limited, len(rows))
 	}
 }

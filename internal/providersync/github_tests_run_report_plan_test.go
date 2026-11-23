@@ -25,13 +25,14 @@ func mustPlanRunReports(t *testing.T, reports ...githubTestsParsedReport) github
 	return plan
 }
 
-// The bound is exact: 100,000 rows are admitted, 100,001 are not.
+// The bound is exact: githubTestsMaxReportRowsPerRun rows (99,975: maxEffectRows less one retraction row per listed artifact,
+// CHAOS-14259) are admitted, one more is not.
 func TestGitHubTestsPlanRunReportsBoundaryIsExact(t *testing.T) {
-	at := mustPlanRunReports(t, planRunReportCases("a", 60_000), planRunReportCases("b", 40_000))
+	at := mustPlanRunReports(t, planRunReportCases("a", 60_000), planRunReportCases("b", githubTestsMaxReportRowsPerRun-60_000))
 	if !slices.Equal(at.Admitted, []int{0, 1}) || len(at.OverBound) != 0 {
 		t.Fatalf("at the bound: admitted %v over %v, want both admitted", at.Admitted, at.OverBound)
 	}
-	over := mustPlanRunReports(t, planRunReportCases("a", 60_000), planRunReportCases("b", 40_001))
+	over := mustPlanRunReports(t, planRunReportCases("a", 60_000), planRunReportCases("b", githubTestsMaxReportRowsPerRun-60_000+1))
 	if !slices.Equal(over.Admitted, []int{0}) || !slices.Equal(over.OverBound, []int{1}) {
 		t.Fatalf("one row over the bound: admitted %v over %v, want [0] and [1]", over.Admitted, over.OverBound)
 	}

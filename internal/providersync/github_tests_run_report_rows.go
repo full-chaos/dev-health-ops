@@ -491,23 +491,48 @@ func githubTestsRetractionRows(parsed []githubTestsParsedReport, dropped []githu
 	return rows
 }
 
-// githubTestsRetractionsFit keeps a run's suite batch inside the effect contract. The admitted rows are bounded by
-// githubTestsMaxReportRowsPerRun and their suite JSON by githubTestsMaxReportPayloadBytesPerDestination; the retraction rows may
-// take only the rest of maxEffectRows and maxEffectPayloadBytes. Rows that do not fit are not written: the stale slot then stays,
-// which is the state before CHAOS-14259, instead of a failing unit.
-func githubTestsRetractionsFit(admittedSuites int, retractions []testSuiteResultRow) bool {
-	if admittedSuites+len(retractions) > maxEffectRows {
-		return false
+// githubTestsRetractionRoom is what a run's suite batch leaves for retraction rows under the effect contract: rows up to
+// maxEffectRows, and the payload headroom over the admitted suites' bound (githubTestsMaxReportPayloadBytesPerDestination). A
+// zero field keeps the contract; cells lower it.
+type githubTestsRetractionRoom struct{ rows, bytes int }
+
+// githubTestsRetractionsWithin is the retraction rows of a run whose suite batch holds admittedSuites rows. One row per parsed
+// suite (githubTestsRetractionRows) when they fit; else one minimal row per dropped report, limited = true: the key of its
+// first suite with no name, framework or environment. That row retires the slot all the same (the slot's newest row
+// decides); only an old reader after a rollback still counts the slot's other stale suites. The minimal rows always fit:
+// githubTestsMaxReportRowsPerRun keeps githubTestsMaxArtifacts rows of maxEffectRows free, a run drops fewer reports than it
+// lists artifacts, and a minimal row is a few hundred bytes and one legacy id per listed artifact at most.
+func githubTestsRetractionsWithin(room githubTestsRetractionRoom, admittedSuites int, parsed []githubTestsParsedReport, dropped []githubTestsReportDrop) (rows []testSuiteResultRow, limited bool) {
+	if room.rows == 0 {
+		room.rows = maxEffectRows
 	}
-	size := 0
-	for _, row := range retractions {
-		encoded, err := json.Marshal(row)
-		if err != nil {
-			return false
+	if room.bytes == 0 {
+		room.bytes = maxEffectPayloadBytes - githubTestsMaxReportPayloadBytesPerDestination
+	}
+	full := githubTestsRetractionRows(parsed, dropped)
+	if admittedSuites+len(full) <= room.rows {
+		size := 0
+		for _, row := range full {
+			encoded, err := json.Marshal(row)
+			if err != nil {
+				size = room.bytes + 1
+				break
+			}
+			size += len(encoded)
 		}
-		size += len(encoded)
+		if size <= room.bytes {
+			return full, false
+		}
 	}
-	return size <= maxEffectPayloadBytes-githubTestsMaxReportPayloadBytesPerDestination
+	minimal := make([]testSuiteResultRow, 0, len(dropped))
+	for _, drop := range dropped {
+		if suites := githubTestsRetractionRows(parsed, []githubTestsReportDrop{drop}); len(suites) > 0 {
+			row := suites[0]
+			row.SuiteName, row.Framework, row.Environment = "", nil, nil
+			minimal = append(minimal, row)
+		}
+	}
+	return minimal, true
 }
 
 // githubTestsContentWithin says whether every suite instance of the report at part (githubTestsReportContent) is also in the report

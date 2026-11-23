@@ -1,0 +1,23 @@
+{
+ "form": "FORM-14553-1",
+ "pin": "a7febdf500025f5ac628a1bdf34d0f817a90e323",
+ "run_rule": "ONE call (REAL), only after the CI exec cell of FORM-14553-1.md is green and acp names this file's sha12. pm substitutes ONLY the tokens ${START_MS} and ${END_MS} (epoch ms integers), every occurrence: END_MS = 00:00:00Z of the call day, START_MS = END_MS - 604800000 (7 days exactly). start/end are JSON NUMBERS (no quotes): this file is a template and is valid JSON only after the fill. Before the call: PRE-TTL-14542-1.sql (text unchanged) with WANT oldest_days >= 8; a miss = STOP, no call. The statement gates itself (cost_gate on system.clusters + system.parts, STOP-COST-GATE). An error or a timeout = STOP, no re-run.",
+ "body": {
+  "schemaVersion": "v1",
+  "start": ${START_MS},
+  "end": ${END_MS},
+  "requestType": "scalar",
+  "compositeQuery": {
+   "queries": [
+    {
+     "type": "clickhouse_sql",
+     "spec": {
+      "name": "F",
+      "query": "WITH (SELECT throwIf((SELECT count() FROM system.clusters WHERE cluster = 'cluster') != 1 OR (SELECT sum(rows) FROM system.parts WHERE active AND database = 'signoz_traces' AND table = 'signoz_index_v3' AND partition_id >= toString(toYYYYMMDD(toDate(fromUnixTimestamp(toUInt32(intDiv(toUInt64(${START_MS}), 1000) - 88200))))) AND partition_id <= toString(toYYYYMMDD(toDate(fromUnixTimestamp(toUInt32(intDiv(toUInt64(${END_MS}), 1000) + 88200)))))) NOT BETWEEN 1 AND 20000000, 'STOP-COST-GATE')) AS cost_gate SELECT r.1 AS section, r.2 AS route, r.3 AS label, count() AS n, countIf(att > 1) AS retried, countIf(att > 1 AND oc = 'response') AS retried_ok, countIf(gw > 0) AS gate_waited, sum(att) AS attempts FROM (SELECT attributes_string['http.route'] AS hroute, attributes_string['provider'] AS prov, attributes_string['outcome'] AS oc, attributes_string['error.type'] AS et, toUInt32(attributes_number['http.response.status_code']) AS st, toUInt64(attributes_number['dev_health.provider.attempts']) AS att, toFloat64(attributes_number['dev_health.provider.gate_wait_ms']) AS gw, toString(toDate(timestamp, 'UTC')) AS day, has(['/repos/{owner}/{repo}/releases', '/repos/{owner}/{repo}/deployments', '/repos/{owner}/{repo}/deployments/{id}/statuses', '/repos/{owner}/{repo}/commits/{sha}/pulls', '/repos/{owner}/{repo}/dependabot/alerts', '/repos/{owner}/{repo}/code-scanning/alerts', '/repos/{owner}/{repo}/security-advisories', '/projects/{project}/releases', '/projects/{project}/deployments', '/projects/{project}/repository/commits/{sha}/merge_requests', '/api/v2/code-refs/repositories'], hroute) AS in_scope FROM signoz_traces.distributed_signoz_index_v3 WHERE ts_bucket_start >= intDiv(toUInt64(${START_MS}), 1000) - 1800 AND ts_bucket_start <= intDiv(toUInt64(${END_MS}), 1000) AND timestamp >= fromUnixTimestamp64Milli(toInt64(${START_MS})) AND timestamp < fromUnixTimestamp64Milli(toInt64(${END_MS})) AND resource_string_service$$name = 'dev-health-go-sync-provider' AND name = 'dev_health.provider.request' AND cost_gate = 0) ARRAY JOIN arrayConcat([('day', '', day)], if(in_scope, [('control', hroute, 'all'), ('class', hroute, multiIf(st = 401, '401', st = 403 AND et = 'rate_limited', '403_rate_limited', st = 403 AND et = 'authentication', '403_permission', st = 403, '403_other_outcome', st = 404, '404', st = 409, '409', st IN (400, 422), '400_422', st = 429, '429', st >= 400 AND st < 500, '4xx_other', st >= 500 AND st < 600, '5xx', st >= 200 AND st < 400, '2xx_3xx', 'no_status')), ('outcome', hroute, concat(oc, ' | ', et))], CAST([], 'Array(Tuple(String, String, String))')), if(hroute IN ('unrouted', ''), [('unrouted', prov, hroute)], CAST([], 'Array(Tuple(String, String, String))'))) AS r GROUP BY section, route, label ORDER BY section, route, label LIMIT 2000",
+      "disabled": false
+     }
+    }
+   ]
+  }
+ }
+}

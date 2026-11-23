@@ -365,7 +365,8 @@ func (s *Service) matchRequest(ctx context.Context, p Provider, v Verified, cook
 // provisionNew handles a sign-in whose key matches no account. An asserted
 // email another account holds is an EmailConflictError naming its sign-in
 // method; a provider without auto-provisioning is ErrAutoProvisionDisabled; a
-// service without the membership seam is ErrNotOrgMember. All of these write
+// service without the membership seam is ErrNotOrgMember; with the seam, a
+// provider with no domain list is ErrAutoProvisionDisabled. All of these write
 // nothing. Otherwise the seam creates the account, its identity and its
 // membership in one transaction; the session is issued after it returns.
 func (s *Service) provisionNew(ctx context.Context, p Provider, id Identity, nameID NameID, email, fullName string) (uuid.UUID, error) {
@@ -385,6 +386,10 @@ func (s *Service) provisionNew(ctx context.Context, p Provider, id Identity, nam
 	}
 	if s.JIT == nil {
 		return uuid.Nil, s.refuse(ctx, p, ErrNotOrgMember)
+	}
+	// An asserted email is the org's IdP's word: only a domain the row lists can make an account.
+	if len(p.AllowedDomains) == 0 {
+		return uuid.Nil, s.provisioningOff(ctx, p)
 	}
 	var legacyName *string
 	if fullName != "" {

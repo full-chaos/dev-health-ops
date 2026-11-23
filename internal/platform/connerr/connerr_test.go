@@ -51,3 +51,38 @@ func TestIsDroppedOnTheRealFirstBlockReadChain(t *testing.T) {
 		t.Fatalf("IsDropped(%v) = true, want false", exception)
 	}
 }
+
+// IsDroppedWrite names a drop only when the dropped error itself is marked as
+// an INSERT call (AtWrite): the mark survives %w and errors.Join, keeps the
+// text and the chain, and a marked non-drop beside an unmarked dropped read is
+// no dropped write.
+func TestIsDroppedWriteNamesOnlyAMarkedDrop(t *testing.T) {
+	drop := fmt.Errorf("query processing: failed to read first block packet: %w", fmt.Errorf("read: %w", io.EOF))
+	exception := &chgoproto.Exception{Code: 241, Name: "DB::Exception", Message: "Memory limit (total) exceeded"}
+	marked := AtWrite(drop)
+	if AtWrite(nil) != nil {
+		t.Fatal("AtWrite(nil) != nil")
+	}
+	if marked.Error() != drop.Error() || !errors.Is(marked, io.EOF) || !errors.Is(marked, drop) {
+		t.Fatalf("AtWrite changed the error: %q errors.Is(io.EOF)=%v", marked, errors.Is(marked, io.EOF))
+	}
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"marked drop":                         {marked, true},
+		"marked drop under %w":                {fmt.Errorf("send batch: %w", marked), true},
+		"marked drop in a join":               {errors.Join(errors.New("abort"), marked), true},
+		"marked drop in a wrapped join":       {fmt.Errorf("write: %w", errors.Join(errors.New("abort"), marked)), true},
+		"unmarked drop (a read)":              {drop, false},
+		"unmarked drop under %w":              {fmt.Errorf("read stored rows: %w", drop), false},
+		"marked exception":                    {AtWrite(exception), false},
+		"marked exception beside a read drop": {errors.Join(AtWrite(exception), fmt.Errorf("read: %w", drop)), false},
+		"marked drop, any wrap text":          {fmt.Errorf("read stored rows: %w", AtWrite(drop)), true},
+		"nil":                                 {nil, false},
+	} {
+		if got := IsDroppedWrite(tc.err); got != tc.want {
+			t.Errorf("%s: IsDroppedWrite(%v) = %v, want %v", name, tc.err, got, tc.want)
+		}
+	}
+}

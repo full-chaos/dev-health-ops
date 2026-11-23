@@ -61,7 +61,7 @@ func TestThroughputReadsTakeTheOrgViewWithoutADeadKey(t *testing.T) {
 		t.Fatalf("backlog = %d, want 3 (the org row of the newest day; the zeros of the retraction add nothing)", backlog.size)
 	}
 
-	current, average, err := loadWorkItemOverlay(ctx, client, org, []string{"t1"}, nil, 4, today)
+	current, average, _, err := loadWorkItemOverlay(ctx, client, org, []string{"t1"}, nil, 4, today)
 	if err != nil {
 		t.Fatalf("loadWorkItemOverlay: %v", err)
 	}

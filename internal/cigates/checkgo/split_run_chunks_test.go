@@ -357,6 +357,29 @@ func TestSplitJobRunsEveryNameOfItsPartsExactlyOnce(t *testing.T) {
 	}
 }
 
+// A name that comes twice in the split lines runs once, in its first place; a small part with a repeat keeps one call.
+func TestSplitJobRunsARepeatedNameOnce(t *testing.T) {
+	t.Parallel()
+	for _, n := range []int{10, 3000} {
+		t.Run(fmt.Sprint(n, " names"), func(t *testing.T) {
+			t.Parallel()
+			names := syntheticNames("Twice", n)
+			r := runSplitJob(t, append(append([]string{}, names...), names[0], names[n-1]), false, "")
+			for _, d := range chunkDefects(t, r.calls, names) {
+				t.Error(d)
+			}
+			if n == 10 {
+				if len(r.calls) != 1 {
+					t.Fatalf("want one call, got %d", len(r.calls))
+				}
+				if _, got := r.calls[0].runArg(t); got != joinedRegex(names) {
+					t.Errorf("-run %q, want %q", got, joinedRegex(names))
+				}
+			}
+		})
+	}
+}
+
 // SMALL PART: a part whose -run fits the budget keeps exactly one go test call whose argv is the base form, byte for byte.
 func TestSmallSplitPartKeepsItsOneGoTestCall(t *testing.T) {
 	t.Parallel()

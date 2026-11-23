@@ -157,29 +157,30 @@ type formExecG03x14190Piece struct {
 	id, text string
 }
 
-// formExecG03x14190Pieces splits the FORM as psql runs it: the pieces between ";\n" that hold SQL. A data statement is
-// named by its first comment line "-- <id> "; BEGIN and ROLLBACK by their own word.
+// formExecG03x14190Pieces splits the FORM as psql runs it: a statement ends at a SQL line (not a "--" comment line)
+// that ends with ";" (psql skips a ";" inside a comment, and G0a's comment holds one). Only pieces that hold SQL count.
+// A data statement is named by its first comment line "-- <id> "; BEGIN and ROLLBACK by their own word.
 func formExecG03x14190Pieces(t *testing.T, text string) []formExecG03x14190Piece {
 	t.Helper()
 	statementID := regexp.MustCompile(`^(S[01]|C[01]|G0[abw]?)$`)
 	var pieces []formExecG03x14190Piece
 	seen := map[string]bool{}
-	for _, raw := range strings.Split(text, ";\n") {
-		statement := strings.TrimSpace(raw)
-		id, sqlText := "", ""
-		for _, line := range strings.Split(statement, "\n") {
-			if strings.HasPrefix(line, "--") {
-				if fields := strings.Fields(line); id == "" && len(fields) > 1 && statementID.MatchString(fields[1]) {
-					id = fields[1]
-				}
-				continue
-			}
-			sqlText += line + "\n"
-		}
-		sqlText = strings.TrimSpace(sqlText)
-		if sqlText == "" {
+	var current []string
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "--") || !strings.HasSuffix(strings.TrimRight(line, " "), ";") {
+			current = append(current, line)
 			continue
 		}
+		current = append(current, strings.TrimSuffix(strings.TrimRight(line, " "), ";"))
+		statement := strings.TrimSpace(strings.Join(current, "\n"))
+		current = nil
+		id := ""
+		for _, line := range strings.Split(statement, "\n") {
+			if fields := strings.Fields(line); strings.HasPrefix(line, "--") && id == "" && len(fields) > 1 && statementID.MatchString(fields[1]) {
+				id = fields[1]
+			}
+		}
+		sqlText := strings.TrimSpace(formExecG03x14190SQLLines(statement))
 		switch {
 		case strings.HasPrefix(sqlText, "BEGIN "):
 			id = "BEGIN"
@@ -191,6 +192,9 @@ func formExecG03x14190Pieces(t *testing.T, text string) []formExecG03x14190Piece
 		}
 		seen[id] = true
 		pieces = append(pieces, formExecG03x14190Piece{id: id, text: statement})
+	}
+	if strings.TrimSpace(formExecG03x14190SQLLines(strings.Join(current, "\n"))) != "" {
+		t.Fatalf("SQL after the last statement:\n%s", strings.Join(current, "\n"))
 	}
 	return pieces
 }

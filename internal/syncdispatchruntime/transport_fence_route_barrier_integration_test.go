@@ -114,6 +114,9 @@ func TestEveryFencedCommitGateHoldsTheRouteBarrierToTheEndOfItsTransaction(t *te
 				if err := probeRouteMutationBarrier(t, ctx, other); err != nil {
 					t.Fatalf("barrier after the pass ended: %v, want free", err)
 				}
+				if gate.kind == outboxKindPostSync {
+					assertPostSyncGateGivesUpOnAHeldBarrier(t, ctx, pool, other, transport)
+				}
 			})
 		})
 	}
@@ -254,4 +257,36 @@ func TestDispatchRefusesAfterARouteMutationThatHeldTheBarrierCommitsAPause(t *te
 		}
 		assertDispatchPassCommittedNothing(t, ctx, other, args[0].RunID)
 	})
+}
+
+// assertPostSyncGateGivesUpOnAHeldBarrier: post_sync does not poll (one read, by design). While a route mutation holds
+// its barrier, the commit gate returns ErrPostSyncUnavailable at once, its text the fixed sentinel, and the fan-out
+// failure line names the stage commit_check and SQLSTATE 55P03 (its cause), never a busy reason of the polling kinds.
+func assertPostSyncGateGivesUpOnAHeldBarrier(t *testing.T, ctx context.Context, pool, other *pgxpool.Pool, transport TransportArgs) {
+	t.Helper()
+	holder, err := other.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(context.Background()) }()
+	if _, err := holder.Exec(ctx, `LOCK TABLE public.sync_dispatch_outbox IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	service := &NativePostSyncService{logger: synclog.New(slog.New(slog.NewTextHandler(&logs, nil)))}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	allowed, gateErr := service.postSyncCommitAllowed(ctx, tx, PostSyncArgs{transport})
+	if allowed || !errors.Is(gateErr, ErrPostSyncUnavailable) || gateErr.Error() != ErrPostSyncUnavailable.Error() || !isLockNotAvailableError(gateErr) {
+		t.Fatalf("post_sync gate on a held barrier: allowed=%v err=%v, want ErrPostSyncUnavailable (sentinel text) caused by SQLSTATE 55P03", allowed, gateErr)
+	}
+	service.observeFanoutFailure(ctx, PostSyncArgs{transport}, gateErr, "", true)
+	line := strings.TrimSpace(logs.String())
+	if strings.Count(line, "\n") != 0 || !strings.Contains(line, "level=ERROR") || !strings.Contains(line, "msg=post_sync_fanout.failed") ||
+		!strings.Contains(line, "reason=commit_check") || !strings.Contains(line, "error.code=55P03") || strings.Contains(line, routeBarrierTestBusyReason) {
+		t.Fatalf("post_sync failure line = %q, want one ERROR post_sync_fanout.failed naming reason=commit_check and error.code=55P03", line)
+	}
 }

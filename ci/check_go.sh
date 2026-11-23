@@ -5982,12 +5982,30 @@ auth_leg_units() {
   [ -z "${whole}" ] || printf '%s\t\n' "${whole% }"
 }
 
+# auth_leg_go_test JSON_FILE GO_TEST_ARG...: one go test call of an auth leg. JSON_FILE is /dev/null (GO_TEST_LEG_JSON_DIR unset: a local
+# run, a stand-in test): the call is plain go test, as before. Otherwise it runs go test -json, appends the events to JSON_FILE (the leg's
+# raw file, runner-only; the workflow converts it to a JUnit part) and prints the plain log rebuilt by GO_TEST_LEG_JQ on stdout, so the
+# AUTH_RACE_MARKER grep of the race-integration leg reads the same lines. pipefail keeps go test's exit code.
+auth_leg_go_test() {
+  local json="$1"
+  shift
+  if [ "${json}" = /dev/null ]; then
+    auth_go test "$@"
+    return
+  fi
+  command -v jq >/dev/null 2>&1 || die "the auth leg's JUnit part needs jq to read go test -json events"
+  auth_go test -json "$@" \
+    | tee -a "${json}" \
+    | jq -nR --unbuffered -rj "${GO_TEST_LEG_JQ}"
+}
+
 # check_auth_leg KIND LEG COUNT: runs the leg. A race-integration go test passes only when every TestRace* test it selected logged
 # AUTH_RACE_MARKER (the check of check_auth_race_integration, narrowed to the names of the leg's part).
 check_auth_leg() {
-  local kind="$1" leg="$2" count="$3" units pkg regex output want got listed total=0 p
+  local kind="$1" leg="$2" count="$3" units pkg regex output want got listed total=0 p json=/dev/null
   local -a flags=() pkgs=() runarg=()
   units="$(auth_leg_units "${kind}" "${leg}" "${count}")" || exit 2
+  [ "${AUTH_LEG_LIST:-}" = "1" ] || json="$(leg_json_file "auth-${kind}" "${leg}" "${count}")" || die "auth ${kind}: cannot create the leg's go test -json file under GO_TEST_LEG_JSON_DIR"
   mapfile -t flags < <(auth_leg_flags "${kind}") || exit 2
   [ "${#flags[@]}" -gt 0 ] || die "auth ${kind}: no go test flags"
   while IFS=$'\t' read -r pkg regex; do
@@ -6005,7 +6023,7 @@ check_auth_leg() {
     [ -z "${regex}" ] || runarg=(-run "${regex}")
     printf 'auth go test %s (leg %s/%s): %s%s\n' "${kind}" "${leg}" "${count}" "${pkg}" "${regex:+ -run ${regex}}"
     if [ "${kind}" != race-integration ]; then
-      auth_go test -mod=readonly -trimpath "${flags[@]}" "${runarg[@]}" "${pkgs[@]}"
+      auth_leg_go_test "${json}" -mod=readonly -trimpath "${flags[@]}" "${runarg[@]}" "${pkgs[@]}"
       continue
     fi
     want="$(cd "${ROOT}" && grep -hoE '^func TestRace[A-Za-z0-9_]+' "${pkg#"$(auth_go list -m)/"}"/*_test.go | sed 's/^func //' | LC_ALL=C sort -u || true)"
@@ -6016,7 +6034,7 @@ check_auth_leg() {
       [ -n "${want}" ] || die "auth race-integration: no TestRace* test found in ${pkg}"
     fi
     output="$(mktemp)"
-    if ! auth_go test -mod=readonly -trimpath "${flags[@]}" "${runarg[@]}" "${pkg}" >"${output}" 2>&1; then
+    if ! auth_leg_go_test "${json}" -mod=readonly -trimpath "${flags[@]}" "${runarg[@]}" "${pkg}" >"${output}" 2>&1; then
       cat "${output}" >&2
       rm -f "${output}"
       die "auth race-integration: ${pkg} failed"

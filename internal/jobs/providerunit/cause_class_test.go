@@ -451,6 +451,7 @@ func TestCauseClassVocabularyIsClosedAndWrapSafe(t *testing.T) {
 		{"budget", providerfoundation.ErrBudgetContended, false, causeClassBudgetContended},
 		{"checkpoint conflict", providersync.ErrChunkCheckpointConflict, false, CheckpointConflictCategory},
 		{"checkpoint store error", providersync.NewChunkStoreError(errors.New("db")), false, causeClassCheckpointStoreError},
+		{"sink dropped", wrap(committedSinkDropError(t)), false, causeClassSinkConnectionDropped},
 		{"nil", nil, false, providersync.CauseClassUnclassified},
 		{"plain", errors.New("x"), false, providersync.CauseClassUnclassified},
 	}

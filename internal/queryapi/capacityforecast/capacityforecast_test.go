@@ -124,6 +124,11 @@ func (f *fakeClient) Query(_ context.Context, statement string, bindings []click
 	return f.responses[index], nil
 }
 
+// backlogRows is the backlog read's one row: the sum, one measured key, no stale key, its newest day.
+func backlogRows(size uint64) *fakeRowScanner {
+	return &fakeRowScanner{rows: [][]any{{size, uint64(1), uint64(0), time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC)}}}
+}
+
 func day(t *testing.T, value string) time.Time {
 	t.Helper()
 	parsed, err := time.Parse("2006-01-02", value)
@@ -219,7 +224,7 @@ func TestResolveForecastReturnsNilWithoutHistory(t *testing.T) {
 func TestResolveForecastReturnsNilWhenTargetAndBacklogAreBothEmpty(t *testing.T) {
 	client := &fakeClient{responses: []*fakeRowScanner{
 		throughputRows(t, 3, 4, 5),
-		{rows: [][]any{{uint64(0)}}}, // backlog
+		backlogRows(0), // backlog
 	}}
 	got, err := ResolveForecast(context.Background(), client, "org-1", nil, day(t, "2026-09-01"))
 	if err != nil {
@@ -234,7 +239,7 @@ func TestResolveForecastReturnsNilWhenTargetAndBacklogAreBothEmpty(t *testing.T)
 func TestResolveForecastComputesFromHistoryAndBacklog(t *testing.T) {
 	client := &fakeClient{responses: []*fakeRowScanner{
 		throughputRows(t, 2, 4, 6, 8, 10),
-		{rows: [][]any{{uint64(30)}}},
+		backlogRows(30),
 	}}
 	got, err := ResolveForecast(context.Background(), client, "org-7", nil, day(t, "2026-09-01"))
 	if err != nil {
@@ -295,7 +300,7 @@ func TestResolveForecastRunsBothModesWhenATargetDateIsSupplied(t *testing.T) {
 	}
 	client := &fakeClient{responses: []*fakeRowScanner{
 		throughputRows(t, 2, 4, 6, 8, 10),
-		{rows: [][]any{{uint64(30)}}},
+		backlogRows(30),
 	}}
 
 	got, err := ResolveForecast(context.Background(), client, "org-7", input, day(t, "2026-09-01"))
@@ -430,7 +435,7 @@ func TestForecastToModelRendersComputedAtAsRFC3339(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			got := forecastToModel(testCase.moment, nil, nil, 0, 0, nil, numerical.ForecastResult{})
+			got := forecastToModel(testCase.moment, nil, nil, backlogRead{}, 0, nil, numerical.ForecastResult{})
 			if got.ComputedAt != testCase.want {
 				t.Errorf("computedAt: got %q, want %q", got.ComputedAt, testCase.want)
 			}
@@ -547,7 +552,7 @@ func TestResolveForecastRejectsAnOversizedSimulationCount(t *testing.T) {
 func TestResolveForecastAcceptsExactlyTheCap(t *testing.T) {
 	client := &fakeClient{responses: []*fakeRowScanner{
 		throughputRows(t, 2, 4, 6),
-		{rows: [][]any{{uint64(0)}}},
+		backlogRows(0),
 	}}
 	input := &model.CapacityForecastInput{HistoryDays: 90, Simulations: maxSimulations}
 
@@ -567,7 +572,7 @@ func TestResolveForecastAcceptsExactlyTheCap(t *testing.T) {
 func TestResolveForecastAcceptsTheSmallestValidSimulationCount(t *testing.T) {
 	client := &fakeClient{responses: []*fakeRowScanner{
 		throughputRows(t, 2, 4, 6),
-		{rows: [][]any{{uint64(12)}}},
+		backlogRows(12),
 	}}
 	input := &model.CapacityForecastInput{HistoryDays: 90, Simulations: 1}
 

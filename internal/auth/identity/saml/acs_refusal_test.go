@@ -98,6 +98,7 @@ func (j *joinSeam) JoinOnSignIn(_ context.Context, principalID uuid.UUID, _ saml
 type lookupStore struct {
 	hit                             *saml.Principal
 	err                             error
+	taken                           bool
 	normalize, byEmail, provisioned int
 }
 
@@ -115,7 +116,7 @@ func (s *lookupStore) NormalizeEmail(raw string) (string, error) {
 
 func (s *lookupStore) PrincipalByEmail(context.Context, string) (saml.EmailOwner, bool, error) {
 	s.byEmail++
-	return saml.EmailOwner{}, false, nil
+	return saml.EmailOwner{}, s.taken, nil
 }
 
 type sessionsSpy struct{ got []saml.SignIn }

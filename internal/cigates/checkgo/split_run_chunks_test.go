@@ -45,6 +45,24 @@ go_test_json_run_t() {
 }
 `
 
+// chunkCellEnv is the cells' environment: the test's own, minus every knob the leg functions or their argv read (a CI leg sets
+// some of them, e.g. DEV_HEALTH_GO_RACE_TEST_TIMEOUT=30m), with the race timeout pinned to the default the base form names, plus extra.
+func chunkCellEnv(extra []string) []string {
+	drop := map[string]bool{
+		"DEV_HEALTH_GO_RACE_TEST_TIMEOUT": true, "MERGE_GROUP_FRESH": true, "GO_TEST_COVER_DIR": true, "LEG_TEST_GOFLAGS": true,
+		"GOFLAGS": true, "CHECK_GO_FRESH": true, "DEV_HEALTH_GO_FRESH_SECURITY": true, "GO_TEST_JSON_DIR": true,
+		"GO_TEST_LEG_JSON_DIR": true, "GITHUB_STEP_SUMMARY": true, "GO_RACE_SPLIT_WEIGHTS": true, "GO_RACE_UNWEIGHTED_SLOW_AWK": true,
+		"DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS": true, "DEV_HEALTH_GO_RACE_UNWEIGHTED_FAIL_SECONDS": true, "FAIL_CALLS": true,
+	}
+	var env []string
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); !drop[k] && !strings.HasPrefix(k, "CELL_") {
+			env = append(env, kv)
+		}
+	}
+	return append(append(env, "DEV_HEALTH_GO_RACE_TEST_TIMEOUT=10m"), extra...)
+}
+
 // chunkCellFunctions is the text of the named functions of ci/check_go.sh; a name in optional that the script lacks is left out.
 func chunkCellFunctions(t *testing.T, required, optional []string) string {
 	t.Helper()
@@ -132,7 +150,7 @@ func runChunkCell(t *testing.T, script string, env ...string) chunkRun {
 		}
 	}
 	cmd := exec.Command("bash", "-c", script)
-	cmd.Env = append(os.Environ(), append([]string{"REC=" + rec, "W=" + work, "TMPDIR=" + tmp, "CELL_ROOT=" + repoRoot(t), "CELL_PKG=" + chunkCellPkg}, env...)...)
+	cmd.Env = chunkCellEnv(append([]string{"REC=" + rec, "W=" + work, "TMPDIR=" + tmp, "CELL_ROOT=" + repoRoot(t), "CELL_PKG=" + chunkCellPkg}, env...))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		race, _ := os.ReadFile(filepath.Join(work, "race.out"))
@@ -495,6 +513,7 @@ func runNameChunks(t *testing.T, names []string) (string, string, error) {
 	script := "set -euo pipefail\n" + chunkCellFunctions(t, []string{"die", "go_run_name_ok", "byte_len", "go_run_name_chunks"}, nil) +
 		"go_run_name_chunks\n"
 	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = chunkCellEnv(nil)
 	cmd.Stdin = strings.NewReader(strings.Join(names, "\n") + "\n")
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

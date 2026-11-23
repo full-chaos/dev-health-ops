@@ -544,9 +544,12 @@ func githubTestsMinimalRetractionRows(retirement githubTestsRetirement) []testSu
 	return rows
 }
 
-// githubTestsRetiredSlotKey is the key of a slot's minimal retraction row: "~" sorts after the hex digits of every parsed suite key.
+// githubTestsRetiredSlotKeyPrefix starts the key of a slot's minimal retraction row: "~" sorts after the hex digits of every
+// parsed suite key, and the chunk split gives such a row a chunk of its own (effectOwnChunkRows).
+const githubTestsRetiredSlotKeyPrefix = "~retired-"
+
 func githubTestsRetiredSlotKey(slot string, attempt int64) string {
-	return "~retired-" + hashTestIdentifier("github-report-retired-slot", slot, strconv.FormatInt(attempt, 10))
+	return githubTestsRetiredSlotKeyPrefix + hashTestIdentifier("github-report-retired-slot", slot, strconv.FormatInt(attempt, 10))
 }
 
 // githubTestsRetractionSplitPolicy is the tests route's chunk policy less the stamps a stored chunk adds (two cursors of at most
@@ -565,9 +568,9 @@ func githubTestsEffectsSplit(effects []EffectBatch) bool {
 // githubTestsRunReportEffects builds a run's effects with the rows that retire its dropped reports' slots. One row per suite
 // (githubTestsRetractionRows) when the suite batch has room for them and the batch still splits into prepared chunks: a full
 // row sits at its suite's key, so it moves live rows to other chunk offsets, where two large rows of two destinations can meet.
-// Else one minimal row per slot, limited "one_row_per_slot". Else, when even those break a prepared chunk the run's own rows
-// fit, no row, limited "not_retired" (a trailing chunk within a few KiB of the bound). When the run's own rows do not split,
-// chunk preparation refuses the run whatever is added, and the minimal rows are kept.
+// Else one minimal row per slot, limited "one_row_per_slot": the split gives it a chunk of its own (effectOwnChunkRows), so it
+// adds no row to a chunk of the run's own rows. (When the run's own rows do not split, chunk preparation refuses the run
+// whatever it holds.)
 func githubTestsRunReportEffects(room githubTestsRetractionRoom, retirement githubTestsRetirement, suites []testSuiteResultRow,
 	cases []testCaseResultRow, coverage []coverageSnapshotRow, completeness []testOpsRunReportCompletenessRow,
 ) (effects []EffectBatch, limited string, err error) {
@@ -584,18 +587,11 @@ func githubTestsRunReportEffects(room githubTestsRetractionRoom, retirement gith
 			return effects, "", nil
 		}
 	}
-	minimal, err := build(githubTestsMinimalRetractionRows(retirement))
+	effects, err = build(githubTestsMinimalRetractionRows(retirement))
 	if err != nil {
 		return nil, "", err
 	}
-	if githubTestsEffectsSplit(minimal) {
-		return minimal, "one_row_per_slot", nil
-	}
-	base, err := build(nil)
-	if err != nil || !githubTestsEffectsSplit(base) {
-		return minimal, "one_row_per_slot", nil
-	}
-	return base, "not_retired", nil
+	return effects, "one_row_per_slot", nil
 }
 
 // githubTestsContentWithin says whether every suite instance of the report at part (githubTestsReportContent) is also in the report

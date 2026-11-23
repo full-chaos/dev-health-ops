@@ -213,7 +213,8 @@ func TestResolve_TrendWindowClamp(t *testing.T) {
 	}
 }
 
-// A filter carries at most maxRows ids to the store.
+// A filter carries at most maxRows ids to the store; Resolve refuses a caller
+// list over maxRows before any statement.
 func TestIDList_BoundedAtMaxRows(t *testing.T) {
 	long := make([]string, 501)
 	for i := range long {
@@ -227,11 +228,10 @@ func TestIDList_BoundedAtMaxRows(t *testing.T) {
 	}
 	cl := &bindingClient{}
 	f := &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeRepo, RepoIds: long, TrendDays: 30}
-	if _, err := Resolve(context.Background(), cl, "o", f, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	if ids, _ := bindingOf(cl.bindings[0], "repo_ids").([]string); len(ids) != 500 {
-		t.Fatalf("the statement carried %d ids", len(ids))
+	got, err := Resolve(context.Background(), cl, "o", f, time.Now())
+	wantRepoIdsRefused(t, got, err, len(long))
+	if len(cl.statements) != 0 {
+		t.Fatalf("%d statements ran; want 0 (refused before any read)", len(cl.statements))
 	}
 }
 

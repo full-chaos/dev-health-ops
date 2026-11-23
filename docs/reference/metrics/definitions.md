@@ -73,7 +73,9 @@ end on the row's day; review latency is the 90th percentile of the hours from
 creation to first review of the pull requests merged in those 30 days. Each row
 also stores the pull requests merged in the window, how many of them had a first
 review, and that share (no share when nothing merged). The share is stored, not
-scored.
+scored. A compounding risk request whose repository filter (`repoIds`) holds
+more than 500 entries is refused with a `BAD_USER_INPUT` error, never answered
+for part of the list.
 
 On the team breakout, the rows and the trend point of the selected day cover
 the same repositories. With no repository filter, or a filter that keeps every

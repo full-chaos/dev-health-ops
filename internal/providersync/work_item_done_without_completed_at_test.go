@@ -2,9 +2,11 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -97,5 +99,32 @@ func TestWorkItemsWriterCountsADoneRowWithNoCompletedAt(t *testing.T) {
 	got := doneWithoutCompletedAtCounts(t, reader)
 	if len(got) != 2 || got["github"] != 2 || got["linear"] != 1 {
 		t.Fatalf("%s by provider = %v, want github 2 and linear 1", doneWithoutCompletedAtMetric, got)
+	}
+}
+
+var errDoneWithoutCompletedAtSend = errors.New("insert refused")
+
+// sendFailsConn is heldVersionConn whose batch Send fails: the rows were appended but none is stored.
+type sendFailsConn struct{ *heldVersionConn }
+
+type sendFailsBatch struct{ heldVersionBatch }
+
+func (conn sendFailsConn) PrepareBatch(context.Context, string, ...driver.PrepareBatchOption) (driver.Batch, error) {
+	return sendFailsBatch{heldVersionBatch{appended: &conn.appended}}, nil
+}
+
+func (sendFailsBatch) Send() error { return errDoneWithoutCompletedAtSend }
+
+// A failed insert stores no row, so it counts nothing.
+func TestWorkItemsWriterCountsNothingWhenTheInsertFails(t *testing.T) {
+	reader := doneWithoutCompletedAtReader(t)
+	conn := sendFailsConn{&heldVersionConn{held: map[string]*time.Time{}, repos: map[string]uuid.UUID{}}}
+	row := doneWithoutCompletedAtRow("github", "gh:acme/api#1", "done", nil)
+	err := writeWorkItemsKeepingHeldColumns(context.Background(), conn, "org-acme", gitHubWorkItemsInsert, []workItemStoredRow{row})
+	if !errors.Is(err, errDoneWithoutCompletedAtSend) {
+		t.Fatalf("err = %v, want the insert error", err)
+	}
+	if got := doneWithoutCompletedAtCounts(t, reader); len(got) != 0 {
+		t.Fatalf("%s by provider = %v after a failed insert, want nothing", doneWithoutCompletedAtMetric, got)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +22,7 @@ import (
 )
 
 // Throwaway exec proof of a prod read form (READ-14548-PLAN-1): not for merge. pl14548Form is the form file byte for byte.
-const pl14548FormSHA256 = "84a106be84f354a0edcb7759446b5f1b5b2670d938b1fd0f7bdbdd8fc382668c"
+const pl14548FormSHA256 = "087cf8b1af517cd31292895c1eb039b2cfc31be55e491f1e4413179450ea8fd2"
 
 const pl14548Form = `-- NOT EXECUTED. READ-14548-PLAN-1 (system tables only; numbers, names and setting values only). acr-mcp, 2026-11-23. acp FORM read first; then pm runs it once.
 -- Exec leg: a throwaway CI leg runs each statement (FORM-TEMPLATE-3); its run id and job id are in READ-14548-PLAN-1.md only.
@@ -35,8 +36,9 @@ const pl14548Form = `-- NOT EXECUTED. READ-14548-PLAN-1 (system tables only; num
 --   views, used_* counts, ProfileEvents names present on one side only, and the settings that differ (key and both values).
 -- S2a: is processors_profile_log on and does it cover the window. S2b: the read steps (MergeTreeSelect processors) of the same two runs,
 --   per step: table name, processors, input and output rows and bytes. The query_id join is inside S2b and never output.
--- Output: no query text, no query_id, no hash of text, no org id. Setting keys starting with param_ and log_comment are left out of
---   settings_changed (a query parameter can hold an org id; log_comment is a free-text tag).
+-- Output: no query text, no query_id, no hash of text, no org id, no String setting value. settings_changed gives, per setting NAME that differs,
+--   on each side: present (0/1), the value only when it is numeric (toFloat64OrNull, else NULL) and the value length. A String value
+--   (log_comment, workload) is never output, only its length. Keys starting with param_ (query parameters) are left out.
 -- No org scope: system tables hold no org rows, so ORG-1 and the org prefix do not apply. No data table is read. No FINAL.
 -- Cost gates are scoped to the day: they sum the active parts of the log table whose min_date..max_date holds 2026-11-23
 --   (the parts the event_date filter can read). One log table per gate; each gated read reads its log table ONCE. WORK MATH: READ-14548-PLAN-1.md.
@@ -53,7 +55,8 @@ SELECT version() AS ch_version, uptime() AS uptime_s, now() - uptime() AS server
        uptime() > 0 AND now() - uptime() <= now() AS uptime_ok;
 
 -- S1: one row. WANT runs_before >= 1 and runs_after >= 1 (else STOP, limit a). Read: before_* = the last run before 09:01Z, after_* = the first
---   run at or after 09:01Z. A changed revision, settings_changed not empty, a changed tables/views list, or events present on one side only
+--   run at or after 09:01Z (runs chosen by event_time literals + the statement prefix). settings_changed entry = (name, before present,
+--   before numeric value or NULL, before length, after present, after numeric value or NULL, after length). A changed revision, settings_changed not empty, a changed tables/views list, or events present on one side only
 --   name what changed. Control that can fail: runs_before and runs_after count the matched runs (0 = wrong day, prefix or type).
 --   The gate caps the day's query_log parts (9 M rows, 4 GB).
 SELECT runs_before, runs_after, before_minute, after_minute, before_revision, after_revision,
@@ -62,8 +65,9 @@ SELECT runs_before, runs_after, before_minute, after_minute, before_revision, af
        before_functions_n, after_functions_n, before_aggregates_n, after_aggregates_n, before_storages_n, after_storages_n,
        arrayFilter(e -> NOT mapContains(after_events, e), mapKeys(before_events)) AS events_only_before,
        arrayFilter(e -> NOT mapContains(before_events, e), mapKeys(after_events)) AS events_only_after,
-       arrayMap(k -> tuple(k, mapContains(before_settings, k), before_settings[k], mapContains(after_settings, k), after_settings[k]),
-                arrayFilter(k -> NOT startsWith(k, 'param_') AND k != 'log_comment'
+       arrayMap(k -> tuple(k, mapContains(before_settings, k), toFloat64OrNull(before_settings[k]), length(before_settings[k]),
+                           mapContains(after_settings, k), toFloat64OrNull(after_settings[k]), length(after_settings[k])),
+                arrayFilter(k -> NOT startsWith(k, 'param_')
                                  AND (mapContains(before_settings, k) != mapContains(after_settings, k) OR before_settings[k] != after_settings[k]),
                             arraySort(arrayDistinct(arrayConcat(mapKeys(before_settings), mapKeys(after_settings)))))) AS settings_changed
 FROM (
@@ -210,18 +214,41 @@ func pl14548Split(body string) []pl14548Statement {
 }
 
 func pl14548Render(v any, dbType string) string {
-	value := reflect.ValueOf(v)
-	for value.Kind() == reflect.Pointer {
+	return pl14548Deep(reflect.ValueOf(v), dbType)
+}
+
+// pl14548Deep renders nested arrays, tuples and Nullable values by value, never by pointer.
+func pl14548Deep(value reflect.Value, dbType string) string {
+	for value.Kind() == reflect.Pointer || value.Kind() == reflect.Interface {
 		if value.IsNil() {
 			return "NULL"
 		}
 		value = value.Elem()
+	}
+	if !value.IsValid() {
+		return "NULL"
 	}
 	if ts, ok := value.Interface().(time.Time); ok {
 		if strings.HasPrefix(dbType, "DateTime") {
 			return ts.UTC().Format("2006-01-02 15:04:05")
 		}
 		return ts.UTC().Format("2006-01-02")
+	}
+	switch value.Kind() {
+	case reflect.Slice, reflect.Array:
+		parts := make([]string, value.Len())
+		for i := range parts {
+			parts[i] = pl14548Deep(value.Index(i), "")
+		}
+		return "[" + strings.Join(parts, " ") + "]"
+	case reflect.Map:
+		keys := value.MapKeys()
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, pl14548Deep(k, "")+":"+pl14548Deep(value.MapIndex(k), ""))
+		}
+		sort.Strings(parts)
+		return "{" + strings.Join(parts, " ") + "}"
 	}
 	return fmt.Sprint(value.Interface())
 }
@@ -500,8 +527,12 @@ func TestReadPlanForm14548ExecutesAtTheChainHead(t *testing.T) {
 				t.Errorf("S1 %s empty: %s", k, s1[k])
 			}
 		}
-		if c := s1["settings_changed"]; !strings.Contains(c, "max_threads") || strings.Count(c, "[") != 2 || strings.Contains(c, "log_comment") || strings.Contains(c, "log_processors_profiles") {
-			t.Errorf("S1 settings_changed = %s, want exactly the max_threads entry", c)
+		// Two names differ: log_comment (a String: lengths only, value NULL) and max_threads (numeric: after = 3).
+		c := s1["settings_changed"]
+		wantLog := fmt.Sprintf("[log_comment true NULL %d true NULL %d]", len(likeComments[0]), len(likeComments[1]))
+		norm := strings.NewReplacer(" true ", " 1 ", " false ", " 0 ").Replace
+		if strings.Count(c, "] [") != 1 || !strings.Contains(norm(c), norm(wantLog)) || !strings.Contains(norm(c), "[max_threads 0 NULL 0 1 3 1]") {
+			t.Errorf("S1 settings_changed = %s, want %s and [max_threads false NULL 0 true 3 1] only", c, wantLog)
 		}
 	}
 	// S2a and S2b: processor profiles of the two runs.
@@ -553,9 +584,6 @@ func TestReadPlanForm14548ExecutesAtTheChainHead(t *testing.T) {
 	}
 	if got := mutateN("S1", "toDateTime('"+cut+"', 'UTC')", "toDateTime('"+day+" 00:00:00', 'UTC')", -1); len(got) != 1 || got[0]["runs_before"] != "0" || got[0]["runs_after"] != "2" {
 		t.Errorf("MUTATE S1 cut at the window start: %v, want runs_before 0, runs_after 2", got)
-	}
-	if got := mutate("S1", " AND k != 'log_comment'", ""); len(got) != 1 || !strings.Contains(got[0]["settings_changed"], "log_comment") {
-		t.Errorf("MUTATE S1 log_comment kept: %v, want log_comment in settings_changed", got)
 	}
 	if ppOn {
 		if got := mutateN("S2a", "event_date = toDate('"+day+"')", "event_date = "+wrongDay, -1); len(got) != 1 || got[0]["processors_rows_day"] != "0" || got[0]["read_processors_window"] != "0" {
@@ -657,7 +685,7 @@ func TestReadPlanForm14548ExecutesAtTheChainHead(t *testing.T) {
 	}
 
 	// Output cell: no column is named like query text or id, and no value holds a run's query_id or the statement text.
-	secrets := []string{likes[0].id, likes[1].id, "uniqExact(subject_kind", "14548000-0000-4000-8000-0000000000aa"}
+	secrets := []string{likes[0].id, likes[1].id, likeComments[0], likeComments[1], "uniqExact(subject_kind", "14548000-0000-4000-8000-0000000000aa"}
 	leaks := func(label, text string) []string {
 		got, err := pl14548Run(ctx, conn, dated(text), fmt.Sprintf("pl14548-output-%s-%d", label, time.Now().UnixNano()), nil)
 		if err != nil {
@@ -694,6 +722,13 @@ func TestReadPlanForm14548ExecutesAtTheChainHead(t *testing.T) {
 		if bad := leaks("S2b-mutant", mutant); len(bad) == 0 {
 			t.Errorf("OUTPUT mutant with query_id: nothing found, the cell cannot fail")
 		}
+	}
+	stringValue := strings.Replace(byLabel["S1"], "toFloat64OrNull(after_settings[k])", "after_settings[k]", 1)
+	if stringValue == byLabel["S1"] {
+		t.Fatalf("OUTPUT S1 string-value mutant: expression not found")
+	}
+	if bad := leaks("S1-string-value-mutant", stringValue); len(bad) == 0 {
+		t.Errorf("OUTPUT S1 mutant with a String setting value: nothing found, the cell cannot fail")
 	}
 	s1Mutant := strings.Replace(byLabel["S1"], "SELECT runs_before, runs_after,", "SELECT runs_before, runs_after, q_text,", 1)
 	s1Mutant = strings.Replace(s1Mutant, "  SELECT countIf(", "  SELECT any(query) AS q_text, countIf(", 1)

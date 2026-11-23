@@ -306,7 +306,7 @@ SELECT gen_random_uuid(), 'plan-' || $1 || ':' || run.id || ':' || copy, 'metric
        'sha256:' || repeat('0', 64), 'metrics', 2, 4, $2, $3, 1, $2, `+riverJobID+`, `+delivered+`, $2, $2
 FROM (`+runsOf+`) AS run CROSS JOIN generate_series(1, 2) AS copy`, class, created, status)
 	}
-	dangling := "2000000000 + (abs(hashtext(run.id::text || copy)) % 1000000000)"
+	dangling := "2000000000::bigint + (abs(hashtext(run.id::text || copy)) % 1000000000)"
 	outbox("candidate", "delivered", at, dangling)
 	outbox("live_outbox", "pending", at, "NULL")
 	outbox("recent_outbox", "delivered", recent, dangling)

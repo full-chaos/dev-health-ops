@@ -5,7 +5,6 @@ import (
 	"context"
 	"io"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -162,18 +161,24 @@ func TestBuildIndexAcceptsFlagsBeforeAndAfterTheIndexName(t *testing.T) {
 	}
 }
 
-// chainFile is a live chain revision's SQL (dir sql/ or sql/down/).
+// chainFile is a live chain revision's SQL (dir sql/ or sql/down/; a down file has its up file's name).
 func chainFile(t *testing.T, dir, revision string) string {
 	t.Helper()
-	matches, err := filepath.Glob(dir + revision + "_*.sql")
-	if err != nil || len(matches) != 1 {
-		t.Fatalf("sql files of revision %s in %s: %v (%v)", revision, dir, matches, err)
-	}
-	data, err := os.ReadFile(matches[0])
+	chain, err := pgmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(data)
+	for _, file := range chain {
+		if file.Revision == revision {
+			data, err := os.ReadFile(dir + file.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(data)
+		}
+	}
+	t.Fatalf("the chain holds no revision %s", revision)
+	return ""
 }
 
 // The Job's finalize-outbox definition and revision 0167's statement are one, so a database the Job built and a

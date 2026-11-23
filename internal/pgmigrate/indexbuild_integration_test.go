@@ -478,7 +478,7 @@ func TestBuildFinalizeOutboxIndexBeforeRevision0167(t *testing.T) {
 	}
 	headConn := connect(t, d.at(t, len(chain)))
 	wantDefinition, valid := indexDefinition(t, headConn, pgmigrate.FinalizeOutboxIndexName)
-	if !valid || !strings.Contains(wantDefinition, "((args #>> '{domain,id}'::text[])) WHERE ((job_kind)::text = 'metrics.daily_finalize'::text)") {
+	if !valid || !strings.Contains(wantDefinition, "(((args #>> '{domain,id}'::text[]))) WHERE ((job_kind)::text = 'metrics.daily_finalize'::text)") {
 		t.Fatalf("the walk's index is %q valid=%v", wantDefinition, valid)
 	}
 	uri := d.at(t, position)

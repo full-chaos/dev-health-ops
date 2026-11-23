@@ -124,8 +124,8 @@ func TestEveryAnnotatedHookDocOfARealRenderIsListedOrExempt(t *testing.T) {
 					hooks++
 				}
 			}
-			if hooks != 14 {
-				t.Fatalf("%s: the render holds %d annotated hook docs, want 14", release, hooks)
+			if hooks != 15 {
+				t.Fatalf("%s: the render holds %d annotated hook docs, want 15", release, hooks)
 			}
 			if bad := hookCensus(docs, readsAnnotation, exempt); len(bad) > 0 {
 				t.Fatalf("%s: annotated hook docs neither in the hook name list nor exempt: %v", release, bad)
@@ -149,12 +149,12 @@ func TestEveryAnnotatedHookDocOfARealRenderIsListedOrExempt(t *testing.T) {
 				}
 			}
 
-			// synthetic 8th hook with a new name.
+			// synthetic 9th hook with a new name.
 			syn := decodeDocs(t, withSyntheticHook(render, chartFullname(release)))
 			bad := hookCensus(syn, readsAnnotation, exempt)
 			want := "Job/" + chartFullname(release) + "-seed-data"
 			if len(bad) != 1 || bad[0] != want {
-				t.Fatalf("%s: synthetic 8th hook: census = %v, want [%s]", release, bad, want)
+				t.Fatalf("%s: synthetic 9th hook: census = %v, want [%s]", release, bad, want)
 			}
 
 			// mutant: annotation read removed -> the synthetic hook goes unseen (cell would be red).

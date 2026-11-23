@@ -199,14 +199,16 @@ func TestPostSyncOutcomeGrantIsSkippedWithoutTheColumns(t *testing.T) {
 					t.Fatal(err)
 				}
 				var before []pgmigrate.ChainFile
+				found := false
 				for _, file := range chain {
 					if file.Revision == "0166" {
+						found = true
 						break
 					}
 					before = append(before, file)
 				}
-				if len(before) != len(chain)-1 {
-					t.Fatalf("chain to 0165: kept %d of %d files, want all but 0166", len(before), len(chain))
+				if !found || len(before) == 0 || before[len(before)-1].Revision != "0165" {
+					t.Fatalf("chain to 0165: kept %d of %d files (0166 found %v), want every file below 0166", len(before), len(chain), found)
 				}
 				conn, err := pgx.Connect(ctx, instance.URI)
 				if err != nil {

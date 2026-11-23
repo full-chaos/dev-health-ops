@@ -18,13 +18,18 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopspooled"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopsrisk"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopswindow"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -559,21 +564,70 @@ VALUES (?, ?, ?, ?, 'tie', ?, ?, 0, 0, 0, 0, ?, ?, 'slot', 1, ?)`, org, repoID, 
 		stack.pass(t, controlOff, retiredRunID, retiredDay().Add(11*time.Hour), offState(true, both))
 		stack.pass(t, staleOff, retiredRunID, retiredDay().Add(10*time.Hour), offState(false, withoutLegB))
 		stack.pass(t, staleOff, retiredRunID, retiredDay().Add(11*time.Hour), offState(true, both))
-		served := map[string]matrixTotalsServed{}
+		served := map[string]retiredOffDefaultServed{}
 		for _, org := range []string{controlOff, staleOff} {
 			if err := stack.conn.Exec(ctx, `INSERT INTO repos (id, repo, created_at, settings, last_synced, org_id) VALUES (?, 'acme/api', ?, ?, ?, ?)`,
 				stack.repoID(t, org), retiredDay(), `{"default_branch":"main"}`, retiredDay().Add(23*time.Hour), org); err != nil {
 				t.Fatal(err)
 			}
-			if got := retiredMetricOf(t, stack, org, retiredDay()); !got.flakeUnknown || got.total != 6 {
-				t.Fatalf("%s %+v: want 6 cases and the off-default mark", org, got)
+			metric := retiredMetricOf(t, stack, org, retiredDay())
+			if !metric.flakeUnknown || metric.total != 6 {
+				t.Fatalf("%s %+v: want 6 cases and the off-default mark", org, metric)
 			}
-			served[org] = retiredServedOnly(matrixTotalsRead(t, stack, env.client, org, retiredRunID, retiredDay()))
+			served[org] = readRetiredOffDefault(t, stack, env.client, org, metric)
 		}
 		if served[staleOff] != served[controlOff] {
 			t.Fatalf("off-default stale run serves\n %+v\nwant\n %+v", served[staleOff], served[controlOff])
 		}
 	})
+}
+
+// retiredOffDefaultServed is what an off-default day serves: the test day, and the window and risk answers the families write
+// (the risk family takes the unknown-test rows). matrixTotalsRead scans the rates as numbers, and an off-default day stores them
+// NULL.
+type retiredOffDefaultServed struct {
+	metric       retiredMetric
+	window, risk string
+}
+
+func readRetiredOffDefault(t *testing.T, stack attemptsStack, client *dhclickhouse.Client, org string, metric retiredMetric) retiredOffDefaultServed {
+	t.Helper()
+	ctx, conn, day := stack.ctx, stack.conn, retiredDay()
+	repoID := stack.repoID(t, org)
+	seedTestopsAuthoritativeOwner(ctx, t, conn, org, repoID, day)
+	run := Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day}
+	partition := Partition{ID: uuid.NewString(), RunID: run.ID, RepoIDs: []RepositoryID{RepositoryID(repoID.String())}}
+	for _, build := range []func(driver.Conn) (NativeFamilyExecutor, error){
+		func(conn driver.Conn) (NativeFamilyExecutor, error) { return NewTestopsTestExecutor(conn) },
+		func(conn driver.Conn) (NativeFamilyExecutor, error) { return NewTestopsPipelineExecutor(conn) },
+		func(conn driver.Conn) (NativeFamilyExecutor, error) { return NewTestopsRiskExecutor(conn) },
+	} {
+		executor, err := build(conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := executor.ComputeFamily(ctx, run, partition); err != nil {
+			t.Fatal(err)
+		}
+	}
+	window, err := testopswindow.Resolve(ctx, client, org, graphqldate.New(day), graphqldate.New(day), testopswindow.Scope{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	windowJSON, err := json.Marshal(window)
+	if err != nil {
+		t.Fatal(err)
+	}
+	risk, err := testopsrisk.Resolve(ctx, client, org, model.TestOpsRiskInput{StartDate: graphqldate.New(day), EndDate: graphqldate.New(day.Add(24 * time.Hour))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	risk.OrgID = ""
+	riskJSON, err := json.Marshal(risk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return retiredOffDefaultServed{metric: metric, window: string(windowJSON), risk: string(riskJSON)}
 }
 
 // retiredKeptSuites is the suite ids the readers keep (the pooled rule, the organization scope).

@@ -776,6 +776,16 @@ const (
 
 func retiredBaseCaseAggregateSQL(t *testing.T) string {
 	t.Helper()
+	query := retiredBaseReaderSQL(t, "loadNativeTestopsCaseAggregate")
+	if !strings.Contains(query, "FROM test_case_results FINAL") {
+		t.Fatalf("no case read found in the base loadNativeTestopsCaseAggregate:\n%s", query)
+	}
+	return query
+}
+
+// retiredBaseReaderSQL is the SQL of the first conn.Query call of function in the base reader source.
+func retiredBaseReaderSQL(t *testing.T, function string) string {
+	t.Helper()
 	source, err := os.ReadFile(filepath.Join("testdata", retiredBaseReaderFile))
 	if err != nil {
 		t.Fatal(err)
@@ -818,11 +828,11 @@ func retiredBaseCaseAggregateSQL(t *testing.T) string {
 	}
 	query := ""
 	ast.Inspect(file, func(node ast.Node) bool {
-		function, isFunction := node.(*ast.FuncDecl)
-		if !isFunction || function.Name.Name != "loadNativeTestopsCaseAggregate" {
+		declaration, isFunction := node.(*ast.FuncDecl)
+		if !isFunction || declaration.Name.Name != function {
 			return true
 		}
-		ast.Inspect(function.Body, func(inner ast.Node) bool {
+		ast.Inspect(declaration.Body, func(inner ast.Node) bool {
 			call, isCall := inner.(*ast.CallExpr)
 			if selector, isSelector := callSelector(call, isCall); isSelector && selector == "Query" && query == "" {
 				query = evaluate(call.Args[1])
@@ -831,8 +841,8 @@ func retiredBaseCaseAggregateSQL(t *testing.T) string {
 		})
 		return false
 	})
-	if !strings.Contains(query, "FROM test_case_results FINAL") {
-		t.Fatalf("no case read found in the base loadNativeTestopsCaseAggregate:\n%s", query)
+	if query == "" {
+		t.Fatalf("no conn.Query call in the base %s", function)
 	}
 	return query
 }
@@ -1000,4 +1010,88 @@ VALUES (?, ?, ?, ?, 'legacy-a', 'a', 'failed', 0, ?)`, org, repoID, runID, id, s
 			t.Errorf("the pooled rule keeps the pre-slot copy %s of the retired slot", listed)
 		}
 	})
+}
+
+// ROLLBACK-ONLY RESIDUAL, pinned as measured (not CONTROL): a suite whose stored key drifted from the parsed key in the same
+// attempt. The base suite read (taken from the base source, as above) admits every row of the slot's newest attempt, and no row
+// the writer can key replaces the drifted one, so after a rollback the base reader counts the stale failure until that day is
+// recomputed by the new build. CONTROL is total 1, passed 1, failed 0, timed 1; the base reader serves total 2, passed 1,
+// failed 1, timed 2.
+func TestTestopsRetiredSlotOldReaderDriftedKeyResidualIsPinned(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	env := startRetiredStack(t, ctx)
+	stack := env.stack
+	org := "org-chaos14259-drifted-" + uuid.NewString()[:8]
+	repoID := uuid.New()
+	started := retiredDay().Add(10 * time.Hour)
+	insert := func(suite, slot string, total, passed, failed uint32, duration *float64, synced time.Time, retracted uint8) {
+		t.Helper()
+		if err := stack.conn.Exec(ctx, `INSERT INTO test_suite_results
+(org_id, repo_id, run_id, suite_id, suite_name, total_count, passed_count, failed_count, skipped_count, error_count, quarantined_count,
+ duration_seconds, started_at, last_synced, report_slot, run_attempt, retracted)
+VALUES (?, ?, 'drift-run', ?, 'drift', ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, 1, ?)`, org, repoID, suite, total, passed, failed, duration, started, synced, slot, retracted); err != nil {
+			t.Fatal(err)
+		}
+	}
+	three := 3.0
+	insert("kept-1", "kept", 1, 1, 0, &three, started.Add(time.Hour), 0)
+	insert("drift-old", "total-b", 1, 0, 1, &three, started.Add(time.Hour), 0)
+	insert("drift-new", "total-b", 0, 0, 0, nil, started.Add(2*time.Hour), 1)
+	var total, passed, failed, timed uint64
+	if err := stack.conn.QueryRow(ctx, "SELECT sum(total_count), sum(passed_count), sum(failed_count), count(duration_seconds) FROM ("+
+		retiredBaseReaderSQL(t, "loadNativeTestopsSuites")+")", testopsSourceArgs(org, []uuid.UUID{repoID}, retiredDay(), retiredDay().Add(24*time.Hour))...).
+		Scan(&total, &passed, &failed, &timed); err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || passed != 1 || failed != 1 || timed != 2 {
+		t.Errorf("base reader serves total %d, passed %d, failed %d, timed %d; the pinned residual is 2, 1, 1, 2 (CONTROL 1, 1, 0, 1)", total, passed, failed, timed)
+	}
+	if got := retiredMetricOf(t, stack, org, retiredDay()); got.total != 1 || got.passed != 1 || got.failed != 0 || got.suites != 1 {
+		t.Errorf("new readers serve %+v, want CONTROL total 1, passed 1, failed 0, 1 suite", got)
+	}
+}
+
+// The "suite_rows_only" fallback serves CONTROL through the new readers: a run whose dropped aggregate is large (two parts of
+// 25,001 cases, their exact aggregate) gets the suite retraction rows and no case retraction row, and the stale run serves
+// what the run synced once serves.
+func TestTestopsRetiredSlotSuiteRowsOnlyServesTheSyncedOnceNumbers(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	env := startRetiredStack(t, ctx)
+	stack := env.stack
+	suite := func(name string) matrixTotalsSuite {
+		out := matrixTotalsSuite{name: name, time: "3.0"}
+		for index := 0; index < 25_001; index++ {
+			out.cases = append(out.cases, matrixTotalsCase{name + "-" + strconv.Itoa(index), "", "0.01"})
+		}
+		return out
+	}
+	left, right := suite("left"), suite("right")
+	const made, timestamp = "2026-07-22T10:20:00Z", "2026-07-22T10:02:00"
+	total := attemptsArtifact{6, "total", made, false, retiredArchive(t, timestamp, left, right)}
+	all := []attemptsArtifact{
+		{1, "part-left", made, false, retiredArchive(t, timestamp, left)},
+		{2, "part-right", made, false, retiredArchive(t, timestamp, right)},
+		total,
+	}
+	controlOrg, staleOrg := "org-chaos14259-suite-only-control-"+uuid.NewString()[:8], "org-chaos14259-suite-only-stale-"+uuid.NewString()[:8]
+	stack.pass(t, controlOrg, retiredRunID, retiredDay().Add(11*time.Hour), retiredState(true, all))
+	stack.pass(t, staleOrg, retiredRunID, retiredDay().Add(10*time.Hour), retiredState(false, []attemptsArtifact{total}))
+	stack.pass(t, staleOrg, retiredRunID, retiredDay().Add(11*time.Hour), retiredState(true, all))
+	for _, org := range []string{controlOrg, staleOrg} {
+		var suites, cases uint64
+		if err := stack.conn.QueryRow(ctx, `SELECT (SELECT countIf(retracted = 1) FROM test_suite_results FINAL WHERE org_id = ?),
+       (SELECT countIf(retracted = 1) FROM test_case_results FINAL WHERE org_id = ?)`, org, org).Scan(&suites, &cases); err != nil {
+			t.Fatal(err)
+		}
+		if suites != 2 || cases != 0 {
+			t.Fatalf("%s: %d suite and %d case retraction rows, want the suite_rows_only fallback: 2 and 0", org, suites, cases)
+		}
+	}
+	control, stale := retiredMetricOf(t, stack, controlOrg, retiredDay()), retiredMetricOf(t, stack, staleOrg, retiredDay())
+	t.Logf("CONTROL %+v, stale %+v", control, stale)
+	if control.total != 50_002 || control.suites != 2 || stale != control {
+		t.Errorf("stale run serves %+v, want CONTROL %+v (50,002 cases, 2 suites)", stale, control)
+	}
 }

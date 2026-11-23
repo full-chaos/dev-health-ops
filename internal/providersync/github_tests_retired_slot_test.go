@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"maps"
 	"math/rand/v2"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -512,4 +513,73 @@ func TestGitHubTestsMinimalRetractionRowsTakeTheirOwnChunk(t *testing.T) {
 	if err != nil || limited != "one_row_per_slot" || retracted != 1 {
 		t.Errorf("a run whose own rows do not split: limited %q, %d retraction rows (%v); want the minimal row kept", limited, retracted, err)
 	}
+}
+
+// retiredLargeMatrix is a run whose dropped aggregate is large: two parts of 25,001 cases each and their exact aggregate
+// (50,002 cases). The admitted rows (2 suites, 50,002 cases) fit the run bound; the case retraction rows (50,002 more) would take
+// the case batch past maxEffectRows (100,004 rows), so the run takes the "suite_rows_only" fallback.
+func retiredLargeMatrix() []rowsArtifact {
+	suite := func(name string) retiredFxSuite {
+		out := retiredFxSuite{name: name, time: "3.0"}
+		for index := 0; index < 25_001; index++ {
+			out.cases = append(out.cases, retiredFxCase{name + "-" + strconv.Itoa(index), "", "0.01"})
+		}
+		return out
+	}
+	left, right := suite("left"), suite("right")
+	return []rowsArtifact{
+		{id: "1", size: 10, body: retiredFxJUnit(left)}, {id: "2", size: 11, body: retiredFxJUnit(right)},
+		{id: "3", size: 20, body: retiredFxJUnit(left, right)},
+	}
+}
+
+// The "suite_rows_only" fallback: when the case retraction rows do not fit the case batch, the suite rows alone are written
+// (the slot is retired for the readers; an old reader after a rollback still sees the slot's stale cases), with the counter
+// and a Warn line that name the reason.
+func TestGitHubTestsRouteWritesSuiteRowsOnlyWhenTheCaseRowsDoNotFit(t *testing.T) {
+	records := captureMembershipLogs(t)
+	suites, cases, metrics := retiredWalkWith(t, GitHubTestsRouteHandler{}, retiredLargeMatrix()...)
+	retractedSuites, retractedCases := 0, 0
+	for _, row := range suites {
+		if row["retracted"] == true {
+			retractedSuites++
+		}
+	}
+	for _, row := range cases {
+		if row["retracted"] == true {
+			retractedCases++
+		}
+	}
+	if retractedSuites != 2 || retractedCases != 0 || len(cases) != 50_002 {
+		t.Fatalf("retraction rows: %d suite, %d case; %d case rows; want the aggregate's 2 suites, no case row, the parts' 50,002 cases",
+			retractedSuites, retractedCases, len(cases))
+	}
+	if want := `dev_health_provider_report_retraction_limited_total{provider="github",reason="suite_rows_only"} 1`; !strings.Contains(metrics, want) {
+		t.Errorf("want %q in the metrics", want)
+	}
+	warned := 0
+	for _, record := range *records {
+		if record.Message != "dropped report retraction rows limited to fit the run's batch" {
+			continue
+		}
+		warned++
+		attrs := membershipLogAttrs(record)
+		if record.Level != slog.LevelWarn || attrs["reason"] != "suite_rows_only" || attrs["slots"] != int64(1) {
+			t.Errorf("limit line level %s attrs %v, want WARN, reason suite_rows_only, 1 slot", record.Level, attrs)
+		}
+		for key, value := range attrs {
+			if _, isError := value.(error); isError {
+				t.Errorf("limit line carries an error operand %s", key)
+			}
+		}
+	}
+	if warned != 1 {
+		t.Errorf("%d limit lines, want 1", warned)
+	}
+	row, err := json.Marshal(testCaseResultRow{RepoID: strings.Repeat("r", 36), RunID: strings.Repeat("9", 11), SuiteID: strings.Repeat("a", 64),
+		CaseID: strings.Repeat("b", 64), OrgID: strings.Repeat("o", 36), LastSynced: time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), Retracted: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("one case retraction row is %d bytes", len(row))
 }

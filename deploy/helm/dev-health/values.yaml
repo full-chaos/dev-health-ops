@@ -1634,14 +1634,16 @@ migrations:
     #    localBundledPostgres the Job runs on pre-upgrade only. Pass a helm --timeout above activeDeadlineSeconds.
     streakIndex:
       enabled: false
-      activeDeadlineSeconds: 2400
+      # -- 1700 since revision 0167's finalize-outbox hook Job joined the budget: ix_sync_run_units_failure_streak is
+      #    present and valid on prod (catalog read 2026-11-23), so this Job finds it and ends at once.
+      activeDeadlineSeconds: 1700
       # -- lock_timeout of the table-lock probe before each attempt, in seconds (1 to 60). The waits for older
       #    transactions are not under it: they run up to deadlineSeconds.
       lockTimeoutSeconds: 5
       # -- window of the whole build in seconds: CREATE/DROP INDEX CONCURRENTLY wait for older transactions up to it.
       #    deadlineSeconds + 360 must not exceed activeDeadlineSeconds; the migrate Job (up to 1800 s) runs after
       #    this hook inside the same helm --timeout.
-      deadlineSeconds: 1800
+      deadlineSeconds: 1270
       attempts: 3
       retryDelaySeconds: 15
     # -- Build ix_sync_run_units_open_run CONCURRENTLY in a
@@ -1656,8 +1658,9 @@ migrations:
     openUnitsIndex:
       enabled: false
       # -- The index is small (about 2 MiB at 830k units), so the Job is short. The hook budget is
-      #    streakIndex 2400 + openUnitsIndex 700 + the migrate Job 1800 + a 500 s rollout margin = 5400 s, the
-      #    helm --timeout of 90m; a larger value here needs a smaller streakIndex or a larger helm --timeout.
+      #    streakIndex 1700 + openUnitsIndex 700 + finalizeOutboxIndex 700 + the migrate Job 1800 + a 500 s rollout
+      #    margin = 5400 s, the helm --timeout of 90m; a larger value here needs a smaller streakIndex or a larger
+      #    helm --timeout.
       activeDeadlineSeconds: 700
       # -- lock_timeout of the table-lock probe before each attempt, in seconds (1 to 60). The waits for older
       #    transactions are not under it: they run up to deadlineSeconds.

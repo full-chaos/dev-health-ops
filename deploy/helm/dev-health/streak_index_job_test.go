@@ -34,11 +34,11 @@ func TestStreakIndexJobIsOffByDefaultAndOrderedBeforeTheMigrateJob(t *testing.T)
 		t.Fatalf("hook annotations = %v, want pre-install,pre-upgrade at weight -2", annotations)
 	}
 	spec := job["spec"].(map[string]any)
-	if spec["backoffLimit"] != 0 || spec["activeDeadlineSeconds"] != 2400 {
-		t.Fatalf("backoffLimit/activeDeadlineSeconds = %v/%v, want 0/2400", spec["backoffLimit"], spec["activeDeadlineSeconds"])
+	if spec["backoffLimit"] != 0 || spec["activeDeadlineSeconds"] != 1700 {
+		t.Fatalf("backoffLimit/activeDeadlineSeconds = %v/%v, want 0/1700", spec["backoffLimit"], spec["activeDeadlineSeconds"])
 	}
 	c := container(t, job, "streak-index")
-	want := []string{"migrate", "postgres", "build-index", "--lock-timeout=5s", "--deadline=1800s", "--attempts=3", "--retry-delay=15s", "failure-streak"}
+	want := []string{"migrate", "postgres", "build-index", "--lock-timeout=5s", "--deadline=1270s", "--attempts=3", "--retry-delay=15s", "failure-streak"}
 	if args := stringsOf(c["args"]); !reflect.DeepEqual(args, want) {
 		t.Fatalf("args = %v, want %v", args, want)
 	}

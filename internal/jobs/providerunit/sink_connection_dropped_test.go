@@ -17,6 +17,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/platform/connerr"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
@@ -60,16 +61,32 @@ func realDroppedConnFirstBlockError(t *testing.T) error {
 	return driverErr
 }
 
-// droppingConn is a driver.Conn whose PrepareBatch fails the way the driver
-// does when the INSERT's first server packet never comes.
+// droppingConn is a driver.Conn whose PrepareBatch fails the way the service
+// conn does when the INSERT's first server packet never comes: the driver
+// error marked connerr.AtWrite (internal/storage/clickhouse
+// TestTheServiceConnMarksOnlyItsInsertCalls). With onSend, PrepareBatch
+// succeeds and the batch's Send fails so.
 type droppingConn struct {
 	driver.Conn
-	err error
+	err    error
+	onSend bool
 }
 
 func (c droppingConn) PrepareBatch(context.Context, string, ...driver.PrepareBatchOption) (driver.Batch, error) {
-	return nil, c.err
+	if c.onSend {
+		return droppingSendBatch{err: connerr.AtWrite(c.err)}, nil
+	}
+	return nil, connerr.AtWrite(c.err)
 }
+
+type droppingSendBatch struct {
+	driver.Batch
+	err error
+}
+
+func (droppingSendBatch) Append(...any) error { return nil }
+func (batch droppingSendBatch) Send() error   { return batch.err }
+func (droppingSendBatch) Abort() error        { return nil }
 
 func sinkDropClaim(now time.Time) providersync.Claim {
 	capability, _ := providersync.Capability("github", "cicd")
@@ -88,8 +105,12 @@ func sinkDropClaim(now time.Time) providersync.Claim {
 // droppingTestOpsSink is the REAL GitHub tests ClickHouse sink over a
 // connection that drops under the INSERT.
 func droppingTestOpsSink(driverErr error) providersync.TestOpsClickHouseEffects {
+	return droppingTestOpsSinkAt(droppingConn{err: driverErr})
+}
+
+func droppingTestOpsSinkAt(conn droppingConn) providersync.TestOpsClickHouseEffects {
 	return providersync.TestOpsClickHouseEffects{
-		Conn:  droppingConn{err: driverErr},
+		Conn:  conn,
 		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	}
 }
@@ -107,14 +128,14 @@ func testSuiteResultsEffect(t *testing.T, now time.Time) providersync.EffectBatc
 }
 
 // realSinkDropError is the error the REAL TestOps sink returns for a dropped
-// INSERT: the driver error, unchanged.
+// INSERT: the service conn's marked driver error, unchanged.
 func realSinkDropError(t *testing.T) error {
 	t.Helper()
 	now := time.Date(2026, 11, 22, 17, 27, 12, 0, time.UTC)
 	driverErr := realDroppedConnFirstBlockError(t)
 	sinkErr := droppingTestOpsSink(driverErr).WriteEffect(context.Background(), sinkDropClaim(now), testSuiteResultsEffect(t, now))
-	if sinkErr != driverErr {
-		t.Fatalf("the TestOps sink changed the driver error: %v", sinkErr)
+	if !connerr.IsDroppedWrite(sinkErr) || !errors.Is(sinkErr, driverErr) || sinkErr.Error() != driverErr.Error() {
+		t.Fatalf("the TestOps sink changed the dropped INSERT error: %v", sinkErr)
 	}
 	return sinkErr
 }

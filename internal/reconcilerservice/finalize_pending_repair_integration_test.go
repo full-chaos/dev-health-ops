@@ -396,6 +396,8 @@ func TestReconcilerRedrivesAFinalizePendingRunWithNoJobAndNoOutboxRow(t *testing
 	if outboxRows, riverJobs := venue.finalizeTrace(t, ctx, runID); outboxRows != 0 || riverJobs != 0 {
 		t.Fatalf("fixture: %d outbox rows and %d River jobs, want none", outboxRows, riverJobs)
 	}
+	// LEG (do not merge): the run lock is held across the first Step, so the redrive ends on its 200 ms deadline.
+	venue.holdRunLock(t, ctx, runID)
 
 	if _, err := venue.relay.Step(ctx, now, 10); err != nil {
 		t.Fatalf("reconciler Step: %v", err)

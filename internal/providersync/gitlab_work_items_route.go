@@ -129,8 +129,9 @@ func gitLabFetchEpicsFromEnv() *bool {
 	return pythonEnvFlag(gitLabFetchEpicsEnv, raw, ok)
 }
 
-// The worker environment flags Python's GitLab provider reads for merge
-// requests, notes, links, and milestones (providers/gitlab/provider.py:110-113).
+// The worker environment flags for merge requests, notes, links, and
+// milestones, read with pythonEnvFlag's rule (unset or unknown keeps the
+// default, on).
 const (
 	gitLabIncludeMRsEnv      = "GITLAB_INCLUDE_MRS"
 	gitLabFetchNotesEnv      = "GITLAB_FETCH_NOTES"
@@ -431,6 +432,10 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 				slog.Warn("providersync.gitlab.issue_link_unsupported_shape",
 					"org_id", claim.OrgID, "unit_id", claim.ID, "issue", logging.ProviderText(item.WorkItemID), "count", unsupported)
 			}
+		}
+		// Not gated by fetchLinks: GITLAB_FETCH_LINKS gates the issue-to-issue links only. The closed_by rows are
+		// the native-tier issue<->MR link (gitlab_closing_reference), and Python has no closed_by fetch.
+		{
 			closing, closingPages, closingErr := collectGitLabClosingMergeRequests(
 				budgetAccount(ctx, "issues"), &counted, gitlabIssuesRoute+"/{iid}/closed_by", root+"/issues/"+strconv.Itoa(payload.IID)+"/closed_by",
 				perPage, nestedMaxPages,

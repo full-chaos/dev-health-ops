@@ -2867,6 +2867,11 @@ FROM run`, old); err != nil {
 		if riverNodes == 0 {
 			t.Fatalf("%s: no river_job node in the plan:\n%s", statement.name, raw)
 		}
+		// The live-job River arm is a HASHED subplan: a set larger than work_mem x hash_mem_multiplier falls back to a
+		// per-row subplan, which this names before the loops count shows it.
+		if !strings.Contains(string(raw), "hashed SubPlan") {
+			t.Fatalf("%s: the live-job River arm is not a hashed subplan:\n%s", statement.name, raw)
+		}
 	}
 }
 

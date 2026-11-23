@@ -12,9 +12,8 @@ import (
 )
 
 // A card moved twice inside one second, on a real ClickHouse: two route runs
-// (stored read, settle, write), then a merge. The stored work_items status, read
-// the way the daily state family reads it, is the one stored transition of the
-// second, whichever status sorts last.
+// (stored read, settle, write), then a merge. The stored work_items status is
+// the one stored transition of the second, whichever status sorts last.
 func TestProjectsV2BoardReMoveInOneSecondStoresTheNewValueAsTheStatus(t *testing.T) {
 	raw := map[string]string{"todo": "Todo", "in_review": "In Review", "done": "Done", "canceled": "wontfix"}
 	for _, order := range [][2]string{
@@ -44,18 +43,18 @@ func TestProjectsV2BoardReMoveInOneSecondStoresTheNewValueAsTheStatus(t *testing
 					t.Fatal(err)
 				}
 			}
-			start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-			end := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
-			items, err := daily.LoadWorkItemStateWorkItems(ctx, conn, orgID, uuid.Nil, start, end)
-			if err != nil || len(items) != 1 {
-				t.Fatalf("items=%d err=%v", len(items), err)
+			// Read directly: the daily item loader skips a done item with no completed_at.
+			var status string
+			if err := conn.QueryRow(ctx, `SELECT status FROM work_items FINAL WHERE org_id = ?`, orgID).Scan(&status); err != nil {
+				t.Fatal(err)
 			}
+			end := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
 			transitions, err := daily.LoadWorkItemStateTransitions(ctx, conn, orgID, uuid.Nil, end)
 			if err != nil || len(transitions) != 1 {
 				t.Fatalf("transitions=%d err=%v, want the one board event of the second", len(transitions), err)
 			}
-			if items[0].Status != batch || transitions[0].ToStatus != batch {
-				t.Fatalf("stored status=%q, stored transition to_status=%q, want both %q", items[0].Status, transitions[0].ToStatus, batch)
+			if status != batch || transitions[0].ToStatus != batch {
+				t.Fatalf("stored status=%q, stored transition to_status=%q, want both %q", status, transitions[0].ToStatus, batch)
 			}
 		})
 	}

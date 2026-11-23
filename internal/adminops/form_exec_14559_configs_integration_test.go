@@ -16,7 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// DO NOT MERGE. This file executes FORM-14559-CONFIGS-1.sql in one READ ONLY transaction on a fresh database at the
+// DO NOT MERGE. This file executes FORM-14559-CONFIGS-2.sql in one READ ONLY transaction on a fresh database at the
 // head chain. The text below is the .sql with its org prefix replaced by {{ORG_PREFIX}} and its quoted repository name
 // by '{{REPO}}', nothing else (its sha256 is checked); the cell puts synthetic values in at run time and checks that
 // every starts_with of every statement got the prefix. With synthetic integrations it wants S1 to list exactly the
@@ -24,16 +24,19 @@ import (
 // configuration and whether the list is written, and the catalog gate to fire when a cap is crossed (pm-guard
 // FORM-TEMPLATE-3, PostgreSQL form).
 const (
-	formExec14559SHA256      = "e67a0580398e58d9b53d0318a06a73727f70cd9f7ce13e9009988b88bb722539"
+	formExec14559SHA256      = "621eda4c9fe877e3be8ded3e5396aaa1d8f9c011942911075deff9d349809e3b"
 	formExec14559Placeholder = "{{ORG_PREFIX}}"
 	formExec14559RepoSlot    = "{{REPO}}"
-	formExec14559SQL         = `-- FORM-14559-CONFIGS-1 (lane-14559, 2026-11-23, ops pin fbcb83f002e7). PostgreSQL prod, READ ONLY, CHAOS-14559.
+	formExec14559SQL         = `-- FORM-14559-CONFIGS-2 (lane-14559, 2026-11-23, ops PR1 head 4fe49eb83e4b). PostgreSQL prod, READ ONLY, CHAOS-14559.
 -- Which GitHub integrations of org {{ORG_PREFIX}} sync the repository full-chaos/dev-health-ops (whose CI uploads the
 -- go-images-, go-test-timings- and go-junit-part- artifacts), whether their tests or cicd dataset is on, which parent
 -- sync configuration each one has (the config the artifact-exclude write targets), and whether the list is written
--- already. WANT text and work math: FORM-14559-CONFIGS-1.md.
+-- already. The list is stored once per integration (integrations.config; it applies to every sync config of the
+-- integration). Replaces FORM-14559-CONFIGS-1 (246aff40f255): S1 parent_configs_with_key (a copy in the parent's
+-- sync_options, no longer a store) becomes configs_with_key_in_options over every config of the integration, WANT 0.
+-- WANT text and work math: FORM-14559-CONFIGS-2.md.
 -- Shape: pm-guard/FORM-TEMPLATE-3.md (sha12 6b9e73a3c45a), PostgreSQL form (b). Run line:
--- psql -X -v ON_ERROR_STOP=1 -f FORM-14559-CONFIGS-1.sql (on the primary; one transaction, ends ROLLBACK).
+-- psql -X -v ON_ERROR_STOP=1 -f FORM-14559-CONFIGS-2.sql (on the primary; one transaction, ends ROLLBACK).
 -- No SET, EXPLAIN or write. Output: counts, booleans and 8-char id prefixes only. Org prefix {{ORG_PREFIX}} by starts_with
 -- on every FROM with org_id.
 
@@ -84,8 +87,8 @@ WHERE starts_with(o.id::text, '{{ORG_PREFIX}}');
 
 -- S1 one row per GitHub integration of the org that holds a source of the repository (external_id or full_name,
 -- case-insensitive). WANT >= 1 row; per row parent_configs = 1 (the write target: planner-managed, no parent_id).
--- A row with tests_on or cicd_on and parent_configs_with_key = 0 is a config the card writes; integration_key_set
--- says the integration config already holds the list.
+-- A row with tests_on or cicd_on and integration_key_set false is a write of the card (on its parent config).
+-- configs_with_key_in_options WANT 0 (no code at the pin keeps the key in sync_options).
 SELECT left(i.id::text, 8) AS integration_prefix,
        i.is_active AS integration_active,
        (SELECT count(*) FROM public.integration_datasets d
@@ -108,8 +111,7 @@ SELECT left(i.id::text, 8) AS integration_prefix,
           AND c.planner_managed AND c.parent_id IS NULL) AS parent_config_prefixes,
        (SELECT count(*) FROM public.sync_configurations c
         WHERE c.integration_id = i.id AND starts_with(c.org_id::text, '{{ORG_PREFIX}}')
-          AND c.planner_managed AND c.parent_id IS NULL
-          AND (c.sync_options::jsonb -> 'ci_artifact_exclude_prefixes') IS NOT NULL) AS parent_configs_with_key,
+          AND (c.sync_options::jsonb -> 'ci_artifact_exclude_prefixes') IS NOT NULL) AS configs_with_key_in_options,
        (i.config::jsonb -> 'ci_artifact_exclude_prefixes') IS NOT NULL AS integration_key_set
 FROM public.integrations i
 WHERE starts_with(i.org_id::text, '{{ORG_PREFIX}}') AND lower(i.provider) = 'github'
@@ -241,7 +243,7 @@ func formExec14559Run(ctx context.Context, t *testing.T, conn *pgx.Conn, pieces 
 			return results, fmt.Errorf("%s: %w", piece.id, err)
 		}
 		for index, row := range result.rows {
-			t.Logf("FORM-14559-CONFIGS-1 %s row %d %v %v", piece.id, index, result.columns, row)
+			t.Logf("FORM-14559-CONFIGS-2 %s row %d %v %v", piece.id, index, result.columns, row)
 		}
 		results[piece.id] = result
 	}
@@ -261,20 +263,21 @@ func formExec14559Rows(results map[string]formExec14559Result, id string) []stri
 	return out
 }
 
-// TestFormExec14559ConfigsListsTheIntegrationsThatSyncTheRepository. Synthetic org prefix f1455aaa, other org e1455aaa,
+// TestFormExec14559Configs2ListsTheIntegrationsThatSyncTheRepository. Synthetic org prefix f1455aaa, other org e1455aaa,
 // repository acme/ci-repo. In the org: integration a01 (github; an enabled source of the repository; tests on; one
 // active parent config without the list), a02 (github; a disabled source of the repository spelled in upper case;
-// cicd on; a parent config with the list, the integration config with the list, and a child config), a03 (github;
+// cicd on; the list on the integration config, a parent config, and a child config whose own sync_options holds a copy),
+// a03 (github;
 // another repository only), a04 (gitlab; a source of the repository). The other org: a05 (github; the repository).
 // S1 WANT exactly a01 and a02 with their values; C1 WANT 3 github sources over 3 integrations.
-func TestFormExec14559ConfigsListsTheIntegrationsThatSyncTheRepository(t *testing.T) {
+func TestFormExec14559Configs2ListsTheIntegrationsThatSyncTheRepository(t *testing.T) {
 	ctx := context.Background()
 	db := startDatabase(t)
 	conn := db.conn
 
 	sum := sha256.Sum256([]byte(formExec14559SQL))
 	if got := hex.EncodeToString(sum[:]); got != formExec14559SHA256 {
-		t.Fatalf("sha256 of the embedded text = %s, want %s (FORM-14559-CONFIGS-1.sql with the org prefix as %s and the repository as %s)",
+		t.Fatalf("sha256 of the embedded text = %s, want %s (FORM-14559-CONFIGS-2.sql with the org prefix as %s and the repository as %s)",
 			got, formExec14559SHA256, formExec14559Placeholder, formExec14559RepoSlot)
 	}
 	const prefix, repo = "f1455aaa", "acme/ci-repo"
@@ -362,9 +365,9 @@ VALUES ($1::uuid, $2, 'fx-' || $1::text, $3, '["tests"]'::json, $4::json, true, 
 	integration(2, org, "github", `{"ci_artifact_exclude_prefixes": ["ci-images-"]}`)
 	source(2, org, "github", strings.ToUpper(repo), false)
 	dataset(2, org, "cicd", true)
-	config(configID(2), 2, org, "github", withKey, nil)
+	config(configID(2), 2, org, "github", `{"all_repos": true}`, nil)
 	parent := configID(2)
-	config(configID(7), 2, org, "github", `{}`, &parent)
+	config(configID(7), 2, org, "github", withKey, &parent)
 	integration(3, org, "github", `{}`)
 	source(3, org, "github", "acme/other", true)
 	dataset(3, org, "tests", true)
@@ -394,8 +397,8 @@ VALUES ($1::uuid, $2, 'fx-' || $1::text, $3, '["tests"]'::json, $4::json, true, 
 		t.Errorf("S0 = %v, want orgs=1", got)
 	}
 	wantS1 := []string{
-		"integration_prefix=f1455a01 integration_active=true tests_on=true cicd_on=false repo_sources_enabled=1 parent_configs=1 parent_configs_active=1 parent_config_prefixes=c1455a01 parent_configs_with_key=0 integration_key_set=false",
-		"integration_prefix=f1455a02 integration_active=true tests_on=false cicd_on=true repo_sources_enabled=0 parent_configs=1 parent_configs_active=1 parent_config_prefixes=c1455a02 parent_configs_with_key=1 integration_key_set=true",
+		"integration_prefix=f1455a01 integration_active=true tests_on=true cicd_on=false repo_sources_enabled=1 parent_configs=1 parent_configs_active=1 parent_config_prefixes=c1455a01 configs_with_key_in_options=0 integration_key_set=false",
+		"integration_prefix=f1455a02 integration_active=true tests_on=false cicd_on=true repo_sources_enabled=0 parent_configs=1 parent_configs_active=1 parent_config_prefixes=c1455a02 configs_with_key_in_options=1 integration_key_set=true",
 	}
 	if got := formExec14559Rows(results, "S1"); strings.Join(got, "\n") != strings.Join(wantS1, "\n") {
 		t.Errorf("S1 =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(wantS1, "\n"))
@@ -410,7 +413,7 @@ VALUES ($1::uuid, $2, 'fx-' || $1::text, $3, '["tests"]'::json, $4::json, true, 
 	}{
 		{"s1-case-sensitive-repo", "S1", "lower(s.external_id) = '" + repo + "' OR lower(s.full_name) = '" + repo + "'", "s.external_id = '" + repo + "'"},
 		{"s1-children-counted", "S1", "AND c.planner_managed AND c.parent_id IS NULL) AS parent_configs,", ") AS parent_configs,"},
-		{"s1-key-name", "S1", "'ci_artifact_exclude_prefixes') IS NOT NULL) AS parent_configs_with_key", "'ci_artifact_exclude_prefix') IS NOT NULL) AS parent_configs_with_key"},
+		{"s1-key-name", "S1", "'ci_artifact_exclude_prefixes') IS NOT NULL) AS configs_with_key_in_options", "'ci_artifact_exclude_prefix') IS NOT NULL) AS configs_with_key_in_options"},
 		{"s1-any-provider", "S1", "AND lower(i.provider) = 'github'", ""},
 		{"s1-other-org", "S1", prefix, "e1455aaa"},
 		{"s1-dataset-ignores-switch", "S1", "AND d.dataset_key = 'cicd' AND d.is_enabled", "AND d.dataset_key = 'cicd'"},

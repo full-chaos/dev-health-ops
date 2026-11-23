@@ -179,8 +179,8 @@ func (handler LaunchDarklyRouteHandler) Collect(
 		if leaseErr := client.Lease.Assert(ctx); leaseErr != nil {
 			return CompleteRouteBatch{}, leaseErr
 		}
-		if !lookupSourceAbsent(codeReferenceErr) {
-			return CompleteRouteBatch{}, codeReferenceErr
+		if serveErr := serveLookupFailure(ctx, client, claim, "code_references", codeReferenceErr); serveErr != nil {
+			return CompleteRouteBatch{}, serveErr
 		}
 		codeReferencePayload = json.RawMessage(`{"items":[]}`)
 	}

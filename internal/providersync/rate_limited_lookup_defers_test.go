@@ -41,7 +41,7 @@ func (doer statusLookupDoer) responseBody() string {
 
 type lookupRoute struct {
 	name    string
-	collect func(t *testing.T, status int) (CompleteRouteBatch, error)
+	collect func(t *testing.T, status int, metrics *providerfoundation.Metrics) (CompleteRouteBatch, error)
 	claim   func() Claim
 }
 
@@ -58,9 +58,10 @@ func lookupRoutes() []lookupRoute {
 		{
 			name:  "github deployments",
 			claim: func() Claim { return nativeTestClaim("github", "deployments") },
-			collect: func(t *testing.T, status int) (CompleteRouteBatch, error) {
+			collect: func(t *testing.T, status int, metrics *providerfoundation.Metrics) (CompleteRouteBatch, error) {
 				doer := statusLookupDoer{inner: &gitHubDeploymentsDoer{}, path: "/repos/acme/api/deployments", status: status}
 				client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
+				client.Metrics = metrics
 				return (GitHubDeploymentsRouteHandler{}).Collect(context.Background(), nativeTestClaim("github", "deployments"),
 					providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
 			},
@@ -68,9 +69,10 @@ func lookupRoutes() []lookupRoute {
 		{
 			name:  "github security",
 			claim: func() Claim { return nativeTestClaim("github", "security") },
-			collect: func(t *testing.T, status int) (CompleteRouteBatch, error) {
+			collect: func(t *testing.T, status int, metrics *providerfoundation.Metrics) (CompleteRouteBatch, error) {
 				doer := statusLookupDoer{inner: &gitHubSecurityDoer{}, path: "/repos/acme/api/dependabot/alerts", status: status}
 				client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
+				client.Metrics = metrics
 				return (GitHubSecurityRouteHandler{}).Collect(context.Background(), nativeTestClaim("github", "security"),
 					providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
 			},
@@ -78,7 +80,7 @@ func lookupRoutes() []lookupRoute {
 		{
 			name:  "gitlab deployments",
 			claim: func() Claim { return nativeTestClaim("gitlab", "deployments") },
-			collect: func(t *testing.T, status int) (CompleteRouteBatch, error) {
+			collect: func(t *testing.T, status int, metrics *providerfoundation.Metrics) (CompleteRouteBatch, error) {
 				deployments := gitLabDeploymentsResponse{body: `[{"id":501,"iid":7,"status":"success","environment":{"name":"production"},"created_at":"2026-07-22T10:00:00Z","sha":"abc"}]`}
 				if status != 0 {
 					deployments = gitLabDeploymentsResponse{status: status, body: `{"message":"refused"}`}
@@ -86,15 +88,16 @@ func lookupRoutes() []lookupRoute {
 				doer := &gitLabDeploymentsDoer{t: t, responses: []gitLabDeploymentsResponse{
 					{body: gitLabRepositoryFixture}, {body: `[]`}, deployments, {body: `[]`},
 				}}
+				client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
+				client.Metrics = metrics
 				return (GitLabDeploymentsRouteHandler{}).Collect(context.Background(), nativeTestClaim("gitlab", "deployments"),
-					providerfoundation.Credential{}, gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example"),
-					time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC))
+					providerfoundation.Credential{}, client, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC))
 			},
 		},
 		{
 			name:  "launchdarkly code references",
 			claim: func() Claim { return nativeTestClaim("launchdarkly", "feature-flags") },
-			collect: func(t *testing.T, status int) (CompleteRouteBatch, error) {
+			collect: func(t *testing.T, status int, metrics *providerfoundation.Metrics) (CompleteRouteBatch, error) {
 				codeRefs := launchDarklyRouteResponse{status: http.StatusOK, body: `{"items":[]}`}
 				if status != 0 {
 					codeRefs = launchDarklyRouteResponse{status: status, body: `{"message":"refused"}`}
@@ -113,6 +116,7 @@ func lookupRoutes() []lookupRoute {
 				if err != nil {
 					t.Fatal(err)
 				}
+				client.Metrics = metrics
 				claim := nativeTestClaim("launchdarkly", "feature-flags")
 				claim.DatasetOptions = map[string]any{"project_key": "payments"}
 				return (LaunchDarklyRouteHandler{CodeReferences: staticLaunchDarklyReferenceResolver{}}).Collect(
@@ -132,11 +136,11 @@ func TestRateLimitedLookupHoldsTheWatermarkAndTheNextRunStoresTheRows(t *testing
 		route := route
 		t.Run(route.name, func(t *testing.T) {
 			t.Parallel()
-			batch, err := route.collect(t, http.StatusTooManyRequests)
+			batch, err := route.collect(t, http.StatusTooManyRequests, nil)
 			if !isRateLimited(err) || batch.Watermark != nil || len(batch.Effects) != 0 {
 				t.Fatalf("limited run: err=%v watermark=%v effects=%d, want the rate_limited error and no batch", err, batch.Watermark, len(batch.Effects))
 			}
-			next, err := route.collect(t, 0)
+			next, err := route.collect(t, 0, nil)
 			if err != nil {
 				t.Fatalf("next run: %v", err)
 			}
@@ -148,84 +152,120 @@ func TestRateLimitedLookupHoldsTheWatermarkAndTheNextRunStoresTheRows(t *testing
 	}
 }
 
-// Per class: only a 404 says the source is absent. A 5xx that outlasted the
-// retries, a 400, a 401, a 409 and a 403 with an undocumented body return their own class.
-func TestLookupFailureIsServedEmptyOnlyWhenTheSourceIsAbsent(t *testing.T) {
+func lookupCounter(t *testing.T, metrics *providerfoundation.Metrics) string {
+	t.Helper()
+	var exposition strings.Builder
+	if err := metrics.WritePrometheus(&exposition); err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, line := range strings.Split(exposition.String(), "\n") {
+		if strings.HasPrefix(line, "dev_health_provider_lookup_unavailable_total{") {
+			lines = append(lines, line)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// Per class: a 5xx that outlasted the retries and a 401 fail the unit with
+// their own class and no batch. A 404 is an absent source, served silently. Any
+// other 4xx is served empty but counted and logged with its reason.
+func TestLookupFailureClassesPerRoute(t *testing.T) {
 	t.Parallel()
 	for _, route := range lookupRoutes() {
 		route := route
 		t.Run(route.name, func(t *testing.T) {
 			t.Parallel()
 			for status, want := range map[int]providerfoundation.ErrorClass{
-				http.StatusServiceUnavailable:  providerfoundation.ErrorTransient,
-				http.StatusUnauthorized:        providerfoundation.ErrorAuthentication,
-				http.StatusForbidden:           providerfoundation.ErrorAuthentication,
-				http.StatusBadRequest:          providerfoundation.ErrorPermanent,
-				http.StatusUnprocessableEntity: providerfoundation.ErrorPermanent,
-				http.StatusConflict:            providerfoundation.ErrorConflict,
+				http.StatusServiceUnavailable: providerfoundation.ErrorTransient,
+				http.StatusUnauthorized:       providerfoundation.ErrorAuthentication,
 			} {
-				batch, err := route.collect(t, status)
+				batch, err := route.collect(t, status, providerfoundation.NewMetrics())
 				var providerErr *providerfoundation.ProviderError
 				if !errors.As(err, &providerErr) || providerErr.Class != want || batch.Watermark != nil {
 					t.Fatalf("status %d: err=%v watermark=%v, want class %s and no batch", status, err, batch.Watermark, want)
 				}
 			}
-			batch, err := route.collect(t, http.StatusNotFound)
-			if err != nil || batch.Watermark == nil {
-				t.Fatalf("404: err=%v watermark=%v, want the absent source served as an empty success", err, batch.Watermark)
+			metrics := providerfoundation.NewMetrics()
+			batch, err := route.collect(t, http.StatusNotFound, metrics)
+			if err != nil || batch.Watermark == nil || lookupCounter(t, metrics) != "" {
+				t.Fatalf("404: err=%v watermark=%v counter=%q, want a silent empty success", err, batch.Watermark, lookupCounter(t, metrics))
+			}
+			for status, reason := range map[int]string{
+				http.StatusForbidden:           "forbidden",
+				http.StatusBadRequest:          "bad_request",
+				http.StatusUnprocessableEntity: "bad_request",
+				http.StatusConflict:            "other_4xx",
+				http.StatusGone:                "other_4xx",
+			} {
+				metrics := providerfoundation.NewMetrics()
+				batch, err := route.collect(t, status, metrics)
+				if err != nil || batch.Watermark == nil {
+					t.Fatalf("status %d: err=%v watermark=%v, want an empty success", status, err, batch.Watermark)
+				}
+				if want := `reason="` + reason + `"} 1`; !strings.Contains(lookupCounter(t, metrics), want) {
+					t.Fatalf("status %d: counter %q lacks %s: the swallow is silent", status, lookupCounter(t, metrics), want)
+				}
 			}
 		})
 	}
 }
 
 // A GitHub 403 whose body is the documented feature-off message skips that one
-// source; the other sources still arrive. The same 403 with another body fails.
-func TestGitHubSecurityFeatureOffForbiddenSkipsOnlyThatSource(t *testing.T) {
+// source silently; the same 403 with another body is served empty and counted.
+func TestGitHubSecurityFeatureOffForbiddenIsSilentAndOtherForbiddenIsCounted(t *testing.T) {
 	t.Parallel()
-	collect := func(path, body string) (CompleteRouteBatch, error) {
+	collect := func(path, body string, metrics *providerfoundation.Metrics) (CompleteRouteBatch, error) {
 		doer := statusLookupDoer{inner: &gitHubSecurityDoer{}, path: path, status: http.StatusForbidden, body: body}
 		client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
+		client.Metrics = metrics
 		return (GitHubSecurityRouteHandler{}).Collect(context.Background(), nativeTestClaim("github", "security"),
 			providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
 	}
-	batch, err := collect("/repos/acme/api/code-scanning/alerts", `{"message":"Advanced Security must be enabled for this repository to use code scanning."}`)
-	if err != nil || batch.Watermark == nil || storedRows(batch) != 2 {
-		t.Fatalf("code scanning off: err=%v watermark=%v rows=%d, want 2 rows (dependabot, advisory) and the watermark", err, batch.Watermark, storedRows(batch))
+	for _, c := range []struct{ path, body string }{
+		{"/repos/acme/api/code-scanning/alerts", `{"message":"Advanced Security must be enabled for this repository to use code scanning."}`},
+		{"/repos/acme/api/dependabot/alerts", `{"message":"Dependabot alerts are disabled for this repository."}`},
+	} {
+		metrics := providerfoundation.NewMetrics()
+		batch, err := collect(c.path, c.body, metrics)
+		if err != nil || batch.Watermark == nil || storedRows(batch) != 2 || lookupCounter(t, metrics) != "" {
+			t.Fatalf("%s: err=%v rows=%d counter=%q, want 2 rows from the other sources and no counter", c.path, err, storedRows(batch), lookupCounter(t, metrics))
+		}
 	}
-	batch, err = collect("/repos/acme/api/code-scanning/alerts", `{"message":"Resource not accessible by integration"}`)
-	if err == nil || batch.Watermark != nil {
-		t.Fatalf("other 403 body: err=%v watermark=%v, want an error and no batch", err, batch.Watermark)
-	}
-	batch, err = collect("/repos/acme/api/dependabot/alerts", `{"message":"Dependabot alerts are disabled for this repository."}`)
-	if err != nil || batch.Watermark == nil || storedRows(batch) != 2 {
-		t.Fatalf("dependabot off: err=%v watermark=%v rows=%d, want 2 rows and the watermark", err, batch.Watermark, storedRows(batch))
+	metrics := providerfoundation.NewMetrics()
+	batch, err := collect("/repos/acme/api/code-scanning/alerts", `{"message":"Resource not accessible by integration"}`, metrics)
+	if err != nil || batch.Watermark == nil || storedRows(batch) != 2 || !strings.Contains(lookupCounter(t, metrics), `reason="forbidden"} 1`) {
+		t.Fatalf("other 403 body: err=%v rows=%d counter=%q, want served empty and counted as forbidden", err, storedRows(batch), lookupCounter(t, metrics))
 	}
 }
 
-func TestLookupSourceAbsentByClass(t *testing.T) {
+func TestClassifyLookupFailureByClass(t *testing.T) {
 	t.Parallel()
+	off := []string{"feature x is disabled"}
 	for name, tc := range map[string]struct {
-		err  error
-		want bool
+		err     error
+		verdict lookupVerdict
+		reason  string
 	}{
-		"404":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorNotFound, StatusCode: 404}, true},
-		"409":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorConflict, StatusCode: 409}, false},
-		"400":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: 400}, false},
-		"410":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: 410}, false},
-		"422":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: 422}, false},
-		"403 other body":    {&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 403, Body: "forbidden"}, false},
-		"403 feature off":   {&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 403, Body: `{"message":"Feature X is DISABLED"}`}, true},
-		"401 feature body":  {&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 401, Body: "feature x is disabled"}, false},
-		"429":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorRateLimited, StatusCode: 429}, false},
-		"403 rate limit":    {&providerfoundation.ProviderError{Class: providerfoundation.ErrorRateLimited, StatusCode: 403, Body: "feature x is disabled"}, false},
-		"503":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorTransient, StatusCode: 503}, false},
-		"transport failure": {&providerfoundation.ProviderError{Class: providerfoundation.ErrorTransient}, false},
-		"deadline":          {context.DeadlineExceeded, false},
-		"lease lost":        {providerfoundation.ErrLeaseLost, false},
-		"body failed":       {providerfoundation.RouteFailure("/x", providerfoundation.ReasonBodyDecode, errors.New("bad body")), false},
+		"404":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorNotFound, StatusCode: 404}, lookupAbsent, ""},
+		"403 feature off":   {&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 403, Body: `{"message":"Feature X is DISABLED"}`}, lookupAbsent, ""},
+		"403 permission":    {&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 403, Body: "forbidden"}, lookupRecorded, "forbidden"},
+		"400":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: 400}, lookupRecorded, "bad_request"},
+		"422":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: 422}, lookupRecorded, "bad_request"},
+		"410":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: 410}, lookupRecorded, "other_4xx"},
+		"409":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorConflict, StatusCode: 409}, lookupRecorded, "other_4xx"},
+		"401":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 401, Body: "feature x is disabled"}, lookupFails, ""},
+		"429":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorRateLimited, StatusCode: 429}, lookupFails, ""},
+		"403 rate limit":    {&providerfoundation.ProviderError{Class: providerfoundation.ErrorRateLimited, StatusCode: 403, Body: "feature x is disabled"}, lookupFails, ""},
+		"503":               {&providerfoundation.ProviderError{Class: providerfoundation.ErrorTransient, StatusCode: 503}, lookupFails, ""},
+		"transport failure": {&providerfoundation.ProviderError{Class: providerfoundation.ErrorTransient}, lookupFails, ""},
+		"deadline":          {context.DeadlineExceeded, lookupFails, ""},
+		"lease lost":        {providerfoundation.ErrLeaseLost, lookupFails, ""},
+		"body failed":       {providerfoundation.RouteFailure("/x", providerfoundation.ReasonBodyDecode, errors.New("bad body")), lookupFails, ""},
 	} {
-		if got := lookupSourceAbsent(tc.err, "feature x is disabled"); got != tc.want {
-			t.Errorf("%s: lookupSourceAbsent = %v, want %v", name, got, tc.want)
+		verdict, reason := classifyLookupFailure(tc.err, off)
+		if verdict != tc.verdict || reason != tc.reason {
+			t.Errorf("%s: verdict=%d reason=%q, want %d %q", name, verdict, reason, tc.verdict, tc.reason)
 		}
 	}
 }

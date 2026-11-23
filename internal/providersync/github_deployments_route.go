@@ -187,8 +187,8 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 	if err != nil {
 		// Python treats release enrichment as best effort, but only an absent
 		// source is served empty; a rate limit or a failure defers the unit.
-		if !lookupSourceAbsent(err) {
-			return CompleteRouteBatch{}, err
+		if serveErr := serveLookupFailure(ctx, client, claim, "releases", err); serveErr != nil {
+			return CompleteRouteBatch{}, serveErr
 		}
 		releases, releasePages = nil, 0
 	}
@@ -197,8 +197,8 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 		// Python logs and returns the successful empty batch for this optional collection:
 		// only when the provider says the collection is absent. Any other failure
 		// returns, so the window is read again instead of acknowledged empty.
-		if !lookupSourceAbsent(err) {
-			return CompleteRouteBatch{}, err
+		if serveErr := serveLookupFailure(ctx, client, claim, "deployments", err); serveErr != nil {
+			return CompleteRouteBatch{}, serveErr
 		}
 		effect, effectErr := effectBatchFromValues("deployments", EffectReadbackRequired, []deploymentRow{})
 		if effectErr != nil {

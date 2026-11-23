@@ -114,8 +114,10 @@ func (handler GitHubSecurityRouteHandler) Collect(ctx context.Context, claim Cla
 	} {
 		items, fetched, ok, fetchErr := fetchGitHubSecurityPage(ctx, &counted, source.route, source.path, source.query, pages)
 		decodedPages += fetched
-		if fetchErr != nil && !lookupSourceAbsent(fetchErr, source.featureOff...) {
-			return CompleteRouteBatch{}, fetchErr
+		if fetchErr != nil {
+			if serveErr := serveLookupFailure(ctx, client, claim, source.name, fetchErr, source.featureOff...); serveErr != nil {
+				return CompleteRouteBatch{}, serveErr
+			}
 		}
 		if !ok {
 			continue

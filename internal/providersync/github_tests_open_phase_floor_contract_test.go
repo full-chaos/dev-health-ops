@@ -190,15 +190,15 @@ func floorSiteWalk(t *testing.T, script map[string]map[int]floorAnswer, handler 
 
 func (result floorSiteResult) marker() any { return result.final.Result["open_phase_rate_floor"] }
 
-// Contract case: a retryable answer (5xx, 429, a 403 rate limit) whose OWN headers cannot show headroom (no rate headers,
-// or a remaining count without a limit) after an earlier reading above the floor: the retry is not sent (fail closed on
-// the current answer), and the phase stops at the floor with the marker -1 (headroom unknown). At each of the three sites.
+// Contract case: a 429 or a 403 rate limit without rate headers, or a 5xx whose rate headers do not carry both the
+// remaining count and the limit, after an earlier reading above the floor: the retry is not sent (fail closed on the
+// current answer), and the phase stops at the floor with the marker -1 (headroom unknown). At each of the three sites.
+// A 5xx with no rate header at all keeps main's path (TestGitHubTestsOpenPhaseFloorHeaderless5xxKeepsTheTransientPath).
 func TestGitHubTestsOpenPhaseFloorFailsClosedOnTheCurrentAnswer(t *testing.T) {
 	shapes := []struct {
 		name   string
 		answer floorAnswer
 	}{
-		{"500 without rate headers", floorAnswer{status: http.StatusInternalServerError, body: `{"message":"Server Error"}`}},
 		{"429 without rate headers", floorAnswer{status: http.StatusTooManyRequests, body: `{"message":"too many requests"}`}},
 		{"403 rate limit without rate headers", floorAnswer{status: http.StatusForbidden, body: `{"message":"You have exceeded a secondary rate limit."}`}},
 		{"500 with 100 left and no limit", floorAnswer{status: http.StatusInternalServerError, remaining: "100", body: `{"message":"Server Error"}`}},
@@ -259,31 +259,60 @@ func TestGitHubTestsOpenPhaseFloorRefusalKeepsTheRequestCount(t *testing.T) {
 // (dev_health_provider_budget_release_errors_total).
 func TestGitHubTestsOpenPhaseFloorRefusalStillCountsABudgetReleaseFailure(t *testing.T) {
 	low := floorAnswer{status: http.StatusInternalServerError, remaining: "100", limit: "5000", body: `{"message":"Server Error"}`}
-	result := floorSiteWalk(t, map[string]map[int]floorAnswer{floorSiteRun: {1: low}}, GitHubTestsRouteHandler{}, true)
-	t.Logf("CELL REL release_failed=%v err=%v marker=%v attempts=%v", result.failedRl, result.err, result.marker(), result.doer.attempts)
-	if !result.failedRl {
-		t.Fatal("premise: the refused call's release did not fail")
-	}
-	if result.err != nil {
-		t.Fatalf("walk: %v, want the floor stop", result.err)
-	}
-	if result.marker() != int64(100) || result.doer.attempts[floorSiteRun] != 1 {
-		t.Errorf("marker=%v attempts=%d, want the floor stop (100, 1 attempt)", result.marker(), result.doer.attempts[floorSiteRun])
-	}
-	if !strings.Contains(result.metrics, `dev_health_provider_budget_release_errors_total{provider="github"} 1`) {
-		t.Errorf("the release failure was not counted:\n%s", result.metrics)
+	for _, site := range []string{floorSiteRun, floorSiteJobs, floorSitePolicy} {
+		t.Run(site, func(t *testing.T) {
+			result := floorSiteWalk(t, map[string]map[int]floorAnswer{site: {1: low}}, GitHubTestsRouteHandler{}, true)
+			t.Logf("CELL REL %s release_failed=%v err=%v marker=%v attempts=%v", site, result.failedRl, result.err, result.marker(), result.doer.attempts)
+			if !result.failedRl {
+				t.Fatal("premise: the refused call's release did not fail")
+			}
+			if result.err != nil {
+				t.Fatalf("walk: %v, want the floor stop", result.err)
+			}
+			if result.marker() != int64(100) || result.doer.attempts[site] != 1 {
+				t.Errorf("marker=%v attempts=%d, want the floor stop (100, 1 attempt)", result.marker(), result.doer.attempts[site])
+			}
+			if !strings.Contains(result.metrics, `dev_health_provider_budget_release_errors_total{provider="github"} 1`) {
+				t.Errorf("the release failure was not counted:\n%s", result.metrics)
+			}
+		})
 	}
 }
 
 // Contract case: the branch protection read of run 7100 is refused at the floor after its jobs read stopped at a per-run
 // bound (here the jobs page budget, on short pages). The run is not emitted, so no truncation of it is published: no
 // run_jobs observation in the final result and no per-run truncation log line.
-func TestGitHubTestsOpenPhaseFloorRefusalPublishesNoTruncationOfAnUnemittedRun(t *testing.T) {
+// floorShortJobPages is six jobs pages of one job each, each with a next link: the jobs read stops at a page budget of 6.
+func floorShortJobPages() map[int]floorAnswer {
 	jobs := map[int]floorAnswer{}
 	for page := 1; page <= 6; page++ {
 		jobs[page] = floorAnswer{status: http.StatusOK, remaining: "4000", limit: "5000", body: `{"jobs":[` + floorJob(page) + `]}`,
 			link: fmt.Sprintf(`<https://api.github.com/repos/acme/api/actions/runs/7100/jobs?page=%d&per_page=100>; rel="next"`, page+1)}
 	}
+	return jobs
+}
+
+// Positive control of the next cell: the same jobs truncation, with a branch protection read that succeeds. Run 7100 is
+// emitted, and its truncation is published: the run_jobs observation in the final result and the per-run truncation line.
+func TestGitHubTestsOpenPhaseFloorPublishesTheTruncationOfAnEmittedRun(t *testing.T) {
+	result := floorSiteWalk(t, map[string]map[int]floorAnswer{floorSiteJobs: floorShortJobPages()}, GitHubTestsRouteHandler{MaxJobPages: 6}, false)
+	incomplete, _ := DecodeGitHubTestsIncomplete(result.final.Result["incomplete"])
+	t.Logf("CELL TRUNC+ attempts=%v marker=%v incomplete=%v reread=%v err=%v", result.doer.attempts, result.marker(), incomplete, result.final.Result["open_runs_reread"], result.err)
+	if result.err != nil {
+		t.Fatalf("walk: %v", result.err)
+	}
+	published := false
+	for _, observation := range incomplete {
+		published = published || observation.Component == githubTestsRunJobsComponent && observation.Cause == githubTestsPerRunPageBudgetCause
+	}
+	if !published || !strings.Contains(result.logs, "provider per-run item cap reached") {
+		t.Errorf("run 7100 was emitted (reread=%v) but its truncation is not published: incomplete=%v logged=%v",
+			result.final.Result["open_runs_reread"], incomplete, strings.Contains(result.logs, "provider per-run item cap reached"))
+	}
+}
+
+func TestGitHubTestsOpenPhaseFloorRefusalPublishesNoTruncationOfAnUnemittedRun(t *testing.T) {
+	jobs := floorShortJobPages()
 	low := floorAnswer{status: http.StatusInternalServerError, remaining: "100", limit: "5000", body: `{"message":"Server Error"}`}
 	result := floorSiteWalk(t, map[string]map[int]floorAnswer{floorSiteJobs: jobs, floorSitePolicy: {1: low}},
 		GitHubTestsRouteHandler{MaxJobPages: 6}, false)
@@ -303,5 +332,45 @@ func TestGitHubTestsOpenPhaseFloorRefusalPublishesNoTruncationOfAnUnemittedRun(t
 	}
 	if strings.Contains(result.logs, "provider per-run item cap reached") {
 		t.Errorf("a per-run truncation line was logged for run 7100, which was not emitted")
+	}
+}
+
+// Contract case: a 5xx with no rate header at all keeps main's path, at the oldest open run and at its branch protection
+// read: the answer is retried; at the run a last failure skips the run as a transient, at the branch protection read the
+// policy is unknown and the run is written. The later open runs (7101, 7102) are read, and there is no floor marker.
+func TestGitHubTestsOpenPhaseFloorHeaderless5xxKeepsTheTransientPath(t *testing.T) {
+	headerless := floorAnswer{status: http.StatusBadGateway, body: `{"message":"Bad Gateway"}`}
+	for _, tc := range []struct {
+		site     string
+		wantRead int
+	}{
+		{floorSiteRun, 2},    // 7100 skipped, 7101 and 7102 re-read
+		{floorSitePolicy, 3}, // 7100 written with an unknown policy, then 7101 and 7102
+	} {
+		t.Run(tc.site, func(t *testing.T) {
+			result := floorSiteWalk(t, map[string]map[int]floorAnswer{tc.site: {1: headerless, 2: headerless}}, GitHubTestsRouteHandler{}, false)
+			later := result.doer.fake.runGets
+			t.Logf("CELL H5XX %s attempts=%v later_reads=%v reread=%v skipped=%v marker=%v err=%v", tc.site, result.doer.attempts, later,
+				result.final.Result["open_runs_reread"], result.final.Result["open_runs_skipped"], result.marker(), result.err)
+			if result.err != nil {
+				t.Fatalf("walk: %v", result.err)
+			}
+			if got := result.doer.attempts[tc.site]; got != 2 {
+				t.Errorf("%s: %d wire attempts, want 2 (retried, as main)", tc.site, got)
+			}
+			if marker, hit := result.final.Result["open_phase_rate_floor"]; hit {
+				t.Errorf("open_phase_rate_floor = %v, want absent", marker)
+			}
+			read := map[int]bool{}
+			for _, id := range later {
+				read[id] = true
+			}
+			if !read[7101] || !read[7102] {
+				t.Errorf("later open runs read = %v, want 7101 and 7102: the header-less 5xx must not end the phase", later)
+			}
+			if got := result.final.Result["open_runs_reread"]; got != tc.wantRead {
+				t.Errorf("open_runs_reread = %v, want %d", got, tc.wantRead)
+			}
+		})
 	}
 }

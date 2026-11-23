@@ -454,9 +454,10 @@ func (c *HTTPClient) doRequest(ctx context.Context, probe *requestProbe, method,
 		if err := c.Auth(request); err != nil {
 			return nil, c.authFailure(ctx, err, attempt)
 		}
+		request = probe.watch(request)
 		setByteRange(ctx, request)
 		var requestErr error
-		guarded, leftOrigin := originGuardedDoer(c.Doer, target, recorder.record)
+		guarded, leftOrigin := originGuardedDoer(c.Doer, target, probe.hop(recorder.record))
 		c.recordWireRequest(ctx, target.Path)
 		probe.sent(attempt)
 		response, requestErr = guarded.Do(request)
@@ -617,10 +618,11 @@ func (c *HTTPClient) doUnauthenticated(
 	if requestErr != nil {
 		return nil, ErrCredentialInvalid
 	}
+	request = probe.watch(request)
 	setByteRange(ctx, request)
 	c.recordWireRequest(ctx, target.Path)
 	probe.sent(1)
-	counting := hopCountingDoer(c.Doer, recorder.record)
+	counting := hopCountingDoer(c.Doer, probe.hop(recorder.record))
 	response, err = counting.Do(request)
 	probe.responded(response)
 	if err != nil {

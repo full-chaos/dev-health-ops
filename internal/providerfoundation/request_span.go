@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptrace"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -48,14 +50,19 @@ const (
 )
 
 // requestProbe gathers the measurements of one call. A nil probe (no recording parent) measures nothing and reads no
-// clock. status is the status of the response to the last wire attempt sent (0: that attempt got none).
+// clock. status is the status of the response to the last request of the call that was written: a redirect hop's 3xx
+// counts, a written request that got no response clears it, and a request that failed before it was written keeps the
+// status before it. hopStatus and written belong to the wire attempt in flight; the transport sets written from its
+// own goroutine.
 type requestProbe struct {
-	span     trace.Span
-	attempts int
-	status   int
-	gateWait time.Duration
-	budget   time.Duration
-	lease    time.Duration
+	span      trace.Span
+	attempts  int
+	status    int
+	hopStatus int
+	written   atomic.Bool
+	gateWait  time.Duration
+	budget    time.Duration
+	lease     time.Duration
 }
 
 type requestSpanParentKey struct{}
@@ -132,14 +139,53 @@ func (p *requestProbe) addBudget(start time.Time) {
 
 func (p *requestProbe) sent(attempt int) {
 	if p != nil {
-		p.attempts, p.status = attempt, 0
+		p.attempts, p.hopStatus = attempt, 0
+		p.written.Store(false)
 	}
 }
 
-// responded records the status of the response a wire attempt got, before the call decides what to do with it.
+// watch returns request with a trace that marks the request (and each redirect hop) written when the transport wrote
+// it. It is applied after the credential step, so a token exchange's requests are not the call's.
+func (p *requestProbe) watch(request *http.Request) *http.Request {
+	if p == nil {
+		return request
+	}
+	return request.WithContext(httptrace.WithClientTrace(request.Context(), &httptrace.ClientTrace{
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			if info.Err == nil {
+				p.written.Store(true)
+			}
+		},
+	}))
+}
+
+// hop is record plus the probe's view of a followed redirect: the 3xx that caused it is the latest status, and the hop
+// is not written yet.
+func (p *requestProbe) hop(record func(*http.Request)) func(*http.Request) {
+	if p == nil {
+		return record
+	}
+	return func(request *http.Request) {
+		if request.Response != nil {
+			p.hopStatus = request.Response.StatusCode
+			p.written.Store(false)
+		}
+		record(request)
+	}
+}
+
+// responded settles the status after a wire attempt returned, before the call decides what to do with the result.
 func (p *requestProbe) responded(response *http.Response) {
-	if p != nil && response != nil {
+	if p == nil {
+		return
+	}
+	switch {
+	case response != nil:
 		p.status = response.StatusCode
+	case p.written.Load():
+		p.status = 0
+	case p.hopStatus > 0:
+		p.status = p.hopStatus
 	}
 }
 
@@ -200,7 +246,7 @@ func CallCancelled(ctx context.Context, err error, labels ...error) bool {
 }
 
 func cancellationLeaves(err error, labels []error) (cancelled, other bool) {
-	if providerErr, ok := err.(*ProviderError); ok && providerErr.Reason == TransportReasonCanceled {
+	if providerErr, ok := err.(*ProviderError); ok && providerErr.Reason == TransportReasonCanceled && !providerErr.cancelBesideFailure {
 		return true, false
 	}
 	if slices.Contains(labels, err) {

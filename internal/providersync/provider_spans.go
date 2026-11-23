@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
@@ -47,13 +48,20 @@ const (
 	spanOutcomeFailed     = "failed"
 )
 
-// endStepSpan sets attrs and the outcome and ends span; failure is non-nil only for a real failure.
+// endStepSpan sets attrs and the outcome and ends span; failure is non-nil only for a real failure. A failure ends as
+// tracing.EndWorkSpan ends one (an exception event with the class, an Error status with the class), without its second
+// cancellation check: the outcome already ruled on cancellation with the step's context.
 func endStepSpan(span trace.Span, attrs []attribute.KeyValue, outcome string, failure error) {
 	if span == nil {
 		return
 	}
 	span.SetAttributes(append(attrs, attribute.String(spanAttrOutcome, outcome))...)
-	tracing.EndWorkSpan(span, failure)
+	if failure != nil {
+		class := tracing.ErrorClass(failure)
+		span.AddEvent("exception", trace.WithAttributes(attribute.String("error.type", class)))
+		span.SetStatus(codes.Error, class)
+	}
+	span.End()
 }
 
 // stepOutcome maps an error every step shares to its word; ok is false for a failure the caller names. A cancellation

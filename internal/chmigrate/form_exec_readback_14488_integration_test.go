@@ -405,6 +405,20 @@ func TestReadback14488FormExecutesAtTheChainHead(t *testing.T) {
 	}
 	check("DEFECT", defectWant, "stmt2", "stmt3", "stmt4")
 
+	// stmt1 control mutation: a window start after every row (test copy) gives rows_after = 0, so WANT rows_after > 0 fails.
+	mutated := strings.ReplaceAll(byLabel["stmt1"], "2026-11-23 06:24:03", "2030-01-01 00:00:00")
+	if mutated == byLabel["stmt1"] {
+		t.Fatal("stmt1: no window literal to mutate")
+	}
+	mgot, merr := rb14488Run(ctx, conn, mutated, fmt.Sprintf("rb14488-mutate-stmt1-%d", time.Now().UnixNano()))
+	if merr != nil || len(mgot) != 1 {
+		t.Fatalf("MUTATE stmt1: err=%v rows=%d", merr, len(mgot))
+	}
+	t.Logf("MUTATE stmt1 ROW %v", mgot[0])
+	if mgot[0]["rows_after"] != "0" || mgot[0]["groups_after"] != "0" {
+		t.Errorf("MUTATE stmt1: rows_after=%s groups_after=%s, want 0 and 0 (the control WANT > 0 must fail)", mgot[0]["rows_after"], mgot[0]["groups_after"])
+	}
+
 	// PASS-path cells: query_log read_rows of each statement on the clean fixture. Model (TEMPLATE-3, measured on
 	// fcc 14531): one scan of the table T + the gate 2 x P (system.parts twice) + 1 (system.one).
 	if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
@@ -419,9 +433,8 @@ func TestReadback14488FormExecutesAtTheChainHead(t *testing.T) {
 		if s.label == "S0" {
 			continue
 		}
-		low, high := tableRows, tableRows+2*parts+1
-		if read < low || read > high {
-			t.Errorf("PASS %s: query_log read_rows %d outside [T, T + 2P + 1] = [%d, %d]", s.label, read, low, high)
+		if want := tableRows + 2*parts + 1; read != want {
+			t.Errorf("PASS %s: query_log read_rows %d, want T + 2P + 1 = %d", s.label, read, want)
 		}
 	}
 

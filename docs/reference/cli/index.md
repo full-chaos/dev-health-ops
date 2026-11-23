@@ -749,7 +749,7 @@ Read and change the LLM settings of an organization (`get`, `set`, `delete`). Ru
 
 ### `admin sync-configs artifact-excludes`
 
-Set, clear and show the CI artifact name prefixes that the GitHub tests sync skips for one sync configuration (`sync_options.ci_artifact_exclude_prefixes`). The verbs and `PATCH /api/v1/admin/sync-configs/{config_id}` validate and write with the same code (`internal/artifactexclude`). The list goes into the configuration and into its integration's config, which every sync unit of the integration reads. A skipped artifact is never downloaded and takes no per-run artifact slot. The verbs read the database from `MIGRATION_DATABASE_URI`, else `POSTGRES_URI`.
+Set, clear and show the CI artifact name prefixes that the GitHub tests sync skips (`ci_artifact_exclude_prefixes`). The list applies to every sync config of this integration: it is stored once, in the integration's config, which every sync unit of the integration reads, and every sync configuration of the integration shows it in `sync_options` (GET, list and the PATCH answer). A write replaces the whole list (the last writer wins); `--clear` or an empty list removes it for every sync config of the integration. The verbs and `PATCH /api/v1/admin/sync-configs/{config_id}` validate and write with the same code (`internal/artifactexclude`); `PATCH /api/v1/admin/integrations/{integration_id}` keeps the list when its new config does not carry the key. A skipped artifact is never downloaded and takes no per-run artifact slot. The verbs read the database from `MIGRATION_DATABASE_URI`, else `POSTGRES_URI`.
 
 ```bash
 dho admin sync-configs artifact-excludes set --config-id <uuid> --prefix ci-images- --prefix ci-timings- --reason "ci artifacts that hold no report"
@@ -760,8 +760,8 @@ dho admin sync-configs artifact-excludes show --config-id <uuid>
 
 | Subcommand | Description |
 |------------|-------------|
-| `set` | Store the `--prefix` list (repeat the flag) or remove it (`--clear`); `--reason` is required and printed with the result. One JSON line: `action`, `config_id_prefix`, `org_id_prefix`, `integration_id_prefix` (8 characters each), `prefix_count`, `sync_options_changed`, `integration_config_changed`, `dry_run`, `reason`. `--dry-run` validates and reports, then rolls back |
-| `show` | One JSON line: the id prefixes, `sync_options_prefixes` and `integration_config_prefixes` (the stored lists, or null) |
+| `set` | Replace the integration's list with the `--prefix` list (repeat the flag) or remove it (`--clear`); `--reason` is required and printed with the result. One JSON line: `action`, `config_id_prefix`, `org_id_prefix`, `integration_id_prefix` (8 characters each), `prefix_count`, `sync_options_changed`, `integration_config_changed`, `dry_run`, `reason`. `--dry-run` validates and reports, then rolls back |
+| `show` | One JSON line: the id prefixes, `integration_config_prefixes` (the list, or null) and `sync_options_prefixes` (a copy left in the configuration's own options by an earlier write, normally null) |
 
 Rules for the list (the API answers 422 with the field and the entry index; the verb prints `invalid_value`): a GitHub configuration only, 1 to 16 entries, each 1 to 100 characters from `A-Z a-z 0-9 . _ -`, no entry repeated (case-insensitive). A name matches an entry when it starts with it, case-insensitively. Unlike the PATCH, the verb does not refresh the GitHub work-item options from its environment: it changes only the list.
 

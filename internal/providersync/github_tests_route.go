@@ -265,8 +265,8 @@ func (artifact githubTestsArtifactPayload) listedSize() int64 {
 var githubTestsNonReportArtifactSuffixes = []string{".dockerbuild", ".spdx.json"}
 
 // githubTestsNonReportArtifactPrefixes is a named deployment exception: this repository's own CI artifact names (go.yml) in product
-// code. The seam joins it with the configuration's own sync_options.ci_artifact_exclude_prefixes (copied to the integration config,
-// CHAOS-14559); it goes once that list is written for every integration that syncs this repository. Content alone does not replace it (TestGitHubTestsArtifactNamePrefixesAreLoadBearing):
+// code. The seam joins it with the integration's ci_artifact_exclude_prefixes (one list per integration, it applies to every sync
+// config of this integration, CHAOS-14559); it goes once that list is written for every integration that syncs this repository. Content alone does not replace it (TestGitHubTestsArtifactNamePrefixesAreLoadBearing):
 // "go-images-": an image artifact keeps 1 day; an expired one has no content to inspect, so selected it reads reports_complete=false.
 // "go-test-timings-": timing tables, never reports; selected, all 17 of a run are downloaded and take per-run cap slots.
 // "go-junit-part-": JUnit parts beside their lossless merged report; githubTestsPlanRunReports keeps the parts and drops the aggregate, so case keys move, the merged rows are retracted and the run reads reports_complete=false.

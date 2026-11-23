@@ -35,6 +35,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/artifactexclude"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
@@ -321,6 +322,10 @@ func (h *handlers) listSyncConfigs(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "enabled_datasets", err)
 		return
 	}
+	if err := deriveArtifactExclude(ctx, h.store.integrationExcludeLists, org, configs...); err != nil {
+		h.fail(w, r, "artifact_exclude", err)
+		return
+	}
 	if err := h.deriveSkippedDatasets(ctx, org, configs...); err != nil {
 		h.fail(w, r, "skipped_datasets", err)
 		return
@@ -402,6 +407,10 @@ func (h *handlers) getSyncConfig(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "enabled_datasets", err)
 		return
 	}
+	if err := deriveArtifactExclude(r.Context(), h.store.integrationExcludeLists, orgID(r), config); err != nil {
+		h.fail(w, r, "artifact_exclude", err)
+		return
+	}
 	if err := h.deriveSkippedDatasets(r.Context(), orgID(r), config); err != nil {
 		h.fail(w, r, "skipped_datasets", err)
 		return
@@ -435,6 +444,9 @@ func syncConfigResponse(config *syncConfig, childrenCount pyjson.Value, credenti
 	options, err := pyDict(optionsValue)
 	if err != nil {
 		return nil, err
+	}
+	if config.artifactExcludeDerived {
+		artifactexclude.Overlay(options, config.artifactExclude, config.artifactExcludePresent)
 	}
 	out := pyjson.NewObject()
 	out.Set("id", config.ID.String())

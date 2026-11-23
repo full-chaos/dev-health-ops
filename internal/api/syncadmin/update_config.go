@@ -248,7 +248,7 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 	}
 	optionsProvided := in.syncOptions != nil || in.provided["schedule_cron"] || in.provided["timezone"] || in.provided["initial_sync_depth"]
 	// ci_artifact_exclude_prefixes is written by artifactexclude.WriteTx below (the writer of the dho verb too), into
-	// the configuration and its integration; the generic merge and the child cascade do not carry it.
+	// the integration only (it applies to every sync config of this integration); the merge and the cascade skip it.
 	excludeChange, err := artifactExcludeChange(config.Provider, options)
 	if err != nil {
 		return nil, err
@@ -372,6 +372,11 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 	}
 	if err := deriveShownTargets(ctx, func(ctx context.Context, org string, ids []uuid.UUID) (map[uuid.UUID][]string, error) {
 		return enabledDatasetKeysByIntegration(ctx, tx, org, ids)
+	}, org, config); err != nil {
+		return nil, err
+	}
+	if err := deriveArtifactExclude(ctx, func(ctx context.Context, org string, ids []uuid.UUID) (map[uuid.UUID]*string, error) {
+		return integrationExcludeLists(ctx, tx, org, ids)
 	}, org, config); err != nil {
 		return nil, err
 	}

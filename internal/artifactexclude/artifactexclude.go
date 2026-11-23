@@ -1,7 +1,9 @@
-// Package artifactexclude is the per-sync-config list of CI artifact name prefixes the GitHub tests sync skips
-// (sync_options.ci_artifact_exclude_prefixes, copied to the integration's config, which every sync unit of the
-// integration reads). The admin API and `dho admin sync-configs artifact-excludes` both validate with Parse and write
-// with WriteTx: one validator and one writer for both callers.
+// Package artifactexclude is the list of CI artifact name prefixes the GitHub tests sync skips.
+// The list applies to every sync config of this integration: the ONE store is the integration's config (key ci_artifact_exclude_prefixes), which
+// every sync unit of the integration reads; a sync config's sync_options never keeps it, and the admin API shows it in
+// sync_options of every config of the integration (Overlay). A write replaces the whole list (last writer wins). The
+// admin API and `dho admin sync-configs artifact-excludes` both validate with Parse and write with WriteTx: one
+// validator and one writer for both callers.
 package artifactexclude
 
 import (
@@ -18,7 +20,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
-// Key is the option key in sync_configurations.sync_options and in integrations.config.
+// Key is the key of the list in integrations.config (the one store; it applies to every sync config of this
+// integration) and the key every sync configuration of the integration shows it under in sync_options.
 const Key = "ci_artifact_exclude_prefixes"
 
 // MaxEntries bounds the list: a deployment names a few artifact families, and the route matches every artifact name
@@ -140,14 +143,18 @@ func Matches(name string, prefixes []string) bool {
 // Result is what WriteTx did. The ids are 8-character prefixes only.
 type Result struct {
 	ConfigIDPrefix, OrgIDPrefix, IntegrationIDPrefix string
-	SyncOptionsChanged, IntegrationConfigChanged     bool
+	// SyncOptionsChanged: the configuration's sync_options held the key (written before the integration config was the
+	// one store) and it was removed.
+	SyncOptionsChanged, IntegrationConfigChanged bool
 	// SyncOptions is the configuration's stored sync_options text after the write.
 	SyncOptions string
 }
 
-// WriteTx applies change to ONE key of the configuration's sync_options and of its integration's config, on tx,
-// leaving every other key of both documents as it is. A row is updated (with updated_at = now) only when its document
-// changed. The configuration must belong to org, be a GitHub configuration and have an integration.
+// WriteTx applies change to the configuration's integration config, the one store of the list, on tx: the whole list
+// is replaced (or removed on Clear), every other key stays as it is. It also removes the key from the configuration's
+// own sync_options if a row still holds it there. A row is updated (with updated_at = now) only when its document
+// changed. The configuration must belong to org, be a GitHub configuration and have an integration; the list then
+// applies to every sync config of that integration.
 func WriteTx(ctx context.Context, tx pgx.Tx, org string, configID uuid.UUID, change Change, now time.Time) (Result, error) {
 	var provider string
 	var integrationID *uuid.UUID
@@ -172,7 +179,7 @@ WHERE org_id = $1 AND id = $2 FOR UPDATE`, org, configID).Scan(&provider, &integ
 		return Result{}, fmt.Errorf("read integration: %w", err)
 	}
 	result := Result{ConfigIDPrefix: idPrefix(configID.String()), OrgIDPrefix: idPrefix(org), IntegrationIDPrefix: idPrefix(integrationID.String())}
-	nextOptions, optionsChanged, err := apply(optionsText, change)
+	nextOptions, optionsChanged, err := apply(optionsText, Change{Clear: true})
 	if err != nil {
 		return Result{}, fmt.Errorf("sync_options: %w", err)
 	}
@@ -194,6 +201,56 @@ WHERE org_id = $1 AND id = $2 FOR UPDATE`, org, configID).Scan(&provider, &integ
 	}
 	result.SyncOptionsChanged, result.IntegrationConfigChanged, result.SyncOptions = optionsChanged, configChanged, nextOptions
 	return result, nil
+}
+
+// Stored is the list an integration config text holds, and whether it holds one.
+func Stored(configText *string) (pyjson.Value, bool, error) {
+	if configText == nil {
+		return nil, false, nil
+	}
+	value, err := pyjson.DecodeString(*configText)
+	if err != nil {
+		return nil, false, err
+	}
+	document, ok := value.(*pyjson.Object)
+	if !ok {
+		return nil, false, nil
+	}
+	stored, present := document.Get(Key)
+	return stored, present, nil
+}
+
+// Overlay shows the integration's list in a sync config's shown sync_options: the key the config itself may hold is
+// dropped and the integration's list (present) is put in at the end. With neither, options stay as they are.
+func Overlay(options *pyjson.Object, value pyjson.Value, present bool) {
+	options.Delete(Key)
+	if present {
+		options.Set(Key, value)
+	}
+}
+
+// KeepOnReplace is the integrations PATCH's rule for a config that replaces the stored one whole: a next config without
+// the key keeps the stored list; one that carries it is validated (Parse for the integration's provider) and a null or
+// empty list removes it. stored is the integration's config text before the write.
+func KeepOnReplace(provider string, stored *string, next *pyjson.Object) error {
+	if value, carried := next.Get(Key); carried {
+		change, err := Parse(provider, value)
+		if err != nil {
+			return err
+		}
+		if change.Clear {
+			next.Delete(Key)
+		}
+		return nil
+	}
+	value, present, err := Stored(stored)
+	if err != nil {
+		return err
+	}
+	if present {
+		next.Set(Key, value)
+	}
+	return nil
 }
 
 // apply sets or deletes Key in the stored document and dumps it as the admin API stores options (json.dumps).

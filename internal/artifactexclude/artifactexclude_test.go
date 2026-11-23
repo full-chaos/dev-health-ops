@@ -165,3 +165,111 @@ func TestArtifactExcludeApplyTouchesOnlyItsKey(t *testing.T) {
 		t.Fatalf("the same list again: changed=%v err=%v, want no change", changed, err)
 	}
 }
+
+// A write replaces the whole list, never merges it: [x, y] then [z] stores [z]; a clear or an empty list removes it.
+func TestArtifactExcludeWriteReplacesTheWholeList(t *testing.T) {
+	stored := `{"all_repos": true}`
+	first, _, err := apply(&stored, Change{Prefixes: []string{"ci-x-", "ci-y-"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, changed, err := apply(&first, Change{Prefixes: []string{"ci-z-"}})
+	if err != nil || !changed {
+		t.Fatalf("second write: changed=%v err=%v", changed, err)
+	}
+	if want := `{"all_repos": true, "ci_artifact_exclude_prefixes": ["ci-z-"]}`; second != want {
+		t.Fatalf("[x, y] then [z] stored %s, want %s (last writer wins, no merge)", second, want)
+	}
+	for _, clear := range []pyjson.Value{nil, listOf()} {
+		change, err := Parse("github", clear)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cleared, changed, err := apply(&second, change)
+		if err != nil || !changed || cleared != `{"all_repos": true}` {
+			t.Fatalf("clear %#v: %s changed=%v err=%v, want the key gone", clear, cleared, changed, err)
+		}
+	}
+}
+
+// Overlay shows the integration's list in a configuration's options. With no list anywhere the options are byte-equal
+// to what they were; a copy the configuration itself holds is never shown.
+func TestArtifactExcludeOverlayShowsTheIntegrationList(t *testing.T) {
+	render := func(options *pyjson.Object) string {
+		text, err := pyjson.Dumps(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return text
+	}
+	decode := func(text string) *pyjson.Object {
+		value, err := pyjson.DecodeString(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value.(*pyjson.Object)
+	}
+	plain := `{"all_repos": true, "schedule_cron": "0 * * * *"}`
+	options := decode(plain)
+	Overlay(options, nil, false)
+	if got := render(options); got != plain {
+		t.Errorf("no list: %s, want the options byte-equal %s", got, plain)
+	}
+	options = decode(plain)
+	Overlay(options, listOf("ci-z-"), true)
+	if got, want := render(options), `{"all_repos": true, "schedule_cron": "0 * * * *", "ci_artifact_exclude_prefixes": ["ci-z-"]}`; got != want {
+		t.Errorf("integration list: %s, want %s", got, want)
+	}
+	stale := `{"ci_artifact_exclude_prefixes": ["old-"], "all_repos": true}`
+	options = decode(stale)
+	Overlay(options, nil, false)
+	if got := render(options); got != `{"all_repos": true}` {
+		t.Errorf("a copy in the configuration, none on the integration: %s, want it not shown", got)
+	}
+	options = decode(stale)
+	Overlay(options, listOf("ci-z-"), true)
+	if got := render(options); got != `{"all_repos": true, "ci_artifact_exclude_prefixes": ["ci-z-"]}` {
+		t.Errorf("a copy in the configuration and a list on the integration: %s, want the integration's", got)
+	}
+}
+
+// The integrations PATCH replaces the config whole: a new config without the key keeps the stored list, one with the
+// key is validated and replaces it (null or [] removes it), and a provider the field does nothing for is refused.
+func TestArtifactExcludeKeepOnReplace(t *testing.T) {
+	stored := `{"fetch_comments": true, "ci_artifact_exclude_prefixes": ["ci-x-", "ci-y-"]}`
+	none := `{"fetch_comments": true}`
+	object := func(text string) *pyjson.Object {
+		value, err := pyjson.DecodeString(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value.(*pyjson.Object)
+	}
+	for _, cell := range []struct {
+		name, provider, stored, next, want string
+		refused                            bool
+	}{
+		{name: "kept when not carried", provider: "github", stored: stored, next: `{"fetch_comments": false}`, want: `{"fetch_comments": false, "ci_artifact_exclude_prefixes": ["ci-x-", "ci-y-"]}`},
+		{name: "replaced whole when carried", provider: "github", stored: stored, next: `{"ci_artifact_exclude_prefixes": ["ci-z-"]}`, want: `{"ci_artifact_exclude_prefixes": ["ci-z-"]}`},
+		{name: "null removes", provider: "github", stored: stored, next: `{"fetch_comments": true, "ci_artifact_exclude_prefixes": null}`, want: none},
+		{name: "empty removes", provider: "github", stored: stored, next: `{"fetch_comments": true, "ci_artifact_exclude_prefixes": []}`, want: none},
+		{name: "nothing stored, nothing carried", provider: "gitlab", stored: none, next: `{"a": 1}`, want: `{"a": 1}`},
+		{name: "invalid value", provider: "github", stored: stored, next: `{"ci_artifact_exclude_prefixes": ["a b"]}`, refused: true},
+		{name: "another provider carrying it", provider: "gitlab", stored: none, next: `{"ci_artifact_exclude_prefixes": ["ci-x-"]}`, refused: true},
+	} {
+		next := object(cell.next)
+		text := cell.stored
+		err := KeepOnReplace(cell.provider, &text, next)
+		var refused *Refusal
+		if cell.refused {
+			if !errors.As(err, &refused) {
+				t.Errorf("%s: err=%v, want a refusal", cell.name, err)
+			}
+			continue
+		}
+		got, _ := pyjson.Dumps(next)
+		if err != nil || got != cell.want {
+			t.Errorf("%s: %s (err %v), want %s", cell.name, got, err, cell.want)
+		}
+	}
+}

@@ -363,6 +363,9 @@ func (h handlers) update(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if request.config != nil {
+			if err := keepArtifactExclude(current, request.config); err != nil {
+				return err
+			}
 			stored, err := pyjson.DecodeString(current.Config)
 			if err != nil {
 				return fmt.Errorf("decode stored config: %w", err)

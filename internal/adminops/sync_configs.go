@@ -15,19 +15,19 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 )
 
-// `admin sync-configs artifact-excludes set|show` write and read a GitHub sync configuration's
-// ci_artifact_exclude_prefixes with artifactexclude.Parse and artifactexclude.WriteTx, the validator and writer of
-// PATCH /api/v1/admin/sync-configs/{id}. The organization is the configuration's own; ids are printed as 8-character
-// prefixes only. Unlike the PATCH, the verb does not snapshot the GitHub work-item options from its environment: it
-// changes the one key and nothing else.
+// `admin sync-configs artifact-excludes set|show` write and read the ci_artifact_exclude_prefixes list of a GitHub sync
+// configuration's integration with artifactexclude.Parse and artifactexclude.WriteTx, the validator and writer of
+// PATCH /api/v1/admin/sync-configs/{id}. The list applies to every sync config of this integration, and a write
+// replaces it whole. The organization is the configuration's own; ids are printed as 8-character prefixes only. Unlike
+// the PATCH, the verb does not snapshot the GitHub work-item options from its environment: it changes the list only.
 func syncConfigsGroup() cli.Command {
 	return cli.Command{
 		Name: "sync-configs", Summary: "sync configuration settings", Kind: cli.Group,
 		Children: []cli.Command{{
-			Name: "artifact-excludes", Summary: "CI artifact name prefixes the GitHub tests sync skips", Kind: cli.Group,
+			Name: "artifact-excludes", Summary: "CI artifact name prefixes the GitHub tests sync skips (applies to every sync config of this integration)", Kind: cli.Group,
 			Children: []cli.Command{
-				{Name: "set", Summary: "set or clear a sync configuration's artifact name prefixes", Kind: cli.Verb, Run: runArtifactExcludesSet},
-				{Name: "show", Summary: "show a sync configuration's artifact name prefixes", Kind: cli.Verb, Run: runArtifactExcludesShow},
+				{Name: "set", Summary: "replace or clear the artifact name prefixes of a sync configuration's integration (applies to every sync config of this integration)", Kind: cli.Verb, Run: runArtifactExcludesSet},
+				{Name: "show", Summary: "show the artifact name prefixes of a sync configuration's integration (applies to every sync config of this integration)", Kind: cli.Verb, Run: runArtifactExcludesShow},
 			},
 		}},
 	}
@@ -59,8 +59,8 @@ func runArtifactExcludesSet(ctx context.Context, env cli.Env) int {
 	var configID, reason optString
 	var prefixes repeatedString
 	flags.Var(&configID, "config-id", "sync configuration id, a UUID (required)")
-	flags.Var(&prefixes, "prefix", "an artifact name prefix; repeat for each (or --clear)")
-	clearAll := flags.Bool("clear", false, "remove the configuration's prefixes")
+	flags.Var(&prefixes, "prefix", "an artifact name prefix; repeat for each (or --clear). The list replaces the integration's list whole and applies to every sync config of this integration")
+	clearAll := flags.Bool("clear", false, "remove the integration's prefixes (from every sync config of this integration)")
 	dryRun := flags.Bool("dry-run", false, "validate and report what would change, then roll back")
 	flags.Var(&reason, "reason", "why the prefixes change (required, printed with the result as audit evidence)")
 	if code, ok := parseArgs(flags, env); !ok {

@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 )
 
@@ -19,6 +20,7 @@ type reader interface {
 	childrenCounts(ctx context.Context, parentIDs []uuid.UUID) (map[uuid.UUID]int64, error)
 	credentialIDs(ctx context.Context, orgID string, integrationIDs []uuid.UUID) (map[uuid.UUID]*uuid.UUID, error)
 	enabledDatasetKeys(ctx context.Context, orgID string, integrationIDs []uuid.UUID) (map[uuid.UUID][]string, error)
+	integrationExcludeLists(ctx context.Context, orgID string, integrationIDs []uuid.UUID) (map[uuid.UUID]*string, error)
 	sourcesForIntegration(ctx context.Context, orgID string, integrationID uuid.UUID, provider string) ([]plannerSource, error)
 	childOptions(ctx context.Context, orgID string, parentID uuid.UUID) ([]*string, error)
 	scheduledSyncJobIDs(ctx context.Context, orgID string, configID uuid.UUID) ([]uuid.UUID, error)
@@ -75,6 +77,10 @@ type syncConfig struct {
 	// it); else the response carries the stored list.
 	shownTargets    []string
 	shownTargetsSet bool
+	// artifactExclude is the integration's CI artifact exclude list (deriveArtifactExclude set it when
+	// artifactExcludeDerived); the response shows it in sync_options, never the config's own copy.
+	artifactExclude                                pyjson.Value
+	artifactExcludePresent, artifactExcludeDerived bool
 	// enabledDatasetKeys are the enabled dataset rows of the integration
 	// (deriveShownTargets set them), for deriveSkippedDatasets.
 	enabledDatasetKeys []string

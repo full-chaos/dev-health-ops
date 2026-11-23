@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/artifactexclude"
 )
@@ -77,9 +79,74 @@ func (v *cascadeVenue) verbWrite(one cascadeSeeded, provider string, prefixes []
 	}
 }
 
-// The PATCH and the dho verb write the same bytes: the list goes into the configuration's sync_options and its
-// integration's config, and the GitHub work-item runtime options (configuration, integration, work-items dataset) stay
-// byte-equal. A clear removes the key from both documents and leaves every other key as it was.
+// shownList is the ci_artifact_exclude_prefixes a rendered configuration shows in sync_options ("<none>" when absent).
+func shownList(t *testing.T, body string) string {
+	t.Helper()
+	var shown struct {
+		SyncOptions map[string]json.RawMessage `json:"sync_options"`
+	}
+	if err := json.Unmarshal([]byte(body), &shown); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	raw, present := shown.SyncOptions["ci_artifact_exclude_prefixes"]
+	if !present {
+		return "<none>"
+	}
+	var list []string
+	if err := json.Unmarshal(raw, &list); err != nil {
+		t.Fatalf("decode the list %s: %v", raw, err)
+	}
+	return strings.Join(list, ",")
+}
+
+// get is the rendered configuration of GET /sync-configs/{id}.
+func (v *cascadeVenue) get(config uuid.UUID) string {
+	v.t.Helper()
+	status, body := v.call("GET", "/api/v1/admin/sync-configs/"+config.String(), "")
+	if status != 200 {
+		v.t.Fatalf("GET %s: %d %s", config, status, body)
+	}
+	return body
+}
+
+// listed is every configuration of the list endpoint, rendered, by id.
+func (v *cascadeVenue) listed() map[string]string {
+	v.t.Helper()
+	status, body := v.call("GET", "/api/v1/admin/sync-configs?include_migrated=true", "")
+	if status != 200 {
+		v.t.Fatalf("list: %d %s", status, body)
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal([]byte(body), &items); err != nil {
+		v.t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, item := range items {
+		var head struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(item, &head); err != nil {
+			v.t.Fatal(err)
+		}
+		out[head.ID] = string(item)
+	}
+	return out
+}
+
+func (v *cascadeVenue) storedOptionsHasKey(config uuid.UUID) bool {
+	v.t.Helper()
+	var has bool
+	if err := v.pool.QueryRow(context.Background(), `SELECT (sync_options::jsonb -> 'ci_artifact_exclude_prefixes') IS NOT NULL
+FROM sync_configurations WHERE id = $1`, config).Scan(&has); err != nil {
+		v.t.Fatal(err)
+	}
+	return has
+}
+
+// The PATCH and the dho verb write the same bytes: the list goes into the integration's config only (it applies to
+// every sync config of this integration), the configuration's sync_options and the GitHub work-item runtime options
+// (configuration, integration, work-items dataset) stay byte-equal, and the PATCH answer shows the list. A clear
+// removes it and leaves every other key as it was.
 func TestArtifactExcludePatchAndVerbWriteByteEqualConfig(t *testing.T) {
 	v := startCascadeVenue(t, true)
 	for _, name := range []string{"GITHUB_FETCH_COMMENTS", "GITHUB_FETCH_MILESTONES", "GITHUB_COMMENTS_LIMIT"} {
@@ -95,27 +162,22 @@ func TestArtifactExcludePatchAndVerbWriteByteEqualConfig(t *testing.T) {
 	if status != 200 {
 		t.Fatalf("PATCH: %d %s", status, body)
 	}
+	if got := shownList(t, body); got != "ci-images-,ci-part-" {
+		t.Fatalf("the PATCH answer shows %s, want the list", got)
+	}
 	v.verbWrite(byVerb, "github", []string{"ci-images-", "ci-part-"})
 	patched, verbed := v.artifactExcludeTexts(byPatch), v.artifactExcludeTexts(byVerb)
 	if patched != verbed {
 		t.Fatalf("the PATCH and the verb wrote different documents:\nPATCH %+v\nverb  %+v", patched, verbed)
 	}
-	wantOptions := `{"schedule_cron": "0 * * * *", ` + artifactExcludeRuntime + `, "ci_artifact_exclude_prefixes": ["ci-images-", "ci-part-"]}`
 	wantConfig := `{` + artifactExcludeRuntime + `, "ci_artifact_exclude_prefixes": ["ci-images-", "ci-part-"]}`
-	if patched.options != wantOptions || patched.config != wantConfig || patched.workItems != before.workItems {
-		t.Fatalf("written %+v, want options %s, config %s and the work-items options unchanged %s", patched, wantOptions, wantConfig, before.workItems)
-	}
-	var shown struct {
-		SyncOptions struct {
-			Prefixes []string `json:"ci_artifact_exclude_prefixes"`
-		} `json:"sync_options"`
-	}
-	if err := json.Unmarshal([]byte(body), &shown); err != nil || strings.Join(shown.SyncOptions.Prefixes, ",") != "ci-images-,ci-part-" {
-		t.Fatalf("the PATCH answer shows %v (%v), want the stored list", shown.SyncOptions.Prefixes, err)
+	if patched.options != before.options || patched.config != wantConfig || patched.workItems != before.workItems {
+		t.Fatalf("written %+v, want sync_options unchanged %s, config %s, work-items options unchanged %s",
+			patched, before.options, wantConfig, before.workItems)
 	}
 
 	status, body = v.call("PATCH", "/api/v1/admin/sync-configs/"+byPatch.config.String(), `{"sync_options":{"ci_artifact_exclude_prefixes":null}}`)
-	if status != 200 {
+	if status != 200 || shownList(t, body) != "<none>" {
 		t.Fatalf("PATCH clear: %d %s", status, body)
 	}
 	v.verbWrite(byVerb, "github", nil)
@@ -126,7 +188,7 @@ func TestArtifactExcludePatchAndVerbWriteByteEqualConfig(t *testing.T) {
 }
 
 // The verb does not snapshot the work-item runtime options from its environment: with GITHUB_COMMENTS_LIMIT set to
-// another value, a write of the list changes nothing but the list.
+// another value, a write of the list changes nothing but the integration's list.
 func TestArtifactExcludeVerbLeavesWorkItemRuntimeKeys(t *testing.T) {
 	v := startCascadeVenue(t, true)
 	t.Setenv("GITHUB_COMMENTS_LIMIT", "7")
@@ -135,13 +197,121 @@ func TestArtifactExcludeVerbLeavesWorkItemRuntimeKeys(t *testing.T) {
 	before := v.artifactExcludeTexts(one)
 	v.verbWrite(one, "github", []string{"ci-images-"})
 	after := v.artifactExcludeTexts(one)
-	for _, text := range []string{after.options, after.config} {
-		if !strings.Contains(text, artifactExcludeRuntime) || !strings.HasSuffix(text, `, "ci_artifact_exclude_prefixes": ["ci-images-"]}`) {
-			t.Errorf("written %s: want the runtime options as stored and only the list added", text)
+	if after.options != before.options || after.workItems != before.workItems ||
+		after.config != `{`+artifactExcludeRuntime+`, "ci_artifact_exclude_prefixes": ["ci-images-"]}` {
+		t.Errorf("written %+v from %+v: want the runtime options as stored and only the integration's list added", after, before)
+	}
+}
+
+// One list per integration: a write on child A (by the PATCH, then by the verb) shows on GET of child A, child B and
+// the parent and on the list endpoint; [x, y] then [z] shows [z] everywhere (last writer wins, no merge); a clear
+// (null, [] and the verb's --clear) removes it everywhere. No configuration's own sync_options keeps the key, and a
+// configuration of another integration without a list renders its stored options as they are.
+func TestArtifactExcludeSiblingsShowOneListLastWriterWins(t *testing.T) {
+	v := startCascadeVenue(t, true)
+	t.Setenv("HIDE_MIGRATED_CHILD_CONFIGS", "")
+	for _, name := range []string{"GITHUB_FETCH_COMMENTS", "GITHUB_FETCH_MILESTONES", "GITHUB_COMMENTS_LIMIT"} {
+		t.Setenv(name, "")
+	}
+	parent := v.seedArtifactExclude("github")
+	childA, childB := v.child(parent, "github", `["tests"]`), v.child(parent, "github", `["tests"]`)
+	control := v.seedArtifactExclude("github")
+	var controlStored string
+	if err := v.pool.QueryRow(context.Background(), `SELECT sync_options::text FROM sync_configurations WHERE id = $1`, control.config).Scan(&controlStored); err != nil {
+		t.Fatal(err)
+	}
+	check := func(label, want string) {
+		t.Helper()
+		list := v.listed()
+		for name, config := range map[string]uuid.UUID{"child A": childA.config, "child B": childB.config, "parent": parent.config} {
+			if got := shownList(t, v.get(config)); got != want {
+				t.Errorf("%s: GET %s shows %s, want %s", label, name, got, want)
+			}
+			if got := shownList(t, list[config.String()]); got != want {
+				t.Errorf("%s: the list shows %s for %s, want %s", label, got, name, want)
+			}
+			if v.storedOptionsHasKey(config) {
+				t.Errorf("%s: %s keeps the key in its own sync_options", label, name)
+			}
+		}
+		var shownControl struct {
+			SyncOptions json.RawMessage `json:"sync_options"`
+		}
+		if err := json.Unmarshal([]byte(v.get(control.config)), &shownControl); err != nil {
+			t.Fatal(err)
+		}
+		var stored, shown any
+		if err := json.Unmarshal([]byte(controlStored), &stored); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(shownControl.SyncOptions, &shown); err != nil {
+			t.Fatal(err)
+		}
+		storedJSON, _ := json.Marshal(stored)
+		shownJSON, _ := json.Marshal(shown)
+		if string(storedJSON) != string(shownJSON) {
+			t.Errorf("%s: another integration's config shows %s, want its stored options %s", label, shownJSON, storedJSON)
 		}
 	}
-	if after.workItems != before.workItems {
-		t.Errorf("the work-items options moved: %s -> %s", before.workItems, after.workItems)
+	patch := func(value string) {
+		t.Helper()
+		status, body := v.call("PATCH", "/api/v1/admin/sync-configs/"+childA.config.String(), `{"sync_options":{"ci_artifact_exclude_prefixes":`+value+`}}`)
+		if status != 200 {
+			t.Fatalf("PATCH child A %s: %d %s", value, status, body)
+		}
+	}
+	patch(`["ci-x-","ci-y-"]`)
+	check("PATCH [x, y] on child A", "ci-x-,ci-y-")
+	patch(`["ci-z-"]`)
+	check("PATCH [z] on child A", "ci-z-")
+	patch(`null`)
+	check("PATCH null on child A", "<none>")
+	patch(`["ci-x-"]`)
+	patch(`[]`)
+	check("PATCH [] on child A", "<none>")
+
+	v.verbWrite(childA, "github", []string{"ci-x-", "ci-y-"})
+	check("verb [x, y] on child A", "ci-x-,ci-y-")
+	v.verbWrite(childA, "github", []string{"ci-z-"})
+	check("verb [z] on child A", "ci-z-")
+	v.verbWrite(childA, "github", nil)
+	check("verb --clear on child A", "<none>")
+}
+
+// The integrations PATCH replaces the integration's config whole: it keeps the list when the new config does not carry
+// the key, a carried list replaces it (null removes it), and a refused value is a 422 that names no value and writes
+// nothing. Every sync configuration of the integration shows the result.
+func TestIntegrationPatchKeepsTheArtifactExcludeList(t *testing.T) {
+	v := startCascadeVenue(t, true)
+	one := v.seedArtifactExclude("github")
+	v.verbWrite(one, "github", []string{"ci-x-"})
+	path := "/api/v1/admin/integrations/" + one.integration.String()
+	status, body := v.call("PATCH", path, `{"config":{"fetch_comments": false}}`)
+	if status != 200 {
+		t.Fatalf("PATCH without the key: %d %s", status, body)
+	}
+	if got := shownList(t, v.get(one.config)); got != "ci-x-" {
+		t.Errorf("after a config without the key the configuration shows %s, want the kept list", got)
+	}
+	status, body = v.call("PATCH", path, `{"config":{"fetch_comments": false, "ci_artifact_exclude_prefixes": ["ci-z-"]}}`)
+	if status != 200 || shownList(t, v.get(one.config)) != "ci-z-" {
+		t.Errorf("PATCH with [z]: %d %s, shown %s, want [z]", status, body, shownList(t, v.get(one.config)))
+	}
+	var before string
+	if err := v.pool.QueryRow(context.Background(), `SELECT config::text FROM integrations WHERE id = $1`, one.integration).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	status, body = v.call("PATCH", path, `{"config":{"ci_artifact_exclude_prefixes": ["zz9 x"]}}`)
+	var after string
+	if err := v.pool.QueryRow(context.Background(), `SELECT config::text FROM integrations WHERE id = $1`, one.integration).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if status != 422 || strings.Contains(body, "zz9") || after != before {
+		t.Errorf("an invalid list: %d %s, config %s -> %s, want a 422 without the value and nothing written", status, body, before, after)
+	}
+	status, body = v.call("PATCH", path, `{"config":{"fetch_comments": false, "ci_artifact_exclude_prefixes": null}}`)
+	if status != 200 || shownList(t, v.get(one.config)) != "<none>" {
+		t.Errorf("PATCH with null: %d %s, want the list gone", status, body)
 	}
 }
 
@@ -180,25 +350,36 @@ FROM sync_configurations WHERE id = $1`, one.config, one.integration).Scan(&afte
 	}
 }
 
-// A create and a batch create of a GitHub configuration store a valid list in the configuration and in its new
-// integration, as given; a gitlab create is refused.
-func TestArtifactExcludeCreateWritesTheListToBothDocuments(t *testing.T) {
+// A create and a batch create of a GitHub configuration store a valid list in the new integration only (never in the
+// configuration's sync_options) and show it in the answer and on GET; a gitlab create is refused.
+func TestArtifactExcludeCreateWritesTheListToTheIntegration(t *testing.T) {
 	v := startCascadeVenue(t, true)
 	for index, cell := range []struct {
-		path, body string
+		path, body, key string
 	}{
-		{"/api/v1/admin/sync-configs", `{"name":"ax create","provider":"github","sync_targets":["tests"],"sync_options":{"all_repos":true,"ci_artifact_exclude_prefixes":["ci-images-"]}}`},
-		{"/api/v1/admin/sync-configs/batch", `{"name":"ax batch","provider":"github","sync_targets":["tests"],"sync_options":{"owner":"acme","ci_artifact_exclude_prefixes":["ci-images-"]},"repos":["acme/api"]}`},
+		{"/api/v1/admin/sync-configs", `{"name":"ax create","provider":"github","sync_targets":["tests"],"sync_options":{"all_repos":true,"ci_artifact_exclude_prefixes":["ci-images-"]}}`, ""},
+		{"/api/v1/admin/sync-configs/batch", `{"name":"ax batch","provider":"github","sync_targets":["tests"],"sync_options":{"owner":"acme","ci_artifact_exclude_prefixes":["ci-images-"]},"repos":["acme/api"]}`, "parent"},
 	} {
 		status, body := v.call("POST", cell.path, cell.body)
 		if status != 201 {
 			t.Fatalf("cell %d: %d %s", index, status, body)
 		}
+		rendered := body
+		if cell.key != "" {
+			var wrapped map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(body), &wrapped); err != nil {
+				t.Fatal(err)
+			}
+			rendered = string(wrapped[cell.key])
+		}
 		var created struct {
 			ID string `json:"id"`
 		}
-		if err := json.Unmarshal([]byte(body), &created); err != nil {
+		if err := json.Unmarshal([]byte(rendered), &created); err != nil {
 			t.Fatal(err)
+		}
+		if got := shownList(t, rendered); got != "ci-images-" {
+			t.Errorf("cell %d: the answer shows %s, want the list", index, got)
 		}
 		var options, config string
 		if err := v.pool.QueryRow(context.Background(), `SELECT config.sync_options::text, integration.config::text
@@ -206,10 +387,11 @@ FROM sync_configurations AS config JOIN integrations AS integration ON integrati
 WHERE config.id = $1::uuid`, created.ID).Scan(&options, &config); err != nil {
 			t.Fatal(err)
 		}
-		for _, text := range []string{options, config} {
-			if !strings.Contains(text, `"ci_artifact_exclude_prefixes": ["ci-images-"]`) {
-				t.Errorf("cell %d: stored %s, want the list", index, text)
-			}
+		if strings.Contains(options, "ci_artifact_exclude_prefixes") || !strings.Contains(config, `"ci_artifact_exclude_prefixes": ["ci-images-"]`) {
+			t.Errorf("cell %d: sync_options %s, integration config %s: want the list in the integration only", index, options, config)
+		}
+		if got := shownList(t, v.get(uuid.MustParse(created.ID))); got != "ci-images-" {
+			t.Errorf("cell %d: GET shows %s, want the list", index, got)
 		}
 	}
 	status, body := v.call("POST", "/api/v1/admin/sync-configs",

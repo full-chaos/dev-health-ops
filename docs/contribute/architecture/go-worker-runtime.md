@@ -567,7 +567,9 @@ properties of that listing shape the walk:
   retries (a 5xx, a 429, or a 403 it classes as a rate limit by its headers
   or its body) it also reads that answer's own rate headers with the same
   parser (the `X-RateLimit-*` names and their `RateLimit-*` aliases), not an
-  earlier reading. The answer stops the phase's requests when it shows fewer
+  earlier reading. To that parser an empty or malformed header value counts
+  as absent: a 5xx with empty rate headers keeps the usual path, and a 429
+  with empty ones stops the requests (headroom unknown). The answer stops the phase's requests when it shows fewer
   remaining than the floor (strictly under, as the check before each run), or
   when it does not carry a usable remaining count and limit. A 5xx with
   neither a remaining count nor a limit is the exception: it keeps the usual

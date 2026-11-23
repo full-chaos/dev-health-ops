@@ -21,22 +21,23 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// DO NOT MERGE. This file executes the text of the prod read FORM-14190-RESIDUAL-1.sql on the head schema with a
+// DO NOT MERGE. This file executes the text of the prod read FORM-14190-RESIDUAL-2.sql on the head schema with a
 // synthetic fixture. The text below is the .sql with its org prefix replaced by {{ORG_PREFIX}}, nothing else (its
 // sha256 is checked); the cell puts a synthetic prefix in at run time and checks the slot count first. It checks each
 // statement's rows in a loss phase and a healed phase, an org mutant and a rule mutant per statement, the pass-path
 // read_rows of each statement against its work math, and fires each cost gate cap once (pm-guard FORM-TEMPLATE-3).
 const (
 	formExecRes14190OrgSlot = "{{ORG_PREFIX}}"
-	formExecRes14190SHA256  = "be8d2dc77364e9bf1d2d9783f218eb6cfbe8961a3023ea192824653c3899a8bc"
-	formExecRes14190SQL     = `-- FORM-14190-RESIDUAL-1 (lane-14190r, 2026-11-23, ops pin a7febdf50002). ClickHouse prod, SELECT only, CHAOS-14190.
+	formExecRes14190SHA256  = "b95d450a079accf0fdfccbdbb24c554003866ab568c713d86ec995a54bdc82d6"
+	formExecRes14190SQL     = `-- FORM-14190-RESIDUAL-2 (lane-14190r, 2026-11-23, ops pin a7febdf50002). ClickHouse prod, SELECT only, CHAOS-14190.
+-- Replaces FORM-14190-RESIDUAL-1 (1181a6d4fc41; frozen, not to be run): acp's added columns in R1 and R2.
 -- Residual REPORT after READBACK POST = MISS (FORM-14190-READBACK-1 dd6cb67abd7a, POST out 3091612d0fe1): per affected
 -- Linear item (R1) and per missing close (R2), the F3 rule of FORM-14190-READBACK-1 grouped per item, plus the work_items
--- version count behind its S0 growth (S2). WANT text, work math and the output rule: FORM-14190-RESIDUAL-1.md.
+-- version count behind its S0 growth (S2). WANT text, work math and the output rule: FORM-14190-RESIDUAL-2.md.
 -- Shape: pm-guard/FORM-TEMPLATE-3.md (sha12 6b9e73a3c45a). Run each statement once, in order. A SQL error
 -- (STOP-COST-GATE included) = STOP and report.
--- OUTPUT RULE: R1 and R2 print work_item_id in full and R2 prints workflow state names (pm needs both to open the
--- issue in Linear). The out file is 0600 in pm-guard/readback-1 and never leaves pm-guard (no ticket, no PR, no repo).
+-- NAMED EXCEPTION (acp): R1 and R2 print the 8-char cut AND the full Linear key of each item, and workflow state
+-- names. The out file is 0600 in pm-guard/readback-1 only: never in chat, Linear, a PR or a log.
 -- No SET, SETTINGS, EXPLAIN, FORMAT or write. Org prefix {{ORG_PREFIX}} by startsWith on every FROM with org_id.
 -- Each statement starts with WITH (SELECT throwIf(...)) AS cost_gate over exactly the tables it reads (system.parts
 -- and system.one only); every WHERE of a query level that reads a table, and the outer WHERE, tests the gate.
@@ -106,27 +107,44 @@ WHERE cost_gate = 0
 GROUP BY item_provider
 ORDER BY provider;
 
--- R1 one row per affected Linear item (ids 'linear:'): a lost reopen or a missing close. reopens_lost and
--- closes_missing per item (their sums = READBACK F3 reopens_lost, closes_missing). synced_last_day = the item's
--- work_items row was written in the 24 h before the read; last_synced_minute and updated_minute = the stored row
--- (UTC). has_row 'no' = no work_items row (the minutes are then ''). event days = the first and last affected reopen.
+-- R1 one row per affected Linear item (ids 'linear:'): a lost reopen or a missing close. id_cut8 = the first 8
+-- characters of the Linear key (the id after 'linear:'), linear_key = the full key. reopens_lost and closes_missing
+-- per item (their sums = READBACK F3 reopens_lost, closes_missing); lost_reopen_days and missing_close_days = the day
+-- of each (space separated). From the item's stored work_items row (FINAL, the newest version): synced_last_day = row
+-- written in the 24 h before the read; last_synced_day, last_synced_minute, updated_minute (UTC); status_raw = the
+-- provider's state name at the last write; close_time_present = closed_at is set (the provider's completedAt, else
+-- canceledAt). not_reread_in_window = row older than 24 h although its updated_at is in the card's window (>= 06-01):
+-- archived, moved to another team, or updated mid-run (no archive mark is stored in ClickHouse). has_row 'no' = no
+-- work_items row (its columns are then '' or 'no'). event days = the first and last affected reopen.
 WITH (SELECT throwIf(
     (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_item_reopen_events', 'work_item_transitions', 'work_items')) > 6000000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_item_reopen_events', 'work_item_transitions', 'work_items')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
-SELECT a.work_item_id                                                         AS work_item_id,
+SELECT substring(replaceOne(a.work_item_id, 'linear:', ''), 1, 8)            AS id_cut8,
+       replaceOne(a.work_item_id, 'linear:', '')                              AS linear_key,
        a.reopens_all                                                          AS reopens_all,
        a.transitions_all                                                      AS transitions_all,
        a.lost                                                                 AS reopens_lost,
        a.missing                                                              AS closes_missing,
+       a.lost_days                                                            AS lost_reopen_days,
+       a.missing_days                                                         AS missing_close_days,
        if(w.n > 0, 'yes', 'no')                                               AS has_row,
        if(w.n > 0 AND w.synced >= now64(3) - INTERVAL 1 DAY, 'yes', 'no')     AS synced_last_day,
+       if(w.n > 0, toString(toDate(w.synced, 'UTC')), '')                     AS last_synced_day,
        if(w.n > 0, formatDateTime(w.synced, '%Y-%m-%d %H:%i', 'UTC'), '')     AS last_synced_minute,
        if(w.n > 0, formatDateTime(w.updated, '%Y-%m-%d %H:%i', 'UTC'), '')    AS updated_minute,
+       if(w.n > 0 AND w.synced < now64(3) - INTERVAL 1 DAY
+          AND w.updated >= toDateTime64('2026-06-01 00:00:00', 3, 'UTC'), 'yes', 'no') AS not_reread_in_window,
+       if(w.n > 0, w.state_raw, '')                                           AS status_raw,
+       if(w.n > 0 AND w.close_time = 1, 'yes', 'no')                          AS close_time_present,
        toDate(a.first_at)                                                     AS event_first_day,
        toDate(a.last_at)                                                      AS event_last_day
 FROM (
     SELECT org_id, work_item_id, length(rs) AS reopens_all, transitions_all,
+           arrayStringConcat(arrayMap(o -> toString(toDate(o, 'UTC')), arrayFilter((o, k) -> k = 0,
+                    arrayMap(x -> tupleElement(x, 1), rs), kept)), ' ')                 AS lost_days,
+           arrayStringConcat(arrayMap(o -> toString(toDate(o, 'UTC')), arrayFilter((o, f, p) -> f = 0 AND p = 1,
+                    arrayMap(x -> tupleElement(x, 1), rs), found, prior)), ' ')         AS missing_days,
            arraySum(arrayMap(k -> toUInt8(k = 0), kept))                                AS lost,
            arraySum(arrayMap((f, p) -> toUInt8(f = 0 AND p = 1), found, prior))         AS missing,
            arrayMin(arrayFilter((o, k, f, p) -> k = 0 OR (f = 0 AND p = 1),
@@ -162,29 +180,37 @@ FROM (
     WHERE cost_gate = 0
 ) AS a
 LEFT JOIN (
-    SELECT org_id, work_item_id, count() AS n, max(updated_at) AS updated, max(last_synced) AS synced
+    SELECT org_id, work_item_id, count() AS n, max(updated_at) AS updated, max(last_synced) AS synced,
+           argMax(status_raw, last_synced) AS state_raw, argMax(toUInt8(isNotNull(closed_at)), last_synced) AS close_time
     FROM work_items FINAL
     WHERE startsWith(org_id, '{{ORG_PREFIX}}') AND cost_gate = 0 AND startsWith(work_item_id, 'linear:')
     GROUP BY org_id, work_item_id
 ) AS w ON w.org_id = a.org_id AND w.work_item_id = a.work_item_id
 WHERE cost_gate = 0 AND (a.lost > 0 OR a.missing > 0)
-ORDER BY work_item_id;
+ORDER BY linear_key;
 
 -- R2 one row per missing close (the F2 rule) and per transition row stored at its reopen instant (LEFT ARRAY JOIN:
 -- rows_at_instant 0 gives one row with tie_ordinal 0 and empty statuses). reopen_kept = the reopen's own transition
 -- is stored (F1 rule). prev_reopen_at = the window's lower bound (1970-01-01 = the first reopen of the item).
 -- window_transitions = transitions in [prev_reopen_at, reopen_at]. last_before = the last transition strictly before
--- the reopen (by occurred_at, then tie_ordinal).
+-- the reopen (by occurred_at, then tie_ordinal). provider_close_any = the item holds a close at ANY instant (the F2
+-- close test without the window: to done or canceled, or to_status_raw = the reopen's from_status_raw): 'no' = the
+-- provider served no close; 'yes' = a close exists outside [prev_reopen_at, reopen_at] (the window cut it).
+-- last_close_before_at = the newest such close strictly before the reopen (1970-01-01 = none).
 WITH (SELECT throwIf(
     (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_item_reopen_events', 'work_item_transitions')) > 6000000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_item_reopen_events', 'work_item_transitions')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
-SELECT m.work_item_id                                                         AS work_item_id,
+SELECT substring(replaceOne(m.work_item_id, 'linear:', ''), 1, 8)            AS id_cut8,
+       replaceOne(m.work_item_id, 'linear:', '')                              AS linear_key,
        m.reopen_at                                                            AS reopen_at,
        m.prev_reopen_at                                                       AS prev_reopen_at,
        m.reopen_from_raw                                                      AS reopen_from_raw,
        m.reopen_to_raw                                                        AS reopen_to_raw,
        m.reopen_kept                                                          AS reopen_kept,
+       if(length(m.close_rows) > 0, 'yes', 'no')                              AS provider_close_any,
+       arrayReverseSort(arrayMap(x -> tupleElement(x, 1),
+                arrayFilter(x -> tupleElement(x, 1) < m.reopen_at, m.close_rows)))[1] AS last_close_before_at,
        m.window_transitions                                                   AS window_transitions,
        tupleElement(m.last_before, 1)                                         AS last_before_at,
        tupleElement(m.last_before, 3)                                         AS last_before_to,
@@ -206,7 +232,9 @@ FROM (
                       AND tupleElement(x, 1) <= tupleElement(j.rs[i], 1), j.ts)  AS window_transitions,
            arrayReverseSort(x -> (tupleElement(x, 1), tupleElement(x, 8)),
                             arrayFilter(x -> tupleElement(x, 1) < tupleElement(j.rs[i], 1), j.ts))[1] AS last_before,
-           arraySort(x -> tupleElement(x, 8), arrayFilter(x -> tupleElement(x, 1) = tupleElement(j.rs[i], 1), j.ts)) AS at
+           arraySort(x -> tupleElement(x, 8), arrayFilter(x -> tupleElement(x, 1) = tupleElement(j.rs[i], 1), j.ts)) AS at,
+           arrayFilter(x -> has(['done', 'canceled'], tupleElement(x, 3))
+                       OR tupleElement(x, 5) = tupleElement(j.rs[i], 2), j.ts)                 AS close_rows
     FROM (
         SELECT r.org_id AS org_id, r.work_item_id AS work_item_id, r.rs AS rs, t.ts AS ts,
                arrayMap(i -> toUInt8(arrayExists(x -> tupleElement(x, 1) >= tupleElement(rs[i - 1], 1)
@@ -238,7 +266,7 @@ FROM (
 ) AS m
 LEFT ARRAY JOIN m.at AS tr
 WHERE cost_gate = 0
-ORDER BY work_item_id, reopen_at, tie_ordinal;
+ORDER BY linear_key, reopen_at, tie_ordinal;
 `
 )
 
@@ -383,15 +411,16 @@ func formExecRes14190QueryLog(ctx context.Context, t *testing.T, conn driver.Con
 // holds a missing close of the same id and must not count. Phase 1 writes each table in ONE INSERT (one part each,
 // merges stopped):
 //
-//	linear:RX-A: In Progress 10-01, Done 10-06; reopened Done -> Todo 10-06, its Todo transition lost in the tie.
-//	linear:RX-B: In Progress 09-10; at 09-20 two rows (In Review ordinal 0, the reopen Done -> Todo ordinal 1); no
+//	linear:RESID-101: In Progress 10-01, Done 10-06; reopened Done -> Todo 10-06, its Todo transition lost in the tie.
+//	linear:RESID-102: In Progress 09-10; at 09-20 two rows (In Review ordinal 0, the reopen Done -> Todo ordinal 1); no
 //	    close before the reopen: a missing close with a tie at the instant.
-//	linear:RX-C: In Progress 09-01; reopened 09-05, only the reopen row stored at the instant (old key): close missing.
-//	linear:RX-D: like RX-C (07-01, 07-15) but its work_items row was written 11-01 (not re-read).
-//	linear:RX-E: Done 08-01, reopened 08-05 (close found), In Progress 08-10, reopened 08-20: the second close missing.
+//	linear:RESID-103: In Progress 09-01; reopened 09-05, only the reopen row stored at the instant (old key): close missing.
+//	linear:RESID-104: like RESID-103 (07-01, 07-15) but its work_items row was written 11-01 (not re-read) and
+//	    holds state Done with a close time: the stored row has a close the transitions do not.
+//	linear:RESID-105: Done 08-01, reopened 08-05 (close found), In Progress 08-10, reopened 08-20: the second close missing.
 //	gh:rx/repo#1: a reopen with no close before it (not Linear: not read).
 //
-// Phase 2 re-reads RX-A and RX-C under the tie_ordinal key (close 0, reopen 1, newer last_synced) and writes their
+// Phase 2 re-reads RESID-101 and RESID-103 under the tie_ordinal key (close 0, reopen 1, newer last_synced) and writes their
 // work_items rows again: both heal and leave R1 and R2; the others stay.
 func TestFormExecFcc14190Residual(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -409,7 +438,7 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 	)
 	sum := sha256.Sum256([]byte(formExecRes14190SQL))
 	if got := hex.EncodeToString(sum[:]); got != formExecRes14190SHA256 {
-		t.Fatalf("sha256 of the embedded text = %s, want %s (FORM-14190-RESIDUAL-1.sql with %s)", got, formExecRes14190SHA256, formExecRes14190OrgSlot)
+		t.Fatalf("sha256 of the embedded text = %s, want %s (FORM-14190-RESIDUAL-2.sql with %s)", got, formExecRes14190SHA256, formExecRes14190OrgSlot)
 	}
 	if got := strings.Count(formExecRes14190SQL, formExecRes14190OrgSlot); got != formSlots {
 		t.Fatalf("the text holds %s %d time(s), want %d", formExecRes14190OrgSlot, got, formSlots)
@@ -429,7 +458,7 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 
 	// The gate of each statement: the tables it reads (its IN list), its cap literals, how many times the IN list and
 	// cost_gate = 0 appear, the data tables it reads (each with the org filter), and fixtureReadRows, the query_log
-	// read_rows on the phase 1 fixture by the scan model of FORM-14190-RESIDUAL-1.md (E 8, T 17, W 6 rows, one part
+	// read_rows on the phase 1 fixture by the scan model of FORM-14190-RESIDUAL-2.md (E 8, T 17, W 6 rows, one part
 	// each; a gate evaluation reads 2 x P + 1, each further cost_gate reference 1 more row, a plain or FINAL read of a
 	// one-part table its rows once). S1 reads metadata only: its read_rows is bounded, not modelled.
 	gates := []struct {
@@ -499,48 +528,48 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 			orgID, zero, id, provider, from, to, fromRaw, toRaw, occurred, lastSynced, ordinal)
 	}
 	transitions := `INSERT INTO work_item_transitions (org_id, repo_id, work_item_id, provider, from_status, to_status, from_status_raw, to_status_raw, actor, occurred_at, last_synced, tie_ordinal) VALUES `
-	item := func(orgID, id, updated, lastSynced string) string {
-		return fmt.Sprintf("('%s', '%s', '%s', 'linear', 'todo', '%s', '%s', %s)", orgID, zero, id, updated, updated, lastSynced)
+	item := func(orgID, id, statusRaw, closedAt, updated, lastSynced string) string {
+		return fmt.Sprintf("('%s', '%s', '%s', 'linear', 'todo', '%s', %s, '%s', '%s', %s)", orgID, zero, id, statusRaw, closedAt, updated, updated, lastSynced)
 	}
-	items := `INSERT INTO work_items (org_id, repo_id, work_item_id, provider, status, created_at, updated_at, last_synced) VALUES `
+	items := `INSERT INTO work_items (org_id, repo_id, work_item_id, provider, status, status_raw, closed_at, created_at, updated_at, last_synced) VALUES `
 	now, old := "now64(3)", "'"+oldItem+"'"
 
 	formExecRes14190Exec(ctx, t, conn, reopens+strings.Join([]string{
-		reopen(org, "linear:RX-A", "Done", "Todo", "2026-10-06 10:00:00.000"),
-		reopen(org, "linear:RX-B", "Done", "Todo", "2026-09-20 10:00:00.000"),
-		reopen(org, "linear:RX-C", "Done", "Todo", "2026-09-05 10:00:00.000"),
-		reopen(org, "linear:RX-D", "Done", "Todo", "2026-07-15 10:00:00.000"),
-		reopen(org, "linear:RX-E", "Done", "Todo", "2026-08-05 10:00:00.000"),
-		reopen(org, "linear:RX-E", "Done", "Todo", "2026-08-20 10:00:00.000"),
+		reopen(org, "linear:RESID-101", "Done", "Todo", "2026-10-06 10:00:00.000"),
+		reopen(org, "linear:RESID-102", "Done", "Todo", "2026-09-20 10:00:00.000"),
+		reopen(org, "linear:RESID-103", "Done", "Todo", "2026-09-05 10:00:00.000"),
+		reopen(org, "linear:RESID-104", "Done", "Todo", "2026-07-15 10:00:00.000"),
+		reopen(org, "linear:RESID-105", "Done", "Todo", "2026-08-05 10:00:00.000"),
+		reopen(org, "linear:RESID-105", "Done", "Todo", "2026-08-20 10:00:00.000"),
 		reopen(org, "gh:rx/repo#1", "closed", "reopened", "2026-10-02 10:00:00.000"),
-		reopen(other, "linear:RX-B", "Done", "Todo", "2026-09-20 10:00:00.000"),
+		reopen(other, "linear:RESID-102", "Done", "Todo", "2026-09-20 10:00:00.000"),
 	}, ", "))
 	formExecRes14190Exec(ctx, t, conn, transitions+strings.Join([]string{
-		transition(org, "linear:RX-A", "linear", "todo", "in_progress", "Todo", "In Progress", "2026-10-01 10:00:00.000", synced, 0),
-		transition(org, "linear:RX-A", "linear", "in_progress", "done", "In Progress", "Done", "2026-10-06 10:00:00.000", synced, 0),
-		transition(org, "linear:RX-B", "linear", "todo", "in_progress", "Todo", "In Progress", "2026-09-10 10:00:00.000", synced, 0),
-		transition(org, "linear:RX-B", "linear", "in_progress", "in_progress", "In Progress", "In Review", "2026-09-20 10:00:00.000", synced, 0),
-		transition(org, "linear:RX-B", "linear", "done", "todo", "Done", "Todo", "2026-09-20 10:00:00.000", synced, 1),
-		transition(org, "linear:RX-C", "linear", "todo", "in_progress", "Todo", "In Progress", "2026-09-01 10:00:00.000", synced, 0),
-		transition(org, "linear:RX-C", "linear", "done", "todo", "Done", "Todo", "2026-09-05 10:00:00.000", synced, 0),
-		transition(org, "linear:RX-D", "linear", "todo", "in_progress", "Todo", "In Progress", "2026-07-01 10:00:00.000", synced, 0),
-		transition(org, "linear:RX-D", "linear", "done", "todo", "Done", "Todo", "2026-07-15 10:00:00.000", synced, 0),
-		transition(org, "linear:RX-E", "linear", "in_progress", "done", "In Progress", "Done", "2026-08-01 10:00:00.000", synced, 0),
-		transition(org, "linear:RX-E", "linear", "done", "todo", "Done", "Todo", "2026-08-05 10:00:00.000", synced, 0),
-		transition(org, "linear:RX-E", "linear", "todo", "in_progress", "Todo", "In Progress", "2026-08-10 10:00:00.000", synced, 0),
-		transition(org, "linear:RX-E", "linear", "done", "todo", "Done", "Todo", "2026-08-20 10:00:00.000", synced, 0),
+		transition(org, "linear:RESID-101", "linear", "todo", "in_progress", "Todo", "In Progress", "2026-10-01 10:00:00.000", synced, 0),
+		transition(org, "linear:RESID-101", "linear", "in_progress", "done", "In Progress", "Done", "2026-10-06 10:00:00.000", synced, 0),
+		transition(org, "linear:RESID-102", "linear", "todo", "in_progress", "Todo", "In Progress", "2026-09-10 10:00:00.000", synced, 0),
+		transition(org, "linear:RESID-102", "linear", "in_progress", "in_progress", "In Progress", "In Review", "2026-09-20 10:00:00.000", synced, 0),
+		transition(org, "linear:RESID-102", "linear", "done", "todo", "Done", "Todo", "2026-09-20 10:00:00.000", synced, 1),
+		transition(org, "linear:RESID-103", "linear", "todo", "in_progress", "Todo", "In Progress", "2026-09-01 10:00:00.000", synced, 0),
+		transition(org, "linear:RESID-103", "linear", "done", "todo", "Done", "Todo", "2026-09-05 10:00:00.000", synced, 0),
+		transition(org, "linear:RESID-104", "linear", "todo", "in_progress", "Todo", "In Progress", "2026-07-01 10:00:00.000", synced, 0),
+		transition(org, "linear:RESID-104", "linear", "done", "todo", "Done", "Todo", "2026-07-15 10:00:00.000", synced, 0),
+		transition(org, "linear:RESID-105", "linear", "in_progress", "done", "In Progress", "Done", "2026-08-01 10:00:00.000", synced, 0),
+		transition(org, "linear:RESID-105", "linear", "done", "todo", "Done", "Todo", "2026-08-05 10:00:00.000", synced, 0),
+		transition(org, "linear:RESID-105", "linear", "todo", "in_progress", "Todo", "In Progress", "2026-08-10 10:00:00.000", synced, 0),
+		transition(org, "linear:RESID-105", "linear", "done", "todo", "Done", "Todo", "2026-08-20 10:00:00.000", synced, 0),
 		transition(org, "gh:rx/repo#1", "github", "todo", "in_progress", "open", "in_progress", "2026-10-01 10:00:00.000", synced, 0),
 		transition(org, "gh:rx/repo#1", "github", "done", "todo", "closed", "reopened", "2026-10-02 10:00:00.000", synced, 0),
-		transition(other, "linear:RX-B", "linear", "todo", "in_progress", "Todo", "In Progress", "2026-09-10 10:00:00.000", synced, 0),
-		transition(other, "linear:RX-B", "linear", "done", "todo", "Done", "Todo", "2026-09-20 10:00:00.000", synced, 0),
+		transition(other, "linear:RESID-102", "linear", "todo", "in_progress", "Todo", "In Progress", "2026-09-10 10:00:00.000", synced, 0),
+		transition(other, "linear:RESID-102", "linear", "done", "todo", "Done", "Todo", "2026-09-20 10:00:00.000", synced, 0),
 	}, ", "))
 	formExecRes14190Exec(ctx, t, conn, items+strings.Join([]string{
-		item(org, "linear:RX-A", "2026-10-06 10:00:00.000", now),
-		item(org, "linear:RX-B", "2026-09-20 10:00:00.000", now),
-		item(org, "linear:RX-C", "2026-09-05 10:00:00.000", now),
-		item(org, "linear:RX-D", "2026-07-15 10:00:00.000", old),
-		item(org, "linear:RX-E", "2026-08-20 10:00:00.000", now),
-		item(other, "linear:RX-B", "2026-09-20 10:00:00.000", now),
+		item(org, "linear:RESID-101", "Todo", "NULL", "2026-10-06 10:00:00.000", now),
+		item(org, "linear:RESID-102", "Todo", "NULL", "2026-09-20 10:00:00.000", now),
+		item(org, "linear:RESID-103", "Todo", "NULL", "2026-09-05 10:00:00.000", now),
+		item(org, "linear:RESID-104", "Done", "'2026-07-20 10:00:00.000'", "2026-07-15 10:00:00.000", old),
+		item(org, "linear:RESID-105", "Todo", "NULL", "2026-08-20 10:00:00.000", now),
+		item(other, "linear:RESID-102", "Todo", "NULL", "2026-09-20 10:00:00.000", now),
 	}, ", "))
 
 	// run runs every statement of the FORM once, in order (as pm runs it), each tagged with a log_comment.
@@ -552,11 +581,11 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 			qctx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"log_comment": comment}))
 			result, err := formExecRes14190Query(qctx, conn, statements[id])
 			if err != nil {
-				t.Fatalf("FORM-14190-RESIDUAL-1 %s %s: %v", phase, id, err)
+				t.Fatalf("FORM-14190-RESIDUAL-2 %s %s: %v", phase, id, err)
 			}
-			t.Logf("FORM-14190-RESIDUAL-1 %s %s columns %v", phase, id, result.columns)
+			t.Logf("FORM-14190-RESIDUAL-2 %s %s columns %v", phase, id, result.columns)
 			for index, row := range result.rows {
-				t.Logf("FORM-14190-RESIDUAL-1 %s %s row %d %v", phase, id, index, row)
+				t.Logf("FORM-14190-RESIDUAL-2 %s %s row %d %v", phase, id, index, row)
 			}
 			results[id] = result
 		}
@@ -569,43 +598,56 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 		}
 	}
 	const epoch = "1970-01-01 00:00:00.000"
-	r1 := func(results map[string]formExecRes14190Result, label string, row int, id, reopensAll, transitionsAll, lost, missing, syncedLastDay, updated, eventDay string) {
+	// r1 checks one R1 row. The item written 11-01 (synced "no") is the not re-read one: its stored state is Done with
+	// a close time; every other item's stored state is Todo with none.
+	r1 := func(results map[string]formExecRes14190Result, label string, row int, id, reopensAll, transitionsAll, lost, missing, lostDays, missingDays, syncedLastDay, updated, eventDay string) {
 		t.Helper()
+		key := strings.TrimPrefix(id, "linear:")
 		want := map[string]string{
-			"work_item_id": id, "reopens_all": reopensAll, "transitions_all": transitionsAll, "reopens_lost": lost,
-			"closes_missing": missing, "has_row": "yes", "synced_last_day": syncedLastDay, "updated_minute": updated,
+			"id_cut8": key[:8], "linear_key": key, "reopens_all": reopensAll, "transitions_all": transitionsAll,
+			"reopens_lost": lost, "closes_missing": missing, "lost_reopen_days": lostDays, "missing_close_days": missingDays,
+			"has_row": "yes", "synced_last_day": syncedLastDay, "updated_minute": updated,
+			"not_reread_in_window": "no", "status_raw": "Todo", "close_time_present": "no",
 			"event_first_day": eventDay, "event_last_day": eventDay,
 		}
 		if syncedLastDay == "no" {
-			want["last_synced_minute"] = "2026-11-01 00:00"
+			want["last_synced_minute"], want["last_synced_day"] = "2026-11-01 00:00", "2026-11-01"
+			want["not_reread_in_window"], want["status_raw"], want["close_time_present"] = "yes", "Done", "yes"
 		}
 		formExecRes14190Row(t, results["R1"], label+" R1", row, want)
 		if minute := formExecRes14190Cell(t, results["R1"], label+" R1", row, "last_synced_minute"); !regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$`).MatchString(minute) {
 			t.Errorf("%s R1 row %d last_synced_minute = %q, want YYYY-MM-DD HH:MM", label, row, minute)
 		}
+		if day := formExecRes14190Cell(t, results["R1"], label+" R1", row, "last_synced_day"); !regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`).MatchString(day) {
+			t.Errorf("%s R1 row %d last_synced_day = %q, want YYYY-MM-DD", label, row, day)
+		}
 	}
-	r2 := func(results map[string]formExecRes14190Result, label string, row int, id, reopenAt, prevAt, window, lastBeforeAt, lastBeforeTo, lastBeforeToRaw, atInstant, ordinal, from, to, fromRaw, toRaw string) {
+	// r2 checks one R2 row. closeAny and lastCloseBefore: the close of the item at any instant (the F2 close test
+	// without the window) and the newest one before the reopen.
+	r2 := func(results map[string]formExecRes14190Result, label string, row int, id, reopenAt, prevAt, closeAny, lastCloseBefore, window, lastBeforeAt, lastBeforeTo, lastBeforeToRaw, atInstant, ordinal, from, to, fromRaw, toRaw string) {
 		t.Helper()
+		key := strings.TrimPrefix(id, "linear:")
 		formExecRes14190Row(t, results["R2"], label+" R2", row, map[string]string{
-			"work_item_id": id, "reopen_at": reopenAt, "prev_reopen_at": prevAt, "reopen_from_raw": "Done",
+			"id_cut8": key[:8], "linear_key": key, "provider_close_any": closeAny, "last_close_before_at": lastCloseBefore,
+			"reopen_at": reopenAt, "prev_reopen_at": prevAt, "reopen_from_raw": "Done",
 			"reopen_to_raw": "Todo", "reopen_kept": "1", "window_transitions": window, "last_before_at": lastBeforeAt,
 			"last_before_to": lastBeforeTo, "last_before_to_raw": lastBeforeToRaw, "rows_at_instant": atInstant,
 			"tie_ordinal": ordinal, "from_status": from, "to_status": to, "from_status_raw": fromRaw, "to_status_raw": toRaw,
 		})
 	}
-	// The residual rows that stay in both phases: RX-B (2 rows at its instant), RX-D, RX-E.
+	// The residual rows that stay in both phases: RESID-102 (2 rows at its instant), RESID-104, RESID-105.
 	r2Stay := func(results map[string]formExecRes14190Result, label string, first int) {
 		t.Helper()
-		r2(results, label, first, "linear:RX-B", "2026-09-20 10:00:00.000", epoch, "3", "2026-09-10 10:00:00.000", "in_progress", "In Progress",
+		r2(results, label, first, "linear:RESID-102", "2026-09-20 10:00:00.000", epoch, "no", epoch, "3", "2026-09-10 10:00:00.000", "in_progress", "In Progress",
 			"2", "0", "in_progress", "in_progress", "In Progress", "In Review")
-		r2(results, label, first+1, "linear:RX-B", "2026-09-20 10:00:00.000", epoch, "3", "2026-09-10 10:00:00.000", "in_progress", "In Progress",
+		r2(results, label, first+1, "linear:RESID-102", "2026-09-20 10:00:00.000", epoch, "no", epoch, "3", "2026-09-10 10:00:00.000", "in_progress", "In Progress",
 			"2", "1", "done", "todo", "Done", "Todo")
 	}
 	r2Tail := func(results map[string]formExecRes14190Result, label string, first int) {
 		t.Helper()
-		r2(results, label, first, "linear:RX-D", "2026-07-15 10:00:00.000", epoch, "2", "2026-07-01 10:00:00.000", "in_progress", "In Progress",
+		r2(results, label, first, "linear:RESID-104", "2026-07-15 10:00:00.000", epoch, "no", epoch, "2", "2026-07-01 10:00:00.000", "in_progress", "In Progress",
 			"1", "0", "done", "todo", "Done", "Todo")
-		r2(results, label, first+1, "linear:RX-E", "2026-08-20 10:00:00.000", "2026-08-05 10:00:00.000", "3", "2026-08-10 10:00:00.000", "in_progress", "In Progress",
+		r2(results, label, first+1, "linear:RESID-105", "2026-08-20 10:00:00.000", "2026-08-05 10:00:00.000", "yes", "2026-08-01 10:00:00.000", "3", "2026-08-10 10:00:00.000", "in_progress", "In Progress",
 			"1", "0", "done", "todo", "Done", "Todo")
 	}
 
@@ -624,19 +666,19 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 		"keys_written_last_day": "4", "keys_one_version_last_day": "4", "keys_repo_not_nil": "0",
 	})
 	rowCount(results, "phase1", "R1", 5)
-	r1(results, "phase1", 0, "linear:RX-A", "1", "2", "1", "0", "yes", "2026-10-06 10:00", "2026-10-06 00:00:00.000")
-	r1(results, "phase1", 1, "linear:RX-B", "1", "3", "0", "1", "yes", "2026-09-20 10:00", "2026-09-20 00:00:00.000")
-	r1(results, "phase1", 2, "linear:RX-C", "1", "2", "0", "1", "yes", "2026-09-05 10:00", "2026-09-05 00:00:00.000")
-	r1(results, "phase1", 3, "linear:RX-D", "1", "2", "0", "1", "no", "2026-07-15 10:00", "2026-07-15 00:00:00.000")
-	r1(results, "phase1", 4, "linear:RX-E", "2", "4", "0", "1", "yes", "2026-08-20 10:00", "2026-08-20 00:00:00.000")
+	r1(results, "phase1", 0, "linear:RESID-101", "1", "2", "1", "0", "2026-10-06", "", "yes", "2026-10-06 10:00", "2026-10-06 00:00:00.000")
+	r1(results, "phase1", 1, "linear:RESID-102", "1", "3", "0", "1", "", "2026-09-20", "yes", "2026-09-20 10:00", "2026-09-20 00:00:00.000")
+	r1(results, "phase1", 2, "linear:RESID-103", "1", "2", "0", "1", "", "2026-09-05", "yes", "2026-09-05 10:00", "2026-09-05 00:00:00.000")
+	r1(results, "phase1", 3, "linear:RESID-104", "1", "2", "0", "1", "", "2026-07-15", "no", "2026-07-15 10:00", "2026-07-15 00:00:00.000")
+	r1(results, "phase1", 4, "linear:RESID-105", "2", "4", "0", "1", "", "2026-08-20", "yes", "2026-08-20 10:00", "2026-08-20 00:00:00.000")
 	rowCount(results, "phase1", "R2", 5)
 	r2Stay(results, "phase1", 0)
-	r2(results, "phase1", 2, "linear:RX-C", "2026-09-05 10:00:00.000", epoch, "2", "2026-09-01 10:00:00.000", "in_progress", "In Progress",
+	r2(results, "phase1", 2, "linear:RESID-103", "2026-09-05 10:00:00.000", epoch, "no", epoch, "2", "2026-09-01 10:00:00.000", "in_progress", "In Progress",
 		"1", "0", "done", "todo", "Done", "Todo")
 	r2Tail(results, "phase1", 3)
 
 	// Mutation cells: each mutant (a test copy; the checked text stays) must change its value. An org mutant drops every
-	// org filter of the statement (the other org's RX-B then counts); a rule mutant changes one rule of it.
+	// org filter of the statement (the other org's RESID-102 then counts); a rule mutant changes one rule of it.
 	type mutant struct {
 		name, id, from, to string
 		count              int
@@ -679,6 +721,10 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 		{"R2-org", "R2", dropOrg, "", 2, 0, "", "5"},
 		{"R2-at-instant", "R2", "arrayFilter(x -> tupleElement(x, 1) = tupleElement(j.rs[i], 1), j.ts)", "arrayFilter(x -> tupleElement(x, 1) <= tupleElement(j.rs[i], 1), j.ts)", 1, 0, "", "5"},
 		{"R2-missing-only", "R2", "j.found[i] = 0 AND j.prior[i] = 1", "j.prior[i] = 1", 1, 0, "", "5"},
+		// The card's --since is read: a cut two months later puts the not re-read item outside the window.
+		{"R1-since-literal", "R1", "w.updated >= toDateTime64('2026-06-01 00:00:00', 3, 'UTC')", "w.updated >= toDateTime64('2026-08-01 00:00:00', 3, 'UTC')", 1, 3, "not_reread_in_window", "yes"},
+		// provider_close_any reads every instant, not the F2 window: windowed, RESID-105's 08-01 close drops out.
+		{"R2-close-any-windowed", "R2", "if(length(m.close_rows) > 0, 'yes', 'no')", "if(length(arrayFilter(x -> tupleElement(x, 1) >= m.prev_reopen_at, m.close_rows)) > 0, 'yes', 'no')", 1, 4, "provider_close_any", "yes"},
 	})
 
 	// Sizes of the work math: active rows and parts per table (system.parts, as the gate reads them).
@@ -767,20 +813,20 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 		t.Errorf("gates fired %d times, want %d (5 statements x 2 caps)", len(fires), 2*len(gates))
 	}
 
-	// Phase 2: RX-A and RX-C are re-read under the tie_ordinal key (every transition of the instant under its own
+	// Phase 2: RESID-101 and RESID-103 are re-read under the tie_ordinal key (every transition of the instant under its own
 	// ordinal, the close 0 and the reopen 1, newer last_synced) and their work_items rows are written again. Both heal;
-	// RX-B, RX-D and RX-E stay. S2 now counts two versions not merged away.
+	// RESID-102, RESID-104 and RESID-105 stay. S2 now counts two versions not merged away.
 	formExecRes14190Exec(ctx, t, conn, transitions+strings.Join([]string{
-		transition(org, "linear:RX-A", "linear", "todo", "in_progress", "Todo", "In Progress", "2026-10-01 10:00:00.000", newKey, 0),
-		transition(org, "linear:RX-A", "linear", "in_progress", "done", "In Progress", "Done", "2026-10-06 10:00:00.000", newKey, 0),
-		transition(org, "linear:RX-A", "linear", "done", "todo", "Done", "Todo", "2026-10-06 10:00:00.000", newKey, 1),
-		transition(org, "linear:RX-C", "linear", "todo", "in_progress", "Todo", "In Progress", "2026-09-01 10:00:00.000", newKey, 0),
-		transition(org, "linear:RX-C", "linear", "in_progress", "done", "In Progress", "Done", "2026-09-05 10:00:00.000", newKey, 0),
-		transition(org, "linear:RX-C", "linear", "done", "todo", "Done", "Todo", "2026-09-05 10:00:00.000", newKey, 1),
+		transition(org, "linear:RESID-101", "linear", "todo", "in_progress", "Todo", "In Progress", "2026-10-01 10:00:00.000", newKey, 0),
+		transition(org, "linear:RESID-101", "linear", "in_progress", "done", "In Progress", "Done", "2026-10-06 10:00:00.000", newKey, 0),
+		transition(org, "linear:RESID-101", "linear", "done", "todo", "Done", "Todo", "2026-10-06 10:00:00.000", newKey, 1),
+		transition(org, "linear:RESID-103", "linear", "todo", "in_progress", "Todo", "In Progress", "2026-09-01 10:00:00.000", newKey, 0),
+		transition(org, "linear:RESID-103", "linear", "in_progress", "done", "In Progress", "Done", "2026-09-05 10:00:00.000", newKey, 0),
+		transition(org, "linear:RESID-103", "linear", "done", "todo", "Done", "Todo", "2026-09-05 10:00:00.000", newKey, 1),
 	}, ", "))
 	formExecRes14190Exec(ctx, t, conn, items+strings.Join([]string{
-		item(org, "linear:RX-A", "2026-10-06 10:00:00.000", now),
-		item(org, "linear:RX-C", "2026-09-05 10:00:00.000", now),
+		item(org, "linear:RESID-101", "Todo", "NULL", "2026-10-06 10:00:00.000", now),
+		item(org, "linear:RESID-103", "Todo", "NULL", "2026-09-05 10:00:00.000", now),
 	}, ", "))
 	results, _ = run("phase2")
 	formExecRes14190Row(t, results["S0"], "phase2 S0", 0, map[string]string{"orgs": "1", "org_rows": "7"})
@@ -790,9 +836,9 @@ func TestFormExecFcc14190Residual(t *testing.T) {
 		"keys_written_last_day": "4", "keys_one_version_last_day": "2", "keys_repo_not_nil": "0",
 	})
 	rowCount(results, "phase2", "R1", 3)
-	r1(results, "phase2", 0, "linear:RX-B", "1", "3", "0", "1", "yes", "2026-09-20 10:00", "2026-09-20 00:00:00.000")
-	r1(results, "phase2", 1, "linear:RX-D", "1", "2", "0", "1", "no", "2026-07-15 10:00", "2026-07-15 00:00:00.000")
-	r1(results, "phase2", 2, "linear:RX-E", "2", "4", "0", "1", "yes", "2026-08-20 10:00", "2026-08-20 00:00:00.000")
+	r1(results, "phase2", 0, "linear:RESID-102", "1", "3", "0", "1", "", "2026-09-20", "yes", "2026-09-20 10:00", "2026-09-20 00:00:00.000")
+	r1(results, "phase2", 1, "linear:RESID-104", "1", "2", "0", "1", "", "2026-07-15", "no", "2026-07-15 10:00", "2026-07-15 00:00:00.000")
+	r1(results, "phase2", 2, "linear:RESID-105", "2", "4", "0", "1", "", "2026-08-20", "yes", "2026-08-20 10:00", "2026-08-20 00:00:00.000")
 	rowCount(results, "phase2", "R2", 4)
 	r2Stay(results, "phase2", 0)
 	r2Tail(results, "phase2", 2)

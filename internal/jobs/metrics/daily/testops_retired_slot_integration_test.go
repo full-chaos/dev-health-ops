@@ -1631,3 +1631,53 @@ func TestTestopsRetiredSlotOldReaderCountsOneMarkerPerDroppedSlot(t *testing.T) 
 		t.Errorf("new readers serve %d suites, %d cases, want CONTROL 32,770 and 32,770", got.suites, got.total)
 	}
 }
+
+// PINNED LIMIT (both readers; on main d4b4c5a38ab2 too): the pre-slot keys of a superseded artifact are projected from the
+// replacement report's suite names (github_tests_reports.go:1442), since the superseded artifact is never read. A pre-slot copy
+// stored under a suite name the replacement no longer has is not hidden by the slot's retirement. Attempt 2 lists the superseded
+// total-b (artifact 6, whose pre-slot rows named the suite left-v1), leg B's parts and the replacement total-b (suite left), and
+// drops the replacement. Both readers serve the copy: total 3, failed 1 (and the new readers flake 1); CONTROL is 2, 0 (flake 0).
+func TestTestopsRetiredSlotRenamedPreSlotSuiteIsPinned(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	env := startRetiredStack(t, ctx)
+	stack := env.stack
+	org := "org-chaos14555-renamed-pre-slot-" + uuid.NewString()[:8]
+	const runID = "43600014281"
+	stamp := func(clock string) string { return "2026-07-22T" + clock + "Z" }
+	ts1, ts2 := "2026-07-22T10:02:00", "2026-07-22T11:12:00"
+	leg := []matrixTotalsSuite{{"left", "3.0", []matrixTotalsCase{{"a", "", "0.25"}}}, {"right", "3.0", []matrixTotalsCase{{"b", "", "0.25"}}}}
+	stack.pass(t, org, runID, retiredDay().Add(11*time.Hour), attemptsRunState{created: stamp("10:01:00"), attempt: 2, started: stamp("11:10:00"),
+		updated: stamp("11:40:00"), artifacts: []attemptsArtifact{
+			{6, "total-b", stamp("10:20:00"), false, retiredArchive(t, ts1, matrixTotalsSuite{"left-v1", "3.0", []matrixTotalsCase{{"a", "failed", "0.25"}}})},
+			{13, "leg-b-left", stamp("11:30:00"), false, retiredArchive(t, ts2, leg[0])},
+			{14, "leg-b-right", stamp("11:30:00"), false, retiredArchive(t, ts2, leg[1])},
+			{16, "total-b", stamp("11:30:00"), false, retiredArchive(t, ts2, leg...)},
+		}})
+	key := func(parts ...string) string {
+		sum := sha256.Sum256([]byte(strings.Join(parts, "::")))
+		return hex.EncodeToString(sum[:])
+	}
+	projected, stored := key(runID, "6", "left", ""), key(runID, "6", "left-v1", "")
+	var listsProjected, listsStored uint64
+	if err := stack.conn.QueryRow(ctx, `SELECT countIf(has(legacy_suite_ids, ?)), countIf(has(legacy_suite_ids, ?)) FROM test_suite_results FINAL
+WHERE org_id = ? AND run_id = ?`, projected, stored, org, runID).Scan(&listsProjected, &listsStored); err != nil {
+		t.Fatal(err)
+	}
+	if listsProjected == 0 || listsStored != 0 {
+		t.Fatalf("rows listing the projected id %d and the stored id %d, want some and 0", listsProjected, listsStored)
+	}
+	started := retiredDay().Add(10*time.Hour + 2*time.Minute)
+	retiredInsertPreSlotCopy(t, stack, org, runID, stored, started, "")
+	if err := stack.conn.Exec(ctx, `INSERT INTO test_case_results
+(org_id, repo_id, run_id, suite_id, case_id, case_name, status, retry_attempt, last_synced)
+VALUES (?, ?, ?, ?, ?, 'a', 'failed', 0, ?)`, org, stack.repoID(t, org), runID, stored, key(stored, "a"), started.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got := retiredMetricOf(t, stack, org, retiredDay()); got.total != 3 || got.failed != 1 || got.suites != 3 || got.flake != 1 {
+		t.Errorf("new readers serve %+v; pinned total 3, failed 1, 3 suites, flake 1 (CONTROL 2, 0, 2, 0)", got)
+	}
+	if total, passed, failed, _ := retiredOldReaderSuiteSums(t, stack, org, retiredDay()); total != 3 || passed != 2 || failed != 1 {
+		t.Errorf("old reader serves total %d, passed %d, failed %d; pinned 3, 2, 1 (CONTROL 2, 2, 0)", total, passed, failed)
+	}
+}

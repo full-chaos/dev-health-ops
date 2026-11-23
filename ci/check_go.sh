@@ -1670,7 +1670,7 @@ test_split_job_start() {
   serr="$(mktemp "${TMPDIR:-/tmp}/dev-health-split-err.XXXXXX")"
   printf 'go test%s (split): %s: %d test name(s) of its parts here\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${key}" "${n}"
   [ "$(printf '%s\n' "${chunks}" | grep -c .)" -le 1 ] \
-    || printf 'go test (split): %s: %d -run chunks of at most 60000 bytes, one go test each\n' "${key}" "$(printf '%s\n' "${chunks}" | grep -c .)"
+    || printf 'go test%s (split): %s: %d -run chunks of at most 60000 bytes, one go test each\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${key}" "$(printf '%s\n' "${chunks}" | grep -c .)"
   if [ "${module_dir}" = "." ] && grep -Fqx -- "${key}" <<<"${census_keys}"; then
     (
       [ -z "${prev}" ] || while kill -0 "${prev}" 2>/dev/null; do sleep 1; done

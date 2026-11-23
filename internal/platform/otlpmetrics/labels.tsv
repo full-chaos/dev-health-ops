@@ -330,6 +330,7 @@ dev_health_team_metrics_daily_repo_count		code: internal/jobruntime/telemetry.go
 dev_health_team_repo_ownership_derivation_resolution_arm_total	arm	code: internal/jobruntime/telemetry.go
 dev_health_team_repo_ownership_derivation_row_count		code: internal/jobruntime/telemetry.go
 dev_health_team_repo_ownership_derivation_total	outcome	code: internal/jobruntime/telemetry.go
+dev_health_testops_report_slots_revived_total		code: internal/jobs/metrics/daily/testops_revived_slots.go
 dev_health_touched_days_drain_total	event	code: internal/jobruntime/telemetry.go
 dev_health_touched_days_oldest_pending_age_seconds		code: internal/jobruntime/telemetry.go
 dev_health_work_item_derived_tables_left_to_daily_job_total	provider	code: internal/providerfoundation/budget.go

@@ -625,8 +625,8 @@ func splitEmission(
 			if rows := (len(regular[index]) + maxRows - 1) / maxRows; rows > shared {
 				shared = rows
 			}
-			if chunks := (len(own[index]) + maxRows - 1) / maxRows; chunks > ownChunks {
-				ownChunks = chunks
+			if len(own[index]) > ownChunks {
+				ownChunks = len(own[index])
 			}
 		}
 		count := shared + ownChunks
@@ -636,24 +636,24 @@ func splitEmission(
 		for ordinal := 0; ordinal < count; ordinal++ {
 			effects := make([]EffectBatch, 0, len(ordered))
 			for index, effect := range ordered {
-				rows, first, last := regular[index], 0, shared
+				rows, first, last, size := regular[index], 0, shared, maxRows
 				if ordinal >= shared {
-					// The own chunks come after every shared chunk and hold only rows of their own (and a trailing
+					// The own chunks come after every shared chunk and hold one row of their own each (and a trailing
 					// destination's rows, which fill the last chunks).
-					rows, first, last = own[index], shared, count
+					rows, first, last, size = own[index], shared, count, 1
 				}
 				// A trailing destination's rows fill the LAST sub-chunks of the emission, so they commit after every row
 				// of the other destinations (effectSplitsLast).
 				shift := first
 				if effectSplitsLast(effect.Destination) {
 					rows, shift = effect.Rows, count-(len(effect.Rows)+maxRows-1)/maxRows
-					last = count
+					last, size = count, maxRows
 				}
-				start := (ordinal - shift) * maxRows
+				start := (ordinal - shift) * size
 				if ordinal < shift || ordinal >= last || start > len(rows) {
 					start = len(rows)
 				}
-				end := start + maxRows
+				end := start + size
 				if end > len(rows) {
 					end = len(rows)
 				}
@@ -729,7 +729,7 @@ func splitEmission(
 }
 
 // effectOwnChunkRows splits an effect's rows into the rows that share chunks with the other destinations' rows and the rows the
-// split puts in chunks of their own, after every shared chunk. A GitHub minimal retraction row (CHAOS-14259, key "~retired-")
+// split puts in chunks of their own, one row per chunk, after every shared chunk. A GitHub minimal retraction row (CHAOS-14259, key "~retired-")
 // retires a report slot; alone it is a few KiB, so its chunk can never pass the prepared-chunk bound however large the run's
 // other rows are.
 func effectOwnChunkRows(effect EffectBatch) (shared, own []json.RawMessage) {

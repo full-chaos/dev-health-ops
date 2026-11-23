@@ -1288,15 +1288,20 @@ func (m *Metrics) RecordCursorCutListDropped(list string) {
 }
 
 // RecordReportRetractionLimited counts ONE run whose dropped reports' retraction rows did not all fit the run's batch
-// (CHAOS-14259), by the fallback taken: "suite_rows_only" writes the suite rows without the case rows (an old reader after a
-// rollback still sees the slot's stale cases); "one_row_per_slot" retires each dropped report's slot with one minimal row in a
-// chunk of its own (an old reader after a rollback still counts the slot's other stale suites and cases). Both retire the slots
-// in the same walk. An unknown reason collapses to "other".
+// (CHAOS-14259, CHAOS-14555), by the fallback taken: "legacy_case_rows_skipped" writes the case rows without those at the pre-slot
+// keys (an old reader after a rollback still sees a stale pre-slot copy of a case); "suite_rows_only" writes the suite rows
+// without the case rows (an old reader after a rollback still sees the slot's stale cases); "one_row_per_slot" retires each
+// dropped report's slot with minimal rows in chunks of their own (an old reader after a rollback still counts the slot's other
+// stale suites and cases); "legacy_ids_capped" retires it with one minimal row listing the first suite's legacy ids only (the
+// new readers still count a pre-slot copy of its other suites). All retire the slots in the same walk. An unknown reason
+// collapses to "other".
 func (m *Metrics) RecordReportRetractionLimited(provider, reason string) {
 	if m == nil {
 		return
 	}
-	if reason != "suite_rows_only" && reason != "one_row_per_slot" {
+	switch reason {
+	case "legacy_case_rows_skipped", "suite_rows_only", "one_row_per_slot", "legacy_ids_capped":
+	default:
 		reason = "other"
 	}
 	m.mu.Lock()
@@ -2144,7 +2149,7 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	}
 	if err := writeProviderLabeledCounter(
 		writer, "dev_health_provider_report_retraction_limited_total",
-		"Runs whose dropped reports' retraction rows did not all fit the run's batch, by bounded provider and fallback: suite rows only, or one minimal row per slot (CHAOS-14259).",
+		"Runs whose dropped reports' retraction rows did not all fit the run's batch, by bounded provider and fallback: legacy case rows skipped, suite rows only, minimal rows per slot, or legacy ids capped (CHAOS-14259, CHAOS-14555).",
 		"reason", m.reportRetractionLimited,
 	); err != nil {
 		return err

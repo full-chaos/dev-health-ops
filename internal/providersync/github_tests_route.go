@@ -247,7 +247,7 @@ func (artifact githubTestsArtifactPayload) listedSize() int64 {
 // ExcludedArtifactSample) purely for operator visibility and CHAOS-4591
 // (per-sync-config selectable artifact ingestion).
 //
-// githubTestsNonReportArtifactPrefixes holds only go-images-, go-test-timings- and go-junit-part- by default
+// githubTestsNonReportArtifactPrefixes holds no "digests-" by default
 // (codex review round 1, P1): "digests-*" artifacts (this repo's own
 // docker-images.yml uploads one empty touch-file per build target) ARE real,
 // valid, tiny zips that parse cleanly and contribute zero report rows --
@@ -263,11 +263,11 @@ func (artifact githubTestsArtifactPayload) listedSize() int64 {
 // ".spdx.json" are SBOM files: never reports, and 6 of them sit in every go.yml run.
 var githubTestsNonReportArtifactSuffixes = []string{".dockerbuild", ".spdx.json"}
 
-// "go-images-" are the docker-images tarballs ops CI uploads (>100 MiB); never
-// reports (CHAOS-13193). go-test-* artifacts carry the JUnit XML and stay selected.
-// "go-test-timings-" are per-shard .tsv.gz timing tables and "go-junit-part-" are per-shard JUnit parts that
-// a fan-in step republishes merged; neither is a report candidate, and 17 timings per go.yml run pushed it past
-// githubTestsMaxArtifacts (31 selected of 25).
+// githubTestsNonReportArtifactPrefixes is a named deployment exception: this repository's own CI artifact names (go.yml) in product
+// code, kept on purpose until a per-config exclude exists; content alone does not replace them (TestGitHubTestsArtifactNamePrefixesAreLoadBearing).
+// "go-images-": an image artifact keeps 1 day; an expired one has no content to inspect, so selected it reads reports_complete=false.
+// "go-test-timings-": timing tables, never reports; selected, all 17 of a run are downloaded and take per-run cap slots.
+// "go-junit-part-": JUnit parts beside their lossless merged report; githubTestsPlanRunReports keeps the parts and drops the aggregate, so case keys move, the merged rows are retracted and the run reads reports_complete=false.
 var githubTestsNonReportArtifactPrefixes = []string{"go-images-", "go-test-timings-", "go-junit-part-"}
 
 const (

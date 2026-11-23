@@ -49,17 +49,17 @@ const (
 
 func startStore(t *testing.T) (context.Context, stdclickhouse.Conn, QueryClient) {
 	t.Helper()
-	ctx, conn, client, _ := startStoreURI(t)
+	ctx, conn, client, _ := startStoreURI(t, containers.StartClickHouse)
 	return ctx, conn, client
 }
 
-// startStoreURI is startStore that also returns the server URI, for a cell that
-// opens a client with other options.
-func startStoreURI(t *testing.T) (context.Context, stdclickhouse.Conn, QueryClient, string) {
+// startStoreURI is startStore on the server start gives, and also returns the
+// server URI, for a cell that opens a client with other options.
+func startStoreURI(t *testing.T, start func(context.Context) (*containers.Instance, error)) (context.Context, stdclickhouse.Conn, QueryClient, string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	t.Cleanup(cancel)
-	inst, err := containers.StartClickHouse(ctx)
+	inst, err := start(ctx)
 	if err != nil {
 		t.Fatalf("start ClickHouse: %v", err)
 	}

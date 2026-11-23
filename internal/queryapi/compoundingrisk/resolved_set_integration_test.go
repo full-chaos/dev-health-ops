@@ -10,7 +10,10 @@ import (
 	"testing"
 	"time"
 
+	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
 // CHAOS-14480: a resolved set is bound whole. 50,000 synthetic repository ids;
@@ -115,8 +118,10 @@ func TestRealClickHouse_FiveHundredOneNamedTeamsStoredRowsAnswerTheLastTeamsRowA
 // max_execution_time of 10 s per statement. The work bound reads
 // system.query_log: two statements, each with read_rows at most 1.5 x the
 // 50,000 stored rows, each run with max_execution_time 10. No wall-clock bound.
+// The server is private (SYSTEM FLUSH LOGS is a server command) and the log
+// read keeps only this database and the log_comment the two reads carry.
 func TestRealClickHouse_StoredTeamReadsBind50000NamedTeams(t *testing.T) {
-	_, conn, _, uri := startStoreURI(t)
+	_, conn, _, uri := startStoreURI(t, containers.StartClickHouseIsolated)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
 	unrestricted, resultRows := uint64(0), uint(500_000)
@@ -137,14 +142,16 @@ func TestRealClickHouse_StoredTeamReadsBind50000NamedTeams(t *testing.T) {
 		ids = append(ids, fmt.Sprintf("tm-%05d", i))
 	}
 
-	picked, err := latestDay(ctx, client, sweepOrg, scopeTeam, ids, d.AddDate(0, 0, -6), d)
+	tag := fmt.Sprintf("stored-team-reads-%d", time.Now().UnixNano())
+	reads := stdclickhouse.Context(ctx, stdclickhouse.WithSettings(stdclickhouse.Settings{"log_comment": tag}))
+	picked, err := latestDay(reads, client, sweepOrg, scopeTeam, ids, d.AddDate(0, 0, -6), d)
 	if err != nil {
 		t.Fatalf("stored day pick with %d named teams: %v", n, err)
 	}
 	if picked == nil || picked.Format(dateLayout) != d.Format(dateLayout) {
 		t.Fatalf("stored day pick %v; want %s", picked, d.Format(dateLayout))
 	}
-	rows, err := latestRowsLimit(ctx, client, sweepOrg, d, scopeTeam, ids, n)
+	rows, err := latestRowsLimit(reads, client, sweepOrg, d, scopeTeam, ids, n)
 	if err != nil {
 		t.Fatalf("stored row read with %d named teams: %v", n, err)
 	}
@@ -164,13 +171,12 @@ func TestRealClickHouse_StoredTeamReadsBind50000NamedTeams(t *testing.T) {
 
 	exec(t, ctx, conn, "SYSTEM FLUSH LOGS")
 	var statements, overBound, otherLimit uint64
-	// Every Select of compounding_risk_daily in this store is one of the two
-	// reads above; this statement is not logged yet when it runs.
 	if err := conn.QueryRow(ctx, `SELECT count(), countIf(read_rows > ?), countIf(Settings['max_execution_time'] != '10')
       FROM system.query_log
-      WHERE type = 'QueryFinish' AND query_kind = 'Select'
+      WHERE log_comment = ? AND current_database = currentDatabase()
+        AND type = 'QueryFinish' AND query_kind = 'Select'
         AND position(query, 'FROM compounding_risk_daily') > 0`,
-		uint64(n*3/2)).Scan(&statements, &overBound, &otherLimit); err != nil {
+		uint64(n*3/2), tag).Scan(&statements, &overBound, &otherLimit); err != nil {
 		t.Fatalf("read system.query_log: %v", err)
 	}
 	if statements != 2 || overBound != 0 || otherLimit != 0 {

@@ -123,6 +123,17 @@ type transportFence struct {
 	kind        string
 	unavailable error
 	logger      *synclog.Logger
+	// failure, when set, builds every error lockCommitSnapshot returns from its cause (the last 55P03 for a give-up);
+	// nil returns unavailable as it is.
+	failure func(cause error) error
+}
+
+// fail is the error of a commit snapshot that did not succeed, from its cause.
+func (fence *transportFence) fail(cause error) error {
+	if fence.failure == nil {
+		return fence.unavailable
+	}
+	return fence.failure(cause)
 }
 
 // commitSnapshotWindow is the retry window of a fenced commit whose outbox row
@@ -281,14 +292,14 @@ func (fence *transportFence) lockCommitSnapshot(ctx context.Context, tx pgx.Tx) 
 	for read := 1; ; read++ {
 		savepoint, err := tx.Begin(ctx)
 		if err != nil {
-			return commitSnapshot{}, fence.unavailable
+			return commitSnapshot{}, fence.fail(err)
 		}
 		queryStart := clock.now()
 		if read == 1 {
 			deadline = queryStart.Add(commitSnapshotWindow)
 		} else if !commitSnapshotReadMayStart(queryStart, deadline) {
 			if rollbackErr := savepoint.Rollback(ctx); rollbackErr != nil {
-				return commitSnapshot{}, fence.unavailable
+				return commitSnapshot{}, fence.fail(rollbackErr)
 			}
 			return commitSnapshot{}, fence.commitSnapshotBusy(ctx, read-1, lastErr)
 		}
@@ -296,38 +307,41 @@ func (fence *transportFence) lockCommitSnapshot(ctx context.Context, tx pgx.Tx) 
 		if err == nil {
 			if !commitSnapshotReadCounts(queryStart, clock.now(), deadline) {
 				if rollbackErr := savepoint.Rollback(ctx); rollbackErr != nil {
-					return commitSnapshot{}, fence.unavailable
+					return commitSnapshot{}, fence.fail(rollbackErr)
 				}
 				return commitSnapshot{}, fence.commitSnapshotBusy(ctx, read, nil)
 			}
 			if err := savepoint.Commit(ctx); err != nil {
-				return commitSnapshot{}, fence.unavailable
+				return commitSnapshot{}, fence.fail(err)
 			}
 			return snapshot, nil
 		}
 		if !isLockNotAvailable(err) {
-			return commitSnapshot{}, fence.unavailable
+			return commitSnapshot{}, fence.fail(err)
 		}
 		if rollbackErr := savepoint.Rollback(ctx); rollbackErr != nil {
-			return commitSnapshot{}, fence.unavailable
+			return commitSnapshot{}, fence.fail(rollbackErr)
 		}
 		if read >= maxReads {
 			return commitSnapshot{}, fence.commitSnapshotBusy(ctx, read, err)
 		}
 		lastErr = err
 		if remaining := deadline.Sub(clock.now()); remaining > 0 {
-			if clock.sleep(ctx, min(commitSnapshotLockBackoff[read-1], remaining)) != nil {
-				return commitSnapshot{}, fence.unavailable
+			if sleepErr := clock.sleep(ctx, min(commitSnapshotLockBackoff[read-1], remaining)); sleepErr != nil {
+				return commitSnapshot{}, fence.fail(sleepErr)
 			}
 		}
 	}
 }
 
 // commitSnapshotBusy reports a fenced commit that gave up on a held outbox row or a held route barrier and returns
-// its error: the service's unavailable error naming the reason.
+// its error: the service's unavailable error naming the reason, or, with a failure func, that func's error of the cause.
 func (fence *transportFence) commitSnapshotBusy(ctx context.Context, reads int, err error) error {
 	reason := commitBusyReason(err)
 	fence.reportCommitSnapshotBusy(ctx, reads, commitSnapshotWindow, reason, err)
+	if fence.failure != nil {
+		return fence.failure(err)
+	}
 	return fmt.Errorf("%w: commit snapshot: %s (SQLSTATE 55P03 after %d reads in a %s window)",
 		fence.unavailable, reason, reads, commitSnapshotWindow)
 }

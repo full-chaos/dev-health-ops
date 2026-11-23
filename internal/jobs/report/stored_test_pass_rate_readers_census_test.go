@@ -37,7 +37,7 @@ var pinnedTableFiles = map[string]censusPin{
 		"reader rule applied: pass_rate is pooled, passed_count over executedCases (passed_count + failed_count), no stored rate read; flake_rate and retry_dependency_rate are pooled over distinct_cases, a repo-day with a NULL rate or NULL counts in neither sum; failure_recurrence_score is pooled, recurrent_failed_names over distinct_failed_names, a repo-day without both counts in neither sum; line_coverage_pct is pooled over lines_total and branch_coverage_pct over branches_total, a repo-day with a NULL count in neither sum, and defect_intro_rate over new_items_count (not the test table); LiveInputKeys counts live (repo_id, day) keys and reads no value column"},
 	"internal/jobs/metrics/daily/stale_team_keys_run.go": {"66f4b1c667d7396c8e904c814db52f2995cfab02d341ba5ad2c7fe5423f72bda",
 		"not a reader: the run-level retraction lists the table (a writer of marker rows)"},
-	"internal/jobs/metrics/daily/testops_native_clickhouse.go": {"34c048123f0872bed807e2e1c2115afc8525d322846247a851f2dad7ecb72794",
+	"internal/jobs/metrics/daily/testops_native_clickhouse.go": {"b8dfde9f72c111679db664aa6649d6ba268ccf821e69faa250d510c5e0e253d2",
 		"writer: the daily writer of the stored rows"},
 	"internal/jobs/metrics/daily/testops_native_executor.go": {"b6c7b19057dbeed7c31a17263ba162a8dbfb067d3d936d7185d45935d928bc5e",
 		"not a reader: the test, coverage and pipeline writers retire a day (a marker row); the file names the test table only in comments and an error text"},

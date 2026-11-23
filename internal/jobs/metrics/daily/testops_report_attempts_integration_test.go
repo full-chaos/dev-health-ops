@@ -48,6 +48,7 @@ type attemptsRunState struct {
 	started   string
 	updated   string
 	artifacts []attemptsArtifact
+	branch    string // head_branch; "" = main
 }
 
 type attemptsDoer struct {
@@ -68,7 +69,7 @@ func (doer *attemptsDoer) Do(request *http.Request) (*http.Response, error) {
 	case path == "/repos/acme/api/actions/runs":
 		body = `{"workflow_runs":[{"id":` + doer.runID + `,"name":"Go","status":"completed","conclusion":"success",` +
 			`"created_at":"` + doer.created() + `","run_started_at":"` + doer.state.started + `","updated_at":"` + doer.state.updated + `",` +
-			`"run_attempt":` + strconv.Itoa(doer.state.attempt) + `,"event":"push","head_sha":"abc","head_branch":"main",` +
+			`"run_attempt":` + strconv.Itoa(doer.state.attempt) + `,"event":"push","head_sha":"abc","head_branch":"` + doer.branch() + `",` +
 			`"html_url":"https://github.com/acme/api/actions/runs/` + doer.runID + `","pull_requests":[]}]}`
 	case path == "/repos/acme/api/actions/runs/"+doer.runID+"/jobs":
 		body = `{"jobs":[{"id":11,"name":"go","status":"completed","conclusion":"success","started_at":"` + doer.state.started +
@@ -107,6 +108,13 @@ func (doer *attemptsDoer) created() string {
 		return doer.state.created
 	}
 	return doer.state.started
+}
+
+func (doer *attemptsDoer) branch() string {
+	if doer.state.branch != "" {
+		return doer.state.branch
+	}
+	return "main"
 }
 
 func (doer *attemptsDoer) downloaded(id int) bool {

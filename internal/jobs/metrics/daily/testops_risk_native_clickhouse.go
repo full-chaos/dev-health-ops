@@ -198,18 +198,16 @@ SELECT c.repo_id, c.run_id, c.suite_id, c.case_name, c.status, c.retry_attempt
 FROM test_case_results AS c FINAL
 WHERE (c.repo_id, c.run_id) IN (
   SELECT repo_id, run_id FROM test_suite_results FINAL
-  WHERE coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
-    AND repo_id = ? AND org_id = ?
+  WHERE coalesce(started_at, finished_at) >= {start:DateTime64(3, 'UTC')} AND coalesce(started_at, finished_at) < {end:DateTime64(3, 'UTC')}
+    AND repo_id IN {repo_ids:Array(UUID)} AND org_id = {org_id:String}
 )
 AND (c.repo_id, c.run_id, c.suite_id) IN (
   SELECT repo_id, run_id, suite_id FROM test_suite_results FINAL
-  WHERE coalesce(started_at, finished_at) < ?
-    AND repo_id = ? AND org_id = ?
+  WHERE coalesce(started_at, finished_at) < {end:DateTime64(3, 'UTC')}
+    AND repo_id IN {repo_ids:Array(UUID)} AND org_id = {org_id:String}
+    AND `+testopsCaseSuitesNotRetired+`
 )
-AND c.repo_id = ? AND c.org_id = ?`,
-		start.UTC(), end.UTC(), repoID, orgID,
-		end.UTC(), repoID, orgID,
-		repoID, orgID)
+AND c.repo_id IN {repo_ids:Array(UUID)} AND c.org_id = {org_id:String}`, testopsSourceArgs(orgID, []uuid.UUID{repoID}, start, end)...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load testops case results: %w", err)
 	}
@@ -248,18 +246,15 @@ SELECT DISTINCT c.case_name AS case_name
 FROM test_case_results AS c FINAL
 INNER JOIN test_suite_results AS s FINAL
   ON (s.repo_id = c.repo_id) AND (s.run_id = c.run_id) AND (s.suite_id = c.suite_id) AND (s.org_id = c.org_id)
-WHERE coalesce(s.started_at, s.finished_at) >= ? AND coalesce(s.started_at, s.finished_at) < ?
-  AND lower(trim(c.status)) IN (?, ?, ?, ?, ?, ?)
+WHERE coalesce(s.started_at, s.finished_at) >= {start:DateTime64(3, 'UTC')} AND coalesce(s.started_at, s.finished_at) < {end:DateTime64(3, 'UTC')}
+  AND lower(trim(c.status)) IN {failure_statuses:Array(String)}
   AND (s.repo_id, s.run_id) NOT IN (
     SELECT repo_id, run_id FROM test_suite_results FINAL
-    WHERE coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
-      AND repo_id = ? AND org_id = ?
+    WHERE coalesce(started_at, finished_at) >= {end:DateTime64(3, 'UTC')} AND coalesce(started_at, finished_at) < {current_day_end:DateTime64(3, 'UTC')}
+      AND repo_id IN {repo_ids:Array(UUID)} AND org_id = {org_id:String}
   )
-  AND s.repo_id = ? AND s.org_id = ?`,
-		start.UTC(), end.UTC(),
-		"failure", "failed", "error", "errors", "timeout", "timed_out",
-		end.UTC(), currentDayEnd.UTC(), repoID, orgID,
-		repoID, orgID)
+  AND s.repo_id IN {repo_ids:Array(UUID)} AND s.org_id = {org_id:String}
+  AND `+testopspooled.SuiteRowsNotRetired("s", testopsRuleScope), testopsHistoryNameArgs(orgID, repoID, start, end, currentDayEnd)...)
 	if err != nil {
 		return nil, fmt.Errorf("load testops historical failed case names: %w", err)
 	}

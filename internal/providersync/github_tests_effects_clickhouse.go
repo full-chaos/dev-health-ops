@@ -155,7 +155,7 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 		if len(rows) == 0 {
 			return sink.Lease.Assert(ctx)
 		}
-		batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO test_suite_results (org_id,repo_id,run_id,suite_id,suite_name,framework,environment,total_count,passed_count,failed_count,skipped_count,error_count,quarantined_count,retried_count,duration_seconds,started_at,finished_at,team_id,service_id,last_synced,report_slot,run_attempt,legacy_suite_ids)`)
+		batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO test_suite_results (org_id,repo_id,run_id,suite_id,suite_name,framework,environment,total_count,passed_count,failed_count,skipped_count,error_count,quarantined_count,retried_count,duration_seconds,started_at,finished_at,team_id,service_id,last_synced,report_slot,run_attempt,legacy_suite_ids,retracted)`)
 		if err != nil {
 			return err
 		}
@@ -179,7 +179,7 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 			if err != nil {
 				return err
 			}
-			if err := batch.Append(row.OrgID, row.RepoID, row.RunID, row.SuiteID, row.SuiteName, row.Framework, row.Environment, counts[0], counts[1], counts[2], counts[3], counts[4], counts[5], counts[6], row.DurationSeconds, row.StartedAt, row.FinishedAt, row.TeamID, row.ServiceID, row.LastSynced, row.ReportSlot, attempt, gitHubTestsArray(row.LegacySuiteIDs)); err != nil {
+			if err := batch.Append(row.OrgID, row.RepoID, row.RunID, row.SuiteID, row.SuiteName, row.Framework, row.Environment, counts[0], counts[1], counts[2], counts[3], counts[4], counts[5], counts[6], row.DurationSeconds, row.StartedAt, row.FinishedAt, row.TeamID, row.ServiceID, row.LastSynced, row.ReportSlot, attempt, gitHubTestsArray(row.LegacySuiteIDs), row.Retracted); err != nil {
 				return err
 			}
 		}
@@ -192,7 +192,7 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 		if len(rows) == 0 {
 			return sink.Lease.Assert(ctx)
 		}
-		batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO test_case_results (org_id,repo_id,run_id,suite_id,case_id,case_name,class_name,status,duration_seconds,retry_attempt,failure_message,failure_type,stack_trace,is_quarantined,last_synced)`)
+		batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO test_case_results (org_id,repo_id,run_id,suite_id,case_id,case_name,class_name,status,duration_seconds,retry_attempt,failure_message,failure_type,stack_trace,is_quarantined,last_synced,retracted)`)
 		if err != nil {
 			return err
 		}
@@ -212,7 +212,7 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 			if err != nil {
 				return err
 			}
-			if err := batch.Append(row.OrgID, row.RepoID, row.RunID, row.SuiteID, row.CaseID, row.CaseName, row.ClassName, row.Status, row.DurationSeconds, retry, row.FailureMessage, row.FailureType, row.StackTrace, row.IsQuarantined, row.LastSynced); err != nil {
+			if err := batch.Append(row.OrgID, row.RepoID, row.RunID, row.SuiteID, row.CaseID, row.CaseName, row.ClassName, row.Status, row.DurationSeconds, retry, row.FailureMessage, row.FailureType, row.StackTrace, row.IsQuarantined, row.LastSynced, row.Retracted); err != nil {
 				return err
 			}
 		}
@@ -639,7 +639,7 @@ func (sink TestOpsClickHouseEffects) InspectEffect(ctx context.Context, claim Cl
 		}
 		return inspectTestOpsRowsByLastSynced(rows, func(expected testSuiteResultRow) (testSuiteResultRow, bool, error) {
 			actual := testSuiteResultRow{}
-			found, err := queryGitHubTestsRow(ctx, sink.Conn, `SELECT org_id,repo_id,run_id,suite_id,suite_name,framework,environment,toInt64(total_count),toInt64(passed_count),toInt64(failed_count),toInt64(skipped_count),toInt64(error_count),toInt64(quarantined_count),toInt64(retried_count),duration_seconds,started_at,finished_at,team_id,service_id,last_synced,toString(report_slot),toInt64(run_attempt),legacy_suite_ids FROM test_suite_results FINAL WHERE org_id=? AND repo_id=? AND run_id=? AND suite_id=?`, []any{expected.OrgID, expected.RepoID, expected.RunID, expected.SuiteID}, &actual.OrgID, &actual.RepoID, &actual.RunID, &actual.SuiteID, &actual.SuiteName, &actual.Framework, &actual.Environment, &actual.TotalCount, &actual.PassedCount, &actual.FailedCount, &actual.SkippedCount, &actual.ErrorCount, &actual.QuarantinedCount, &actual.RetriedCount, &actual.DurationSeconds, &actual.StartedAt, &actual.FinishedAt, &actual.TeamID, &actual.ServiceID, &actual.LastSynced, &actual.ReportSlot, &actual.RunAttempt, &actual.LegacySuiteIDs)
+			found, err := queryGitHubTestsRow(ctx, sink.Conn, `SELECT org_id,repo_id,run_id,suite_id,suite_name,framework,environment,toInt64(total_count),toInt64(passed_count),toInt64(failed_count),toInt64(skipped_count),toInt64(error_count),toInt64(quarantined_count),toInt64(retried_count),duration_seconds,started_at,finished_at,team_id,service_id,last_synced,toString(report_slot),toInt64(run_attempt),legacy_suite_ids,retracted != 0 FROM test_suite_results FINAL WHERE org_id=? AND repo_id=? AND run_id=? AND suite_id=?`, []any{expected.OrgID, expected.RepoID, expected.RunID, expected.SuiteID}, &actual.OrgID, &actual.RepoID, &actual.RunID, &actual.SuiteID, &actual.SuiteName, &actual.Framework, &actual.Environment, &actual.TotalCount, &actual.PassedCount, &actual.FailedCount, &actual.SkippedCount, &actual.ErrorCount, &actual.QuarantinedCount, &actual.RetriedCount, &actual.DurationSeconds, &actual.StartedAt, &actual.FinishedAt, &actual.TeamID, &actual.ServiceID, &actual.LastSynced, &actual.ReportSlot, &actual.RunAttempt, &actual.LegacySuiteIDs, &actual.Retracted)
 			return actual, found, err
 		})
 	case "test_case_results":
@@ -649,7 +649,7 @@ func (sink TestOpsClickHouseEffects) InspectEffect(ctx context.Context, claim Cl
 		}
 		return inspectTestOpsRowsByLastSynced(rows, func(expected testCaseResultRow) (testCaseResultRow, bool, error) {
 			actual := testCaseResultRow{}
-			found, err := queryGitHubTestsRow(ctx, sink.Conn, `SELECT org_id,repo_id,run_id,suite_id,case_id,case_name,class_name,status,duration_seconds,toInt64(retry_attempt),failure_message,failure_type,stack_trace,is_quarantined != 0,last_synced FROM test_case_results FINAL WHERE org_id=? AND repo_id=? AND run_id=? AND suite_id=? AND case_id=?`, []any{expected.OrgID, expected.RepoID, expected.RunID, expected.SuiteID, expected.CaseID}, &actual.OrgID, &actual.RepoID, &actual.RunID, &actual.SuiteID, &actual.CaseID, &actual.CaseName, &actual.ClassName, &actual.Status, &actual.DurationSeconds, &actual.RetryAttempt, &actual.FailureMessage, &actual.FailureType, &actual.StackTrace, &actual.IsQuarantined, &actual.LastSynced)
+			found, err := queryGitHubTestsRow(ctx, sink.Conn, `SELECT org_id,repo_id,run_id,suite_id,case_id,case_name,class_name,status,duration_seconds,toInt64(retry_attempt),failure_message,failure_type,stack_trace,is_quarantined != 0,last_synced,retracted != 0 FROM test_case_results FINAL WHERE org_id=? AND repo_id=? AND run_id=? AND suite_id=? AND case_id=?`, []any{expected.OrgID, expected.RepoID, expected.RunID, expected.SuiteID, expected.CaseID}, &actual.OrgID, &actual.RepoID, &actual.RunID, &actual.SuiteID, &actual.CaseID, &actual.CaseName, &actual.ClassName, &actual.Status, &actual.DurationSeconds, &actual.RetryAttempt, &actual.FailureMessage, &actual.FailureType, &actual.StackTrace, &actual.IsQuarantined, &actual.LastSynced, &actual.Retracted)
 			return actual, found, err
 		})
 	case "coverage_snapshots":

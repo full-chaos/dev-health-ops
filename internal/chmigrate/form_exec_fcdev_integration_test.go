@@ -885,13 +885,15 @@ func formExecCostGates(ctx context.Context, t *testing.T, conn driver.Conn, name
 	}
 	var fires []fire
 	for _, statement := range statements {
+		// The checks and the cap-0 copies read the SQL without its comment lines: a comment can neither satisfy nor
+		// break them, and the copy differs from the statement only in comments and the one cap.
+		text := formExecSQLOnly(statement.text)
 		if statement.id == "S0" {
-			if strings.Contains(statement.text, "STOP-COST-GATE") {
+			if strings.Contains(text, "STOP-COST-GATE") {
 				t.Errorf("%s S0: reads system.parts only, want no gate", name)
 			}
 			continue
 		}
-		text := statement.text
 		if strings.Count(text, "'STOP-COST-GATE'") != 1 || strings.Count(text, "WITH (SELECT throwIf(") != 1 {
 			t.Errorf("%s %s: want exactly one WITH (SELECT throwIf(... 'STOP-COST-GATE')) AS cost_gate", name, statement.id)
 			continue
@@ -953,6 +955,18 @@ func formExecCostGates(ctx context.Context, t *testing.T, conn driver.Conn, name
 			t.Errorf("%s %s fire: query_log types %v read_rows %d, want [ExceptionBeforeStart] and <= 2 x %d + 1", name, f.id, types, read, f.parts)
 		}
 	}
+}
+
+// formExecSQLOnly drops every line whose first non-blank characters are "--" (the FORM's comment lines).
+func formExecSQLOnly(text string) string {
+	var lines []string
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "--") {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // formExecPartsInfo checks S0: one row per table, table_rows > 0.

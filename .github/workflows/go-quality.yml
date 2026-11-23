@@ -687,6 +687,12 @@ jobs:
         if: always()
         run: docker logout ghcr.io
 
+      - name: Test the venue-oracles change-set reader
+        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
+        # CHAOS-11108: hermetic. The functions are cut out of ci/check_go.sh; a NUL-delimited change set with a newline
+        # inside a name must still select its package.
+        run: bash ci/venue_oracle_changed_test.sh
+
   # CHAOS-13718: the only writer of the go-quality Go caches. One entry per family (build: static, plan-reads and the test
   # legs; race: the race legs) and UTC day, saved by a push to main only (never a pull request or merge_group run: a queue-ref
   # entry is readable by no later run). A same-day entry ends the job at the lookup (no download). Not a required context: the

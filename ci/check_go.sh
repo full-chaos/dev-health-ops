@@ -2504,13 +2504,28 @@ vo_awk() {
   [ "${rc}" -le 1 ] || die "venue-oracles --changed: awk failed (rc ${rc}) reading the change set or a selection file"
   return "${rc}"
 }
+# vo_paths FILE: the change set as lines. A file with a NUL is NUL-delimited (git diff -z): a NUL becomes the line break and
+# a newline INSIDE a name becomes \001, so one record stays one line and a newline-leading name still selects its package.
+# A file with no NUL is newline-separated and is printed as it is.
+vo_paths() {
+  if [ "$(tr -d -c '\0' < "$1" | wc -c)" -gt 0 ]; then
+    tr '\n\0' '\001\n' < "$1"
+  else
+    cat -- "$1"
+  fi
+}
+# venue_oracle_changed_dirs FILE: the package directory of every changed path (a path under .../testdata belongs to the
+# package above it), sorted and unique.
+venue_oracle_changed_dirs() {
+  vo_paths "$1" | awk 'NF { d = $0; sub(/\/[^\/]*$/, "", d); sub(/\/testdata(\/.*)?$/, "", d); print d }' | LC_ALL=C sort -u
+}
 venue_oracle_changed_selects() {
   local escaped pkg name path
   escaped="$(printf '%s' "$1" | sed 's/[][\\.*^$/]/\\&/g')"
   # grep -q stops at its first match: it reads a process substitution, never a pipe whose writer would die of SIGPIPE and
   # fail the whole pipeline under pipefail on a large change set (the match was lost and the run read as "nothing to run").
   local own=1
-  if vo_grep -qE "^${escaped}/([^/]+|testdata/.+)$" < <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
+  if vo_grep -qE "^${escaped}/([^/]+|testdata/.+)$" < <(vo_paths "${VENUE_CHANGED_FILE}"); then
     own=0
   fi
   # The dependency closure of the package's test binary (VENUE_CLOSURE_DIR, CHAOS-9935): a file directly in, or under
@@ -2535,7 +2550,7 @@ venue_oracle_changed_selects() {
     # "~dir" lines: a changed file anywhere under a directory a linked package embeds files from.
     if vo_awk 'FNR == NR { if (substr($0, 1, 1) == "~") prefix[substr($0, 2) "/"] = 1; next }
             { for (p in prefix) if (index($0, p) == 1) { found = 1; exit } }
-            END { exit !found }' "${closure_file}" <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
+            END { exit !found }' "${closure_file}" <(vo_paths "${VENUE_CHANGED_FILE}"); then
       return 0
     fi
   fi
@@ -2544,7 +2559,7 @@ venue_oracle_changed_selects() {
   while IFS=$'\t' read -r pkg name path; do
     { [ "${pkg}" = "$1" ] && [ "${name}" = "$2" ]; } || continue
     escaped="$(printf '%s' "${path}" | sed 's/[][\\.*^$/]/\\&/g')"
-    if vo_grep -qE "^${escaped}(/.*)?$" < <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
+    if vo_grep -qE "^${escaped}(/.*)?$" < <(vo_paths "${VENUE_CHANGED_FILE}"); then
       return 0
     fi
   done <<< "${VENUE_TRIGGER_ROWS:-}"
@@ -2648,7 +2663,7 @@ check_venue_oracles() {
     fi
     # The package directory of every changed path (a path under .../testdata belongs to the package
     # above it), for the closure rule of venue_oracle_changed_selects.
-    VENUE_CHANGED_DIRS="$(tr '\0' '\n' < "${changed}" | awk 'NF { d = $0; sub(/\/[^\/]*$/, "", d); sub(/\/testdata(\/.*)?$/, "", d); print d }' | LC_ALL=C sort -u)"
+    VENUE_CHANGED_DIRS="$(venue_oracle_changed_dirs "${changed}")"
     VENUE_TRIGGER_ROWS="$(venue_oracle_trigger_rows)" \
       || die "venue-oracles --changed: ci/venue_oracle_triggers.d/ could not be read (see above)"
   fi

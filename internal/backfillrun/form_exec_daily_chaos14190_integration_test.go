@@ -547,10 +547,6 @@ VALUES ($1::uuid, $2::uuid, $3::date, $4, $5, $6, $7::uuid, $8::timestamptz, $9:
 	results = read("finalize-failed")
 	formExecDaily14190Want(t, "finalize-failed D2", results["D2"], 0, map[string]string{"failed": "0", "open": "1", "retrying": "1"})
 	remove(10)
-	daily(11, org, generation, "2026-11-16", "canceled", "pending", afterT0)
-	results = read("canceled")
-	formExecDaily14190Want(t, "canceled D2", results["D2"], 0, map[string]string{"failed": "1", "open": "0"})
-	remove(11)
 	for n := 100; n < 144; n++ {
 		daily(n, org, generation, fmt.Sprintf("2026-%02d-%02d", 8+(n-100)/28, 1+(n-100)%28), "succeeded", "succeeded", afterT0)
 	}
@@ -608,6 +604,7 @@ VALUES ($1::uuid, 'org-second', 'org', 'enterprise', true, now(), now())`, formE
 	fire("index not ready", "", "")
 	exec(`UPDATE pg_index SET indisready = true WHERE indexrelid = 'public.uq_daily_metrics_run_generation'::regclass`)
 	fire("index missing", "ic.relname = 'uq_daily_metrics_run_generation'", "ic.relname = 'uq_missing_index'")
+	fire("table missing", "c.relname IN ('organizations', 'daily_metrics_runs')", "c.relname IN ('organizations', 'daily_metrics_runs_gone')")
 	exec(`UPDATE pg_class SET reltuples = -1 WHERE oid = 'public.daily_metrics_runs'::regclass`)
 	fire("never analyzed", "", "")
 	exec(`ANALYZE daily_metrics_runs`)

@@ -13,11 +13,13 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/spantest"
 )
 
@@ -725,6 +727,121 @@ func TestGitHubTestsDownloadKeepsTheCallersSpanOnExistingLogLines(t *testing.T) 
 	for _, request := range requests {
 		if request.Raw.Parent().SpanID() != downloads[0].Raw.SpanContext().SpanID() || request.Raw.SpanContext().TraceID() != parent.TraceID() {
 			t.Errorf("request span parent=%s trace=%s, want the download span in the caller's trace", request.Raw.Parent().SpanID(), request.Raw.SpanContext().TraceID())
+		}
+	}
+}
+
+// spanCensusAllowList is the whole key set each provider and work span of this package's paths may carry, by span name;
+// an event may carry error.type only.
+var spanCensusAllowList = map[string][]string{
+	spanRequestName: {"dev_health.provider.attempts", "dev_health.provider.budget_ms", "dev_health.provider.gate_wait_ms",
+		"dev_health.provider.lease_ms", "dev_health.provider.target", "error.type", "family", "http.request.method",
+		"http.response.status_code", "http.route", "outcome", "provider"},
+	spanDownloadName: spanDownloadKeys,
+	spanParseName:    {"dev_health.artifact.bytes", "dev_health.tests.cases", "dev_health.tests.reports", "dev_health.tests.suites", "outcome"},
+	spanPrepareName:  spanChunkKeys,
+	spanCommitName:   spanChunkKeys,
+}
+
+// The key census: every request, credential-step, download, parse, prepare and commit path of the cells (each outcome,
+// failures, cancels under a cancelled and under a live context, a gate sleep, a lost acknowledgement) runs under one
+// recording pipeline, and every attribute key of every span, raw and exported, is on that span's own allow-list.
+func TestEverySpanKeyIsOnItsSpansAllowList(t *testing.T) {
+	pipeline := spantest.Install(t)
+	archive := githubTestsZip(t, map[string]string{"junit.xml": githubTestsMultiSuiteJUnit(1)})
+	download := func(ctx context.Context, client *providerfoundation.HTTPClient, artifact string) {
+		_, _, _, _ = downloadGitHubTestsListedArtifact(ctx, client, spanRoot, artifact, spanArtifactCapped, -1)
+	}
+	for _, artifact := range []string{spanArtifactRead, spanArtifactGone, spanArtifactOver} {
+		download(pipeline.Parent, githubTestsClient(t, spanArtifactDoer(t, archive)), artifact)
+	}
+	contended := githubTestsClient(t, spanArtifactDoer(t, archive))
+	contended.Budget = spanContendedBudget{}
+	download(pipeline.Parent, contended, spanArtifactRead)
+	gated := githubTestsClient(t, spanArtifactDoer(t, archive))
+	gated.Gate = &spanGate{waits: []time.Duration{time.Millisecond}}
+	gated.GateWaitMax = time.Second
+	download(pipeline.Parent, gated, spanArtifactRead)
+	for _, tc := range []struct {
+		cancel bool
+		err    error
+	}{{true, context.Canceled}, {true, errors.Join(context.Canceled, io.ErrUnexpectedEOF)}, {false, context.Canceled}, {false, errors.New("aaaa")}} {
+		ctx, cancel := context.WithCancel(pipeline.Parent)
+		download(ctx, githubTestsClient(t, spanDoer(func(*http.Request) (*http.Response, error) {
+			if tc.cancel {
+				cancel()
+			}
+			return nil, tc.err
+		})), spanArtifactRead)
+		cancel()
+	}
+	credentialFailing, err := providerfoundation.NewHTTPClient("github", "https://api.github.com", fakehttp.Client(spanArtifactDoer(t, archive)),
+		func(*http.Request) error {
+			return &providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: http.StatusUnauthorized}
+		},
+		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	download(pipeline.Parent, credentialFailing, spanArtifactRead)
+
+	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	for _, parse := range []struct {
+		archive []byte
+		repoID  string
+	}{{archive, "repo-1"}, {[]byte("aaaa"), "repo-1"}, {archive, ""}} {
+		_, _ = parseGitHubTestsReportArtifactInSpan(pipeline.Parent, parse.archive, func() (githubTestsReportRows, error) {
+			return parseGitHubTestsReportArtifact(parse.archive, spanArtifactRead, githubTestsReportSlot{Name: "r", Attempt: 1}, nil, parse.repoID, "run-1", "org-1", nil, nil, normalizedAt)
+		})
+	}
+
+	newStore := func() *groupRecordingStore { return &groupRecordingStore{chunkMemoryStore: newChunkMemoryStore()} }
+	_, _ = spanChunkExecution(t, pipeline.Parent, 8)
+	_, _ = spanChunkExecution(t, pipeline.Parent, 1)
+	for _, tc := range []struct {
+		cancel bool
+		err    error
+	}{{true, NewChunkStoreError(context.Canceled)}, {false, context.Canceled}, {false, ErrChunkCheckpointConflict}} {
+		ctx, cancel := context.WithCancel(pipeline.Parent)
+		store := &spanCancelPrepareStore{groupRecordingStore: newStore(), err: tc.err}
+		if tc.cancel {
+			store.cancel = cancel
+		}
+		_ = spanChunkRun(t, ctx, store, nil, nil)
+		cancel()
+	}
+	_ = spanChunkRun(t, pipeline.Parent, newStore(), nil, &spanRecordingComparator{mismatch: true})
+	_ = spanChunkRun(t, pipeline.Parent, &spanAckLostStore{groupRecordingStore: newStore()}, func(claim Claim) CompleteRouteHandler {
+		return &spanObservingHandler{streamingChunkRouteHandler: &streamingChunkRouteHandler{batch: chunkedTestBatch(t, claim)}}
+	}, nil)
+
+	seen := map[string]int{}
+	for _, span := range pipeline.Ended() {
+		if _, ok := spanCensusAllowList[span.Name()]; !ok {
+			t.Errorf("span %q is not on the census", span.Name())
+		}
+		seen[span.Name()]++
+	}
+	for name, allowed := range spanCensusAllowList {
+		if seen[name] == 0 {
+			t.Errorf("no %s span ran: the census does not cover it", name)
+		}
+		for _, pair := range pipeline.Pairs(name) {
+			for side, attrs := range map[string][]attribute.KeyValue{"raw": pair.Raw.Attributes(), "exported": pair.Exported.Attributes} {
+				for _, kv := range attrs {
+					if !slices.Contains(allowed, string(kv.Key)) {
+						t.Errorf("%s %s span carries %q, which is not on its allow-list", side, name, kv.Key)
+					}
+				}
+			}
+			for _, event := range pair.Raw.Events() {
+				for _, kv := range event.Attributes {
+					if kv.Key != "error.type" {
+						t.Errorf("%s event %q carries %q", name, event.Name, kv.Key)
+					}
+				}
+			}
 		}
 	}
 }

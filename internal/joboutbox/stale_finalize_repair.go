@@ -414,10 +414,10 @@ const (
 	staleFinalizeBaseSQL = `run.status = 'running'
 	AND run.finalization_status = 'pending'
 	AND run.updated_at <= $1
-	AND run.id NOT IN (
-		SELECT partition.run_id FROM public.daily_metrics_partitions AS partition
-		WHERE (partition.status <> 'succeeded' OR partition.updated_at > $1)
-			AND partition.run_id IS NOT NULL
+	AND NOT EXISTS (
+		SELECT 1 FROM public.daily_metrics_partitions AS partition
+		WHERE partition.run_id = run.id
+			AND (partition.status <> 'succeeded' OR partition.updated_at > $1)
 	)`
 	// The River arm is an uncorrelated IN, so it reads river_job once per
 	// statement (a hashed subplan), not once per base run: as a correlated

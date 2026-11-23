@@ -48,9 +48,11 @@ func TestCapacityInputsOfANamedRetiredTeamGiveRetractionRowsNoWeight(t *testing.
 		if out.History, err = loadThroughput(ctx, client, org, []string{teamID}, nil, 30, today); err != nil {
 			t.Fatalf("%s %s throughput: %v", org, teamID, err)
 		}
-		if out.Backlog, err = loadBacklog(ctx, client, org, []string{teamID}, nil); err != nil {
+		backlog, err := loadBacklog(ctx, client, org, []string{teamID}, nil, 30, today)
+		if err != nil {
 			t.Fatalf("%s %s backlog: %v", org, teamID, err)
 		}
+		out.Backlog = backlog.size
 		return out
 	}
 

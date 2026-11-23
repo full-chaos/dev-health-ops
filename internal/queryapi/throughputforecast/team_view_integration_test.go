@@ -83,10 +83,10 @@ func readTeamView(ctx context.Context, t *testing.T, client QueryClient, org str
 	if reads.History, err = loadThroughputHistory(ctx, client, org, teams, nil, 4, teamViewToday()); err != nil {
 		t.Fatalf("%v history: %v", teams, err)
 	}
-	if reads.CurrentWIP, reads.AverageWIP, err = loadWorkItemOverlay(ctx, client, org, teams, nil, 4, teamViewToday()); err != nil {
+	if reads.CurrentWIP, reads.AverageWIP, _, err = loadWorkItemOverlay(ctx, client, org, teams, nil, 4, teamViewToday()); err != nil {
 		t.Fatalf("%v overlay: %v", teams, err)
 	}
-	if reads.StaleP50, reads.StaleP90, err = loadStaleWIP(ctx, client, org, teams, nil); err != nil {
+	if reads.StaleP50, reads.StaleP90, _, err = loadStaleWIP(ctx, client, org, teams, nil, 4, teamViewToday()); err != nil {
 		t.Fatalf("%v stale wip: %v", teams, err)
 	}
 	backlog, err := loadBacklog(ctx, client, org, teams, nil, 4, teamViewToday())
@@ -119,7 +119,7 @@ func (r teamViewReads) String() string {
 		}
 		return fmt.Sprintf("%g", *v)
 	}
-	served, err := json.Marshal(r.Forecast)
+	served, err := json.Marshal(mainShapeForecast(r.Forecast))
 	if err != nil {
 		served = []byte(err.Error())
 	}
@@ -127,6 +127,68 @@ func (r teamViewReads) String() string {
 	return fmt.Sprintf("history=%v currentWIP=%g averageWIP=%g stale=%s/%s backlog=%d %s asOf=%s team=%q forecast=%x",
 		r.History, r.CurrentWIP, r.AverageWIP, deref(r.StaleP50), deref(r.StaleP90), r.BacklogSize, r.BacklogState,
 		r.BacklogAsOf, r.ForecastTeamID, digest[:6])
+}
+
+// mainShapeForecast is the served forecast in the JSON shape the digests were pinned in (main, before CHAOS-7508 added
+// the newest-day state fields): the same fields, tags and order, and none of the new fields. Nil stays nil.
+func mainShapeForecast(f *model.ThroughputForecast) any {
+	if f == nil {
+		return nil
+	}
+	type staleWip struct {
+		P50AgeHours *float64 `json:"p50AgeHours,omitempty"`
+		P90AgeHours *float64 `json:"p90AgeHours,omitempty"`
+	}
+	type estimateCoverage struct {
+		Ratio            *float64 `json:"ratio,omitempty"`
+		EstimatedCount   int      `json:"estimatedCount"`
+		UnestimatedCount int      `json:"unestimatedCount"`
+		BacklogSize      int      `json:"backlogSize"`
+		GrainCount       int      `json:"grainCount"`
+	}
+	type forecast struct {
+		ForecastID          string                          `json:"forecastId"`
+		ComputedAt          string                          `json:"computedAt"`
+		TeamID              *string                         `json:"teamId,omitempty"`
+		WorkScopeID         *string                         `json:"workScopeId,omitempty"`
+		BacklogSize         int                             `json:"backlogSize"`
+		BacklogState        model.ThroughputBacklogState    `json:"backlogState"`
+		BacklogAsOfDay      any                             `json:"backlogAsOfDay,omitempty"`
+		DegradedReason      *string                         `json:"degradedReason,omitempty"`
+		HistoryWeeks        int                             `json:"historyWeeks"`
+		P50Weeks            *int                            `json:"p50Weeks,omitempty"`
+		P75Weeks            *int                            `json:"p75Weeks,omitempty"`
+		P90Weeks            *int                            `json:"p90Weeks,omitempty"`
+		RollingWindows      []model.ThroughputRollingWindow `json:"rollingWindows"`
+		PrimaryRisk         *model.ThroughputRiskOverlay    `json:"primaryRisk"`
+		WipCongestion       *model.ThroughputRiskOverlay    `json:"wipCongestion"`
+		StaleWip            *staleWip                       `json:"staleWip,omitempty"`
+		EstimateCoverage    *estimateCoverage               `json:"estimateCoverage,omitempty"`
+		ReviewBottleneck    *model.ThroughputRiskOverlay    `json:"reviewBottleneck"`
+		IncidentLoad        *model.ThroughputRiskOverlay    `json:"incidentLoad"`
+		InsufficientHistory bool                            `json:"insufficientHistory"`
+	}
+	out := forecast{
+		ForecastID: f.ForecastID, ComputedAt: f.ComputedAt, TeamID: f.TeamID, WorkScopeID: f.WorkScopeID,
+		BacklogSize: f.BacklogSize, BacklogState: f.BacklogState, DegradedReason: f.DegradedReason,
+		HistoryWeeks: f.HistoryWeeks, P50Weeks: f.P50Weeks, P75Weeks: f.P75Weeks, P90Weeks: f.P90Weeks,
+		RollingWindows: f.RollingWindows, PrimaryRisk: f.PrimaryRisk, WipCongestion: f.WipCongestion,
+		ReviewBottleneck: f.ReviewBottleneck, IncidentLoad: f.IncidentLoad, InsufficientHistory: f.InsufficientHistory,
+	}
+	if f.BacklogAsOfDay != nil {
+		out.BacklogAsOfDay = f.BacklogAsOfDay
+	}
+	if f.StaleWip != nil {
+		out.StaleWip = &staleWip{P50AgeHours: f.StaleWip.P50AgeHours, P90AgeHours: f.StaleWip.P90AgeHours}
+	}
+	if f.EstimateCoverage != nil {
+		out.EstimateCoverage = &estimateCoverage{
+			Ratio: f.EstimateCoverage.Ratio, EstimatedCount: f.EstimateCoverage.EstimatedCount,
+			UnestimatedCount: f.EstimateCoverage.UnestimatedCount, BacklogSize: f.EstimateCoverage.BacklogSize,
+			GrainCount: f.EstimateCoverage.GrainCount,
+		}
+	}
+	return out
 }
 
 // wantTeamViewReads compares the served fields of got with want. A want that carries " forecast=<digest>" is an answer

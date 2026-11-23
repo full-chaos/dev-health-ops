@@ -38,9 +38,15 @@ query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {
       active
       __typename
     }
+    wipCongestionState
+    wipCongestionAsOfDay
+    wipCongestionGrainCount
     staleWip {
       p50AgeHours
       p90AgeHours
+      state
+      asOfDay
+      grainCount
       __typename
     }
     estimateCoverage {
@@ -49,6 +55,8 @@ query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {
       unestimatedCount
       backlogSize
       grainCount
+      state
+      asOfDay
       __typename
     }
     reviewBottleneck {

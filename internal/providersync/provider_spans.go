@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
@@ -47,34 +48,46 @@ const (
 	spanOutcomeFailed     = "failed"
 )
 
-// endStepSpan sets attrs and the outcome and ends span; failure is non-nil only for a real failure.
+// endStepSpan sets attrs and the outcome and ends span; failure is non-nil only for a real failure. A failure ends as
+// tracing.EndWorkSpan ends one (an exception event with the class, an Error status with the class), without its second
+// cancellation check: the outcome already ruled on cancellation with the step's context.
 func endStepSpan(span trace.Span, attrs []attribute.KeyValue, outcome string, failure error) {
 	if span == nil {
 		return
 	}
 	span.SetAttributes(append(attrs, attribute.String(spanAttrOutcome, outcome))...)
-	tracing.EndWorkSpan(span, failure)
+	if failure != nil {
+		class := tracing.ErrorClass(failure)
+		span.AddEvent("exception", trace.WithAttributes(attribute.String("error.type", class)))
+		span.SetStatus(codes.Error, class)
+	}
+	span.End()
 }
 
-// stepOutcome maps an error every step shares to its word; ok is false for a failure the caller names.
-func stepOutcome(err error) (outcome string, ok bool) {
+// stepOutcome maps an error every step shares to its word; ok is false for a failure the caller names. A cancellation
+// counts when ctx is cancelled and the cause came back alone, as the transport's canceled reason, or wrapped next to the
+// incomplete-read or chunk-store sentinel.
+func stepOutcome(ctx context.Context, err error) (outcome string, ok bool) {
 	switch {
 	case errors.Is(err, providerfoundation.ErrBudgetContended):
 		return spanOutcomeBudgetWait, true
-	case tracing.IsCancellation(err):
+	case providerfoundation.CallCancelled(ctx, err, ErrGitHubTestsIncomplete, ErrChunkCheckpointConflict):
 		return spanOutcomeCancelled, true
 	}
 	return "", false
 }
 
+// startGitHubTestsDownloadSpan returns ctx with the download span as the parent of its request spans only: the span of
+// ctx, which the download's log lines read, stays the caller's.
 func startGitHubTestsDownloadSpan(ctx context.Context) (context.Context, trace.Span) {
 	if ctx == nil || !trace.SpanFromContext(ctx).IsRecording() {
 		return ctx, nil
 	}
-	return tracing.StartWorkSpan(ctx, providerSyncTracerName, artifactDownloadSpanName)
+	_, span := tracing.StartWorkSpan(ctx, providerSyncTracerName, artifactDownloadSpanName)
+	return providerfoundation.WithRequestSpanParent(ctx, span), span
 }
 
-func endGitHubTestsDownloadSpan(span trace.Span, archiveBytes int, listedSize int64, requests int, notFound, rangeRead bool, err error) {
+func endGitHubTestsDownloadSpan(ctx context.Context, span trace.Span, archiveBytes int, listedSize int64, requests int, notFound, rangeRead bool, err error) {
 	if span == nil {
 		return
 	}
@@ -84,7 +97,7 @@ func endGitHubTestsDownloadSpan(span trace.Span, archiveBytes int, listedSize in
 		attribute.Int(spanAttrRequests, requests),
 	}
 	var oversized *githubTestsArtifactOversizedError
-	outcome, routine := stepOutcome(err)
+	outcome, routine := stepOutcome(ctx, err)
 	switch {
 	case routine:
 		endStepSpan(span, attrs, outcome, nil)
@@ -155,11 +168,11 @@ func chunkSpanAttributes(group []PreparedProviderChunk) []attribute.KeyValue {
 	}
 }
 
-func endChunkPrepareSpan(span trace.Span, group []PreparedProviderChunk, err error) {
+func endChunkPrepareSpan(ctx context.Context, span trace.Span, group []PreparedProviderChunk, err error) {
 	if span == nil {
 		return
 	}
-	outcome, routine := stepOutcome(err)
+	outcome, routine := stepOutcome(ctx, err)
 	switch {
 	case routine:
 		endStepSpan(span, chunkSpanAttributes(group), outcome, nil)
@@ -170,13 +183,14 @@ func endChunkPrepareSpan(span trace.Span, group []PreparedProviderChunk, err err
 	}
 }
 
-// endChunkCommitSpan: committed are the chunks of the group this call committed (fewer than the group at a
-// continuation or a failure).
-func endChunkCommitSpan(span trace.Span, committed []PreparedProviderChunk, err error) {
+// endChunkCommitSpan: committed are the chunks of the group this call confirmed committed (a mark that returned nil,
+// or a lost acknowledgement whose read back shows the checkpoint past the chunk); fewer than the group at a
+// continuation or a failure.
+func endChunkCommitSpan(ctx context.Context, span trace.Span, committed []PreparedProviderChunk, err error) {
 	if span == nil {
 		return
 	}
-	outcome, routine := stepOutcome(err)
+	outcome, routine := stepOutcome(ctx, err)
 	switch {
 	case routine:
 		endStepSpan(span, chunkSpanAttributes(committed), outcome, nil)

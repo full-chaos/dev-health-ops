@@ -302,6 +302,20 @@ func declaredCredentialField(field string) (string, bool) {
 	return "", false
 }
 
+// knownNonSecretCredentialFields are credential keys whose names hold a secret part
+// but whose values are plain identifiers (the LaunchDarkly project key). A warning
+// names one only on an exact, case-sensitive match and logs the list's own literal.
+var knownNonSecretCredentialFields = []string{"project_key"}
+
+func knownNonSecretCredentialField(field string) (string, bool) {
+	for _, known := range knownNonSecretCredentialFields {
+		if field == known {
+			return known, true
+		}
+	}
+	return "", false
+}
+
 // warnedField is the field's identity for the once-only warning: every spelling of
 // a declared field is one field. An undeclared name keeps its own text (the text
 // stays in memory, never in a log line).
@@ -314,14 +328,19 @@ func warnedField(field string) string {
 
 // warnAttrs names the setting, and the credential field when there is one. The
 // field travels as its own attribute: its key is not a protected word and a
-// declared name survives the redactor. A name the platform does not declare is
-// reported by length only.
+// declared name survives the redactor. Any other name, unless it is a known
+// non-secret key, is reported by length only.
 func warnAttrs(name, field string) []any {
 	if field == "" {
 		return []any{"setting", name}
 	}
 	if declared, ok := declaredCredentialField(field); ok {
 		return []any{"setting", name, "field", declared}
+	}
+	if known, ok := knownNonSecretCredentialField(field); ok {
+		// A plain string on purpose: the value redactor still runs on it, so a registered
+		// secret equal to or inside the name redacts it. Never bypass the redactor here.
+		return []any{"setting", name, "field", known}
 	}
 	return []any{"setting", name, "field", "undeclared_name", "field_length", len(field)}
 }

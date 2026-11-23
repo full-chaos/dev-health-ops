@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
@@ -28,14 +29,34 @@ func joinedError(err error) bool {
 }
 
 func featureOffMessage(body string, featureOff []string) bool {
-	var answer struct {
-		Message string `json:"message"`
+	decoder := json.NewDecoder(strings.NewReader(body))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return false
 	}
-	if json.Unmarshal([]byte(body), &answer) != nil {
+	message, seen := "", false
+	for decoder.More() {
+		token, err := decoder.Token()
+		key, isKey := token.(string)
+		if err != nil || !isKey {
+			return false
+		}
+		if !strings.EqualFold(key, "message") {
+			var skipped json.RawMessage
+			if decoder.Decode(&skipped) != nil {
+				return false
+			}
+			continue
+		}
+		if key != "message" || seen || decoder.Decode(&message) != nil {
+			return false
+		}
+		seen = true
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
 		return false
 	}
 	for _, text := range featureOff {
-		if text != "" && answer.Message == text {
+		if seen && text != "" && message == text {
 			return true
 		}
 	}

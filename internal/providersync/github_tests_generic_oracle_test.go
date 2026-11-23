@@ -25,6 +25,7 @@ var githubTestsOracleSuiteGoOnlyFields = map[string]string{
 	"report_slot":      githubTestsOracleSlotGoOnlyFields["report_slot"],
 	"run_attempt":      githubTestsOracleSlotGoOnlyFields["run_attempt"],
 	"legacy_suite_ids": "CHAOS-13925: Go-only columns, Python writer frozen: the pre-slot suite keys a slotted row replaces",
+	"retracted":        "CHAOS-14259: Go-only column, Python writer frozen: a zero-measure row retiring a dropped report's slot",
 }
 
 var githubTestsOracleCoverageGoOnlyFields = map[string]string{

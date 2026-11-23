@@ -32,6 +32,7 @@ var gitLabTestsSuiteGoOnlyFields = map[string]string{
 	"report_slot":      gitLabTestsSlotGoOnlyFields["report_slot"],
 	"run_attempt":      gitLabTestsSlotGoOnlyFields["run_attempt"],
 	"legacy_suite_ids": "CHAOS-13925: Go-only columns, Python writer frozen: the pre-slot suite key a GitLab retry row replaces",
+	"retracted":        "CHAOS-14259: Go-only column, Python writer frozen: a zero-measure row retiring a dropped report's slot (GitLab writes none)",
 }
 
 var gitLabTestsCoverageGoOnlyFields = map[string]string{

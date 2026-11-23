@@ -199,6 +199,9 @@ type testSuiteResultRow struct {
 	RunAttempt int64  `json:"run_attempt,omitempty"`
 	// LegacySuiteIDs are the keys the pre-slot writer gives this suite (CHAOS-13925): one per artifact it replaces.
 	LegacySuiteIDs []string `json:"legacy_suite_ids,omitempty"`
+	// Retracted marks a zero-measure row that retires its report slot (CHAOS-14259, githubTestsRetractionRows); a live row omits it,
+	// so its JSON and effect digest are unchanged.
+	Retracted bool `json:"retracted,omitempty"`
 }
 
 type testCaseResultRow struct {

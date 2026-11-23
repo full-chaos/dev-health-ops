@@ -472,6 +472,44 @@ func githubTestsPlanRunReportsWithin(parsed []githubTestsParsedReport, bound git
 	return plan, nil
 }
 
+// githubTestsRetractionRows retire the report slot of each dropped report (CHAOS-14259). An earlier sync of the run may have stored
+// the report as its own slot (a build before CHAOS-14045, or a listing without its parts), and nothing else overwrites it: per
+// parsed suite of the report, the row at its parsed key (slot, attempt, legacy ids, day, team and service kept) with every measure
+// 0, no duration and Retracted set. The readers retire a slot whose newest row of its newest attempt is retracted
+// (testopspooled). No case or coverage row: a lossless drop holds no coverage, and its cases are its parts'.
+func githubTestsRetractionRows(parsed []githubTestsParsedReport, dropped []githubTestsReportDrop) []testSuiteResultRow {
+	var rows []testSuiteResultRow
+	for _, drop := range dropped {
+		for _, suite := range parsed[drop.Index].Suites {
+			suite.TotalCount, suite.PassedCount, suite.FailedCount, suite.SkippedCount = 0, 0, 0, 0
+			suite.ErrorCount, suite.QuarantinedCount, suite.RetriedCount = 0, 0, 0
+			suite.DurationSeconds = nil
+			suite.Retracted = true
+			rows = append(rows, suite)
+		}
+	}
+	return rows
+}
+
+// githubTestsRetractionsFit keeps a run's suite batch inside the effect contract. The admitted rows are bounded by
+// githubTestsMaxReportRowsPerRun and their suite JSON by githubTestsMaxReportPayloadBytesPerDestination; the retraction rows may
+// take only the rest of maxEffectRows and maxEffectPayloadBytes. Rows that do not fit are not written: the stale slot then stays,
+// which is the state before CHAOS-14259, instead of a failing unit.
+func githubTestsRetractionsFit(admittedSuites int, retractions []testSuiteResultRow) bool {
+	if admittedSuites+len(retractions) > maxEffectRows {
+		return false
+	}
+	size := 0
+	for _, row := range retractions {
+		encoded, err := json.Marshal(row)
+		if err != nil {
+			return false
+		}
+		size += len(encoded)
+	}
+	return size <= maxEffectPayloadBytes-githubTestsMaxReportPayloadBytesPerDestination
+}
+
 // githubTestsContentWithin says whether every suite instance of the report at part (githubTestsReportContent) is also in the report
 // at whole, as many times, counting one work unit per instance read.
 // githubTestsCoverageContent is the allow-list of coverageSnapshotRow fields that are report content, the coverage part of a copy

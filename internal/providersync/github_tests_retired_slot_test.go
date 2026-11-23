@@ -88,8 +88,8 @@ func retiredFxListing(ids ...string) []rowsArtifact {
 	return out
 }
 
-// The dropped aggregate (total-b, artifact 6) gets one zero-measure retracted row per parsed suite, after the admitted rows of its
-// run, at the keys its own rows would have had; it gets no case row.
+// The dropped aggregate (total-b, artifact 6) gets one zero-measure retracted row per parsed suite in its run's suite batch, at the
+// keys its own rows would have had; it gets no case row.
 func TestGitHubTestsRouteRetractsTheSlotOfADroppedAggregate(t *testing.T) {
 	suites, cases := retiredWalk(t, retiredFxListing("3", "4", "6")...)
 	var live, retracted []map[string]any
@@ -100,9 +100,6 @@ func TestGitHubTestsRouteRetractsTheSlotOfADroppedAggregate(t *testing.T) {
 		}
 		if _, present := row["retracted"]; present {
 			t.Errorf("live suite row %d carries retracted=%v: a live row keeps its JSON (and effect digest)", index, row["retracted"])
-		}
-		if len(retracted) > 0 {
-			t.Errorf("live suite row %d comes after a retracted row: the parts must come first in the batch", index)
 		}
 		live = append(live, row)
 	}
@@ -149,5 +146,60 @@ func TestGitHubTestsRouteRetractsTheSlotOfADroppedAggregate(t *testing.T) {
 		if retractedIDs[row["suite_id"]] {
 			t.Errorf("a case row was written under a retracted suite: %v", row)
 		}
+	}
+}
+
+// K12: only a planner drop writes retraction rows. A mismatched total (total-a: its parts are leg A but it fails case a) is kept
+// with its parts and marked, an artifact over the run bound is skipped whole: neither retires a slot, since a later sync may still
+// hold their rows. (An expired or unreadable artifact is never parsed, so it is never in the plan.)
+func TestGitHubTestsRouteRetractsOnlyAPlannerDrop(t *testing.T) {
+	suites, _ := retiredWalk(t, retiredFxListing("1", "2", "5")...)
+	for _, row := range suites {
+		if _, present := row["retracted"]; present {
+			t.Errorf("a mismatched total wrote a retraction row: %v", row)
+		}
+	}
+	if len(suites) != 4 {
+		t.Errorf("suite rows %d, want leg A's 2 parts and total-a's 2 suites, all live", len(suites))
+	}
+	first, second := part("ob1", 1, 60_000), part("ob2", 1, 60_000)
+	walk, _, _ := rowsWalk(t, 1, rowsArtifact{id: "71", size: 10, body: fxJUnit(first)}, rowsArtifact{id: "72", size: 20, body: fxJUnit(second)})
+	if observed(walk, githubTestsPerRunCapCause) != 1 {
+		t.Fatalf("observations %+v, want artifact 72 over the run bound", walk.cursor.Incomplete)
+	}
+	overBound, _ := retiredWalk(t, rowsArtifact{id: "71", size: 10, body: fxJUnit(first)}, rowsArtifact{id: "72", size: 20, body: fxJUnit(second)})
+	for _, row := range overBound {
+		if _, present := row["retracted"]; present {
+			t.Fatalf("an artifact over the run bound wrote a retraction row: %v", row)
+		}
+	}
+	if len(overBound) != 1 {
+		t.Errorf("suite rows %d, want artifact 71's one suite", len(overBound))
+	}
+}
+
+// The retraction rows of a run never take its suite batch past the effect contract: past either bound they are not written.
+func TestGitHubTestsRetractionRowsFitTheEffectContract(t *testing.T) {
+	row := testSuiteResultRow{OrgID: "org", RepoID: "repo", RunID: "run", SuiteID: "suite", Retracted: true}
+	if !githubTestsRetractionsFit(maxEffectRows-2, []testSuiteResultRow{row, row}) {
+		t.Errorf("two rows that fit the row bound were refused")
+	}
+	if githubTestsRetractionsFit(maxEffectRows-1, []testSuiteResultRow{row, row}) {
+		t.Errorf("rows past maxEffectRows were accepted")
+	}
+	encoded, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	room := (maxEffectPayloadBytes - githubTestsMaxReportPayloadBytesPerDestination) / len(encoded)
+	many := make([]testSuiteResultRow, room+1)
+	for index := range many {
+		many[index] = row
+	}
+	if room+1 <= maxEffectRows && githubTestsRetractionsFit(0, many) {
+		t.Errorf("%d rows of %d bytes past the payload headroom were accepted", len(many), len(encoded))
+	}
+	if !githubTestsRetractionsFit(0, many[:room]) {
+		t.Errorf("%d rows of %d bytes inside the payload headroom were refused", room, len(encoded))
 	}
 }

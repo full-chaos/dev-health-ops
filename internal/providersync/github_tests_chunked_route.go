@@ -2690,6 +2690,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				suites := []testSuiteResultRow(nil)
 				cases := []testCaseResultRow(nil)
 				coverage := []coverageSnapshotRow(nil)
+				var retractions []testSuiteResultRow
 				var completeness []testOpsRunReportCompletenessRow
 				if include && githubTestsRunReadable(run) && !githubTestsArtifactRunOutside(pipeline, claim, cursor.Relist == githubTestsRelistWalking) &&
 					githubTestsArtifactInterval(claim, cursor.Relist == githubTestsRelistWalking, lateLookback).admitsUnder(pipeline.QueuedAt, cursor.RangeHi) &&
@@ -3177,6 +3178,15 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						cases = append(cases, parsedReports[index].Cases...)
 						coverage = append(coverage, parsedReports[index].Coverage...)
 					}
+					retractions = githubTestsRetractionRows(parsedReports, plan.Dropped)
+					if !githubTestsRetractionsFit(len(suites), retractions) {
+						slog.Warn(
+							"dropped report retraction rows do not fit the run's suite batch; the dropped reports' slots are not retired",
+							"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+							"repository", logging.ProviderText(cursor.Repo), logging.ProviderIDAttr("run", pipeline.RunID), "rows", len(retractions),
+						)
+						retractions = nil
+					}
 					// One verdict row per run, after its last emission's rows are decided (CHAOS-13826).
 					lossAfter := githubTestsTakeRunLossCounts(cursor)
 					for _, cause := range replayedRunLosses {
@@ -3200,7 +3210,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				cursor.Cases += len(cases)
 				cursor.Coverage += len(coverage)
 				cursor.ExtraRecords += len(completeness)
-				effects, effectErr := testOpsEffects(nil, nil, nil, suites, cases, coverage, completeness...)
+				// The retraction rows join the run's suite batch (the batch sorts its rows by content, so they hold no position in it);
+				// they are not report rows of the walk's counters.
+				effects, effectErr := testOpsEffects(nil, nil, nil, append(suites, retractions...), cases, coverage, completeness...)
 				if effectErr != nil {
 					return effectErr
 				}

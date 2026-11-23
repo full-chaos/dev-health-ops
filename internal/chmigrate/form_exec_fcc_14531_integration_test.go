@@ -20,18 +20,21 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// DO NOT MERGE. This file executes the text of the prod read FORM-14531-4.sql byte for byte (the sha256 below is the
-// sha256 of the .sql file) on the head schema with a synthetic fixture, checks each WANT, and fires each cost gate cap
-// once (pm-guard FORM-TEMPLATE-1 (a)).
+// DO NOT MERGE. This file executes the text of the prod read FORM-14531-5.sql byte for byte (the sha256 below is the
+// sha256 of the .sql file) on the head schema with a synthetic fixture, checks each WANT, checks each data statement's
+// pass-path read_rows against its work math, and fires each cost gate cap once (pm-guard FORM-TEMPLATE-2).
 const (
-	formExecFcc14531SHA256 = "e4627e5199ff030918bf27422360bdd994b1b2d45f81d7b2f4069a96d872882e"
-	formExecFcc14531SQL    = `-- FORM-14531-4 (lane-14531, 2026-11-23, ops base 92df42e9f210). ClickHouse prod, SELECT only, CHAOS-14531 SIZE.
--- Shape: pm-guard/FORM-TEMPLATE-1.md (a) (sha12 e220dd03e6fc). Replaces FORM-14531-3 (b8ccf15a7149): the -3 gate was a
--- bare throwIf term in a WHERE, which runs per block at execution, not at analysis.
+	formExecFcc14531SHA256 = "7a58a825be1387a081a78732b2d543ea2c04be2f91a014456b66cbbacbcee98f"
+	formExecFcc14531SQL    = `-- FORM-14531-5 (lane-14531, 2026-11-23, ops base 92df42e9f210). ClickHouse prod, SELECT only, CHAOS-14531 SIZE.
+-- Shape: pm-guard/FORM-TEMPLATE-2.md (sha12 23a035273db8), with the pass-path budget. Replaces FORM-14531-4
+-- (e4627e5199ff): -4 capped table size per table read (up to 40M rows in F3 and F5) and F5 read work_items twice.
 -- No SET, SETTINGS, EXPLAIN, FORMAT or write. Org prefix c6a38355 by startsWith on every FROM with org_id.
 -- Each data statement starts with WITH (SELECT throwIf(...)) AS cost_gate over exactly the tables it reads and uses
--- cost_gate = 0 in the outer WHERE and in the WHERE of every subquery that reads a table. Caps: 20000000 active rows and
--- 4294967296 bytes per table read (one table), 40000000 and 8589934592 (two tables).
+-- cost_gate = 0 in the outer WHERE and in the WHERE of every subquery that reads a table.
+-- Budget: every data statement scans each table it reads ONCE, and its rows cap is the sum of the active rows of
+-- those tables: W <= 19900000 (one table) or W + T <= 19900000 (two tables), W = work_items rows, T =
+-- work_item_transitions rows. The gate itself reads 2 x P + 1 rows (P = active parts of its tables). Bytes cap 4294967296
+-- on the same sum. Work math per statement: FORM-14531-5.md.
 -- Run each statement once, in order. A SQL error (STOP-COST-GATE included) = STOP and report.
 -- work_items = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id), read FINAL as the daily readers
 -- read it. work_item_transitions is read raw (counts, existence and max only).
@@ -50,7 +53,7 @@ ORDER BY table_name;
 
 -- F0 ORG-1 and control. WANT orgs = 1, org_rows > 0.
 WITH (SELECT throwIf(
-    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items')) > 20000000
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items')) > 19900000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
 SELECT uniqExact(org_id) AS orgs, count() AS org_rows
@@ -59,7 +62,7 @@ WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0;
 
 -- F1 stored rows per provider (FINAL: one row per (org_id, repo_id, work_item_id)). Control: done_all > 0 in >= 1 row.
 WITH (SELECT throwIf(
-    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items')) > 20000000
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items')) > 19900000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
 SELECT provider,
@@ -80,7 +83,7 @@ GROUP BY provider ORDER BY provider;
 
 -- F2 items whose newest copy (max last_synced) is done with no completed_at. Control: items > 0 in >= 1 row.
 WITH (SELECT throwIf(
-    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items')) > 20000000
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items')) > 19900000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
 SELECT provider,
@@ -99,8 +102,8 @@ GROUP BY provider ORDER BY provider;
 
 -- F3 transitions of the items with a done copy that has no completed_at. Control: items > 0 in >= 1 row.
 WITH (SELECT throwIf(
-    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items', 'work_item_transitions')) > 40000000
-    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items', 'work_item_transitions')) > 8589934592,
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items', 'work_item_transitions')) > 19900000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items', 'work_item_transitions')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
 SELECT w.provider AS provider,
        count()                          AS items,
@@ -127,7 +130,7 @@ GROUP BY w.provider ORDER BY provider;
 -- no_repo = another row with the zero repo_id (Linear, Jira, a board item with no repository), repo = the rest.
 -- Control: done_all > 0 in >= 1 row.
 WITH (SELECT throwIf(
-    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items')) > 20000000
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items')) > 19900000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
 SELECT provider,
@@ -142,32 +145,32 @@ FROM work_items FINAL
 WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0
 GROUP BY provider, source_kind ORDER BY provider, source_kind;
 
--- F5 later non-done state of each done copy with no completed_at, per provider and source kind of that copy.
--- Control: done_null_copies > 0 in >= 1 row. Row-vs-history control: not_done_after_last_done WANT 0.
+-- F5 later non-done state of each done copy with no completed_at, per provider and source kind of that copy. One scan
+-- of each table: the item's copies are counted in the same work_items read that lists its done copies with no
+-- completed_at. Control: done_null_copies > 0 in >= 1 row. Row-vs-history control: not_done_after_last_done WANT 0.
 WITH (SELECT throwIf(
-    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items', 'work_item_transitions')) > 40000000
-    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items', 'work_item_transitions')) > 8589934592,
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items', 'work_item_transitions')) > 19900000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_items', 'work_item_transitions')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
 SELECT d.provider AS provider, d.source_kind AS source_kind,
        count()                                                 AS done_null_copies,
-       countIf(c.copies > 1)                                   AS with_other_copy,
-       countIf(c.not_done_copies > 0)                          AS with_other_copy_not_done,
+       countIf(d.copies > 1)                                   AS with_other_copy,
+       countIf(d.not_done_copies > 0)                          AS with_other_copy_not_done,
        countIf(t.done_events > 0)                              AS with_done_transition,
        countIf(t.done_events > 0 AND t.last_not_done_at > t.last_done_at) AS not_done_after_last_done,
        countIf(t.transitions = 0)                              AS no_transition
 FROM (
-    SELECT provider, work_item_id,
-           multiIf(startsWith(project_id, 'ghprojv2:'), 'ghprojv2',
-               repo_id = toUUID('00000000-0000-0000-0000-000000000000'), 'no_repo', 'repo') AS source_kind
-    FROM work_items FINAL
-    WHERE startsWith(org_id, 'c6a38355') AND status = 'done' AND completed_at IS NULL AND cost_gate = 0
+    SELECT provider, work_item_id, copies, not_done_copies, arrayJoin(done_null_kinds) AS source_kind
+    FROM (
+        SELECT provider, work_item_id, count() AS copies, countIf(status != 'done') AS not_done_copies,
+               groupArrayIf(multiIf(startsWith(project_id, 'ghprojv2:'), 'ghprojv2',
+               repo_id = toUUID('00000000-0000-0000-0000-000000000000'), 'no_repo', 'repo'),
+                            status = 'done' AND completed_at IS NULL) AS done_null_kinds
+        FROM work_items FINAL
+        WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0
+        GROUP BY provider, work_item_id
+    )
 ) AS d
-LEFT JOIN (
-    SELECT provider, work_item_id, count() AS copies, countIf(status != 'done') AS not_done_copies
-    FROM work_items FINAL
-    WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0
-    GROUP BY provider, work_item_id
-) AS c ON c.provider = d.provider AND c.work_item_id = d.work_item_id
 LEFT JOIN (
     SELECT work_item_id, count() AS transitions, countIf(to_status = 'done') AS done_events,
            maxIf(occurred_at, to_status = 'done') AS last_done_at,
@@ -182,17 +185,22 @@ GROUP BY d.provider, d.source_kind ORDER BY provider, source_kind;
 )
 
 // formExecFcc14531Gates are the cost gates of the data statements: the tables each reads (the gate's IN list), its cap
-// literals, and how many times it holds cost_gate = 0 (the outer WHERE plus each subquery that reads a table).
+// literals, how many times it holds cost_gate = 0 (the outer WHERE plus each subquery that reads a table), and its work
+// math: the scans of work_items (W rows) and work_item_transitions (T rows), so read_rows = work x W + transitions x T
+// + 2 x P + 1 (the gate reads system.parts twice and system.one once; P = active parts of its tables). fixtureReadRows is
+// that number on this fixture (W 11, T 6, P 2 + 1, merges stopped).
 var formExecFcc14531Gates = []struct {
 	id, tables, rowsCap, bytesCap string
 	uses                          int
+	work, transitions             uint64
+	fixtureReadRows               uint64
 }{
-	{"F0", "'work_items'", "> 20000000", "> 4294967296", 1},
-	{"F1", "'work_items'", "> 20000000", "> 4294967296", 1},
-	{"F2", "'work_items'", "> 20000000", "> 4294967296", 2},
-	{"F3", "'work_items', 'work_item_transitions'", "> 40000000", "> 8589934592", 3},
-	{"F4", "'work_items'", "> 20000000", "> 4294967296", 1},
-	{"F5", "'work_items', 'work_item_transitions'", "> 40000000", "> 8589934592", 4},
+	{"F0", "'work_items'", "> 19900000", "> 4294967296", 1, 1, 0, 16},
+	{"F1", "'work_items'", "> 19900000", "> 4294967296", 1, 1, 0, 16},
+	{"F2", "'work_items'", "> 19900000", "> 4294967296", 2, 1, 0, 16},
+	{"F3", "'work_items', 'work_item_transitions'", "> 19900000", "> 4294967296", 3, 1, 1, 24},
+	{"F4", "'work_items'", "> 19900000", "> 4294967296", 1, 1, 0, 16},
+	{"F5", "'work_items', 'work_item_transitions'", "> 19900000", "> 4294967296", 3, 1, 1, 24},
 }
 
 type formExecFcc14531Result struct {
@@ -372,6 +380,9 @@ func TestFormExecFcc14531Size(t *testing.T) {
 		return fmt.Sprintf("('%s', '%s', '%s', '%s', 'fixture', 'issue', '%s', '%s', '%s', '%s', '%s', %s, %s, %s, '%s')",
 			orgID, repoID, id, provider, status, status, project, created, created, started, completed, closed, lastSynced)
 	}
+	// Merges stay off, so the part and row counts of the work math do not move while the test runs.
+	formExecFcc14531Exec(ctx, t, conn, "SYSTEM STOP MERGES work_items")
+	formExecFcc14531Exec(ctx, t, conn, "SYSTEM STOP MERGES work_item_transitions")
 	items := `INSERT INTO work_items (org_id, repo_id, work_item_id, provider, title, type, status, status_raw, project_id, created_at, updated_at, started_at, completed_at, closed_at, last_synced) VALUES `
 	formExecFcc14531Exec(ctx, t, conn, items+item(org, repo, "gh:fx/repo#2", "github", "fx/repo", "in_progress",
 		"2026-09-03 00:00:00.000", "NULL", "NULL", "NULL", "2026-11-01 00:00:00.000"))
@@ -443,27 +454,31 @@ func TestFormExecFcc14531Size(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("ClickHouse version %s", version)
+	// The pass path: every statement at its real caps, each tagged with a log_comment so its query_log row can be read.
 	results := map[string]formExecFcc14531Result{}
+	passComments := map[string]string{}
 	for _, id := range ids {
-		result, err := formExecFcc14531Query(ctx, conn, statements[id])
+		comment := fmt.Sprintf("form14531-pass-%s-%d", id, time.Now().UnixNano())
+		passComments[id] = comment
+		qctx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"log_comment": comment}))
+		result, err := formExecFcc14531Query(qctx, conn, statements[id])
 		if err != nil {
-			t.Fatalf("FORM-14531-4 %s: %v", id, err)
+			t.Fatalf("FORM-14531-5 %s: %v", id, err)
 		}
-		t.Logf("FORM-14531-4 %s columns %v", id, result.columns)
+		t.Logf("FORM-14531-5 %s columns %v", id, result.columns)
 		for index, row := range result.rows {
-			t.Logf("FORM-14531-4 %s row %d %v", id, index, row)
+			t.Logf("FORM-14531-5 %s row %d %v", id, index, row)
 		}
 		results[id] = result
 	}
 
-	// S0 table_rows and F0 org_rows are raw counts: one more before the background merge folds the older version of
-	// gh:fx/repo#2 than after it.
+	// Merges are stopped, so the older version of gh:fx/repo#2 stays in its own part: S0 and F0 count it.
 	formExecFcc14531Rows(t, results, "S0", 2)
-	formExecFcc14531Row(t, results, "S0", 0, map[string]string{"table_name": "work_item_transitions", "table_rows": "6"})
-	formExecFcc14531Row(t, results, "S0", 1, map[string]string{"table_name": "work_items", "table_rows": "11|10"})
+	formExecFcc14531Row(t, results, "S0", 0, map[string]string{"table_name": "work_item_transitions", "table_rows": "6", "active_parts": "1"})
+	formExecFcc14531Row(t, results, "S0", 1, map[string]string{"table_name": "work_items", "table_rows": "11", "active_parts": "2"})
 
 	formExecFcc14531Rows(t, results, "F0", 1)
-	formExecFcc14531Row(t, results, "F0", 0, map[string]string{"orgs": "1", "org_rows": "9|8"})
+	formExecFcc14531Row(t, results, "F0", 0, map[string]string{"orgs": "1", "org_rows": "9"})
 
 	formExecFcc14531Rows(t, results, "F1", 2)
 	formExecFcc14531Row(t, results, "F1", 0, map[string]string{
@@ -521,35 +536,85 @@ func TestFormExecFcc14531Size(t *testing.T) {
 		"with_other_copy_not_done": "0", "with_done_transition": "1", "not_done_after_last_done": "1", "no_transition": "0",
 	})
 
-	// The gates fire (FORM-TEMPLATE-1 (a)): each cap literal of each data statement lowered to 0 in a test copy only (the
-	// embedded text and its sha256 stay as checked above). WANT code 395 STOP-COST-GATE, system.query_log type
-	// ExceptionBeforeStart, and query_log read_rows <= 2 x P + 1 (P = active parts of the statement's tables: the gate
-	// reads system.parts twice, plus system.one), so no data-table row is read.
-	parts := map[string]uint64{}
-	partRows, err := conn.Query(ctx, `SELECT table, count() FROM system.parts WHERE active AND database = currentDatabase()
+	// Sizes of the work math: W, T = active rows, P = active parts (system.parts, as the gate reads them).
+	parts, sizes := map[string]uint64{}, map[string]uint64{}
+	partRows, err := conn.Query(ctx, `SELECT table, count(), sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
 		AND table IN ('work_items', 'work_item_transitions') GROUP BY table`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for partRows.Next() {
 		var table string
-		var count uint64
-		if err := partRows.Scan(&table, &count); err != nil {
+		var count, rows uint64
+		if err := partRows.Scan(&table, &count, &rows); err != nil {
 			t.Fatal(err)
 		}
-		parts[table] = count
+		parts[table], sizes[table] = count, rows
 	}
 	_ = partRows.Close()
+	if sizes["work_items"] != 11 || sizes["work_item_transitions"] != 6 || parts["work_items"] != 2 || parts["work_item_transitions"] != 1 {
+		t.Fatalf("fixture sizes W=%d T=%d P(work_items)=%d P(work_item_transitions)=%d, want 11, 6, 2, 1",
+			sizes["work_items"], sizes["work_item_transitions"], parts["work_items"], parts["work_item_transitions"])
+	}
+	gateParts := func(tables string) uint64 {
+		var p uint64
+		for _, table := range strings.Split(tables, ", ") {
+			p += parts[strings.Trim(table, "'")]
+		}
+		return p
+	}
+
+	// PASS-path cells (FORM-TEMPLATE-2): each data statement completed at its real caps (above); its query_log
+	// QueryFinish read_rows must equal its work math on the fixture sizes, which proves the scan count of each table.
+	if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
+		t.Fatalf("the query log is not readable by this user: %v", err)
+	}
+	for _, gate := range formExecFcc14531Gates {
+		want := gate.work*sizes["work_items"] + gate.transitions*sizes["work_item_transitions"] + 2*gateParts(gate.tables) + 1
+		if want != gate.fixtureReadRows {
+			t.Errorf("PASS %s: the work math gives %d, the stated fixture number is %d", gate.id, want, gate.fixtureReadRows)
+		}
+		var types []string
+		var read uint64
+		rows, err := conn.Query(ctx, `SELECT toString(type), read_rows FROM system.query_log
+			WHERE log_comment = ? AND type != 'QueryStart' ORDER BY event_time_microseconds`, passComments[gate.id])
+		if err != nil {
+			t.Fatalf("PASS %s: query log: %v", gate.id, err)
+		}
+		for rows.Next() {
+			var typ string
+			var r uint64
+			if err := rows.Scan(&typ, &r); err != nil {
+				t.Fatalf("PASS %s: query log scan: %v", gate.id, err)
+			}
+			types = append(types, typ)
+			read = r
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("PASS %s: query log: %v", gate.id, err)
+		}
+		_ = rows.Close()
+		t.Logf("PASS %s query_log types=%v read_rows=%d math=%d x %d + %d x %d + 2 x %d + 1 = %d", gate.id, types, read,
+			gate.work, sizes["work_items"], gate.transitions, sizes["work_item_transitions"], gateParts(gate.tables), want)
+		if len(types) != 1 || types[0] != "QueryFinish" {
+			t.Errorf("PASS %s: query_log types %v, want [QueryFinish]", gate.id, types)
+		}
+		if read != want {
+			t.Errorf("PASS %s: query_log read_rows %d, want the work math %d", gate.id, read, want)
+		}
+	}
+
+	// The gates fire (FORM-TEMPLATE-2): each cap literal of each data statement lowered to 0 in a test copy only (the
+	// embedded text and its sha256 stay as checked above). WANT code 395 STOP-COST-GATE, system.query_log type
+	// ExceptionBeforeStart, and query_log read_rows <= 2 x P + 1 (P = active parts of the statement's tables: the gate
+	// reads system.parts twice, plus system.one), so no data-table row is read.
 	type fired struct {
 		id, cap, comment string
 		p                uint64
 	}
 	var fires []fired
 	for _, gate := range formExecFcc14531Gates {
-		var p uint64
-		for _, table := range strings.Split(gate.tables, ", ") {
-			p += parts[strings.Trim(table, "'")]
-		}
+		p := gateParts(gate.tables)
 		for _, literal := range []string{gate.rowsCap, gate.bytesCap} {
 			lowered := strings.Replace(statements[gate.id], literal, "> 0", 1)
 			if lowered == statements[gate.id] {

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 )
 
@@ -290,27 +291,61 @@ func atomicPassLockTimeoutPool(t *testing.T, ctx context.Context, pool *pgxpool.
 
 // TestAtomicPassTailHoldsTheRouteMutationBarrierOff (PLAN-READ-14479-1 B1, changed by CHAOS-14523): the tail's
 // re-arm takes ROW EXCLUSIVE on sync_dispatch_outbox. The commit snapshot already holds that lock (commitBarrierSQL),
-// so from the commit point (in the tail) a route mutation cannot take its SHARE ROW EXCLUSIVE barrier (the real
-// routeMutationLockSQL text, NOWAIT here): it gets 55P03, and the tail never waits on it. The pass commits its
-// publish and its re-arm; once it has committed, the barrier is free.
+// so from the commit point (in the tail) a route mutation cannot take its SHARE ROW EXCLUSIVE barrier: a NOWAIT probe
+// of the barrier (the real routeMutationLockSQL text) gets 55P03, and a real syncroute.Controller.Pause started there
+// waits on a lock. The tail never waits on the barrier: the pass commits its publish and its re-arm, and the pause
+// then completes (paused, generation + 1): it is delayed to after the pass's COMMIT, not lost.
 func TestAtomicPassTailHoldsTheRouteMutationBarrierOff(t *testing.T) {
 	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		atomicPassShapes[0].seed(t, ctx, pool)
+		// Pause validates the row against the checked-in policy (rollback_route none); the route table's trigger wants a
+		// generation increase for that change, so the delivery is at routePauseRaceGeneration.
+		if _, err := pool.Exec(ctx, `UPDATE sync_dispatch_transport_routes SET rollback_transport = 'none', generation = $2 WHERE kind = $1`,
+			outboxKindDispatchSyncRun, routePauseRaceGeneration); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE sync_dispatch_outbox SET dispatched_route_generation = $2 WHERE id = $1`,
+			dispatchServiceTestOutbox, routePauseRaceGeneration); err != nil {
+			t.Fatal(err)
+		}
+		args := atomicPassArgs()
+		args.TransportArgs.RouteGeneration = routePauseRaceGeneration
+		controller, _ := routePauseRaceController(t, ctx, pool)
 		service := newTestDispatchService(t, pool)
-		var barrierErr error
-		probed := false
+
+		var barrierErr, pauseErr error
+		var pausedState syncroute.RouteState
+		probed, pauseWaited := false, false
+		pauseDone := make(chan struct{})
 		fired := atCommitPoint(t, service, func() {
 			tx, err := pool.Begin(ctx)
 			if err != nil {
 				barrierErr = err
 				return
 			}
-			defer func() { _ = tx.Rollback(ctx) }()
 			_, barrierErr = tx.Exec(ctx, `LOCK TABLE public.sync_dispatch_outbox IN SHARE ROW EXCLUSIVE MODE NOWAIT`)
+			_ = tx.Rollback(ctx)
 			probed = true
+			go func() {
+				defer close(pauseDone)
+				pausedState, pauseErr = controller.Pause(ctx, outboxKindDispatchSyncRun)
+			}()
+			deadline := time.Now().Add(10 * time.Second)
+			for time.Now().Before(deadline) && !pauseWaited {
+				select {
+				case <-pauseDone:
+					return
+				case <-time.After(10 * time.Millisecond):
+				}
+				var waiting int
+				if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1 AND wait_event_type = 'Lock'`,
+					routePauseRaceApp).Scan(&waiting); err == nil && waiting > 0 {
+					pauseWaited = true
+				}
+			}
 		})
 		passCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err := service.Dispatch(passCtx, atomicPassArgs())
+		err := service.Dispatch(passCtx, args)
 		cancel()
 		if !fired.Load() || !probed {
 			t.Fatalf("precondition: commit point fired=%v, barrier probed=%v err=%v", fired.Load(), probed, barrierErr)
@@ -322,19 +357,32 @@ func TestAtomicPassTailHoldsTheRouteMutationBarrierOff(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Dispatch returned %v, want nil: the tail does not wait on a barrier it holds off", err)
 		}
+		if !pauseWaited {
+			t.Fatal("the pause started at the commit point did not wait on a lock: it was not held off by the pass")
+		}
 		if status, _ := atomicPassRow(t, ctx, pool); status != "pending" {
 			t.Fatalf("row status=%s, want pending (the tail re-armed it)", status)
 		}
 		if got := atomicPassPublishes(t, ctx, pool); got != 1 {
 			t.Fatalf("published=%d, want 1", got)
 		}
-		tx, err := pool.Begin(ctx)
-		if err != nil {
+		select {
+		case <-pauseDone:
+		case <-time.After(30 * time.Second):
+			t.Fatal("the pause did not end after the pass committed")
+		}
+		if pauseErr != nil {
+			t.Fatalf("pause after the pass committed: %v, want nil (delayed, not lost)", pauseErr)
+		}
+		var generation int64
+		var paused bool
+		if err := pool.QueryRow(ctx, `SELECT generation, paused FROM sync_dispatch_transport_routes WHERE kind = $1`, outboxKindDispatchSyncRun).
+			Scan(&generation, &paused); err != nil {
 			t.Fatal(err)
 		}
-		defer func() { _ = tx.Rollback(ctx) }()
-		if _, err := tx.Exec(ctx, `LOCK TABLE public.sync_dispatch_outbox IN SHARE ROW EXCLUSIVE MODE NOWAIT`); err != nil {
-			t.Fatalf("route mutation barrier after the pass committed: %v, want free", err)
+		if !paused || generation != routePauseRaceGeneration+1 || pausedState.Generation != generation {
+			t.Fatalf("route after the pause: generation=%d paused=%v (pause returned generation %d), want %d paused",
+				generation, paused, pausedState.Generation, routePauseRaceGeneration+1)
 		}
 	})
 }

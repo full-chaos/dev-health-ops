@@ -138,7 +138,7 @@ func (gate githubTestsFloorBackoffGate) Penalize(ctx context.Context, penalty ti
 const githubTestsMaxJobsPerRun = 500
 
 // githubTestsMaxReportRowsPerRun bounds the suites+cases+coverage rows admitted for ONE run (githubTestsMaxArtifacts rows under
-// maxEffectRows: the room of one retraction row per dropped report, githubTestsRetractionsWithin), and
+// maxEffectRows: the room of one retraction row per dropped report, githubTestsMinimalRetractionRows), and
 // githubTestsMaxReportPayloadBytesPerDestination the JSON bytes of any one destination's rows (CHAOS-13794). They sit under the
 // effect contract that one run's rows go through as ONE batch per destination before the split into chunks (maxEffectRows,
 // maxEffectPayloadBytes): a run over either is a failing unit, not a truncated one, so the bound is the contract ceiling, not a
@@ -2691,7 +2691,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				suites := []testSuiteResultRow(nil)
 				cases := []testCaseResultRow(nil)
 				coverage := []coverageSnapshotRow(nil)
-				var retractions []testSuiteResultRow
+				var retirement githubTestsRetirement
 				var completeness []testOpsRunReportCompletenessRow
 				if include && githubTestsRunReadable(run) && !githubTestsArtifactRunOutside(pipeline, claim, cursor.Relist == githubTestsRelistWalking) &&
 					githubTestsArtifactInterval(claim, cursor.Relist == githubTestsRelistWalking, lateLookback).admitsUnder(pipeline.QueuedAt, cursor.RangeHi) &&
@@ -3179,16 +3179,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						cases = append(cases, parsedReports[index].Cases...)
 						coverage = append(coverage, parsedReports[index].Coverage...)
 					}
-					var limited bool
-					retractions, limited = githubTestsRetractionsWithin(handler.retractionRoom, len(suites), parsedReports, plan.Dropped)
-					if limited {
-						client.Metrics.RecordReportRetractionLimited(claim.Provider, "one_row_per_slot")
-						slog.Warn(
-							"dropped report retraction rows limited to one row per slot to fit the run's suite batch",
-							"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-							"repository", logging.ProviderText(cursor.Repo), logging.ProviderIDAttr("run", pipeline.RunID), "slots", len(retractions),
-						)
-					}
+					retirement = githubTestsRetirement{parsed: parsedReports, dropped: plan.Dropped}
 					// One verdict row per run, after its last emission's rows are decided (CHAOS-13826).
 					lossAfter := githubTestsTakeRunLossCounts(cursor)
 					for _, cause := range replayedRunLosses {
@@ -3214,9 +3205,17 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				cursor.ExtraRecords += len(completeness)
 				// The retraction rows join the run's suite batch (the batch sorts its rows by content, so they hold no position in it);
 				// they are not report rows of the walk's counters.
-				effects, effectErr := testOpsEffects(nil, nil, nil, append(suites, retractions...), cases, coverage, completeness...)
+				effects, limited, effectErr := githubTestsRunReportEffects(handler.retractionRoom, retirement, suites, cases, coverage, completeness)
 				if effectErr != nil {
 					return effectErr
+				}
+				if limited != "" {
+					client.Metrics.RecordReportRetractionLimited(claim.Provider, limited)
+					slog.Warn(
+						"dropped report retraction rows limited to fit the run's batch",
+						"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "reason", limited,
+						"repository", logging.ProviderText(cursor.Repo), logging.ProviderIDAttr("run", pipeline.RunID), "slots", len(retirement.dropped),
+					)
 				}
 				creditRecords(cutSecond, githubTestsWalkRecords(cursor)-githubTestsWalkRecords(before), false)
 				after := cursor

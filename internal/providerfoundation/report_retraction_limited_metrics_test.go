@@ -12,6 +12,7 @@ func TestReportRetractionLimitedCounterRendersPerBoundedProviderAndReason(t *tes
 	metrics := NewMetrics()
 	metrics.RecordReportRetractionLimited("github", "one_row_per_slot")
 	metrics.RecordReportRetractionLimited("github", "one_row_per_slot")
+	metrics.RecordReportRetractionLimited("github", "not_retired")
 	metrics.RecordReportRetractionLimited("org-4711-provider", "run 43600014259")
 	var nilMetrics *Metrics
 	nilMetrics.RecordReportRetractionLimited("github", "one_row_per_slot")
@@ -24,6 +25,7 @@ func TestReportRetractionLimitedCounterRendersPerBoundedProviderAndReason(t *tes
 	for _, want := range []string{
 		"# TYPE dev_health_provider_report_retraction_limited_total counter",
 		`dev_health_provider_report_retraction_limited_total{provider="github",reason="one_row_per_slot"} 2`,
+		`dev_health_provider_report_retraction_limited_total{provider="github",reason="not_retired"} 1`,
 		`dev_health_provider_report_retraction_limited_total{provider="other",reason="other"} 1`,
 	} {
 		if !strings.Contains(rendered, want) {

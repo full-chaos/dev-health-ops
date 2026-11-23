@@ -1259,15 +1259,16 @@ func (m *Metrics) RecordCursorCutListDropped(list string) {
 	m.cursorCutListDropped[list]++
 }
 
-// RecordReportRetractionLimited counts ONE run whose dropped reports' retraction rows did not all fit the run's suite batch
-// (CHAOS-14259), by the fallback taken: "one_row_per_slot" retires each dropped report's slot with one minimal row at the
-// key of its first suite instead of one row per suite. The slots are retired in the same walk; an old reader after a rollback
-// then still counts the other suites of a stale slot. An unknown reason collapses to "other".
+// RecordReportRetractionLimited counts ONE run whose dropped reports' retraction rows did not all fit the run's batch
+// (CHAOS-14259), by the fallback taken: "one_row_per_slot" retires each dropped report's slot with one minimal row instead of
+// one row per suite (the slots are retired in the same walk; an old reader after a rollback still counts the other suites of a
+// stale slot); "not_retired" writes no row, because even the minimal rows break a prepared chunk the run's own rows fit (the
+// stale slots stay served). An unknown reason collapses to "other".
 func (m *Metrics) RecordReportRetractionLimited(provider, reason string) {
 	if m == nil {
 		return
 	}
-	if reason != "one_row_per_slot" {
+	if reason != "one_row_per_slot" && reason != "not_retired" {
 		reason = "other"
 	}
 	m.mu.Lock()
@@ -2108,7 +2109,7 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	}
 	if err := writeProviderLabeledCounter(
 		writer, "dev_health_provider_report_retraction_limited_total",
-		"Runs whose dropped reports were retired with one minimal row per slot because one row per suite did not fit the run's suite batch, by bounded provider and fallback (CHAOS-14259).",
+		"Runs whose dropped reports' retraction rows did not all fit the run's batch, by bounded provider and fallback: one minimal row per slot, or not retired (CHAOS-14259).",
 		"reason", m.reportRetractionLimited,
 	); err != nil {
 		return err

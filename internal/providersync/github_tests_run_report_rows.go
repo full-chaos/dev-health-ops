@@ -497,43 +497,105 @@ func githubTestsRetractionRows(parsed []githubTestsParsedReport, dropped []githu
 // zero field keeps the contract; cells lower it.
 type githubTestsRetractionRoom struct{ rows, bytes int }
 
-// githubTestsRetractionsWithin is the retraction rows of a run whose suite batch holds admittedSuites rows. One row per parsed
-// suite (githubTestsRetractionRows) when they fit; else one minimal row per dropped report, limited = true: the key of its
-// first suite with no name, framework or environment. That row retires the slot all the same (the slot's newest row
-// decides); only an old reader after a rollback still counts the slot's other stale suites. The minimal rows always fit:
-// githubTestsMaxReportRowsPerRun keeps githubTestsMaxArtifacts rows of maxEffectRows free, a run drops fewer reports than it
-// lists artifacts, and a minimal row is a few hundred bytes and one legacy id per listed artifact at most.
-func githubTestsRetractionsWithin(room githubTestsRetractionRoom, admittedSuites int, parsed []githubTestsParsedReport, dropped []githubTestsReportDrop) (rows []testSuiteResultRow, limited bool) {
+func (room githubTestsRetractionRoom) fits(admittedSuites int, rows []testSuiteResultRow) bool {
 	if room.rows == 0 {
 		room.rows = maxEffectRows
 	}
 	if room.bytes == 0 {
 		room.bytes = maxEffectPayloadBytes - githubTestsMaxReportPayloadBytesPerDestination
 	}
-	full := githubTestsRetractionRows(parsed, dropped)
-	if admittedSuites+len(full) <= room.rows {
-		size := 0
-		for _, row := range full {
-			encoded, err := json.Marshal(row)
-			if err != nil {
-				size = room.bytes + 1
-				break
-			}
-			size += len(encoded)
+	if admittedSuites+len(rows) > room.rows {
+		return false
+	}
+	size := 0
+	for _, row := range rows {
+		encoded, err := json.Marshal(row)
+		if err != nil {
+			return false
 		}
-		if size <= room.bytes {
-			return full, false
+		size += len(encoded)
+	}
+	return size <= room.bytes
+}
+
+// githubTestsRetirement is a run's parsed reports and the planner's drops of them.
+type githubTestsRetirement struct {
+	parsed  []githubTestsParsedReport
+	dropped []githubTestsReportDrop
+}
+
+// githubTestsMinimalRetractionRows retire each dropped report's slot with one row: the slot's newest row decides, so one row
+// does what a row per suite does for the readers (only an old reader after a rollback still counts the slot's other stale
+// suites). The row keeps the slot, attempt, legacy ids and day of the report's first suite, holds no name, framework,
+// environment, team or service, and is keyed githubTestsRetiredSlotKey: the key sorts after every parsed suite key, so the
+// row joins the end of the run's sorted suite rows and moves no live row to another chunk offset.
+func githubTestsMinimalRetractionRows(retirement githubTestsRetirement) []testSuiteResultRow {
+	rows := make([]testSuiteResultRow, 0, len(retirement.dropped))
+	for _, drop := range retirement.dropped {
+		suites := githubTestsRetractionRows(retirement.parsed, []githubTestsReportDrop{drop})
+		if len(suites) == 0 {
+			continue
+		}
+		row := suites[0]
+		row.SuiteID = githubTestsRetiredSlotKey(row.ReportSlot, row.RunAttempt)
+		row.SuiteName, row.Framework, row.Environment, row.TeamID, row.ServiceID = "", nil, nil, nil, nil
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// githubTestsRetiredSlotKey is the key of a slot's minimal retraction row: "~" sorts after the hex digits of every parsed suite key.
+func githubTestsRetiredSlotKey(slot string, attempt int64) string {
+	return "~retired-" + hashTestIdentifier("github-report-retired-slot", slot, strconv.FormatInt(attempt, 10))
+}
+
+// githubTestsRetractionSplitPolicy is the tests route's chunk policy less the stamps a stored chunk adds (two cursors of at most
+// 4 KiB and the chunk metadata): the split the route checks must hold under the executor's stamped split.
+func githubTestsRetractionSplitPolicy() ChunkPolicy {
+	policy := TestOpsRouteChunkPolicy()
+	policy.MaxPreparedBytes -= 16 << 10
+	return policy
+}
+
+func githubTestsEffectsSplit(effects []EffectBatch) bool {
+	_, err := splitCompleteRouteBatch(CompleteRouteBatch{Effects: effects}, ShadowComparison{}, githubTestsRetractionSplitPolicy())
+	return err == nil
+}
+
+// githubTestsRunReportEffects builds a run's effects with the rows that retire its dropped reports' slots. One row per suite
+// (githubTestsRetractionRows) when the suite batch has room for them and the batch still splits into prepared chunks: a full
+// row sits at its suite's key, so it moves live rows to other chunk offsets, where two large rows of two destinations can meet.
+// Else one minimal row per slot, limited "one_row_per_slot". Else, when even those break a prepared chunk the run's own rows
+// fit, no row, limited "not_retired" (a trailing chunk within a few KiB of the bound). When the run's own rows do not split,
+// chunk preparation refuses the run whatever is added, and the minimal rows are kept.
+func githubTestsRunReportEffects(room githubTestsRetractionRoom, retirement githubTestsRetirement, suites []testSuiteResultRow,
+	cases []testCaseResultRow, coverage []coverageSnapshotRow, completeness []testOpsRunReportCompletenessRow,
+) (effects []EffectBatch, limited string, err error) {
+	build := func(retractions []testSuiteResultRow) ([]EffectBatch, error) {
+		return testOpsEffects(nil, nil, nil, append(slices.Clip(suites), retractions...), cases, coverage, completeness...)
+	}
+	full := githubTestsRetractionRows(retirement.parsed, retirement.dropped)
+	if len(full) == 0 {
+		effects, err = build(nil)
+		return effects, "", err
+	}
+	if room.fits(len(suites), full) {
+		if effects, err := build(full); err == nil && githubTestsEffectsSplit(effects) {
+			return effects, "", nil
 		}
 	}
-	minimal := make([]testSuiteResultRow, 0, len(dropped))
-	for _, drop := range dropped {
-		if suites := githubTestsRetractionRows(parsed, []githubTestsReportDrop{drop}); len(suites) > 0 {
-			row := suites[0]
-			row.SuiteName, row.Framework, row.Environment = "", nil, nil
-			minimal = append(minimal, row)
-		}
+	minimal, err := build(githubTestsMinimalRetractionRows(retirement))
+	if err != nil {
+		return nil, "", err
 	}
-	return minimal, true
+	if githubTestsEffectsSplit(minimal) {
+		return minimal, "one_row_per_slot", nil
+	}
+	base, err := build(nil)
+	if err != nil || !githubTestsEffectsSplit(base) {
+		return minimal, "one_row_per_slot", nil
+	}
+	return base, "not_retired", nil
 }
 
 // githubTestsContentWithin says whether every suite instance of the report at part (githubTestsReportContent) is also in the report

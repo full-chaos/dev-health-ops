@@ -344,7 +344,7 @@ type GitHubTestsRouteHandler struct {
 	// MaxWalkRecords lowers the walk record bound of the claim's mode (githubTestsMaxWalkRecords, or
 	// githubTestsBackfillMaxWalkRecords for a backfill claim of dataset cicd) when positive; zero keeps it.
 	MaxWalkRecords int
-	// retractionRoom lowers the room a run's suite batch leaves for retraction rows (githubTestsRetractionsWithin); the zero
+	// retractionRoom lowers the room a run's suite batch leaves for retraction rows (githubTestsRunReportEffects); the zero
 	// value keeps the effect contract.
 	retractionRoom githubTestsRetractionRoom
 }

@@ -194,7 +194,7 @@ func TestGitHubTestsRouteRetractsOnlyAPlannerDrop(t *testing.T) {
 }
 
 // When one row per suite does not fit the run's suite batch, the dropped report's slot is still retired in the same walk: one
-// minimal row (the key of its first suite, no name), a counter and a Warn line, and the unit finishes. A walk with the room
+// minimal row (a retired-slot key, no name, team or service), a counter and a Warn line, and the unit finishes. A walk with the room
 // of the effect contract writes one row per suite again.
 func TestGitHubTestsRouteRetiresTheSlotWithOneRowWhenTheSuiteRowsDoNotFit(t *testing.T) {
 	records := captureMembershipLogs(t)
@@ -211,8 +211,9 @@ func TestGitHubTestsRouteRetiresTheSlotWithOneRowWhenTheSuiteRowsDoNotFit(t *tes
 		t.Fatalf("suite rows %d (%d retracted), want leg B's 2 parts and 1 minimal retraction row:\n%v", len(suites), len(retracted), suites)
 	}
 	row := retracted[0]
-	if row["report_slot"] != "test-results-6" || row["suite_name"] != "" || row["framework"] != nil || row["total_count"] != float64(0) || row["duration_seconds"] != nil {
-		t.Errorf("minimal retraction row %v, want slot test-results-6, no name or framework, zero measures", row)
+	if row["report_slot"] != "test-results-6" || row["suite_name"] != "" || row["framework"] != nil || row["service_id"] != nil ||
+		row["total_count"] != float64(0) || row["duration_seconds"] != nil || !strings.HasPrefix(row["suite_id"].(string), "~retired-") {
+		t.Errorf("minimal retraction row %v, want slot test-results-6 at a retired-slot key, no name, framework or service, zero measures", row)
 	}
 	want := `dev_health_provider_report_retraction_limited_total{provider="github",reason="one_row_per_slot"} 1`
 	if !strings.Contains(metrics, want) {
@@ -220,12 +221,12 @@ func TestGitHubTestsRouteRetiresTheSlotWithOneRowWhenTheSuiteRowsDoNotFit(t *tes
 	}
 	warned := 0
 	for _, record := range *records {
-		if record.Message != "dropped report retraction rows limited to one row per slot to fit the run's suite batch" {
+		if record.Message != "dropped report retraction rows limited to fit the run's batch" {
 			continue
 		}
 		warned++
 		attrs := membershipLogAttrs(record)
-		if record.Level != slog.LevelWarn || attrs["slots"] != int64(1) || attrs["provider"] != "github" {
+		if record.Level != slog.LevelWarn || attrs["slots"] != int64(1) || attrs["provider"] != "github" || attrs["reason"] != "one_row_per_slot" {
 			t.Errorf("limit line level %s attrs %v, want WARN with slots 1", record.Level, attrs)
 		}
 		for key, value := range attrs {
@@ -274,9 +275,9 @@ func TestGitHubTestsMinimalRetractionRowsAlwaysFitTheEffectContract(t *testing.T
 			dropped = append(dropped, githubTestsReportDrop{Index: index, Cause: githubTestsAggregateOfPartsCause})
 		}
 	}
-	rows, limited := githubTestsRetractionsWithin(githubTestsRetractionRoom{}, githubTestsMaxReportRowsPerRun, parsed, dropped)
-	if !limited || len(rows) != len(dropped) {
-		t.Fatalf("limited %t with %d rows, want the minimal rows of %d dropped reports", limited, len(rows), len(dropped))
+	rows := githubTestsMinimalRetractionRows(githubTestsRetirement{parsed: parsed, dropped: dropped})
+	if len(rows) != len(dropped) {
+		t.Fatalf("%d minimal rows, want one per dropped report (%d)", len(rows), len(dropped))
 	}
 	size := 0
 	for _, row := range rows {
@@ -289,8 +290,8 @@ func TestGitHubTestsMinimalRetractionRowsAlwaysFitTheEffectContract(t *testing.T
 	if githubTestsMaxReportRowsPerRun+len(rows) > maxEffectRows || size > maxEffectPayloadBytes-githubTestsMaxReportPayloadBytesPerDestination {
 		t.Fatalf("%d minimal rows of %d bytes do not fit the room left by a full run", len(rows), size)
 	}
-	if rows, limited := githubTestsRetractionsWithin(githubTestsRetractionRoom{}, 2, parsed[:2], dropped[:1]); limited || len(rows) != 1 || rows[0].SuiteName == "" {
-		t.Fatalf("a small run took the fallback (limited %t, %d rows)", limited, len(rows))
+	if full := githubTestsRetractionRows(parsed[:2], dropped[:1]); !(githubTestsRetractionRoom{}).fits(2, full) {
+		t.Fatalf("one full row of a small run does not fit the room")
 	}
 }
 
@@ -391,5 +392,50 @@ func TestGitHubTestsRetractionRowsDoNotBreakTheChunkSplit(t *testing.T) {
 	if retired == 0 || largeSuites != 1 || largeCases != 2 {
 		t.Errorf("retraction rows of total-b %d, large live suites %d, large cases %d; want total-b retired, 1 and 2 (the fixture's large rows)",
 			retired, largeSuites, largeCases)
+	}
+}
+
+// The last fallback: when even the minimal row breaks a prepared chunk the run's own rows fit (it lands next to a case row
+// within a few KiB of the chunk bound), no row is written and the fallback is "not_retired"; when the run's own rows do not
+// split either, the minimal row is kept (chunk preparation refuses the run whatever it holds).
+func TestGitHubTestsRunReportEffectsFallsBackToNotRetiredOnlyForTheRunsOwnFit(t *testing.T) {
+	at := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	suite := func(id, slot string) testSuiteResultRow {
+		return testSuiteResultRow{OrgID: "org", RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", RunID: "1", SuiteID: id, SuiteName: "s",
+			TotalCount: 1, PassedCount: 1, LastSynced: at, ReportSlot: slot, RunAttempt: 1}
+	}
+	caseRow := func(id, message string) testCaseResultRow {
+		return testCaseResultRow{OrgID: "org", RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", RunID: "1", SuiteID: "a1", CaseID: id, CaseName: id,
+			Status: "failed", FailureMessage: &message, LastSynced: at}
+	}
+	retirement := githubTestsRetirement{
+		parsed:  []githubTestsParsedReport{{Suites: []testSuiteResultRow{suite("a1", "kept")}}, {Suites: []testSuiteResultRow{suite("b1", "dropped")}}},
+		dropped: []githubTestsReportDrop{{Index: 1, Cause: githubTestsAggregateOfPartsCause}},
+	}
+	// The largest case message the run's own rows still split with (searched down in 64-byte steps).
+	letters := retiredLetters(githubTestsRetractionSplitPolicy().MaxPreparedBytes)
+	near := ""
+	for size := len(letters); size > 0 && near == ""; size -= 64 {
+		base, err := testOpsEffects(nil, nil, nil, []testSuiteResultRow{suite("a1", "kept")}, []testCaseResultRow{caseRow("c0", "x"), caseRow("c1", letters[:size])}, nil)
+		if err == nil && githubTestsEffectsSplit(base) {
+			near = letters[:size]
+		}
+	}
+	_, limited, err := githubTestsRunReportEffects(githubTestsRetractionRoom{}, retirement, []testSuiteResultRow{suite("a1", "kept")},
+		[]testCaseResultRow{caseRow("c0", "x"), caseRow("c1", near)}, nil, nil)
+	if err != nil || limited != "not_retired" {
+		t.Errorf("a minimal row next to a near-bound case: limited %q (%v), want not_retired", limited, err)
+	}
+	over := retiredLetters(githubTestsRetractionSplitPolicy().MaxPreparedBytes + 10)
+	effects, limited, err := githubTestsRunReportEffects(githubTestsRetractionRoom{}, retirement, []testSuiteResultRow{suite("a1", "kept")},
+		[]testCaseResultRow{caseRow("c0", over)}, nil, nil)
+	retracted := 0
+	for _, effect := range effects {
+		if effect.Destination == "test_suite_results" {
+			retracted = len(effect.Rows) - 1
+		}
+	}
+	if err != nil || limited != "one_row_per_slot" || retracted != 1 {
+		t.Errorf("a run whose own rows do not split: limited %q, %d retraction rows (%v); want the minimal row kept", limited, retracted, err)
 	}
 }

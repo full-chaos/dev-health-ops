@@ -565,7 +565,9 @@ properties of that listing shape the walk:
   `open_phase_rate_floor`, when fewer than the larger of 500 and a fifth of the
   limit remain, or when no header was seen. It also reads them on every 5xx,
   429 and 403 answer, retryable or not, including one on the last attempt.
-  Such an answer under the floor marks the stop: the client sends no further
+  It reads that answer's own headers, not an earlier reading. Such an answer
+  under the floor, or one whose headers do not carry both the remaining count
+  and the limit, marks the stop: the client sends no further
   attempt of that request, and the phase stops with the same marker when the
   request ends on that refusal. A request that ends on its own error (a 403
   that is not a rate limit, a 5xx on the last attempt) keeps that error's path,

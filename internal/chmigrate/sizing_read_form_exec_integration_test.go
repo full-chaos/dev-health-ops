@@ -1039,17 +1039,29 @@ func TestReadbackReadFormFailsBeforeAndPassesAfterARecompute(t *testing.T) {
 	}
 }
 
-// Third throwaway exec proof: SIZING-14285-3 (CHAOS-14285 sizing). sizing14285Form is SIZING-14285-3.sql byte for byte.
-const sizing14285FormSHA256 = "0b545d0c495b4cfe6256697e4afd503a17318550830a2c486b6a1ffa9c2ea5bc"
+// Third throwaway exec proof: SIZING-14285-4 (CHAOS-14285 sizing). sizing14285Form is SIZING-14285-4.sql byte for byte.
+const sizing14285FormSHA256 = "0e668c288a69515897b5c47329aa359a938e5f43290cff122ec3730b2382fb91"
 
-const sizing14285Form = `-- SIZING-14285-3 = SIZING-14285-2 (406b0f9dd2d7, acp FORM OK, never gated, never executed) in FORM-TEMPLATE-1 (pm-guard,
---   e220dd03e6fc) shape (a). ClickHouse, SELECT only. Lane l14285-form3 (lead fcsup), 2026-11-23. Item 3 (CHAOS-14285) of
---   CARD-13902-recompute-3 (30f972dfa124) P6. Template example: SIZING-13902-4 706d1c5d4de6.
--- Prod: NOT EXECUTED. Executed on CI (synthetic rows, schema head 170): EXEC-PROOF-14285-3.md. md: SIZING-14285-3.md.
--- Edits vs -2 (all other text = -2):
---   L1 Engine cost gate in EVERY statement: stmt0..stmt7 start WITH (SELECT throwIf(...)) AS cost_gate over exactly the
---      tables the statement reads (system.parts active rows over 30M or bytes on disk over 4 GiB = STOP-COST-GATE).
---      cost_gate = 0 sits in the outer WHERE and in every scalar subquery that reads a table (stmt0, stmt6).
+const sizing14285Form = `-- SIZING-14285-4 = SIZING-14285-3 in FORM-TEMPLATE-3 (pm-guard, 6b9e73a3c45a) shape (a) + pass-path budget. ClickHouse,
+--   SELECT only. Lane l14285-form3 (lead fcsup), 2026-11-23. Item 3 (CHAOS-14285) of CARD-13902-recompute-3 (30f972dfa124)
+--   P6. Base chain: SIZING-14285-2 406b0f9dd2d7 (acp FORM OK, never gated, never executed) -> -3 0b545d0c495b (CI exec 1,
+--   job 137509282135: every value WANT and all 17 gate fires held; stmt6 read 79 rows over the -3 read bound 78.2) ->
+--   -3 fbf0a3691866 (bound fix, never pushed) -> this file. -3 is SUPERSEDED: do not run it.
+-- Prod: NOT EXECUTED. Executed on CI (synthetic rows, schema head 170): EXEC-PROOF-14285-3.md. md: SIZING-14285-4.md.
+-- Edits vs -3 (FORM-TEMPLATE-3):
+--   M1 Budget gate: each statement's rows cap is the PASS-PATH BUDGET 20M rows read. The gate sums the system.parts rows
+--      of each table it reads times k = the scans of that table in the statement (stmt5 git_pull_requests 2, stmt6
+--      git_commit_stats 2 + git_commits 2, stmt7 git_commit_stats 2, else 1): sum(rows x k) over 20M or sum(bytes on disk
+--      x k) over 4 GiB = STOP-COST-GATE. All orgs (an upper bound of the org reads). The gates read ONLY system.parts and
+--      system.one. No CTE: the only WITH is the scalar gate; it reads metadata only, at each scope that uses it.
+--   M2 stmt6: the 3 git_commits FINAL scalar subqueries (count, min day, max day) are one derived table cf, read once:
+--      git_commits scans 4 -> 2. Same outputs, same names.
+--   M3 read_rows WANT: read_rows <= 1.1 x G + (1 + s) x (2 x P + 1), G = sum of rows x k (S0), P = S0 parts of the gate
+--      tables, s = scalar subqueries that read a table (stmt0 7, stmt6 3, else 0). CI asserts the exact scan count:
+--      G + 2 x P + 1 <= query_log read_rows <= G + (1 + s) x (2 x P + 1).
+-- Edits of -3 vs -2 (kept):
+--   L1 Engine cost gate in EVERY statement (now the M1 budget gate), cost_gate = 0 in the outer WHERE and in every scalar
+--      subquery that reads a table.
 --   L2 New S0, gated on system.one (part count of its 7 tables over 100000 = STOP-COST-GATE): one row per table read here.
 --   L3 No placeholder: the old-rule cut placeholder of -2 (ROLL_END_14285_UTC) is the literal '2026-11-23 03:08:08' UTC (STEP 323 old-pod
 --      drain 0, RECORD-323 8ff7c60b985f; the READBACK-13902-3 cut). ops 340c3e05 (STEP 323) holds ceee575af360
@@ -1062,8 +1074,7 @@ const sizing14285Form = `-- SIZING-14285-3 = SIZING-14285-2 (406b0f9dd2d7, acp F
 --      teamkeytables/teamkeytables.go, providersync/github_commit_stats_route.go, baseline/head.json: same line numbers.
 --   L5 stmt3: new INFO doubled_commit_first_day / doubled_commit_last_day (range input of the decision rule).
 -- Run rule: each statement once, in order. A SQL error (STOP-COST-GATE included) = STOP. A timeout (30 s) = STOP, no re-run.
--- read_rows WANT after each of stmt0..stmt7: read_rows <= 1.1 x G + 2 x P + 2 (G = sum over reads of the table rows from
---   S0, a table read k times counts k times; P = S0 parts of the gate tables). Read counts per statement: md.
+-- read_rows WANT: M3. Work math per statement: md.
 -- -2 notes (kept; paths at a7febdf50002):
 --   F1 stmt0: prs_orgs / reviews_orgs 0 = INFO (stmt5 arm empty: no_raw can only grow), not a STOP. > 1 = STOP.
 --   F2/F3 every derived table has an alias; every outer name is alias.<col>.
@@ -1132,7 +1143,7 @@ ORDER BY table;
 --   other column = STOP. Gate tables: all 7.
 WITH (SELECT throwIf(
     (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
-      AND table IN ('commit_metrics', 'git_commit_stats', 'git_commits', 'git_pull_request_reviews', 'git_pull_requests', 'repo_metrics_daily', 'user_metrics_daily')) > 30000000
+      AND table IN ('commit_metrics', 'git_commit_stats', 'git_commits', 'git_pull_request_reviews', 'git_pull_requests', 'repo_metrics_daily', 'user_metrics_daily')) > 20000000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
       AND table IN ('commit_metrics', 'git_commit_stats', 'git_commits', 'git_pull_request_reviews', 'git_pull_requests', 'repo_metrics_daily', 'user_metrics_daily')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
@@ -1150,7 +1161,7 @@ SELECT
 -- INFO first_day, last_day, days, after_roll_repo_days.
 WITH (SELECT throwIf(
     (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
-      AND table IN ('repo_metrics_daily')) > 30000000
+      AND table IN ('repo_metrics_daily')) > 20000000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
       AND table IN ('repo_metrics_daily')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
@@ -1173,7 +1184,7 @@ WHERE s.r = 0 AND cost_gate = 0;
 --   (F5), no_commit_now (stored commits_count > 0, no raw commit on the day today).
 WITH (SELECT throwIf(
     (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
-      AND table IN ('git_commit_stats', 'git_commits', 'repo_metrics_daily')) > 30000000
+      AND table IN ('git_commit_stats', 'git_commits', 'repo_metrics_daily')) > 20000000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
       AND table IN ('git_commit_stats', 'git_commits', 'repo_metrics_daily')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
@@ -1233,7 +1244,7 @@ WHERE s.r = 0 AND cost_gate = 0;
 --   key, no raw commit on that day: never retracted, a recompute leaves it), raw_changed_after.
 WITH (SELECT throwIf(
     (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
-      AND table IN ('commit_metrics', 'git_commit_stats', 'git_commits')) > 30000000
+      AND table IN ('commit_metrics', 'git_commit_stats', 'git_commits')) > 20000000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
       AND table IN ('commit_metrics', 'git_commit_stats', 'git_commits')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
@@ -1291,7 +1302,7 @@ WHERE cost_gate = 0;
 --   user_under, user_count_mismatch, raw_changed_after.
 WITH (SELECT throwIf(
     (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
-      AND table IN ('git_commit_stats', 'git_commits', 'user_metrics_daily')) > 30000000
+      AND table IN ('git_commit_stats', 'git_commits', 'user_metrics_daily')) > 20000000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
       AND table IN ('git_commit_stats', 'git_commits', 'user_metrics_daily')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
@@ -1333,9 +1344,9 @@ WHERE s.r = 0 AND cost_gate = 0;
 -- WANT live_repo_days > 0; with_raw > 0; no_raw = 0 (> 0 = pm + acp read before any recompute of those days).
 -- INFO no_raw_first_day, no_raw_last_day.
 WITH (SELECT throwIf(
-    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
-      AND table IN ('git_commits', 'git_pull_request_reviews', 'git_pull_requests', 'repo_metrics_daily')) > 30000000
-    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
+    (SELECT sum(rows * multiIf(table = 'git_pull_requests', 2, 1)) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('git_commits', 'git_pull_request_reviews', 'git_pull_requests', 'repo_metrics_daily')) > 20000000
+    OR (SELECT sum(bytes_on_disk * multiIf(table = 'git_pull_requests', 2, 1)) FROM system.parts WHERE active AND database = currentDatabase()
       AND table IN ('git_commits', 'git_pull_request_reviews', 'git_pull_requests', 'repo_metrics_daily')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
 SELECT count() AS live_repo_days,
@@ -1361,25 +1372,27 @@ LEFT JOIN (
 ) AS a ON a.r_repo = s.repo_id AND a.r_day = s.day
 WHERE s.r = 0 AND cost_gate = 0;
 
--- stmt6 RAW SPAN and unmerged versions NOW. Gate tables: commits + stats. git_commits is read 4 times, git_commit_stats 2.
+-- stmt6 RAW SPAN and unmerged versions NOW. Gate tables: commits + stats, each read twice (raw + FINAL; M2).
 -- WANT commit_rows_final > 0; stat_rows_final > 0 (the compare sees data).
 -- WANT raw_first_day <= stmt1 first_day (else old stored days lost their raw rows: see stmt2 no_commit_now, stmt5 no_raw).
 -- INFO commit_versions_unmerged, stat_versions_unmerged: > 0 = the duplicate state still occurs today.
 WITH (SELECT throwIf(
-    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
-      AND table IN ('git_commit_stats', 'git_commits')) > 30000000
-    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
+    (SELECT sum(rows * multiIf(table = 'git_commit_stats', 2, table = 'git_commits', 2, 1)) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('git_commit_stats', 'git_commits')) > 20000000
+    OR (SELECT sum(bytes_on_disk * multiIf(table = 'git_commit_stats', 2, table = 'git_commits', 2, 1)) FROM system.parts WHERE active AND database = currentDatabase()
       AND table IN ('git_commit_stats', 'git_commits')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
 SELECT
   (SELECT count() FROM git_commits WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) AS commit_rows_raw,
-  (SELECT count() FROM git_commits FINAL WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) AS commit_rows_final,
+  cf.f_rows AS commit_rows_final,
   (SELECT count() FROM git_commit_stats WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) AS stat_rows_raw,
   (SELECT count() FROM git_commit_stats FINAL WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) AS stat_rows_final,
   commit_rows_raw - commit_rows_final AS commit_versions_unmerged,
   stat_rows_raw - stat_rows_final AS stat_versions_unmerged,
-  (SELECT min(toDate(committer_when)) FROM git_commits FINAL WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) AS raw_first_day,
-  (SELECT max(toDate(committer_when)) FROM git_commits FINAL WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) AS raw_last_day;
+  cf.f_first AS raw_first_day, cf.f_last AS raw_last_day
+FROM (SELECT count() AS f_rows, min(toDate(committer_when)) AS f_first, max(toDate(committer_when)) AS f_last
+      FROM git_commits FINAL WHERE startsWith(org_id, 'c6a38355')) AS cf
+WHERE cost_gate = 0;
 
 -- stmt7 OLD RULE vs NEW RULE NOW (F6), per (repo_id, hash) of every raw commit of the org, no day filter.
 --   old = the pre-fix join: raw git_commits x raw git_commit_stats, LOC as compute.go:229-230. new = git_commit_stats FINAL
@@ -1387,9 +1400,9 @@ SELECT
 -- WANT commits_now > 0; oldrule_same_commits > 0; oldrule_under_commits = 0 (old >= new always: > 0 = the SQL is wrong,
 --   STOP, acp reads). INFO oldrule_over_commits (> 0 = the doubling is live today), oldrule_ratio2_commits.
 WITH (SELECT throwIf(
-    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
-      AND table IN ('git_commit_stats', 'git_commits')) > 30000000
-    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
+    (SELECT sum(rows * multiIf(table = 'git_commit_stats', 2, 1)) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('git_commit_stats', 'git_commits')) > 20000000
+    OR (SELECT sum(bytes_on_disk * multiIf(table = 'git_commit_stats', 2, 1)) FROM system.parts WHERE active AND database = currentDatabase()
       AND table IN ('git_commit_stats', 'git_commits')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate
 SELECT count() AS commits_now,
@@ -1516,7 +1529,7 @@ func TestSizing14285ReadFormExecutesAndEveryGateFires(t *testing.T) {
 
 	sum := sha256.Sum256([]byte(sizing14285Form))
 	if got := hex.EncodeToString(sum[:]); got != sizing14285FormSHA256 {
-		t.Fatalf("SIZING-14285-3 form sha256 = %s, want %s", got, sizing14285FormSHA256)
+		t.Fatalf("SIZING-14285-4 form sha256 = %s, want %s", got, sizing14285FormSHA256)
 	}
 	statements := splitForm(sizing14285Form)
 	labels := make([]string, 0, len(statements))
@@ -1524,9 +1537,9 @@ func TestSizing14285ReadFormExecutesAndEveryGateFires(t *testing.T) {
 		labels = append(labels, s.label)
 	}
 	if strings.Join(labels, ",") != "S0,stmt0,stmt1,stmt2,stmt3,stmt4,stmt5,stmt6,stmt7" {
-		t.Fatalf("SIZING-14285-3 statements = %v", labels)
+		t.Fatalf("SIZING-14285-4 statements = %v", labels)
 	}
-	// Table reads per statement (table -> times read). The gate list = the keys, sorted; G = sum of k x table rows.
+	// Table scans per statement (table -> k = times read). The gate list = the keys, sorted; G = sum of k x table rows.
 	all := map[string]uint64{"commit_metrics": 1, "git_commit_stats": 1, "git_commits": 1, "git_pull_request_reviews": 1,
 		"git_pull_requests": 1, "repo_metrics_daily": 1, "user_metrics_daily": 1}
 	reads := map[string]map[string]uint64{
@@ -1537,7 +1550,7 @@ func TestSizing14285ReadFormExecutesAndEveryGateFires(t *testing.T) {
 		"stmt3": {"commit_metrics": 1, "git_commit_stats": 1, "git_commits": 1},
 		"stmt4": {"git_commit_stats": 1, "git_commits": 1, "user_metrics_daily": 1},
 		"stmt5": {"git_commits": 1, "git_pull_request_reviews": 1, "git_pull_requests": 2, "repo_metrics_daily": 1},
-		"stmt6": {"git_commit_stats": 2, "git_commits": 4},
+		"stmt6": {"git_commit_stats": 2, "git_commits": 2},
 		"stmt7": {"git_commit_stats": 2, "git_commits": 1},
 	}
 	gateList := func(label string) string {
@@ -1549,20 +1562,54 @@ func TestSizing14285ReadFormExecutesAndEveryGateFires(t *testing.T) {
 		return "table IN ('" + strings.Join(names, "', '") + "')"
 	}
 	const partsCap = "> 100000"
+	const budgetRowsCap = "> 20000000"
 	gateCaps := func(label string) []struct{ name, literal string } {
 		if label == "S0" {
 			return []struct{ name, literal string }{{"parts", partsCap}}
 		}
-		return []struct{ name, literal string }{{"rows", rowsCap}, {"bytes", bytesCap}}
+		return []struct{ name, literal string }{{"rows", budgetRowsCap}, {"bytes", bytesCap}}
 	}
+	// The budget gate weighs each table's system.parts rows and bytes by k, so it sums every scan of the statement.
+	weight := func(label string) string {
+		names := make([]string, 0, len(reads[label]))
+		for name, k := range reads[label] {
+			if k > 1 {
+				names = append(names, name)
+			}
+		}
+		if len(names) == 0 {
+			return ""
+		}
+		sort.Strings(names)
+		arms := make([]string, 0, len(names))
+		for _, name := range names {
+			arms = append(arms, fmt.Sprintf("table = '%s', %d", name, reads[label][name]))
+		}
+		return " * multiIf(" + strings.Join(arms, ", ") + ", 1)"
+	}
+	// s = scalar subqueries that read a table: each scope that uses cost_gate can run the gate (2 x P + 1 rows) once.
+	scalarScopes := map[string]uint64{"stmt0": 7, "stmt6": 3}
 	// Every statement holds exactly one gate over exactly the tables it reads.
 	for _, s := range statements {
 		wantRowsBytes, wantParts := 1, 0
 		if s.label == "S0" {
 			wantRowsBytes, wantParts = 0, 1
 		}
-		if n := strings.Count(s.text, rowsCap); n != wantRowsBytes {
-			t.Fatalf("%s: %d rows caps %q, want %d", s.label, n, rowsCap, wantRowsBytes)
+		if n := strings.Count(s.text, budgetRowsCap); n != wantRowsBytes {
+			t.Fatalf("%s: %d rows budget caps %q, want %d", s.label, n, budgetRowsCap, wantRowsBytes)
+		}
+		if n := strings.Count(s.text, rowsCap); n != 0 {
+			t.Fatalf("%s: %d old rows caps %q, want 0", s.label, n, rowsCap)
+		}
+		if s.label != "S0" {
+			for _, sum := range []string{"(SELECT sum(rows" + weight(s.label) + ") FROM system.parts", "(SELECT sum(bytes_on_disk" + weight(s.label) + ") FROM system.parts"} {
+				if n := strings.Count(s.text, sum); n != 1 {
+					t.Fatalf("%s: budget sum %q found %d times, want 1", s.label, sum, n)
+				}
+			}
+			if n := uint64(strings.Count(chmigrate.StripLineComments(s.text), "AND cost_gate = 0) AS ")); n != scalarScopes[s.label] {
+				t.Fatalf("%s: %d scalar subqueries use cost_gate, want %d", s.label, n, scalarScopes[s.label])
+			}
 		}
 		if n := strings.Count(s.text, bytesCap); n != wantRowsBytes {
 			t.Fatalf("%s: %d bytes caps %q, want %d", s.label, n, bytesCap, wantRowsBytes)
@@ -1642,9 +1689,13 @@ func TestSizing14285ReadFormExecutesAndEveryGateFires(t *testing.T) {
 
 	tableRows := map[string]uint64{}
 	tableParts := map[string]uint64{}
+	passComments := map[string]string{}
 	for _, statement := range statements {
 		var readRows uint64
-		qctx := clickhouse.Context(ctx, clickhouse.WithProgress(func(p *clickhouse.Progress) { readRows += p.Rows }))
+		passComments[statement.label] = fmt.Sprintf("sizing14285-pass-%s-%d", statement.label, time.Now().UnixNano())
+		qctx := clickhouse.Context(ctx,
+			clickhouse.WithSettings(clickhouse.Settings{"log_comment": passComments[statement.label]}),
+			clickhouse.WithProgress(func(p *clickhouse.Progress) { readRows += p.Rows }))
 		rows, err := conn.Query(qctx, statement.text)
 		if err != nil {
 			t.Fatalf("%s: SQL error: %v", statement.label, err)
@@ -1695,17 +1746,7 @@ func TestSizing14285ReadFormExecutesAndEveryGateFires(t *testing.T) {
 			continue
 		}
 
-		// md WANT: read_rows <= 1.1 x G + 2 x P + 2 (G counts a table once per read of it; P = parts of the gate tables).
-		var g, p uint64
-		for table, k := range reads[statement.label] {
-			g += k * tableRows[table]
-			p += tableParts[table]
-		}
-		limit := 1.1*float64(g) + 2*float64(p) + 2
-		t.Logf("%s read_rows=%d G=%d P=%d limit=%.1f", statement.label, readRows, g, p, limit)
-		if 10*readRows > 11*g+20*p+20 {
-			t.Errorf("%s: read_rows %d over 1.1 x G + 2 x P + 2 = %.1f (G=%d P=%d)", statement.label, readRows, limit, g, p)
-		}
+		t.Logf("%s client read_rows=%d", statement.label, readRows)
 		if len(got) != 1 {
 			t.Errorf("%s: %d rows, want 1", statement.label, len(got))
 			continue
@@ -1719,6 +1760,48 @@ func TestSizing14285ReadFormExecutesAndEveryGateFires(t *testing.T) {
 			if _, ok := want[statement.label][name]; !ok {
 				t.Errorf("%s: column %s has no WANT in the cell", statement.label, name)
 			}
+		}
+	}
+
+	// PASS path (caps at the real values): the scan count. WANT G + 2 x P + 1 <= query_log read_rows <= G + (1 + s) x (2 x P + 1),
+	// G = sum of k x table rows (every scan of the statement), P = parts of the gate tables, s = scalar gate scopes.
+	if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
+		t.Fatalf("the query log is not readable by this user: %v", err)
+	}
+	for _, statement := range statements[1:] {
+		var g, p uint64
+		for table, k := range reads[statement.label] {
+			g += k * tableRows[table]
+			p += tableParts[table]
+		}
+		s := scalarScopes[statement.label]
+		var types []string
+		var logRead uint64
+		rows, err := conn.Query(ctx, `SELECT toString(type), read_rows FROM system.query_log
+			WHERE log_comment = ? AND type != 'QueryStart' ORDER BY event_time_microseconds`, passComments[statement.label])
+		if err != nil {
+			t.Fatalf("PASS %s: query log: %v", statement.label, err)
+		}
+		for rows.Next() {
+			var typ string
+			var r uint64
+			if err := rows.Scan(&typ, &r); err != nil {
+				t.Fatalf("PASS %s: query log scan: %v", statement.label, err)
+			}
+			types = append(types, typ)
+			logRead += r
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("PASS %s: query log: %v", statement.label, err)
+		}
+		_ = rows.Close()
+		low, high := g+2*p+1, g+(1+s)*(2*p+1)
+		t.Logf("PASS %s query_log types=%v read_rows=%d G=%d P=%d s=%d band=[%d, %d]", statement.label, types, logRead, g, p, s, low, high)
+		if len(types) != 1 || types[0] != "QueryFinish" {
+			t.Errorf("PASS %s: query_log types %v, want [QueryFinish]", statement.label, types)
+		}
+		if logRead < low || logRead > high {
+			t.Errorf("PASS %s: query_log read_rows %d outside [G + 2 x P + 1, G + (1 + s) x (2 x P + 1)] = [%d, %d]", statement.label, logRead, low, high)
 		}
 	}
 

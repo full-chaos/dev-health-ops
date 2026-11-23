@@ -223,9 +223,9 @@ func sweepAnswer(t *testing.T, world sweepWorld, filter *model.CompoundingRiskFi
 	return strings.Join(sweepServed(got, err), "\n")
 }
 
-// A request list is cut at maxRows before the team scope resolves it: entry
-// 501 of repoIds or teamIds selects nothing. An explicit empty repoIds keeps
-// its answer of main.
+// repoIds is cut at maxRows before the team scope resolves it: its entry 501
+// selects nothing. teamIds is not cut: every named team answers its row, as on
+// main. An explicit empty repoIds keeps its answer of main.
 func TestARequestListOver500IsCutBeforeTheTeamScopeResolvesIt(t *testing.T) {
 	now := sweepNow()
 	d := time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC)
@@ -257,9 +257,11 @@ func TestARequestListOver500IsCutBeforeTheTeamScopeResolvesIt(t *testing.T) {
 		}
 		world.teams = append(world.teams, sweepTeam{id: "tail", name: "Tail", active: true, owns: []string{"repo-t"}})
 		full := sweepAnswer(t, world, team(append(teamIDs, "tail"), nil))
-		first := sweepAnswer(t, world, team(teamIDs, nil))
-		if full != first || !strings.HasPrefix(full, "  served ") || strings.Contains(full, "row ") {
-			t.Errorf("served with team tail as entry 501:\n%s\nwith the first 500 entries:\n%s\nwant both equal, a served answer, with no row", full, first)
+		want := strings.Join([]string{`  served breakout="TEAM" rows=1 trend=1`,
+			`  row TEAM tail "Tail" score=0.5 coverage=0.4000000000000001 severity=ELEVATED day=2026-03-09`,
+			`  trend 2026-03-09 score=0.5`}, "\n")
+		if full != want {
+			t.Errorf("served with team tail as entry 501:\n%s\nwant the answer of main (tail is not cut):\n%s", full, want)
 		}
 	})
 	t.Run("c-explicit-empty-repoIds", func(t *testing.T) {
@@ -276,4 +278,42 @@ func TestARequestListOver500IsCutBeforeTheTeamScopeResolvesIt(t *testing.T) {
 			t.Errorf("TEAM, teamIds [big], repoIds []:\n%s\nwant the answer of repoIds absent, as on main:\n%s", got, absent)
 		}
 	})
+}
+
+// 501 named teams and 501 repoIds tokens: every named team answers its row
+// (tm-500 owns rp-000 too) and repoIds entry 501 (x-tail, owned by tm-000) has
+// no effect.
+func TestFiveHundredOneNamedTeamsAnswerEveryRowWhileRepoIdsIsCutAt500(t *testing.T) {
+	now := sweepNow()
+	d := time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC)
+	world := sweepWorld{}
+	var teamIDs, repoIDs []string
+	for i := 0; i <= maxRows; i++ {
+		tm, rp := fmt.Sprintf("tm-%03d", i), fmt.Sprintf("rp-%03d", i)
+		owns := []string{rp}
+		switch i {
+		case 0:
+			owns = append(owns, "x-tail")
+		case maxRows:
+			owns = []string{"rp-000"}
+		}
+		world.teams = append(world.teams, sweepTeam{id: tm, name: tm, active: true, owns: owns})
+		teamIDs = append(teamIDs, tm)
+		if i < maxRows {
+			world.repos = append(world.repos, sweepRepo{rp, "acme/" + rp})
+			world.risk = append(world.risk, bigRiskRow(d, rp, .5, now))
+			repoIDs = append(repoIDs, rp)
+		}
+	}
+	world.repos = append(world.repos, sweepRepo{"x-tail", "acme/x-tail"})
+	world.risk = append(world.risk, bigRiskRow(d, "x-tail", 1, now))
+	filter := func(repos []string) *model.CompoundingRiskFilterInput {
+		return &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TeamIds: teamIDs, RepoIds: repos, TrendDays: 30}
+	}
+	full := sweepAnswer(t, world, filter(append(repoIDs, "x-tail")))
+	first := sweepAnswer(t, world, filter(repoIDs))
+	if !strings.HasPrefix(full, fmt.Sprintf(`  served breakout="TEAM" rows=%d trend=1`, maxRows+1)) || strings.Contains(full, "score=0.75") || full != first {
+		t.Errorf("served with x-tail as repoIds entry 501:\n%.400s\nwith the first 500 entries:\n%.400s\nwant both equal, %d rows (one per named team), no tm-000 row mixed with x-tail (0.75)",
+			full, first, maxRows+1)
+	}
 }

@@ -465,7 +465,7 @@ ORDER BY run.updated_at, run.id
 LIMIT $2::int`
 	staleFinalizeLevelsSQLTemplate = `
 SELECT classified.disposition,
-	count(*) FILTER (WHERE classified.ordinal < $2::int)::int,
+	count(*)::int,
 	count(*)::int
 FROM (
 	SELECT row_number() OVER (ORDER BY run.updated_at, run.id) AS ordinal,

@@ -204,7 +204,7 @@ func TestRoutePauseInTheCommitWindowCommitsNothingForTheOldGeneration(t *testing
 							return
 						case <-time.After(10 * time.Millisecond):
 						}
-						if routePauseRaceCount(t, ctx, pool, `SELECT count(*) FROM pg_stat_activity WHERE application_name = $1 AND wait_event_type = 'Lock'`, routePauseRaceApp) > 0 {
+						if routePauseRaceCount(t, ctx, pool, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1 AND wait_event_type = 'Lock'`, routePauseRaceApp) > 0 {
 							pauseWaited = true
 							return
 						}

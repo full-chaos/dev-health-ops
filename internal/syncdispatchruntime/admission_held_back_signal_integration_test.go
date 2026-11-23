@@ -8,13 +8,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -195,5 +198,175 @@ func TestBucketDecisionWithNoLiveOlderRunSaysNone(t *testing.T) {
 			t.Fatalf("heldBackRunIDs = %v, want none", decision.heldBackRunIDs)
 		}
 		assertHeldBackLine(t, line, raw, 0, "none", "none")
+	})
+}
+
+// assertHeldBackSignal seeds the older run with the given signs and checks the line names it with the signal.
+func assertHeldBackSignal(t *testing.T, signs heldBackSigns, want heldBackSignal) {
+	t.Helper()
+	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := pgNow()
+		seedHeldBackCase(t, ctx, pool, now, heldBackOlderRun, signs)
+		seedHeldBackNewerRun(t, ctx, pool, now)
+		decision, line, raw := bucketDecisionLine(t, ctx, pool, now)
+		if len(decision.heldBackRunIDs) != 1 || decision.heldBackRunIDs[0] != heldBackOlderRun || len(decision.cappedUnitIDs) != 3 {
+			t.Fatalf("heldBackRunIDs = %v capped = %d, want [%s] and 3", decision.heldBackRunIDs, len(decision.cappedUnitIDs), heldBackOlderRun)
+		}
+		assertHeldBackLine(t, line, raw, 2, "14403a0e", string(want))
+	})
+}
+
+func TestBucketDecisionNamesTheRecentRunSignal(t *testing.T) {
+	assertHeldBackSignal(t, heldBackSigns{recentRun: true}, heldBackSignalRecentRun)
+}
+
+func TestBucketDecisionNamesTheFinalizePendingSignal(t *testing.T) {
+	assertHeldBackSignal(t, heldBackSigns{finalize: true}, heldBackSignalFinalizePending)
+}
+
+func TestBucketDecisionNamesTheUnitLeaseSignal(t *testing.T) {
+	assertHeldBackSignal(t, heldBackSigns{lease: true}, heldBackSignalUnitLease)
+}
+
+func TestBucketDecisionNamesTheUnitDispatchingSignal(t *testing.T) {
+	assertHeldBackSignal(t, heldBackSigns{dispatching: true}, heldBackSignalUnitDispatching)
+}
+
+// Overlap: with two signals true the first in heldBackSignalOrder wins; with all six, recent_run.
+func TestBucketDecisionOverlappingSignalsTakeTheFirstInOrder(t *testing.T) {
+	assertHeldBackSignal(t, heldBackSigns{heartbeat: true, wake: true}, heldBackSignalUnitHeartbeat)
+}
+
+func TestBucketDecisionEverySignalTakesRecentRun(t *testing.T) {
+	assertHeldBackSignal(t, heldBackSigns{true, true, true, true, true, true}, heldBackSignalRecentRun)
+}
+
+// Mixed fixture: one older run with every signal live and one with every signal row present but past the bound.
+// olderRunsInBucketSQL (unchanged, sha pinned by TestOlderRunsInBucketSQLIsTheBaseStatement) lists exactly the live one.
+func TestOlderRunsRowSetWithEverySignalPresentIsTheLiveRunOnly(t *testing.T) {
+	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := pgNow()
+		const deadRun = "14403b0e-0000-4000-8000-000000014404"
+		seedHeldBackCase(t, ctx, pool, now, heldBackOlderRun, heldBackSigns{true, true, true, true, true, true})
+		seedHeldBackCase(t, ctx, pool, now, deadRun, heldBackSigns{})
+		seedHeldBackNewerRun(t, ctx, pool, now)
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		self, err := readRunOrder(ctx, tx, guardTestRun)
+		if err != nil {
+			t.Fatal(err)
+		}
+		older, err := readOlderRuns(ctx, tx, dispatchBucket{orgID: guardTestOrg, provider: "github", costClass: "medium"}, self, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(older) != 1 || older[0].id != heldBackOlderRun || older[0].waiting != 2 || !older[0].progressAt.Equal(now) {
+			t.Fatalf("older runs = %+v, want only %s waiting 2", older, heldBackOlderRun)
+		}
+		if got := readHeldBackSignal(ctx, tx, deadRun, now); got != heldBackSignalRecheckedNone {
+			t.Fatalf("recheck of the dead run = %q, want rechecked_none", got)
+		}
+		if got := readHeldBackSignal(ctx, tx, "14403c0e-0000-4000-8000-000000014405", now); got != heldBackSignalRecheckedNone {
+			t.Fatalf("recheck of a run that is gone = %q, want rechecked_none", got)
+		}
+	})
+}
+
+// signalStatementCounter counts heldBackSignalSQL executions on its pool.
+type signalStatementCounter struct {
+	mu    sync.Mutex
+	count int
+}
+
+func (counter *signalStatementCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if data.SQL == heldBackSignalSQL {
+		counter.mu.Lock()
+		counter.count++
+		counter.mu.Unlock()
+	}
+	return ctx
+}
+
+func (*signalStatementCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func countedSignalStatements(t *testing.T, ctx context.Context, pool *pgxpool.Pool, now time.Time) int {
+	t.Helper()
+	config, err := pgxpool.ParseConfig(pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	counter := &signalStatementCounter{}
+	config.ConnConfig.Tracer = counter
+	traced, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer traced.Close()
+	bucketDecisionLine(t, ctx, traced, now)
+	return counter.count
+}
+
+// held == 0 -> the second statement is not run; held > 0 -> it runs once.
+func TestHeldBackSignalStatementRunsOnlyWhenSlotsWereHeldBack(t *testing.T) {
+	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := pgNow()
+		seedHeldBackCase(t, ctx, pool, now, heldBackOlderRun, heldBackSigns{})
+		seedHeldBackNewerRun(t, ctx, pool, now)
+		if got := countedSignalStatements(t, ctx, pool, now); got != 0 {
+			t.Fatalf("nothing held back: heldBackSignalSQL ran %d times, want 0", got)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE public.sync_runs SET created_at = $2 WHERE id = $1::uuid`, heldBackOlderRun, now.Add(-time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		if got := countedSignalStatements(t, ctx, pool, now); got != 1 {
+			t.Fatalf("held back: heldBackSignalSQL ran %d times, want 1", got)
+		}
+	})
+}
+
+// A failed recheck logs read_failed, leaves the decision as it is, and does not abort the guard transaction: the
+// pass's later statements (the second unit fold, the claim UPDATE) and its COMMIT succeed.
+func TestHeldBackSignalReadFailureKeepsTheDecisionAndTheTransaction(t *testing.T) {
+	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := pgNow()
+		seedHeldBackCase(t, ctx, pool, now, heldBackOlderRun, heldBackSigns{wake: true})
+		seedHeldBackNewerRun(t, ctx, pool, now)
+		control, line, raw := bucketDecisionLine(t, ctx, pool, now)
+		assertHeldBackLine(t, line, raw, 2, "14403a0e", "wake_armed")
+
+		planted := heldBackSignalSQL
+		t.Cleanup(func() { heldBackSignalSQL = planted })
+		heldBackSignalSQL = `SELECT (1 / 0) = 1, false, false, false, false, false
+WHERE $1::uuid IS NOT NULL AND $2::timestamptz IS NOT NULL AND $3::double precision IS NOT NULL`
+
+		var logs bytes.Buffer
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		decision, err := authorizeRun(ctx, tx, synclog.New(slog.New(slog.NewJSONHandler(&logs, nil))), guardTestOrg, guardTestRun, now)
+		if err != nil {
+			t.Fatalf("authorizeRun with a failing recheck: %v", err)
+		}
+		if !reflect.DeepEqual(decision, control) {
+			t.Fatalf("decision with a failing recheck = %+v, want the control decision %+v", decision, control)
+		}
+		if !strings.Contains(logs.String(), `"guard.held_back":2,"guard.held_back_run":"14403a0e","guard.held_back_signal":"read_failed"`) {
+			t.Fatalf("no read_failed bucket_decision line:\n%s", logs.String())
+		}
+		if strings.Contains(logs.String(), "division") || strings.Contains(logs.String(), "22012") {
+			t.Fatalf("the recheck error reached the log:\n%s", logs.String())
+		}
+		if _, err := tx.Exec(ctx, `UPDATE public.sync_run_units SET status = 'dispatching', updated_at = $2 WHERE sync_run_id = $1::uuid AND status = 'planned' AND id = ANY($3::uuid[])`,
+			guardTestRun, now, []string{guardUnitID("00014403b0", 0)}); err != nil {
+			t.Fatalf("claim after a failed recheck: %v", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("commit after a failed recheck: %v", err)
+		}
 	})
 }

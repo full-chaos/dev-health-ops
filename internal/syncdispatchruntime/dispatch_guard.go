@@ -283,11 +283,12 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, orgID,
 		activeCount: func(bucket dispatchBucket) (int, int, int, error) {
 			return countActiveBucketUnits(ctx, tx, bucket, staleCutoff, now)
 		},
-		emit: func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, heldBack int) {
-			emitBucketDecision(ctx, logger, bucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, heldBack)
+		emit: func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, heldBack int, heldBackRun string, signal heldBackSignal) {
+			emitBucketDecision(ctx, logger, bucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, heldBack, heldBackRun, signal)
 		},
-		self:      self,
-		olderRuns: func(bucket dispatchBucket) ([]olderRun, error) { return readOlderRuns(ctx, tx, bucket, self, now) },
+		self:           self,
+		olderRuns:      func(bucket dispatchBucket) ([]olderRun, error) { return readOlderRuns(ctx, tx, bucket, self, now) },
+		heldBackSignal: func(runID string) heldBackSignal { return readHeldBackSignal(ctx, tx, runID, now) },
 	}
 	source := func(fold func(dispatchGuardUnit) error) error {
 		return forEachDispatchGuardUnit(ctx, tx, runID, fold)
@@ -304,11 +305,14 @@ type guardEnv struct {
 	// activeCount returns the bucket's active units and, of those, the units of backfill runs and the chunked units, from
 	// one read.
 	activeCount func(dispatchBucket) (active, activeBackfill, activeChunked int, err error)
-	emit        func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, heldBack int)
+	emit        func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, heldBack int, heldBackRun string, signal heldBackSignal)
 	// self is the deciding run's admission position; olderRuns lists the bucket's older open runs with waiting units
 	// (CHAOS-8880).
 	self      runOrder
 	olderRuns func(dispatchBucket) ([]olderRun, error)
+	// heldBackSignal names the liveness probe of the run a bucket held slots for (CHAOS-14403). Called only when the
+	// bucket held slots back, after the decision; it never fails the pass.
+	heldBackSignal func(runID string) heldBackSignal
 }
 
 // guardUnitSource folds every unit of the run in id order; each call is one full paged read.
@@ -499,6 +503,8 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 
 	activeCounts := make(map[dispatchBucket]int, len(allBuckets))
 	heldBack := make(map[dispatchBucket]int, len(allBuckets))
+	heldBackRun := make(map[dispatchBucket]string, len(allBuckets))
+	heldBackSignals := make(map[dispatchBucket]heldBackSignal, len(allBuckets))
 	folds := make(map[dispatchBucket]*guardBucketFold, len(allBuckets))
 	livenessBound := admissionLivenessBound()
 	var heldBackRunIDs []string
@@ -526,6 +532,9 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 			heldBack[bucket] = held
 			if oldest != "" {
 				heldBackRunIDs = append(heldBackRunIDs, oldest)
+			}
+			if held > 0 && env.heldBackSignal != nil {
+				heldBackRun[bucket], heldBackSignals[bucket] = oldest, env.heldBackSignal(oldest)
 			}
 		}
 		if slots > 0 {
@@ -571,7 +580,11 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 		if reclaimedStale > fold.slots {
 			reclaimedStale = fold.slots
 		}
-		env.emit(bucket, activeCounts[bucket], reclaimedStale, len(capped)-len(fold.cappedReclaims), len(fold.cappedReclaims), headroom, heldBack[bucket])
+		signal, signalled := heldBackSignals[bucket]
+		if !signalled {
+			signal = heldBackSignalNone
+		}
+		env.emit(bucket, activeCounts[bucket], reclaimedStale, len(capped)-len(fold.cappedReclaims), len(fold.cappedReclaims), headroom, heldBack[bucket], heldBackRun[bucket], signal)
 	}
 
 	if len(cappedUnitIDs) > 0 {
@@ -799,10 +812,18 @@ func logConcurrencyCapped(ctx context.Context, logger *synclog.Logger, runID str
 // failure here is likewise swallowed, not propagated: attribute.String/Int
 // on a Go span cannot fail the way Python's dynamic OTel calls could, so
 // there is nothing to catch, but the log call is likewise best-effort).
-func emitBucketDecision(ctx context.Context, logger *synclog.Logger, bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, slotHeadroom, heldBack int) {
+//
+// heldBackRun is the oldest run the bucket held slots for ("" for none), logged as its 8-character prefix; signal is
+// the liveness probe that matched for it (CHAOS-14403). guard.held_back keeps its key and integer form.
+func emitBucketDecision(ctx context.Context, logger *synclog.Logger, bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, slotHeadroom, heldBack int, heldBackRun string, signal heldBackSignal) {
 	bucketLabel := bucket.orgID + "/" + bucket.provider + "/" + bucket.costClass
 	logBucket := bucket.provider + ":" + bucket.costClass
-	logger.Info(ctx, synclog.MsgDispatchGuardBucketDecision, synclog.Org(synclog.ParseID(bucket.orgID)), synclog.Text(synclog.KeyBucket, synclog.ParseLabel(logBucket)), synclog.Count(synclog.KeyGuardActiveCount, activeCount), synclog.Count(synclog.KeyGuardReclaimedStale, reclaimedStale), synclog.Count(synclog.KeyGuardCappedNew, cappedNew), synclog.Count(synclog.KeyGuardCappedStale, cappedStale), synclog.Count(synclog.KeyGuardSlotHeadroom, slotHeadroom), synclog.Count(synclog.KeyGuardHeldBack, heldBack))
+	runPrefix := heldBackRunPrefix(heldBackRun)
+	runLabel := synclog.LabelHeldBackNone
+	if heldBackRun != "" {
+		runLabel = synclog.ParseLabel(runPrefix)
+	}
+	logger.Info(ctx, synclog.MsgDispatchGuardBucketDecision, synclog.Org(synclog.ParseID(bucket.orgID)), synclog.Text(synclog.KeyBucket, synclog.ParseLabel(logBucket)), synclog.Count(synclog.KeyGuardActiveCount, activeCount), synclog.Count(synclog.KeyGuardReclaimedStale, reclaimedStale), synclog.Count(synclog.KeyGuardCappedNew, cappedNew), synclog.Count(synclog.KeyGuardCappedStale, cappedStale), synclog.Count(synclog.KeyGuardSlotHeadroom, slotHeadroom), synclog.Count(synclog.KeyGuardHeldBack, heldBack), synclog.Text(synclog.KeyGuardHeldBackRun, runLabel), synclog.Text(synclog.KeyGuardHeldBackSignal, signal.label()))
 	span := oteltrace.SpanFromContext(ctx)
 	if span == nil || !span.IsRecording() {
 		return
@@ -815,6 +836,8 @@ func emitBucketDecision(ctx context.Context, logger *synclog.Logger, bucket disp
 		attribute.Int("guard.capped_stale", cappedStale),
 		attribute.Int("guard.slot_headroom", slotHeadroom),
 		attribute.Int("guard.held_back", heldBack),
+		attribute.String("guard.held_back_run", runPrefix),
+		attribute.String("guard.held_back_signal", string(signal)),
 	}
 	span.SetAttributes(attrs...)
 	span.AddEvent("dispatch_guard.bucket_decision", oteltrace.WithAttributes(attrs...))

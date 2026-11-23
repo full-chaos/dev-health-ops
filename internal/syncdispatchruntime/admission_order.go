@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/jackc/pgx/v5"
 )
@@ -228,4 +229,133 @@ func readOlderRuns(ctx context.Context, tx pgx.Tx, bucket dispatchBucket, self r
 		return nil, fmt.Errorf("%w: iterate older runs in bucket: %w", ErrDiscoveryTransientFailure, err)
 	}
 	return older, nil
+}
+
+// heldBackSignal names why the oldest run a bucket decision held slots for was live (CHAOS-14403), for the Info
+// bucket_decision line. The first six are the liveness probes of olderRunsInBucketSQL in the order
+// pickHeldBackSignal takes the first true one.
+type heldBackSignal string
+
+const (
+	heldBackSignalNone            heldBackSignal = "none"
+	heldBackSignalRecentRun       heldBackSignal = "recent_run"
+	heldBackSignalFinalizePending heldBackSignal = "finalize_pending"
+	heldBackSignalUnitHeartbeat   heldBackSignal = "unit_heartbeat"
+	heldBackSignalUnitLease       heldBackSignal = "unit_lease"
+	heldBackSignalUnitDispatching heldBackSignal = "unit_dispatching"
+	heldBackSignalWakeArmed       heldBackSignal = "wake_armed"
+	// heldBackSignalRecheckedNone: no probe was true on the recheck (the run's state moved after olderRunsInBucketSQL).
+	heldBackSignalRecheckedNone heldBackSignal = "rechecked_none"
+	heldBackSignalReadFailed    heldBackSignal = "read_failed"
+)
+
+// heldBackSignalOrder is the order pickHeldBackSignal reads heldBackSignalSQL's columns in.
+var heldBackSignalOrder = [6]heldBackSignal{
+	heldBackSignalRecentRun, heldBackSignalFinalizePending, heldBackSignalUnitHeartbeat,
+	heldBackSignalUnitLease, heldBackSignalUnitDispatching, heldBackSignalWakeArmed,
+}
+
+func (signal heldBackSignal) label() synclog.Label {
+	switch signal {
+	case heldBackSignalNone:
+		return synclog.LabelHeldBackNone
+	case heldBackSignalRecentRun:
+		return synclog.LabelHeldBackRecentRun
+	case heldBackSignalFinalizePending:
+		return synclog.LabelHeldBackFinalizePending
+	case heldBackSignalUnitHeartbeat:
+		return synclog.LabelHeldBackUnitHeartbeat
+	case heldBackSignalUnitLease:
+		return synclog.LabelHeldBackUnitLease
+	case heldBackSignalUnitDispatching:
+		return synclog.LabelHeldBackUnitDispatching
+	case heldBackSignalWakeArmed:
+		return synclog.LabelHeldBackWakeArmed
+	case heldBackSignalRecheckedNone:
+		return synclog.LabelHeldBackRecheckedNone
+	case heldBackSignalReadFailed:
+		return synclog.LabelHeldBackReadFailed
+	}
+	return synclog.LabelInvalid
+}
+
+func pickHeldBackSignal(probes [6]bool) heldBackSignal {
+	for index, matched := range probes {
+		if matched {
+			return heldBackSignalOrder[index]
+		}
+	}
+	return heldBackSignalRecheckedNone
+}
+
+// heldBackSignalSQL is the liveness test of olderRunsInBucketSQL for ONE run, each probe its own column, in
+// heldBackSignalOrder. The probe text is olderRunsInBucketSQL's, with $7 (now) written $2 and $9 (the bound in
+// seconds) written $3; TestHeldBackSignalProbesAreTheOlderRunsProbes pins that. A variable so the tests can plant a
+// statement error; production never changes it.
+var heldBackSignalSQL = `
+SELECT
+    run.created_at > $2::timestamptz - make_interval(secs => $3::double precision),
+    EXISTS (
+            SELECT 1 FROM public.sync_dispatch_outbox AS outbox
+            WHERE outbox.sync_run_id = run.id AND outbox.kind = 'finalize_sync_run'
+                AND outbox.created_at > $2::timestamptz - make_interval(secs => $3::double precision)
+            LIMIT 1
+        ),
+    EXISTS (
+            SELECT 1 FROM public.sync_run_units AS unit
+            WHERE unit.sync_run_id = run.id AND unit.status = 'running'
+                AND unit.last_heartbeat_at > $2::timestamptz - make_interval(secs => $3::double precision)
+            LIMIT 1
+        ),
+    EXISTS (
+            SELECT 1 FROM public.sync_run_units AS unit
+            WHERE unit.sync_run_id = run.id AND unit.status = 'running'
+                AND unit.lease_expires_at > $2::timestamptz
+            LIMIT 1
+        ),
+    EXISTS (
+            SELECT 1 FROM public.sync_run_units AS unit
+            WHERE unit.sync_run_id = run.id AND unit.status = 'dispatching'
+                AND unit.updated_at > $2::timestamptz - make_interval(secs => $3::double precision)
+            LIMIT 1
+        ),
+    EXISTS (
+            SELECT 1 FROM public.sync_dispatch_outbox AS wake
+            WHERE wake.sync_run_id = run.id AND wake.kind = 'dispatch_sync_run'
+                AND wake.status = 'pending' AND wake.last_error IS NULL
+                AND wake.available_at > $2::timestamptz - make_interval(secs => $3::double precision)
+                AND wake.available_at <= $2::timestamptz + make_interval(secs => $3::double precision)
+            LIMIT 1
+        )
+FROM public.sync_runs AS run
+WHERE run.id = $1::uuid`
+
+// readHeldBackSignal rechecks, after the decision is made, which liveness probe of the held-for run matches, with
+// readOlderRuns' now and bound. It reads in a savepoint of the guard transaction: a failed read is rolled back to the
+// savepoint, so it cannot abort the guard transaction, and it gives read_failed; the decision never depends on it.
+// A run gone since the first read gives rechecked_none.
+func readHeldBackSignal(ctx context.Context, tx pgx.Tx, runID string, now time.Time) heldBackSignal {
+	savepoint, err := tx.Begin(ctx)
+	if err != nil {
+		return heldBackSignalReadFailed
+	}
+	var probes [6]bool
+	err = savepoint.QueryRow(ctx, heldBackSignalSQL, runID, now, admissionLivenessBound().Seconds()).
+		Scan(&probes[0], &probes[1], &probes[2], &probes[3], &probes[4], &probes[5])
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		_ = savepoint.Rollback(ctx)
+		return heldBackSignalReadFailed
+	}
+	if err := savepoint.Commit(ctx); err != nil {
+		return heldBackSignalReadFailed
+	}
+	return pickHeldBackSignal(probes)
+}
+
+// heldBackRunPrefix is the first 8 characters of a held-for run id for the Info line, or none.
+func heldBackRunPrefix(runID string) string {
+	if runID == "" {
+		return string(heldBackSignalNone)
+	}
+	return runID[:min(len(runID), 8)]
 }

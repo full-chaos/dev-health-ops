@@ -399,7 +399,9 @@ func TestReconcilerRedrivesAFinalizePendingRunWithNoJobAndNoOutboxRow(t *testing
 	// LEG (do not merge): the run lock is held across the first Step, so the redrive ends on its 200 ms deadline.
 	venue.holdRunLock(t, ctx, runID)
 
+	stepStart := time.Now()
 	result, err := venue.relay.Step(ctx, now, 10)
+	stepTook := time.Since(stepStart)
 	if err != nil {
 		t.Fatalf("reconciler Step: %v", err)
 	}
@@ -411,9 +413,9 @@ func TestReconcilerRedrivesAFinalizePendingRunWithNoJobAndNoOutboxRow(t *testing
 			levels = *result.StaleFinalizeLevels
 		}
 		t.Fatalf("after one reconciler Step the shape-D run has %d finalize outbox rows, want 1: "+
-			"no stage redrove the stranded finalize (stage redriven %v, failures %+v, deferred %d, levels read %t %+v)",
+			"no stage redrove the stranded finalize (stage redriven %v, failures %+v, deferred %d, levels read %t %+v; Step took %s)",
 			outboxRows, result.StaleFinalizeRedriven, result.StaleFinalizeFailures, result.StaleFinalizeDeferred,
-			result.StaleFinalizeLevels != nil, levels)
+			result.StaleFinalizeLevels != nil, levels, stepTook)
 	}
 	// The redrive is stamped with the publisher's own clock, after the Step's
 	// now, so the relay delivers it on the next tick. That tick must deliver it

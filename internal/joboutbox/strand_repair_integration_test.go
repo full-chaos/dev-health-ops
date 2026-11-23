@@ -2624,3 +2624,77 @@ func assertUndeliveredInvariant(t *testing.T, ctx context.Context, pool *pgxpool
 		t.Fatalf("%d work-graph requests are pending behind an undeliverable outbox row", violations)
 	}
 }
+
+// Round 1 P2 (acp P2-2): statement A on Postgres honours the cursor's frozen bound. With a cursor set, a candidate
+// written after the bound (and before the cutoff) is NOT read; once the cursor wraps (nil) it is.
+func TestStaleFinalizeStatementAHoldsTheCursorBound(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = instance.Close(context.Background()) }()
+	admin := openIntegrationPool(t, ctx, instance.URI)
+	defer admin.Close()
+	createStrandSchema(t, ctx, admin)
+	domainRole, err := containers.RoleName("sfbound_domain", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer containers.DropRole(admin, domainRole, t.Logf)
+	queueRole, err := containers.RoleName("sfbound_queue", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer containers.DropRole(admin, queueRole, t.Logf)
+	createStrandRoles(t, ctx, admin, domainRole, queueRole)
+	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{
+		Schema: "river", DomainRole: domainRole, QueueRole: queueRole,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	cutoff := now.Add(-StaleFinalizeHorizon)
+	cursorAt, bound := cutoff.Add(-10*time.Hour), cutoff.Add(-5*time.Hour)
+	runs := map[string]time.Time{
+		"00000000-0000-4000-8000-0000000b0001": cutoff.Add(-8 * time.Hour), // after the cursor, before the bound
+		"00000000-0000-4000-8000-0000000b0002": cutoff.Add(-2 * time.Hour), // after the bound, before the cutoff
+	}
+	day := 0
+	for runID, at := range runs {
+		day++
+		if _, err := admin.Exec(ctx, `
+WITH run AS (
+    INSERT INTO public.daily_metrics_runs (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at)
+    VALUES ($1::uuid, '00000000-0000-4000-8000-0000000b0000'::uuid, DATE '2026-04-01' + $3::int, 'bound:' || $1, 'running', 'pending', $2, $2)
+    RETURNING id
+)
+INSERT INTO public.daily_metrics_partitions (id, run_id, ordinal, repo_ids, status, attempt_count, completed_at, created_at, updated_at)
+SELECT gen_random_uuid(), run.id, 0, '[]'::jsonb, 'succeeded', 1, $2, $2, $2 FROM run`, runID, at, day); err != nil {
+			t.Fatal(err)
+		}
+	}
+	jobTable := `"river"."river_job"`
+	candidatesSQL := fmt.Sprintf(staleFinalizeCandidatesSQLTemplate, jobTable)
+	levelsSQL := fmt.Sprintf(staleFinalizeLevelsSQLTemplate, jobTable)
+	read := func(cursor *staleFinalizeCursor) []string {
+		t.Helper()
+		survey := surveyStaleFinalize(ctx, admin.Begin, staleFinalizeBaseExistsSQL, candidatesSQL, levelsSQL, cutoff, 10, cursor)
+		if len(survey.failures) != 0 {
+			t.Fatalf("survey failures %+v", survey.failures)
+		}
+		ids := []string{}
+		for _, candidate := range survey.candidates {
+			ids = append(ids, candidate.runID)
+		}
+		return ids
+	}
+	cursor := &staleFinalizeCursor{updatedAt: cursorAt, runID: "00000000-0000-4000-8000-000000000000", bound: bound}
+	if got := read(cursor); !reflect.DeepEqual(got, []string{"00000000-0000-4000-8000-0000000b0001"}) {
+		t.Fatalf("with the cursor bound: candidates %v, want only the run written before the bound", got)
+	}
+	if got := read(nil); !reflect.DeepEqual(got, []string{"00000000-0000-4000-8000-0000000b0001", "00000000-0000-4000-8000-0000000b0002"}) {
+		t.Fatalf("after the wrap: candidates %v, want both runs, oldest first", got)
+	}
+}

@@ -492,8 +492,8 @@ func (store *PostgresStore) RedriveStaleFinalize(
 // staleFinalizeOutboxRecheckSQL is the survey's own outbox refusal (the
 // unrelayed arm of its live-job fragment and the outbox arm of its recent
 // fragment, internal/joboutbox/stale_finalize_repair.go), on the same
-// predicate, so the partial index ix_worker_job_outbox_finalize_domain_id
-// serves both.
+// predicate, so one partial index on that predicate can serve both (the
+// index is not part of this change).
 const staleFinalizeOutboxRecheckSQL = `
 SELECT EXISTS (
 	SELECT 1 FROM public.worker_job_outbox AS outbox
@@ -568,7 +568,7 @@ FOR UPDATE OF run`, runID).Scan(
 		return false, nil
 	}
 	if outboxRecentSince != nil {
-		// JIT off as in the survey: without the partial outbox index the planner
+		// JIT off as in the survey: with no index on this predicate the planner
 		// prices this read above jit_above_cost, and JIT alone costs ~0.5 s.
 		if _, err := tx.Exec(ctx, "SET LOCAL jit = off"); err != nil {
 			return false, ErrUnavailable

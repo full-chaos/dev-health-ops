@@ -912,10 +912,12 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 		t.Fatalf("overlap part X: %v", err)
 	}
 	runPhase("b")
+	time.Sleep(1100 * time.Millisecond) // part changes and run starts never share a second (the part times are seconds)
 	if err := conn.Exec(ctx, "ALTER TABLE work_items DROP PART '"+overlapName()+"'"); err != nil {
 		t.Fatalf("drop X: %v", err)
 	}
 	runPhase("c")
+	time.Sleep(1100 * time.Millisecond)
 	if err := conn.Exec(ctx, p3x14548Orgs(p3x14548Overlap)); err != nil {
 		t.Fatalf("overlap part Y: %v", err)
 	}
@@ -1204,7 +1206,8 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 		return strings.ReplaceAll(strings.ReplaceAll(dated(byLabel[label]), nextDay, "2000-01-02"), day, "2000-01-01")
 	}
 	orgSwap := func(label string) string {
-		return strings.ReplaceAll(replaced(label, "'f0f0f0f0'", "'d0d0d0d0'"), "'f0f0f0f1'", "'d0d0d0d1'")
+		// a range above every key: no granule spans into it (a range between two orgs would meet the granule that spans them)
+		return strings.ReplaceAll(replaced(label, "'f0f0f0f0'", "'fff0f0f0'"), "'f0f0f0f1'", "'fff0f0f1'")
 	}
 	prefix, wrongPrefix := "'SELECT source, uniqExact(subject_kind'", "'SELECT zource, uniqExact(subject_kind'"
 	flip := func(label string) string { return replaced(label, ">= 47000", ">= 1") }

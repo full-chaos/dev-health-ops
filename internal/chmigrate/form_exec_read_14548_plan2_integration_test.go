@@ -23,7 +23,7 @@ import (
 )
 
 // Throwaway exec proof of a prod read form (READ-14548-PLAN-2): not for merge. p2x14548Form is the form file byte for byte.
-const p2x14548FormSHA256 = "61212f40cb11ddaf68d316ec79936c92d8d6d213e79b7cfba24e464bde0a9888"
+const p2x14548FormSHA256 = "cef0be2ae3c93e89f708c9359d0231cdc020e0bb49756d334964809904335cbf"
 
 const p2x14548Form = `-- NOT EXECUTED. READ-14548-PLAN-2 (system tables and part index only; numbers and static names only). acr-mcp, 2026-11-23. acp FORM read first; then pm runs it once.
 -- Exec leg: a throwaway CI leg runs each statement (FORM-TEMPLATE-3); its run id and job id are in READ-14548-PLAN-2.md only.
@@ -211,15 +211,15 @@ ORDER BY run_side DESC, step_table, step_id, processor;
 --   levels, level0_parts, newest_level / newest_rows; the hypothesis needs a new small part at 'after' that 'before' does not have.
 --   Control that can fail: on 'now', parts = active_now (else limit c). Gates: part_log day parts 6,000,000 rows / 3,000,000,000 bytes;
 --   query_log window 1,000,000 rows.
-SELECT r.run_side AS run_side, u.table AS data_table, count() AS parts, sum(u.part_rows) AS rows, countIf(NOT u.rows_known) AS parts_rows_unknown,
-       arraySort(groupArray(u.level)) AS levels, arrayReverseSort(groupArray(u.part_rows)) AS part_rows, countIf(u.level = 0) AS level0_parts,
+SELECT r.run_side AS run_side, u.part_table AS data_table, count() AS parts, sum(u.part_rows) AS rows, countIf(NOT u.rows_known) AS parts_rows_unknown,
+       arraySort(groupArray(u.level)) AS levels, arrayReverseSort(groupArray(u.part_rows)) AS rows_per_part, countIf(u.level = 0) AS level0_parts,
        argMax(u.level, u.max_block) AS newest_level, argMax(u.part_rows, u.max_block) AS newest_rows,
        countIf(u.created_at < toDateTime('2026-11-23 00:00:00', 'UTC')) AS parts_from_before_day,
        if(data_table = 'work_items',
           (SELECT count() FROM system.parts WHERE active AND database = currentDatabase() AND table = 'work_items'),
           (SELECT count() FROM system.parts WHERE active AND database = currentDatabase() AND table = 'project_membership_transitions')) AS active_now
 FROM (
-  SELECT table, name,
+  SELECT part_table, name,
          coalesce(minIfOrNull(t, kind = 'create'), minIfOrNull(t, kind = 'part'), toDateTime(0)) AS created_at,
          minIfOrNull(t, kind = 'remove') AS removed_at,
          coalesce(maxIfOrNull(n, kind = 'part'), maxIfOrNull(n, kind = 'create'), 0) AS part_rows,
@@ -227,13 +227,13 @@ FROM (
          toUInt32OrZero(splitByChar('_', name)[4]) AS level,
          toUInt64OrZero(splitByChar('_', name)[3]) AS max_block
   FROM (
-    SELECT toString(table) AS table, tupleElement(e, 1) AS name, tupleElement(e, 2) AS kind, tupleElement(e, 3) AS t, tupleElement(e, 4) AS n
+    SELECT event_table AS part_table, tupleElement(e, 1) AS name, tupleElement(e, 2) AS kind, tupleElement(e, 3) AS t, tupleElement(e, 4) AS n
     FROM (
       WITH (SELECT throwIf(
         (SELECT sum(rows) FROM system.parts WHERE active AND database = 'system' AND table = 'part_log' AND min_date <= toDate('2026-11-23') AND max_date >= toDate('2026-11-23')) > 6000000
         OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = 'system' AND table = 'part_log' AND min_date <= toDate('2026-11-23') AND max_date >= toDate('2026-11-23')) > 3000000000,
         'STOP-COST-GATE')) AS cost_gate
-      SELECT table, arrayConcat(
+      SELECT toString(table) AS event_table, arrayConcat(
                if(event_type IN ('NewPart', 'MergeParts', 'MutatePart', 'DownloadPart'), [tuple(part_name, 'create', event_time, rows)], []),
                if(event_type IN ('MergeParts', 'MutatePart'), arrayMap(x -> tuple(x, 'remove', event_time, toUInt64(0)), merged_from), []),
                if(event_type = 'RemovePart', [tuple(part_name, 'remove', event_time, toUInt64(0))], [])) AS events
@@ -245,13 +245,13 @@ FROM (
     )
     ARRAY JOIN events AS e
     UNION ALL
-    SELECT toString(table) AS table, tupleElement(e, 1) AS name, tupleElement(e, 2) AS kind, tupleElement(e, 3) AS t, tupleElement(e, 4) AS n
+    SELECT toString(table) AS p_table, tupleElement(e, 1) AS p_name, tupleElement(e, 2) AS p_kind, tupleElement(e, 3) AS p_t, tupleElement(e, 4) AS p_n
     FROM system.parts
     ARRAY JOIN arrayConcat([tuple(name, 'part', modification_time, rows)],
                            if(NOT active AND remove_time > toDateTime(0), [tuple(name, 'remove', remove_time, toUInt64(0))], [])) AS e
     WHERE database = currentDatabase() AND table IN ('project_membership_transitions', 'work_items')
   )
-  GROUP BY table, name
+  GROUP BY part_table, name
 ) AS u
 CROSS JOIN (
   SELECT tupleElement(run, 1) AS run_side, tupleElement(run, 2) AS run_start
@@ -860,7 +860,7 @@ func TestReadPlan2Form14548ExecutesAtTheChainHead(t *testing.T) {
 	gotS3a := map[string]string{}
 	for _, r := range passRows["S3a"] {
 		key := r["run_side"] + "|" + r["data_table"]
-		gotS3a[key] = strings.Join([]string{r["parts"], r["rows"], r["levels"], r["part_rows"], r["newest_level"], r["newest_rows"]}, " ")
+		gotS3a[key] = strings.Join([]string{r["parts"], r["rows"], r["levels"], r["rows_per_part"], r["newest_level"], r["newest_rows"]}, " ")
 		if r["parts_rows_unknown"] != "0" || r["parts_from_before_day"] != "0" {
 			t.Errorf("S3a %s: %v, want parts_rows_unknown 0 and parts_from_before_day 0", key, r)
 		}

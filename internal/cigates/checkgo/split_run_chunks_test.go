@@ -473,3 +473,78 @@ func TestRaceSplitPartOverTheArgLimitRunsInRunChunksOfTheBudget(t *testing.T) {
 		})
 	}
 }
+
+// edgeNames gives names whose "^(...)$" is exactly total bytes: n-1 names of 49 bytes and a last name that fills the rest.
+func edgeNames(t *testing.T, n, total int) []string {
+	t.Helper()
+	names := make([]string, 0, n)
+	for i := 0; i < n-1; i++ {
+		names = append(names, fmt.Sprintf("TestEdge%05d", i)+strings.Repeat("P", 49-13))
+	}
+	last := total - len(joinedRegex(append(append([]string{}, names...), "")))
+	names = append(names, "TestEdgeLast"+strings.Repeat("X", last-len("TestEdgeLast")))
+	if got := len(joinedRegex(names)); got != total {
+		t.Fatalf("the fixture's -run is %d bytes, want %d", got, total)
+	}
+	return names
+}
+
+// runNameChunks runs go_run_name_chunks on names and returns its stdout, stderr and exit error.
+func runNameChunks(t *testing.T, names []string) (string, string, error) {
+	t.Helper()
+	script := "set -euo pipefail\n" + chunkCellFunctions(t, []string{"die", "go_run_name_ok", "byte_len", "go_run_name_chunks"}, nil) +
+		"go_run_name_chunks\n"
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Stdin = strings.NewReader(strings.Join(names, "\n") + "\n")
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
+}
+
+// The budget edge: a -run of exactly 60000 bytes is one chunk, 60001 bytes is two (every name once, each <= 60000), and one name
+// whose "^(name)$" alone passes 60000 bytes fails loudly instead of running.
+func TestRunChunkBudgetEdge(t *testing.T) {
+	t.Parallel()
+	t.Run("exactly 60000 bytes is one chunk", func(t *testing.T) {
+		t.Parallel()
+		names := edgeNames(t, 1200, chunkRunBudget)
+		r := runSplitJob(t, names, false, "")
+		if len(r.calls) != 1 {
+			t.Fatalf("want one call, got %d", len(r.calls))
+		}
+		if _, got := r.calls[0].runArg(t); got != joinedRegex(names) {
+			t.Errorf("-run of %d bytes is not the one joined pattern of the names", len(got))
+		}
+	})
+	t.Run("60001 bytes is two chunks", func(t *testing.T) {
+		t.Parallel()
+		names := edgeNames(t, 1200, chunkRunBudget+1)
+		r := runSplitJob(t, names, false, "")
+		if len(r.calls) != 2 {
+			t.Fatalf("want two calls, got %d", len(r.calls))
+		}
+		for _, d := range chunkDefects(t, r.calls, names) {
+			t.Error(d)
+		}
+	})
+	t.Run("one name of exactly 60000 bytes with its anchors is one chunk", func(t *testing.T) {
+		t.Parallel()
+		name := "TestAlone" + strings.Repeat("A", chunkRunBudget-4-len("TestAlone"))
+		out, errs, err := runNameChunks(t, []string{name})
+		if err != nil || out != name+"\n" {
+			t.Errorf("want the one name back, rc ok; got err %v, %d bytes out, stderr %q", err, len(out), errs)
+		}
+	})
+	t.Run("one name over 60000 bytes with its anchors fails", func(t *testing.T) {
+		t.Parallel()
+		name := "TestAlone" + strings.Repeat("A", chunkRunBudget-3-len("TestAlone"))
+		out, errs, err := runNameChunks(t, []string{"TestShort", name})
+		if err == nil {
+			t.Fatalf("want a failure, got rc 0 and %d bytes out", len(out))
+		}
+		if want := name + " alone exceeds the 60000-byte -run budget"; !strings.Contains(errs, want) {
+			t.Errorf("stderr %q does not name the budget", errs)
+		}
+	})
+}

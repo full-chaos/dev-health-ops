@@ -21,12 +21,12 @@ import (
 )
 
 // DO NOT MERGE. CHAOS-14559 config-write card exec leg: CARD-14559-WRITE-1's argv run through the dho command tree on a
-// migrated PostgreSQL with synthetic rows, and FORM-14559-G0-1 / FORM-14559-READBACK-1 executed as pm runs them. The
+// migrated PostgreSQL with synthetic rows, and FORM-14559-G0-1 / FORM-14559-READBACK-2 executed as pm runs them. The
 // embedded texts are the .sql files with the org prefix, config prefix, integration prefix and repository replaced by
 // placeholders, nothing else (sha256 checked); the cells put synthetic values in at run time. No prod id is in this file.
 const (
 	write14559G0SHA256       = "dad25341a62662227331d9f5ee44e9f143a6bab767e91a73f56ca118c2228006"
-	write14559ReadbackSHA256 = "69ca447becd26269366b18a4ecfea93b974ac39ceb377a51c2a0255e915e135a"
+	write14559ReadbackSHA256 = "7dcd412a20da0ff6f37261e03df444860aa7c4f11de3050aee5e805a8d659b3b"
 	write14559G0SQL          = `-- FORM-14559-G0-1 (lane-14559, 2026-11-23, ops pin ec43459c6614 = #6953 merged). PostgreSQL prod, READ ONLY, CHAOS-14559.
 -- The T0 read of CARD-14559-WRITE-1: the card's write target is the one GitHub parent sync configuration of org {{ORG_PREFIX}}
 -- whose id starts {{CONFIG_PREFIX}}, its integration starts {{INTEGRATION_PREFIX}}, and that integration holds no exclude list yet.
@@ -111,15 +111,17 @@ FROM ints LEFT JOIN cfg ON cfg.integration_id = ints.id;
 
 ROLLBACK;
 `
-	write14559ReadbackSQL = `-- FORM-14559-READBACK-1 (lane-14559, 2026-11-23, ops pin ec43459c6614 = #6953 merged). PostgreSQL prod, READ ONLY, CHAOS-14559.
+	write14559ReadbackSQL = `-- FORM-14559-READBACK-2 (lane-14559, 2026-11-23, ops pin ec43459c6614 = #6953 merged). PostgreSQL prod, READ ONLY, CHAOS-14559.
+-- Changed vs FORM-14559-READBACK-1: only R2's value read (a guarded nested CASE; new INFO column unreadable_results).
+-- Needs standard_conforming_strings on (the default; this form sets nothing): R2's regex literal holds backslashes.
 -- The read-back of CARD-14559-WRITE-1: the integration of org {{ORG_PREFIX}} whose id starts {{INTEGRATION_PREFIX}} holds exactly the list
 -- go-images-, go-test-timings-, go-junit-part- (the one store; every sync config of the integration shows it), no sync
 -- config keeps a copy, and the GitHub tests units of its full-chaos/dev-health-ops source created after the write
 -- carry excluded_non_report_prefix in their result. T0 = the integration's updated_at (the write stamps it).
 -- Shape: pm-guard/FORM-TEMPLATE-3.md (sha12 6b9e73a3c45a), PostgreSQL form (b). Run line:
--- psql -X -v ON_ERROR_STOP=1 -f FORM-14559-READBACK-1.sql (on the primary; one transaction, ends ROLLBACK).
+-- psql -X -v ON_ERROR_STOP=1 -f FORM-14559-READBACK-2.sql (on the primary; one transaction, ends ROLLBACK).
 -- No SET, EXPLAIN, cast to jsonb or write; no stored text is selected. Output: counts, booleans, 8-char cuts, minutes.
--- Org prefix {{ORG_PREFIX}} by starts_with on every FROM with org_id. WANT text and work math: FORM-14559-READBACK-1.md.
+-- Org prefix {{ORG_PREFIX}} by starts_with on every FROM with org_id. WANT text and work math: FORM-14559-READBACK-2.md.
 
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
 
@@ -195,9 +197,11 @@ SELECT count(ints.id) AS integrations,
 FROM ints LEFT JOIN cfg ON cfg.integration_id = ints.id;
 
 -- R2 the next units: GitHub tests/cicd units of the integration's full-chaos/dev-health-ops source created after T0
--- (the integration's updated_at). INFO units_after_t0, success_after_t0; WANT, once success_after_t0 >= 1:
--- with_prefix_exclusions >= 1 (result.excluded_non_report_prefix a number > 0). The value is read with json -> and
--- json_typeof (no de-escape, no jsonb cast), cast to a number only under the CASE guard.
+-- (the integration's updated_at). INFO units_after_t0, success_after_t0, unreadable_results (success units whose result
+-- text holds the escape \u0000 or a UTF-16 surrogate escape); WANT, once success_after_t0 > unreadable_results:
+-- with_prefix_exclusions >= 1 (result.excluded_non_report_prefix an integer > 0). json -> de-escapes every string of the
+-- document and raises 22P05 on those escapes, so the outer WHEN tests the stored text with a regex first (no parse) and
+-- only the inner CASE uses ->. The inner CASE casts only 1 to 18 plain digits to bigint (no cast can raise).
 WITH ints AS MATERIALIZED (
     SELECT i.id, i.updated_at
     FROM public.integrations i
@@ -211,14 +215,18 @@ src AS MATERIALIZED (
 ),
 units AS MATERIALIZED (
     SELECT u.status, u.created_at,
-           CASE WHEN json_typeof(u.result -> 'excluded_non_report_prefix') = 'number'
-                THEN (((u.result -> 'excluded_non_report_prefix')::text)::numeric)::bigint END AS excluded_prefix
+           u.result::text ~* '\\u(0000|d[89a-f][0-9a-f]{2})' AS unreadable,
+           CASE WHEN u.result::text ~* '\\u(0000|d[89a-f][0-9a-f]{2})' THEN NULL
+                ELSE CASE WHEN (u.result -> 'excluded_non_report_prefix')::text ~ '^[0-9]{1,18}$'
+                          THEN ((u.result -> 'excluded_non_report_prefix')::text)::bigint END
+           END AS excluded_prefix
     FROM src JOIN public.sync_run_units u ON u.source_id = src.id
     WHERE starts_with(u.org_id::text, '{{ORG_PREFIX}}') AND u.provider = 'github' AND u.dataset_key IN ('tests', 'cicd')
       AND u.created_at > src.updated_at
 )
 SELECT count(*) AS units_after_t0,
        count(*) FILTER (WHERE status = 'success') AS success_after_t0,
+       count(*) FILTER (WHERE status = 'success' AND unreadable) AS unreadable_results,
        count(*) FILTER (WHERE status = 'success' AND excluded_prefix > 0) AS with_prefix_exclusions,
        COALESCE(max(excluded_prefix) FILTER (WHERE status = 'success'), 0) AS max_excluded_prefix,
        COALESCE(to_char(max(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI'), '') AS last_unit_minute
@@ -589,10 +597,12 @@ func TestFormExec14559G0FindsTheWriteTarget(t *testing.T) {
 		map[string]string{"ix_sync_configurations_integration_id": "index_ready=0"})
 }
 
-// FORM-14559-READBACK-1 as pm runs it, after the card's write: R1 shows the exact list in the integration and no copy in
+// FORM-14559-READBACK-2 as pm runs it, after the card's write: R1 shows the exact list in the integration and no copy in
 // a config; R2 counts the source's GitHub tests units created after T0 (the integration's updated_at) and their
-// excluded_non_report_prefix (a unit before T0 is not counted; a result holding "\u0000" reads without error); C1 sees
-// the source's units. Before the write R1 misses its WANT. Each statement's filters bite; the gate fires.
+// excluded_non_report_prefix (a unit before T0 is not counted; a result holding "\u0000" or a lone surrogate escape
+// reads without error and is counted unreadable, never as an exclusion, even next to a count); C1 sees the source's
+// units. Before the write R1 misses its WANT. Each statement's filters bite; without R2's outer guard, or with a guard
+// on \u0000 only, the statement fails 22P05; the gate fires.
 func TestFormExec14559ReadbackReadsTheWrittenList(t *testing.T) {
 	ctx := context.Background()
 	db := startDatabase(t)
@@ -615,13 +625,17 @@ func TestFormExec14559ReadbackReadsTheWrittenList(t *testing.T) {
 			t.Fatalf("%s: %v", sql, err)
 		}
 	}
-	for index, result := range []string{`{"excluded_non_report_prefix": 3, "x": "\u0000"}`, `{"excluded_non_report_prefix": 0}`, `null`} {
-		exec(`INSERT INTO sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode, status, attempts, result, created_at, updated_at)
+	addUnits := func(first int, results ...string) {
+		t.Helper()
+		for offset, result := range results {
+			exec(`INSERT INTO sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode, status, attempts, result, created_at, updated_at)
 VALUES ($1::uuid, $2, '5c455b06-1455-4000-8000-000000000001'::uuid, $3::uuid, $4::uuid, 'github', 'tests', 'heavy', 'incremental', 'success', 1,
         $5::json, now() + interval '1 minute', now() + interval '1 minute')`,
-			fmt.Sprintf("0e455b06-1455-4000-8000-0000000001%02d", index), write14559Org, write14559Integration, write14559Source, result)
+				fmt.Sprintf("0e455b06-1455-4000-8000-0000000001%02d", first+offset), write14559Org, write14559Integration, write14559Source, result)
+		}
+		exec(`ANALYZE sync_run_units`)
 	}
-	exec(`ANALYZE sync_run_units`)
+	addUnits(0, `{"excluded_non_report_prefix": 3}`, `{"excluded_non_report_prefix": 0, "x": "\u0000"}`, `null`)
 	results, err = write14559Run(ctx, t, db.conn, pieces, "", "", "")
 	if err != nil {
 		t.Fatal(err)
@@ -629,11 +643,32 @@ VALUES ($1::uuid, $2, '5c455b06-1455-4000-8000-000000000001'::uuid, $3::uuid, $4
 	if got := write14559Rows(results, "R1"); !strings.HasPrefix(got, "integrations=1 integration_key_set=true list_exact=true configs_of_integration=2 configs_with_key_in_options=0 t0_minute=") {
 		t.Errorf("R1 = %s", got)
 	}
-	if got, want := write14559Rows(results, "R2"), "units_after_t0=3 success_after_t0=3 with_prefix_exclusions=1 max_excluded_prefix=3"; !strings.HasPrefix(got, want) {
+	if got, want := write14559Rows(results, "R2"), "units_after_t0=3 success_after_t0=3 unreadable_results=1 with_prefix_exclusions=1 max_excluded_prefix=3 "; !strings.HasPrefix(got, want) {
 		t.Errorf("R2 = %s, want prefix %s", got, want)
 	}
-	if got := write14559Rows(results, "C1"); got != "source_units=4" {
-		t.Errorf("C1 = %s, want source_units=4", got)
+	// The escape in the same result as a count of 3, and a lone surrogate escape (json accepts it, -> raises on it):
+	// both unreadable, so with_prefix_exclusions stays 1 (read, it would be 3).
+	addUnits(3, `{"excluded_non_report_prefix": 3, "x": "\u0000"}`, `{"excluded_non_report_prefix": 3, "x": "\ud800"}`)
+	results, err = write14559Run(ctx, t, db.conn, pieces, "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := write14559Rows(results, "R2"), "units_after_t0=5 success_after_t0=5 unreadable_results=3 with_prefix_exclusions=1 max_excluded_prefix=3 "; !strings.HasPrefix(got, want) {
+		t.Errorf("R2 = %s, want prefix %s", got, want)
+	}
+	if got := write14559Rows(results, "C1"); got != "source_units=6" {
+		t.Errorf("C1 = %s, want source_units=6", got)
+	}
+	guard := `CASE WHEN u.result::text ~* '\\u(0000|d[89a-f][0-9a-f]{2})' THEN NULL`
+	for _, mutant := range []struct{ name, to string }{
+		{"r2-no-guard", "CASE WHEN false THEN NULL"},
+		{"r2-guard-no-surrogate", `CASE WHEN u.result::text ~* '\\u0000' THEN NULL`},
+	} {
+		if _, err := write14559Run(ctx, t, db.conn, pieces, "R2", guard, mutant.to); err == nil {
+			t.Errorf("MUTANT %s SURVIVED: R2 ran without its guard", mutant.name)
+		} else if pgErr := (*pgconn.PgError)(nil); !errors.As(err, &pgErr) || (pgErr.Code != "22P05" && pgErr.Code != "22P02") {
+			t.Errorf("MUTANT %s: err = %v, want SQLSTATE 22P05 (\\u0000) or 22P02 (surrogate)", mutant.name, err)
+		}
 	}
 	for _, mutant := range []struct{ name, id, from, to string }{
 		{"r1-other-org", "R1", "starts_with(i.org_id::text, '" + write14559Org[:8] + "')", "starts_with(i.org_id::text, '" + write14559OtherOrg[:8] + "')"},
@@ -642,7 +677,8 @@ VALUES ($1::uuid, $2, '5c455b06-1455-4000-8000-000000000001'::uuid, $3::uuid, $4
 		{"r2-other-org", "R2", "starts_with(u.org_id::text, '" + write14559Org[:8] + "')", "starts_with(u.org_id::text, '" + write14559OtherOrg[:8] + "')"},
 		{"r2-before-t0", "R2", "u.created_at > src.updated_at", "u.created_at <= src.updated_at"},
 		{"r2-other-repo", "R2", "lower(s.external_id) = '" + write14559Repo + "' OR lower(s.full_name) = '" + write14559Repo + "'", "lower(s.external_id) = 'acme/other'"},
-		{"r2-counter-name", "R2", "'excluded_non_report_prefix') = 'number'", "'excluded_non_report_suffix') = 'number'"},
+		{"r2-counter-name", "R2", "u.result -> 'excluded_non_report_prefix'", "u.result -> 'excluded_non_report_suffix'"},
+		{"r2-unreadable-needle", "R2", `~* '\\u(0000|d[89a-f][0-9a-f]{2})' AS unreadable`, `~* '\\u0001' AS unreadable`},
 		{"c1-other-org", "C1", "starts_with(u.org_id::text, '" + write14559Org[:8] + "')", "starts_with(u.org_id::text, '" + write14559OtherOrg[:8] + "')"},
 	} {
 		mutated, err := write14559Run(ctx, t, db.conn, pieces, mutant.id, mutant.from, mutant.to)

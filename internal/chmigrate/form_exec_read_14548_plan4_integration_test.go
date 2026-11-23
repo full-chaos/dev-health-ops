@@ -22,33 +22,42 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-// Throwaway exec proof of a prod read form (READ-14548-PLAN-3): not for merge. p3x14548Form is the form file with the app org prefix swapped to f0f0f0f0 (range end f0f0f0f1); the sha pins the swapped copy.
-const p3x14548FormSHA256 = "d99c1cc83d91d27a32e49b77f796b9e2399f74f302e6986dc54f1c469aed3637"
+// Throwaway exec proof of a prod read form (READ-14548-PLAN-4): not for merge. p4x14548Form is the form file with the app org prefix swapped to f0f0f0f0 (range end f0f0f0f1); the sha pins the swapped copy.
+const p4x14548FormSHA256 = "329c6ceabf2c8ff7f4de4fbae3665041820e2bd282668588146bd14383d292da"
 
-const p3x14548Form = `-- NOT EXECUTED. READ-14548-PLAN-3 (system tables and part index only; numbers and static names only). acr-mcp, 2026-11-23. acp FORM read first; then pm runs it once.
--- Replaces READ-14548-PLAN-2 (8b4525e8c63c, frozen). Adds the per-run reads that pm and acp asked for: S3 (every run from 08:00Z:
---   read_rows next to the part state at its start, and a PREDICTION column that can fail) and S4 (every run: the FINAL read path per table).
--- Exec leg: a throwaway CI leg runs each statement (FORM-TEMPLATE-3); its run id and job id are in READ-14548-PLAN-3.md only. The CI copy
---   swaps the org prefix (f0f0f0f0 -> f0f0f0f0, f0f0f0f1 -> f0f0f0f1) and pins the sha of the swapped copy; this file is the prod text.
+const p4x14548Form = `-- NOT EXECUTED. READ-14548-PLAN-4 (system tables and part index only; numbers and static names only). acr-mcp, 2026-11-23. acp FORM read first; then pm runs it once.
+-- Replaces READ-14548-PLAN-3 (d7eab9e73986, frozen, not read) and READ-14548-PLAN-2 (8b4525e8c63c, acp NOT OK: READ-14548-PLAN-2-1
+--   6829484773cd). Fixes: P2-1 = S3 / S4 read EVERY projector run from 08:00Z to the read time (covers 08:50-10:30Z) with read_rows,
+--   memory and Selected* per run, and a verdict per run both ways; P2-2 = S3 is a LOWER bound on Cloud (limit c2): "no new part" = NOT
+--   SHOWN, never "fails" from S3 alone; P3-1 / P3-3 lines below.
+-- acp named exception (P3-1): mergeTreeIndex is read as a gate / key source = the primary index only (part name, mark number, granule
+--   rows, sort-key values of each mark; no data column), and only after a system.parts marks gate on the same table.
+-- Run line (P3-3): pm runs each statement once on the dev-health ClickHouse database connection (currentDatabase() = the dev-health
+--   database, as PARTS-3); a wrong database fails visibly (S3 no 'run' rows on the data tables, S5 org_parts 0).
+-- Exec leg: a throwaway CI leg runs each statement (FORM-TEMPLATE-3); its run id and job id are in READ-14548-PLAN-4.md only. The CI copy
+--   swaps the app org prefix to f0f0f0f0 (range end f0f0f0f1) and pins the sha of the swapped copy; this file is the prod text.
 --   Until that leg is green and acp reads it, pm does not run this file.
 -- Why (CHAOS-14548): projector statement 7cbf3538fee3 read 163,241 rows at 08:56Z and 209,805 at 09:02Z (first run after the acr roll at
---   09:01Z) and stayed at 209-214k. Lead hypothesis (reproduced on CI by PLAN-2's leg): a new work_items part that intersects the key range
+--   09:01Z) and stayed at 209-214k. Lead hypothesis (CI repro: PLAN-2 / PLAN-3 legs): a new work_items part that intersects the key range
 --   of the big part moves FINAL from the no-merge read to the merge read until the parts merge. acp: the after-runs stayed flat across
 --   merges, so the theory needs the part state at EVERY run. pm: the prediction must be a WANT that can fail.
 -- S0: size proof of each log window. S1, S2: PLAN-2 S1, S2 unchanged (the 08:56 and 09:02 runs: read counters; read steps).
--- S3: every run from 08:00Z: read_rows + part state + theory_ok. S4: every run from 08:00Z: FINAL path per table. S5: PLAN-2 S3b (now).
+-- S3: every run from 08:00Z: read_rows + part state + verdict. S4: every run from 08:00Z: FINAL path per table + theory_ok. S5: PLAN-2 S3b.
 -- Output: no query text, no query_id, no key value, no org id, no String setting value, no part name. Names are static (event names,
---   table names, processor names, run sides / kinds, window names).
+--   table names, processor names, run sides / kinds, window names, verdict words).
 -- Org scope: S0-S2, S4 read system tables only (no org rows). S3 and S5 read the part index of 2 data tables; each granule range is cut
 --   to the org range ['f0f0f0f0', 'f0f0f0f1') (the prefix filter in range form: a mark holds the FIRST key of its granule); counts leave.
+--   INFO (acp P3-6): S3 part counts, levels and rows cover all orgs (a part holds every org's rows); only the overlap test is org-cut.
 -- Gates: a log-table read is gated on the rows of the granules that can hold its window or its run seconds (part index = upper bound of
 --   the primary-key read); each part index read is gated first on the marks of the table (system.parts). part_log is gated on its day
 --   parts; the data part index on the marks of each data table. Every gate throws code 395 STOP-COST-GATE before a data row is read.
---   WORK MATH: READ-14548-PLAN-3.md.
+--   INFO (acp P3-2): the window test also passes the last granule of every older part (is_last arm), so window_rows over-counts (safe).
+--   WORK MATH: READ-14548-PLAN-4.md.
 -- Named limits: (a) the log tables are per node: S1 runs_before = 0 or runs_after = 0, or S3 with no 'run' row = STOP. (b) S2 with fewer
 --   than 2 run_side values, or S4 with a run that has no row = the runs did not log processors. (c) S3 'now' row wi_parts !=
---   wi_active_now = part_log on this node misses events. (d) code 47 or 36 = the log sorting key or the part index differs from 26.x:
---   STOP. (e) S3 / S5 error = no part index on this engine.
+--   wi_active_now = part_log on this node misses events. (c2) on Cloud part_log is per replica: a part that another replica created AND
+--   merged away before the read leaves no trace here, so S3 part sets at a run are a LOWER bound even when (c) passes. (d) code 47 or
+--   36 = the log sorting key or the part index differs from 26.x: STOP. (e) S3 / S5 error = no part index on this engine.
 -- Match key: startsWith(query, 'SELECT source, uniqExact(subject_kind') + type = 'QueryFinish' (edge_counts.go:50), as in PLAN-1/2.
 --   The query column is read to match, never output.
 -- SELECT only; no SET / SETTINGS.
@@ -261,9 +270,11 @@ ORDER BY run_side DESC, step_table, step_id, processor;
 --   part's org key range (part index, parts still active now); disjoint = active now and no intersection (or no org rows);
 --   unknown = gone now (merged), so its key range is not readable. Time basis: part_log create / merge / remove events of the day and
 --   system.parts modification_time / remove_time (as PLAN-2 S3a); empty parts are left out.
--- PREDICTION (pm, a WANT that can fail): wi_state = 'overlap' (a small work_items part intersects the big part) predicts read_rows
---   >= 186,000 (the after level 209-214k); wi_state = 'none' predicts read_rows < 186,000 (the before level 163k). theory_ok = 1 when the
---   run matches, 0 when it does not, NULL when wi_state = 'unknown'. Any theory_ok = 0 = the overlap theory FAILS for that run.
+-- PREDICTION (pm, a WANT that can fail) per run, column verdict: high = read_rows >= 186,000 (after level 209-214k), low = below
+--   (before level 163k). 'fails' = a KNOWN overlapping small part (active now, so exact) with a low read: the theory FAILS for that run.
+--   'consistent' = known overlap with a high read, or a low read with no overlap shown. 'not_shown' = a high read with no overlapping
+--   part shown (acp P2-2: S3 is a lower bound on Cloud, limit c2, so S3 alone never says "fails" here; S4 decides that run), or
+--   wi_state 'unknown' (a small part of that time is merged away now: its key range is not readable).
 --   Control that can fail: the 'now' row: wi_parts = wi_active_now (else part_log on this node misses events: states are not exact).
 --   Gates: part_log day parts 6,000,000 rows / 3,000,000,000 bytes; query_log from_0800 window 1,000,000 rows; data table marks 100,000.
 SELECT r.run_kind AS run_kind, r.run_time AS run_time, r.read_rows AS read_rows, r.memory AS memory,
@@ -285,7 +296,8 @@ SELECT r.run_kind AS run_kind, r.run_time AS run_time, r.read_rows AS read_rows,
        countIf(u.part_table = 'project_membership_transitions' AND u.overlap = 2) AS pmt_small_unknown,
        toStartOfMinute(argMaxIf(u.created_at, u.max_block, u.part_table = 'project_membership_transitions')) AS pmt_newest_created_minute,
        multiIf(wi_big = 0, 'unknown', wi_small_overlapping > 0, 'overlap', wi_small_unknown > 0, 'unknown', 'none') AS wi_state,
-       if(wi_state = 'unknown' OR run_kind = 'now', NULL, (wi_state = 'overlap') = (read_rows >= 186000)) AS theory_ok,
+       multiIf(run_kind = 'now', '', wi_state = 'unknown', 'not_shown', wi_state = 'overlap' AND read_rows >= 186000, 'consistent',
+               wi_state = 'overlap', 'fails', read_rows < 186000, 'consistent', 'not_shown') AS verdict,
        if(run_kind = 'now', (SELECT count() FROM system.parts WHERE active AND rows > 0 AND database = currentDatabase() AND table = 'work_items'), NULL) AS wi_active_now
 FROM (
   SELECT 'run' AS run_kind, query_start_time AS run_start, event_time AS run_time, read_rows, toInt64(memory_usage) AS memory,
@@ -413,7 +425,9 @@ ORDER BY r.run_start, run_kind;
 --   MergeTreeSelect output rows. The processors read is limited by the primary key to the finish second (+-1 s) of each run; the query_id
 --   join stays inside. WANT: one work_items row and one project_membership_transitions row per run.
 -- PREDICTION (pm, a WANT that can fail, no unknowns): on the work_items row, theory_ok = 1 when the merge path (merge_processors > 0)
---   comes exactly with a high read (run_read_rows >= 186,000), 0 when not. Any theory_ok = 0 = the overlap theory FAILS for that run. Gates: processors_profile_log run_seconds granules 2,000,000 rows;
+--   comes exactly with a high read (run_read_rows >= 186,000), 0 when not. Any theory_ok = 0 = the overlap theory FAILS for that run
+--   (acp P2-1 both ways: a run near 209k without the work_items merge path fails it; the run's own processors log is on the node that
+--   ran it, so this is not a lower bound). Gates: processors_profile_log run_seconds granules 2,000,000 rows;
 --   query_log from_0800 window 1,000,000 rows (3 reads).
 SELECT r.run_time AS run_time, r.run_read_rows AS run_read_rows, p.plan_step_description AS step_table,
        uniqExact(p.plan_step) AS steps,
@@ -582,13 +596,13 @@ ORDER BY data_table;
 `
 
 const (
-	p3x14548OrgA = "f0f0f0f0-0000-4000-8000-000000014548"
-	p3x14548OrgB = "14548000-0000-4000-8000-0000000000bb"
+	p4x14548OrgA = "f0f0f0f0-0000-4000-8000-000000014548"
+	p4x14548OrgB = "14548000-0000-4000-8000-0000000000bb"
 )
 
 // Synthetic rows. work_items: one merged part (org B 2,000 rows, then org A 40,900 rows over 40 repos; only repos 0-2 have a project),
 // then merges stop and a 21-row org A part lands after every org A key (repo ffff...). transitions: one 20-row org A part.
-const p3x14548Fixture = `
+const p4x14548Fixture = `
 INSERT INTO work_items (org_id, repo_id, work_item_id, provider, project_id, created_at, updated_at, last_synced)
 SELECT if(number < 2000, 'ORG_B', 'ORG_A'), toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(number % 40), 12, '0'))),
        concat('wi-', leftPad(toString(number), 6, '0')), 'linear', if(number % 40 < 3, 'p1', ''),
@@ -607,14 +621,14 @@ FROM numbers(20);
 `
 
 // 107 org A rows that rewrite existing keys spread over all 40 repos: a small part inside the big part's org key range.
-const p3x14548Overlap = `INSERT INTO work_items (org_id, repo_id, work_item_id, provider, project_id, created_at, updated_at, last_synced)
+const p4x14548Overlap = `INSERT INTO work_items (org_id, repo_id, work_item_id, provider, project_id, created_at, updated_at, last_synced)
 SELECT 'ORG_A', toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(n % 40), 12, '0'))), concat('wi-', leftPad(toString(n), 6, '0')),
        'linear', if(n % 40 < 3, 'p1', ''), toDateTime64('2026-11-01 00:00:00', 3), toDateTime64('2026-11-23 09:00:00', 3),
        toDateTime64('2026-11-23 09:00:00', 3)
 FROM (SELECT 2000 + number * 381 AS n FROM numbers(107))`
 
 // The same first token as the projector statement (edge_counts.go:50); a transitions arm and a work_items arm, both FINAL.
-const p3x14548Like = `SELECT source, uniqExact(subject_kind, subject_id) AS edge_count
+const p4x14548Like = `SELECT source, uniqExact(subject_kind, subject_id) AS edge_count
 FROM (
   SELECT 'transition' AS source, subject_kind, subject_id FROM project_membership_transitions FINAL WHERE org_id = 'ORG_A'
   UNION ALL
@@ -623,17 +637,17 @@ FROM (
 )
 GROUP BY source`
 
-const p3x14548LabelList = "S0,S1,S2,S3,S4,S5"
+const p4x14548LabelList = "S0,S1,S2,S3,S4,S5"
 
-type p3x14548Statement struct{ label, text string }
+type p4x14548Statement struct{ label, text string }
 
-func p3x14548Orgs(text string) string {
-	return strings.NewReplacer("'ORG_A'", "'"+p3x14548OrgA+"'", "'ORG_B'", "'"+p3x14548OrgB+"'").Replace(text)
+func p4x14548Orgs(text string) string {
+	return strings.NewReplacer("'ORG_A'", "'"+p4x14548OrgA+"'", "'ORG_B'", "'"+p4x14548OrgB+"'").Replace(text)
 }
 
-func p3x14548Split(body string) []p3x14548Statement {
-	labels := strings.Split(p3x14548LabelList, ",")
-	var out []p3x14548Statement
+func p4x14548Split(body string) []p4x14548Statement {
+	labels := strings.Split(p4x14548LabelList, ",")
+	var out []p4x14548Statement
 	var chunk []string
 	for _, line := range strings.Split(body, "\n") {
 		chunk = append(chunk, line)
@@ -645,13 +659,13 @@ func p3x14548Split(body string) []p3x14548Statement {
 		if len(out) < len(labels) {
 			label = labels[len(out)]
 		}
-		out = append(out, p3x14548Statement{label: label, text: text})
+		out = append(out, p4x14548Statement{label: label, text: text})
 		chunk = nil
 	}
 	return out
 }
 
-func p3x14548Deep(value reflect.Value, dbType string) string {
+func p4x14548Deep(value reflect.Value, dbType string) string {
 	for value.Kind() == reflect.Pointer || value.Kind() == reflect.Interface {
 		if value.IsNil() {
 			return "NULL"
@@ -671,14 +685,14 @@ func p3x14548Deep(value reflect.Value, dbType string) string {
 	case reflect.Slice, reflect.Array:
 		parts := make([]string, value.Len())
 		for i := range parts {
-			parts[i] = p3x14548Deep(value.Index(i), "")
+			parts[i] = p4x14548Deep(value.Index(i), "")
 		}
 		return "[" + strings.Join(parts, " ") + "]"
 	case reflect.Map:
 		keys := value.MapKeys()
 		parts := make([]string, 0, len(keys))
 		for _, k := range keys {
-			parts = append(parts, p3x14548Deep(k, "")+":"+p3x14548Deep(value.MapIndex(k), ""))
+			parts = append(parts, p4x14548Deep(k, "")+":"+p4x14548Deep(value.MapIndex(k), ""))
 		}
 		sort.Strings(parts)
 		return "{" + strings.Join(parts, " ") + "}"
@@ -686,7 +700,7 @@ func p3x14548Deep(value reflect.Value, dbType string) string {
 	return fmt.Sprint(value.Interface())
 }
 
-func p3x14548Run(ctx context.Context, conn driver.Conn, text, comment string, extra clickhouse.Settings) ([]map[string]string, error) {
+func p4x14548Run(ctx context.Context, conn driver.Conn, text, comment string, extra clickhouse.Settings) ([]map[string]string, error) {
 	settings := clickhouse.Settings{"log_comment": comment}
 	for k, v := range extra {
 		settings[k] = v
@@ -709,14 +723,14 @@ func p3x14548Run(ctx context.Context, conn driver.Conn, text, comment string, ex
 		}
 		row := map[string]string{}
 		for i, name := range columns {
-			row[name] = p3x14548Deep(reflect.ValueOf(cells[i]), types[i].DatabaseTypeName())
+			row[name] = p4x14548Deep(reflect.ValueOf(cells[i]), types[i].DatabaseTypeName())
 		}
 		got = append(got, row)
 	}
 	return got, rows.Err()
 }
 
-func p3x14548Log(ctx context.Context, t *testing.T, conn driver.Conn, comment string) ([]string, uint64) {
+func p4x14548Log(ctx context.Context, t *testing.T, conn driver.Conn, comment string) ([]string, uint64) {
 	t.Helper()
 	rows, err := conn.Query(ctx, `SELECT toString(type), read_rows FROM system.query_log
 		WHERE log_comment = ? AND type != 'QueryStart' ORDER BY event_time_microseconds`, comment)
@@ -741,7 +755,7 @@ func p3x14548Log(ctx context.Context, t *testing.T, conn driver.Conn, comment st
 	return types, total
 }
 
-func p3x14548Count(ctx context.Context, t *testing.T, conn driver.Conn, query string, args ...any) uint64 {
+func p4x14548Count(ctx context.Context, t *testing.T, conn driver.Conn, query string, args ...any) uint64 {
 	t.Helper()
 	var n uint64
 	if err := conn.QueryRow(ctx, query, args...).Scan(&n); err != nil {
@@ -750,13 +764,13 @@ func p3x14548Count(ctx context.Context, t *testing.T, conn driver.Conn, query st
 	return n
 }
 
-func p3x14548Uint(s string) uint64 {
+func p4x14548Uint(s string) uint64 {
 	n, _ := strconv.ParseUint(s, 10, 64)
 	return n
 }
 
-// p3x14548Caps returns the byte offsets of every cap literal "> N" (N a cap of this form) in text.
-func p3x14548Caps(text string) [][2]int {
+// p4x14548Caps returns the byte offsets of every cap literal "> N" (N a cap of this form) in text.
+func p4x14548Caps(text string) [][2]int {
 	caps := map[string]bool{"400000": true, "1000000": true, "2000000": true, "4000000": true, "6000000": true, "3000000000": true, "100000": true}
 	var out [][2]int
 	for _, m := range regexp.MustCompile(`> (\d+)\b`).FindAllStringSubmatchIndex(text, -1) {
@@ -767,32 +781,32 @@ func p3x14548Caps(text string) [][2]int {
 	return out
 }
 
-type p3x14548Logged struct {
+type p4x14548Logged struct {
 	comment, id, phase                                string
 	readRows, readBytes, resultRows, memory, duration uint64
 	finish                                            time.Time
 	events                                            map[string]uint64
 }
 
-func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
+func TestReadPlan4Form14548ExecutesAtTheChainHead(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 14*time.Minute)
 	defer cancel()
 
-	sum := sha256.Sum256([]byte(p3x14548Form))
-	if got := hex.EncodeToString(sum[:]); got != p3x14548FormSHA256 {
-		t.Fatalf("form sha256 = %s, want %s", got, p3x14548FormSHA256)
+	sum := sha256.Sum256([]byte(p4x14548Form))
+	if got := hex.EncodeToString(sum[:]); got != p4x14548FormSHA256 {
+		t.Fatalf("form sha256 = %s, want %s", got, p4x14548FormSHA256)
 	}
-	statements := p3x14548Split(p3x14548Form)
+	statements := p4x14548Split(p4x14548Form)
 	byLabel := map[string]string{}
 	labels := make([]string, 0, len(statements))
 	for _, s := range statements {
 		labels = append(labels, s.label)
 		byLabel[s.label] = s.text
 	}
-	if strings.Join(labels, ",") != p3x14548LabelList {
+	if strings.Join(labels, ",") != p4x14548LabelList {
 		t.Fatalf("form statements = %v", labels)
 	}
-	code := chmigrate.StripLineComments(p3x14548Form)
+	code := chmigrate.StripLineComments(p4x14548Form)
 	for _, forbidden := range []string{`(?i)\b(FORMAT|EXPLAIN|INSERT|FINAL|LIMIT|OPTIMIZE|ALTER)\b`, `(?i)\bSETTINGS\s+\w+\s*=`, `(?im)^\s*SET\b`} {
 		if regexp.MustCompile(forbidden).MatchString(code) {
 			t.Fatalf("form holds a forbidden keyword (%s)", forbidden)
@@ -820,7 +834,7 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 	wantFires := 0
 	for _, s := range statements {
 		got := map[string]int{}
-		for _, c := range p3x14548Caps(s.text) {
+		for _, c := range p4x14548Caps(s.text) {
 			got[strings.TrimPrefix(s.text[c[0]:c[1]], "> ")]++
 			wantFires++
 		}
@@ -875,19 +889,19 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 	}
 	time.Sleep(1100 * time.Millisecond)
 
-	for _, statement := range chmigrate.SplitStatements(p3x14548Orgs(p3x14548Fixture)) {
+	for _, statement := range chmigrate.SplitStatements(p4x14548Orgs(p4x14548Fixture)) {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatalf("fixture: %v\n%s", err, statement)
 		}
 	}
-	like := p3x14548Orgs(p3x14548Like)
+	like := p4x14548Orgs(p4x14548Like)
 	stamp := time.Now().UnixNano()
 	phases := map[string][]string{}
 	runPhase := func(phase string) {
 		for i := 1; i <= 3; i++ {
 			time.Sleep(1100 * time.Millisecond)
-			comment := fmt.Sprintf("p3x14548-like-%s%d-%d", phase, i, stamp)
-			if _, err := p3x14548Run(ctx, conn, like, comment, clickhouse.Settings{"log_processors_profiles": 1}); err != nil {
+			comment := fmt.Sprintf("p4x14548-like-%s%d-%d", phase, i, stamp)
+			if _, err := p4x14548Run(ctx, conn, like, comment, clickhouse.Settings{"log_processors_profiles": 1}); err != nil {
 				t.Fatalf("like run %s%d: %v", phase, i, err)
 			}
 			phases[phase] = append(phases[phase], comment)
@@ -908,7 +922,7 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(1100 * time.Millisecond)
-	if err := conn.Exec(ctx, p3x14548Orgs(p3x14548Overlap)); err != nil {
+	if err := conn.Exec(ctx, p4x14548Orgs(p4x14548Overlap)); err != nil {
 		t.Fatalf("overlap part X: %v", err)
 	}
 	runPhase("b")
@@ -918,7 +932,7 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 	}
 	runPhase("c")
 	time.Sleep(1100 * time.Millisecond)
-	if err := conn.Exec(ctx, p3x14548Orgs(p3x14548Overlap)); err != nil {
+	if err := conn.Exec(ctx, p4x14548Orgs(p4x14548Overlap)); err != nil {
 		t.Fatalf("overlap part Y: %v", err)
 	}
 	runPhase("d")
@@ -930,6 +944,7 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 		text = strings.ReplaceAll(text, "2026-11-24 00:00:00", nextDay+" 00:00:00")
 		text = strings.ReplaceAll(text, "2026-11-23 09:01:00", cut)
 		text = strings.ReplaceAll(text, ">= 186000", ">= 47000")
+		text = strings.ReplaceAll(text, "< 186000", "< 47000")
 		return strings.ReplaceAll(text, "2026-11-23", day)
 	}
 	t.Logf("dated copies: windows %s 00:00:00 .. %s 00:00:00 UTC, cut %s, theory threshold 47000 (the CI clock and fixture, not prod)", day, nextDay, cut)
@@ -937,16 +952,16 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 	if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 		t.Fatalf("the logs are not flushable by this user: %v", err)
 	}
-	loadLike := func(comment string) p3x14548Logged {
-		r := p3x14548Logged{comment: comment, events: map[string]uint64{}}
+	loadLike := func(comment string) p4x14548Logged {
+		r := p4x14548Logged{comment: comment, events: map[string]uint64{}}
 		if err := conn.QueryRow(ctx, `SELECT query_id, read_rows, read_bytes, result_rows, toUInt64(memory_usage), query_duration_ms, event_time, ProfileEvents
 			FROM system.query_log WHERE log_comment = ? AND type = 'QueryFinish'`, comment).Scan(&r.id, &r.readRows, &r.readBytes, &r.resultRows, &r.memory, &r.duration, &r.finish, &r.events); err != nil {
 			t.Fatalf("like run %s in query_log: %v", comment, err)
 		}
 		return r
 	}
-	runs := map[string][]p3x14548Logged{}
-	var all []p3x14548Logged
+	runs := map[string][]p4x14548Logged{}
+	var all []p4x14548Logged
 	for _, phase := range []string{"a", "b", "c", "d"} {
 		for _, c := range phases[phase] {
 			r := loadLike(c)
@@ -982,8 +997,8 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 	passComments := map[string]string{}
 	passRows := map[string][]map[string]string{}
 	for _, s := range statements {
-		passComments[s.label] = fmt.Sprintf("p3x14548-pass-%s-%d", s.label, time.Now().UnixNano())
-		got, err := p3x14548Run(ctx, conn, dated(s.text), passComments[s.label], nil)
+		passComments[s.label] = fmt.Sprintf("p4x14548-pass-%s-%d", s.label, time.Now().UnixNano())
+		got, err := p4x14548Run(ctx, conn, dated(s.text), passComments[s.label], nil)
 		if err != nil {
 			t.Errorf("PASS %s: SQL error: %v", s.label, err)
 			continue
@@ -993,21 +1008,21 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 	}
 
 	// S0: 4 windows, key ok, rows > 0; the run-second window is a small share of the processors log (the filler).
-	ppDay := p3x14548Count(ctx, t, conn, "SELECT count() FROM system.processors_profile_log WHERE event_date = toDate(?)", day)
+	ppDay := p4x14548Count(ctx, t, conn, "SELECT count() FROM system.processors_profile_log WHERE event_date = toDate(?)", day)
 	s0 := map[string]map[string]string{}
 	for _, r := range passRows["S0"] {
 		s0[r["log_table"]+"|"+r["window_name"]] = r
 	}
 	for _, k := range []string{"processors_profile_log|0850_0910", "processors_profile_log|run_seconds", "query_log|0850_0910", "query_log|from_0800"} {
 		r := s0[k]
-		if r == nil || r["key_ok"] != "1" || p3x14548Uint(r["window_rows"]) == 0 || p3x14548Uint(r["marks_all"]) == 0 {
+		if r == nil || r["key_ok"] != "1" || p4x14548Uint(r["window_rows"]) == 0 || p4x14548Uint(r["marks_all"]) == 0 {
 			t.Errorf("S0 %s: %v, want key_ok 1, window_rows > 0, marks_all > 0", k, r)
 		}
 	}
 	if len(passRows["S0"]) != 4 {
 		t.Errorf("S0: %d rows, want 4", len(passRows["S0"]))
 	}
-	wRS := p3x14548Uint(s0["processors_profile_log|run_seconds"]["window_rows"])
+	wRS := p4x14548Uint(s0["processors_profile_log|run_seconds"]["window_rows"])
 	t.Logf("S0 run_seconds window %d rows of %d processors_profile_log rows today", wRS, ppDay)
 	if wRS == 0 || 2*wRS > ppDay {
 		t.Errorf("S0 run_seconds window %d is not a small share of %d rows: the bound cell would prove nothing", wRS, ppDay)
@@ -1092,8 +1107,8 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 		}
 	}
 
-	// S3: one row per run + 'now'. Run values = the runs' own log values; wi_state / theory_ok by phase.
-	wantState := map[string]string{"a": "none 1", "b": "unknown NULL", "c": "none 1", "d": "overlap 1"}
+	// S3: one row per run + 'now'. Run values = the runs' own log values; wi_state / verdict by phase.
+	wantState := map[string]string{"a": "none consistent", "b": "unknown not_shown", "c": "none consistent", "d": "overlap consistent"}
 	var gotS3, wantS3 []string
 	for _, r := range all {
 		wantS3 = append(wantS3, fmt.Sprintf("%s %d %d %d %d %d %d %s", r.finish.UTC().Format("2006-01-02 15:04:05"), r.readRows, r.memory,
@@ -1112,7 +1127,7 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 			t.Errorf("S3 run %s: wi_newest_created_minute %q", r["run_time"], m)
 		}
 		gotS3 = append(gotS3, strings.Join([]string{r["run_time"], r["read_rows"], r["memory"], r["selected_parts"], r["selected_marks"],
-			r["selected_ranges"], r["selected_rows"], r["wi_state"], r["theory_ok"]}, " "))
+			r["selected_ranges"], r["selected_rows"], r["wi_state"], r["verdict"]}, " "))
 	}
 	sort.Strings(gotS3)
 	sort.Strings(wantS3)
@@ -1121,7 +1136,7 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 	}
 
 	// S4: per run and table; work_items merge path exactly on B and D; outputs = independent processors read per run.
-	byFinish := map[string]p3x14548Logged{}
+	byFinish := map[string]p4x14548Logged{}
 	for _, r := range all {
 		byFinish[r.finish.UTC().Format("2006-01-02 15:04:05")] = r
 	}
@@ -1184,7 +1199,7 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 
 	// Mutants: each must change the result so its WANT fails.
 	mutateWith := func(label, text string) []map[string]string {
-		got, err := p3x14548Run(ctx, conn, text, fmt.Sprintf("p3x14548-mutate-%s-%d", label, time.Now().UnixNano()), nil)
+		got, err := p4x14548Run(ctx, conn, text, fmt.Sprintf("p4x14548-mutate-%s-%d", label, time.Now().UnixNano()), nil)
 		if err != nil {
 			t.Fatalf("MUTATE %s: %v", label, err)
 		}
@@ -1270,11 +1285,23 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 			t.Errorf("MUTATE S3 no removal: now wi_parts %s = wi_active_now, want unequal", r["wi_parts"])
 		}
 	}
-	if !anyZero(mutateWith("S3-threshold", flip("S3"))) {
-		t.Errorf("MUTATE S3 threshold: no theory_ok 0, the prediction cannot fail")
+	verdicts := func(rows []map[string]string, v string) int {
+		n := 0
+		for _, r := range rows {
+			if r["verdict"] == v {
+				n++
+			}
+		}
+		return n
 	}
-	if !anyZero(mutateWith("S3-org", orgSwap("S3"))) {
-		t.Errorf("MUTATE S3 org range: no theory_ok 0")
+	// threshold above every read: the known-overlap runs (D) read "low" -> 'fails'.
+	high := strings.ReplaceAll(replaced("S3", ">= 47000", ">= 99999999"), "< 47000", "< 99999999")
+	if n := verdicts(mutateWith("S3-threshold", high), "fails"); n == 0 {
+		t.Errorf("MUTATE S3 threshold: no 'fails' verdict, the prediction cannot fail")
+	}
+	// org range moved: D loses its known overlap -> high read with no overlap shown = 'not_shown' (lower bound, never 'fails').
+	if n := verdicts(mutateWith("S3-org", orgSwap("S3")), "not_shown"); n <= 3 {
+		t.Errorf("MUTATE S3 org range: %d 'not_shown' verdicts, want more than the 3 of phase B", n)
 	}
 	if !anyZero(mutateWith("S4-threshold", flip("S4"))) {
 		t.Errorf("MUTATE S4 threshold: no theory_ok 0, the prediction cannot fail")
@@ -1288,20 +1315,20 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 	if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 		t.Fatal(err)
 	}
-	sizes, err := p3x14548Run(ctx, conn, dated(byLabel["S0"]), fmt.Sprintf("p3x14548-sizes-%d", time.Now().UnixNano()), nil)
+	sizes, err := p4x14548Run(ctx, conn, dated(byLabel["S0"]), fmt.Sprintf("p4x14548-sizes-%d", time.Now().UnixNano()), nil)
 	if err != nil || len(sizes) != 4 {
 		t.Fatalf("sizes: %v %v", sizes, err)
 	}
 	size := map[string]uint64{}
 	for _, r := range sizes {
-		size[r["log_table"]+"|"+r["window_name"]] = p3x14548Uint(r["window_rows"])
-		size[r["log_table"]+"|marks"] = p3x14548Uint(r["marks_all"]) + p3x14548Uint(r["parts_all"])
+		size[r["log_table"]+"|"+r["window_name"]] = p4x14548Uint(r["window_rows"])
+		size[r["log_table"]+"|marks"] = p4x14548Uint(r["marks_all"]) + p4x14548Uint(r["parts_all"])
 	}
 	wQ2, wQD, wP2, wRS2 := size["query_log|0850_0910"], size["query_log|from_0800"], size["processors_profile_log|0850_0910"], size["processors_profile_log|run_seconds"]
 	mQ, mP := size["query_log|marks"], size["processors_profile_log|marks"]
-	plToday := p3x14548Count(ctx, t, conn, "SELECT count() FROM system.part_log WHERE event_date = toDate(?)", day)
-	mData := p3x14548Count(ctx, t, conn, "SELECT sum(marks) + count() FROM system.parts WHERE database = currentDatabase() AND table IN ('work_items', 'project_membership_transitions')")
-	pAll := p3x14548Count(ctx, t, conn, "SELECT count() FROM system.parts WHERE (database = 'system' AND table IN ('query_log', 'processors_profile_log', 'part_log')) OR (database = currentDatabase() AND table IN ('work_items', 'project_membership_transitions'))")
+	plToday := p4x14548Count(ctx, t, conn, "SELECT count() FROM system.part_log WHERE event_date = toDate(?)", day)
+	mData := p4x14548Count(ctx, t, conn, "SELECT sum(marks) + count() FROM system.parts WHERE database = currentDatabase() AND table IN ('work_items', 'project_membership_transitions')")
+	pAll := p4x14548Count(ctx, t, conn, "SELECT count() FROM system.parts WHERE (database = 'system' AND table IN ('query_log', 'processors_profile_log', 'part_log')) OR (database = currentDatabase() AND table IN ('work_items', 'project_membership_transitions'))")
 	slack := 20*pAll + 5000
 	bounds := map[string]uint64{
 		"S0": 2*mP + 3*mQ + wQD + slack,
@@ -1317,7 +1344,7 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 		if _, ok := passRows[s.label]; !ok {
 			continue
 		}
-		types, read := p3x14548Log(ctx, t, conn, passComments[s.label])
+		types, read := p4x14548Log(ctx, t, conn, passComments[s.label])
 		if len(types) != 1 || types[0] != "QueryFinish" {
 			t.Errorf("PASS %s: query_log types %v, want [QueryFinish]", s.label, types)
 		}
@@ -1334,14 +1361,14 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 			secs = append(secs, "'"+ts.Add(d).Format("2006-01-02 15:04:05")+"'")
 		}
 	}
-	pruneComment := fmt.Sprintf("p3x14548-prune-%d", time.Now().UnixNano())
-	if _, err := p3x14548Run(ctx, conn, "SELECT count() FROM system.processors_profile_log WHERE event_date = toDate('"+day+"') AND event_time IN ("+strings.Join(secs, ", ")+")", pruneComment, nil); err != nil {
+	pruneComment := fmt.Sprintf("p4x14548-prune-%d", time.Now().UnixNano())
+	if _, err := p4x14548Run(ctx, conn, "SELECT count() FROM system.processors_profile_log WHERE event_date = toDate('"+day+"') AND event_time IN ("+strings.Join(secs, ", ")+")", pruneComment, nil); err != nil {
 		t.Fatalf("prune cell: %v", err)
 	}
 	if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 		t.Fatal(err)
 	}
-	_, pruneRead := p3x14548Log(ctx, t, conn, pruneComment)
+	_, pruneRead := p4x14548Log(ctx, t, conn, pruneComment)
 	t.Logf("PRUNE: processors_profile_log read %d rows for the run seconds; run_seconds window %d; rows today %d", pruneRead, wRS2, ppDay)
 	if pruneRead > wRS2 || 2*pruneRead > ppDay {
 		t.Errorf("PRUNE: read %d rows, want <= run_seconds window %d and < half of %d", pruneRead, wRS2, ppDay)
@@ -1350,10 +1377,10 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 	// Gate fires: each cap literal lowered to 0. WANT code 395 STOP-COST-GATE, ExceptionBeforeStart, small read.
 	fires := 0
 	for _, s := range statements {
-		for i, c := range p3x14548Caps(s.text) {
+		for i, c := range p4x14548Caps(s.text) {
 			lowered := s.text[:c[0]] + "> 0" + s.text[c[1]:]
-			comment := fmt.Sprintf("p3x14548-gate-%s-%d-%d", s.label, i, time.Now().UnixNano())
-			_, err := p3x14548Run(ctx, conn, dated(lowered), comment, nil)
+			comment := fmt.Sprintf("p4x14548-gate-%s-%d-%d", s.label, i, time.Now().UnixNano())
+			_, err := p4x14548Run(ctx, conn, dated(lowered), comment, nil)
 			var ex *clickhouse.Exception
 			if err == nil || !errors.As(err, &ex) || ex.Code != 395 || !strings.Contains(ex.Message, "STOP-COST-GATE") {
 				t.Errorf("GATE %s #%d %s lowered to 0: err = %v, want code 395 STOP-COST-GATE", s.label, i, s.text[c[0]:c[1]], err)
@@ -1362,7 +1389,7 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 			if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 				t.Fatal(err)
 			}
-			types, read := p3x14548Log(ctx, t, conn, comment)
+			types, read := p4x14548Log(ctx, t, conn, comment)
 			bound := 3*(mP+mQ) + wQD + mData + slack
 			t.Logf("GATE %s #%d %s: code %d, types=%v read_rows=%d bound=%d", s.label, i, s.text[c[0]:c[1]], ex.Code, types, read, bound)
 			if len(types) != 1 || types[0] != "ExceptionBeforeStart" {
@@ -1379,13 +1406,13 @@ func TestReadPlan3Form14548ExecutesAtTheChainHead(t *testing.T) {
 	}
 
 	// Output cell: no query text / id, comment, org id, key value or part name in any output.
-	secrets := []string{p3x14548OrgA, p3x14548OrgB, "uniqExact(subject_kind", "wi-0", "wz-0", "ffffffff-ffff", "00000000-0000-4000-8000-0000000000"}
+	secrets := []string{p4x14548OrgA, p4x14548OrgB, "uniqExact(subject_kind", "wi-0", "wz-0", "ffffffff-ffff", "00000000-0000-4000-8000-0000000000"}
 	for _, r := range all {
 		secrets = append(secrets, r.id, r.comment)
 	}
 	partName := regexp.MustCompile(`all_\d+_\d+_\d+`)
 	leaks := func(label, text string) []string {
-		got, err := p3x14548Run(ctx, conn, dated(text), fmt.Sprintf("p3x14548-output-%s-%d", label, time.Now().UnixNano()), nil)
+		got, err := p4x14548Run(ctx, conn, dated(text), fmt.Sprintf("p4x14548-output-%s-%d", label, time.Now().UnixNano()), nil)
 		if err != nil {
 			t.Fatalf("OUTPUT %s: %v", label, err)
 		}

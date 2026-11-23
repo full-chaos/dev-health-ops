@@ -129,6 +129,36 @@ func gitLabFetchEpicsFromEnv() *bool {
 	return pythonEnvFlag(gitLabFetchEpicsEnv, raw, ok)
 }
 
+// The worker environment flags for merge requests, notes, links, and
+// milestones, read with pythonEnvFlag's rule (unset or unknown keeps the
+// default, on).
+const (
+	gitLabIncludeMRsEnv      = "GITLAB_INCLUDE_MRS"
+	gitLabFetchNotesEnv      = "GITLAB_FETCH_NOTES"
+	gitLabFetchLinksEnv      = "GITLAB_FETCH_LINKS"
+	gitLabFetchMilestonesEnv = "GITLAB_FETCH_MILESTONES"
+)
+
+func gitLabIncludeMRsFromEnv() *bool {
+	raw, ok := os.LookupEnv(gitLabIncludeMRsEnv)
+	return pythonEnvFlag(gitLabIncludeMRsEnv, raw, ok)
+}
+
+func gitLabFetchNotesFromEnv() *bool {
+	raw, ok := os.LookupEnv(gitLabFetchNotesEnv)
+	return pythonEnvFlag(gitLabFetchNotesEnv, raw, ok)
+}
+
+func gitLabFetchLinksFromEnv() *bool {
+	raw, ok := os.LookupEnv(gitLabFetchLinksEnv)
+	return pythonEnvFlag(gitLabFetchLinksEnv, raw, ok)
+}
+
+func gitLabFetchMilestonesFromEnv() *bool {
+	raw, ok := os.LookupEnv(gitLabFetchMilestonesEnv)
+	return pythonEnvFlag(gitLabFetchMilestonesEnv, raw, ok)
+}
+
 // pythonEnvFlag is Python's env_flag (providers/utils.py) on a value the
 // caller read: 1/true/yes/on is true, 0/false/no/off is false, trimmed and
 // case-insensitive; unset or any other value is nil, so the route keeps its
@@ -402,6 +432,10 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 				slog.Warn("providersync.gitlab.issue_link_unsupported_shape",
 					"org_id", claim.OrgID, "unit_id", claim.ID, "issue", logging.ProviderText(item.WorkItemID), "count", unsupported)
 			}
+		}
+		// Not gated by fetchLinks: GITLAB_FETCH_LINKS gates the issue-to-issue links only. The closed_by rows are
+		// the native-tier issue<->MR link (gitlab_closing_reference), and Python has no closed_by fetch.
+		{
 			closing, closingPages, closingErr := collectGitLabClosingMergeRequests(
 				budgetAccount(ctx, "issues"), &counted, gitlabIssuesRoute+"/{iid}/closed_by", root+"/issues/"+strconv.Itoa(payload.IID)+"/closed_by",
 				perPage, nestedMaxPages,

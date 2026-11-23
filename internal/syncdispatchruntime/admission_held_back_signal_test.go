@@ -201,3 +201,48 @@ func TestBucketDecisionSpanEventCarriesTheHeldBackRunAndSignal(t *testing.T) {
 		}
 	}
 }
+
+// Two held buckets: every recheck runs after the last decision read of the pass (each activeCount, each olderRuns and
+// the end of the last unit fold), so its added time cannot move a decision read's READ COMMITTED snapshot later.
+func TestHeldBackSignalRechecksRunAfterEveryDecisionRead(t *testing.T) {
+	light := dispatchBucket{orgID: admissionOrg, provider: "github", costClass: "light"}
+	medium := dispatchBucket{orgID: admissionOrg, provider: "github", costClass: "medium"}
+	self := runOrder{id: admissionRunB, createdAt: admissionNow}
+	olderLight := olderRun{runOrder: runOrder{id: admissionRunA, createdAt: admissionNow.Add(-1)}, progressAt: admissionNow, waiting: 2}
+	olderMedium := olderRun{runOrder: runOrder{id: admissionRunC, createdAt: admissionNow.Add(-2)}, progressAt: admissionNow, waiting: 2}
+	env, calls := admissionGuardEnv(self, nil, map[dispatchBucket][]olderRun{light: {olderLight}, medium: {olderMedium}})
+	units := sliceSource(append(plannedUnits("l", 3, "github", "light"), plannedUnits("m", 3, "github", "medium")...))
+	source := func(fold func(dispatchGuardUnit) error) error {
+		err := units(fold)
+		*calls = append(*calls, guardCall{kind: "source"})
+		return err
+	}
+	env.heldBackSignal = func(runID string) heldBackSignal {
+		*calls = append(*calls, guardCall{kind: "recheck:" + runID})
+		return heldBackSignalWakeArmed
+	}
+	decision, err := decideDispatchGuard(source, env, admissionOrg, admissionNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(decision.heldBackRunIDs, []string{admissionRunA, admissionRunC}) {
+		t.Fatalf("heldBackRunIDs = %v, want both buckets held", decision.heldBackRunIDs)
+	}
+	lastRead, rechecks := -1, []string{}
+	for index, call := range *calls {
+		switch {
+		case call.kind == "active" || call.kind == "older" || call.kind == "source":
+			lastRead = index
+		case strings.HasPrefix(call.kind, "recheck:"):
+			rechecks = append(rechecks, call.kind)
+		}
+	}
+	if len(rechecks) != 2 || rechecks[0] != "recheck:"+admissionRunA || rechecks[1] != "recheck:"+admissionRunC {
+		t.Fatalf("rechecks %v, want one per held bucket after every read: %v", rechecks, *calls)
+	}
+	for index, call := range *calls {
+		if strings.HasPrefix(call.kind, "recheck:") && index < lastRead {
+			t.Fatalf("recheck at %d precedes the last decision read at %d: %v", index, lastRead, *calls)
+		}
+	}
+}

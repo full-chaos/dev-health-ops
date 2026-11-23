@@ -311,7 +311,8 @@ type guardEnv struct {
 	self      runOrder
 	olderRuns func(dispatchBucket) ([]olderRun, error)
 	// heldBackSignal names the liveness probe of the run a bucket held slots for (CHAOS-14403). Called only when the
-	// bucket held slots back, after the decision; it never fails the pass.
+	// bucket held slots back, after the last decision read of the pass (activeCount, olderRuns, the unit folds); it
+	// never fails the pass.
 	heldBackSignal func(runID string) heldBackSignal
 }
 
@@ -504,7 +505,6 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 	activeCounts := make(map[dispatchBucket]int, len(allBuckets))
 	heldBack := make(map[dispatchBucket]int, len(allBuckets))
 	heldBackRun := make(map[dispatchBucket]string, len(allBuckets))
-	heldBackSignals := make(map[dispatchBucket]heldBackSignal, len(allBuckets))
 	folds := make(map[dispatchBucket]*guardBucketFold, len(allBuckets))
 	livenessBound := admissionLivenessBound()
 	var heldBackRunIDs []string
@@ -533,8 +533,8 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 			if oldest != "" {
 				heldBackRunIDs = append(heldBackRunIDs, oldest)
 			}
-			if held > 0 && env.heldBackSignal != nil {
-				heldBackRun[bucket], heldBackSignals[bucket] = oldest, env.heldBackSignal(oldest)
+			if held > 0 {
+				heldBackRun[bucket] = oldest
 			}
 		}
 		if slots > 0 {
@@ -580,9 +580,11 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 		if reclaimedStale > fold.slots {
 			reclaimedStale = fold.slots
 		}
-		signal, signalled := heldBackSignals[bucket]
-		if !signalled {
-			signal = heldBackSignalNone
+		// The recheck runs only here, after every read the decision is made of (CHAOS-14403): under READ COMMITTED a
+		// later decision read would otherwise take its snapshot after the recheck's added time.
+		signal := heldBackSignalNone
+		if run := heldBackRun[bucket]; run != "" && env.heldBackSignal != nil {
+			signal = env.heldBackSignal(run)
 		}
 		env.emit(bucket, activeCounts[bucket], reclaimedStale, len(capped)-len(fold.cappedReclaims), len(fold.cappedReclaims), headroom, heldBack[bucket], heldBackRun[bucket], signal)
 	}

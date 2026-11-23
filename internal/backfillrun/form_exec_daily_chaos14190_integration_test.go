@@ -16,21 +16,22 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// DO NOT MERGE. This file executes FORM-14190-DAILY-1.sql in one READ ONLY transaction on a fresh database at the head
+// DO NOT MERGE. This file executes FORM-14190-DAILY-2.sql in one READ ONLY transaction on a fresh database at the head
 // chain. The text below is the .sql with its org prefix replaced by {{ORG_PREFIX}} and its sync run prefix by
 // {{RUN_PREFIX}}, nothing else (its sha256 is checked); the cell puts synthetic values in at run time and checks that
 // every org-scoped FROM got the prefix. With synthetic daily runs it wants the pass set to pass every WANT, each mutant
 // row set to fail its WANT, and the catalog and index gate to fire (pm-guard FORM-TEMPLATE-3, PostgreSQL form).
 const (
-	formExecDaily14190SHA256  = "f251e88ffe4e3f292853f90ec6d82d90aaad46b2469146f27d8ade1284204a79"
+	formExecDaily14190SHA256  = "8c8d8377eac7a1eb0078a0d1bb44ef85641263018951e774460455cbdb3c062f"
 	formExecDaily14190OrgSlot = "{{ORG_PREFIX}}"
 	formExecDaily14190RunSlot = "{{RUN_PREFIX}}"
-	formExecDaily14190SQL     = `-- FORM-14190-DAILY-1 (lane-14190c, 2026-11-23, ops pin a7febdf50002). PostgreSQL prod, READ ONLY, CHAOS-14190.
+	formExecDaily14190SQL     = `-- FORM-14190-DAILY-2 (lane-14190c, 2026-11-23, ops pin a7febdf50002). PostgreSQL prod, READ ONLY, CHAOS-14190.
 -- Before READBACK POST: the daily metrics runs of the backfill's fan-out are terminal. The backfill sync run (prefix
 -- {{RUN_PREFIX}}, T0 2026-11-23 14:50:56 UTC) writes its daily runs under generation 'post-sync:' || sync_run_id (the
 -- window days and every touched day). Other runs of the org created since T0 (hourly syncs, nightly, drains) are INFO.
--- WANT text and work math: FORM-14190-DAILY-1.md. Shape: pm-guard/FORM-TEMPLATE-3.md (sha12 6b9e73a3c45a), PostgreSQL
--- form (b). Run line: psql -X -v ON_ERROR_STOP=1 -f FORM-14190-DAILY-1.sql (on the primary; one transaction).
+-- Replaces FORM-14190-DAILY-1 (50a436a2a19b): adds the first and last created_at minute (pm). WANT text and work math:
+-- FORM-14190-DAILY-2.md. Shape: pm-guard/FORM-TEMPLATE-3.md (sha12 6b9e73a3c45a), PostgreSQL
+-- form (b). Run line: psql -X -v ON_ERROR_STOP=1 -f FORM-14190-DAILY-2.sql (on the primary; one transaction).
 -- Done run = status IN ('succeeded', 'no_repositories') AND finalization_status = 'succeeded'.
 -- Failed run = status IN ('failed', 'canceled') OR finalization_status = 'failed'. Open run = neither.
 -- Output: counts, days and UTC minutes only. Org prefix {{ORG_PREFIX}} on every FROM with org_id: a uuid range (it lets the
@@ -91,7 +92,7 @@ FROM public.organizations o
 WHERE starts_with(o.id::text, '{{ORG_PREFIX}}');
 
 -- D1 INFO the org's daily runs created since T0, by generation class x status x finalization_status: runs, first and
--- last target day. Classes: this_backfill ('post-sync:' + the run prefix {{RUN_PREFIX}}), post_sync_other, touched_drain,
+-- last target day, first and last created_at minute (UTC). Classes: this_backfill ('post-sync:' + the run prefix {{RUN_PREFIX}}), post_sync_other, touched_drain,
 -- fixed_schedule, manual_daily, ext_recompute, other.
 SELECT CASE WHEN r.generation LIKE 'post-sync:{{RUN_PREFIX}}%' THEN 'this_backfill'
             WHEN r.generation LIKE 'post-sync:%' THEN 'post_sync_other'
@@ -101,7 +102,9 @@ SELECT CASE WHEN r.generation LIKE 'post-sync:{{RUN_PREFIX}}%' THEN 'this_backfi
             WHEN r.generation LIKE 'ext-recompute:%' THEN 'ext_recompute'
             ELSE 'other' END AS generation_class,
        r.status, r.finalization_status, count(*) AS runs,
-       min(r.target_day) AS first_day, max(r.target_day) AS last_day
+       min(r.target_day) AS first_day, max(r.target_day) AS last_day,
+       to_char(min(r.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') AS first_created_minute,
+       to_char(max(r.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') AS last_created_minute
 FROM public.daily_metrics_runs r
 WHERE r.org_id >= '{{ORG_PREFIX}}-0000-0000-0000-000000000000'::uuid AND r.org_id <= '{{ORG_PREFIX}}-ffff-ffff-ffff-ffffffffffff'::uuid
   AND starts_with(r.org_id::text, '{{ORG_PREFIX}}') AND r.created_at >= '2026-11-23 14:50:56+00'::timestamptz
@@ -109,7 +112,8 @@ GROUP BY 1, 2, 3
 ORDER BY 1, 2, 3;
 
 -- D2 the backfill's own daily runs (generation 'post-sync:' + the run prefix {{RUN_PREFIX}}). WANT total > 0 (control: the
--- fan-out happened), open = 0, failed = 0. INFO done, no_repositories, blocked, first and last day, last update minute.
+-- fan-out happened), open = 0, failed = 0. INFO done, no_repositories, blocked, first and last day, first and last
+-- created_at minute, last update minute (UTC).
 SELECT count(*) AS total,
        count(*) FILTER (WHERE r.status IN ('succeeded', 'no_repositories') AND r.finalization_status = 'succeeded') AS done,
        count(*) FILTER (WHERE NOT (r.status IN ('succeeded', 'no_repositories') AND r.finalization_status = 'succeeded')
@@ -118,6 +122,8 @@ SELECT count(*) AS total,
        count(*) FILTER (WHERE r.status = 'no_repositories') AS no_repositories,
        count(*) FILTER (WHERE r.blocked_at IS NOT NULL) AS blocked,
        min(r.target_day) AS first_day, max(r.target_day) AS last_day,
+       COALESCE(to_char(min(r.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI'), '') AS first_created_minute,
+       COALESCE(to_char(max(r.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI'), '') AS last_created_minute,
        COALESCE(to_char(max(r.updated_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI'), '') AS last_update_minute
 FROM public.daily_metrics_runs r
 WHERE r.org_id >= '{{ORG_PREFIX}}-0000-0000-0000-000000000000'::uuid AND r.org_id <= '{{ORG_PREFIX}}-ffff-ffff-ffff-ffffffffffff'::uuid
@@ -253,7 +259,7 @@ func formExecDaily14190Run(ctx context.Context, t *testing.T, conn *pgx.Conn, pi
 			return results, fmt.Errorf("%s: %w", piece.id, err)
 		}
 		for index, row := range result.rows {
-			t.Logf("FORM-14190-DAILY-1 %s row %d %v %v", piece.id, index, result.columns, row)
+			t.Logf("FORM-14190-DAILY-2 %s row %d %v %v", piece.id, index, result.columns, row)
 		}
 		results[piece.id] = result
 	}
@@ -277,7 +283,14 @@ func formExecDaily14190Cell(t *testing.T, label string, result formExecDaily1419
 func formExecDaily14190Want(t *testing.T, label string, result formExecDaily14190Result, row int, want map[string]string) {
 	t.Helper()
 	for column, value := range want {
-		if got := formExecDaily14190Cell(t, label, result, row, column); got != value {
+		got := formExecDaily14190Cell(t, label, result, row, column)
+		if prefix, isPrefix := strings.CutSuffix(value, "*"); isPrefix {
+			if !strings.HasPrefix(got, prefix) {
+				t.Errorf("%s row %d %s = %q, want prefix %q", label, row, column, got, prefix)
+			}
+			continue
+		}
+		if got != value {
 			t.Errorf("%s row %d %s = %q, want %q", label, row, column, got, value)
 		}
 	}
@@ -286,7 +299,7 @@ func formExecDaily14190Want(t *testing.T, label string, result formExecDaily1419
 // TestFormExecDaily14190ReadsTheBackfillDailyRuns. Org f0f0f0f0-... holds the backfill's daily runs (generation
 // 'post-sync:' + a run id of prefix b1b1b1b1): two succeeded and one no_repositories run after T0, one pending run of
 // the same generation BEFORE T0 (out of the window), and an open daily run of another sync after T0 (D3 INFO). Org
-// e0e0e0e0-... holds an open run of the same generation and must not count.
+// e0e0e0e0-... holds an open and a failed run of the same generation and must not count (the org filter mutants).
 func TestFormExecDaily14190ReadsTheBackfillDailyRuns(t *testing.T) {
 	ctx := context.Background()
 	instance, admin := startDatabase(t)
@@ -299,7 +312,7 @@ func TestFormExecDaily14190ReadsTheBackfillDailyRuns(t *testing.T) {
 
 	sum := sha256.Sum256([]byte(formExecDaily14190SQL))
 	if got := hex.EncodeToString(sum[:]); got != formExecDaily14190SHA256 {
-		t.Fatalf("sha256 of the embedded text = %s, want %s (FORM-14190-DAILY-1.sql with %s and %s)", got, formExecDaily14190SHA256,
+		t.Fatalf("sha256 of the embedded text = %s, want %s (FORM-14190-DAILY-2.sql with %s and %s)", got, formExecDaily14190SHA256,
 			formExecDaily14190OrgSlot, formExecDaily14190RunSlot)
 	}
 	pieces := formExecDaily14190Pieces(t, formExecDaily14190SQL)
@@ -376,6 +389,7 @@ VALUES ($1::uuid, $2::uuid, $3::date, $4, $5, $6, $7::uuid, $8::timestamptz, $9:
 	daily(4, org, generation, "2026-11-21", "pending", "pending", beforeT0)
 	daily(5, org, otherGeneration, "2026-11-23", "pending", "pending", afterT0)
 	daily(6, other, generation, "2026-11-23", "running", "pending", afterT0)
+	daily(12, other, generation, "2026-11-22", "failed", "failed", afterT0)
 	exec(`ANALYZE organizations`)
 	exec(`ANALYZE daily_metrics_runs`)
 
@@ -401,7 +415,8 @@ VALUES ($1::uuid, $2::uuid, $3::date, $4, $5, $6, $7::uuid, $8::timestamptz, $9:
 	}
 	formExecDaily14190Want(t, "pass S0", results["S0"], 0, map[string]string{"orgs": "1"})
 	formExecDaily14190Want(t, "pass D2", results["D2"], 0, map[string]string{"total": "3", "done": "3", "open": "0", "failed": "0",
-		"no_repositories": "1", "blocked": "0"})
+		"no_repositories": "1", "blocked": "0", "first_day": "2026-06-10*", "last_day": "2026-11-23*",
+		"first_created_minute": "2026-11-23 15:00", "last_created_minute": "2026-11-23 15:00"})
 	formExecDaily14190Want(t, "pass D3", results["D3"], 0, map[string]string{"total": "1", "open": "1", "failed": "0"})
 	if got := len(results["D1"].rows); got != 3 {
 		t.Fatalf("pass D1: %d rows, want 3", got)
@@ -409,8 +424,36 @@ VALUES ($1::uuid, $2::uuid, $3::date, $4, $5, $6, $7::uuid, $8::timestamptz, $9:
 	formExecDaily14190Want(t, "pass D1", results["D1"], 0, map[string]string{"generation_class": "post_sync_other", "status": "pending", "finalization_status": "pending", "runs": "1"})
 	formExecDaily14190Want(t, "pass D1", results["D1"], 1, map[string]string{"generation_class": "this_backfill", "status": "no_repositories", "finalization_status": "succeeded", "runs": "1"})
 	formExecDaily14190Want(t, "pass D1", results["D1"], 2, map[string]string{"generation_class": "this_backfill", "status": "succeeded", "finalization_status": "succeeded", "runs": "2"})
+	for row := range results["D1"].rows {
+		formExecDaily14190Want(t, "pass D1", results["D1"], row, map[string]string{"first_created_minute": "2026-11-23 15:00", "last_created_minute": "2026-11-23 15:00"})
+	}
 	if !wantPass(results) {
 		t.Errorf("pass set: a WANT failed")
+	}
+
+	// The org filter: the other org's open and failed runs of the same generation are kept out of D2 by the org filter.
+	// The uuid range and starts_with are the same filter (the range bounds are the prefix's first and last uuid), so
+	// either one alone still passes; without both the other org's runs count and the WANTs fail.
+	orgFilter := "WHERE r.org_id >= '" + formExecDaily14190OrgPrefix + "-0000-0000-0000-000000000000'::uuid AND r.org_id <= '" +
+		formExecDaily14190OrgPrefix + "-ffff-ffff-ffff-ffffffffffff'::uuid\n  AND starts_with(r.org_id::text, '" + formExecDaily14190OrgPrefix + "') AND "
+	for _, mutant := range []struct {
+		name, to   string
+		killed     bool
+		open, fail string
+	}{
+		{"no-org-filter", "WHERE ", true, "1", "1"},
+		{"range-only", "WHERE r.org_id >= '" + formExecDaily14190OrgPrefix + "-0000-0000-0000-000000000000'::uuid AND r.org_id <= '" +
+			formExecDaily14190OrgPrefix + "-ffff-ffff-ffff-ffffffffffff'::uuid AND ", false, "0", "0"},
+		{"starts-with-only", "WHERE starts_with(r.org_id::text, '" + formExecDaily14190OrgPrefix + "') AND ", false, "0", "0"},
+	} {
+		results, err := formExecDaily14190Run(ctx, t, conn, pieces, "D2", orgFilter, mutant.to)
+		if err != nil {
+			t.Fatalf("MUTANT %s: %v", mutant.name, err)
+		}
+		formExecDaily14190Want(t, "MUTANT "+mutant.name+" D2", results["D2"], 0, map[string]string{"open": mutant.open, "failed": mutant.fail})
+		if passed := wantPass(results); passed == mutant.killed {
+			t.Errorf("MUTANT %s: WANTs passed = %v, want %v", mutant.name, passed, !mutant.killed)
+		}
 	}
 
 	// Mutant row sets: each must fail its WANT.

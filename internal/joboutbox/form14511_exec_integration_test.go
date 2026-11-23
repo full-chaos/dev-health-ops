@@ -4,15 +4,17 @@ package joboutbox
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// EXEC PROOF ONLY (never merged): FORM-14090-S0-3 and FORM-14511-RECHECK-3 on Postgres at the migrated schema (with
+// EXEC PROOF ONLY (never merged): FORM-14090-S0-3 and FORM-14511-RECHECK-4 on Postgres at the migrated schema (with
 // revision 0167's partial outbox index). The SQL files are the FORMs with the one org prefix literal replaced by the
 // fixture prefix 'f0f0f0f0'. Pass paths, each G0 STOP fired once, each control shown failing.
 func TestFormsS02AndRecheck2Execute(t *testing.T) {
@@ -26,7 +28,7 @@ func TestFormsS02AndRecheck2Execute(t *testing.T) {
 		}
 		return string(raw)
 	}
-	s02, recheck := read("FORM-14090-S0-3.sql"), read("FORM-14511-RECHECK-3.sql")
+	s02, recheck := read("FORM-14090-S0-3.sql"), read("FORM-14511-RECHECK-4.sql")
 	exec := func(query string, args ...any) {
 		t.Helper()
 		if _, err := admin.Exec(ctx, query, args...); err != nil {
@@ -84,26 +86,62 @@ VALUES (gen_random_uuid(), 'metrics.daily_finalize:' || $1, 'metrics.daily_final
 		t.Fatalf("S0-2 S2 under a mutation = %v, want runs_total 0 (the control can fail)", got)
 	}
 
-	// FORM-14511-RECHECK-2: BEGIN, G0, PREPARE, PREPARE, S1, S2, S3, S4, S5, DEALLOCATE, DEALLOCATE, ROLLBACK.
+	// FORM-14511-RECHECK-4: BEGIN, G0, PREPARE, PREPARE, S1, S2, S3a (gset), S3, S4, S5, DEALLOCATE, DEALLOCATE, ROLLBACK.
 	got = runFormScript(t, ctx, admin, recheck, "")
-	if got[1][0][0] != "0" || got[4][0][0] != "f" || got[5][0][0] == "0" || got[6][0][0] != "f" || got[7][0][0] != "f" || got[8][0][0] == "0" {
-		t.Fatalf("RECHECK-2 = %v, want G0 0, S1 false, S2 > 0, S3 false (the newest run's finalize row is delivered and old), S4 false, S5 > 0", got)
+	if got[1][0][0] != "0" || got[4][0][0] != "f" || got[5][0][0] == "0" || got[6][0][0] != stuck || got[7][0][0] != "f" ||
+		got[8][0][0] != "f" || got[9][0][0] == "0" {
+		t.Fatalf("RECHECK-4 = %v, want G0 0, S1 false, S2 > 0, S3a the stuck run, S3 false (its finalize row is delivered and old), S4 false, S5 > 0", got)
 	}
 	exec(`UPDATE public.worker_job_outbox SET status = 'pending', river_job_id = NULL, delivered_at = NULL WHERE dedupe_key = $1`,
 		"metrics.daily_finalize:"+stuck)
-	if got := runFormScript(t, ctx, admin, recheck, "")[6][0][0]; got != "t" {
-		t.Fatalf("RECHECK-2 S3 with an unrelayed finalize row = %v, want true (the re-check can answer true)", got)
+	if got := runFormScript(t, ctx, admin, recheck, "")[7][0][0]; got != "t" {
+		t.Fatalf("RECHECK-4 S3 with an unrelayed finalize row = %v, want true (the re-check can answer true)", got)
 	}
 	runFormScript(t, ctx, admin, strings.Replace(recheck, "outbox <= 2000000", "outbox <= 0", 1), "STOP-G0")
 	runFormScript(t, ctx, admin, strings.Replace(recheck, "runs_bytes <= 104857600", "runs_bytes <= 0", 1), "STOP-G0")
 	runFormScript(t, ctx, admin, strings.Replace(recheck, "partitions_bytes <= 209715200", "partitions_bytes <= 0", 1), "STOP-G0")
 	runFormScript(t, ctx, admin, strings.Replace(recheck, "outbox_bytes <= 2147483648", "outbox_bytes <= 0", 1), "STOP-G0")
 	runFormScript(t, ctx, admin, strings.ReplaceAll(recheck, "'f0f0f0f0'", "'e0e0e0e0'"), "STOP-G0 orgs=0")
-	if got := runFormScript(t, ctx, admin, strings.Replace(recheck, "WHERE outbox.job_kind = 'metrics.daily_finalize';", "WHERE outbox.job_kind = 'metrics.daily_finalizex';", 1), "")[8][0][0]; got != "0" {
-		t.Fatalf("RECHECK-2 S5 under a wrong literal = %v, want 0 (the control can fail)", got)
+	if got := runFormScript(t, ctx, admin, strings.Replace(recheck, "WHERE outbox.job_kind = 'metrics.daily_finalize';", "WHERE outbox.job_kind = 'metrics.daily_finalizex';", 1), "")[9][0][0]; got != "0" {
+		t.Fatalf("RECHECK-4 S5 under a wrong literal = %v, want 0 (the control can fail)", got)
 	}
 	exec("DROP INDEX public.ix_worker_job_outbox_finalize_domain_id")
 	runFormScript(t, ctx, admin, recheck, "indexes_ok=1")
+}
+
+// execFormParts runs the FORM as psql does with its gset meta-command: the text before each gset goes in one simple-query
+// call on the same connection (the transaction stays open), the last row of it sets one variable per column, and each
+// :'name' after it becomes that value as a quoted literal. No row, or more than one, is an error, as in psql.
+func execFormParts(ctx context.Context, conn *pgxpool.Conn, form string) ([]*pgconn.Result, error) {
+	var all []*pgconn.Result
+	vars := map[string]string{}
+	for {
+		part, rest, found := strings.Cut(form, "\\gset")
+		for name, value := range vars {
+			part = strings.ReplaceAll(part, ":'"+name+"'", "'"+strings.ReplaceAll(value, "'", "''")+"'")
+		}
+		results, err := conn.Conn().PgConn().Exec(ctx, part).ReadAll()
+		all = append(all, results...)
+		if err != nil {
+			return all, err
+		}
+		for _, result := range results {
+			if result.Err != nil {
+				return all, result.Err
+			}
+		}
+		if !found {
+			return all, nil
+		}
+		if len(results) == 0 || len(results[len(results)-1].Rows) != 1 {
+			return all, fmt.Errorf("gset: the query before it did not return exactly one row")
+		}
+		last := results[len(results)-1]
+		for index, field := range last.FieldDescriptions {
+			vars[field.Name] = string(last.Rows[0][index])
+		}
+		form = rest
+	}
 }
 
 // runFormScript sends a FORM in one simple-query call, as psql -f does. With wantErr set it wants the call to fail with
@@ -115,15 +153,7 @@ func runFormScript(t *testing.T, ctx context.Context, admin *pgxpool.Pool, form,
 		t.Fatal(err)
 	}
 	defer conn.Release()
-	results, err := conn.Conn().PgConn().Exec(ctx, form).ReadAll()
-	if err == nil {
-		for _, result := range results {
-			if result.Err != nil {
-				err = result.Err
-				break
-			}
-		}
-	}
+	results, err := execFormParts(ctx, conn, form)
 	if wantErr != "" {
 		if err == nil || !strings.Contains(err.Error(), wantErr) {
 			t.Fatalf("FORM error = %v, want %q", err, wantErr)

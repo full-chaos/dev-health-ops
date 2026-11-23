@@ -1,8 +1,10 @@
--- FORM-14511-RECHECK-3 (pm-14090; -2 3512faad361f frozen: bytes caps for runs and partitions, null-safe STOP text, the
--- outbox index tied to its table, work math for the new statement 0). Was RECHECK-2 = RECHECK-1 (c632e5c5cff1) with statement 0 replaced by its NEW text at ops
+-- FORM-14511-RECHECK-4 (pm-14090; -3 275fb0ee6cf0 frozen: its S3 passed a subquery as an EXECUTE parameter, which
+-- PostgreSQL refuses (0A000 "cannot use subquery in EXECUTE parameter", exec leg job 137560514346). S3 now takes the run id
+-- from S3a through psql's gset meta-command. Nothing else changed.) -3 was RECHECK-2 3512faad361f + bytes caps for runs and
+-- partitions, null-safe STOP text, the outbox index tied to its table, work math for the new statement 0. Was RECHECK-2 = RECHECK-1 (c632e5c5cff1) with statement 0 replaced by its NEW text at ops
 -- 863efd3a6e77 (#6850 head; sha 89794a9d433d); the re-check text is unchanged (sha 3e1fe377912e). Everything else
 -- (G0, S2-S5, WANTs, work math) is RECHECK-1's; read that md for the reasons. Run AFTER the #6850 roll:
---   psql -X -v ON_ERROR_STOP=1 -c '\timing on' -f FORM-14511-RECHECK-2.sql
+--   psql -X -v ON_ERROR_STOP=1 -c '\timing on' -f FORM-14511-RECHECK-4.sql
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
 
 -- G0 catalog gate (reads no data table). WANT cost_gate_ok = 0.
@@ -77,12 +79,15 @@ EXECUTE stale_finalize_statement0(now() - interval '24 hours');
 -- S2 control (can fail): the app org has a daily run to re-check. WANT runs > 0 (else S3 has no real run and STOP: report it).
 SELECT count(*) AS app_org_runs FROM public.daily_metrics_runs AS run WHERE starts_with(run.org_id::text, 'f0f0f0f0');
 
--- S3 re-check, newest app-org run (it has finalize outbox rows: the index stops at the first match). WANT time <= 100 ms (half the
+-- S3a the newest app-org run id = INFO (reads daily_metrics_runs once, <= runs cap). psql keeps it as the variable
+-- recheck_run (gset on the next line). No row = a psql error, and ON_ERROR_STOP stops the file (S2 already said why).
+SELECT run.id::text AS recheck_run FROM public.daily_metrics_runs AS run
+WHERE starts_with(run.org_id::text, 'f0f0f0f0') ORDER BY run.updated_at DESC, run.id DESC LIMIT 1
+\gset
+
+-- S3 re-check of that run (it has finalize outbox rows: the index stops at the first match). WANT time <= 100 ms (half the
 -- 200 ms per-run deadline it runs under); the boolean = INFO.
-EXECUTE stale_finalize_recheck(
-  (SELECT run.id::text FROM public.daily_metrics_runs AS run
-   WHERE starts_with(run.org_id::text, 'f0f0f0f0') ORDER BY run.updated_at DESC, run.id DESC LIMIT 1),
-  now() - interval '24 hours');
+EXECUTE stale_finalize_recheck(:'recheck_run', now() - interval '24 hours');
 
 -- S4 re-check, an id no outbox row holds (the miss: one full index probe, the worst case of the candidate path).
 -- WANT exists = false AND time <= 100 ms.

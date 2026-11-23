@@ -8,12 +8,14 @@ import (
 	"encoding/hex"
 	"fmt"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
@@ -21,38 +23,61 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// DO NOT MERGE. This file executes the text of two prod read FORMs (FORM-7829-2.sql, FORM-14259-SIZE-2.sql), byte for byte
+// DO NOT MERGE. This file executes the text of two prod read FORMs (FORM-7829-3.sql, FORM-14259-SIZE-3.sql), byte for byte
 // (the sha256 below is the sha256 of each .sql file), on the head schema with synthetic fixtures. It checks each WANT, that
-// each GATE fires on a copy of the text with only its bound lowered, and that each CONTROL fails under a planted mutation.
+// each statement's STOP-COST-GATE fires before the start with a cap set to 0 (query log), that each size GATE fires on a
+// copy of the text with only its bound lowered, and that each CONTROL fails under a planted mutation.
 const (
-	formExec7829SHA256  = "40ef1b5b79a51b3f697e258889e41a2bd80305f606c54a218faca37985609233"
-	formExec14259SHA256 = "de0218e62c17171557a3e7cce0ae562424694e9bdc829d7630587488d9d4c88c"
-	formExec7829SQL     = `-- FORM-7829-2 (lane lformch for fcdev, 2026-11-22). CHAOS-7829: one Linear event_id stored at two occurred_at values.
--- Replaces FORM-7829-1 after acp READ-FORM-CH-2 (a1e884d50b59). ClickHouse, SELECT only. Org prefix c6a38355 only.
--- Output = counts, 8-char sha256 prefixes of event_id, UTC aggregate times, per-row times cut to the second.
--- Run each statement once, in order, each as its own call. A SQL error = STOP. A GATE error = STOP and report the
--- gate text (the statement read nothing past its gate). S0 orgs != 1 = STOP.
+	formExec7829SHA256  = "b919b830e66abb3234ef1007f05dfcaf6a1dde963eb77ec1db3c408a98e31267"
+	formExec14259SHA256 = "ec41eafa0a7ba09ed16c2f5d7bb6732a49aa92dc0057341b5bf919165daabbf6"
+	formExec7829SQL     = `-- FORM-7829-3 (lane lformch for fcdev, 2026-11-23). CHAOS-7829: one Linear event_id stored at two occurred_at values.
+-- Shape: pm-guard/FORM-TEMPLATE-1.md (e220dd03e6fc) (a) ClickHouse. Replaces FORM-7829-2 (frozen).
+-- ClickHouse, SELECT only, one statement per call. Org prefix c6a38355 on every FROM with org_id.
+-- Output = counts, 8-char sha256 prefixes of event_id, days (UTC), spans in ms.
+-- Run each statement once, in order. Any SQL error (STOP-COST-GATE and GATE errors included) = STOP, report the text.
+-- STOP when S1 orgs != 1.
 -- Table: project_membership_transitions, ReplacingMergeTree(last_synced),
 --   ORDER BY (org_id, subject_kind, repo_id, subject_id, occurred_at, event_id), no PARTITION BY, org_id String.
--- GATES (throwIf in scalar subqueries, run before the statement reads the table, nested so they run in this order):
---   parts  = whole table active parts over 20000000 rows or 4 GiB on disk (system.parts). In every statement.
---   events = org distinct event_id (uniq) over 2000000. In S1 to S4 (bounds the GROUP BY event_id memory).
---   multi  = over 10000 multi-occurred events or over 1000000 rows of them. In S3, S4 (bounds the dedup GROUP BY).
--- Dedup: S3 and S4 group the rows of the multi-occurred events by the full sort key, max(last_synced) = the version
+-- Gates, all scalar subqueries (run at analysis, before any table read), in this order:
+--   cost_gate (S1 to S5) = active parts of the table over 20000000 rows or 4 GiB on disk: 'STOP-COST-GATE'.
+--   events (S2 to S5) = org distinct event_id (uniq) over 2000000 (the GROUP BY event_id memory). Gated by cost_gate.
+--   multi (S4, S5) = over 10000 multi-occurred events or over 1000000 of their rows (the dedup memory). Gated by events.
+-- cost_gate = 0 is in the WHERE of every query block that reads the table.
+-- Dedup: S4 and S5 group the rows of the multi-occurred events by the full sort key, max(last_synced) = the version
 --   FINAL keeps. Two occurred_at values are two sort keys and stay two keys.
 
--- S0 ORG-1 and size report. WANT orgs = 1, raw_linear_rows > 0. INFO events_approx (S1 to S4 gate at 2000000).
+-- S0 cost inputs (system.parts only). WANT 1 row, table_rows > 0 (a wrong table name gives no row).
+SELECT table, sum(rows) AS table_rows, sum(bytes_on_disk) AS disk_bytes, count() AS active_parts
+FROM system.parts
+WHERE active AND database = currentDatabase()
+  AND table IN ('project_membership_transitions')
+GROUP BY table
+ORDER BY table;
+
+-- S1 ORG-1 and size report. WANT orgs = 1, raw_linear_rows > 0. INFO events_approx (S2 to S5 gate at 2000000).
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('project_membership_transitions')) > 20000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('project_membership_transitions')) > 4294967296,
+    'STOP-COST-GATE')) AS cost_gate
 SELECT uniqExact(org_id) AS orgs,
        count() AS raw_rows,
        countIf(provider = 'linear') AS raw_linear_rows,
        uniq(event_id) AS events_approx
 FROM project_membership_transitions
-WHERE startsWith(org_id, 'c6a38355') AND (SELECT throwIf(sum(rows) > 20000000 OR sum(bytes_on_disk) > 4294967296, 'FORM-7829-2 GATE parts: project_membership_transitions over 20000000 rows or 4 GiB') FROM system.parts WHERE active AND database = currentDatabase() AND table = 'project_membership_transitions') = 0;
+WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0;
 
--- S1 per provider (raw rows, no FINAL: an occurred_at value is in the sort key, so versions never add or remove one).
+-- S2 per provider (raw rows, no FINAL: an occurred_at value is in the sort key, so versions never add or remove one).
 -- WANT linear events > 0. WANT linear events_multi_occ >= 3 (ticket: 3 seen in CHAOS-7659, no path retires a key).
 -- INFO multi_occ_native_id = of those, event_id 'linear:<history entry id>'. INFO events_multi_subject = one event_id
 --   under 2+ subjects. raw_rows_of_multi_occ counts unmerged versions too.
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('project_membership_transitions')) > 20000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('project_membership_transitions')) > 4294967296,
+    'STOP-COST-GATE')) AS cost_gate
 SELECT m.provider AS provider,
        count() AS events,
        countIf(m.min_occ < m.max_occ) AS events_multi_occ,
@@ -69,14 +94,20 @@ FROM (
            min(cityHash64(subject_kind, repo_id, subject_id)) AS min_sh,
            max(cityHash64(subject_kind, repo_id, subject_id)) AS max_sh
     FROM project_membership_transitions
-    WHERE startsWith(org_id, 'c6a38355') AND (SELECT throwIf(uniq(event_id) > 2000000, 'FORM-7829-2 GATE events: org event_ids over 2000000') FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND (SELECT throwIf(sum(rows) > 20000000 OR sum(bytes_on_disk) > 4294967296, 'FORM-7829-2 GATE parts: project_membership_transitions over 20000000 rows or 4 GiB') FROM system.parts WHERE active AND database = currentDatabase() AND table = 'project_membership_transitions') = 0) = 0
+    WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND (SELECT throwIf(uniq(event_id) > 2000000, 'FORM-7829-3 GATE events: org event_ids over 2000000') FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) = 0
     GROUP BY provider, event_id
 ) AS m
 GROUP BY m.provider
 ORDER BY provider;
 
--- S2 CONTROL: S1 events_multi_occ by another rule (2 distinct occurred_at kept by groupUniqArray(2), not min < max).
--- WANT per provider events_multi_occ_alt = S1 events_multi_occ.
+-- S3 CONTROL: S2 events_multi_occ by another rule (2 distinct occurred_at kept by groupUniqArray(2), not min < max).
+-- WANT per provider events_multi_occ_alt = S2 events_multi_occ. WANT linear events_multi_occ_alt > 0.
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('project_membership_transitions')) > 20000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('project_membership_transitions')) > 4294967296,
+    'STOP-COST-GATE')) AS cost_gate
 SELECT m.provider AS provider,
        countIf(m.occ2 = 2) AS events_multi_occ_alt
 FROM (
@@ -84,28 +115,36 @@ FROM (
            event_id,
            length(groupUniqArray(2)(occurred_at)) AS occ2
     FROM project_membership_transitions
-    WHERE startsWith(org_id, 'c6a38355') AND (SELECT throwIf(uniq(event_id) > 2000000, 'FORM-7829-2 GATE events: org event_ids over 2000000') FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND (SELECT throwIf(sum(rows) > 20000000 OR sum(bytes_on_disk) > 4294967296, 'FORM-7829-2 GATE parts: project_membership_transitions over 20000000 rows or 4 GiB') FROM system.parts WHERE active AND database = currentDatabase() AND table = 'project_membership_transitions') = 0) = 0
+    WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND (SELECT throwIf(uniq(event_id) > 2000000, 'FORM-7829-3 GATE events: org event_ids over 2000000') FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) = 0
     GROUP BY provider, event_id
 ) AS m
 GROUP BY m.provider
 ORDER BY provider;
 
--- S3 one row per multi-occurred event, LIMIT 100. WANT row count = S1 sum of events_multi_occ (if <= 100).
--- keys = distinct sort keys. occ_span_ms = max - min occurred_at. Go cut per provider: github writer aca100589
---   (2026-08-24 20:33:09 UTC), linear and jira writer a21768303 (2026-08-25 01:33:44 UTC). WANT keys_ls_before_cut = 0.
+-- S4 one row per multi-occurred event, LIMIT 100. WANT row count = S2 sum of events_multi_occ (if <= 100), > 0.
+-- key_rows = distinct sort keys. occ_span_ms = max - min occurred_at. Go cut per provider (writer literals: 'github'
+--   github_project_membership_snapshot_diff.go:314, writer aca100589, 2026-08-24 20:33:09 UTC, 'linear'
+--   linear_work_items_route.go:1869, writer a21768303, 2026-08-25 01:33:44 UTC, jira the same commit).
+--   WANT keys_ls_before_cut = 0.
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('project_membership_transitions')) > 20000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('project_membership_transitions')) > 4294967296,
+    'STOP-COST-GATE')) AS cost_gate
 SELECT substring(lower(hex(SHA256(e.event_id))), 1, 8) AS event_h8,
        e.provider AS provider,
        e.native AS native_id,
        e.keys AS key_rows,
        e.occ AS occurred_values,
        e.subj AS subjects,
-       toString(e.min_occ, 'UTC') AS min_occurred_utc,
-       toString(e.max_occ, 'UTC') AS max_occurred_utc,
+       toString(toDate(e.min_occ, 'UTC')) AS min_occurred_day,
+       toString(toDate(e.max_occ, 'UTC')) AS max_occurred_day,
        toUnixTimestamp64Milli(e.max_occ) - toUnixTimestamp64Milli(e.min_occ) AS occ_span_ms,
-       toString(e.min_ls, 'UTC') AS min_last_synced_utc,
-       toString(e.max_ls, 'UTC') AS max_last_synced_utc,
-       toString(e.min_ing, 'UTC') AS min_ingested_utc,
-       toString(e.max_ing, 'UTC') AS max_ingested_utc,
+       toString(toDate(e.min_ls, 'UTC')) AS min_last_synced_day,
+       toString(toDate(e.max_ls, 'UTC')) AS max_last_synced_day,
+       toString(toDate(e.min_ing, 'UTC')) AS min_ingested_day,
+       toString(toDate(e.max_ing, 'UTC')) AS max_ingested_day,
        e.before_cut AS keys_ls_before_cut,
        e.keys - e.before_cut AS keys_ls_after_cut
 FROM (
@@ -124,48 +163,54 @@ FROM (
            countIf(k.ls < if(k.provider = 'github', toDateTime64('2026-08-24 20:33:09', 3, 'UTC'),
                              toDateTime64('2026-08-25 01:33:44', 3, 'UTC'))) AS before_cut
     FROM (
-        SELECT provider, event_id, subject_kind, repo_id, subject_id, occurred_at,
-               max(last_synced) AS ls,
-               argMax(ingested_at, last_synced) AS ing
+    SELECT provider, event_id, subject_kind, repo_id, subject_id, occurred_at,
+           max(last_synced) AS ls,
+           argMax(ingested_at, last_synced) AS ing
+    FROM project_membership_transitions
+    WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND (SELECT throwIf(count() > 10000 OR sum(g.n) > 1000000, 'FORM-7829-3 GATE multi: over 10000 multi-occurred events or 1000000 of their rows') FROM (SELECT count() AS n FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND (SELECT throwIf(uniq(event_id) > 2000000, 'FORM-7829-3 GATE events: org event_ids over 2000000') FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) = 0 GROUP BY provider, event_id HAVING min(occurred_at) < max(occurred_at)) AS g) = 0
+      AND (provider, event_id) IN (
+        SELECT provider, event_id
         FROM project_membership_transitions
-        WHERE startsWith(org_id, 'c6a38355') AND (SELECT throwIf(count() > 10000 OR sum(g.n) > 1000000, 'FORM-7829-2 GATE multi: over 10000 multi-occurred events or 1000000 of their rows') FROM (SELECT count() AS n FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND (SELECT throwIf(uniq(event_id) > 2000000, 'FORM-7829-2 GATE events: org event_ids over 2000000') FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND (SELECT throwIf(sum(rows) > 20000000 OR sum(bytes_on_disk) > 4294967296, 'FORM-7829-2 GATE parts: project_membership_transitions over 20000000 rows or 4 GiB') FROM system.parts WHERE active AND database = currentDatabase() AND table = 'project_membership_transitions') = 0) = 0 GROUP BY provider, event_id HAVING min(occurred_at) < max(occurred_at)) AS g) = 0
-          AND (provider, event_id) IN (
-            SELECT provider, event_id
-            FROM project_membership_transitions
-            WHERE startsWith(org_id, 'c6a38355') AND (SELECT throwIf(count() > 10000 OR sum(g.n) > 1000000, 'FORM-7829-2 GATE multi: over 10000 multi-occurred events or 1000000 of their rows') FROM (SELECT count() AS n FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND (SELECT throwIf(uniq(event_id) > 2000000, 'FORM-7829-2 GATE events: org event_ids over 2000000') FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND (SELECT throwIf(sum(rows) > 20000000 OR sum(bytes_on_disk) > 4294967296, 'FORM-7829-2 GATE parts: project_membership_transitions over 20000000 rows or 4 GiB') FROM system.parts WHERE active AND database = currentDatabase() AND table = 'project_membership_transitions') = 0) = 0 GROUP BY provider, event_id HAVING min(occurred_at) < max(occurred_at)) AS g) = 0
-            GROUP BY provider, event_id
-            HAVING min(occurred_at) < max(occurred_at)
-          )
-        GROUP BY org_id, provider, event_id, subject_kind, repo_id, subject_id, occurred_at
+        WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND (SELECT throwIf(count() > 10000 OR sum(g.n) > 1000000, 'FORM-7829-3 GATE multi: over 10000 multi-occurred events or 1000000 of their rows') FROM (SELECT count() AS n FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND (SELECT throwIf(uniq(event_id) > 2000000, 'FORM-7829-3 GATE events: org event_ids over 2000000') FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) = 0 GROUP BY provider, event_id HAVING min(occurred_at) < max(occurred_at)) AS g) = 0
+        GROUP BY provider, event_id
+        HAVING min(occurred_at) < max(occurred_at)
+      )
+    GROUP BY org_id, provider, event_id, subject_kind, repo_id, subject_id, occurred_at
     ) AS k
     GROUP BY k.provider, k.event_id
 ) AS e
 ORDER BY event_h8
 LIMIT 100;
 
--- S4 one row per (event, occurred_at) of the S3 events, LIMIT 300. WANT row count = sum of S3 occurred_values (if <= 300).
--- occurred_second_utc is cut to the second, ms_after_first = ms after the event's first occurred_at.
--- Reading: one occurred_at whose max_last_synced_utc stopped long ago while the other is recent = the provider changed
---   createdAt upstream and the old key is never retired (old row). Both recent = the provider returns both now (live).
+-- S5 one row per (event, occurred_at) of the S4 events, LIMIT 300. WANT row count = sum of S4 occurred_values (if <= 300).
+-- ms_after_first = ms after the event's first occurred_at. Reading: one occurred_at whose max_last_synced_day stopped
+--   long ago while the other is recent = the provider changed createdAt upstream and the old key is never retired (old
+--   row). Both recent = the provider returns both now (live).
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('project_membership_transitions')) > 20000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('project_membership_transitions')) > 4294967296,
+    'STOP-COST-GATE')) AS cost_gate
 SELECT substring(lower(hex(SHA256(k.event_id))), 1, 8) AS event_h8,
-       toString(toDateTime(toStartOfSecond(k.occurred_at, 'UTC'), 'UTC')) AS occurred_second_utc,
+       toString(toDate(k.occurred_at, 'UTC')) AS occurred_day,
        toUnixTimestamp64Milli(k.occurred_at)
            - toUnixTimestamp64Milli(min(k.occurred_at) OVER (PARTITION BY k.provider, k.event_id)) AS ms_after_first,
        count() AS key_rows,
        uniqExact(k.subject_kind, k.repo_id, k.subject_id) AS subjects,
-       toString(min(k.ls), 'UTC') AS min_last_synced_utc,
-       toString(max(k.ls), 'UTC') AS max_last_synced_utc,
-       toString(max(k.ing), 'UTC') AS max_ingested_utc
+       toString(toDate(min(k.ls), 'UTC')) AS min_last_synced_day,
+       toString(toDate(max(k.ls), 'UTC')) AS max_last_synced_day,
+       toString(toDate(max(k.ing), 'UTC')) AS max_ingested_day
 FROM (
     SELECT provider, event_id, subject_kind, repo_id, subject_id, occurred_at,
            max(last_synced) AS ls,
            argMax(ingested_at, last_synced) AS ing
     FROM project_membership_transitions
-    WHERE startsWith(org_id, 'c6a38355') AND (SELECT throwIf(count() > 10000 OR sum(g.n) > 1000000, 'FORM-7829-2 GATE multi: over 10000 multi-occurred events or 1000000 of their rows') FROM (SELECT count() AS n FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND (SELECT throwIf(uniq(event_id) > 2000000, 'FORM-7829-2 GATE events: org event_ids over 2000000') FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND (SELECT throwIf(sum(rows) > 20000000 OR sum(bytes_on_disk) > 4294967296, 'FORM-7829-2 GATE parts: project_membership_transitions over 20000000 rows or 4 GiB') FROM system.parts WHERE active AND database = currentDatabase() AND table = 'project_membership_transitions') = 0) = 0 GROUP BY provider, event_id HAVING min(occurred_at) < max(occurred_at)) AS g) = 0
+    WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND (SELECT throwIf(count() > 10000 OR sum(g.n) > 1000000, 'FORM-7829-3 GATE multi: over 10000 multi-occurred events or 1000000 of their rows') FROM (SELECT count() AS n FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND (SELECT throwIf(uniq(event_id) > 2000000, 'FORM-7829-3 GATE events: org event_ids over 2000000') FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) = 0 GROUP BY provider, event_id HAVING min(occurred_at) < max(occurred_at)) AS g) = 0
       AND (provider, event_id) IN (
         SELECT provider, event_id
         FROM project_membership_transitions
-        WHERE startsWith(org_id, 'c6a38355') AND (SELECT throwIf(count() > 10000 OR sum(g.n) > 1000000, 'FORM-7829-2 GATE multi: over 10000 multi-occurred events or 1000000 of their rows') FROM (SELECT count() AS n FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND (SELECT throwIf(uniq(event_id) > 2000000, 'FORM-7829-2 GATE events: org event_ids over 2000000') FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND (SELECT throwIf(sum(rows) > 20000000 OR sum(bytes_on_disk) > 4294967296, 'FORM-7829-2 GATE parts: project_membership_transitions over 20000000 rows or 4 GiB') FROM system.parts WHERE active AND database = currentDatabase() AND table = 'project_membership_transitions') = 0) = 0 GROUP BY provider, event_id HAVING min(occurred_at) < max(occurred_at)) AS g) = 0
+        WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND (SELECT throwIf(count() > 10000 OR sum(g.n) > 1000000, 'FORM-7829-3 GATE multi: over 10000 multi-occurred events or 1000000 of their rows') FROM (SELECT count() AS n FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND (SELECT throwIf(uniq(event_id) > 2000000, 'FORM-7829-3 GATE events: org event_ids over 2000000') FROM project_membership_transitions WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) = 0 GROUP BY provider, event_id HAVING min(occurred_at) < max(occurred_at)) AS g) = 0
         GROUP BY provider, event_id
         HAVING min(occurred_at) < max(occurred_at)
       )
@@ -175,55 +220,76 @@ GROUP BY k.provider, k.event_id, k.occurred_at
 ORDER BY event_h8, ms_after_first
 LIMIT 300;
 `
-	formExec14259SQL = `-- FORM-14259-SIZE-2 (lane lformch for fcdev, 2026-11-22). CHAOS-14259 sizing: stored GitHub runs that hold a report slot
---   the current planner (CHAOS-14045, 37b7d692a) would no longer write. Replaces FORM-14259-SIZE-1 after acp
---   READ-FORM-CH-2 (a1e884d50b59). ClickHouse, SELECT only, counts and UTC aggregate times only. Org prefix c6a38355 only.
--- Run each statement once, in order, each as its own call. A SQL error = STOP. A GATE error = STOP and report the
---   gate text. S0 suite_orgs != 1 = STOP.
+	formExec14259SQL = `-- FORM-14259-SIZE-3 (lane lformch for fcdev, 2026-11-23). CHAOS-14259 sizing: stored GitHub runs that hold a report slot
+--   the current planner (CHAOS-14045, 37b7d692a) would no longer write.
+-- Shape: pm-guard/FORM-TEMPLATE-1.md (e220dd03e6fc) (a) ClickHouse. Replaces FORM-14259-SIZE-2 (frozen).
+-- ClickHouse, SELECT only, one statement per call. Org prefix c6a38355 on every FROM with org_id. Output = counts, days.
+-- Run each statement once, in order. Any SQL error (STOP-COST-GATE and GATE errors included) = STOP, report the text.
+-- STOP when S1 suite_orgs != 1.
 -- Terms (code at ops 340c3e05e3ca, internal/providersync/github_tests_run_report_rows.go):
 --   slot attempt = (test_suite_results.report_slot, run_attempt). The measured slot S is the newest attempt of its slot
 --   (readers count only that one). It is compared with every stored slot of the SAME run_attempt (the planner of that
 --   attempt saw them together, the suite content holds run_attempt). A suite instance = the suite row without suite_id,
 --   report_slot, legacy_suite_ids, last_synced, plus the multiset of its case rows without suite_id, case_id,
 --   last_synced (githubTestsReportContent). head = the suite row part only.
--- UPPER (S1) = runs with a slot S whose every suite head has an equal head in the other slots of S's attempt, as many
+-- UPPER (S2) = runs with a slot S whose every suite head has an equal head in the other slots of S's attempt, as many
 --   times. Each slot the planner of that attempt drops (copy or lossless aggregate) passes it: a true upper bound
 --   within one run_attempt.
--- ESTIMATE (S2), no guarantee in either direction: S has cases and no coverage row, the slots of S's attempt that share
+-- ESTIMATE (S3), no guarantee in either direction: S has cases and no coverage row, the slots of S's attempt that share
 --   an instance with S (P) all lie inside S and sum to S, and either |P| >= 2 with no case identity in two parts
 --   (aggregate) or |P| = 1 with a case duration > 0 (copy). It can count a slot the planner keeps: a third slot with
 --   the copy key (e_slots_third_copy), case rows with no suite row (e_runs_orphan_cases), partition work over the
 --   bound, or a drop undone by admission (e_runs_capped). It can miss a slot the planner drops through a partition
 --   among more slots than P.
--- GATES (throwIf in scalar subqueries, run before the read, nested in this order):
+-- Gates, all scalar subqueries (run at analysis, before any table read), in this order:
+--   cost_gate (S1 to S4) = active parts of the tables that statement reads over its row or byte cap: 'STOP-COST-GATE'.
 --   suites = org suite rows (raw) over 3000000. slots = a run with over 500 slot attempts. heads = one suite head over
---   16 times in one run attempt (bounds every self-join to 16 x the suite rows). cases (S2 only) = case rows of the
---   S1 runs over 10000000.
--- Tables (ReplacingMergeTree, no PARTITION BY, filtered on the sort-key prefix startsWith(org_id, 'c6a38355')):
---   test_suite_results (org_id, repo_id, run_id, suite_id), test_case_results (+ case_id), coverage_snapshots
---   (org_id, repo_id, run_id, snapshot_id), testops_run_report_completeness (org_id, repo_id, run_id, run_attempt),
---   repos (org_id, id). repos.provider 'github' = github_repository_route.go:206.
--- The CTE chain between CHAIN BEGIN and CHAIN END is byte-equal in S1, S2, S3 (the CI test checks it).
+--   16 times in one run attempt (bounds every self-join to 16 x the suite rows). cases (S3 only) = case rows of the
+--   S2 runs over 10000000. Each is gated by the one before (cost_gate first).
+-- cost_gate = 0 is in the WHERE of every query block that reads a table.
+-- Text literals: repos.provider 'github' = github_repository_route.go:206. 'aggregate_mismatch' =
+--   github_tests_reports.go:426, 'per_run_cap' = :420.
+-- The CTE chain between CHAIN BEGIN and CHAIN END is byte-equal in S2, S3, S4 (the CI test checks it).
 
--- S0 ORG-1 and size report (counts on the sort-key prefix, no gate). WANT suite_orgs = 1, repo_orgs = 1,
---   github_repos > 0, slot_suite_rows_raw > 0. INFO completeness_orgs (0 = every run reads no_row) and raw sizes.
+-- S0 cost inputs (system.parts only). WANT 5 rows (one per table), table_rows > 0 in each.
+SELECT table, sum(rows) AS table_rows, sum(bytes_on_disk) AS disk_bytes, count() AS active_parts
+FROM system.parts
+WHERE active AND database = currentDatabase()
+  AND table IN ('coverage_snapshots', 'repos', 'test_case_results', 'test_suite_results', 'testops_run_report_completeness')
+GROUP BY table
+ORDER BY table;
+
+-- S1 ORG-1 and size report. WANT suite_orgs = 1, repo_orgs = 1, github_repos > 0, slot_suite_rows_raw > 0.
+--   INFO completeness_orgs (0 = every run reads no_row) and raw sizes.
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('coverage_snapshots', 'repos', 'test_case_results', 'test_suite_results', 'testops_run_report_completeness')) > 300000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('coverage_snapshots', 'repos', 'test_case_results', 'test_suite_results', 'testops_run_report_completeness')) > 68719476736,
+    'STOP-COST-GATE')) AS cost_gate
 SELECT
-    (SELECT uniqExact(org_id) FROM test_suite_results WHERE startsWith(org_id, 'c6a38355')) AS suite_orgs,
-    (SELECT uniqExact(org_id) FROM repos WHERE startsWith(org_id, 'c6a38355')) AS repo_orgs,
-    (SELECT uniqExact(org_id) FROM testops_run_report_completeness WHERE startsWith(org_id, 'c6a38355')) AS completeness_orgs,
-    (SELECT count() FROM test_suite_results WHERE startsWith(org_id, 'c6a38355')) AS suite_rows_raw,
-    (SELECT countIf(report_slot != '') FROM test_suite_results WHERE startsWith(org_id, 'c6a38355')) AS slot_suite_rows_raw,
-    (SELECT count() FROM test_case_results WHERE startsWith(org_id, 'c6a38355')) AS case_rows_raw,
-    (SELECT count() FROM coverage_snapshots WHERE startsWith(org_id, 'c6a38355')) AS coverage_rows_raw,
-    (SELECT count() FROM repos FINAL WHERE startsWith(org_id, 'c6a38355') AND provider = 'github') AS github_repos;
+    (SELECT uniqExact(org_id) FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) AS suite_orgs,
+    (SELECT uniqExact(org_id) FROM repos WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) AS repo_orgs,
+    (SELECT uniqExact(org_id) FROM testops_run_report_completeness WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) AS completeness_orgs,
+    (SELECT count() FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) AS suite_rows_raw,
+    (SELECT countIf(report_slot != '') FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) AS slot_suite_rows_raw,
+    (SELECT count() FROM test_case_results WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) AS case_rows_raw,
+    (SELECT count() FROM coverage_snapshots WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) AS coverage_rows_raw,
+    (SELECT count() FROM repos FINAL WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND provider = 'github') AS github_repos;
 
--- S1 UPPER bound. WANT u_runs >= S2 e_runs. INFO splits: newest completeness row of the run names aggregate_mismatch
---   (the old planner kept a mismatch there), is complete, or is missing. u_slots_stale = the slot's newest last_synced
---   is older than its run's. u_slots_before_14045_commit = slot last_synced before 2026-11-20 02:45:39 UTC.
-WITH
--- CHAIN BEGIN (byte-equal in S1, S2, S3)
+-- S2 UPPER bound. WANT newest_slots > 0 (real rows). WANT u_runs >= S3 e_runs. INFO splits: newest completeness row of
+--   the run names aggregate_mismatch (the old planner kept a mismatch there), is complete, or is missing.
+--   u_slots_stale = the slot's newest last_synced is older than its run's. u_slots_before_14045_commit = slot
+--   last_synced before 2026-11-20 02:45:39 UTC.
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('repos', 'test_suite_results', 'testops_run_report_completeness')) > 30000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('repos', 'test_suite_results', 'testops_run_report_completeness')) > 8589934592,
+    'STOP-COST-GATE')) AS cost_gate,
+-- CHAIN BEGIN (byte-equal in S2, S3, S4)
 gh AS (
-    SELECT id FROM repos FINAL WHERE startsWith(org_id, 'c6a38355') AND provider = 'github'
+    SELECT id FROM repos FINAL WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND provider = 'github'
 ),
 sa AS (
     SELECT repo_id, run_id, suite_id, report_slot AS slot, run_attempt AS att, last_synced AS ls,
@@ -236,8 +302,8 @@ sa AS (
            cityHash64(concat(suite_name, '|', ifNull(toString(started_at), 'none'), '|',
                ifNull(toString(duration_seconds), 'none'))) AS sk
     FROM test_suite_results FINAL
-    WHERE startsWith(org_id, 'c6a38355') AND report_slot != '' AND repo_id IN (SELECT id FROM gh)
-      AND (SELECT throwIf(max(z.c) > 16, 'FORM-14259-SIZE-2 GATE heads: a suite head over 16 times in one run attempt') FROM (SELECT count() AS c FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND report_slot != '' AND (SELECT throwIf(max(x.slots) > 500, 'FORM-14259-SIZE-2 GATE slots: a run with over 500 slot attempts') FROM (SELECT count() AS slots FROM (SELECT repo_id, run_id FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND report_slot != '' AND (SELECT throwIf(count() > 3000000, 'FORM-14259-SIZE-2 GATE suites: org suite rows over 3000000') FROM test_suite_results WHERE startsWith(org_id, 'c6a38355')) = 0 GROUP BY repo_id, run_id, report_slot, run_attempt) AS y GROUP BY y.repo_id, y.run_id) AS x) = 0 GROUP BY repo_id, run_id, run_attempt,
+    WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND report_slot != '' AND repo_id IN (SELECT id FROM gh)
+      AND (SELECT throwIf(max(z.c) > 16, 'FORM-14259-SIZE-3 GATE heads: a suite head over 16 times in one run attempt') FROM (SELECT count() AS c FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND report_slot != '' AND (SELECT throwIf(max(x.slots) > 500, 'FORM-14259-SIZE-3 GATE slots: a run with over 500 slot attempts') FROM (SELECT count() AS slots FROM (SELECT repo_id, run_id FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND report_slot != '' AND (SELECT throwIf(count() > 3000000, 'FORM-14259-SIZE-3 GATE suites: org suite rows over 3000000') FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) = 0 GROUP BY repo_id, run_id, report_slot, run_attempt) AS y GROUP BY y.repo_id, y.run_id) AS x) = 0 GROUP BY repo_id, run_id, run_attempt,
            cityHash64(concat(suite_name, '|', ifNull(framework, '~'), '|', ifNull(environment, '~'), '|',
                toString(total_count), '|', toString(passed_count), '|', toString(failed_count), '|',
                toString(skipped_count), '|', toString(error_count), '|', toString(quarantined_count), '|',
@@ -278,29 +344,35 @@ comp AS (
            argMax(has(reasons, 'aggregate_mismatch'), run_attempt) AS marked,
            argMax(has(reasons, 'per_run_cap'), run_attempt) AS capped
     FROM testops_run_report_completeness FINAL
-    WHERE startsWith(org_id, 'c6a38355')
+    WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0
     GROUP BY repo_id, run_id
 )
-SELECT uniqExact(U.repo_id, U.run_id) AS u_runs,
+SELECT (SELECT count() FROM nw) AS newest_slots,
+       uniqExact(U.repo_id, U.run_id) AS u_runs,
        count() AS u_slots,
        uniqExactIf((U.repo_id, U.run_id), ifNull(c.marked, 0) = 1) AS u_runs_marked_mismatch,
        uniqExactIf((U.repo_id, U.run_id), ifNull(c.has_row, 0) = 1 AND ifNull(c.complete, 0) = 1) AS u_runs_complete,
        uniqExactIf((U.repo_id, U.run_id), ifNull(c.has_row, 0) = 0) AS u_runs_no_row,
        countIf(sl.ls < rl.ls) AS u_slots_stale,
        countIf(sl.ls < toDateTime64('2026-11-20 02:45:39', 3, 'UTC')) AS u_slots_before_14045_commit,
-       toString(min(sl.ls), 'UTC') AS u_min_ls_utc,
-       toString(max(sl.ls), 'UTC') AS u_max_ls_utc
+       toString(toDate(min(sl.ls), 'UTC')) AS u_first_day,
+       toString(toDate(max(sl.ls), 'UTC')) AS u_last_day
 FROM uslots AS U
 INNER JOIN slot_ls AS sl ON sl.repo_id = U.repo_id AND sl.run_id = U.run_id AND sl.slot = U.slot
 INNER JOIN run_ls AS rl ON rl.repo_id = U.repo_id AND rl.run_id = U.run_id
 LEFT JOIN comp AS c ON c.repo_id = U.repo_id AND c.run_id = U.run_id;
 
--- S2 ESTIMATE (the S1 runs only), no guarantee. INFO e_runs and splits. Caveat counts (WANT 0, else the estimate is
---   weaker): e_slots_third_copy, e_runs_orphan_cases, e_runs_capped.
-WITH
--- CHAIN BEGIN (byte-equal in S1, S2, S3)
+-- S3 ESTIMATE (the S2 runs only), no guarantee. WANT newest_slots > 0 (real rows). INFO e_runs and splits. Caveat
+--   counts (WANT 0, else the estimate is weaker): e_slots_third_copy, e_runs_orphan_cases, e_runs_capped.
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('coverage_snapshots', 'repos', 'test_case_results', 'test_suite_results', 'testops_run_report_completeness')) > 300000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('coverage_snapshots', 'repos', 'test_case_results', 'test_suite_results', 'testops_run_report_completeness')) > 68719476736,
+    'STOP-COST-GATE')) AS cost_gate,
+-- CHAIN BEGIN (byte-equal in S2, S3, S4)
 gh AS (
-    SELECT id FROM repos FINAL WHERE startsWith(org_id, 'c6a38355') AND provider = 'github'
+    SELECT id FROM repos FINAL WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND provider = 'github'
 ),
 sa AS (
     SELECT repo_id, run_id, suite_id, report_slot AS slot, run_attempt AS att, last_synced AS ls,
@@ -313,8 +385,8 @@ sa AS (
            cityHash64(concat(suite_name, '|', ifNull(toString(started_at), 'none'), '|',
                ifNull(toString(duration_seconds), 'none'))) AS sk
     FROM test_suite_results FINAL
-    WHERE startsWith(org_id, 'c6a38355') AND report_slot != '' AND repo_id IN (SELECT id FROM gh)
-      AND (SELECT throwIf(max(z.c) > 16, 'FORM-14259-SIZE-2 GATE heads: a suite head over 16 times in one run attempt') FROM (SELECT count() AS c FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND report_slot != '' AND (SELECT throwIf(max(x.slots) > 500, 'FORM-14259-SIZE-2 GATE slots: a run with over 500 slot attempts') FROM (SELECT count() AS slots FROM (SELECT repo_id, run_id FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND report_slot != '' AND (SELECT throwIf(count() > 3000000, 'FORM-14259-SIZE-2 GATE suites: org suite rows over 3000000') FROM test_suite_results WHERE startsWith(org_id, 'c6a38355')) = 0 GROUP BY repo_id, run_id, report_slot, run_attempt) AS y GROUP BY y.repo_id, y.run_id) AS x) = 0 GROUP BY repo_id, run_id, run_attempt,
+    WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND report_slot != '' AND repo_id IN (SELECT id FROM gh)
+      AND (SELECT throwIf(max(z.c) > 16, 'FORM-14259-SIZE-3 GATE heads: a suite head over 16 times in one run attempt') FROM (SELECT count() AS c FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND report_slot != '' AND (SELECT throwIf(max(x.slots) > 500, 'FORM-14259-SIZE-3 GATE slots: a run with over 500 slot attempts') FROM (SELECT count() AS slots FROM (SELECT repo_id, run_id FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND report_slot != '' AND (SELECT throwIf(count() > 3000000, 'FORM-14259-SIZE-3 GATE suites: org suite rows over 3000000') FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) = 0 GROUP BY repo_id, run_id, report_slot, run_attempt) AS y GROUP BY y.repo_id, y.run_id) AS x) = 0 GROUP BY repo_id, run_id, run_attempt,
            cityHash64(concat(suite_name, '|', ifNull(framework, '~'), '|', ifNull(environment, '~'), '|',
                toString(total_count), '|', toString(passed_count), '|', toString(failed_count), '|',
                toString(skipped_count), '|', toString(error_count), '|', toString(quarantined_count), '|',
@@ -355,7 +427,7 @@ comp AS (
            argMax(has(reasons, 'aggregate_mismatch'), run_attempt) AS marked,
            argMax(has(reasons, 'per_run_cap'), run_attempt) AS capped
     FROM testops_run_report_completeness FINAL
-    WHERE startsWith(org_id, 'c6a38355')
+    WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0
     GROUP BY repo_id, run_id
 ),
 cand AS (
@@ -372,8 +444,8 @@ cs AS (
            max(ifNull(duration_seconds, 0) > 0) AS timed,
            groupUniqArray(cityHash64(concat(ifNull(class_name, ''), '|', case_name))) AS idks
     FROM test_case_results FINAL
-    WHERE startsWith(org_id, 'c6a38355') AND (repo_id, run_id) IN (SELECT repo_id, run_id FROM cand)
-      AND (SELECT throwIf(count() > 10000000, 'FORM-14259-SIZE-2 GATE cases: case rows of the candidate runs over 10000000') FROM test_case_results WHERE startsWith(org_id, 'c6a38355') AND (repo_id, run_id) IN (SELECT repo_id, run_id FROM cand)) = 0
+    WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND (repo_id, run_id) IN (SELECT repo_id, run_id FROM cand)
+      AND (SELECT throwIf(count() > 10000000, 'FORM-14259-SIZE-3 GATE cases: case rows of the candidate runs over 10000000') FROM test_case_results WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND (repo_id, run_id) IN (SELECT repo_id, run_id FROM cand)) = 0
     GROUP BY repo_id, run_id, suite_id
 ),
 orph AS (
@@ -428,7 +500,7 @@ pstat AS (
 cov AS (
     SELECT DISTINCT repo_id, run_id, report_slot AS slot, run_attempt AS att, 1 AS has_cov
     FROM coverage_snapshots FINAL
-    WHERE startsWith(org_id, 'c6a38355') AND report_slot != '' AND (repo_id, run_id) IN (SELECT repo_id, run_id FROM cand)
+    WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND report_slot != '' AND (repo_id, run_id) IN (SELECT repo_id, run_id FROM cand)
 ),
 eslots AS (
     SELECT q.repo_id AS repo_id, q.run_id AS run_id, q.slot AS slot, q.att AS att, ps.parts AS parts
@@ -447,7 +519,8 @@ third AS (
       AND (a.repo_id, a.run_id, a.att, a.slot, b.slot) NOT IN (SELECT repo_id, run_id, att, s_slot, t_slot FROM pairs)
     GROUP BY a.repo_id, a.run_id, a.slot
 )
-SELECT uniqExact(E.repo_id, E.run_id) AS e_runs,
+SELECT (SELECT count() FROM nw) AS newest_slots,
+       uniqExact(E.repo_id, E.run_id) AS e_runs,
        uniqExactIf((E.repo_id, E.run_id), E.parts >= 2) AS e_runs_aggregate,
        countIf(E.parts >= 2) AS e_slots_aggregate,
        uniqExactIf((E.repo_id, E.run_id), E.parts = 1) AS e_runs_copy,
@@ -464,12 +537,17 @@ INNER JOIN slot_ls AS sl ON sl.repo_id = E.repo_id AND sl.run_id = E.run_id AND 
 INNER JOIN run_ls AS rl ON rl.repo_id = E.repo_id AND rl.run_id = E.run_id
 LEFT JOIN comp AS c ON c.repo_id = E.repo_id AND c.run_id = E.run_id;
 
--- S3 CONTROL: S1 u_slots recomputed by window functions over its own read (no shared CTE). WANT u_slots_cte =
+-- S4 CONTROL: S2 u_slots recomputed by window functions over its own read (no shared CTE). WANT u_slots_cte =
 --   u_slots_window, newest_slots > 0 (real rows).
-WITH
--- CHAIN BEGIN (byte-equal in S1, S2, S3)
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('repos', 'test_suite_results')) > 30000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('repos', 'test_suite_results')) > 8589934592,
+    'STOP-COST-GATE')) AS cost_gate,
+-- CHAIN BEGIN (byte-equal in S2, S3, S4)
 gh AS (
-    SELECT id FROM repos FINAL WHERE startsWith(org_id, 'c6a38355') AND provider = 'github'
+    SELECT id FROM repos FINAL WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND provider = 'github'
 ),
 sa AS (
     SELECT repo_id, run_id, suite_id, report_slot AS slot, run_attempt AS att, last_synced AS ls,
@@ -482,8 +560,8 @@ sa AS (
            cityHash64(concat(suite_name, '|', ifNull(toString(started_at), 'none'), '|',
                ifNull(toString(duration_seconds), 'none'))) AS sk
     FROM test_suite_results FINAL
-    WHERE startsWith(org_id, 'c6a38355') AND report_slot != '' AND repo_id IN (SELECT id FROM gh)
-      AND (SELECT throwIf(max(z.c) > 16, 'FORM-14259-SIZE-2 GATE heads: a suite head over 16 times in one run attempt') FROM (SELECT count() AS c FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND report_slot != '' AND (SELECT throwIf(max(x.slots) > 500, 'FORM-14259-SIZE-2 GATE slots: a run with over 500 slot attempts') FROM (SELECT count() AS slots FROM (SELECT repo_id, run_id FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND report_slot != '' AND (SELECT throwIf(count() > 3000000, 'FORM-14259-SIZE-2 GATE suites: org suite rows over 3000000') FROM test_suite_results WHERE startsWith(org_id, 'c6a38355')) = 0 GROUP BY repo_id, run_id, report_slot, run_attempt) AS y GROUP BY y.repo_id, y.run_id) AS x) = 0 GROUP BY repo_id, run_id, run_attempt,
+    WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND report_slot != '' AND repo_id IN (SELECT id FROM gh)
+      AND (SELECT throwIf(max(z.c) > 16, 'FORM-14259-SIZE-3 GATE heads: a suite head over 16 times in one run attempt') FROM (SELECT count() AS c FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND report_slot != '' AND (SELECT throwIf(max(x.slots) > 500, 'FORM-14259-SIZE-3 GATE slots: a run with over 500 slot attempts') FROM (SELECT count() AS slots FROM (SELECT repo_id, run_id FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND report_slot != '' AND (SELECT throwIf(count() > 3000000, 'FORM-14259-SIZE-3 GATE suites: org suite rows over 3000000') FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) = 0 GROUP BY repo_id, run_id, report_slot, run_attempt) AS y GROUP BY y.repo_id, y.run_id) AS x) = 0 GROUP BY repo_id, run_id, run_attempt,
            cityHash64(concat(suite_name, '|', ifNull(framework, '~'), '|', ifNull(environment, '~'), '|',
                toString(total_count), '|', toString(passed_count), '|', toString(failed_count), '|',
                toString(skipped_count), '|', toString(error_count), '|', toString(quarantined_count), '|',
@@ -533,9 +611,9 @@ alt AS (
                ifNull(toString(started_at), '~'), '|', ifNull(toString(finished_at), '~'), '|',
                ifNull(team_id, '~'), '|', ifNull(service_id, '~'), '|', toString(run_attempt)))) AS slot_n
         FROM test_suite_results FINAL
-        WHERE startsWith(org_id, 'c6a38355') AND report_slot != ''
-          AND repo_id IN (SELECT id FROM repos FINAL WHERE startsWith(org_id, 'c6a38355') AND provider = 'github')
-          AND (SELECT throwIf(max(z.c) > 16, 'FORM-14259-SIZE-2 GATE heads: a suite head over 16 times in one run attempt') FROM (SELECT count() AS c FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND report_slot != '' AND (SELECT throwIf(max(x.slots) > 500, 'FORM-14259-SIZE-2 GATE slots: a run with over 500 slot attempts') FROM (SELECT count() AS slots FROM (SELECT repo_id, run_id FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND report_slot != '' AND (SELECT throwIf(count() > 3000000, 'FORM-14259-SIZE-2 GATE suites: org suite rows over 3000000') FROM test_suite_results WHERE startsWith(org_id, 'c6a38355')) = 0 GROUP BY repo_id, run_id, report_slot, run_attempt) AS y GROUP BY y.repo_id, y.run_id) AS x) = 0 GROUP BY repo_id, run_id, run_attempt,
+        WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND report_slot != ''
+          AND repo_id IN (SELECT id FROM repos FINAL WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND provider = 'github')
+          AND (SELECT throwIf(max(z.c) > 16, 'FORM-14259-SIZE-3 GATE heads: a suite head over 16 times in one run attempt') FROM (SELECT count() AS c FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND report_slot != '' AND (SELECT throwIf(max(x.slots) > 500, 'FORM-14259-SIZE-3 GATE slots: a run with over 500 slot attempts') FROM (SELECT count() AS slots FROM (SELECT repo_id, run_id FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0 AND report_slot != '' AND (SELECT throwIf(count() > 3000000, 'FORM-14259-SIZE-3 GATE suites: org suite rows over 3000000') FROM test_suite_results WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) = 0 GROUP BY repo_id, run_id, report_slot, run_attempt) AS y GROUP BY y.repo_id, y.run_id) AS x) = 0 GROUP BY repo_id, run_id, run_attempt,
            cityHash64(concat(suite_name, '|', ifNull(framework, '~'), '|', ifNull(environment, '~'), '|',
                toString(total_count), '|', toString(passed_count), '|', toString(failed_count), '|',
                toString(skipped_count), '|', toString(error_count), '|', toString(quarantined_count), '|',
@@ -788,6 +866,105 @@ func formExecWantRows(t *testing.T, results map[string]formExecResult, id string
 	}
 }
 
+var formExecCapPattern = regexp.MustCompile(`table IN \(([^)]*)\)\) > ([0-9]+)`)
+
+// formExecCostGates checks the FORM-TEMPLATE-1 (a) cost gate of every statement but S0, on the fixture's tables: one gate
+// per statement, its table list = the tables the statement reads (of known), and each cap set to 0 (one at a time, the
+// rest byte for byte) stops the statement with code 395 STOP-COST-GATE, typed ExceptionBeforeStart in the query log,
+// with read_rows <= 2 x P + 1 (P = the active parts the gate lists).
+func formExecCostGates(ctx context.Context, t *testing.T, conn driver.Conn, name string, statements []formExecStatement, known []string) {
+	t.Helper()
+	version, err := formExecQuery(ctx, conn, "SELECT version()")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("%s: ClickHouse version %v", name, version.rows)
+	type fire struct {
+		id, comment string
+		parts       uint64
+	}
+	var fires []fire
+	for _, statement := range statements {
+		if statement.id == "S0" {
+			if strings.Contains(statement.text, "STOP-COST-GATE") {
+				t.Errorf("%s S0: reads system.parts only, want no gate", name)
+			}
+			continue
+		}
+		text := statement.text
+		if strings.Count(text, "'STOP-COST-GATE'") != 1 || strings.Count(text, "WITH (SELECT throwIf(") != 1 {
+			t.Errorf("%s %s: want exactly one WITH (SELECT throwIf(... 'STOP-COST-GATE')) AS cost_gate", name, statement.id)
+			continue
+		}
+		gateEnd := strings.Index(text, "'STOP-COST-GATE'")
+		caps := formExecCapPattern.FindAllStringSubmatchIndex(text[:gateEnd], -1)
+		if len(caps) != 2 || text[caps[0][2]:caps[0][3]] != text[caps[1][2]:caps[1][3]] {
+			t.Errorf("%s %s: want a rows cap and a bytes cap over one table list", name, statement.id)
+			continue
+		}
+		list := text[caps[0][2]:caps[0][3]]
+		for _, table := range known {
+			listed := strings.Contains(list, "'"+table+"'")
+			read := strings.Contains(text, "FROM "+table+" ") || strings.Contains(text, "FROM "+table+"\n")
+			if listed != read {
+				t.Errorf("%s %s: table %s listed in the gate %v, read %v", name, statement.id, table, listed, read)
+			}
+		}
+		var parts uint64
+		if err := conn.QueryRow(ctx, "SELECT count() FROM system.parts WHERE active AND database = currentDatabase() AND table IN ("+list+")").Scan(&parts); err != nil {
+			t.Fatalf("%s %s: parts: %v", name, statement.id, err)
+		}
+		for index, capIndex := range caps {
+			lowered := text[:capIndex[4]] + "0" + text[capIndex[5]:]
+			comment := fmt.Sprintf("fcdev-form-%s-%s-cap%d-%d", strings.ReplaceAll(name, " ", "-"), statement.id, index, time.Now().UnixNano())
+			qctx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"log_comment": comment}))
+			_, err := formExecQuery(qctx, conn, lowered)
+			if err == nil || !strings.Contains(err.Error(), "STOP-COST-GATE") || !strings.Contains(err.Error(), "395") {
+				t.Errorf("%s %s cap %d set to 0: err = %v, want code 395 STOP-COST-GATE", name, statement.id, index, err)
+				continue
+			}
+			t.Logf("%s %s cap %d set to 0: %s", name, statement.id, index, strings.SplitN(err.Error(), "\n", 2)[0])
+			fires = append(fires, fire{statement.id, comment, parts})
+		}
+	}
+	if len(fires) != 2*(len(statements)-1) {
+		t.Errorf("%s: %d cost gate fires, want %d", name, len(fires), 2*(len(statements)-1))
+	}
+	formExecExec(ctx, t, conn, "SYSTEM FLUSH LOGS")
+	for _, f := range fires {
+		rows, err := conn.Query(ctx, "SELECT toString(type), read_rows FROM system.query_log WHERE log_comment = ? AND type != 'QueryStart'", f.comment)
+		if err != nil {
+			t.Fatalf("%s %s: query log: %v", name, f.id, err)
+		}
+		var types []string
+		var read uint64
+		for rows.Next() {
+			var typ string
+			var r uint64
+			if err := rows.Scan(&typ, &r); err != nil {
+				t.Fatalf("%s %s: query log scan: %v", name, f.id, err)
+			}
+			types = append(types, typ)
+			read += r
+		}
+		_ = rows.Close()
+		t.Logf("%s %s fire: query_log types %v read_rows %d parts %d", name, f.id, types, read, f.parts)
+		if len(types) != 1 || types[0] != "ExceptionBeforeStart" || read > 2*f.parts+1 {
+			t.Errorf("%s %s fire: query_log types %v read_rows %d, want [ExceptionBeforeStart] and <= 2 x %d + 1", name, f.id, types, read, f.parts)
+		}
+	}
+}
+
+// formExecPartsInfo checks S0: one row per table, table_rows > 0.
+func formExecPartsInfo(t *testing.T, results map[string]formExecResult, tables []string) {
+	t.Helper()
+	formExecWantRows(t, results, "S0", len(tables))
+	for row, table := range tables {
+		formExecWant(t, results, "S0", row, "table", table)
+		formExecWantRange(t, results, "S0", row, "table_rows", 1, 1<<40)
+	}
+}
+
 func formExecH8(eventID string) string {
 	sum := sha256.Sum256([]byte(eventID))
 	return hex.EncodeToString(sum[:])[:8]
@@ -805,7 +982,7 @@ const (
 // event e two occurred_at 1.5 s apart; event f (github) two occurred_at, one row synced before the github cut and one
 // synced after the github cut and before the linear cut (counts only under the github cut).
 func TestFormExecFcdevCHAOS7829(t *testing.T) {
-	statements := formExecStatements(t, "FORM-7829-2", formExec7829SQL, formExec7829SHA256, 5)
+	statements := formExecStatements(t, "FORM-7829-3", formExec7829SQL, formExec7829SHA256, 6)
 
 	t.Run("fixture", func(t *testing.T) {
 		ctx, conn := formExecOpen(t)
@@ -831,94 +1008,97 @@ func TestFormExecFcdevCHAOS7829(t *testing.T) {
 			insert(formExec7829Other, "linear", "linear:FX-1", occurred, "2026-09-02 00:00:00.000", "linear:hist-a")
 		}
 
-		results := formExecRunAll(ctx, t, conn, "FORM-7829-2", statements)
-		formExecWant(t, results, "S0", 0, "orgs", "1")
-		formExecWantRange(t, results, "S0", 0, "raw_rows", 12, 13)
-		formExecWantRange(t, results, "S0", 0, "raw_linear_rows", 9, 10)
-		formExecWant(t, results, "S0", 0, "events_approx", "6")
-
-		formExecWantRows(t, results, "S1", 3)
-		formExecWant(t, results, "S1", 0, "provider", "github")
-		formExecWant(t, results, "S1", 0, "events", "1")
-		formExecWant(t, results, "S1", 0, "events_multi_occ", "1")
-		formExecWant(t, results, "S1", 0, "multi_occ_native_id", "0")
-		formExecWant(t, results, "S1", 1, "provider", "jira")
-		formExecWant(t, results, "S1", 1, "events", "1")
-		formExecWant(t, results, "S1", 1, "events_multi_occ", "0")
-		formExecWant(t, results, "S1", 2, "provider", "linear")
-		formExecWant(t, results, "S1", 2, "events", "4")
-		formExecWant(t, results, "S1", 2, "events_multi_occ", "3")
-		formExecWant(t, results, "S1", 2, "multi_occ_native_id", "3")
-		formExecWant(t, results, "S1", 2, "events_multi_subject", "2")
-		formExecWantRange(t, results, "S1", 2, "raw_rows_of_multi_occ", 7, 8)
+		results := formExecRunAll(ctx, t, conn, "FORM-7829-3", statements)
+		formExecPartsInfo(t, results, []string{"project_membership_transitions"})
+		formExecWant(t, results, "S1", 0, "orgs", "1")
+		formExecWantRange(t, results, "S1", 0, "raw_rows", 12, 13)
+		formExecWantRange(t, results, "S1", 0, "raw_linear_rows", 9, 10)
+		formExecWant(t, results, "S1", 0, "events_approx", "6")
 
 		formExecWantRows(t, results, "S2", 3)
+		formExecWant(t, results, "S2", 0, "provider", "github")
+		formExecWant(t, results, "S2", 0, "events", "1")
+		formExecWant(t, results, "S2", 0, "events_multi_occ", "1")
+		formExecWant(t, results, "S2", 0, "multi_occ_native_id", "0")
+		formExecWant(t, results, "S2", 1, "provider", "jira")
+		formExecWant(t, results, "S2", 1, "events", "1")
+		formExecWant(t, results, "S2", 1, "events_multi_occ", "0")
+		formExecWant(t, results, "S2", 2, "provider", "linear")
+		formExecWant(t, results, "S2", 2, "events", "4")
+		formExecWant(t, results, "S2", 2, "events_multi_occ", "3")
+		formExecWant(t, results, "S2", 2, "multi_occ_native_id", "3")
+		formExecWant(t, results, "S2", 2, "events_multi_subject", "2")
+		formExecWantRange(t, results, "S2", 2, "raw_rows_of_multi_occ", 7, 8)
+
+		formExecWantRows(t, results, "S3", 3)
 		for row, want := range []string{"1", "0", "3"} {
-			formExecWant(t, results, "S2", row, "events_multi_occ_alt", want)
-			formExecWant(t, results, "S2", row, "events_multi_occ_alt", formExecCell(t, results, "S1", row, "events_multi_occ"))
+			formExecWant(t, results, "S3", row, "events_multi_occ_alt", want)
+			formExecWant(t, results, "S3", row, "events_multi_occ_alt", formExecCell(t, results, "S2", row, "events_multi_occ"))
 		}
 
-		formExecWantRows(t, results, "S3", 4)
+		formExecWantRows(t, results, "S4", 4)
 		h8 := map[string]string{
 			formExecH8("linear:hist-a"): "a", formExecH8("linear:hist-c"): "c",
 			formExecH8("linear:hist-e"): "e", formExecH8("ghprojv2:item-f"): "f",
 		}
-		for row := 0; row < len(results["S3"].rows); row++ {
+		for row := 0; row < len(results["S4"].rows); row++ {
 			want := map[string]string{}
-			switch h8[formExecCell(t, results, "S3", row, "event_h8")] {
+			switch h8[formExecCell(t, results, "S4", row, "event_h8")] {
 			case "a":
 				want = map[string]string{"provider": "linear", "native_id": "1", "key_rows": "2", "occurred_values": "2", "subjects": "1",
-					"occ_span_ms": "250", "min_occurred_utc": "2026-09-01 10:00:00.000", "min_last_synced_utc": "2026-09-02 12:00:00.000",
-					"max_last_synced_utc": "2026-09-03 12:00:00.000", "keys_ls_before_cut": "0", "keys_ls_after_cut": "2"}
+					"occ_span_ms": "250", "min_occurred_day": "2026-09-01", "min_last_synced_day": "2026-09-02",
+					"max_last_synced_day": "2026-09-03", "keys_ls_before_cut": "0", "keys_ls_after_cut": "2"}
 			case "c":
 				want = map[string]string{"key_rows": "3", "occurred_values": "2", "subjects": "2", "occ_span_ms": "3600000",
-					"min_last_synced_utc": "2026-08-20 00:00:00.000", "keys_ls_before_cut": "1", "keys_ls_after_cut": "2"}
+					"min_last_synced_day": "2026-08-20", "keys_ls_before_cut": "1", "keys_ls_after_cut": "2"}
 			case "e":
 				want = map[string]string{"key_rows": "2", "occ_span_ms": "1500", "keys_ls_before_cut": "0"}
 			case "f":
 				want = map[string]string{"provider": "github", "native_id": "0", "key_rows": "2", "occ_span_ms": "3600000",
 					"keys_ls_before_cut": "1", "keys_ls_after_cut": "1"}
 			default:
-				t.Errorf("S3 row %d: event_h8 %s is not event a, c, e or f", row, formExecCell(t, results, "S3", row, "event_h8"))
+				t.Errorf("S4 row %d: event_h8 %s is not event a, c, e or f", row, formExecCell(t, results, "S4", row, "event_h8"))
 			}
 			for column, value := range want {
-				formExecWant(t, results, "S3", row, column, value)
+				formExecWant(t, results, "S4", row, column, value)
 			}
 		}
 
-		formExecWantRows(t, results, "S4", 8)
+		formExecWantRows(t, results, "S5", 8)
 		keys := make([]string, 0, 8)
-		for row := 0; row < len(results["S4"].rows); row++ {
-			event := h8[formExecCell(t, results, "S4", row, "event_h8")]
-			second := formExecCell(t, results, "S4", row, "occurred_second_utc")
-			after := formExecCell(t, results, "S4", row, "ms_after_first")
+		for row := 0; row < len(results["S5"].rows); row++ {
+			event := h8[formExecCell(t, results, "S5", row, "event_h8")]
+			second := formExecCell(t, results, "S5", row, "occurred_day")
+			after := formExecCell(t, results, "S5", row, "ms_after_first")
 			keys = append(keys, event+" "+second+" +"+after)
 			if event == "a" && after == "0" {
-				formExecWant(t, results, "S4", row, "key_rows", "1")
-				formExecWant(t, results, "S4", row, "max_last_synced_utc", "2026-09-03 12:00:00.000")
+				formExecWant(t, results, "S5", row, "key_rows", "1")
+				formExecWant(t, results, "S5", row, "max_last_synced_day", "2026-09-03")
 			}
 			if event == "c" && after == "0" {
-				formExecWant(t, results, "S4", row, "key_rows", "2")
-				formExecWant(t, results, "S4", row, "subjects", "2")
+				formExecWant(t, results, "S5", row, "key_rows", "2")
+				formExecWant(t, results, "S5", row, "subjects", "2")
 			}
 		}
 		sort.Strings(keys)
-		wantKeys := "a 2026-09-01 10:00:00 +0,a 2026-09-01 10:00:00 +250,c 2026-09-07 08:00:00 +0,c 2026-09-07 09:00:00 +3600000," +
-			"e 2026-09-11 08:00:00 +0,e 2026-09-11 08:00:01 +1500,f 2026-08-24 22:00:00 +0,f 2026-08-24 23:00:00 +3600000"
+		wantKeys := "a 2026-09-01 +0,a 2026-09-01 +250,c 2026-09-07 +0,c 2026-09-07 +3600000," +
+			"e 2026-09-11 +0,e 2026-09-11 +1500,f 2026-08-24 +0,f 2026-08-24 +3600000"
 		if got := strings.Join(keys, ","); got != wantKeys {
-			t.Errorf("S4 keys = %s, want %s", got, wantKeys)
+			t.Errorf("S5 keys = %s, want %s", got, wantKeys)
 		}
 
-		// CONTROL mutation: S2 counting every event as multi-occurred must break S2 = S1.
-		mutated := formExecMutate(t, formExecFind(t, statements, "S2"), "countIf(m.occ2 = 2)", "countIf(m.occ2 >= 1)")
+		// CONTROL mutation: S3 counting every event as multi-occurred must break S3 = S2.
+		mutated := formExecMutate(t, formExecFind(t, statements, "S3"), "countIf(m.occ2 = 2)", "countIf(m.occ2 >= 1)")
 		result, err := formExecQuery(ctx, conn, mutated)
 		if err != nil {
-			t.Fatalf("mutated S2: %v", err)
+			t.Fatalf("mutated S3: %v", err)
 		}
-		formExecLog(t, "FORM-7829-2 mutated", "S2", result)
-		if len(result.rows) != 3 || result.rows[2][1] == formExecCell(t, results, "S1", 2, "events_multi_occ") {
-			t.Errorf("mutated S2 rows %v still equal S1 linear events_multi_occ: the control cannot fail", result.rows)
+		formExecLog(t, "FORM-7829-3 mutated", "S3", result)
+		if len(result.rows) != 3 || result.rows[2][1] == formExecCell(t, results, "S2", 2, "events_multi_occ") {
+			t.Errorf("mutated S3 rows %v still equal S2 linear events_multi_occ: the control cannot fail", result.rows)
 		}
+
+		formExecCostGates(ctx, t, conn, "FORM-7829-3", statements, []string{"project_membership_transitions"})
 	})
 
 	// Gate cells: a copy of the FORM text with only that gate's bound literal(s) lowered, on a fixture just over it.
@@ -928,25 +1108,18 @@ func TestFormExecFcdevCHAOS7829(t *testing.T) {
 			orgID, subject, occurred, eventID, n))
 	}
 
-	t.Run("gate_parts", func(t *testing.T) {
-		ctx, conn := formExecOpen(t)
-		lowered := formExecSplit(t, "FORM-7829-2 parts>50", formExecLowered(t, formExec7829SQL, "sum(rows) > 20000000", "sum(rows) > 50", 7), 5)
-		membership(ctx, t, conn, formExec7829Other, "'linear:BIG'", "addMilliseconds(toDateTime64('2026-09-01 00:00:00', 3), number)", "'linear:big'", 51)
-		formExecGateCell(ctx, t, conn, "FORM-7829-2 parts>50", lowered, "FORM-7829-2 GATE parts", "S0", "S1", "S2", "S3", "S4")
-	})
-
 	t.Run("gate_events", func(t *testing.T) {
 		ctx, conn := formExecOpen(t)
-		lowered := formExecSplit(t, "FORM-7829-2 events>5", formExecLowered(t, formExec7829SQL, "uniq(event_id) > 2000000", "uniq(event_id) > 5", 6), 5)
+		lowered := formExecSplit(t, "FORM-7829-3 events>5", formExecLowered(t, formExec7829SQL, "uniq(event_id) > 2000000", "uniq(event_id) > 5", 6), 6)
 		membership(ctx, t, conn, formExec7829Org, "concat('linear:FX-', toString(number))", "toDateTime64('2026-09-01 00:00:00', 3)", "concat('linear:ev-', toString(number))", 6)
-		formExecGateCell(ctx, t, conn, "FORM-7829-2 events>5", lowered, "FORM-7829-2 GATE events", "S1", "S2", "S3", "S4")
+		formExecGateCell(ctx, t, conn, "FORM-7829-3 events>5", lowered, "FORM-7829-3 GATE events", "S2", "S3", "S4", "S5")
 	})
 
 	t.Run("gate_multi", func(t *testing.T) {
 		ctx, conn := formExecOpen(t)
-		lowered := formExecSplit(t, "FORM-7829-2 multi>1/5", formExecLowered(t, formExec7829SQL, "count() > 10000 OR sum(g.n) > 1000000", "count() > 1 OR sum(g.n) > 5", 4), 5)
+		lowered := formExecSplit(t, "FORM-7829-3 multi>1/5", formExecLowered(t, formExec7829SQL, "count() > 10000 OR sum(g.n) > 1000000", "count() > 1 OR sum(g.n) > 5", 4), 6)
 		membership(ctx, t, conn, formExec7829Org, "'linear:FX-1'", "addMilliseconds(toDateTime64('2026-09-01 00:00:00', 3), number)", "concat('linear:hist-', toString(number % 2))", 6)
-		formExecGateCell(ctx, t, conn, "FORM-7829-2 multi>1/5", lowered, "FORM-7829-2 GATE multi", "S3", "S4")
+		formExecGateCell(ctx, t, conn, "FORM-7829-3 multi>1/5", lowered, "FORM-7829-3 GATE multi", "S4", "S5")
 	})
 }
 
@@ -988,7 +1161,7 @@ func formExec14259Repos(ctx context.Context, t *testing.T, conn driver.Conn) {
 //
 // r4 (a gitlab repo of the same org) and r5 (another org) hold an exact total and must not count.
 func TestFormExecFcdevCHAOS14259(t *testing.T) {
-	statements := formExecStatements(t, "FORM-14259-SIZE-2", formExec14259SQL, formExec14259SHA256, 4)
+	statements := formExecStatements(t, "FORM-14259-SIZE-3", formExec14259SQL, formExec14259SHA256, 5)
 	chain := func(id string) string {
 		text := formExecFind(t, statements, id)
 		begin, end := strings.Index(text, "-- CHAIN BEGIN"), strings.Index(text, "-- CHAIN END")
@@ -997,8 +1170,8 @@ func TestFormExecFcdevCHAOS14259(t *testing.T) {
 		}
 		return text[begin:end]
 	}
-	if chain("S2") != chain("S1") || chain("S3") != chain("S1") {
-		t.Fatalf("the CTE chain of S1, S2 and S3 is not byte-equal")
+	if chain("S3") != chain("S2") || chain("S4") != chain("S2") {
+		t.Fatalf("the CTE chain of S2, S3 and S4 is not byte-equal")
 	}
 
 	t.Run("fixture", func(t *testing.T) {
@@ -1092,51 +1265,54 @@ func TestFormExecFcdevCHAOS14259(t *testing.T) {
 		formExecExec(ctx, t, conn, completeness+`('`+org+`', '`+github+`', 'r3', 1, 'github', 0, ['aggregate_mismatch'], 3, 3, '`+newLS+`', 1000)`)
 		formExecExec(ctx, t, conn, completeness+`('`+org+`', '`+github+`', 'r3', 1, 'github', 1, [], 3, 3, '`+newLS+`', 4398046513104)`)
 
-		results := formExecRunAll(ctx, t, conn, "FORM-14259-SIZE-2", statements)
-		formExecWant(t, results, "S0", 0, "suite_orgs", "1")
-		formExecWant(t, results, "S0", 0, "repo_orgs", "1")
-		formExecWant(t, results, "S0", 0, "completeness_orgs", "1")
-		formExecWant(t, results, "S0", 0, "github_repos", "1")
-		formExecWantRange(t, results, "S0", 0, "suite_rows_raw", int64(orgSuites), int64(orgSuites)+1)
-		formExecWantRange(t, results, "S0", 0, "slot_suite_rows_raw", int64(orgSuites), int64(orgSuites)+1)
-		formExecWant(t, results, "S0", 0, "coverage_rows_raw", "1")
+		results := formExecRunAll(ctx, t, conn, "FORM-14259-SIZE-3", statements)
+		formExecPartsInfo(t, results, []string{"coverage_snapshots", "repos", "test_case_results", "test_suite_results", "testops_run_report_completeness"})
+		formExecWant(t, results, "S1", 0, "suite_orgs", "1")
+		formExecWant(t, results, "S1", 0, "repo_orgs", "1")
+		formExecWant(t, results, "S1", 0, "completeness_orgs", "1")
+		formExecWant(t, results, "S1", 0, "github_repos", "1")
+		formExecWantRange(t, results, "S1", 0, "suite_rows_raw", int64(orgSuites), int64(orgSuites)+1)
+		formExecWantRange(t, results, "S1", 0, "slot_suite_rows_raw", int64(orgSuites), int64(orgSuites)+1)
+		formExecWant(t, results, "S1", 0, "coverage_rows_raw", "1")
 
 		for column, want := range map[string]string{
 			"u_runs": "7", "u_slots": "18", "u_runs_marked_mismatch": "1", "u_runs_complete": "1", "u_runs_no_row": "4",
 			"u_slots_stale": "1", "u_slots_before_14045_commit": "3",
-			"u_min_ls_utc": "2026-11-01 00:00:00.000", "u_max_ls_utc": "2026-11-21 00:00:00.000",
-		} {
-			formExecWant(t, results, "S1", 0, column, want)
-		}
-		for column, want := range map[string]string{
-			"e_runs": "4", "e_runs_aggregate": "1", "e_slots_aggregate": "1", "e_runs_copy": "3",
-			"e_runs_marked_mismatch": "1", "e_runs_complete": "0", "e_runs_no_row": "2", "e_slots_stale": "1",
-			"e_slots_before_14045_commit": "3", "e_slots_third_copy": "2", "e_runs_orphan_cases": "1", "e_runs_capped": "1",
+			"u_first_day": "2026-11-01", "u_last_day": "2026-11-21", "newest_slots": "21",
 		} {
 			formExecWant(t, results, "S2", 0, column, want)
 		}
-		formExecWant(t, results, "S3", 0, "u_slots_cte", "18")
-		formExecWant(t, results, "S3", 0, "u_slots_window", "18")
-		formExecWant(t, results, "S3", 0, "newest_slots", strconv.Itoa(len(newestSlots)))
+		for column, want := range map[string]string{
+			"newest_slots": "21", "e_runs": "4", "e_runs_aggregate": "1", "e_slots_aggregate": "1", "e_runs_copy": "3",
+			"e_runs_marked_mismatch": "1", "e_runs_complete": "0", "e_runs_no_row": "2", "e_slots_stale": "1",
+			"e_slots_before_14045_commit": "3", "e_slots_third_copy": "2", "e_runs_orphan_cases": "1", "e_runs_capped": "1",
+		} {
+			formExecWant(t, results, "S3", 0, column, want)
+		}
+		formExecWant(t, results, "S4", 0, "u_slots_cte", "18")
+		formExecWant(t, results, "S4", 0, "u_slots_window", "18")
+		formExecWant(t, results, "S4", 0, "newest_slots", strconv.Itoa(len(newestSlots)))
 		if len(newestSlots) != 21 {
 			t.Errorf("fixture newest github slots = %d, want 21", len(newestSlots))
 		}
 
-		// CONTROL mutations of the CTE chain copy in S3: each must break u_slots_cte = u_slots_window.
+		// CONTROL mutations of the CTE chain copy in S4: each must break u_slots_cte = u_slots_window.
 		for _, mutation := range []struct{ name, old, replacement, want string }{
 			{"every slot twinned", "HAVING min(r.n >= 2 * k.n) = 1", "HAVING min(r.n >= k.n) = 1", "21"},
 			{"head without outcome counts", "toString(passed_count), '|', toString(failed_count), '|',", "", "20"},
 		} {
-			mutated := formExecMutate(t, formExecFind(t, statements, "S3"), mutation.old, mutation.replacement)
+			mutated := formExecMutate(t, formExecFind(t, statements, "S4"), mutation.old, mutation.replacement)
 			result, err := formExecQuery(ctx, conn, mutated)
 			if err != nil {
-				t.Fatalf("mutated S3 (%s): %v", mutation.name, err)
+				t.Fatalf("mutated S4 (%s): %v", mutation.name, err)
 			}
-			formExecLog(t, "FORM-14259-SIZE-2 mutated "+mutation.name, "S3", result)
+			formExecLog(t, "FORM-14259-SIZE-3 mutated "+mutation.name, "S4", result)
 			if len(result.rows) != 1 || result.rows[0][0] != mutation.want || result.rows[0][0] == result.rows[0][1] {
-				t.Errorf("mutated S3 (%s) = %v, want u_slots_cte %s != u_slots_window", mutation.name, result.rows, mutation.want)
+				t.Errorf("mutated S4 (%s) = %v, want u_slots_cte %s != u_slots_window", mutation.name, result.rows, mutation.want)
 			}
 		}
+
+		formExecCostGates(ctx, t, conn, "FORM-14259-SIZE-3", statements, []string{"coverage_snapshots", "repos", "test_case_results", "test_suite_results", "testops_run_report_completeness"})
 	})
 
 	// Gate cells: a copy of the FORM text with only that gate's bound literal(s) lowered, on a fixture just over it.
@@ -1147,7 +1323,7 @@ func TestFormExecFcdevCHAOS14259(t *testing.T) {
 	}
 	lowered := func(t *testing.T, old, replacement string, n int) []formExecStatement {
 		t.Helper()
-		return formExecSplit(t, "FORM-14259-SIZE-2 "+replacement, formExecLowered(t, formExec14259SQL, old, replacement, n), 4)
+		return formExecSplit(t, "FORM-14259-SIZE-3 "+replacement, formExecLowered(t, formExec14259SQL, old, replacement, n), 5)
 	}
 
 	t.Run("gate_suites", func(t *testing.T) {
@@ -1155,7 +1331,7 @@ func TestFormExecFcdevCHAOS14259(t *testing.T) {
 		statements := lowered(t, "throwIf(count() > 3000000,", "throwIf(count() > 20,", 4)
 		formExec14259Repos(ctx, t, conn)
 		bulk(ctx, t, conn, "concat('big-', toString(intDiv(number, 3)))", "toString(number)", "concat('pkg', toString(number))", "concat('s', toString(number % 3))", 21)
-		formExecGateCell(ctx, t, conn, "FORM-14259-SIZE-2 suites>20", statements, "FORM-14259-SIZE-2 GATE suites", "S1", "S2", "S3")
+		formExecGateCell(ctx, t, conn, "FORM-14259-SIZE-3 suites>20", statements, "FORM-14259-SIZE-3 GATE suites", "S2", "S3", "S4")
 	})
 
 	t.Run("gate_slots", func(t *testing.T) {
@@ -1163,7 +1339,7 @@ func TestFormExecFcdevCHAOS14259(t *testing.T) {
 		statements := lowered(t, "max(x.slots) > 500", "max(x.slots) > 3", 4)
 		formExec14259Repos(ctx, t, conn)
 		bulk(ctx, t, conn, "'many'", "toString(number)", "concat('pkg', toString(number))", "concat('s', toString(number))", 4)
-		formExecGateCell(ctx, t, conn, "FORM-14259-SIZE-2 slots>3", statements, "FORM-14259-SIZE-2 GATE slots", "S1", "S2", "S3")
+		formExecGateCell(ctx, t, conn, "FORM-14259-SIZE-3 slots>3", statements, "FORM-14259-SIZE-3 GATE slots", "S2", "S3", "S4")
 	})
 
 	t.Run("gate_heads", func(t *testing.T) {
@@ -1171,7 +1347,7 @@ func TestFormExecFcdevCHAOS14259(t *testing.T) {
 		statements := lowered(t, "max(z.c) > 16", "max(z.c) > 2", 4)
 		formExec14259Repos(ctx, t, conn)
 		bulk(ctx, t, conn, "'heads'", "toString(number)", "'pkg'", "concat('s', toString(number))", 3)
-		formExecGateCell(ctx, t, conn, "FORM-14259-SIZE-2 heads>2", statements, "FORM-14259-SIZE-2 GATE heads", "S1", "S2", "S3")
+		formExecGateCell(ctx, t, conn, "FORM-14259-SIZE-3 heads>2", statements, "FORM-14259-SIZE-3 GATE heads", "S2", "S3", "S4")
 	})
 
 	t.Run("gate_cases", func(t *testing.T) {
@@ -1180,6 +1356,6 @@ func TestFormExecFcdevCHAOS14259(t *testing.T) {
 		formExec14259Repos(ctx, t, conn)
 		bulk(ctx, t, conn, "'cases'", "concat('c', toString(number + 1), '@1/0-pkg')", "'pkg'", "concat('c', toString(number + 1))", 2)
 		formExecExec(ctx, t, conn, `INSERT INTO test_case_results (org_id, repo_id, run_id, suite_id, case_id, case_name, status, last_synced) SELECT '`+formExec14259Org+`', toUUID('`+formExec14259GitHub+`'), 'cases', 'c1@1/0-pkg', toString(number), 'x', 'passed', toDateTime64('2026-11-21 00:00:00', 3, 'UTC') FROM numbers(6)`)
-		formExecGateCell(ctx, t, conn, "FORM-14259-SIZE-2 cases>5", statements, "FORM-14259-SIZE-2 GATE cases", "S2")
+		formExecGateCell(ctx, t, conn, "FORM-14259-SIZE-3 cases>5", statements, "FORM-14259-SIZE-3 GATE cases", "S3")
 	})
 }

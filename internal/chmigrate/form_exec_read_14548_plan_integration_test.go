@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -527,12 +528,64 @@ func TestReadPlanForm14548ExecutesAtTheChainHead(t *testing.T) {
 				t.Errorf("S1 %s empty: %s", k, s1[k])
 			}
 		}
-		// Two names differ: log_comment (a String: lengths only, value NULL) and max_threads (numeric: after = 3).
-		c := s1["settings_changed"]
-		wantLog := fmt.Sprintf("[log_comment true NULL %d true NULL %d]", len(likeComments[0]), len(likeComments[1]))
+		// Independent recompute from the runs' own Settings maps: every differing name (no param_), with the numeric value or NULL and the length.
+		var maps []map[string]string
+		for _, comment := range likeComments {
+			m := map[string]string{}
+			if err := conn.QueryRow(ctx, "SELECT Settings FROM system.query_log WHERE log_comment = ? AND type = 'QueryFinish'", comment).Scan(&m); err != nil {
+				t.Fatalf("like run settings: %v", err)
+			}
+			maps = append(maps, m)
+		}
+		names := map[string]bool{}
+		for _, m := range maps {
+			for k := range m {
+				names[k] = true
+			}
+		}
+		var diff []string
+		for k := range names {
+			b, inB := maps[0][k]
+			a, inA := maps[1][k]
+			if !strings.HasPrefix(k, "param_") && (inB != inA || b != a) {
+				diff = append(diff, k)
+			}
+		}
+		sort.Strings(diff)
+		bit := func(ok bool) string {
+			if ok {
+				return "1"
+			}
+			return "0"
+		}
+		num := func(v string) string {
+			f, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				return "NULL"
+			}
+			return fmt.Sprint(f)
+		}
+		var entries []string
+		for _, k := range diff {
+			b, inB := maps[0][k]
+			a, inA := maps[1][k]
+			entries = append(entries, fmt.Sprintf("[%s %s %s %d %s %s %d]", k, bit(inB), num(b), len(b), bit(inA), num(a), len(a)))
+		}
+		wantChanged := "[" + strings.Join(entries, " ") + "]"
 		norm := strings.NewReplacer(" true ", " 1 ", " false ", " 0 ").Replace
-		if strings.Count(c, "] [") != 1 || !strings.Contains(norm(c), norm(wantLog)) || !strings.Contains(norm(c), "[max_threads 0 NULL 0 1 3 1]") {
-			t.Errorf("S1 settings_changed = %s, want %s and [max_threads false NULL 0 true 3 1] only", c, wantLog)
+		t.Logf("S1 settings_changed names %v (recomputed from the runs' Settings maps)", diff)
+		if got := norm(s1["settings_changed"]); got != wantChanged {
+			t.Errorf("S1 settings_changed = %s, want %s", got, wantChanged)
+		}
+		hasString, hasThreads := false, false
+		for _, k := range diff {
+			if _, err := strconv.ParseFloat(maps[1][k], 64); err != nil && maps[1][k] != "" {
+				hasString = true
+			}
+			hasThreads = hasThreads || k == "max_threads"
+		}
+		if !hasString || !hasThreads {
+			t.Errorf("S1 fixture: differing settings %v need max_threads and one String-valued setting, or the cells prove nothing", diff)
 		}
 	}
 	// S2a and S2b: processor profiles of the two runs.

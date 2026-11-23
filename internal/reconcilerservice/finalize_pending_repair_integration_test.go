@@ -1320,7 +1320,7 @@ func TestTwoConcurrentStaleFinalizeRedrivesOfOneRunPublishOnce(t *testing.T) {
 	results := make(chan outcome, 2)
 	for range 2 {
 		go func() {
-			redriven, err := redriver.RedriveStaleFinalize(ctx, runID, uuid.NewString())
+			redriven, err := redriver.RedriveStaleFinalize(ctx, runID, uuid.NewString(), time.Now().UTC().Add(-joboutbox.StaleFinalizeHorizon))
 			results <- outcome{redriven, err}
 		}()
 	}

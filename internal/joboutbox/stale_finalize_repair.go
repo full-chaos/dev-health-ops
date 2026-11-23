@@ -74,7 +74,7 @@ var ErrStaleFinalizeInvalidState = errors.New("stale finalize redrive refused th
 // reports whether a fresh finalize was published. One run per call: a failure
 // of one run never stops the next.
 type StaleFinalizeRedriver interface {
-	RedriveStaleFinalize(ctx context.Context, runID, nonce string) (bool, error)
+	RedriveStaleFinalize(ctx context.Context, runID, nonce string, cutoff time.Time) (bool, error)
 }
 
 // StaleFinalizeFailure is one counted failure of a stage pass. It carries no
@@ -200,7 +200,7 @@ func (stage *staleFinalizeStage) step(ctx context.Context, now time.Time, limit 
 			break
 		}
 		runCtx, cancelRun := context.WithTimeout(passCtx, staleFinalizeRunDeadline)
-		redriven, err := stage.redriver.RedriveStaleFinalize(runCtx, candidate.runID, nonce)
+		redriven, err := stage.redriver.RedriveStaleFinalize(runCtx, candidate.runID, nonce, cutoff)
 		deadline := errors.Is(runCtx.Err(), context.DeadlineExceeded)
 		cancelRun()
 		lastTried = &staleFinalizeCursor{updatedAt: candidate.updatedAt, runID: candidate.runID, bound: bound}

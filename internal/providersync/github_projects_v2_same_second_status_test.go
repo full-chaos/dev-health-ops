@@ -48,14 +48,17 @@ func sameSecondBoards(halves ...githubWorkItemRows) githubWorkItemRows {
 	return out
 }
 
-// sameSecondReader returns the stored rows as the production reader scans them.
+// sameSecondReader returns the stored rows as the production reader builds
+// them from its scan (githubStoredTransitionRow).
 type sameSecondReader []workItemTransitionStoredRow
 
 func (table sameSecondReader) StoredTransitions(_ context.Context, _ string, ids []string) ([]githubWorkItemTransitionRow, error) {
 	var out []githubWorkItemTransitionRow
 	for _, row := range table {
 		if slices.Contains(ids, row.WorkItemID) {
-			out = append(out, sameSecondScan(row))
+			out = append(out, githubStoredTransitionRow(
+				row.WorkItemID, row.OccurredAt, row.FromStatus, row.ToStatus, row.ToStatusRaw, row.TieOrdinal,
+			))
 		}
 	}
 	return out, nil

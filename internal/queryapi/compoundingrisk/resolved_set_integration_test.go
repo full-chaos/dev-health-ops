@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 // CHAOS-14480: a resolved set is bound whole. 50,000 synthetic repository ids;
@@ -103,5 +105,76 @@ func TestRealClickHouse_FiveHundredOneNamedTeamsStoredRowsAnswerTheLastTeamsRowA
 					len(got.Rows), last, c.wantRows, lastNamedTeamStoredRow)
 			}
 		})
+	}
+}
+
+// CHAOS-14521: the stored team reads at 50,000 named team ids. The named list
+// has no length cap of its own (CHAOS-14515); a request body bounds it. The
+// client has the options of the query API's read client (chclient.Options:
+// max_bytes_to_read unrestricted, max_result_rows 500,000) and its default
+// max_execution_time of 10 s per statement. The work bound reads
+// system.query_log: two statements, each with read_rows at most 1.5 x the
+// 50,000 stored rows, each run with max_execution_time 10. No wall-clock bound.
+func TestRealClickHouse_StoredTeamReadsBind50000NamedTeams(t *testing.T) {
+	_, conn, _, uri := startStoreURI(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	t.Cleanup(cancel)
+	unrestricted, resultRows := uint64(0), uint(500_000)
+	client, err := clickhouse.NewClickHouseQueryClientWithOptions(clickhouse.Options{DSN: uri, MaxBytesToRead: &unrestricted, MaxResultRows: &resultRows})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	const n = 50000
+	d := time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC)
+	exec(t, ctx, conn, `INSERT INTO compounding_risk_daily (org_id, day, scope, scope_id, compounding_risk, severity,
+      w_churn, w_complexity, w_ownership, w_review, threshold_elevated, threshold_high, computed_at)
+      SELECT '%s', toDate('%s'), 'team', concat('tm-', leftPad(toString(number), 5, '0')), 0.5, 'elevated',
+      0.4, 0.3, 0.2, 0.1, 0.4, 0.7, toDateTime('2026-03-10 01:00:00', 'UTC') FROM numbers(%d)`, sweepOrg, d.Format(dateLayout), n)
+	ids := make(namedTeamIDs, 0, n)
+	for i := 0; i < n; i++ {
+		ids = append(ids, fmt.Sprintf("tm-%05d", i))
+	}
+
+	picked, err := latestDay(ctx, client, sweepOrg, scopeTeam, ids, d.AddDate(0, 0, -6), d)
+	if err != nil {
+		t.Fatalf("stored day pick with %d named teams: %v", n, err)
+	}
+	if picked == nil || picked.Format(dateLayout) != d.Format(dateLayout) {
+		t.Fatalf("stored day pick %v; want %s", picked, d.Format(dateLayout))
+	}
+	rows, err := latestRowsLimit(ctx, client, sweepOrg, d, scopeTeam, ids, n)
+	if err != nil {
+		t.Fatalf("stored row read with %d named teams: %v", n, err)
+	}
+	served := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		served[r.scopeID] = true
+	}
+	var missing []string
+	for _, id := range ids {
+		if !served[id] {
+			missing = append(missing, id)
+		}
+	}
+	if len(rows) != n || len(missing) > 0 {
+		t.Fatalf("stored row read: %d rows, %d named teams missing (first %v); want every one of the %d named teams", len(rows), len(missing), missing[:min(3, len(missing))], n)
+	}
+
+	exec(t, ctx, conn, "SYSTEM FLUSH LOGS")
+	var statements, overBound, otherLimit uint64
+	// Every Select of compounding_risk_daily in this store is one of the two
+	// reads above; this statement is not logged yet when it runs.
+	if err := conn.QueryRow(ctx, `SELECT count(), countIf(read_rows > ?), countIf(Settings['max_execution_time'] != '10')
+      FROM system.query_log
+      WHERE type = 'QueryFinish' AND query_kind = 'Select'
+        AND position(query, 'FROM compounding_risk_daily') > 0`,
+		uint64(n*3/2)).Scan(&statements, &overBound, &otherLimit); err != nil {
+		t.Fatalf("read system.query_log: %v", err)
+	}
+	if statements != 2 || overBound != 0 || otherLimit != 0 {
+		t.Errorf("query_log: %d stored team statements, %d with read_rows over %d, %d without max_execution_time 10; want 2, 0, 0",
+			statements, overBound, n*3/2, otherLimit)
 	}
 }

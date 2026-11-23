@@ -196,12 +196,28 @@ func loadThroughput(
 	return history, nil
 }
 
-// loadBacklog ports get_backlog_from_sink, including its self-joined max(day).
+// backlogRead is the backlog of a scope and how it was found (CHAOS-7508): the newest day of a key can be long before
+// the forecast window, and a sum read from it is not a current backlog.
+type backlogRead struct {
+	size  int
+	state model.NewestDayState
+	// asOfDay is the oldest newest day of the measured keys; nil for NO_ROWS.
+	asOfDay *time.Time
+}
+
+// loadBacklog ports get_backlog_from_sink, including its self-joined max(day), and says how fresh the sum is. A
+// measured key whose newest day is before the window start (the start of the throughput read, today minus
+// historyDays days) makes the read STALE; the sum keeps that key's value. A key whose newest row is a retraction adds
+// 0 and is not a measured key, so a scope of such keys only is NO_ROWS, not a measured zero.
 func loadBacklog(
 	ctx context.Context, client QueryClient, orgID string, teamIDs []string, workScopeID *string,
-) (int, error) {
+	historyDays int, today time.Time,
+) (backlogRead, error) {
 	conditions, bindings := capacityScopeFilters(orgID, teamIDs, workScopeID)
 	where := strings.Join(conditions, " AND ")
+	bindings = append(bindings, clickhouse.Binding{
+		Name: "start_date", Value: today.UTC().AddDate(0, 0, -historyDays).Format("2006-01-02"),
+	})
 
 	// Each selected team contributes its OWN newest row (CHAOS-8498). One
 	// maximum day over the whole set dropped any team whose newest day was
@@ -209,32 +225,53 @@ func loadBacklog(
 	// the outer filter selects the scope's rows, and the subquery finds each
 	// team's newest day within that scope.
 	source := capacitySource(teamIDs, where, true)
+	// The rule reads the picked row's own columns (qualified), never the sum below.
+	live := liverow.Predicate("work_item_metrics_daily", "")
 	query := fmt.Sprintf(`
-        SELECT sum(wip_count_end_of_day) AS wip_count_end_of_day
+        SELECT
+            sum(wip_count_end_of_day) AS backlog,
+            countIf(%s) AS measured_keys,
+            countIf(%s AND day < {start_date:Date}) AS stale_keys,
+            minIf(day, %s) AS oldest_day
         FROM %s
         WHERE %s
           AND %s
-    `, source, where, newestrow.PerTeamPredicate(source, where))
+    `, live, live, live, source, where, newestrow.PerTeamPredicate(source, where))
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
-		return 0, fmt.Errorf("capacityForecast: backlog query: %w", err)
+		return backlogRead{}, fmt.Errorf("capacityForecast: backlog query: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	// An aggregate with no GROUP BY returns exactly one row -- zero when
 	// nothing matches -- which is why Python's `int(... or 0)` never has an
 	// empty case to handle either.
-	var backlog uint64
+	var backlog, measuredKeys, staleKeys uint64
+	var oldestDay time.Time
 	if rows.Next() {
-		if scanErr := rows.Scan(&backlog); scanErr != nil {
-			return 0, fmt.Errorf("capacityForecast: backlog scan: %w", scanErr)
+		if scanErr := rows.Scan(&backlog, &measuredKeys, &staleKeys, &oldestDay); scanErr != nil {
+			return backlogRead{}, fmt.Errorf("capacityForecast: backlog scan: %w", scanErr)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("capacityForecast: backlog rows: %w", err)
+		return backlogRead{}, fmt.Errorf("capacityForecast: backlog rows: %w", err)
 	}
-	return countFromAggregate("wip_count_end_of_day", backlog)
+	size, err := countFromAggregate("wip_count_end_of_day", backlog)
+	if err != nil {
+		return backlogRead{}, err
+	}
+	read := backlogRead{size: size, state: model.NewestDayStateNoRows}
+	if measuredKeys == 0 {
+		return read, nil
+	}
+	read.state = model.NewestDayStateMeasured
+	if staleKeys > 0 {
+		read.state = model.NewestDayStateStale
+	}
+	day := oldestDay.UTC()
+	read.asOfDay = &day
+	return read, nil
 }
 
 // scanForecastRow maps one persisted capacity_forecasts row onto the GraphQL

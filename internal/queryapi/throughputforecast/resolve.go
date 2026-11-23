@@ -96,7 +96,7 @@ func Resolve(
 	// the zero object (never null). This departs from the last Python resolver
 	// (forecast.py skipped the read at backlog 0), by chris's decision.
 	// Ordered before the no-history return because the empty payload carries it.
-	coverage, err := loadEstimateCoverage(ctx, client, orgID, input.TeamIds, input.WorkScopeID)
+	coverage, err := loadEstimateCoverage(ctx, client, orgID, input.TeamIds, input.WorkScopeID, input.HistoryWeeks, now)
 	if err != nil {
 		return nil, err
 	}
@@ -136,16 +136,18 @@ func Resolve(
 		// staleWip is deliberately NOT loaded on this path: Python passes only
 		// estimate_coverage into _result_to_output here, so the field is absent
 		// rather than merely empty.
-		return toModel(noHistoryForecastID, now, empty, backlog, nil, nil, coverage), nil
+		// No current WIP is read on this path either: the overlay is computed from zeros, so it is NO_ROWS.
+		return toModel(noHistoryForecastID, now, empty, backlog, newestDayRead{state: model.NewestDayStateNoRows},
+			nil, nil, newestDayRead{}, coverage), nil
 	}
 
-	currentWIP, averageWIP, err := loadWorkItemOverlay(
+	currentWIP, averageWIP, current, err := loadWorkItemOverlay(
 		ctx, client, orgID, input.TeamIds, input.WorkScopeID, input.HistoryWeeks, now,
 	)
 	if err != nil {
 		return nil, err
 	}
-	staleP50, staleP90, err := loadStaleWIP(ctx, client, orgID, input.TeamIds, input.WorkScopeID)
+	staleP50, staleP90, stale, err := loadStaleWIP(ctx, client, orgID, input.TeamIds, input.WorkScopeID, input.HistoryWeeks, now)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +200,7 @@ func Resolve(
 		"duration_ms", time.Since(started).Milliseconds(),
 	)
 
-	return toModel(uuid.NewString(), now, result, backlog, staleP50, staleP90, coverage), nil
+	return toModel(uuid.NewString(), now, result, backlog, current, staleP50, staleP90, stale, coverage), nil
 }
 
 // distinctTeamIDs is a team selection as a set: each id once, in the order of its first use.
@@ -244,7 +246,9 @@ func toModel(
 	computedAt time.Time,
 	result forecastResult,
 	backlog backlogRead,
+	current newestDayRead,
 	staleP50, staleP90 *float64,
+	stale newestDayRead,
 	coverage *estimateCoverage,
 ) *model.ThroughputForecast {
 	windows := make([]model.ThroughputRollingWindow, 0, len(result.rollingWindows))
@@ -260,22 +264,25 @@ func toModel(
 	}
 
 	forecast := &model.ThroughputForecast{
-		ForecastID:          forecastID,
-		ComputedAt:          graphqldate.RFC3339UTC(computedAt),
-		TeamID:              result.teamID,
-		WorkScopeID:         result.workScopeID,
-		BacklogSize:         result.backlogSize,
-		BacklogState:        backlog.state,
-		HistoryWeeks:        result.historyWeeks,
-		P50Weeks:            result.p50Weeks,
-		P75Weeks:            result.p75Weeks,
-		P90Weeks:            result.p90Weeks,
-		RollingWindows:      windows,
-		PrimaryRisk:         overlayToModel(result.primaryRisk),
-		WipCongestion:       overlayToModel(result.wipCongestion),
-		ReviewBottleneck:    overlayToModel(result.reviewBottleneck),
-		IncidentLoad:        overlayToModel(result.incidentLoad),
-		InsufficientHistory: result.insufficientHistory,
+		ForecastID:              forecastID,
+		ComputedAt:              graphqldate.RFC3339UTC(computedAt),
+		TeamID:                  result.teamID,
+		WorkScopeID:             result.workScopeID,
+		BacklogSize:             result.backlogSize,
+		BacklogState:            backlog.state,
+		HistoryWeeks:            result.historyWeeks,
+		P50Weeks:                result.p50Weeks,
+		P75Weeks:                result.p75Weeks,
+		P90Weeks:                result.p90Weeks,
+		RollingWindows:          windows,
+		PrimaryRisk:             overlayToModel(result.primaryRisk),
+		WipCongestion:           overlayToModel(result.wipCongestion),
+		WipCongestionState:      current.state,
+		WipCongestionAsOfDay:    dateOrNil(current.asOfDay),
+		WipCongestionGrainCount: current.grains,
+		ReviewBottleneck:        overlayToModel(result.reviewBottleneck),
+		IncidentLoad:            overlayToModel(result.incidentLoad),
+		InsufficientHistory:     result.insufficientHistory,
 	}
 
 	if backlog.asOfDay != nil {
@@ -296,6 +303,12 @@ func toModel(
 		forecast.StaleWip = &model.ThroughputStaleWip{
 			P50AgeHours: staleP50,
 			P90AgeHours: staleP90,
+			State:       stale.state,
+			GrainCount:  stale.grains,
+		}
+		// An age comes from at least one key, so the read always has an oldest newest day here.
+		if stale.asOfDay != nil {
+			forecast.StaleWip.AsOfDay = graphqldate.New(*stale.asOfDay)
 		}
 	}
 	if coverage != nil {
@@ -305,9 +318,20 @@ func toModel(
 			UnestimatedCount: coverage.unestimatedCount,
 			BacklogSize:      coverage.backlogSize,
 			GrainCount:       coverage.grainCount,
+			State:            coverage.newest.state,
+			AsOfDay:          dateOrNil(coverage.newest.asOfDay),
 		}
 	}
 	return forecast
+}
+
+// dateOrNil is the served day of a read, or null when the read has none.
+func dateOrNil(moment *time.Time) *graphqldate.Date {
+	if moment == nil {
+		return nil
+	}
+	day := graphqldate.New(*moment)
+	return &day
 }
 
 func overlayToModel(overlay riskOverlay) *model.ThroughputRiskOverlay {

@@ -491,11 +491,16 @@ type CapacityDistributionBin struct {
 }
 
 type CapacityForecast struct {
-	ForecastID          string            `json:"forecastId"`
-	ComputedAt          string            `json:"computedAt"`
-	TeamID              *string           `json:"teamId,omitempty"`
-	WorkScopeID         *string           `json:"workScopeId,omitempty"`
-	BacklogSize         int               `json:"backlogSize"`
+	ForecastID  string  `json:"forecastId"`
+	ComputedAt  string  `json:"computedAt"`
+	TeamID      *string `json:"teamId,omitempty"`
+	WorkScopeID *string `json:"workScopeId,omitempty"`
+	// The sum of the WIP on each work-item key's (provider, work scope, team) newest day. It is not bounded by historyDays: a key whose newest day is before the window start still adds its WIP, and backlogState says so.
+	BacklogSize int `json:"backlogSize"`
+	// How backlogSize was found against the window start (the forecast day minus historyDays days): MEASURED, STALE or NO_ROWS (see NewestDayState). Null on a stored forecast (capacityForecasts), which keeps no read state.
+	BacklogState *NewestDayState `json:"backlogState,omitempty"`
+	// The oldest of the newest work-item days that backlogSize is read from. Null when backlogState is NO_ROWS or null.
+	BacklogAsOfDay      *graphqldate.Date `json:"backlogAsOfDay,omitempty"`
 	TargetItems         *int              `json:"targetItems,omitempty"`
 	TargetDate          *graphqldate.Date `json:"targetDate,omitempty"`
 	P50Date             *graphqldate.Date `json:"p50Date,omitempty"`
@@ -1814,6 +1819,7 @@ type TestOpsTestWindowResult struct {
 	ReportCompleteness *TestOpsReportCompleteness `json:"reportCompleteness"`
 }
 
+// Estimate coverage of the scope, read from each coverage grain's (provider, work scope, team) own newest row: per grain, not one newest day for the scope, and not bounded by the window. Never null: with no coverage row it is the zero object.
 type ThroughputEstimateCoverage struct {
 	Ratio            *float64 `json:"ratio,omitempty"`
 	EstimatedCount   int      `json:"estimatedCount"`
@@ -1821,6 +1827,10 @@ type ThroughputEstimateCoverage struct {
 	BacklogSize      int      `json:"backlogSize"`
 	// The number of coverage grains (provider, work scope, team) the counts are read from. 0: the scope has no coverage row, and the zero counts and ratio 0 are not a measurement.
 	GrainCount int `json:"grainCount"`
+	// How the newest days of the grains stand against the window start (the forecast day minus historyWeeks weeks): MEASURED, STALE, or NO_ROWS when grainCount is 0 (see NewestDayState).
+	State NewestDayState `json:"state"`
+	// The oldest of the newest days of the grains the counts are read from. Null when state is NO_ROWS.
+	AsOfDay *graphqldate.Date `json:"asOfDay,omitempty"`
 }
 
 type ThroughputForecast struct {
@@ -1834,19 +1844,26 @@ type ThroughputForecast struct {
 	// The oldest of the newest work-item days that backlogSize is read from. Null when backlogState is NO_ROWS or SUPPLIED.
 	BacklogAsOfDay *graphqldate.Date `json:"backlogAsOfDay,omitempty"`
 	// Why the backlog read is not a healthy measurement: the backlogState value (STALE or NO_ROWS) when the read is stale or found no work-item row; null when backlogState is MEASURED or SUPPLIED.
-	DegradedReason      *string                     `json:"degradedReason,omitempty"`
-	HistoryWeeks        int                         `json:"historyWeeks"`
-	P50Weeks            *int                        `json:"p50Weeks,omitempty"`
-	P75Weeks            *int                        `json:"p75Weeks,omitempty"`
-	P90Weeks            *int                        `json:"p90Weeks,omitempty"`
-	RollingWindows      []ThroughputRollingWindow   `json:"rollingWindows"`
-	PrimaryRisk         *ThroughputRiskOverlay      `json:"primaryRisk"`
-	WipCongestion       *ThroughputRiskOverlay      `json:"wipCongestion"`
-	StaleWip            *ThroughputStaleWip         `json:"staleWip,omitempty"`
-	EstimateCoverage    *ThroughputEstimateCoverage `json:"estimateCoverage,omitempty"`
-	ReviewBottleneck    *ThroughputRiskOverlay      `json:"reviewBottleneck"`
-	IncidentLoad        *ThroughputRiskOverlay      `json:"incidentLoad"`
-	InsufficientHistory bool                        `json:"insufficientHistory"`
+	DegradedReason *string                   `json:"degradedReason,omitempty"`
+	HistoryWeeks   int                       `json:"historyWeeks"`
+	P50Weeks       *int                      `json:"p50Weeks,omitempty"`
+	P75Weeks       *int                      `json:"p75Weeks,omitempty"`
+	P90Weeks       *int                      `json:"p90Weeks,omitempty"`
+	RollingWindows []ThroughputRollingWindow `json:"rollingWindows"`
+	PrimaryRisk    *ThroughputRiskOverlay    `json:"primaryRisk"`
+	// value: the current WIP (the sum of each work-item key's newest row INSIDE the window) over the window's average daily WIP. The current WIP is as of wipCongestionAsOfDay, not as of the forecast day.
+	WipCongestion *ThroughputRiskOverlay `json:"wipCongestion"`
+	// How the current WIP of wipCongestion was read: MEASURED (at least one measured key inside the window) or NO_ROWS (no measured key inside the window, or no throughput history, so the value 0 is not a measurement). Never STALE: the read is bounded to the window (see NewestDayState).
+	WipCongestionState NewestDayState `json:"wipCongestionState"`
+	// The oldest of the keys' newest days inside the window that the current WIP of wipCongestion is read from. Null when wipCongestionState is NO_ROWS.
+	WipCongestionAsOfDay *graphqldate.Date `json:"wipCongestionAsOfDay,omitempty"`
+	// The number of measured work-item keys (provider, work scope, team) the current WIP of wipCongestion sums.
+	WipCongestionGrainCount int                         `json:"wipCongestionGrainCount"`
+	StaleWip                *ThroughputStaleWip         `json:"staleWip,omitempty"`
+	EstimateCoverage        *ThroughputEstimateCoverage `json:"estimateCoverage,omitempty"`
+	ReviewBottleneck        *ThroughputRiskOverlay      `json:"reviewBottleneck"`
+	IncidentLoad            *ThroughputRiskOverlay      `json:"incidentLoad"`
+	InsufficientHistory     bool                        `json:"insufficientHistory"`
 }
 
 type ThroughputForecastInput struct {
@@ -1873,8 +1890,16 @@ type ThroughputRollingWindow struct {
 }
 
 type ThroughputStaleWip struct {
+	// The average wip_age_p50_hours over the keys below, each on its own newest day. Not bounded by the window: a key whose newest day is before the window start counts, and state says so.
 	P50AgeHours *float64 `json:"p50AgeHours,omitempty"`
+	// The average wip_age_p90_hours over the keys below, each on its own newest day. Not bounded by the window: a key whose newest day is before the window start counts, and state says so.
 	P90AgeHours *float64 `json:"p90AgeHours,omitempty"`
+	// How the newest days of the keys stand against the window start (the forecast day minus historyWeeks weeks): MEASURED or STALE (see NewestDayState). Never NO_ROWS: staleWip is null when no key has an age.
+	State NewestDayState `json:"state"`
+	// The oldest of the newest days of the keys the ages are read from.
+	AsOfDay graphqldate.Date `json:"asOfDay"`
+	// The number of work-item keys (provider, work scope, team) whose newest-day ages are averaged.
+	GrainCount int `json:"grainCount"`
 }
 
 type TimeseriesRequestInput struct {
@@ -2618,6 +2643,50 @@ func (e *MeasureInput) UnmarshalGQL(v any) error {
 }
 
 func (e MeasureInput) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+// How a value read from each key's newest day stands against the request window. A key is (provider, work scope, team), and each key gives its OWN newest day, not one day for the whole scope. MEASURED: the newest day of every key the value is read from is on or after the window start. STALE: the newest day of at least one key is before the window start; the value still holds that key's row, and the asOfDay field beside the state names the oldest of the newest days. NO_ROWS: no key was read, so a 0 is not a measured zero.
+type NewestDayState string
+
+const (
+	NewestDayStateMeasured NewestDayState = "MEASURED"
+	NewestDayStateStale    NewestDayState = "STALE"
+	NewestDayStateNoRows   NewestDayState = "NO_ROWS"
+)
+
+var AllNewestDayState = []NewestDayState{
+	NewestDayStateMeasured,
+	NewestDayStateStale,
+	NewestDayStateNoRows,
+}
+
+func (e NewestDayState) IsValid() bool {
+	switch e {
+	case NewestDayStateMeasured, NewestDayStateStale, NewestDayStateNoRows:
+		return true
+	}
+	return false
+}
+
+func (e NewestDayState) String() string {
+	return string(e)
+}
+
+func (e *NewestDayState) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = NewestDayState(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid NewestDayState", str)
+	}
+	return nil
+}
+
+func (e NewestDayState) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }
 

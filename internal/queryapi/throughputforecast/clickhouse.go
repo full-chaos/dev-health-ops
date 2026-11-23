@@ -26,6 +26,37 @@ import (
 // and it adds 0 to a sum and no value to a Nullable mean.
 var measuredWorkItem = liverow.Predicate("work_item_metrics_daily", "newest")
 
+// measuredCurrentWorkItem is the same rule on the newest row of each key that the current WIP sums: a key whose newest
+// row is a retraction adds 0 there and is not a measured key of the current WIP (CHAOS-7508).
+var measuredCurrentWorkItem = liverow.Predicate("work_item_metrics_daily", "current_newest")
+
+// newestDayRead says how the newest days of the keys a value is read from stand against the window start
+// (CHAOS-7508): the state, the oldest of the newest days (nil for NO_ROWS) and the number of keys.
+type newestDayRead struct {
+	state   model.NewestDayState
+	asOfDay *time.Time
+	grains  int
+}
+
+// newNewestDayRead maps the counts a read returns: no key is NO_ROWS (the min of no day is the epoch and is never
+// served), a key whose newest day is before the window start makes the read STALE, else it is MEASURED.
+func newNewestDayRead(column string, grains, staleGrains uint64, oldestDay time.Time) (newestDayRead, error) {
+	count, err := countFromAggregate(column, grains)
+	if err != nil {
+		return newestDayRead{}, err
+	}
+	if grains == 0 {
+		return newestDayRead{state: model.NewestDayStateNoRows}, nil
+	}
+	read := newestDayRead{state: model.NewestDayStateMeasured, grains: count}
+	if staleGrains > 0 {
+		read.state = model.NewestDayStateStale
+	}
+	day := oldestDay.UTC()
+	read.asOfDay = &day
+	return read, nil
+}
+
 // The newest version of a key is the one with the newest computed_at, then the highest hash of the version's values, so
 // two versions that share a computed_at serve one of them whatever the scan order. Each table has ONE order key, the
 // same columns in the same order as the operating review reads of that table, so the pages serve the same version of a
@@ -251,10 +282,12 @@ func loadThroughputHistory(
 // those into ONE wip figure per day, and only then does the outer level average
 // across days and pick the latest day's value. Collapsing any level changes
 // what "average WIP" means -- a two-level form averages partitions, not days.
+//
+// It also says which day the current WIP is as of (CHAOS-7508): the oldest newest day of the measured keys it sums.
 func loadWorkItemOverlay(
 	ctx context.Context, client QueryClient, orgID string,
 	teamIDs []string, workScopeID *string, historyWeeks int, today time.Time,
-) (float64, float64, error) {
+) (float64, float64, newestDayRead, error) {
 	conditions, bindings := workItemScopeFilter(orgID, teamIDs, workScopeID)
 	conditions = append([]string{"day >= {start_date:Date}"}, conditions...)
 	bindings = append(bindings, clickhouse.Binding{
@@ -267,7 +300,7 @@ func loadWorkItemOverlay(
 	// (CHAOS-8498); one maximum day over the team set dropped a team whose
 	// newest day was older. average_wip keeps the per-day sums.
 	query := fmt.Sprintf(`
-        SELECT average_wip, current_wip
+        SELECT average_wip, current_wip, current_keys, current_oldest_day
         FROM (
             SELECT avg(wip_count_end_of_day) AS average_wip
             FROM (
@@ -290,7 +323,10 @@ func loadWorkItemOverlay(
             )
         ) AS average_part
         CROSS JOIN (
-            SELECT sum(wip_count_end_of_day) AS current_wip
+            SELECT
+                sum(wip_count_end_of_day) AS current_wip,
+                countIf(%s) AS current_keys,
+                minIf(day, %s) AS current_oldest_day
             FROM (
                 SELECT
                     day,
@@ -302,14 +338,15 @@ func loadWorkItemOverlay(
                 WHERE %s
                   AND %s
                 GROUP BY day, provider, work_scope_id, team_id, row_view
-            )
+            ) AS current_newest
         ) AS current_part
     `, workItemSource(teamIDs, where, false), where, measuredWorkItem,
+		measuredCurrentWorkItem, measuredCurrentWorkItem,
 		newestDaySource, where, newestrow.PerTeamPredicate(newestDaySource, where))
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
-		return 0, 0, fmt.Errorf("throughputForecast: work item overlay query: %w", err)
+		return 0, 0, newestDayRead{}, fmt.Errorf("throughputForecast: work item overlay query: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -318,21 +355,27 @@ func loadWorkItemOverlay(
 	// error. An aggregate with no GROUP BY returns exactly one row, so this
 	// branch is defensive on both sides.
 	var averageWIP float64
-	var currentWIP uint64
+	var currentWIP, currentKeys uint64
+	var currentOldestDay time.Time
 	if rows.Next() {
-		if scanErr := rows.Scan(&averageWIP, &currentWIP); scanErr != nil {
-			return 0, 0, fmt.Errorf("throughputForecast: work item overlay scan: %w", scanErr)
+		if scanErr := rows.Scan(&averageWIP, &currentWIP, &currentKeys, &currentOldestDay); scanErr != nil {
+			return 0, 0, newestDayRead{}, fmt.Errorf("throughputForecast: work item overlay scan: %w", scanErr)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return 0, 0, fmt.Errorf("throughputForecast: work item overlay rows: %w", err)
+		return 0, 0, newestDayRead{}, fmt.Errorf("throughputForecast: work item overlay rows: %w", err)
+	}
+	// The read is bounded to the window, so no key can be stale: the window start is passed as no bound at all.
+	current, err := newNewestDayRead("current_keys", currentKeys, 0, currentOldestDay)
+	if err != nil {
+		return 0, 0, newestDayRead{}, err
 	}
 
 	// avg() over an empty set is NaN in ClickHouse, and Python keeps it: `nan
 	// or 0.0` evaluates to nan, because nan is truthy. Kept here too -- the
 	// ratio guard downstream (`averageWIP > 0`) is false for NaN, so both sides
 	// reach the same 0.0 ratio by the same route.
-	return float64(currentWIP), averageWIP, nil
+	return float64(currentWIP), averageWIP, current, nil
 }
 
 // loadStaleWIP ports _load_stale_wip.
@@ -343,13 +386,17 @@ func loadWorkItemOverlay(
 // wip_age_p50_hours and wip_age_p90_hours are Nullable(Float64) on
 // work_item_metrics_daily; both are tuple-wrapped so argMax cannot skip
 // the latest day's row when either carries NULL.
+//
+// The read has no window bound (CHAOS-7508): it also says how the newest days of the keys it averages stand against
+// the window start and which is the oldest of them.
 func loadStaleWIP(
 	ctx context.Context, client QueryClient, orgID string,
-	teamIDs []string, workScopeID *string,
-) (*float64, *float64, error) {
+	teamIDs []string, workScopeID *string, historyWeeks int, today time.Time,
+) (*float64, *float64, newestDayRead, error) {
 	conditions, bindings := workItemScopeFilter(orgID, teamIDs, workScopeID)
 	where := strings.Join(conditions, " AND ")
 	source := workItemSource(teamIDs, where, true)
+	bindings = append(bindings, clickhouse.Binding{Name: "start_date", Value: startDate(today, historyWeeks)})
 
 	// The same predicate appears twice on purpose: the subquery finds the
 	// latest day WITHIN THIS SCOPE, and the outer filter selects that scope's
@@ -359,12 +406,16 @@ func loadStaleWIP(
 	query := fmt.Sprintf(`
         SELECT
             avg(wip_age_p50_hours) AS p50_age_hours,
-            avg(wip_age_p90_hours) AS p90_age_hours
+            avg(wip_age_p90_hours) AS p90_age_hours,
+            count() AS grains,
+            countIf(newest_day < {start_date:Date}) AS stale_grains,
+            min(newest_day) AS oldest_day
         FROM (
             SELECT
                 provider,
                 work_scope_id,
                 team_id,
+                max(day) AS newest_day,
                 `+workItemNewestColumns+`
             FROM %s
             WHERE %s
@@ -376,20 +427,26 @@ func loadStaleWIP(
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
-		return nil, nil, fmt.Errorf("throughputForecast: stale wip query: %w", err)
+		return nil, nil, newestDayRead{}, fmt.Errorf("throughputForecast: stale wip query: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	var p50, p90 *float64
+	var grains, staleGrains uint64
+	var oldestDay time.Time
 	if rows.Next() {
-		if scanErr := rows.Scan(&p50, &p90); scanErr != nil {
-			return nil, nil, fmt.Errorf("throughputForecast: stale wip scan: %w", scanErr)
+		if scanErr := rows.Scan(&p50, &p90, &grains, &staleGrains, &oldestDay); scanErr != nil {
+			return nil, nil, newestDayRead{}, fmt.Errorf("throughputForecast: stale wip scan: %w", scanErr)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("throughputForecast: stale wip rows: %w", err)
+		return nil, nil, newestDayRead{}, fmt.Errorf("throughputForecast: stale wip rows: %w", err)
 	}
-	return p50, p90, nil
+	read, err := newNewestDayRead("stale wip grains", grains, staleGrains, oldestDay)
+	if err != nil {
+		return nil, nil, newestDayRead{}, err
+	}
+	return p50, p90, read, nil
 }
 
 // estimateCoverage is _load_estimate_coverage's result before it becomes a
@@ -400,6 +457,8 @@ type estimateCoverage struct {
 	unestimatedCount int
 	backlogSize      int
 	grainCount       int
+	// newest is how the newest days of the grains stand against the window start (CHAOS-7508).
+	newest newestDayRead
 }
 
 // loadEstimateCoverage ports _load_estimate_coverage.
@@ -417,24 +476,31 @@ type estimateCoverage struct {
 // defect. Recorded here rather than silently carried: if the quirk is ever
 // worth fixing it must be fixed on BOTH sides, in its own change, with the
 // row-count difference measured first.
+//
+// The read has no window bound and each grain gives its own newest day (CHAOS-7508): it also says how those days
+// stand against the window start and which is the oldest of them.
 func loadEstimateCoverage(
 	ctx context.Context, client QueryClient, orgID string,
-	teamIDs []string, workScopeID *string,
+	teamIDs []string, workScopeID *string, historyWeeks int, today time.Time,
 ) (*estimateCoverage, error) {
 	conditions, bindings := scopeFilter(orgID, teamIDs, workScopeID)
 	where := strings.Join(conditions, " AND ")
+	bindings = append(bindings, clickhouse.Binding{Name: "start_date", Value: startDate(today, historyWeeks)})
 
 	query := fmt.Sprintf(`
         SELECT
             sum(estimated_count) AS estimated_count,
             sum(unestimated_count) AS unestimated_count,
             sum(backlog_size) AS backlog_size,
-            count() AS grains
+            count() AS grains,
+            countIf(newest_day < {start_date:Date}) AS stale_grains,
+            min(newest_day) AS oldest_day
         FROM (
             SELECT
                 provider,
                 work_scope_id,
                 team_id,
+                max(day) AS newest_day,
                 argMax(
                     tuple(estimate_coverage_metrics_daily.estimated_count, estimate_coverage_metrics_daily.unestimated_count, estimate_coverage_metrics_daily.backlog_size),
                     (estimate_coverage_metrics_daily.computed_at, cityHash64(tuple(
@@ -456,10 +522,11 @@ func loadEstimateCoverage(
 	}
 	defer func() { _ = rows.Close() }()
 
-	var estimated, unestimated, backlog, grains uint64
+	var estimated, unestimated, backlog, grains, staleGrains uint64
+	var oldestDay time.Time
 	seen := false
 	if rows.Next() {
-		if scanErr := rows.Scan(&estimated, &unestimated, &backlog, &grains); scanErr != nil {
+		if scanErr := rows.Scan(&estimated, &unestimated, &backlog, &grains, &staleGrains, &oldestDay); scanErr != nil {
 			return nil, fmt.Errorf("throughputForecast: estimate coverage scan: %w", scanErr)
 		}
 		seen = true
@@ -475,7 +542,7 @@ func loadEstimateCoverage(
 	// ratio below.
 	if !seen || grains == 0 {
 		zero := 0.0
-		return &estimateCoverage{ratio: &zero}, nil
+		return &estimateCoverage{ratio: &zero, newest: newestDayRead{state: model.NewestDayStateNoRows}}, nil
 	}
 
 	estimatedCount, err := countFromAggregate("estimated_count", estimated)
@@ -495,6 +562,10 @@ func loadEstimateCoverage(
 	if err != nil {
 		return nil, err
 	}
+	newest, err := newNewestDayRead("grains", grains, staleGrains, oldestDay)
+	if err != nil {
+		return nil, err
+	}
 
 	// `ratio = estimated / backlog if backlog else None` -- a FALSY check, so a
 	// backlog of zero yields a null ratio rather than a division by zero. The
@@ -511,6 +582,7 @@ func loadEstimateCoverage(
 		unestimatedCount: unestimatedCount,
 		backlogSize:      backlogSize,
 		grainCount:       grainCount,
+		newest:           newest,
 	}, nil
 }
 

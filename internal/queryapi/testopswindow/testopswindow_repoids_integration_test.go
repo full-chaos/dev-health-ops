@@ -4,6 +4,7 @@ package testopswindow
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,6 +140,54 @@ func TestRealClickHouse_TestWindowRepoIdsMatch(t *testing.T) {
 		}
 		if got.Coverage.CompletedRuns != 4 || caseTotal(got) != 50 {
 			t.Errorf("an id with no catalog row: %d completed runs, %d cases, want its own: 4 and 50", got.Coverage.CompletedRuns, caseTotal(got))
+		}
+	})
+
+	t.Run("an id or a name of another organization never selects from this one", func(t *testing.T) {
+		const org, other = "org-own", "org-other"
+		repo(org, repoA, "acme/a", t1)
+		repo(other, repoB, "acme/b", t1)
+		repo(other, repoC, "acme/a", t1) // the same name in the other organization
+		seed(org, repoA, 2, 100)
+		seed(other, repoB, 3, 7)
+		seed(other, repoC, 4, 50)
+		for name, ids := range map[string][]string{"name of the other org": {"acme/b"}, "id of the other org": {repoB, repoC}} {
+			got, err := Resolve(ctx, client, org, since, until, Scope{RepoIDs: ids})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Coverage.CompletedRuns != 0 || caseTotal(got) != 0 {
+				t.Errorf("%s: %d completed runs, %d cases, want an empty answer", name, got.Coverage.CompletedRuns, caseTotal(got))
+			}
+		}
+		same, err := Resolve(ctx, client, org, since, until, Scope{RepoIDs: []string{"acme/a"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if same.Coverage.CompletedRuns != 2 || caseTotal(same) != 100 {
+			t.Errorf("a name both organizations hold: %d completed runs, %d cases, want this organization's own: 2 and 100", same.Coverage.CompletedRuns, caseTotal(same))
+		}
+	})
+
+	t.Run("a blank entry beside an id drops out; an id is matched as sent, so an upper-case UUID selects nothing", func(t *testing.T) {
+		const org = "org-mixed"
+		repo(org, repoA, "acme/a", t1)
+		repo(org, repoB, "acme/b", t1)
+		seed(org, repoA, 2, 100)
+		seed(org, repoB, 3, 7)
+		mixed, err := Resolve(ctx, client, org, since, until, Scope{RepoIDs: []string{"", repoB}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mixed.Coverage.CompletedRuns != 3 || caseTotal(mixed) != 7 {
+			t.Errorf("blank and an id: %d completed runs, %d cases, want only that repository: 3 and 7", mixed.Coverage.CompletedRuns, caseTotal(mixed))
+		}
+		upper, err := Resolve(ctx, client, org, since, until, Scope{RepoIDs: []string{strings.ToUpper(repoB)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if upper.Coverage.CompletedRuns != 0 || caseTotal(upper) != 0 {
+			t.Errorf("an upper-case id: %d completed runs, %d cases; ids are matched as sent (exact text), so want an empty answer", upper.Coverage.CompletedRuns, caseTotal(upper))
 		}
 	})
 }

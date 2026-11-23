@@ -143,4 +143,52 @@ func TestRealClickHouse_JobFailuresRepoIdsMatch(t *testing.T) {
 			t.Errorf("an id with no catalog row: groups %q, want its own: job-of-c", names)
 		}
 	})
+
+	t.Run("an id or a name of another organization never selects from this one", func(t *testing.T) {
+		const org, other = "org-own", "org-other"
+		repo(org, repoA, "acme/a", t1)
+		repo(other, repoB, "acme/b", t1)
+		repo(other, repoC, "acme/a", t1) // the same name in the other organization
+		seed(org, repoA, "job-of-a")
+		seed(other, repoB, "job-of-b")
+		seed(other, repoC, "job-of-c")
+		for name, ids := range map[string][]string{"name of the other org": {"acme/b"}, "id of the other org": {repoB, repoC}} {
+			got, err := Resolve(ctx, client, org, since, until, Scope{RepoIDs: ids}, 20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if names := jobNames(got.Groups); names != "" {
+				t.Errorf("%s: groups %q, want an empty answer", name, names)
+			}
+		}
+		same, err := Resolve(ctx, client, org, since, until, Scope{RepoIDs: []string{"acme/a"}}, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if names := jobNames(same.Groups); names != "job-of-a" {
+			t.Errorf("a name both organizations hold: groups %q, want this organization's own: job-of-a", names)
+		}
+	})
+
+	t.Run("a blank entry beside an id drops out; an id is matched as sent, so an upper-case UUID selects nothing", func(t *testing.T) {
+		const org = "org-mixed"
+		repo(org, repoA, "acme/a", t1)
+		repo(org, repoB, "acme/b", t1)
+		seed(org, repoA, "job-of-a")
+		seed(org, repoB, "job-of-b")
+		mixed, err := Resolve(ctx, client, org, since, until, Scope{RepoIDs: []string{"", repoB}}, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if names := jobNames(mixed.Groups); names != "job-of-b" {
+			t.Errorf("blank and an id: groups %q, want only that repository: job-of-b", names)
+		}
+		upper, err := Resolve(ctx, client, org, since, until, Scope{RepoIDs: []string{strings.ToUpper(repoB)}}, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if names := jobNames(upper.Groups); names != "" {
+			t.Errorf("an upper-case id: groups %q; ids are matched as sent (exact text), so want an empty answer", names)
+		}
+	})
 }

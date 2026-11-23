@@ -477,13 +477,13 @@ VALUES ($1::uuid, $2::uuid, $3::date, $4, $5, $6, $7::uuid, $8::timestamptz, $9:
 	results = read("canceled")
 	formExecDaily14190Want(t, "canceled D2", results["D2"], 0, map[string]string{"failed": "1", "open": "0"})
 	remove(11)
-	exec(`UPDATE daily_metrics_runs SET generation = generation || '-moved' WHERE generation = $1`, generation)
+	exec(`UPDATE daily_metrics_runs SET generation = 'moved:' || generation WHERE generation = $1`, generation)
 	results = read("no rows")
 	formExecDaily14190Want(t, "no rows D2", results["D2"], 0, map[string]string{"total": "0"})
 	if wantPass(results) {
 		t.Errorf("no rows: the control passed")
 	}
-	exec(`UPDATE daily_metrics_runs SET generation = $1 WHERE generation = $1 || '-moved'`, generation)
+	exec(`UPDATE daily_metrics_runs SET generation = $1 WHERE generation = 'moved:' || $1`, generation)
 	exec(`INSERT INTO organizations (id, slug, name, tier, is_active, created_at, updated_at)
 VALUES ($1::uuid, 'org-second', 'org', 'enterprise', true, now(), now())`, formExecDaily14190OrgPrefix+"-1419-4000-8000-0000000000a9")
 	results = read("two orgs")

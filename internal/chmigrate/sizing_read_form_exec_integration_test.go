@@ -18,24 +18,29 @@ import (
 )
 
 // Throwaway exec proof of a prod read form: not for merge. sizingForm is the form file byte for byte.
-const sizingFormSHA256 = "f38fec483020d4c1a1edc0ef9f233a4ff85299b3266e0f2646c098a6d7f3fd01"
+// The cost gate cap literals of the form (30M rows, 4 GiB on disk).
+const (
+	rowsCap  = "> 30000000"
+	bytesCap = "> 4294967296"
+)
 
-const sizingForm = `-- SIZING-13902-3 = SIZING-13902-2 (8f6b03b41cce, acp FORM copy) + cost gate + roll time, lane l13902-form3, 2026-11-23.
--- Prod: NOT EXECUTED. Executed once on CI (synthetic rows, schema at the chain head): EXEC-PROOF-13902-3.md.
--- Edits vs -2 (the -2 header edits E1-E9 stay, see that file):
---   G1 New stmt S0 first = cost gate: active parts of the 3 read tables from system.parts (rows, bytes on disk, parts).
---      Each later statement has a WANT read_rows bound from the S0 rows and a STOP-before rule (SIZING-13902-3.md).
---      No settings clause and no set statement anywhere: the gate is a read plus WANT lines, not a setting.
---   G2 {{ROLL_END_UTC}} filled = '2026-11-23 02:58:22' = creation time of the FIRST new-image worker pod of STEP 323
---      (RECORD 8ff7c60b985f, workers at ops 340c3e05, which carries the fix 9d88395188e6, rollout end 03:05:21Z).
---      Reason: an old-rule row is only a row computed BEFORE the first possible new-image write. A row computed in the
---      rollout window (02:58:22-03:05:21Z) can come from a new pod, so it counts as move_after_roll, never as old_checked.
---   G3 Every derived table has an alias (stmt1 cicd_keys / testops_keys, stmt3 run_rows). No alias equals an input
---      column name of its own SELECT (S0 reads rows / bytes_on_disk and names them table_rows / disk_bytes).
---   G4 stmt4 (raw span) removed: not needed for the pm ruling (ADDENDUM-1: stmt 2/3 decide).
--- Run rule: each statement once, in order. A SQL error = STOP. A STOP rule or a read_rows WANT miss = STOP (acp reads).
+const sizingFormSHA256 = "706d1c5d4de6737e2ea24faec8e28b482db70423d5183083de1f7b774fc394d2"
 
--- S0 COST GATE. WANT 3 rows (one per table), table_rows > 0 in each. Unit: all orgs (upper bound for the org reads).
+const sizingForm = `-- SIZING-13902-4 = SIZING-13902-3 (f38fec483020) + an engine cost gate in each heavy statement, lane l13902-form4, 2026-11-23.
+-- Prod: NOT EXECUTED. Executed once on CI (synthetic rows, schema at the chain head): EXEC-PROOF-13902-4.md.
+-- Edits vs -3 (the -3 edits G1-G4 and the -2 edits E1-E9 stay, see those files):
+--   H1 (acp P2-1) stmt0, stmt1, stmt2 and stmt3 each start with WITH (SELECT throwIf(...)) AS cost_gate. The gate sums the
+--      active-part rows and bytes on disk (system.parts) of the tables THAT statement reads, and throws 'STOP-COST-GATE'
+--      over 30M rows or over 4 GiB. It is a scalar subquery: the engine runs it once, at query analysis, before any table
+--      read of the statement (a bare throwIf term in a WHERE is not constant-folded and runs per block at execution).
+--      stmt0 uses cost_gate inside each of its scalar subqueries (they also run at analysis, so the gate must come first);
+--      stmt1 to stmt3 use it in the outer WHERE. The gate reads only system.parts (metadata) and system.one.
+--   H2 S0 stays INFO: R, B, P per table = the inputs of the read_rows WANT (SIZING-13902-4.md). The stop is the gate (H1).
+--   H3 (acp P3-1) STOP before stmt2 and stmt3 when stmt1 live_repo_days is over 5M in either row (the JOIN memory).
+-- Run rule: each statement once, in order. A SQL error (STOP-COST-GATE included) = STOP. A timeout (30 s) = STOP, no re-run.
+-- A STOP rule or a read_rows WANT miss = STOP (acp reads).
+
+-- S0 INFO cost inputs. WANT 3 rows (one per table), table_rows > 0 in each. Unit: all orgs (upper bound for the org reads).
 SELECT table, sum(rows) AS table_rows, sum(bytes_on_disk) AS disk_bytes, count() AS active_parts
 FROM system.parts
 WHERE active AND database = currentDatabase()
@@ -43,27 +48,47 @@ WHERE active AND database = currentDatabase()
 GROUP BY table
 ORDER BY table;
 
--- stmt0 ORG-1. WANT raw_orgs = 1, cicd_orgs = 1, testops_orgs = 1
+-- stmt0 ORG-1. WANT raw_orgs = 1, cicd_orgs = 1, testops_orgs = 1. Gate tables: raw + cicd + testops.
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('ci_pipeline_runs', 'cicd_metrics_daily', 'testops_pipeline_metrics_daily')) > 30000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('ci_pipeline_runs', 'cicd_metrics_daily', 'testops_pipeline_metrics_daily')) > 4294967296,
+    'STOP-COST-GATE')) AS cost_gate
 SELECT
-  (SELECT uniqExact(org_id) FROM ci_pipeline_runs WHERE startsWith(org_id, 'c6a38355')) AS raw_orgs,
-  (SELECT uniqExact(org_id) FROM cicd_metrics_daily WHERE startsWith(org_id, 'c6a38355')) AS cicd_orgs,
-  (SELECT uniqExact(org_id) FROM testops_pipeline_metrics_daily WHERE startsWith(org_id, 'c6a38355')) AS testops_orgs;
+  (SELECT uniqExact(org_id) FROM ci_pipeline_runs WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) AS raw_orgs,
+  (SELECT uniqExact(org_id) FROM cicd_metrics_daily WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) AS cicd_orgs,
+  (SELECT uniqExact(org_id) FROM testops_pipeline_metrics_daily WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0) AS testops_orgs;
 
--- stmt1 RANGE of the stored live repo-days (= queue-table rows a full-range recompute rewrites).
--- WANT live_repo_days > 0 in both rows. INFO first_day, last_day, days.
+-- stmt1 RANGE of the stored live repo-days (= queue-table rows a full-range recompute rewrites). Gate tables: cicd + testops.
+-- WANT live_repo_days > 0 in both rows. STOP before stmt2/3 when live_repo_days is over 5M in either row. INFO first_day,
+-- last_day, days. The gate sits in the first branch: the engine analyzes the whole UNION ALL before it reads a table.
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('cicd_metrics_daily', 'testops_pipeline_metrics_daily')) > 30000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('cicd_metrics_daily', 'testops_pipeline_metrics_daily')) > 4294967296,
+    'STOP-COST-GATE')) AS cost_gate
 SELECT 'cicd' AS t, count() AS live_repo_days, min(day) AS first_day, max(day) AS last_day, uniqExact(day) AS days
 FROM (SELECT repo_id, day, argMax(retracted, computed_at) AS r FROM cicd_metrics_daily
-      WHERE startsWith(org_id, 'c6a38355') GROUP BY repo_id, day) AS cicd_keys WHERE r = 0
+      WHERE startsWith(org_id, 'c6a38355') GROUP BY repo_id, day) AS cicd_keys WHERE r = 0 AND cost_gate = 0
 UNION ALL
 SELECT 'testops' AS t, count() AS live_repo_days, min(day) AS first_day, max(day) AS last_day, uniqExact(day) AS days
 FROM (SELECT repo_id, day, argMax(retracted, computed_at) AS r FROM testops_pipeline_metrics_daily
       WHERE startsWith(org_id, 'c6a38355') GROUP BY repo_id, day) AS testops_keys WHERE r = 0;
 
 -- stmt2 CICD. Raw = the cicd source (cicd/clickhouse.go:51-57): finished_at day, status not deleted, not running/queued.
+-- Gate tables: raw + cicd. Run only if stmt1 live_repo_days is 5M or less in both rows.
 -- WANT live_repo_days > 0, with_raw > 0, ctrl_checked > 0, ctrl_match = ctrl_checked.
 -- WANT no_raw = 0 (a live key with no raw run gets a RETRACTION row at recompute, cicd/fence.go:66-69, :84-93).
 -- WANT move_repo_days >= 1 (0 = NOT EXERCISED for cicd). WANT old_match = old_checked (a miss = acp reads).
 -- INFO value_move (stored values that change), to_null, move_days, first/last, move_after_roll, move_raw_changed.
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('ci_pipeline_runs', 'cicd_metrics_daily')) > 30000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('ci_pipeline_runs', 'cicd_metrics_daily')) > 4294967296,
+    'STOP-COST-GATE')) AS cost_gate
 SELECT count() AS live_repo_days, countIf(ifNull(raw.runs, 0) > 0) AS with_raw,
   countIf(ifNull(raw.runs, 0) = 0) AS no_raw,
   minIf(s.day, ifNull(raw.runs, 0) = 0) AS no_raw_first_day, maxIf(s.day, ifNull(raw.runs, 0) = 0) AS no_raw_last_day,
@@ -96,11 +121,18 @@ LEFT JOIN (
     AND lowerUTF8(trimBoth(ifNull(status, ''))) NOT IN ('deleted', 'running', 'queued')
   GROUP BY repo_id, day
 ) AS raw ON raw.repo_id = s.repo_id AND raw.day = s.day
-WHERE s.r = 0;
+WHERE s.r = 0 AND cost_gate = 0;
 
 -- stmt3 TESTOPS. Raw = the testops pipeline source (testops_native_clickhouse.go:126-130): started_at day, status not deleted.
 -- Old sample = the raw arm text before the fix (queryapi/testopspooled/testopspooled.go:100-101 minus the retry_count guard).
+-- Gate tables: raw + testops. Run only if stmt1 live_repo_days is 5M or less in both rows.
 -- WANT / INFO: as stmt2 (no_raw keys are retired by supersedeStaleTeamKeys, testops_native_executor.go:169-185).
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('ci_pipeline_runs', 'testops_pipeline_metrics_daily')) > 30000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase()
+      AND table IN ('ci_pipeline_runs', 'testops_pipeline_metrics_daily')) > 4294967296,
+    'STOP-COST-GATE')) AS cost_gate
 SELECT count() AS live_repo_days, countIf(ifNull(raw.runs, 0) > 0) AS with_raw,
   countIf(ifNull(raw.runs, 0) = 0) AS no_raw,
   minIf(s.day, ifNull(raw.runs, 0) = 0) AS no_raw_first_day, maxIf(s.day, ifNull(raw.runs, 0) = 0) AS no_raw_last_day,
@@ -134,7 +166,7 @@ LEFT JOIN (
   ) AS run_rows
   GROUP BY repo_id, day
 ) AS raw ON raw.repo_id = s.repo_id AND raw.day = s.day
-WHERE s.r = 0;
+WHERE s.r = 0 AND cost_gate = 0;
 `
 
 // Synthetic rows. Org c6a38355-0000-..., other org b0000000-0000-... (filter control). Merges are stopped and each
@@ -242,6 +274,35 @@ func TestSizingReadFormExecutesAtTheChainHead(t *testing.T) {
 	if strings.Join(labels, ",") != "S0,stmt0,stmt1,stmt2,stmt3" {
 		t.Fatalf("form statements = %v", labels)
 	}
+	reads := map[string][]string{
+		"stmt0": {"ci_pipeline_runs", "cicd_metrics_daily", "testops_pipeline_metrics_daily"},
+		"stmt1": {"cicd_metrics_daily", "testops_pipeline_metrics_daily"},
+		"stmt2": {"ci_pipeline_runs", "cicd_metrics_daily"},
+		"stmt3": {"ci_pipeline_runs", "testops_pipeline_metrics_daily"},
+	}
+	// Each heavy statement holds exactly one gate (one rows cap, one bytes cap) over exactly the tables it reads.
+	for _, s := range statements {
+		wantCaps := 1
+		if s.label == "S0" {
+			wantCaps = 0
+		}
+		if n := strings.Count(s.text, rowsCap); n != wantCaps {
+			t.Fatalf("%s: %d rows caps %q, want %d", s.label, n, rowsCap, wantCaps)
+		}
+		if n := strings.Count(s.text, bytesCap); n != wantCaps {
+			t.Fatalf("%s: %d bytes caps %q, want %d", s.label, n, bytesCap, wantCaps)
+		}
+		if s.label == "S0" {
+			continue
+		}
+		in := "table IN ('" + strings.Join(reads[s.label], "', '") + "')"
+		if n := strings.Count(s.text, in); n != 2 {
+			t.Fatalf("%s: gate table list %s found %d times, want 2", s.label, in, n)
+		}
+		if n := strings.Count(s.text, "'STOP-COST-GATE'"); n != 1 {
+			t.Fatalf("%s: %d STOP-COST-GATE throwIf, want 1", s.label, n)
+		}
+	}
 
 	scratch := scratchDatabase(t)
 	conn := openDatabase(t, scratch.URI, "")
@@ -316,14 +377,9 @@ func TestSizingReadFormExecutesAtTheChainHead(t *testing.T) {
 	}
 	want["stmt2"] = []map[string]string{moveWant}
 	want["stmt3"] = []map[string]string{moveWant}
-	reads := map[string][]string{
-		"stmt0": {"ci_pipeline_runs", "cicd_metrics_daily", "testops_pipeline_metrics_daily"},
-		"stmt1": {"cicd_metrics_daily", "testops_pipeline_metrics_daily"},
-		"stmt2": {"cicd_metrics_daily", "ci_pipeline_runs"},
-		"stmt3": {"testops_pipeline_metrics_daily", "ci_pipeline_runs"},
-	}
 
 	tableRows := map[string]uint64{}
+	tableParts := map[string]uint64{}
 	for _, statement := range statements {
 		var readRows uint64
 		qctx := clickhouse.Context(ctx, clickhouse.WithProgress(func(p *clickhouse.Progress) { readRows += p.Rows }))
@@ -366,18 +422,26 @@ func TestSizingReadFormExecutesAtTheChainHead(t *testing.T) {
 					t.Fatalf("S0: table %s table_rows %q, want > 0", row["table"], row["table_rows"])
 				}
 				tableRows[row["table"]] = n
+				var p uint64
+				if _, err := fmt.Sscan(row["active_parts"], &p); err != nil || p == 0 {
+					t.Fatalf("S0: table %s active_parts %q, want > 0", row["table"], row["active_parts"])
+				}
+				tableParts[row["table"]] = p
 			}
 			t.Logf("S0 read_rows=%d", readRows)
 			continue
 		}
 
-		var bound uint64
+		// md WANT: read_rows <= 1.1 x G + 2 x P + 2 (the gate lists P parts twice, plus one-row system.one reads).
+		var g, p uint64
 		for _, table := range reads[statement.label] {
-			bound += tableRows[table]
+			g += tableRows[table]
+			p += tableParts[table]
 		}
-		t.Logf("%s read_rows=%d gate_rows=%d ratio=%.2f", statement.label, readRows, bound, float64(readRows)/float64(bound))
-		if readRows > 2*bound {
-			t.Errorf("%s: read_rows %d over 2x the S0 rows %d of its tables", statement.label, readRows, bound)
+		limit := 1.1*float64(g) + 2*float64(p) + 2
+		t.Logf("%s read_rows=%d gate_rows=%d gate_parts=%d limit=%.1f ratio=%.2f", statement.label, readRows, g, p, limit, float64(readRows)/float64(g))
+		if 10*readRows > 11*g+20*p+20 {
+			t.Errorf("%s: read_rows %d over 1.1 x G + 2 x P + 2 = %.1f (G=%d P=%d)", statement.label, readRows, limit, g, p)
 		}
 
 		expected := want[statement.label]
@@ -400,5 +464,65 @@ func TestSizingReadFormExecutesAtTheChainHead(t *testing.T) {
 				}
 			}
 		}
+	}
+
+	// Gate fires: each heavy statement with ONE cap literal lowered to 0 (rest byte for byte) must stop with
+	// STOP-COST-GATE, and the query log must type it ExceptionBeforeStart (stopped at analysis, before any table read).
+	type fired struct{ label, cap, comment string }
+	var fires []fired
+	for _, statement := range statements[1:] {
+		for _, c := range []struct{ name, literal string }{{"rows", rowsCap}, {"bytes", bytesCap}} {
+			lowered := strings.Replace(statement.text, c.literal, "> 0", 1)
+			comment := fmt.Sprintf("sizing13902-gate-%s-%s-%d", statement.label, c.name, time.Now().UnixNano())
+			var readRows uint64
+			qctx := clickhouse.Context(ctx,
+				clickhouse.WithSettings(clickhouse.Settings{"log_comment": comment}),
+				clickhouse.WithProgress(func(p *clickhouse.Progress) { readRows += p.Rows }))
+			rows, err := conn.Query(qctx, lowered)
+			if err == nil {
+				for rows.Next() {
+				}
+				err = rows.Err()
+				_ = rows.Close()
+			}
+			if err == nil || !strings.Contains(err.Error(), "STOP-COST-GATE") {
+				t.Errorf("GATE %s %s cap lowered: err = %v, want STOP-COST-GATE", statement.label, c.name, err)
+				continue
+			}
+			t.Logf("GATE %s %s cap lowered: fired, client read_rows=%d, error: %s", statement.label, c.name, readRows, strings.SplitN(err.Error(), "\n", 2)[0])
+			fires = append(fires, fired{statement.label, c.name, comment})
+		}
+	}
+	if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
+		t.Fatalf("the query log is not readable by this user: %v", err)
+	}
+	for _, f := range fires {
+		var types []string
+		var logRead uint64
+		rows, err := conn.Query(ctx, `SELECT toString(type), read_rows FROM system.query_log
+			WHERE log_comment = ? AND type != 'QueryStart' ORDER BY event_time_microseconds`, f.comment)
+		if err != nil {
+			t.Fatalf("GATE %s %s: query log: %v", f.label, f.cap, err)
+		}
+		for rows.Next() {
+			var typ string
+			var r uint64
+			if err := rows.Scan(&typ, &r); err != nil {
+				t.Fatalf("GATE %s %s: query log scan: %v", f.label, f.cap, err)
+			}
+			types = append(types, typ)
+			logRead += r
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("GATE %s %s: query log: %v", f.label, f.cap, err)
+		}
+		_ = rows.Close()
+		t.Logf("GATE %s %s query_log types=%v read_rows=%d", f.label, f.cap, types, logRead)
+		if len(types) != 1 || types[0] != "ExceptionBeforeStart" {
+			t.Errorf("GATE %s %s: query_log types %v, want [ExceptionBeforeStart]", f.label, f.cap, types)
+		}
+	}
+	if len(fires) != 8 {
+		t.Errorf("gate fired %d times, want 8 (4 heavy statements x 2 caps)", len(fires))
 	}
 }

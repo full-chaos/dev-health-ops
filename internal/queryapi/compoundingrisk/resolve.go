@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
@@ -416,11 +417,19 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 		if len(teamIDs) == 0 {
 			teamIDs = nil
 		}
-		// repoIds carries at most maxRows entries before the team scope resolves
-		// it; a resolved set is bound whole. Slicing keeps [] apart from nil.
-		// teamIds is not cut: every named team answers its row.
+		// A caller repoIds list over maxRows entries is refused, never cut: an
+		// answer for part of the list would read as complete. A set the team
+		// scope resolves is not a request list and is bound whole. teamIds is
+		// not limited: every named team answers its row.
 		if len(repoIDs) > maxRows {
-			repoIDs = repoIDs[:maxRows]
+			return nil, &gqlerror.Error{
+				Message: fmt.Sprintf("compoundingRisk: filter.repoIds holds %d entries; the limit is %d", len(repoIDs), maxRows),
+				Extensions: map[string]any{
+					"code":  "BAD_USER_INPUT",
+					"field": "filter.repoIds",
+					"cap":   maxRows,
+				},
+			}
 		}
 		if filter.Day != nil {
 			d := filter.Day.Time()

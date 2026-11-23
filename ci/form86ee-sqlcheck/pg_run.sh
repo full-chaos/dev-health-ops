@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Throwaway: executes FORM-W2-86EE-ERRCLASS-1 (form_pg.sql here = the FORM with the org literal swapped to the synthetic prefix)
+# Throwaway: executes FORM-W2-86EE-ERRCLASS-2 (form_pg.sql here = the FORM with the org literal swapped to the synthetic prefix)
 # on PostgreSQL with the real public.organizations / sync_runs / sync_run_units DDL taken from internal/pgmigrate/baseline/head.json
 # AT THE WORKERS PIN (no FKs). Modes: PG_IMAGE set = docker (CI); LOCAL_PG="-h <dir> -p <port> -U postgres" = a local server.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-PIN=a7febdf500025f5ac628a1bdf34d0f817a90e323
-FORM_SHA12=57935db8607c
+PIN=a7febdf50002
+FORM_SHA12=10f57badd6cd
 work=$(mktemp -d)
 status=0
 fail() { echo "FAIL: $*"; status=1; }
@@ -138,15 +138,41 @@ for s in S1 S2 S3; do
   form c_${s}_g2 aaaaaaaa bbbbbbbb "$work/c_${s}_g2.sql"
   expect_stop c_${s}_g2 "STOP-${s}-G2" "$got" "$later"
 done
-# unit cap low (3 < the 6 + 5 seeded unit rows): S1 STOPs on the data gate
+# unit cap low (3 < the 6 + 6 seeded unit rows): S1 STOPs on the data gate
 mutate "$work/c_cap3.sql" S1 'BETWEEN 1 AND 20000' 'BETWEEN 1 AND 3'
 form c_cap3 aaaaaaaa bbbbbbbb "$work/c_cap3.sql"
-expect_stop c_cap3 'STOP-S1-G2 runs_matched_1=2 runs_ambiguous=0 unit_rows_capped=11' "$prev" "$H_S1"
+expect_stop c_cap3 'STOP-S1-G2 runs_matched_1=2 runs_ambiguous=0 unit_rows_capped=12' "$prev" "$H_S1"
+# P1 leak guard: no stored text (the URL-like string, its host, or any CONTEXT line) in any stdout / stderr of the non-mutant runs
+leak_scan() {
+  local f
+  for f in "$work"/pg-*.out "$work"/pg-*.err; do
+    case "$f" in */pg-m_leak.*) continue;; esac
+    if grep -q -E 'PLACEHOLDERSIG|example\.test|CONTEXT|DETAIL:' "$f"; then fail "leak: stored text or CONTEXT in $(basename "$f")"; fi
+  done
+  echo "leak scan done"
+}
+# the mutant that must LEAK: S2 reads json without the validity guard -> the \u0000 error prints stored text (proves the scan can fail)
+mutate "$work/m_leak.sql" S2 "pg_input_is_valid(u.result::text, 'jsonb') THEN u.result::jsonb" "true THEN u.result::jsonb"
+form m_leak aaaaaaaa bbbbbbbb "$work/m_leak.sql"
+if [ "$rc" -ne 0 ] && grep -q 'PLACEHOLDERSIG' "$work/pg-m_leak.err"; then echo "PASS m_leak: the unguarded read raises rc ${rc} and prints stored text (the leak scan can fail)"; else fail "m_leak: expected the unguarded read to leak"; fi
+# counter drift: run aaaaaaaa failed_units 0 while 1 unit is failed -> S1 failed_ok = f, file still finishes
+psql_fx -q -c "UPDATE public.sync_runs SET failed_units = 0 WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1'"
+form m_drift aaaaaaaa bbbbbbbb
+if [ "$rc" -eq 0 ] && grep -q '^aaaaaaaa,aaaaaaaa,failed,backfill,6,5,0,.*,6,5,1,0,1,t,t,f$' "$work/pg-m_drift.out"; then echo "PASS m_drift: failed_ok = f on the drifted counter"; else fail "m_drift: S1 did not show failed_ok = f"; fi
+psql_fx -q -c "UPDATE public.sync_runs SET failed_units = 1 WHERE id = 'aaaaaaaa-0000-4000-8000-0000000000a1'"
+# infinite window dates: the file finishes, the day cells are empty
+psql_fx -q -c "UPDATE public.sync_run_units SET since_at = '-infinity', before_at = 'infinity' WHERE id = 'a1000001-0000-4000-8000-000000000001'"
+form m_inf aaaaaaaa bbbbbbbb
+if [ "$rc" -eq 0 ] && ! grep -q 'infinite' "$work/pg-m_inf.err"; then echo "PASS m_inf: infinite window dates do not raise"; else fail "m_inf: rc ${rc}"; fi
+psql_fx -q -c "UPDATE public.sync_run_units SET since_at = '2026-11-18 00:00:00+00', before_at = '2026-11-19 00:00:00+00' WHERE id = 'a1000001-0000-4000-8000-000000000001'"
+leak_scan
+# read-only: the form changed no row (seed: 5 runs, 15 units)
+after=$(psql_fx -Atc "SELECT (SELECT count(*) FROM public.sync_runs) || '/' || (SELECT count(*) FROM public.sync_run_units)")
+echo "tables after: $after"
+if [ "$after" = "5/15" ]; then echo "PASS read-only: row counts 5/15 unchanged"; else fail "row counts changed: $after"; fi
 # dropped index (G0 ix = 1) and invalid-by-drop pkey
 psql_fx -q -c 'DROP INDEX public.ix_sync_run_units_run_status'
 form g0_noix aaaaaaaa bbbbbbbb
 expect_stop g0_noix 'STOP-G0 orgs=1 rels=3 relok=3 ix=1' '' "$H_O $H_G1 $H_S1"
-# read-only transaction: the form writes nothing (row counts unchanged)
-echo "tables after: $(psql_fx -Atc "SELECT (SELECT count(*) FROM public.sync_runs) || '/' || (SELECT count(*) FROM public.sync_run_units)")"
 [ -z "${LOCAL_PG:-}" ] && docker rm -f pg >/dev/null
 exit "$status"

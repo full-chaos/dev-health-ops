@@ -1,7 +1,7 @@
 INSERT INTO public.organizations (id, slug, name) VALUES ('f0f0f0f0-0000-4000-8000-000000000001','org-target','Org Target'),('99999999-0000-4000-8000-000000000009','org-other','Org Other');
 INSERT INTO public.sync_runs (id, org_id, integration_id, triggered_by, mode, status, total_units, completed_units, failed_units, created_at, started_at, completed_at) VALUES
   ('aaaaaaaa-0000-4000-8000-0000000000a1','f0f0f0f0-0000-4000-8000-000000000001','00000000-0000-4000-8000-0000000000b1','manual','backfill','failed',6,5,1,'2026-12-01 10:00:00+00','2026-12-01 10:01:00+00','2026-12-01 15:45:56+00'),
-  ('bbbbbbbb-0000-4000-8000-0000000000b1','f0f0f0f0-0000-4000-8000-000000000001','00000000-0000-4000-8000-0000000000b1','manual','backfill','dispatching',5,1,0,'2026-12-01 15:46:00+00','2026-12-01 15:46:30+00',NULL),
+  ('bbbbbbbb-0000-4000-8000-0000000000b1','f0f0f0f0-0000-4000-8000-000000000001','00000000-0000-4000-8000-0000000000b1','manual','backfill','dispatching',6,1,1,'2026-12-01 15:46:00+00','2026-12-01 15:46:30+00',NULL),
   ('cccccccc-0000-4000-8000-0000000000c1','f0f0f0f0-0000-4000-8000-000000000001','00000000-0000-4000-8000-0000000000b1','manual','backfill','success',1,1,0,'2026-12-01 09:00:00+00',NULL,NULL),
   ('cccccccc-1111-4000-8000-0000000000c2','f0f0f0f0-0000-4000-8000-000000000001','00000000-0000-4000-8000-0000000000b1','manual','backfill','success',1,1,0,'2026-12-01 09:00:00+00',NULL,NULL),
   ('dddddddd-0000-4000-8000-0000000000d1','99999999-0000-4000-8000-000000000009','00000000-0000-4000-8000-0000000000b1','manual','backfill','success',1,1,0,'2026-12-01 09:00:00+00',NULL,NULL);
@@ -20,6 +20,18 @@ INSERT INTO public.sync_run_units (id, org_id, sync_run_id, integration_id, sour
   ('c1000001-0000-4000-8000-000000000001','f0f0f0f0-0000-4000-8000-000000000001','cccccccc-0000-4000-8000-0000000000c1','00000000-0000-4000-8000-0000000000b1','00000000-0000-4000-8000-0000000000c1','github','cicd','medium','backfill','2026-11-18 00:00:00+00','2026-11-19 00:00:00+00','success',1,NULL,NULL,NULL,'2026-12-01 09:00:00+00','2026-12-01 09:10:00+00'),
   ('c2000001-0000-4000-8000-000000000001','f0f0f0f0-0000-4000-8000-000000000001','cccccccc-1111-4000-8000-0000000000c2','00000000-0000-4000-8000-0000000000b1','00000000-0000-4000-8000-0000000000c1','github','cicd','medium','backfill','2026-11-18 00:00:00+00','2026-11-19 00:00:00+00','success',1,NULL,NULL,NULL,'2026-12-01 09:00:00+00','2026-12-01 09:10:00+00'),
   ('d1000001-0000-4000-8000-000000000001','99999999-0000-4000-8000-000000000009','dddddddd-0000-4000-8000-0000000000d1','00000000-0000-4000-8000-0000000000b1','00000000-0000-4000-8000-0000000000c1','github','cicd','medium','backfill','2026-11-18 00:00:00+00','2026-11-19 00:00:00+00','success',1,NULL,NULL,NULL,'2026-12-01 09:00:00+00','2026-12-01 09:10:00+00');
+-- unit results that json accepts and jsonb refuses (backslash-u0000), with a URL-like query string before it
+UPDATE public.sync_run_units SET result = '{"u":"https://example.test/o/r/runs/1?sig=PLACEHOLDERSIG\u0000x"}'::json
+ WHERE id IN ('a1000004-0000-4000-8000-000000000004', 'b1000003-0000-4000-8000-000000000003');
+INSERT INTO public.sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode, since_at, before_at, status, attempts, error, result, created_at, updated_at)
+VALUES ('b1000006-0000-4000-8000-000000000006','f0f0f0f0-0000-4000-8000-000000000001','bbbbbbbb-0000-4000-8000-0000000000b1','00000000-0000-4000-8000-0000000000b1','00000000-0000-4000-8000-0000000000c1','github','tests','heavy','backfill','2026-11-18 00:00:00+00','2026-11-19 00:00:00+00','failed',2,'provider_unit_failed','{"error_category":"provider_unit_failed","note":"https://example.test/x?sig=PLACEHOLDERSIG\u0000y"}'::json,'2026-12-01 09:00:00+00','2026-12-01 15:55:00+00');
+-- lease / retry state
+UPDATE public.sync_run_units SET lease_owner = 'worker-a', lease_expires_at = now() - interval '1 hour', last_heartbeat_at = now() - interval '2 hours'
+ WHERE id = 'b1000003-0000-4000-8000-000000000003';
+UPDATE public.sync_run_units SET expired_lease_retry_count = 2, rate_limit_deferrals = 3, budget_deferrals = 1
+ WHERE id = 'b1000002-0000-4000-8000-000000000002';
+UPDATE public.sync_run_units SET expired_lease_retry_count = 3, retry_exhausted_at = '2026-12-01 15:50:00+00'
+ WHERE id = 'b1000005-0000-4000-8000-000000000005';
 ANALYZE public.organizations;
 ANALYZE public.sync_runs;
 ANALYZE public.sync_run_units;

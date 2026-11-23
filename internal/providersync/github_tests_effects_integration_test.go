@@ -264,7 +264,6 @@ func newGitHubTestsIntegrationSink(t *testing.T) (context.Context, GitHubTestsCl
 		`CREATE TABLE ci_pipeline_runs (org_id String,repo_id UUID,run_id String,pipeline_name Nullable(String),provider String,status Nullable(String),queued_at Nullable(DateTime64(3,'UTC')),started_at DateTime64(3,'UTC'),finished_at Nullable(DateTime64(3,'UTC')),duration_seconds Nullable(Float64),queue_seconds Nullable(Float64),retry_count UInt32,cancel_reason Nullable(String),trigger_source Nullable(String),commit_hash Nullable(String),branch Nullable(String),pr_number Nullable(UInt32),team_id Nullable(String),service_id Nullable(String),last_synced DateTime64(3,'UTC')) ENGINE=ReplacingMergeTree(last_synced) ORDER BY (org_id,repo_id,run_id)`,
 		`CREATE TABLE ci_job_runs (org_id String,repo_id UUID,run_id String,job_id String,job_name String,stage Nullable(String),status Nullable(String),started_at Nullable(DateTime64(3,'UTC')),finished_at Nullable(DateTime64(3,'UTC')),duration_seconds Nullable(Float64),runner_type Nullable(String),retry_attempt UInt32,last_synced DateTime64(3,'UTC')) ENGINE=ReplacingMergeTree(last_synced) ORDER BY (org_id,repo_id,run_id,job_id)`,
 		`CREATE TABLE ci_acceptance_checks (org_id String,repo_id UUID,run_id String,check_key String,check_name String,provider String,requirement String,result String,rule_version String,provenance String,target_branch Nullable(String),pr_number Nullable(UInt32),source_url Nullable(String),observed_at DateTime64(3,'UTC'),last_synced DateTime64(3,'UTC')) ENGINE=ReplacingMergeTree(last_synced) ORDER BY (org_id,repo_id,run_id,check_key)`,
-		`CREATE TABLE test_case_results (org_id String,repo_id UUID,run_id String,suite_id String,case_id String,case_name String,class_name Nullable(String),status String,duration_seconds Nullable(Float64),retry_attempt UInt32,failure_message Nullable(String),failure_type Nullable(String),stack_trace Nullable(String),is_quarantined UInt8,last_synced DateTime64(3,'UTC')) ENGINE=ReplacingMergeTree(last_synced) ORDER BY (org_id,repo_id,run_id,suite_id,case_id)`,
 		reposDDL,
 	}
 	for _, ddl := range ddls {
@@ -272,7 +271,7 @@ func newGitHubTestsIntegrationSink(t *testing.T) (context.Context, GitHubTestsCl
 			t.Fatal(err)
 		}
 	}
-	chschema.CreateTables(ctx, t, conn, "test_suite_results", "coverage_snapshots", "testops_run_report_completeness",
+	chschema.CreateTables(ctx, t, conn, "test_case_results", "test_suite_results", "coverage_snapshots", "testops_run_report_completeness",
 		"daily_metrics_touched_days")
 	return ctx, GitHubTestsClickHouseEffects{Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })}
 }

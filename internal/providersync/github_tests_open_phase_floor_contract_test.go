@@ -452,41 +452,47 @@ type floorEntryRow struct {
 }
 
 // floorEntryRows is the table {site} x {answer class} x {rate header shape}. One source answers each question: the
-// headroom is the client's parser's reading of the answer's own headers (aliases included; an empty value is no value);
-// the gate arms only on an answer the client retries (its classification: 5xx, 429, and a 403 the client classes a rate
-// limit, here by its body); the floor is strict (remaining < floor, as the per-run check); a 5xx with no rate header
-// keeps main's transient path.
+// headroom is the client's parser's reading of the answer's own headers (aliases included; an empty or malformed value is
+// no value); the gate arms only on an answer the client retries (its classification: 5xx, 429, a 403 the client classes
+// a rate limit by its headers (Retry-After, or remaining 0) or by its body); the floor is strict (remaining < floor, as
+// the per-run check); a 5xx with neither a remaining count nor a limit keeps main's transient path.
 func floorEntryRows() []floorEntryRow {
 	classes := []struct {
 		name      string
 		status    int
-		body      map[string]string // site -> body
+		body      map[string]string // site -> body ("" = any site)
+		extra     map[string]string // class headers
 		retried   bool
 		transient bool
 	}{
-		{"200", http.StatusOK, map[string]string{floorSiteRun: floorPullRun, floorSitePolicy: `{"contexts":[],"checks":[]}`}, false, false},
-		{"404", http.StatusNotFound, nil, false, false},
-		{"403 permission", http.StatusForbidden, map[string]string{"": `{"message":"Resource not accessible by integration"}`}, false, false},
-		{"403 rate limit", http.StatusForbidden, map[string]string{"": `{"message":"You have exceeded a secondary rate limit."}`}, true, false},
-		{"429", http.StatusTooManyRequests, nil, true, false},
-		{"5xx", http.StatusServiceUnavailable, nil, true, true},
+		{"200", http.StatusOK, map[string]string{floorSiteRun: floorPullRun, floorSiteJobs: `{"total_count":0,"jobs":[]}`, floorSitePolicy: `{"contexts":[],"checks":[]}`}, nil, false, false},
+		{"404", http.StatusNotFound, nil, nil, false, false},
+		{"403 permission", http.StatusForbidden, map[string]string{"": `{"message":"Resource not accessible by integration"}`}, nil, false, false},
+		{"403 rate limit by body", http.StatusForbidden, map[string]string{"": `{"message":"You have exceeded a secondary rate limit."}`}, nil, true, false},
+		{"403 rate limit by Retry-After", http.StatusForbidden, map[string]string{"": `{"message":"Forbidden"}`}, map[string]string{"Retry-After": "0"}, true, false},
+		{"429", http.StatusTooManyRequests, nil, nil, true, false},
+		{"5xx", http.StatusServiceUnavailable, nil, nil, true, true},
 	}
 	shapes := []struct {
 		name    string
 		raw     map[string]string
-		reading string // "absent", "unknown", "ok", "low", "floor"
+		reading string // "absent", "unknown", "ok", "low", "floor", "zero"
 	}{
 		{"none", nil, "absent"},
 		{"canonical", map[string]string{"X-RateLimit-Remaining": "4000", "X-RateLimit-Limit": "5000"}, "ok"},
 		{"alias", map[string]string{"RateLimit-Remaining": "4000", "RateLimit-Limit": "5000"}, "ok"},
 		{"alias low", map[string]string{"RateLimit-Remaining": "100", "RateLimit-Limit": "5000"}, "low"},
 		{"one of two", map[string]string{"X-RateLimit-Remaining": "100"}, "unknown"},
+		{"only limit", map[string]string{"X-RateLimit-Limit": "5000"}, "unknown"},
+		{"limit 0", map[string]string{"X-RateLimit-Remaining": "100", "X-RateLimit-Limit": "0"}, "unknown"},
 		{"empty", map[string]string{"X-RateLimit-Remaining": "", "X-RateLimit-Limit": ""}, "absent"},
+		{"malformed", map[string]string{"X-RateLimit-Remaining": "abc", "X-RateLimit-Limit": "xyz"}, "absent"},
 		{"low", map[string]string{"X-RateLimit-Remaining": "100", "X-RateLimit-Limit": "5000"}, "low"},
+		{"remaining 0", map[string]string{"X-RateLimit-Remaining": "0", "X-RateLimit-Limit": "5000"}, "zero"},
 		{"at the floor", map[string]string{"X-RateLimit-Remaining": "1000", "X-RateLimit-Limit": "5000"}, "floor"},
 	}
 	var rows []floorEntryRow
-	for _, site := range []string{floorSiteRun, floorSitePolicy} {
+	for _, site := range []string{floorSiteRun, floorSiteJobs, floorSitePolicy} {
 		for _, class := range classes {
 			body := class.body[site]
 			if body == "" {
@@ -496,20 +502,36 @@ func floorEntryRows() []floorEntryRow {
 				body = `{"message":"error"}`
 			}
 			for _, shape := range shapes {
+				raw := map[string]string{}
+				for name, value := range class.extra {
+					raw[name] = value
+				}
+				for name, value := range shape.raw {
+					raw[name] = value
+				}
 				row := floorEntryRow{site: site, class: class.name, shape: shape.name,
-					answer: floorAnswer{status: class.status, body: body, raw: shape.raw}, mainSame: true}
-				lastOfRun := site == floorSitePolicy || class.status != http.StatusOK // no later request of run 7100 follows
+					answer: floorAnswer{status: class.status, body: body, raw: raw}, mainSame: true}
+				// A 403 with remaining 0 is a rate limit by its headers (the client's isRateLimitedForbidden).
+				retried := class.retried || class.status == http.StatusForbidden && shape.reading == "zero"
+				usableLow := shape.reading == "low" || shape.reading == "zero"
+				// No later request of run 7100 follows the answer: a 200 at the run or jobs read is followed by the branch
+				// protection read, whose healthy headers replace the reading, as main.
+				lastOfRun := site == floorSitePolicy || class.status != http.StatusOK
+				marker := int64(100)
+				if shape.reading == "zero" {
+					marker = 0
+				}
 				switch {
-				case site == floorSiteRun && class.name == "403 permission":
+				case !retried && class.name == "403 permission" && site != floorSitePolicy:
 					row.action = "unit fails"
-				case !class.retried && shape.reading == "low" && lastOfRun:
-					row.action, row.marker = "not gated, stop before next run", int64(100)
-				case !class.retried:
+				case !retried && usableLow && lastOfRun:
+					row.action, row.marker = "not gated, stop before next run", marker
+				case !retried:
 					row.action = "not gated"
 				case class.transient && shape.reading == "absent":
 					row.action = "retry sent"
-				case shape.reading == "low":
-					row.action, row.marker, row.mainSame = "refused", int64(100), false
+				case usableLow:
+					row.action, row.marker, row.mainSame = "refused", marker, false
 				case shape.reading == "absent" || shape.reading == "unknown":
 					row.action, row.marker, row.mainSame = "refused", int64(-1), false
 				default:
@@ -571,5 +593,56 @@ func TestGitHubTestsOpenPhaseFloorEntryTable(t *testing.T) {
 				t.Errorf("not gated: open_runs_reread = %v, want 3 (run 7100 written, then 7101 and 7102)", result.final.Result["open_runs_reread"])
 			}
 		})
+	}
+}
+
+// Contract case (as main, ruled): after a known-low reading, a 5xx with no rate header is not gated. The run read answers
+// 200 with 100 of 5,000 left; jobs page 1 answers 503 without rate headers and is retried (2 wire attempts under the
+// known-low reading); the run is written; the check before run 7101 stops the phase with the low reading (100).
+func TestGitHubTestsOpenPhaseFloorHeaderless5xxAfterALowReadingIsRetriedAsMain(t *testing.T) {
+	low := map[string]string{"X-RateLimit-Remaining": "100", "X-RateLimit-Limit": "5000"}
+	result := floorSiteWalk(t, map[string]map[int]floorAnswer{
+		floorSiteRun:    {1: {status: http.StatusOK, body: floorPullRun, raw: low}},
+		floorSiteJobs:   {1: {status: http.StatusServiceUnavailable, body: `{"message":"Service Unavailable"}`}, 2: {status: http.StatusOK, body: `{"total_count":0,"jobs":[]}`, raw: low}},
+		floorSitePolicy: {1: {status: http.StatusOK, body: `{"contexts":[],"checks":[]}`, raw: low}},
+	}, GitHubTestsRouteHandler{}, false)
+	t.Logf("CELL H5XX-LOW attempts=%v later_reads=%v reread=%v marker=%v err=%v", result.doer.attempts, result.doer.fake.runGets,
+		result.final.Result["open_runs_reread"], result.marker(), result.err)
+	if result.err != nil {
+		t.Fatalf("walk: %v", result.err)
+	}
+	if got := result.doer.attempts[floorSiteJobs]; got != 2 {
+		t.Errorf("jobs: %d wire attempts, want 2 (a header-less 5xx is retried, as main)", got)
+	}
+	if got := result.final.Result["open_runs_reread"]; got != 1 {
+		t.Errorf("open_runs_reread = %v, want 1 (run 7100 written)", got)
+	}
+	if result.marker() != int64(100) || len(result.doer.fake.runGets) != 0 {
+		t.Errorf("marker=%v later reads=%v, want the stop at the check before run 7101 with 100", result.marker(), result.doer.fake.runGets)
+	}
+}
+
+// Contract case: the stopping answer comes on the LAST attempt. Run 7100's read answers 503 without rate headers (retried,
+// as main), then 503 with only a remaining count (unknown headroom: the gate stops). Nothing follows in that call, so the
+// run takes main's transient skip. The check before run 7101 passes (the last usable reading is 4,000), and run 7101's
+// first request is refused before the wire: marker -1, no later run read.
+func TestGitHubTestsOpenPhaseFloorStopOnTheLastAttemptRefusesTheNextRun(t *testing.T) {
+	result := floorSiteWalk(t, map[string]map[int]floorAnswer{floorSiteRun: {
+		1: {status: http.StatusServiceUnavailable, body: `{"message":"Service Unavailable"}`},
+		2: {status: http.StatusServiceUnavailable, body: `{"message":"Service Unavailable"}`, raw: map[string]string{"X-RateLimit-Remaining": "100"}},
+	}}, GitHubTestsRouteHandler{}, false)
+	t.Logf("CELL LAST attempts=%v later_reads=%v skipped=%v marker=%v err=%v", result.doer.attempts, result.doer.fake.runGets,
+		result.final.Result["open_runs_skipped"], result.marker(), result.err)
+	if result.err != nil {
+		t.Fatalf("walk: %v", result.err)
+	}
+	if got := result.doer.attempts[floorSiteRun]; got != 2 {
+		t.Errorf("run 7100: %d wire attempts, want 2", got)
+	}
+	if got := result.final.Result["open_runs_skipped"]; got != 1 {
+		t.Errorf("open_runs_skipped = %v, want 1 (main's transient skip of run 7100)", got)
+	}
+	if result.marker() != int64(-1) || len(result.doer.fake.runGets) != 0 {
+		t.Errorf("marker=%v later reads=%v, want run 7101 refused before the wire with -1", result.marker(), result.doer.fake.runGets)
 	}
 }

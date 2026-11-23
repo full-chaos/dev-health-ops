@@ -507,7 +507,12 @@ type CapacityForecast {
   computedAt: String!
   teamId: String
   workScopeId: String
+  "The sum of the WIP on each work-item key's (provider, work scope, team) newest day. It is not bounded by historyDays: a key whose newest day is before the window start still adds its WIP, and backlogState says so."
   backlogSize: Int!
+  "How backlogSize was found against the window start (the forecast day minus historyDays days): MEASURED, STALE or NO_ROWS (see NewestDayState). Null on a stored forecast (capacityForecasts), which keeps no read state."
+  backlogState: NewestDayState
+  "The oldest of the newest work-item days that backlogSize is read from. Null when backlogState is NO_ROWS or null."
+  backlogAsOfDay: Date
   targetItems: Int
   targetDate: Date
   p50Date: Date
@@ -1407,6 +1412,15 @@ type Mutation {
 
   """Trigger a manual report execution"""
   triggerReport(orgId: String!, reportId: String!): ReportRunType
+}
+
+"""
+How a value read from each key's newest day stands against the request window. A key is (provider, work scope, team), and each key gives its OWN newest day, not one day for the whole scope. MEASURED: the newest day of every key the value is read from is on or after the window start. STALE: the newest day of at least one key is before the window start; the value still holds that key's row, and the asOfDay field beside the state names the oldest of the newest days. NO_ROWS: no key was read, so a 0 is not a measured zero.
+"""
+enum NewestDayState {
+  MEASURED
+  STALE
+  NO_ROWS
 }
 
 type OperatingReview {
@@ -2387,6 +2401,9 @@ enum ThroughputBacklogState {
   SUPPLIED
 }
 
+"""
+Estimate coverage of the scope, read from each coverage grain's (provider, work scope, team) own newest row: per grain, not one newest day for the scope, and not bounded by the window. Never null: with no coverage row it is the zero object.
+"""
 type ThroughputEstimateCoverage {
   ratio: Float
   estimatedCount: Int!
@@ -2394,6 +2411,10 @@ type ThroughputEstimateCoverage {
   backlogSize: Int!
   "The number of coverage grains (provider, work scope, team) the counts are read from. 0: the scope has no coverage row, and the zero counts and ratio 0 are not a measurement."
   grainCount: Int!
+  "How the newest days of the grains stand against the window start (the forecast day minus historyWeeks weeks): MEASURED, STALE, or NO_ROWS when grainCount is 0 (see NewestDayState)."
+  state: NewestDayState!
+  "The oldest of the newest days of the grains the counts are read from. Null when state is NO_ROWS."
+  asOfDay: Date
 }
 
 type ThroughputForecast {
@@ -2414,7 +2435,14 @@ type ThroughputForecast {
   p90Weeks: Int
   rollingWindows: [ThroughputRollingWindow!]!
   primaryRisk: ThroughputRiskOverlay!
+  "value: the current WIP (the sum of each work-item key's newest row INSIDE the window) over the window's average daily WIP. The current WIP is as of wipCongestionAsOfDay, not as of the forecast day."
   wipCongestion: ThroughputRiskOverlay!
+  "How the current WIP of wipCongestion was read: MEASURED (at least one measured key inside the window) or NO_ROWS (no measured key inside the window, or no throughput history, so the value 0 is not a measurement). Never STALE: the read is bounded to the window (see NewestDayState)."
+  wipCongestionState: NewestDayState!
+  "The oldest of the keys' newest days inside the window that the current WIP of wipCongestion is read from. Null when wipCongestionState is NO_ROWS."
+  wipCongestionAsOfDay: Date
+  "The number of measured work-item keys (provider, work scope, team) the current WIP of wipCongestion sums."
+  wipCongestionGrainCount: Int!
   staleWip: ThroughputStaleWip
   estimateCoverage: ThroughputEstimateCoverage
   reviewBottleneck: ThroughputRiskOverlay!
@@ -2446,8 +2474,16 @@ type ThroughputRollingWindow {
 }
 
 type ThroughputStaleWip {
+  "The average wip_age_p50_hours over the keys below, each on its own newest day. Not bounded by the window: a key whose newest day is before the window start counts, and state says so."
   p50AgeHours: Float
+  "The average wip_age_p90_hours over the keys below, each on its own newest day. Not bounded by the window: a key whose newest day is before the window start counts, and state says so."
   p90AgeHours: Float
+  "How the newest days of the keys stand against the window start (the forecast day minus historyWeeks weeks): MEASURED or STALE (see NewestDayState). Never NO_ROWS: staleWip is null when no key has an age."
+  state: NewestDayState!
+  "The oldest of the newest days of the keys the ages are read from."
+  asOfDay: Date!
+  "The number of work-item keys (provider, work scope, team) whose newest-day ages are averaged."
+  grainCount: Int!
 }
 
 enum TimeGranularity {

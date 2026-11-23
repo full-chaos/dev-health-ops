@@ -1,0 +1,41 @@
+query CapacityForecasts($orgId: String!, $filters: CapacityForecastFilterInput) {
+  capacityForecasts(orgId: $orgId, filters: $filters) {
+    edges {
+      node {
+        forecastId
+        computedAt
+        teamId
+        workScopeId
+        backlogSize
+        targetItems
+        targetDate
+        p50Date
+        p85Date
+        p95Date
+        p50Days
+        p85Days
+        p95Days
+        p50Items
+        p85Items
+        p95Items
+        throughputMean
+        throughputStddev
+        historyDays
+        insufficientHistory
+        highVariance
+        __typename
+      }
+      cursor
+      __typename
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+      __typename
+    }
+    totalCount
+    __typename
+  }
+}

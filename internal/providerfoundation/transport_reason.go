@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/full-chaos/dev-health-ops/internal/egressguard"
+	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
 )
 
 // IsEgressRefused reports whether err is a provider call the dial-time egress guard refused, before or after
@@ -86,5 +87,6 @@ func newTransportError(provider, route string, cause error, attempt int) *Provid
 	if reason == TransportReasonEgressRefused {
 		return &ProviderError{Class: ErrorPermanent, Reason: reason, Route: route}
 	}
-	return &ProviderError{Class: ErrorTransient, Reason: reason, Route: route}
+	return &ProviderError{Class: ErrorTransient, Reason: reason, Route: route,
+		cancelBesideFailure: reason == TransportReasonCanceled && !tracing.IsCancellation(cause)}
 }

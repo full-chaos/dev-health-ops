@@ -1,18 +1,25 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/spantest"
 )
 
@@ -359,16 +366,482 @@ func TestStepSpansNeedARecordingParent(t *testing.T) {
 	if ctx, span := startGitHubTestsDownloadSpan(nilCtx); ctx != nil || span != nil {
 		t.Fatal("download span start with a nil context made a span")
 	}
-	endGitHubTestsDownloadSpan(nil, 0, -1, 0, false, false, nil)
+	endGitHubTestsDownloadSpan(nilCtx, nil, 0, -1, 0, false, false, nil)
 	if _, err := parseGitHubTestsReportArtifactInSpan(nilCtx, archive, func() (githubTestsReportRows, error) { return githubTestsReportRows{}, nil }); err != nil {
 		t.Fatal(err)
 	}
 	if startChunkPrepareSpan(nilCtx) != nil || startChunkCommitSpan(nilCtx) != nil {
 		t.Fatal("chunk span start with a nil context made a span")
 	}
-	endChunkPrepareSpan(nil, nil, nil)
-	endChunkCommitSpan(nil, nil, nil)
+	endChunkPrepareSpan(nilCtx, nil, nil, nil)
+	endChunkCommitSpan(nilCtx, nil, nil, nil)
 	if spans := pipeline.Ended(); len(spans) != 0 {
 		t.Fatalf("spans = %d (first %q), want 0", len(spans), spans[0].Name())
+	}
+}
+
+// spanChunkRun is spanChunkExecution with the store, the route handler (nil: the streaming fixture) and the comparator
+// (nil: the matching one) of the cell.
+func spanChunkRun(t *testing.T, ctx context.Context, store EffectLedger, handler func(Claim) CompleteRouteHandler, comparator CompleteRouteComparator) error {
+	t.Helper()
+	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	claim, session := completeRouteSessionFor(t, now, false, "github", "cicd")
+	descriptor, ok := Descriptor("github", "cicd")
+	if !ok {
+		t.Fatal("descriptor missing")
+	}
+	descriptor.ChunkPolicy = ChunkPolicy{
+		MaxSourceItems: 2, MaxEffectRows: 2, MaxPreparedBytes: 64 << 10,
+		MaxChunksPerAttempt: 8, MaxWallTime: time.Minute,
+	}
+	if handler == nil {
+		handler = func(claim Claim) CompleteRouteHandler {
+			return &streamingChunkRouteHandler{batch: chunkedTestBatch(t, claim)}
+		}
+	}
+	executor := completeRouteExecutor(now, handler(claim), store, &memoryEffectSink{})
+	if comparator != nil {
+		executor.Comparator = comparator
+	}
+	executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: "github"}
+	executor.Credentials.Decryptor = chunkedCredentialDecryptor{}
+	_, err := executor.Execute(ctx, session, descriptor)
+	return err
+}
+
+// requireOneStepOutcome: exactly one span of name, its key set is keys (raw and exported), its outcome is want, and it
+// has an Error status only on failed.
+func requireOneStepOutcome(t *testing.T, pipeline *spantest.Pipeline, name string, keys, allowed []string, want string) {
+	t.Helper()
+	pairs := pipeline.Pairs(name)
+	if len(pairs) != 1 {
+		t.Fatalf("%s spans = %d, want 1", name, len(pairs))
+	}
+	spantest.Check(t, pairs[0], keys)
+	if got := spanOutcome(t, pairs[0], allowed); got != want {
+		t.Errorf("%s outcome = %q, want %q", name, got, want)
+	}
+	if failed := pairs[0].Raw.Status().Code == codes.Error; failed != (want == spanOutcomeFailed) {
+		t.Errorf("%s Error status = %v, want %v", name, failed, want == spanOutcomeFailed)
+	}
+}
+
+// spanCancelReader cancels the step's context and fails the read with the cancellation, as a body read does when its
+// request context is cancelled.
+type spanCancelReader struct{ cancel context.CancelFunc }
+
+func (r spanCancelReader) Read([]byte) (int, error) {
+	r.cancel()
+	return 0, context.Canceled
+}
+
+// spanCancelPrepareStore fails every group prepare with err, after it cancels the attempt's context when cancel is set.
+type spanCancelPrepareStore struct {
+	*groupRecordingStore
+	cancel context.CancelFunc
+	err    error
+}
+
+func (s *spanCancelPrepareStore) PrepareChunkGroup(context.Context, Claim, []PreparedProviderChunk, time.Time, time.Time) ([]PreparedProviderChunk, error) {
+	if s.cancel != nil {
+		s.cancel()
+	}
+	return nil, s.err
+}
+
+// A step that ended only because its context was cancelled is outcome cancelled with no Error status, also when the
+// cause came back wrapped next to a domain sentinel (an incomplete artifact read, a chunk store error) or as the
+// transport's canceled reason. The same error under a live context, and the bare sentinel under a cancelled one, stay
+// failures.
+func TestStepSpansOfACancelledStepAreCancelled(t *testing.T) {
+	blobRedirect := func(request *http.Request) *http.Response {
+		return &http.Response{StatusCode: http.StatusFound, Request: request, Body: io.NopCloser(strings.NewReader("")),
+			Header: http.Header{"Location": {"https://" + spanBlobHost + "/containers/a.zip?sig=aaaa"}}}
+	}
+	t.Run("download body read cancelled", func(t *testing.T) {
+		pipeline := spantest.Install(t)
+		ctx, cancel := context.WithCancel(pipeline.Parent)
+		defer cancel()
+		client := githubTestsClient(t, spanDoer(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Host == spanBlobHost {
+				return &http.Response{StatusCode: http.StatusOK, ContentLength: 10, Request: request, Body: io.NopCloser(spanCancelReader{cancel: cancel})}, nil
+			}
+			return blobRedirect(request), nil
+		}))
+		if _, _, _, err := downloadGitHubTestsListedArtifact(ctx, client, spanRoot, spanArtifactRead, spanArtifactCapped, -1); err == nil {
+			t.Fatal("download err = nil, want the cancelled read")
+		}
+		requireOneStepOutcome(t, pipeline, spanDownloadName, spanDownloadKeys, spanDownloadOutcomes, spanOutcomeCancelled)
+	})
+	t.Run("download transport cancelled", func(t *testing.T) {
+		pipeline := spantest.Install(t)
+		ctx, cancel := context.WithCancel(pipeline.Parent)
+		defer cancel()
+		client := githubTestsClient(t, spanDoer(func(*http.Request) (*http.Response, error) {
+			cancel()
+			return nil, context.Canceled
+		}))
+		if _, _, _, err := downloadGitHubTestsListedArtifact(ctx, client, spanRoot, spanArtifactRead, spanArtifactCapped, -1); err == nil {
+			t.Fatal("download err = nil, want the cancelled request")
+		}
+		requireOneStepOutcome(t, pipeline, spanDownloadName, spanDownloadKeys, spanDownloadOutcomes, spanOutcomeCancelled)
+	})
+	t.Run("download transport cancel joined with a failure", func(t *testing.T) {
+		pipeline := spantest.Install(t)
+		ctx, cancel := context.WithCancel(pipeline.Parent)
+		defer cancel()
+		client := githubTestsClient(t, spanDoer(func(*http.Request) (*http.Response, error) {
+			cancel()
+			return nil, errors.Join(context.Canceled, io.ErrUnexpectedEOF)
+		}))
+		if _, _, _, err := downloadGitHubTestsListedArtifact(ctx, client, spanRoot, spanArtifactRead, spanArtifactCapped, -1); err == nil {
+			t.Fatal("download err = nil, want the failed request")
+		}
+		requireOneStepOutcome(t, pipeline, spanDownloadName, spanDownloadKeys, spanDownloadOutcomes, spanOutcomeFailed)
+	})
+	for _, tc := range []struct {
+		name   string
+		cancel bool
+		err    error
+		want   string
+	}{
+		{"prepare store cancelled", true, NewChunkStoreError(context.Canceled), spanOutcomeCancelled},
+		{"prepare store cancel error under a live context", false, NewChunkStoreError(context.Canceled), spanOutcomeFailed},
+		{"prepare bare conflict under a cancelled context", true, ErrChunkCheckpointConflict, spanOutcomeFailed},
+		{"prepare plain cancel error under a live context", false, context.Canceled, spanOutcomeFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pipeline := spantest.Install(t)
+			ctx, cancel := context.WithCancel(pipeline.Parent)
+			defer cancel()
+			store := &spanCancelPrepareStore{groupRecordingStore: &groupRecordingStore{chunkMemoryStore: newChunkMemoryStore()}, err: tc.err}
+			if tc.cancel {
+				store.cancel = cancel
+			}
+			if err := spanChunkRun(t, ctx, store, nil, nil); err == nil {
+				t.Fatal("execute err = nil, want the prepare failure")
+			}
+			requireOneStepOutcome(t, pipeline, spanPrepareName, spanChunkKeys, spanPrepareOutcomes, tc.want)
+		})
+	}
+}
+
+// spanRecordingComparator is the final validation of the cell: it records when it returned and matches unless mismatch.
+type spanRecordingComparator struct {
+	mismatch    bool
+	validatedAt time.Time
+}
+
+func (c *spanRecordingComparator) CompareCompleteRoute(context.Context, Claim, CompleteRouteBatch) (ShadowComparison, error) {
+	c.validatedAt = time.Now()
+	return ShadowComparison{Match: !c.mismatch}, nil
+}
+
+// chunk_prepare is the split, encode and PrepareChunkGroup of one group: the final group's prepare span starts after
+// the final validation returned (an order, not a duration), and a final group the validation refuses has no prepare span.
+func TestChunkPrepareSpanStartsAfterTheFinalValidation(t *testing.T) {
+	t.Run("final validation before the span", func(t *testing.T) {
+		pipeline := spantest.Install(t)
+		store := &groupRecordingStore{chunkMemoryStore: newChunkMemoryStore()}
+		comparator := &spanRecordingComparator{}
+		if err := spanChunkRun(t, pipeline.Parent, store, nil, comparator); err != nil {
+			t.Fatalf("execute: %v", err)
+		}
+		prepares := pipeline.Pairs(spanPrepareName)
+		if len(prepares) == 0 || len(prepares) != len(store.groups) || comparator.validatedAt.IsZero() {
+			t.Fatalf("prepare spans = %d groups = %d validated = %v, want one span per group and a validation", len(prepares), len(store.groups), !comparator.validatedAt.IsZero())
+		}
+		if final := prepares[len(prepares)-1]; final.Raw.StartTime().Before(comparator.validatedAt) {
+			t.Errorf("the final prepare span started before the final validation returned: the validation is not prepare time")
+		}
+	})
+	t.Run("refused final group", func(t *testing.T) {
+		pipeline := spantest.Install(t)
+		store := &groupRecordingStore{chunkMemoryStore: newChunkMemoryStore()}
+		if err := spanChunkRun(t, pipeline.Parent, store, nil, &spanRecordingComparator{mismatch: true}); !errors.Is(err, ErrShadowMismatch) {
+			t.Fatalf("execute err = %v, want ErrShadowMismatch", err)
+		}
+		prepares := pipeline.Pairs(spanPrepareName)
+		if len(prepares) != len(store.groups) {
+			t.Fatalf("prepare spans = %d groups = %d, want no span for the refused final group", len(prepares), len(store.groups))
+		}
+		for _, pair := range prepares {
+			if got := spanOutcome(t, pair, spanPrepareOutcomes); got != spanOutcomePrepared {
+				t.Errorf("prepare outcome = %q, want prepared", got)
+			}
+		}
+	})
+}
+
+// spanObservingHandler is the streaming fixture as a ChunkCommitObserver (the GitHub tests route is one).
+type spanObservingHandler struct {
+	*streamingChunkRouteHandler
+	committed, unconfirmed int
+}
+
+func (h *spanObservingHandler) ObserveCommittedChunk(Claim, PreparedProviderChunk, *providerfoundation.Metrics) {
+	h.committed++
+}
+
+func (h *spanObservingHandler) ObserveUnconfirmedChunk(Claim, PreparedProviderChunk) { h.unconfirmed++ }
+
+// spanAckLostStore fails the first chunk mark: the inner mark lands first unless noAdvance; with readbackFails the
+// checkpoint read back after it fails once.
+type spanAckLostStore struct {
+	*groupRecordingStore
+	marks                    int
+	noAdvance, readbackFails bool
+	failLoad                 bool
+}
+
+func (s *spanAckLostStore) MarkChunkCommitted(ctx context.Context, claim Claim, ordinal int, digest string, now time.Time) error {
+	s.marks++
+	if s.marks != 1 {
+		return s.groupRecordingStore.MarkChunkCommitted(ctx, claim, ordinal, digest, now)
+	}
+	if !s.noAdvance {
+		if err := s.groupRecordingStore.MarkChunkCommitted(ctx, claim, ordinal, digest, now); err != nil {
+			return err
+		}
+	}
+	s.failLoad = s.readbackFails
+	return errors.New("aaaa")
+}
+
+func (s *spanAckLostStore) LoadChunkCheckpoint(ctx context.Context, claim Claim, now time.Time) (ChunkCheckpoint, error) {
+	if s.failLoad {
+		s.failLoad = false
+		return ChunkCheckpoint{}, errors.New("aaaa")
+	}
+	return s.groupRecordingStore.LoadChunkCheckpoint(ctx, claim, now)
+}
+
+// The commit span counts the chunks the call confirmed committed: a mark whose acknowledgement was lost but whose
+// read back shows the checkpoint past the chunk counts; one with a failed read back or no advance does not.
+func TestChunkCommitSpanCountsAChunkTheReadbackConfirmed(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		noAdvance, readbackFails bool
+		count                    int
+		committed, unconfirmed   int
+	}{
+		{name: "the read back confirms the lost acknowledgement", count: 1, committed: 1},
+		{name: "the read back fails", readbackFails: true, unconfirmed: 1},
+		{name: "the mark did not land", noAdvance: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pipeline := spantest.Install(t)
+			store := &spanAckLostStore{groupRecordingStore: &groupRecordingStore{chunkMemoryStore: newChunkMemoryStore()},
+				noAdvance: tc.noAdvance, readbackFails: tc.readbackFails}
+			var observer *spanObservingHandler
+			err := spanChunkRun(t, pipeline.Parent, store, func(claim Claim) CompleteRouteHandler {
+				observer = &spanObservingHandler{streamingChunkRouteHandler: &streamingChunkRouteHandler{batch: chunkedTestBatch(t, claim)}}
+				return observer
+			}, nil)
+			if err == nil || len(store.groups) == 0 {
+				t.Fatalf("execute err = %v groups = %d, want the failed mark after a prepared group", err, len(store.groups))
+			}
+			if observer.committed != tc.committed || observer.unconfirmed != tc.unconfirmed {
+				t.Fatalf("observer committed=%d unconfirmed=%d, want %d and %d", observer.committed, observer.unconfirmed, tc.committed, tc.unconfirmed)
+			}
+			commits := pipeline.Pairs(spanCommitName)
+			if len(commits) != 1 {
+				t.Fatalf("commit spans = %d, want 1", len(commits))
+			}
+			pair := commits[0]
+			spantest.Check(t, pair, spanChunkKeys)
+			if got := spanOutcome(t, pair, spanCommitOutcomes); got != spanOutcomeFailed {
+				t.Errorf("outcome = %q, want failed", got)
+			}
+			count, payload, effects := spanChunkTotals(store.groups[0][:tc.count])
+			for key, want := range map[string]int64{"dev_health.chunk.count": count, "dev_health.chunk.payload_bytes": payload, "dev_health.chunk.effects": effects} {
+				if got := spanInt(t, pair, key); got != want {
+					t.Errorf("%s = %d, want %d", key, got, want)
+				}
+			}
+		})
+	}
+}
+
+// spanGate answers its scripted waits in order, then 0.
+type spanGate struct {
+	waits []time.Duration
+	calls int
+}
+
+func (g *spanGate) Wait(context.Context) (time.Duration, error) {
+	g.calls++
+	if g.calls <= len(g.waits) {
+		return g.waits[g.calls-1], nil
+	}
+	return 0, nil
+}
+
+func (g *spanGate) Penalize(context.Context, time.Duration) error { return nil }
+
+// Existing log lines written inside a download keep the caller's span (same trace, same span id), while the request
+// spans stay children of the download span.
+func TestGitHubTestsDownloadKeepsTheCallersSpanOnExistingLogLines(t *testing.T) {
+	pipeline := spantest.Install(t)
+	archive := githubTestsZip(t, map[string]string{"junit.xml": githubTestsMultiSuiteJUnit(1)})
+	client := githubTestsClient(t, spanArtifactDoer(t, archive))
+	client.Gate = &spanGate{waits: []time.Duration{time.Millisecond}}
+	client.GateWaitMax = time.Second
+	var out bytes.Buffer
+	func() {
+		restore := logging.InstallDefault(logging.NewJSON(&out, slog.LevelInfo))
+		defer restore()
+		if _, _, _, err := downloadGitHubTestsListedArtifact(pipeline.Parent, client, spanRoot, spanArtifactRead, spanArtifactCapped, int64(len(archive))); err != nil {
+			t.Fatalf("download: %v", err)
+		}
+	}()
+	parent := trace.SpanContextFromContext(pipeline.Parent)
+	lines := 0
+	for _, raw := range bytes.Split(out.Bytes(), []byte("\n")) {
+		if len(bytes.TrimSpace(raw)) == 0 {
+			continue
+		}
+		var line map[string]any
+		if err := json.Unmarshal(raw, &line); err != nil {
+			t.Fatalf("log line is not JSON: %v", err)
+		}
+		if line["msg"] != "provider_gate_wait_slept" {
+			continue
+		}
+		lines++
+		if line["span_id"] != parent.SpanID().String() || line["trace_id"] != parent.TraceID().String() {
+			t.Errorf("gate line span_id=%v trace_id=%v, want the caller's %s %s", line["span_id"], line["trace_id"], parent.SpanID(), parent.TraceID())
+		}
+	}
+	if lines == 0 {
+		t.Fatal("no provider_gate_wait_slept line")
+	}
+	downloads := pipeline.Pairs(spanDownloadName)
+	if len(downloads) != 1 {
+		t.Fatalf("download spans = %d, want 1", len(downloads))
+	}
+	requests := pipeline.Pairs(spanRequestName)
+	if len(requests) != 2 {
+		t.Fatalf("request spans = %d, want 2", len(requests))
+	}
+	for _, request := range requests {
+		if request.Raw.Parent().SpanID() != downloads[0].Raw.SpanContext().SpanID() || request.Raw.SpanContext().TraceID() != parent.TraceID() {
+			t.Errorf("request span parent=%s trace=%s, want the download span in the caller's trace", request.Raw.Parent().SpanID(), request.Raw.SpanContext().TraceID())
+		}
+	}
+}
+
+// spanCensusAllowList is the whole key set each provider and work span of this package's paths may carry, by span name;
+// an event may carry error.type only.
+var spanCensusAllowList = map[string][]string{
+	spanRequestName: {"dev_health.provider.attempts", "dev_health.provider.budget_ms", "dev_health.provider.gate_wait_ms",
+		"dev_health.provider.lease_ms", "dev_health.provider.target", "error.type", "family", "http.request.method",
+		"http.response.status_code", "http.route", "outcome", "provider"},
+	spanDownloadName: spanDownloadKeys,
+	spanParseName:    {"dev_health.artifact.bytes", "dev_health.tests.cases", "dev_health.tests.reports", "dev_health.tests.suites", "outcome"},
+	spanPrepareName:  spanChunkKeys,
+	spanCommitName:   spanChunkKeys,
+}
+
+// The key census: every request, credential-step, download, parse, prepare and commit path of the cells (each outcome,
+// failures, cancels under a cancelled and under a live context, a gate sleep, a lost acknowledgement) runs under one
+// recording pipeline, and every attribute key of every span, raw and exported, is on that span's own allow-list.
+func TestEverySpanKeyIsOnItsSpansAllowList(t *testing.T) {
+	pipeline := spantest.Install(t)
+	archive := githubTestsZip(t, map[string]string{"junit.xml": githubTestsMultiSuiteJUnit(1)})
+	download := func(ctx context.Context, client *providerfoundation.HTTPClient, artifact string) {
+		_, _, _, _ = downloadGitHubTestsListedArtifact(ctx, client, spanRoot, artifact, spanArtifactCapped, -1)
+	}
+	for _, artifact := range []string{spanArtifactRead, spanArtifactGone, spanArtifactOver} {
+		download(pipeline.Parent, githubTestsClient(t, spanArtifactDoer(t, archive)), artifact)
+	}
+	contended := githubTestsClient(t, spanArtifactDoer(t, archive))
+	contended.Budget = spanContendedBudget{}
+	download(pipeline.Parent, contended, spanArtifactRead)
+	gated := githubTestsClient(t, spanArtifactDoer(t, archive))
+	gated.Gate = &spanGate{waits: []time.Duration{time.Millisecond}}
+	gated.GateWaitMax = time.Second
+	download(pipeline.Parent, gated, spanArtifactRead)
+	for _, tc := range []struct {
+		cancel bool
+		err    error
+	}{{true, context.Canceled}, {true, errors.Join(context.Canceled, io.ErrUnexpectedEOF)}, {false, context.Canceled}, {false, errors.New("aaaa")}} {
+		ctx, cancel := context.WithCancel(pipeline.Parent)
+		download(ctx, githubTestsClient(t, spanDoer(func(*http.Request) (*http.Response, error) {
+			if tc.cancel {
+				cancel()
+			}
+			return nil, tc.err
+		})), spanArtifactRead)
+		cancel()
+	}
+	credentialFailing, err := providerfoundation.NewHTTPClient("github", "https://api.github.com", fakehttp.Client(spanArtifactDoer(t, archive)),
+		func(*http.Request) error {
+			return &providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: http.StatusUnauthorized}
+		},
+		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	download(pipeline.Parent, credentialFailing, spanArtifactRead)
+
+	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	for _, parse := range []struct {
+		archive []byte
+		repoID  string
+	}{{archive, "repo-1"}, {[]byte("aaaa"), "repo-1"}, {archive, ""}} {
+		_, _ = parseGitHubTestsReportArtifactInSpan(pipeline.Parent, parse.archive, func() (githubTestsReportRows, error) {
+			return parseGitHubTestsReportArtifact(parse.archive, spanArtifactRead, githubTestsReportSlot{Name: "r", Attempt: 1}, nil, parse.repoID, "run-1", "org-1", nil, nil, normalizedAt)
+		})
+	}
+
+	newStore := func() *groupRecordingStore { return &groupRecordingStore{chunkMemoryStore: newChunkMemoryStore()} }
+	_, _ = spanChunkExecution(t, pipeline.Parent, 8)
+	_, _ = spanChunkExecution(t, pipeline.Parent, 1)
+	for _, tc := range []struct {
+		cancel bool
+		err    error
+	}{{true, NewChunkStoreError(context.Canceled)}, {false, context.Canceled}, {false, ErrChunkCheckpointConflict}} {
+		ctx, cancel := context.WithCancel(pipeline.Parent)
+		store := &spanCancelPrepareStore{groupRecordingStore: newStore(), err: tc.err}
+		if tc.cancel {
+			store.cancel = cancel
+		}
+		_ = spanChunkRun(t, ctx, store, nil, nil)
+		cancel()
+	}
+	_ = spanChunkRun(t, pipeline.Parent, newStore(), nil, &spanRecordingComparator{mismatch: true})
+	_ = spanChunkRun(t, pipeline.Parent, &spanAckLostStore{groupRecordingStore: newStore()}, func(claim Claim) CompleteRouteHandler {
+		return &spanObservingHandler{streamingChunkRouteHandler: &streamingChunkRouteHandler{batch: chunkedTestBatch(t, claim)}}
+	}, nil)
+
+	seen := map[string]int{}
+	for _, span := range pipeline.Ended() {
+		if _, ok := spanCensusAllowList[span.Name()]; !ok {
+			t.Errorf("span %q is not on the census", span.Name())
+		}
+		seen[span.Name()]++
+	}
+	for name, allowed := range spanCensusAllowList {
+		if seen[name] == 0 {
+			t.Errorf("no %s span ran: the census does not cover it", name)
+		}
+		for _, pair := range pipeline.Pairs(name) {
+			for side, attrs := range map[string][]attribute.KeyValue{"raw": pair.Raw.Attributes(), "exported": pair.Exported.Attributes} {
+				for _, kv := range attrs {
+					if !slices.Contains(allowed, string(kv.Key)) {
+						t.Errorf("%s %s span carries %q, which is not on its allow-list", side, name, kv.Key)
+					}
+				}
+			}
+			for _, event := range pair.Raw.Events() {
+				for _, kv := range event.Attributes {
+					if kv.Key != "error.type" {
+						t.Errorf("%s event %q carries %q", name, event.Name, kv.Key)
+					}
+				}
+			}
+		}
 	}
 }

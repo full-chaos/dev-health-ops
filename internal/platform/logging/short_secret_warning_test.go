@@ -142,3 +142,43 @@ func TestTwoDistinctUndeclaredFieldsWarnSeparately(t *testing.T) {
 		t.Errorf("want 2 warnings for two undeclared names, got %d: %s", got, out.String())
 	}
 }
+
+func TestShortCredentialFieldOnTheNonSecretListIsNamedThroughTheRedactor(t *testing.T) {
+	record, line := shortFieldRecord(t, "project_key")
+	if record["field"] != "project_key" {
+		t.Errorf("field = %v, want project_key (%s)", record["field"], line)
+	}
+	if _, has := record["field_length"]; has {
+		t.Errorf("a named field carries no length: %s", line)
+	}
+	if strings.Contains(line, "abc") {
+		t.Errorf("the value reached the log: %s", line)
+	}
+}
+
+// The name of a known non-secret field is a plain log string: a registered secret
+// equal to it, or inside it, still redacts it (fail-closed).
+func TestAKnownNonSecretFieldNameIsStillRedactedWhenItEqualsARegisteredValue(t *testing.T) {
+	for _, tc := range []struct{ registered, want string }{
+		{"", "project_key"},
+		{"project_key", "[REDACTED]"},
+		{"project_k", "[REDACTED]ey"},
+	} {
+		secrets.ResetRegistered()
+		var out bytes.Buffer
+		restore := InstallDefault(NewJSON(&out, slog.LevelDebug))
+		if tc.registered != "" {
+			secrets.Register("REVIEW_PLANTED_TOKEN", tc.registered)
+		}
+		secrets.RegisterCredentialJSON([]byte(`{"project_key":"abc"}`))
+		restore()
+		secrets.ResetRegistered()
+		var record map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &record); err != nil {
+			t.Fatalf("registered %q: %v: %s", tc.registered, err, out.String())
+		}
+		if record["field"] != tc.want {
+			t.Errorf("registered %q: field = %v, want %q (%s)", tc.registered, record["field"], tc.want, out.String())
+		}
+	}
+}

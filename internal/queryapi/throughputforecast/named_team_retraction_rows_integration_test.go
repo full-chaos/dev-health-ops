@@ -79,10 +79,10 @@ func TestForecastInputsOfANamedRetiredTeamGiveRetractionRowsNoWeight(t *testing.
 		if out.History, err = loadThroughputHistory(ctx, client, org, teams, nil, historyWeeks, today); err != nil {
 			t.Fatalf("%s %s history: %v", org, teamID, err)
 		}
-		if out.CurrentWIP, out.AverageWIP, err = loadWorkItemOverlay(ctx, client, org, teams, nil, historyWeeks, today); err != nil {
+		if out.CurrentWIP, out.AverageWIP, _, err = loadWorkItemOverlay(ctx, client, org, teams, nil, historyWeeks, today); err != nil {
 			t.Fatalf("%s %s overlay: %v", org, teamID, err)
 		}
-		if out.StaleP50, out.StaleP90, err = loadStaleWIP(ctx, client, org, teams, nil); err != nil {
+		if out.StaleP50, out.StaleP90, _, err = loadStaleWIP(ctx, client, org, teams, nil, historyWeeks, today); err != nil {
 			t.Fatalf("%s %s stale WIP: %v", org, teamID, err)
 		}
 		backlog, err := loadBacklog(ctx, client, org, teams, nil, historyWeeks, today)
@@ -161,7 +161,7 @@ func TestEstimateCoverageOfANamedRetiredTeamHasNoRule(t *testing.T) {
 	}
 	read := func(org, teamID string) answer {
 		t.Helper()
-		coverage, err := loadEstimateCoverage(ctx, client, org, []string{teamID}, nil)
+		coverage, err := loadEstimateCoverage(ctx, client, org, []string{teamID}, nil, 4, time.Now().UTC())
 		if err != nil {
 			t.Fatalf("%s %s: %v", org, teamID, err)
 		}
@@ -248,7 +248,7 @@ VALUES (?, ?, 'jira', 'ENGPROJ', ?, 'Engineering', ?, ?, ?, ?)`, org, day, retir
 		t.Errorf("history = %v, want %v", history, want)
 	}
 	// The mean WIP over those three days: 3, 2 and 0.
-	_, averageWIP, err := loadWorkItemOverlay(ctx, client, org, []string{retired}, nil, 4, today)
+	_, averageWIP, _, err := loadWorkItemOverlay(ctx, client, org, []string{retired}, nil, 4, today)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ VALUES (?, ?, 'jira', 'SCOPE-A', ?, ?)`, org, day, team, store.NewComputedAt); e
 	if want := []int{5}; !reflect.DeepEqual(history, want) {
 		t.Errorf("history = %v, want %v: the day with the measured scope", history, want)
 	}
-	_, averageWIP, err := loadWorkItemOverlay(ctx, client, org, []string{team}, nil, 4, today)
+	_, averageWIP, _, err := loadWorkItemOverlay(ctx, client, org, []string{team}, nil, 4, today)
 	if err != nil {
 		t.Fatal(err)
 	}

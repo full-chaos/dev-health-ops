@@ -554,6 +554,9 @@ func unitRowsScope(orgID, repoFragment string, teamIDs []string) (string, []clic
 
 // InvestmentQualityStatsColumns is the select list of the evidence-quality stats read; the GraphQL and REST readers
 // share it so their counts cannot drift apart. uncategorized_count is the evidence-gated units (CHAOS-10351).
+//
+// quality_stddev (stddevPopIf): ClickHouse merges partial states in thread-completion order, so identical requests
+// can differ by 1-2 ULP. Compare it with a relative tolerance (1e-9), never with exact equality.
 const InvestmentQualityStatsColumns = `    count() AS total,
     countIf(evidence_quality IS NOT NULL) AS quality_known_count,
     avgIf(evidence_quality, evidence_quality IS NOT NULL) AS quality_mean,

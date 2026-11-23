@@ -48,7 +48,7 @@ var latestrowSites = map[string]int{
 	"internal/queryapi/aianalytics/scope.go:loadTeams:ArgMaxKeepNullBy":                               1,
 	"internal/queryapi/analytics/investment.go:LatestWorkUnitInvestmentsSource:ArgMax":                12,
 	"internal/queryapi/analytics/investment.go:LatestWorkUnitInvestmentsSource:ArgMaxKeepNull":        4,
-	"internal/queryapi/testopsrisk/testopsrisk.go:quadrantQuery:ArgMaxKeepNullBy":                     1,
+	"internal/queryapi/testopsrisk/testopsrisk.go:quadrantStatement:ArgMaxKeepNullBy":                 1,
 	"internal/storage/clickhouse/latestrow/latestrow.go:ArgMax:ArgMax":                                1,
 	"internal/storage/clickhouse/latestrow/latestrow.go:ArgMaxKeepNull:ArgMaxKeepNull":                1,
 	"internal/storage/clickhouse/latestrow/latestrow.go:ArgMaxKeepNullBy:ArgMaxKeepNullBy":            1,

@@ -91,6 +91,8 @@ type githubWorkItemTransitionRow struct {
 	// board's projectScopeID, in [2^31, 2^32)). A provider timeline event leaves it 0 and is ranked by content. It
 	// rides in the effect row (a prepared-route sink-read key), so a replay writes the board event into its own slot.
 	BoardSlot int `json:"board_slot,omitempty"`
+	// storedTieOrdinals are the tie_ordinals of a row read back from work_item_transitions; never written.
+	storedTieOrdinals []uint32
 }
 
 type githubWorkItemDependencyRow struct {

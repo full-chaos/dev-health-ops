@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 )
 
@@ -289,72 +289,100 @@ func atomicPassLockTimeoutPool(t *testing.T, ctx context.Context, pool *pgxpool.
 	return limited
 }
 
-// TestAtomicPassTailWaitsAtMostTheBoundOnARouteMutationBarrier (PLAN-READ-14479-1 B1): the tail's re-arm takes ROW
-// EXCLUSIVE on sync_dispatch_outbox, which waits on a route mutation's SHARE ROW EXCLUSIVE barrier. From the commit
-// point (in the tail) a second connection holds that barrier (the real routeMutationLockSQL text). The pass must give
-// up within its tail lock bound, commit nothing, and succeed on the retry once the barrier is gone.
-func TestAtomicPassTailWaitsAtMostTheBoundOnARouteMutationBarrier(t *testing.T) {
+// TestAtomicPassTailHoldsTheRouteMutationBarrierOff (PLAN-READ-14479-1 B1, changed by CHAOS-14523): the tail's
+// re-arm takes ROW EXCLUSIVE on sync_dispatch_outbox. The commit snapshot already holds that lock (commitBarrierSQL),
+// so from the commit point (in the tail) a route mutation cannot take its SHARE ROW EXCLUSIVE barrier: a NOWAIT probe
+// of the barrier (the real routeMutationLockSQL text) gets 55P03, and a real syncroute.Controller.Pause started there
+// waits on a lock. The tail never waits on the barrier: the pass commits its publish and its re-arm, and the pause
+// then completes (paused, generation + 1): it is delayed to after the pass's COMMIT, not lost.
+func TestAtomicPassTailHoldsTheRouteMutationBarrierOff(t *testing.T) {
 	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		atomicPassShapes[0].seed(t, ctx, pool)
+		// Pause validates the row against the checked-in policy (rollback_route none); the route table's trigger wants a
+		// generation increase for that change, so the delivery is at routePauseRaceGeneration.
+		if _, err := pool.Exec(ctx, `UPDATE sync_dispatch_transport_routes SET rollback_transport = 'none', generation = $2 WHERE kind = $1`,
+			outboxKindDispatchSyncRun, routePauseRaceGeneration); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE sync_dispatch_outbox SET dispatched_route_generation = $2 WHERE id = $1`,
+			dispatchServiceTestOutbox, routePauseRaceGeneration); err != nil {
+			t.Fatal(err)
+		}
+		args := atomicPassArgs()
+		args.TransportArgs.RouteGeneration = routePauseRaceGeneration
+		controller, _ := routePauseRaceController(t, ctx, pool)
 		service := newTestDispatchService(t, pool)
-		var holder pgx.Tx
-		var holdErr error
-		var heldAt time.Time
+
+		var barrierErr, pauseErr error
+		var pausedState syncroute.RouteState
+		probed, pauseWaited := false, false
+		pauseDone := make(chan struct{})
 		fired := atCommitPoint(t, service, func() {
 			tx, err := pool.Begin(ctx)
 			if err != nil {
-				holdErr = err
+				barrierErr = err
 				return
 			}
-			if _, err := tx.Exec(ctx, `LOCK TABLE public.sync_dispatch_outbox IN SHARE ROW EXCLUSIVE MODE NOWAIT`); err != nil {
-				_ = tx.Rollback(ctx)
-				holdErr = err
-				return
+			_, barrierErr = tx.Exec(ctx, `LOCK TABLE public.sync_dispatch_outbox IN SHARE ROW EXCLUSIVE MODE NOWAIT`)
+			_ = tx.Rollback(ctx)
+			probed = true
+			go func() {
+				defer close(pauseDone)
+				pausedState, pauseErr = controller.Pause(ctx, outboxKindDispatchSyncRun)
+			}()
+			deadline := time.Now().Add(10 * time.Second)
+			for time.Now().Before(deadline) && !pauseWaited {
+				select {
+				case <-pauseDone:
+					return
+				case <-time.After(10 * time.Millisecond):
+				}
+				var waiting int
+				if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1 AND wait_event_type = 'Lock'`,
+					routePauseRaceApp).Scan(&waiting); err == nil && waiting > 0 {
+					pauseWaited = true
+				}
 			}
-			holder, heldAt = tx, time.Now()
 		})
 		passCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err := service.Dispatch(passCtx, atomicPassArgs())
-		returnedAt := time.Now()
+		err := service.Dispatch(passCtx, args)
 		cancel()
-		if holder != nil {
-			_ = holder.Rollback(ctx)
+		if !fired.Load() || !probed {
+			t.Fatalf("precondition: commit point fired=%v, barrier probed=%v err=%v", fired.Load(), probed, barrierErr)
 		}
-		if !fired.Load() || holdErr != nil || holder == nil {
-			t.Fatalf("precondition: commit point fired=%v, barrier held=%v err=%v", fired.Load(), holder != nil, holdErr)
-		}
-		waited := returnedAt.Sub(heldAt)
-		status, attempts := atomicPassRow(t, ctx, pool)
-		published := atomicPassPublishes(t, ctx, pool)
-		t.Logf("barrier: err=%v waited=%s row=%s/%d published=%d", err, waited, status, attempts, published)
-		if err == nil || !errors.Is(err, ErrDispatchSyncRunUnavailable) {
-			t.Fatalf("Dispatch returned %v, want ErrDispatchSyncRunUnavailable from the tail's lock timeout", err)
-		}
-		// The tail wraps every error as Unavailable; only lock_not_available after a real wait proves the lock bound.
 		var pgErr *pgconn.PgError
-		if !errors.As(err, &pgErr) || pgErr.Code != "55P03" {
-			t.Fatalf("Dispatch returned %v, want the cause lock_not_available (55P03) of the tail's lock_timeout", err)
+		if !errors.As(barrierErr, &pgErr) || pgErr.Code != "55P03" {
+			t.Fatalf("route mutation barrier at the commit point: %v, want lock_not_available (55P03): the pass must hold it off to COMMIT", barrierErr)
 		}
-		//abstime:allow lower bound: lock_timeout fires only after 1 s of waiting on the barrier held before the wait began, so load can only lengthen this; it fails only a tail that did not wait
-		if waited < 900*time.Millisecond {
-			t.Fatalf("the pass gave up after %s on the barrier, want a wait of the 1 s tail bound", waited)
+		if err != nil {
+			t.Fatalf("Dispatch returned %v, want nil: the tail does not wait on a barrier it holds off", err)
 		}
-		//abstime:allow hang ceiling: without the tail bound the pass waits on the barrier to its 10 s ctx deadline
-		if waited > 4*time.Second {
-			t.Fatalf("the pass waited %s on the barrier, want the 1 s tail bound", waited)
-		}
-		if published != 0 || atomicPassPlannedCount(t, ctx, pool) != 2 || status != "dispatched" || attempts != 1 {
-			t.Fatalf("after the timeout published=%d row=%s/%d, want nothing committed", published, status, attempts)
-		}
-
-		if err := newTestDispatchService(t, pool).Dispatch(ctx, atomicPassArgs()); err != nil {
-			t.Fatalf("retry after the barrier released: %v, want nil", err)
+		if !pauseWaited {
+			t.Fatal("the pause started at the commit point did not wait on a lock: it was not held off by the pass")
 		}
 		if status, _ := atomicPassRow(t, ctx, pool); status != "pending" {
-			t.Fatalf("after the retry row status=%s, want pending", status)
+			t.Fatalf("row status=%s, want pending (the tail re-armed it)", status)
 		}
 		if got := atomicPassPublishes(t, ctx, pool); got != 1 {
-			t.Fatalf("after the retry published=%d, want 1", got)
+			t.Fatalf("published=%d, want 1", got)
+		}
+		select {
+		case <-pauseDone:
+		case <-time.After(30 * time.Second):
+			t.Fatal("the pause did not end after the pass committed")
+		}
+		if pauseErr != nil {
+			t.Fatalf("pause after the pass committed: %v, want nil (delayed, not lost)", pauseErr)
+		}
+		var generation int64
+		var paused bool
+		if err := pool.QueryRow(ctx, `SELECT generation, paused FROM sync_dispatch_transport_routes WHERE kind = $1`, outboxKindDispatchSyncRun).
+			Scan(&generation, &paused); err != nil {
+			t.Fatal(err)
+		}
+		if !paused || generation != routePauseRaceGeneration+1 || pausedState.Generation != generation {
+			t.Fatalf("route after the pause: generation=%d paused=%v (pause returned generation %d), want %d paused",
+				generation, paused, pausedState.Generation, routePauseRaceGeneration+1)
 		}
 	})
 }

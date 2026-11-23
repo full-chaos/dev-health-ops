@@ -30,9 +30,9 @@ import (
 // declares.
 const (
 	sweepGoldenPath     = "testdata/equality_sweep.golden"
-	sweepGoldenSHA256   = "434512532f0fbc1ef7ba7a3bee4275c768ac279c9c797dae724e0662927a74e7"
+	sweepGoldenSHA256   = "b0600abc84fdaf55475d981382fa7edc67e214fec8d61d5177a9fcbd36b74c68"
 	sweepDeclaredPath   = "testdata/equality_sweep.declared"
-	sweepDeclaredSHA256 = "3df5e89543a160aef3744893443f74256f8301c53d25c0092884cfde0138bab1"
+	sweepDeclaredSHA256 = "a81d20da80344354db3f607cf4d29fce94e3026e33c33ee01d0b097d81447d3c"
 	sweepRewriteEnv     = "COMPOUNDINGRISK_SWEEP_REWRITE"
 	sweepOrg            = "org-sweep"
 )
@@ -71,10 +71,31 @@ type sweepTeam struct {
 
 type sweepRepo struct{ id, name string }
 
+// sweepOwner is one ownership row with its validity window [from, to); to nil
+// is open.
+type sweepOwner struct {
+	team, repo string
+	from       time.Time
+	to         *time.Time
+}
+
 type sweepWorld struct {
-	repos []sweepRepo
-	teams []sweepTeam
-	risk  []sweepRiskRow
+	repos  []sweepRepo
+	teams  []sweepTeam
+	owners []sweepOwner
+	risk   []sweepRiskRow
+}
+
+// ownership is every ownership row of the world: a team's owns are valid from
+// 2020-01-01 with no end.
+func (w sweepWorld) ownership() []sweepOwner {
+	var out []sweepOwner
+	for _, t := range w.teams {
+		for _, id := range t.owns {
+			out = append(out, sweepOwner{team: t.id, repo: id, from: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)})
+		}
+	}
+	return append(out, w.owners...)
 }
 
 // sweepStore answers the statements of this package from a sweepWorld. A
@@ -379,8 +400,10 @@ func (c *sweepStore) repoLabels(b []clickhouse.Binding) (clickhouse.RowScanner, 
 }
 
 // ownedRepos is the ownership read of teamscope.RepoCondition: the
-// repositories the named ACTIVE teams own. Ownership does not change over
-// time in the fixture.
+// repositories the named ACTIVE teams own at the bound instant. As
+// ownershipwindow.Window, a row is valid when from <= at < to, where at is the
+// bound instant or, when later, the first from of the repository's rows of
+// active teams.
 func (c *sweepStore) ownedRepos(b []clickhouse.Binding) (clickhouse.RowScanner, error) {
 	if err := c.org(b, "org_id"); err != nil {
 		return nil, err
@@ -392,12 +415,25 @@ func (c *sweepStore) ownedRepos(b []clickhouse.Binding) (clickhouse.RowScanner, 
 	for _, id := range mustSweepBinding(b, teamscope.BindingTeamIDs).([]string) {
 		named[id] = true
 	}
+	asOf, ok := mustSweepBinding(b, teamscope.BindingAsOf).(time.Time)
+	if !ok {
+		return nil, errors.New("sweep: ownership as-of binding is not a time")
+	}
+	active := c.activeIDs()
+	first := map[string]time.Time{}
+	for _, o := range c.world.ownership() {
+		if f, seen := first[o.repo]; active[o.team] && (!seen || o.from.Before(f)) {
+			first[o.repo] = o.from
+		}
+	}
 	owned := map[string]bool{}
-	for _, t := range c.world.teams {
-		if named[t.id] && t.active {
-			for _, id := range t.owns {
-				owned[id] = true
-			}
+	for _, o := range c.world.ownership() {
+		at := asOf
+		if first[o.repo].After(at) {
+			at = first[o.repo]
+		}
+		if named[o.team] && active[o.team] && !o.from.After(at) && (o.to == nil || o.to.After(at)) {
+			owned[o.repo] = true
 		}
 	}
 	rows := &sweepRows{}
@@ -478,6 +514,22 @@ func sweepFixture(dayKind, read string, now time.Time) sweepWorld {
 		row.scope, row.computedAt = scopeTeam, at(2, 0)
 		w.risk = append(w.risk, row)
 	}
+	return w
+}
+
+// sweepMovedFixture is sweepFixture with repo-m: t1 owns it on the selected
+// day, t2 from 06:00 of the next day (before now).
+func sweepMovedFixture(dayKind string, now time.Time) sweepWorld {
+	w := sweepFixture(dayKind, "under-cap", now)
+	d := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, time.UTC)
+	moved := time.Date(now.Year(), now.Month(), now.Day(), 6, 0, 0, 0, time.UTC)
+	w.repos = append(w.repos, sweepRepo{"repo-m", "acme/move"})
+	w.owners = append(w.owners,
+		sweepOwner{team: "t1", repo: "repo-m", from: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), to: &moved},
+		sweepOwner{team: "t2", repo: "repo-m", from: moved})
+	w.risk = append(w.risk, sweepRiskRow{day: d, scope: scopeRepo, scopeID: "repo-m", severity: "low", score: sweepF(.125), churn: sweepF(.125),
+		wChurn: .4, wComplexity: .3, wOwnership: .2, wReview: .1, thresholdElevated: .4, thresholdHigh: .7,
+		computedAt: time.Date(now.Year(), now.Month(), now.Day(), 1, 0, 0, 0, time.UTC)})
 	return w
 }
 
@@ -593,6 +645,28 @@ func sweepTable(t *testing.T, resolve sweepResolve) []byte {
 				Breakout: model.CompoundingRiskScopeTeam, RepoIds: extra.repos.ids, TeamIds: extra.teams.ids, TrendDays: 30,
 			})
 	}
+	for _, mv := range []struct {
+		teams   idsArg
+		repos   idsArg
+		dayKind string
+	}{
+		{idsArg{"absent", nil}, idsArg{"absent", nil}, "derived"},
+		{idsArg{"named", []string{"t1", "t2"}}, idsArg{"absent", nil}, "derived"},
+		{idsArg{"named-t1", []string{"t1"}}, idsArg{"absent", nil}, "derived"},
+		{idsArg{"named-t2", []string{"t2"}}, idsArg{"absent", nil}, "derived"},
+		{idsArg{"absent", nil}, idsArg{"absent", nil}, "stored"},
+		{idsArg{"absent", nil}, idsArg{"moved-narrowing", []string{"repo-a", "repo-m", "repo-u"}}, "stored"},
+		{idsArg{"named", []string{"t1", "t2"}}, idsArg{"moved-narrowing", []string{"repo-a", "repo-m"}}, "stored"},
+	} {
+		read := "n/a"
+		if mv.dayKind == "stored" {
+			read = "under-cap"
+		}
+		run(fmt.Sprintf("breakout=TEAM teamIds=%s repoIds=%s day=%s read=%s world=moved", mv.teams.name, mv.repos.name, mv.dayKind, read),
+			sweepMovedFixture(mv.dayKind, now), &model.CompoundingRiskFilterInput{
+				Breakout: model.CompoundingRiskScopeTeam, RepoIds: mv.repos.ids, TeamIds: mv.teams.ids, TrendDays: 30,
+			})
+	}
 	t.Logf("combinations run: %d; not applicable: %d", combinations, len(notApplicable))
 	for _, na := range notApplicable {
 		t.Logf("not applicable: %s", na)
@@ -635,9 +709,9 @@ func sweepCompare(t *testing.T, text []byte) {
 	for _, h := range declared.order {
 		class, block, _ := strings.Cut(declared.blocks[h], "\n")
 		switch {
-		case class != "class B" && class != "class F" && class != "class []":
+		case class != "class G" && class != "class S":
 			differ++
-			t.Errorf("%s: declared %q is not one of the classes B, F, []", h, class)
+			t.Errorf("%s: declared %q is not one of the classes G (grouping at the selected day), S (named scope at the selected day)", h, class)
 		case want.blocks[h] == "":
 			differ++
 			t.Errorf("%s: declared, but not a combination of the golden", h)

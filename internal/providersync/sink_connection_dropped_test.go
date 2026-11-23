@@ -12,6 +12,8 @@ import (
 	"time"
 
 	chgoproto "github.com/ClickHouse/clickhouse-go/v2/lib/proto"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/connerr"
 )
 
 // droppedFirstBlockError has the shape of the driver error of a connection
@@ -22,6 +24,11 @@ func droppedFirstBlockError() error {
 	return fmt.Errorf("query processing: failed to read first block packet from %s (conn_id=%d): %w",
 		"127.0.0.1:9000", 1, fmt.Errorf("read: %w", io.EOF))
 }
+
+// droppedInsertError is the error the service conn returns for an INSERT
+// whose connection dropped: the driver error marked connerr.AtWrite
+// (internal/storage/clickhouse TestTheServiceConnMarksOnlyItsInsertCalls).
+func droppedInsertError() error { return connerr.AtWrite(droppedFirstBlockError()) }
 
 // failingEffectSink fails every write with err; onWrite runs first.
 type failingEffectSink struct {
@@ -85,21 +92,21 @@ func requireSinkErrorUnchanged(t *testing.T, err, sinkErr error) {
 
 // (a) A dropped write to a ReadbackRequired ReplacingMergeTree destination.
 func TestEffectCommitterNamesADroppedReadbackRequiredWrite(t *testing.T) {
-	sinkErr := droppedFirstBlockError()
+	sinkErr := droppedInsertError()
 	err := commitWithFailingSink(t, context.Background(), "test_suite_results", EffectReadbackRequired, sinkErr, nil)
 	requireSinkDropWrapped(t, err, sinkErr, "test_suite_results")
 }
 
 // (b) A dropped write to a ReplaySafe ReplacingMergeTree destination.
 func TestEffectCommitterNamesADroppedReplaySafeWrite(t *testing.T) {
-	sinkErr := droppedFirstBlockError()
+	sinkErr := droppedInsertError()
 	err := commitWithFailingSink(t, context.Background(), "feature_flag", EffectReplaySafe, sinkErr, nil)
 	requireSinkDropWrapped(t, err, sinkErr, "feature_flag")
 }
 
 // (c) A Blocked effect has no recovery: its dropped write is not named.
 func TestEffectCommitterDoesNotNameADroppedBlockedWrite(t *testing.T) {
-	sinkErr := droppedFirstBlockError()
+	sinkErr := droppedInsertError()
 	err := commitWithFailingSink(t, context.Background(), "test_suite_results", EffectRecoveryBlocked, sinkErr, nil)
 	requireSinkErrorUnchanged(t, err, sinkErr)
 }
@@ -107,7 +114,7 @@ func TestEffectCommitterDoesNotNameADroppedBlockedWrite(t *testing.T) {
 // (d) feature_flag_event is a plain MergeTree: a second copy of a dropped
 // INSERT the server applied late is a real duplicate, so it is not named.
 func TestEffectCommitterDoesNotNameADroppedFeatureFlagEventWrite(t *testing.T) {
-	sinkErr := droppedFirstBlockError()
+	sinkErr := droppedInsertError()
 	err := commitWithFailingSink(t, context.Background(), "feature_flag_event", EffectReadbackRequired, sinkErr, nil)
 	requireSinkErrorUnchanged(t, err, sinkErr)
 }
@@ -115,7 +122,7 @@ func TestEffectCommitterDoesNotNameADroppedFeatureFlagEventWrite(t *testing.T) {
 // (e) The work context ended during the write (shutdown, lease loss): the
 // driver closed the connection itself, so the EOF is no drop.
 func TestEffectCommitterDoesNotNameAnEOFAfterTheWorkContextEnded(t *testing.T) {
-	sinkErr := droppedFirstBlockError()
+	sinkErr := droppedInsertError()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	err := commitWithFailingSink(t, ctx, "test_suite_results", EffectReadbackRequired, sinkErr, cancel)
@@ -124,7 +131,7 @@ func TestEffectCommitterDoesNotNameAnEOFAfterTheWorkContextEnded(t *testing.T) {
 
 // (f) A ClickHouse server exception is not a dropped connection.
 func TestEffectCommitterDoesNotNameAClickHouseException(t *testing.T) {
-	sinkErr := &chgoproto.Exception{Code: 241, Name: "DB::Exception", Message: "Memory limit (total) exceeded"}
+	sinkErr := connerr.AtWrite(&chgoproto.Exception{Code: 241, Name: "DB::Exception", Message: "Memory limit (total) exceeded"})
 	err := commitWithFailingSink(t, context.Background(), "test_suite_results", EffectReadbackRequired, sinkErr, nil)
 	requireSinkErrorUnchanged(t, err, sinkErr)
 }
@@ -206,4 +213,60 @@ func TestSinkDropWrappableDestinationsAreReplacingMergeTree(t *testing.T) {
 			t.Errorf("not-wrapped destination %q is a ReplacingMergeTree: move it to the wrappable set", destination)
 		}
 	}
+}
+
+// (g) A dropped READ inside the write (the stored-finish-day SELECT before the
+// ci_pipeline_runs INSERT, a readback after it) is no dropped INSERT: no mark,
+// so the error is returned unchanged (unclassified, cap 2). Before, after and
+// joined with a successful INSERT alike.
+func TestEffectCommitterDoesNotNameADroppedReadInsideTheWrite(t *testing.T) {
+	for name, sinkErr := range map[string]error{
+		"read before the insert":      fmt.Errorf("read stored ci_pipeline_runs finish days: %w", droppedFirstBlockError()),
+		"read after a stored insert":  fmt.Errorf("read back stored rows: %w", droppedFirstBlockError()),
+		"read beside an insert error": errors.Join(connerr.AtWrite(errors.New("code: 60, unknown table")), droppedFirstBlockError()),
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := commitWithFailingSink(t, context.Background(), "ci_pipeline_runs", EffectReadbackRequired, sinkErr, nil)
+			if !errors.Is(err, io.EOF) {
+				t.Fatalf("premise: %v does not carry the drop", err)
+			}
+			requireSinkErrorUnchanged(t, err, sinkErr)
+		})
+	}
+}
+
+// (h) The INSERT mark survives the wrapping on the way to the committer: %w
+// (the touched-days "send touched days ..." wrap) and errors.Join.
+func TestEffectCommitterNamesAWrappedDroppedInsert(t *testing.T) {
+	for name, sinkErr := range map[string]error{
+		"%w":           fmt.Errorf("send touched days of moved ci_pipeline_runs: %w", droppedInsertError()),
+		"errors.Join":  errors.Join(errors.New("abort batch"), droppedInsertError()),
+		"%w over join": fmt.Errorf("write: %w", errors.Join(droppedInsertError(), errors.New("abort batch"))),
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := commitWithFailingSink(t, context.Background(), "ci_pipeline_runs", EffectReadbackRequired, sinkErr, nil)
+			requireSinkDropWrapped(t, err, sinkErr, "ci_pipeline_runs")
+		})
+	}
+}
+
+// (i) The recovery readback of a Writing effect (commitPrepared, before any
+// rewrite) is a read: its drop is returned unchanged, never named.
+func TestEffectCommitterDoesNotNameADroppedRecoveryReadback(t *testing.T) {
+	now := time.Date(2026, 11, 22, 17, 27, 12, 0, time.UTC)
+	claim := nativeTestClaim("github", "cicd")
+	batch := effectBatchFixture(t, "test_suite_results", EffectReadbackRequired, `{"org_id":"org-acme","run_id":"9001"}`)
+	ledger := &memoryEffectLedger{}
+	if _, err := (EffectCommitter{
+		Ledger: ledger, Sink: failingEffectSink{err: droppedInsertError()},
+		Readback: staticEffectReadback{}, Now: func() time.Time { return now },
+	}).Commit(context.Background(), claim, []EffectBatch{batch}, now); err == nil || ledger.state.Effects[0].Status != GenerationBlockWriting {
+		t.Fatalf("premise: first write err=%v, want a failed write that leaves the effect Writing", err)
+	}
+	readErr := fmt.Errorf("inspect test_suite_results: %w", droppedFirstBlockError())
+	_, err := (EffectCommitter{
+		Ledger: ledger, Sink: failingEffectSink{err: errors.New("premise: no rewrite before the readback")},
+		Readback: staticEffectReadback{err: readErr}, Now: func() time.Time { return now },
+	}).Commit(context.Background(), claim, []EffectBatch{batch}, now)
+	requireSinkErrorUnchanged(t, err, readErr)
 }

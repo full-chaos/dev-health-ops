@@ -689,14 +689,19 @@ func notMember(row Provider) *Error {
 }
 
 // newAccount runs the e-mail checks. With JIT off it then refuses, writing
-// nothing. With JIT on, one JIT step creates the account, joins it to the
-// provider's organization and issues the session together.
+// nothing. With JIT on, a row with no domain list refuses as auto-provisioning
+// off; otherwise one JIT step creates the account, joins it to the provider's
+// organization and issues the session together.
 func (s *Service) newAccount(ctx context.Context, row Provider, v validated, requestID *string) (Login, *Error) {
 	if failure := s.checkNewAccount(ctx, row, v); failure != nil {
 		return Login{}, failure
 	}
 	if s.cfg.MembershipJIT == nil {
 		return Login{}, notMember(row)
+	}
+	// An asserted email is the org's IdP's word: only a domain the row lists can make an account.
+	if len(row.AllowedDomains) == 0 {
+		return Login{}, s.provisioningOff(ctx, row)
 	}
 	role, ok := s.signInRole(ctx, row)
 	if !ok {

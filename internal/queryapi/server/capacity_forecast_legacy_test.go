@@ -49,8 +49,9 @@ func TestCapacityForecastCurrentAndV1_DifferByTheDistributionSelection(t *testin
 
 func TestCapacityForecast_BothTextsResolveToTheOneOperation(t *testing.T) {
 	legacy := legacyDigestsByOperation["capacityForecast"]
-	if len(legacy) != 2 || legacy[0] != digestHex(registeredCapacityForecastV1Document) || legacy[1] != digestHex(registeredCapacityForecastV2Document) {
-		t.Fatalf("legacyDigestsByOperation[capacityForecast] = %v, want exactly the V1 and the V2 digest", legacy)
+	if len(legacy) != 3 || legacy[0] != digestHex(registeredCapacityForecastV1Document) ||
+		legacy[1] != digestHex(registeredCapacityForecastV2Document) || legacy[2] != digestHex(registeredCapacityForecastV3Document) {
+		t.Fatalf("legacyDigestsByOperation[capacityForecast] = %v, want exactly the V1, the V2 and the V3 digest", legacy)
 	}
 
 	byDigest, err := buildOperationByDigest(
@@ -66,7 +67,7 @@ func TestCapacityForecast_BothTextsResolveToTheOneOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"capacityForecast.graphql", "capacityForecast.v1.graphql", "capacityForecast.v2.graphql"} {
+	for _, name := range []string{"capacityForecast.graphql", "capacityForecast.v1.graphql", "capacityForecast.v2.graphql", "capacityForecast.v3.graphql"} {
 		operation, ok := operationForDocument(readWireFormFile(t, name), byDigest)
 		if !ok || operation != "capacityForecast" {
 			t.Errorf("%s resolves to %q, %v; want capacityForecast, true", name, operation, ok)
@@ -91,7 +92,7 @@ func TestCapacityForecastV2Document_MatchesItsWireFormFixture(t *testing.T) {
 // the horizon on the distribution; the cumulative share on both bin lists): take them out of the current text and
 // the V2 text is left, byte for byte.
 func TestCapacityForecastCurrentAndV2_DifferByTheRunTotalAndTheCumulativeShare(t *testing.T) {
-	current := registeredCapacityForecastDocument
+	current := withoutBacklogState(t, registeredCapacityForecastDocument)
 	without := current
 	for line, times := range map[string]int{
 		"      runs\n": 1, "      unfinishedRuns\n": 1, "      horizonDays\n": 1, "        cumulativeShare\n": 2,
@@ -112,6 +113,90 @@ func TestCapacityForecastCurrentAndV2_DifferByTheRunTotalAndTheCumulativeShare(t
 	for _, dropped := range []string{"throughputHistory", "throughputDistribution"} {
 		if strings.Contains(current, dropped) {
 			t.Errorf("the current capacityForecast document asks for %s", dropped)
+		}
+	}
+}
+
+// CHAOS-7508: the current text asks how its backlogSize was found; the text CHAOS-8477 registered stays accepted as the
+// legacy V3 text.
+
+func TestCapacityForecastV3Document_MatchesItsWireFormFixture(t *testing.T) {
+	fixture := readWireFormFile(t, "capacityForecast.v3.graphql")
+	if got, want := digestHex(registeredCapacityForecastV3Document), digestHex(fixture); got != want {
+		t.Fatalf("registeredCapacityForecastV3Document digests to %s, its fixture to %s", got, want)
+	}
+	if !strings.Contains(fixture, "__typename") {
+		t.Fatal("the V3 fixture carries no __typename: it is the raw web source, not a wire form")
+	}
+}
+
+// withoutBacklogState is the current capacityForecast text less the two selections CHAOS-7508 added after backlogSize.
+func withoutBacklogState(t *testing.T, document string) string {
+	t.Helper()
+	const added = "    backlogSize\n    backlogState\n    backlogAsOfDay\n"
+	if strings.Count(document, added) != 1 {
+		t.Fatal("the current capacityForecast document does not ask for backlogState and backlogAsOfDay after backlogSize exactly once")
+	}
+	return strings.Replace(document, added, "    backlogSize\n", 1)
+}
+
+// Take backlogState and backlogAsOfDay out of the current text and the V3 text is left, byte for byte.
+func TestCapacityForecastCurrentAndV3_DifferByTheBacklogState(t *testing.T) {
+	for _, field := range []string{"backlogState", "backlogAsOfDay"} {
+		if strings.Contains(registeredCapacityForecastV3Document, field) {
+			t.Fatalf("the legacy V3 capacityForecast document asks for %s: it is not the old text", field)
+		}
+	}
+	if without := withoutBacklogState(t, registeredCapacityForecastDocument); without != registeredCapacityForecastV3Document {
+		t.Fatalf("the current document less backlogState and backlogAsOfDay is not the V3 text:\n%s", without)
+	}
+}
+
+// CHAOS-7508: the list operation returns the same CapacityForecast type; its current text asks for backlogState and
+// backlogAsOfDay on the node, and the text CHAOS-5349 registered stays accepted as the legacy V1 text.
+
+func TestCapacityForecastsV1Document_MatchesItsWireFormFixture(t *testing.T) {
+	fixture := readWireFormFile(t, "capacityForecasts.v1.graphql")
+	if got, want := digestHex(registeredCapacityForecastsV1Document), digestHex(fixture); got != want {
+		t.Fatalf("registeredCapacityForecastsV1Document digests to %s, its fixture to %s", got, want)
+	}
+	if !strings.Contains(fixture, "__typename") {
+		t.Fatal("the V1 fixture carries no __typename: it is the raw web source, not a wire form")
+	}
+}
+
+// Take backlogState and backlogAsOfDay out of the current list text and the V1 text is left, byte for byte.
+func TestCapacityForecastsCurrentAndV1_DifferByTheBacklogState(t *testing.T) {
+	const added = "        backlogSize\n        backlogState\n        backlogAsOfDay\n"
+	if strings.Count(registeredCapacityForecastsDocument, added) != 1 {
+		t.Fatal("the current capacityForecasts document does not ask for backlogState and backlogAsOfDay after backlogSize exactly once")
+	}
+	for _, field := range []string{"backlogState", "backlogAsOfDay"} {
+		if strings.Contains(registeredCapacityForecastsV1Document, field) {
+			t.Fatalf("the legacy V1 capacityForecasts document asks for %s: it is not the old text", field)
+		}
+	}
+	if without := strings.Replace(registeredCapacityForecastsDocument, added, "        backlogSize\n", 1); without != registeredCapacityForecastsV1Document {
+		t.Fatalf("the current list document less backlogState and backlogAsOfDay is not the V1 text:\n%s", without)
+	}
+}
+
+func TestCapacityForecasts_BothTextsResolveToTheOneOperation(t *testing.T) {
+	legacy := legacyDigestsByOperation["capacityForecasts"]
+	if len(legacy) != 1 || legacy[0] != digestHex(registeredCapacityForecastsV1Document) {
+		t.Fatalf("legacyDigestsByOperation[capacityForecasts] = %v, want exactly the V1 digest", legacy)
+	}
+	byDigest, err := buildOperationByDigest(
+		map[string]string{"capacityForecasts": digestHex(registeredCapacityForecastsDocument)},
+		map[string][]string{"capacityForecasts": legacy},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"capacityForecasts.graphql", "capacityForecasts.v1.graphql"} {
+		operation, ok := operationForDocument(readWireFormFile(t, name), byDigest)
+		if !ok || operation != "capacityForecasts" {
+			t.Errorf("%s resolves to %q, %v; want capacityForecasts, true", name, operation, ok)
 		}
 	}
 }

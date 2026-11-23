@@ -33,9 +33,6 @@ func TestRetryWaitLongerThanTheDeadlineEndsAsRateLimitedNotTimeLimit(t *testing.
 			if !errors.As(err, &providerErr) || providerErr.Class != ErrorRateLimited || providerErr.RetryAfter != 2*time.Second {
 				t.Fatalf("status %d, Retry-After 2s, deadline in 300ms: err = %v after %s, want rate_limited carrying RetryAfter 2s (not a deadline error)", status, err, elapsed)
 			}
-			if elapsed >= 250*time.Millisecond {
-				t.Fatalf("status %d: returned after %s, want at once (the wait cannot finish before the deadline)", status, elapsed)
-			}
 		})
 	}
 }

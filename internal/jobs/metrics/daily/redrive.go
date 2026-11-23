@@ -486,7 +486,7 @@ func (store *PostgresStore) RedriveStaleFinalize(
 	if !validUUID(runID) {
 		return false, ErrInvalidState
 	}
-	return store.redriveOneStrandedFinalize(ctx, publisher, runID, nonce, store.now().UTC(), false, &outboxRecentSince)
+	return store.redriveOneStrandedFinalize(ctx, publisher, runID, nonce, store.now().UTC(), false, nil)
 }
 
 // staleFinalizeOutboxRecheckSQL is the survey's own outbox refusal (the

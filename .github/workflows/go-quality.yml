@@ -570,6 +570,7 @@ jobs:
           path: go-junit-part/
           retention-days: 7
           if-no-files-found: ignore
+          overwrite: true
 
       - name: Upload the providersync race slice's go test -json (race legs)
         continue-on-error: true
@@ -872,6 +873,7 @@ jobs:
           path: junit-merged/
           retention-days: 14
           if-no-files-found: warn
+          overwrite: true
 
   # CHAOS-13767: one lcov report of the main push's non-race test legs, for the ops coverage sync (it reads .info members). Best effort:
   # no step can fail the job, nothing needs it, and it is not in the go-quality aggregate, so it can never change a verdict.

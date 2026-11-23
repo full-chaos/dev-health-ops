@@ -128,6 +128,9 @@ func computeTestopsTestMetricsWithoutTeams(
 	if err := loadNativeTestopsSuites(ctx, conn, accumulator, orgID, repoID, start, end); err != nil {
 		return nil, err
 	}
+	if err := loadNativeTestopsRevivedSlots(ctx, conn, orgID, repoID, start, end); err != nil {
+		return nil, err
+	}
 	historicalFailedNames, err := loadNativeTestopsCaseAggregate(
 		ctx, conn, accumulator, orgID, repoID, historyStart, start, end)
 	if err != nil {

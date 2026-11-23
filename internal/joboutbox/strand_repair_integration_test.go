@@ -2853,6 +2853,11 @@ FROM run`, old); err != nil {
 				if node.NodeType == "Seq Scan" && node.ActualLoops > 1 {
 					t.Fatalf("%s scans river_job %.0f times (once per base run):\n%s", statement.name, node.ActualLoops, raw)
 				}
+				// A per-run read of river_job (the recent arm) must go through River's args index.
+				if node.ActualLoops > 1 && !readsArgsIndex(node) {
+					t.Fatalf("%s reads river_job %.0f times through %s %q, not river_job_args_index:\n%s",
+						statement.name, node.ActualLoops, node.NodeType, node.IndexName, raw)
+				}
 			}
 			for _, child := range node.Plans {
 				walk(child)
@@ -2865,10 +2870,36 @@ FROM run`, old); err != nil {
 	}
 }
 
+// readsArgsIndex reports whether the node reads river_job_args_index: an index scan on it, or a bitmap heap scan over a
+// bitmap index scan on it.
+func readsArgsIndex(node explainNode) bool {
+	if node.IndexName == "river_job_args_index" {
+		return true
+	}
+	if node.NodeType != "Bitmap Heap Scan" {
+		return false
+	}
+	var found bool
+	var walk func(child explainNode)
+	walk = func(child explainNode) {
+		if child.IndexName == "river_job_args_index" {
+			found = true
+		}
+		for _, grand := range child.Plans {
+			walk(grand)
+		}
+	}
+	for _, child := range node.Plans {
+		walk(child)
+	}
+	return found
+}
+
 // explainNode is one node of EXPLAIN (ANALYZE, FORMAT JSON).
 type explainNode struct {
 	NodeType     string        `json:"Node Type"`
 	RelationName string        `json:"Relation Name"`
+	IndexName    string        `json:"Index Name"`
 	ActualLoops  float64       `json:"Actual Loops"`
 	Plans        []explainNode `json:"Plans"`
 }

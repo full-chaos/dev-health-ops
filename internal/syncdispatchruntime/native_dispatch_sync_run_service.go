@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"time"
 
@@ -52,10 +53,9 @@ var ErrDispatchSyncRunUnavailable = errors.New("native dispatch_sync_run is unav
 // service owns no lifecycle over, opening its own transaction(s) per call
 // rather than accepting an ambient one, matching Python's own multiple
 // separate `with get_postgres_session_sync() as session:` blocks inside
-// ONE dispatch_sync_run call (the main claim/route/enqueue pass, then a
-// second session just for _pending_unit_counts, then a third
-// _schedule_redispatch opens for itself) rather than one transaction end
-// to end.
+// ONE dispatch_sync_run call. Since CHAOS-14479 the pending-unit-counts
+// read and the re-arm run in the pass's own transaction (armPassWake); only
+// the finalize arm opens a second one.
 type NativeDispatchSyncRunService struct {
 	pool     *pgxpool.Pool
 	logger   *synclog.Logger
@@ -143,11 +143,11 @@ func (service *NativeDispatchSyncRunService) nowUTC() time.Time {
 // loop, the DISPATCHING status flip (all still the SAME first transaction
 // -- team-lead-confirmed against origin/main: the claim/enqueue/
 // status-flip is one Postgres transaction in Python too, closing the
-// producer kill window its own comment names), and the tail (a SECOND
-// transaction for pending-unit-counts, deciding between a countdown/
-// deferred redispatch and arming finalize; scheduleRedispatch and
-// armFinalizeSyncRunWakeup each open their own transaction beyond that,
-// matching Python's own separate sessions for _schedule_redispatch calls).
+// producer kill window its own comment names), and the tail (armPassWake,
+// in that SAME transaction after the commit snapshot: pending-unit-counts,
+// deciding between a countdown/deferred redispatch and arming finalize;
+// only armFinalizeSyncRunWakeup opens its own transaction, after the
+// commit -- CHAOS-14479).
 //
 // RULING REVERSAL (CHAOS-4175, team-lead, superseding an earlier ruling in
 // this same ticket): Dispatch does NOT resolve sync.provider_unit's route
@@ -596,7 +596,19 @@ WHERE id = $1::uuid`,
 			return ErrDispatchSyncRunUnavailable
 		}
 	}
-	if committed, err := service.commitFenced(ctx, tx, fence); err != nil {
+	// CHAOS-14479: the pass arms its own wake inside its transaction, after the commit snapshot accepted the delivery
+	// and before COMMIT. A failed read or re-arm write then commits nothing and River retries an attempt that
+	// committed nothing; before, the re-arm ran after the commit and a failure ended a committed pass as a success with
+	// no wake (or, for the tail's read, as an error River retried).
+	var end passEnd
+	var counts pendingUnitCounts
+	if committed, err := service.commitFencedAfter(ctx, tx, fence, func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		if end, counts, err = service.armPassWake(ctx, tx, run.id, now, riverQueued, nextDeferredAt, len(deferredOutsideSnapshot) > 0); err != nil {
+			return fmt.Errorf("%w: pass tail: %w", ErrDispatchSyncRunUnavailable, err)
+		}
+		return nil
+	}); err != nil {
 		return err
 	} else if !committed {
 		return nil
@@ -621,76 +633,17 @@ WHERE id = $1::uuid`,
 		defer wakeHeldBackRuns(ctx, service.pool, decision.heldBackRunIDs, service.nowUTC())
 	}
 
-	if riverQueued > 0 {
-		// The pass consumed the run's dispatch row, so it re-arms from the run's state after its writes, not only from
-		// this pass's deferrals: a retrying unit an earlier pass deferred keeps its wake, and work still due now
-		// (concurrency-capped units, a unit that became claimable after the guard's snapshot, CHAOS-4605) wants the
-		// countdown. scheduleRedispatch writes ONE wakeup and overwrites a pending row, so it takes the earlier of the two.
-		// On a failed read the pass arms from its own values (only an earlier pass's deferral is not carried) and does not
-		// return the error: a retried delivery would run admission again under the same attempt. Due work is the guard's
-		// concurrency-capped units; the pass's budget-deferred and cooldown-excluded units are in nextDeferredAt.
-		counts, err := service.pendingUnitCountsNow(ctx, run.id, now)
-		if err != nil {
-			service.logger.Warn(ctx, synclog.MsgDispatchSyncRunRedispatchBackoffReadFailed, synclog.Run(synclog.ParseID(run.id)), synclog.Text(synclog.KeyReason, synclog.ParseLabel(pendingCountsReadReason)))
-			counts = pendingUnitCounts{dispatchable: len(decision.cappedUnitIDs)}
-		}
-		armAt := service.nowUTC()
-		if at, ok := queuedPassRearmAt(nextDeferredAt, counts, len(deferredOutsideSnapshot) > 0, armAt); ok {
-			scheduleRedispatch(ctx, service.pool, service.logger, run.id, at, armAt)
-		}
+	switch end {
+	case passEndQueued:
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunDispatched, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, riverQueued))
 		return nil
-	}
-
-	// --- Tail: river_queued == 0 -- nothing was claimable this pass.
-	// SECOND, separate transaction (Python's own second
-	// `with get_postgres_session_sync() as session:` block, opened only
-	// after the first one above already committed).
-	counts, err := service.pendingUnitCountsNow(ctx, run.id, now)
-	if err != nil {
-		return err
-	}
-
-	// a) Deferred work remains dispatchable now (a PLANNED unit, or a due
-	// RETRYING/stale-DISPATCHING one) -> countdown redispatch so it drains
-	// once slots free up. scheduleRedispatch's own exception-swallowing
-	// means the try/except Python wraps THIS call in can never actually
-	// fire (matching the dead-code precedent already found and NOT ported
-	// elsewhere in this function) -- nothing to replicate beyond the call
-	// itself.
-	if counts.dispatchable > 0 {
-		// CHAOS-4605 (codex round 2, P2): this armed the bare countdown and
-		// dropped counts.nextDeferredAt on the floor. Because
-		// scheduleRedispatch's second statement overwrites a pending row
-		// UNCONDITIONALLY, a run holding both dispatchable-but-capped work and
-		// an earlier budget deferral had that deferral pushed out by up to the
-		// countdown. Reachable on origin/main already (concurrency-capped units
-		// alone put a pass here), and made far more reachable by this ticket's
-		// allow-list, which is precisely what leaves a unit dispatchable rather
-		// than claiming it. Same rule, same helper, as the riverQueued > 0 arm.
-		armAt := service.nowUTC()
-		// CHAOS-8459: this pass claimed nothing, so the run is waiting on a
-		// cap or a long unit; the re-arm backs off with the idle time and a
-		// unit end wakes the pass at once (CHAOS-10013).
-		backoff, backoffAttrs := rearmBackoff(ctx, service.pool, service.logger, run.id, armAt)
-		scheduleRedispatch(ctx, service.pool, service.logger, run.id, dueNowRearmAtAfter(counts.nextDeferredAt, armAt, backoff), armAt, backoffAttrs...)
+	case passEndCountdown:
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunNoop, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Count(synclog.KeyPendingUnits, counts.dispatchable))
 		return nil
-	}
-	// b) Nothing dispatchable, but a RETRYING unit has a future available_at
-	// -- arm a redispatch for exactly that time rather than the default
-	// countdown, so a long backoff is honored instead of being polled early for
-	// nothing. Also while units are in flight: this pass consumed the run's
-	// row, so without it the deferral would wait for the next unit end.
-	if counts.nextDeferredAt != nil {
-		scheduleRedispatch(ctx, service.pool, service.logger, run.id, counts.nextDeferredAt, service.nowUTC())
+	case passEndDeferred:
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunDeferred, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Instant(synclog.KeyNextDeferredAt, *counts.nextDeferredAt))
 		return nil
-	}
-	// c) Nothing dispatchable or deferred, but something is genuinely in
-	// flight (DISPATCHING not yet stale, or RUNNING) -- wait for it; its end
-	// wakes the pass, no wakeup to arm.
-	if counts.inFlight > 0 {
+	case passEndInFlight:
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunWaitingInflight, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Count(synclog.KeyInFlightUnits, counts.inFlight))
 		return nil
 	}
@@ -698,7 +651,9 @@ WHERE id = $1::uuid`,
 	// already terminal) -- arm finalize (idempotent; handles both the
 	// zero-unit and already-finalized cases the same way
 	// finalize_sync_run's own entry logic already does). A redispatch here
-	// would loop forever with nothing left to ever claim.
+	// would loop forever with nothing left to ever claim. Its own
+	// transaction after the commit: inside the pass it would add a wait on
+	// the finalize row while the pass holds its dispatch row.
 	service.logger.Info(ctx, synclog.MsgDispatchSyncRunNoopFinalize, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0))
 	finalizeTx, err := service.pool.Begin(ctx)
 	if err != nil {
@@ -712,6 +667,89 @@ WHERE id = $1::uuid`,
 		return ErrDispatchSyncRunUnavailable
 	}
 	return nil
+}
+
+// passEnd is how a committed pass left the run: which wake it armed inside its transaction, or that its queued or
+// in-flight units' ends wake it, or (passEndFinalize) that nothing is left and finalize is armed after the commit.
+type passEnd int
+
+const (
+	passEndQueued passEnd = iota
+	passEndCountdown
+	passEndDeferred
+	passEndInFlight
+	passEndFinalize
+)
+
+// dispatchTailLockTimeoutSQL bounds every lock wait of the pass's tail. The re-arm takes ROW EXCLUSIVE on
+// sync_dispatch_outbox, which waits on a route mutation's SHARE ROW EXCLUSIVE barrier (syncroute/control.go
+// routeMutationLockSQL) while the pass holds its dispatch row, units and bucket locks. Transaction-local: the body
+// and the commit snapshot keep their own rules. A timeout rolls the pass back and River redelivers it.
+const dispatchTailLockTimeoutSQL = `SET LOCAL lock_timeout = '1000ms'`
+
+// armPassWake is the pass's tail (passTail): it reads the run's pending units on the pass transaction and re-arms
+// the run's dispatch row there. Any error is returned and the pass commits nothing.
+func (service *NativeDispatchSyncRunService) armPassWake(ctx context.Context, tx pgx.Tx, runID string, admittedAt time.Time, riverQueued int, passDeferredAt *time.Time, claimableAfterSnapshot bool) (passEnd, pendingUnitCounts, error) {
+	if _, err := tx.Exec(ctx, dispatchTailLockTimeoutSQL); err != nil {
+		return 0, pendingUnitCounts{}, err
+	}
+	counts, err := computePendingUnitCounts(ctx, tx, runID, service.nowUTC(), admittedAt)
+	if err != nil {
+		return 0, pendingUnitCounts{}, err
+	}
+	if riverQueued > 0 {
+		// The pass consumed the run's dispatch row, so it re-arms from the run's state after its writes, not only from
+		// this pass's deferrals: a retrying unit an earlier pass deferred keeps its wake, and work still due now
+		// (concurrency-capped units, a unit that became claimable after the guard's snapshot, CHAOS-4605) wants the
+		// countdown. scheduleRedispatch writes ONE wakeup and overwrites a pending row, so it takes the earlier of the two.
+		armAt := service.nowUTC()
+		if at, ok := queuedPassRearmAt(passDeferredAt, counts, claimableAfterSnapshot, armAt); ok {
+			if err := scheduleRedispatch(ctx, tx, service.logger, runID, at, armAt); err != nil {
+				return 0, pendingUnitCounts{}, err
+			}
+		}
+		return passEndQueued, counts, nil
+	}
+	// --- Tail: river_queued == 0 -- nothing was claimable this pass.
+	//
+	// a) Deferred work remains dispatchable now (a PLANNED unit, or a due
+	// RETRYING/stale-DISPATCHING one) -> countdown redispatch so it drains
+	// once slots free up.
+	if counts.dispatchable > 0 {
+		// CHAOS-4605 (codex round 2, P2): this armed the bare countdown and
+		// dropped counts.nextDeferredAt on the floor. Because
+		// scheduleRedispatch's second statement overwrites a pending row
+		// UNCONDITIONALLY, a run holding both dispatchable-but-capped work and
+		// an earlier budget deferral had that deferral pushed out by up to the
+		// countdown. Same rule, same helper, as the riverQueued > 0 arm.
+		armAt := service.nowUTC()
+		// CHAOS-8459: this pass claimed nothing, so the run is waiting on a
+		// cap or a long unit; the re-arm backs off with the idle time and a
+		// unit end wakes the pass at once (CHAOS-10013).
+		backoff, backoffAttrs := rearmBackoff(ctx, tx, service.logger, runID, armAt)
+		if err := scheduleRedispatch(ctx, tx, service.logger, runID, dueNowRearmAtAfter(counts.nextDeferredAt, armAt, backoff), armAt, backoffAttrs...); err != nil {
+			return 0, pendingUnitCounts{}, err
+		}
+		return passEndCountdown, counts, nil
+	}
+	// b) Nothing dispatchable, but a RETRYING unit has a future available_at
+	// -- arm a redispatch for exactly that time rather than the default
+	// countdown, so a long backoff is honored instead of being polled early for
+	// nothing. Also while units are in flight: this pass consumed the run's
+	// row, so without it the deferral would wait for the next unit end.
+	if counts.nextDeferredAt != nil {
+		if err := scheduleRedispatch(ctx, tx, service.logger, runID, counts.nextDeferredAt, service.nowUTC()); err != nil {
+			return 0, pendingUnitCounts{}, err
+		}
+		return passEndDeferred, counts, nil
+	}
+	// c) Nothing dispatchable or deferred, but something is genuinely in
+	// flight (DISPATCHING not yet stale, or RUNNING) -- wait for it; its end
+	// wakes the pass, no wakeup to arm.
+	if counts.inFlight > 0 {
+		return passEndInFlight, counts, nil
+	}
+	return passEndFinalize, counts, nil
 }
 
 // terminalizeFeatureDisabled ports the feature-gate denial branch verbatim:
@@ -760,7 +798,12 @@ func (service *NativeDispatchSyncRunService) terminalizeFeatureDisabled(
 // delivery was superseded during the pass) is reported like a start refusal,
 // with the reason decideCommit took from the locked commit snapshot.
 func (service *NativeDispatchSyncRunService) commitFenced(ctx context.Context, tx pgx.Tx, fence *transportFence) (bool, error) {
-	outcome, err := fence.commit(ctx, tx)
+	return service.commitFencedAfter(ctx, tx, fence, nil)
+}
+
+// commitFencedAfter is commitFenced with a tail run inside the pass (transportFence.commitAfter).
+func (service *NativeDispatchSyncRunService) commitFencedAfter(ctx context.Context, tx pgx.Tx, fence *transportFence, tail passTail) (bool, error) {
+	outcome, err := fence.commitAfter(ctx, tx, tail)
 	if err != nil || outcome.committed {
 		return outcome.committed, err
 	}

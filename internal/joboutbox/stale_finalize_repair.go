@@ -421,11 +421,11 @@ const (
 	// so #>> equals the old @> containment; the IS NOT NULL keeps a job with no
 	// domain id from putting a NULL into the set, which would turn
 	// "run.id IN (...)" into NULL instead of false.
-	staleFinalizeLiveJobSQL = `(run.id::text IN (
-		SELECT job.args #>> '{domain,id}' FROM %[1]s AS job
+	staleFinalizeLiveJobSQL = `(EXISTS (
+		SELECT 1 FROM %[1]s AS job
 		WHERE job.kind = 'metrics.daily_finalize'
+			AND job.args @> jsonb_build_object('domain', jsonb_build_object('id', run.id::text))
 			AND job.state::text NOT IN ('completed', 'discarded', 'cancelled')
-			AND job.args #>> '{domain,id}' IS NOT NULL
 	) OR EXISTS (
 		SELECT 1 FROM public.worker_job_outbox AS outbox
 		WHERE outbox.job_kind = 'metrics.daily_finalize'

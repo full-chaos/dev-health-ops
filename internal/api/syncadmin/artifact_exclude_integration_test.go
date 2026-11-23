@@ -220,6 +220,42 @@ func TestArtifactExcludeListOnlyPatchMatchesTheVerbAfterAnEmptiedIntegration(t *
 	}
 }
 
+// Round 2: a null is_active or sync_targets decodes as unset (no edit), so a PATCH carrying it beside the list is still
+// a list edit: no runtime refresh, bytes equal to the verb after an emptied integration. A null schedule_cron CLEARS the
+// option, so that PATCH is an edit and refreshes the runtime keys.
+func TestArtifactExcludeListEditIsDecidedByEffectiveEdits(t *testing.T) {
+	v := startCascadeVenue(t, true)
+	for _, cell := range []struct {
+		label, extra string
+		refresh      bool
+	}{
+		{"is_active null", `,"is_active":null`, false},
+		{"sync_targets null", `,"sync_targets":null`, false},
+		{"is_active and sync_targets null", `,"is_active":null,"sync_targets":null`, false},
+		{"schedule_cron null", `,"schedule_cron":null`, true},
+	} {
+		byPatch, byVerb := v.seedArtifactExclude("github"), v.seedArtifactExclude("github")
+		for _, one := range []cascadeSeeded{byPatch, byVerb} {
+			if status, body := v.call("PATCH", "/api/v1/admin/integrations/"+one.integration.String(), `{"config":{}}`); status != 200 {
+				t.Fatalf("%s: integration PATCH {}: %d %s", cell.label, status, body)
+			}
+		}
+		if status, body := v.call("PATCH", "/api/v1/admin/sync-configs/"+byPatch.config.String(),
+			`{"sync_options":{"ci_artifact_exclude_prefixes":["ci-x-"]}`+cell.extra+`}`); status != 200 {
+			t.Fatalf("%s: PATCH %d %s", cell.label, status, body)
+		}
+		v.verbWrite(byVerb, "github", []string{"ci-x-"})
+		patched, verbed := v.artifactExcludeTexts(byPatch), v.artifactExcludeTexts(byVerb)
+		refreshed := strings.Contains(patched.config, `"fetch_comments"`)
+		if refreshed != cell.refresh {
+			t.Errorf("%s: integration config %s: runtime refresh %v, want %v", cell.label, patched.config, refreshed, cell.refresh)
+		}
+		if !cell.refresh && patched.config != verbed.config {
+			t.Errorf("%s: integration config PATCH %s, verb %s: want byte-equal", cell.label, patched.config, verbed.config)
+		}
+	}
+}
+
 // A MIXED PATCH (the list and another key) keeps today's GitHub runtime refresh: the runtime keys follow the body.
 func TestArtifactExcludeMixedPatchStillRefreshesTheRuntimeKeys(t *testing.T) {
 	v := startCascadeVenue(t, true)

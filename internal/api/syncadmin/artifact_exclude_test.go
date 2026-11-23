@@ -169,7 +169,14 @@ func TestListOnlyPatchIsOnlyTheArtifactExcludeKey(t *testing.T) {
 		`{"sync_options":{"ci_artifact_exclude_prefixes":["ci-x-"]},"timezone":"UTC"}`:            false,
 		`{"sync_options":{"fetch_comments":false}}`:                                               false,
 		`{"sync_options":{}}`: false,
-		`{}`:                  false,
+		`{"sync_options":{"ci_artifact_exclude_prefixes":["ci-x-"]},"is_active":null}`:                     true,
+		`{"sync_options":{"ci_artifact_exclude_prefixes":["ci-x-"]},"sync_targets":null}`:                  true,
+		`{"sync_options":{"ci_artifact_exclude_prefixes":["ci-x-"]},"is_active":null,"sync_targets":null}`: true,
+		`{"sync_options":{"ci_artifact_exclude_prefixes":["ci-x-"]},"schedule_cron":null}`:                 false,
+		`{"sync_options":{"ci_artifact_exclude_prefixes":["ci-x-"]},"timezone":null}`:                      false,
+		`{"sync_options":{"ci_artifact_exclude_prefixes":["ci-x-"]},"initial_sync_depth":null}`:            false,
+		`{"sync_options":null,"is_active":null}`:                                                           false,
+		`{}`:                                                                                               false,
 	} {
 		if got := listOnlyPatch(body(text)); got != want {
 			t.Errorf("%s: list only = %v, want %v", text, got, want)

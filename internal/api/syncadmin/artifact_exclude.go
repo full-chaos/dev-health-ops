@@ -57,12 +57,22 @@ func takeArtifactExclude(provider string, options *pyjson.Object) (*artifactexcl
 	return change, nil
 }
 
-// listOnlyPatch: the PATCH changes ci_artifact_exclude_prefixes and nothing else (its body is only sync_options holding
-// only that key). It is a list edit: it skips the GitHub work-item runtime refresh, so it writes what the dho verb
-// writes. Any other PATCH keeps the refresh.
+// listOnlyPatch: the PATCH's only EFFECTIVE edit is ci_artifact_exclude_prefixes. It is a list edit: it skips the
+// GitHub work-item runtime refresh, so it writes what the dho verb writes. Any other edit keeps the refresh. By key of
+// the decoder (decodeSyncConfigUpdate):
+//   - sync_options: must hold only the list key (null decodes to nil = no edit, pybody OptionalAnyDict);
+//   - sync_targets, is_active: null decodes as unset (OptionalStringList, OptionalBool) = no edit, so only a value is
+//     an edit (syncTargetsSet, isActive);
+//   - schedule_cron, timezone, initial_sync_depth: a present null CLEARS the option (updateSyncConfigTx's cleared
+//     loop), so presence, null included, is an edit.
 func listOnlyPatch(in syncConfigUpdate) bool {
-	if in.syncOptions == nil || len(in.provided) != 1 || !in.provided["sync_options"] || in.syncOptions.Len() != 1 {
+	if in.syncOptions == nil || in.syncOptions.Len() != 1 || in.syncTargetsSet || in.isActive != nil {
 		return false
+	}
+	for _, clearing := range []string{"schedule_cron", "timezone", "initial_sync_depth"} {
+		if in.provided[clearing] {
+			return false
+		}
 	}
 	_, present := in.syncOptions.Get(artifactexclude.Key)
 	return present

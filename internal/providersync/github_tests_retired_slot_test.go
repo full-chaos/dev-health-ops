@@ -290,3 +290,29 @@ func TestGitHubTestsMinimalRetractionRowsAlwaysFitTheEffectContract(t *testing.T
 		t.Fatalf("a small run took the fallback (limited %t, %d rows)", limited, len(rows))
 	}
 }
+
+// The bound on the rows a run holds before planning stays 2 x 100,000 = 200,000: the retraction reserve of the admitted
+// bound (CHAOS-14259) must not refuse a report the planner would keep after deduplication.
+func TestGitHubTestsHeldRowBoundKeepsItsBaseValue(t *testing.T) {
+	copyOf := func(prefix string, cases int) string { return fxJUnit(part(prefix, 1, cases)) }
+	// 199,951 held: three exact copies of 49,988 rows and an independent report of 49,987. After deduplication 99,975 are
+	// admitted, the run bound exactly.
+	copies := copyOf("copy", 49_987)
+	walk, _, _ := rowsWalk(t, 1, rowsArtifact{id: "81", size: 10, body: copies}, rowsArtifact{id: "82", size: 11, body: copies},
+		rowsArtifact{id: "83", size: 12, body: copies}, rowsArtifact{id: "84", size: 13, body: copyOf("independent", 49_986)})
+	if got := committedReportRows(walk); got != 99_975 || observed(walk, githubTestsPerRunCapCause) != 0 {
+		t.Errorf("199,951 held rows: committed %d, per_run_cap %d; want 99,975 and none (the independent report kept)",
+			got, observed(walk, githubTestsPerRunCapCause))
+	}
+	// 200,000 held: four exact copies of 50,000 rows deduplicate to one.
+	copies = copyOf("four", 49_999)
+	walk, _, _ = rowsWalk(t, 1, rowsArtifact{id: "91", size: 10, body: copies}, rowsArtifact{id: "92", size: 11, body: copies},
+		rowsArtifact{id: "93", size: 12, body: copies}, rowsArtifact{id: "94", size: 13, body: copies})
+	if got := committedReportRows(walk); got != 50_000 || observed(walk, githubTestsPerRunCapCause) != 0 {
+		t.Errorf("200,000 held rows: committed %d, per_run_cap %d; want 50,000 and none (all four deduplicated)",
+			got, observed(walk, githubTestsPerRunCapCause))
+	}
+	if githubTestsMaxHeldReportRowsPerRun != 2*maxEffectRows {
+		t.Errorf("held-row bound %d, want 2 x maxEffectRows = %d", githubTestsMaxHeldReportRowsPerRun, 2*maxEffectRows)
+	}
+}

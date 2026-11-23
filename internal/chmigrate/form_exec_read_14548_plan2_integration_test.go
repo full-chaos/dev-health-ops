@@ -23,7 +23,7 @@ import (
 )
 
 // Throwaway exec proof of a prod read form (READ-14548-PLAN-2): not for merge. p2x14548Form is the form file byte for byte.
-const p2x14548FormSHA256 = "cef0be2ae3c93e89f708c9359d0231cdc020e0bb49756d334964809904335cbf"
+const p2x14548FormSHA256 = "8b4525e8c63c5f48ba8d0f17c4eb3584c3e8f4cf6b94aad1d628ba7a7910a99c"
 
 const p2x14548Form = `-- NOT EXECUTED. READ-14548-PLAN-2 (system tables and part index only; numbers and static names only). acr-mcp, 2026-11-23. acp FORM read first; then pm runs it once.
 -- Exec leg: a throwaway CI leg runs each statement (FORM-TEMPLATE-3); its run id and job id are in READ-14548-PLAN-2.md only.
@@ -208,12 +208,14 @@ ORDER BY run_side DESC, step_table, step_id, processor;
 --   run_side and table. A part exists at T when it was created at or before T and not removed by T. Created = its part_log create event
 --   of the day, else its system.parts modification_time, else before the day. Removed = the first merge that consumed it, its RemovePart
 --   event, or its system.parts remove_time. Level and max block come from the part name. WANT 6 rows. Read: before vs after: parts,
---   levels, level0_parts, newest_level / newest_rows; the hypothesis needs a new small part at 'after' that 'before' does not have.
+--   rows_per_part, newest_rows / newest_created_minute; the hypothesis needs a new small part at 'after' (created 08:56-09:02Z) that
+--   'before' does not have. On 26.x an insert into a Replacing table writes level 1 (optimize_on_insert), so level alone does not mark a new part.
 --   Control that can fail: on 'now', parts = active_now (else limit c). Gates: part_log day parts 6,000,000 rows / 3,000,000,000 bytes;
 --   query_log window 1,000,000 rows.
 SELECT r.run_side AS run_side, u.part_table AS data_table, count() AS parts, sum(u.part_rows) AS rows, countIf(NOT u.rows_known) AS parts_rows_unknown,
        arraySort(groupArray(u.level)) AS levels, arrayReverseSort(groupArray(u.part_rows)) AS rows_per_part, countIf(u.level = 0) AS level0_parts,
        argMax(u.level, u.max_block) AS newest_level, argMax(u.part_rows, u.max_block) AS newest_rows,
+       toStartOfMinute(argMax(u.created_at, u.max_block)) AS newest_created_minute,
        countIf(u.created_at < toDateTime('2026-11-23 00:00:00', 'UTC')) AS parts_from_before_day,
        if(data_table = 'work_items',
           (SELECT count() FROM system.parts WHERE active AND database = currentDatabase() AND table = 'work_items'),
@@ -849,18 +851,38 @@ func TestReadPlan2Form14548ExecutesAtTheChainHead(t *testing.T) {
 	for _, table := range []string{"work_items", "project_membership_transitions"} {
 		partsNow[table] = p2x14548Count(ctx, t, conn, "SELECT count() FROM system.parts WHERE active AND database = currentDatabase() AND table = ?", table)
 	}
-	wantS3a := map[string]string{
-		"before|work_items":                     "2 42921 [0 1] [42900 21] 0 21",
-		"after|work_items":                      "3 43028 [0 0 1] [42900 107 21] 0 107",
-		"now|work_items":                        "3 43028 [0 0 1] [42900 107 21] 0 107",
-		"before|project_membership_transitions": "1 20 [0] [20] 0 20",
-		"after|project_membership_transitions":  "1 20 [0] [20] 0 20",
-		"now|project_membership_transitions":    "1 20 [0] [20] 0 20",
+	// Independent levels from system.parts (an insert into a Replacing table is level 1 on 26.x; the OPTIMIZE result is one level up).
+	levelOf := func(where string) uint64 {
+		var level, n uint64
+		if err := conn.QueryRow(ctx, "SELECT toUInt64(any(level)), count() FROM system.parts WHERE active AND database = currentDatabase() AND "+where).Scan(&level, &n); err != nil || n != 1 {
+			t.Fatalf("level of %s: %v (%d parts)", where, err, n)
+		}
+		return level
 	}
+	big := levelOf("table = 'work_items' AND rows = 42900")
+	far := levelOf("table = 'work_items' AND rows = 21")
+	overlap := levelOf("table = 'work_items' AND rows = 107")
+	trans := levelOf("table = 'project_membership_transitions'")
+	sortedLevels := func(levels ...uint64) string {
+		sort.Slice(levels, func(i, j int) bool { return levels[i] < levels[j] })
+		return fmt.Sprint(levels)
+	}
+	wantS3a := map[string]string{
+		"before|work_items":                     fmt.Sprintf("2 42921 %s [42900 21] %d 21", sortedLevels(big, far), far),
+		"after|work_items":                      fmt.Sprintf("3 43028 %s [42900 107 21] %d 107", sortedLevels(big, far, overlap), overlap),
+		"now|work_items":                        fmt.Sprintf("3 43028 %s [42900 107 21] %d 107", sortedLevels(big, far, overlap), overlap),
+		"before|project_membership_transitions": fmt.Sprintf("1 20 [%d] [20] %d 20", trans, trans),
+		"after|project_membership_transitions":  fmt.Sprintf("1 20 [%d] [20] %d 20", trans, trans),
+		"now|project_membership_transitions":    fmt.Sprintf("1 20 [%d] [20] %d 20", trans, trans),
+	}
+	t.Logf("S3a levels from system.parts: big %d, far part %d, overlapping part %d, transitions %d", big, far, overlap, trans)
 	gotS3a := map[string]string{}
 	for _, r := range passRows["S3a"] {
 		key := r["run_side"] + "|" + r["data_table"]
 		gotS3a[key] = strings.Join([]string{r["parts"], r["rows"], r["levels"], r["rows_per_part"], r["newest_level"], r["newest_rows"]}, " ")
+		if m := r["newest_created_minute"]; m == "" || strings.HasPrefix(m, "1970") {
+			t.Errorf("S3a %s: newest_created_minute %q", key, m)
+		}
 		if r["parts_rows_unknown"] != "0" || r["parts_from_before_day"] != "0" {
 			t.Errorf("S3a %s: %v, want parts_rows_unknown 0 and parts_from_before_day 0", key, r)
 		}

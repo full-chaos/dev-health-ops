@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"slices"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -52,14 +52,20 @@ const (
 // requestProbe gathers the measurements of one call. A nil probe (no recording parent) measures nothing and reads no
 // clock. status is the status of the response to the last request of the call that was written: a redirect hop's 3xx
 // counts, a written request that got no response clears it, and a request that failed before it was written keeps the
-// status before it. hopStatus and written belong to the wire attempt in flight; the transport sets written from its
-// own goroutine.
+// status before it. The wire state belongs to one wire attempt: attempt numbers the watched requests, requests counts
+// the attempt's original request and its redirect hops, writes counts the write reports of this attempt only (a late
+// report of an earlier attempt is dropped). Each request is written at most once, so the latest request was written
+// when writes reaches requests; a late report of an earlier hop of the same attempt cannot reach that count alone. mu
+// guards the wire state: the transport reports writes from its own goroutine.
 type requestProbe struct {
 	span      trace.Span
 	attempts  int
 	status    int
+	mu        sync.Mutex
+	attempt   int
+	requests  int
+	writes    int
 	hopStatus int
-	written   atomic.Bool
 	gateWait  time.Duration
 	budget    time.Duration
 	lease     time.Duration
@@ -139,36 +145,48 @@ func (p *requestProbe) addBudget(start time.Time) {
 
 func (p *requestProbe) sent(attempt int) {
 	if p != nil {
-		p.attempts, p.hopStatus = attempt, 0
-		p.written.Store(false)
+		p.attempts = attempt
 	}
 }
 
-// watch returns request with a trace that marks the request (and each redirect hop) written when the transport wrote
-// it. It is applied after the credential step, so a token exchange's requests are not the call's.
+// watch starts the wire state of one attempt and returns request with a trace that counts the write reports of this
+// attempt's requests (the original and each redirect hop). It is applied after the credential step, so a token
+// exchange's requests are not the call's.
 func (p *requestProbe) watch(request *http.Request) *http.Request {
 	if p == nil {
 		return request
 	}
+	p.mu.Lock()
+	p.attempt++
+	attempt := p.attempt
+	p.requests, p.writes, p.hopStatus = 1, 0, 0
+	p.mu.Unlock()
 	return request.WithContext(httptrace.WithClientTrace(request.Context(), &httptrace.ClientTrace{
 		WroteRequest: func(info httptrace.WroteRequestInfo) {
-			if info.Err == nil {
-				p.written.Store(true)
+			if info.Err != nil {
+				return
 			}
+			p.mu.Lock()
+			if p.attempt == attempt {
+				p.writes++
+			}
+			p.mu.Unlock()
 		},
 	}))
 }
 
-// hop is record plus the probe's view of a followed redirect: the 3xx that caused it is the latest status, and the hop
-// is not written yet.
+// hop is record plus the probe's view of a followed redirect: the 3xx that caused it is the latest status, and the
+// attempt has one more request, not written yet.
 func (p *requestProbe) hop(record func(*http.Request)) func(*http.Request) {
 	if p == nil {
 		return record
 	}
 	return func(request *http.Request) {
 		if request.Response != nil {
+			p.mu.Lock()
 			p.hopStatus = request.Response.StatusCode
-			p.written.Store(false)
+			p.requests++
+			p.mu.Unlock()
 		}
 		record(request)
 	}
@@ -179,10 +197,12 @@ func (p *requestProbe) responded(response *http.Response) {
 	if p == nil {
 		return
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	switch {
 	case response != nil:
 		p.status = response.StatusCode
-	case p.written.Load():
+	case p.writes >= p.requests:
 		p.status = 0
 	case p.hopStatus > 0:
 		p.status = p.hopStatus

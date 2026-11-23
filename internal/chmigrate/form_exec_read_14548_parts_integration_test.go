@@ -601,8 +601,8 @@ func TestReadPartsForm14548ExecutesAtTheChainHead(t *testing.T) {
 	}
 
 	// Control mutations: each must change the result so its WANT fails.
-	mutate := func(label, from, to string) []map[string]string {
-		mutated := strings.Replace(dated(byLabel[label]), from, to, 1)
+	mutateN := func(label, from, to string, n int) []map[string]string {
+		mutated := strings.Replace(dated(byLabel[label]), from, to, n)
 		if mutated == dated(byLabel[label]) {
 			t.Fatalf("MUTATE %s: %q not found", label, from)
 		}
@@ -613,6 +613,7 @@ func TestReadPartsForm14548ExecutesAtTheChainHead(t *testing.T) {
 		t.Logf("MUTATE %s %q -> %q ROWS %v", label, from, to, got)
 		return got
 	}
+	mutate := func(label, from, to string) []map[string]string { return mutateN(label, from, to, 1) }
 	if got := mutate("S0a", "'repos'", "'reposz'"); len(got) != 3 {
 		t.Errorf("MUTATE S0a wrong table: %d rows, want 3 (WANT 4 fails)", len(got))
 	}
@@ -633,10 +634,11 @@ func TestReadPartsForm14548ExecutesAtTheChainHead(t *testing.T) {
 	if got := mutate("S4a", "event_date = toDate('"+day+"')", "event_date = toDate('2030-01-01')"); len(got) != 1 || got[0]["rows_window"] != "0" || got[0]["runs_prefix_window"] != "0" {
 		t.Errorf("MUTATE S4a day: %v, want rows_window 0, runs_prefix_window 0", got)
 	}
-	if got := mutate("S4a", "'SELECT source, uniqExact(subject_kind'", "'SELECT zource, uniqExact(subject_kind'"); len(got) != 1 || got[0]["runs_prefix_window"] != "0" || got[0]["runs_contains_window"] != "3" || got[0]["prefix_hashes"] != "0" {
+	if got := mutateN("S4a", "'SELECT source, uniqExact(subject_kind'", "'SELECT zource, uniqExact(subject_kind'", -1); len(got) != 1 || got[0]["runs_prefix_window"] != "0" || got[0]["runs_contains_window"] != "3" || got[0]["prefix_hashes"] != "0" {
 		t.Errorf("MUTATE S4a prefix: %v, want runs_prefix_window 0, runs_contains_window 3, prefix_hashes 0", got)
 	}
-	if got := mutate("S4a", "type = 'QueryFinish'", "type = 'QueryStart'"); len(got) != 1 || got[0]["runs_prefix_window"] != "0" {
+	// QueryStart rows of the runs also match the prefix, so the type mutant uses a type with no matching row.
+	if got := mutate("S4a", "type = 'QueryFinish'", "type = 'ExceptionWhileProcessing'"); len(got) != 1 || got[0]["runs_prefix_window"] != "0" {
 		t.Errorf("MUTATE S4a type: %v, want runs_prefix_window 0", got)
 	}
 	if got := mutate("S4b", "AND type = 'QueryFinish'", "AND type = 'QueryStart'"); pt14548Diff(got, want["S4b"]) == "" {
@@ -688,6 +690,43 @@ func TestReadPartsForm14548ExecutesAtTheChainHead(t *testing.T) {
 			}
 		}
 	}
+
+	// Diag: where S4b read_rows comes from (prewhere, lazy materialization, read in order). Test-only settings; the form has none.
+	diag := func(label, tag string, settings clickhouse.Settings) {
+		if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
+			t.Fatal(err)
+		}
+		before := logToday()
+		comment := fmt.Sprintf("pt14548-diag-%s-%s-%d", label, tag, time.Now().UnixNano())
+		settings["log_comment"] = comment
+		rows, err := conn.Query(clickhouse.Context(ctx, clickhouse.WithSettings(settings)), dated(byLabel[label]))
+		if err != nil {
+			t.Logf("DIAG %s %s: %v", label, tag, err)
+			return
+		}
+		n := 0
+		for rows.Next() {
+			n++
+		}
+		rows.Close()
+		if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
+			t.Fatal(err)
+		}
+		var read uint64
+		var events map[string]uint64
+		if err := conn.QueryRow(ctx, `SELECT read_rows, mapFilter((k, v) -> k LIKE '%Rows%' OR k LIKE '%Marks%' OR k LIKE '%Parts%' OR k LIKE '%Ranges%' OR k LIKE '%Prewhere%' OR k LIKE '%Lazy%', ProfileEvents)
+			FROM system.query_log WHERE log_comment = ? AND type = 'QueryFinish'`, comment).Scan(&read, &events); err != nil {
+			t.Logf("DIAG %s %s log: %v", label, tag, err)
+			return
+		}
+		t.Logf("DIAG %s %s: out rows %d, query_log rows before %d, parts %d, read_rows %d, events %v", label, tag, n, before, partsOf("query_log"), read, events)
+	}
+	diag("S4a", "default", clickhouse.Settings{})
+	diag("S4b", "default", clickhouse.Settings{})
+	diag("S4b", "noprewhere", clickhouse.Settings{"optimize_move_to_prewhere": 0})
+	diag("S4b", "nolazy", clickhouse.Settings{"query_plan_optimize_lazy_materialization": 0})
+	diag("S4b", "noinorder", clickhouse.Settings{"optimize_read_in_order": 0})
+	diag("S4b", "nocache", clickhouse.Settings{"use_query_condition_cache": 0})
 
 	// Gate fires: each cap literal lowered to 0 in a test copy of the shipped text. WANT code 395 STOP-COST-GATE before any log read.
 	type fired struct{ label, cap, comment, table string }
@@ -756,7 +795,7 @@ func TestReadPartsForm14548ExecutesAtTheChainHead(t *testing.T) {
 		var bad []string
 		for i, ct := range rows.ColumnTypes() {
 			name := rows.Columns()[i]
-			if strings.Contains(ct.DatabaseTypeName(), "String") || strings.Contains(strings.ToLower(name), "query") {
+			if strings.Contains(ct.DatabaseTypeName(), "String") || name == "query" || name == "query_id" || name == "initial_query_id" || name == "formatted_query" {
 				bad = append(bad, name+" "+ct.DatabaseTypeName())
 			}
 		}

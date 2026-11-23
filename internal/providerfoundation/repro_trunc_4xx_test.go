@@ -80,3 +80,20 @@ func TestReproSecondaryLimitSentenceIsRateLimited(t *testing.T) {
 		}
 	}
 }
+
+// REPRO claim 1 (real risk): a secondary-limit 403 whose body is cut before the limit text arrives.
+func TestReproCutSecondaryLimit403IsNotAPlainPermissionDenial(t *testing.T) {
+	client := reproClient(t, "github", func(request *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusForbidden, Header: http.Header{"X-Ratelimit-Remaining": []string{"4000"}}, Request: request,
+			Body: &reproBrokenBody{head: strings.NewReader(`{"message":"You have exceeded a sec`)}}, nil
+	})
+	_, err := client.Do(context.Background(), http.MethodGet, "/repos/acme/api/x", nil)
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("err = %v, want a ProviderError", err)
+	}
+	t.Logf("class=%q afterResponse=%v err=%v", providerErr.Class, providerErr.AfterResponse(), err)
+	if providerErr.Class == ErrorAuthentication && !providerErr.AfterResponse() {
+		t.Fatalf("a cut secondary-limit 403 is returned as a plain permission denial (class=%q afterResponse=false): err=%v", providerErr.Class, err)
+	}
+}

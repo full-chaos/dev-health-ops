@@ -86,8 +86,11 @@ var sinkDropNotWrappedDestinations = map[string]string{
 
 // sinkConnectionDropped names err a dropped connection when the work context
 // is still live (a done context closes the connection itself, as retryConn
-// rules), the effect is recoverable, and the destination is wrappable.
-// Every other error is returned unchanged.
+// rules), the effect is recoverable, the destination is wrappable, and the
+// drop came from an INSERT call (connerr.IsDroppedWrite: the storage conn marks
+// PrepareBatch and the batch's Send, Flush and Close). A dropped read inside
+// the write (a SELECT before or after the INSERT) tried no INSERT and stays
+// unclassified. Every other error is returned unchanged.
 func sinkConnectionDropped(ctx context.Context, effect EffectLedgerEntry, batch EffectBatch, err error) error {
 	if err == nil || ctx.Err() != nil || effect.Recovery == EffectRecoveryBlocked {
 		return err
@@ -95,7 +98,7 @@ func sinkConnectionDropped(ctx context.Context, effect EffectLedgerEntry, batch 
 	if _, wrappable := sinkDropWrappableDestinations[batch.Destination]; !wrappable {
 		return err
 	}
-	if !connerr.IsDropped(err) {
+	if !connerr.IsDroppedWrite(err) {
 		return err
 	}
 	return &SinkConnectionDroppedError{Destination: batch.Destination, Err: err}

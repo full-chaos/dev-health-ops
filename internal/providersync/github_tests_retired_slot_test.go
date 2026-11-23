@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"maps"
 	"math/rand/v2"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -582,4 +583,22 @@ func TestGitHubTestsRouteWritesSuiteRowsOnlyWhenTheCaseRowsDoNotFit(t *testing.T
 		t.Fatal(err)
 	}
 	t.Logf("one case retraction row is %d bytes", len(row))
+}
+
+// PINNED LIMIT (1a): a minimal retraction row lists only the legacy ids of the dropped report's first suite. For a slot whose
+// only stored rows are pre-slot rows (no older slotted row lists the other ids), the pre-slot copies of its other suites are
+// not hidden by the new readers.
+func TestGitHubTestsMinimalRetractionRowListsOnlyTheFirstSuitesLegacyIDsIsPinned(t *testing.T) {
+	at := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	suite := func(id, legacy string) testSuiteResultRow {
+		return testSuiteResultRow{OrgID: "org", RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", RunID: "1", SuiteID: id, SuiteName: id,
+			LastSynced: at, ReportSlot: "total-b", RunAttempt: 1, LegacySuiteIDs: []string{legacy}}
+	}
+	rows := githubTestsMinimalRetractionRows(githubTestsRetirement{
+		parsed:  []githubTestsParsedReport{{Suites: []testSuiteResultRow{suite("left", "legacy-left"), suite("right", "legacy-right")}}},
+		dropped: []githubTestsReportDrop{{Index: 0, Cause: githubTestsAggregateOfPartsCause}},
+	})
+	if len(rows) != 1 || !slices.Equal(rows[0].LegacySuiteIDs, []string{"legacy-left"}) {
+		t.Fatalf("minimal rows %+v; the pinned limit is one row listing only the first suite's legacy id", rows)
+	}
 }

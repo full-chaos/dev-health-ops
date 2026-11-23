@@ -1145,3 +1145,219 @@ WHERE org_id = ? AND run_id = ? AND suite_id IN (
 		t.Errorf("revived run serves flake %d, failed names %d of %d names; the pinned limit is flake 0, failed names 0 of 2", got.flake, got.failedNames, got.distinct)
 	}
 }
+
+// retiredOldReaderSuiteSums is the base suite read (from the base source) over the stored rows: the sums of the counts and
+// the suites with a duration.
+func retiredOldReaderSuiteSums(t *testing.T, stack attemptsStack, org string, day time.Time) (total, passed, failed, timed uint64) {
+	t.Helper()
+	if err := stack.conn.QueryRow(stack.ctx, "SELECT sum(total_count), sum(passed_count), sum(failed_count), count(duration_seconds) FROM ("+
+		retiredBaseReaderSQL(t, "loadNativeTestopsSuites")+")", testopsSourceArgs(org, []uuid.UUID{stack.repoID(t, org)}, day, day.Add(24*time.Hour))...).
+		Scan(&total, &passed, &failed, &timed); err != nil {
+		t.Fatal(err)
+	}
+	return total, passed, failed, timed
+}
+
+// retiredInsertPreSlotCopy stores a pre-slot copy (report_slot = ”) of a suite under suiteID, with one case failedCase that
+// failed when it is not empty.
+func retiredInsertPreSlotCopy(t *testing.T, stack attemptsStack, org, runID, suiteID string, started time.Time, failedCase string) {
+	t.Helper()
+	repoID := stack.repoID(t, org)
+	synced := started.Add(-time.Hour)
+	if err := stack.conn.Exec(stack.ctx, `INSERT INTO test_suite_results
+(org_id, repo_id, run_id, suite_id, suite_name, total_count, passed_count, failed_count, skipped_count, error_count, quarantined_count,
+ duration_seconds, started_at, last_synced)
+VALUES (?, ?, ?, ?, 'left', 1, 0, 1, 0, 0, 0, 3.0, ?, ?)`, org, repoID, runID, suiteID, started, synced); err != nil {
+		t.Fatal(err)
+	}
+	if failedCase == "" {
+		return
+	}
+	if err := stack.conn.Exec(stack.ctx, `INSERT INTO test_case_results
+(org_id, repo_id, run_id, suite_id, case_id, case_name, status, retry_attempt, last_synced)
+VALUES (?, ?, ?, ?, 'pre-slot-case', ?, 'failed', 0, ?)`, org, repoID, runID, suiteID, failedCase, synced); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// retiredLargeTwoAttemptRun is K4's shape at the size that takes the "suite_rows_only" fallback: total-b alone at attempt 1
+// (two suites of 25,001 cases, case left-0 failing), then at attempt 2 leg B's two parts and their exact aggregate, all passing.
+// Admitted 50,002 cases plus 2 x 50,002 case retraction rows (labels 1 and 2) pass the 100,000-row case batch.
+func retiredLargeTwoAttemptRun(t *testing.T, stack attemptsStack, org, runID string, day time.Time) {
+	t.Helper()
+	date := day.Format(time.DateOnly)
+	stamp := func(clock string) string { return date + "T" + clock + "Z" }
+	suite := func(name, failing string) matrixTotalsSuite {
+		out := matrixTotalsSuite{name: name, time: "3.0"}
+		for index := 0; index < 25_001; index++ {
+			caseName, status := name+"-"+strconv.Itoa(index), ""
+			if caseName == failing {
+				status = "failed"
+			}
+			out.cases = append(out.cases, matrixTotalsCase{caseName, status, "0.01"})
+		}
+		return out
+	}
+	ts1, ts2 := date+"T10:02:00", date+"T11:12:00"
+	attempt1 := []attemptsArtifact{{6, "total-b", stamp("10:20:00"), false, retiredArchive(t, ts1, suite("left", "left-0"), suite("right", ""))}}
+	left, right := suite("left", ""), suite("right", "")
+	attempt2 := []attemptsArtifact{
+		{13, "leg-b-left", stamp("11:30:00"), false, retiredArchive(t, ts2, left)},
+		{14, "leg-b-right", stamp("11:30:00"), false, retiredArchive(t, ts2, right)},
+		{16, "total-b", stamp("11:30:00"), false, retiredArchive(t, ts2, left, right)},
+	}
+	stack.pass(t, org, runID, day.Add(10*time.Hour), attemptsRunState{attempt: 1, started: stamp("10:01:00"), updated: stamp("10:30:00"), artifacts: attempt1})
+	stack.pass(t, org, runID, day.Add(11*time.Hour), attemptsRunState{created: stamp("10:01:00"), attempt: 2, started: stamp("11:10:00"),
+		updated: stamp("11:40:00"), artifacts: append(slices.Clone(attempt1), attempt2...)})
+	var suites, cases uint64
+	if err := stack.conn.QueryRow(stack.ctx, `SELECT (SELECT countIf(retracted = 1) FROM test_suite_results FINAL WHERE org_id = ? AND run_id = ?),
+       (SELECT countIf(retracted = 1) FROM test_case_results FINAL WHERE org_id = ? AND run_id = ?)`, org, runID, org, runID).Scan(&suites, &cases); err != nil {
+		t.Fatal(err)
+	}
+	if suites != 2 || cases != 0 {
+		t.Fatalf("run %s: %d suite and %d case retraction rows, want the suite_rows_only fallback: 2 and 0", runID, suites, cases)
+	}
+}
+
+// PINNED LIMITS (rollback-only or pre-slot-only residuals, measured, not CONTROL). Each subtest asserts the numbers the named
+// reader serves today; CONTROL is in the subtest's comment.
+func TestTestopsRetiredSlotNamedResidualsArePinned(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
+	defer cancel()
+	env := startRetiredStack(t, ctx)
+	stack := env.stack
+	newOrg := func(name string) string { return "org-chaos14259-" + name + "-" + uuid.NewString()[:8] }
+
+	// one_row_per_slot, old reader: the stale run (STALE-A's recorded pre-14045 emission) retired by one minimal row (the row
+	// githubTestsMinimalRetractionRows writes: no measure, retracted, a retired-slot key). The old reader still counts the slot's
+	// stale suites: total 8, passed 7, failed 1, timed 8. CONTROL (the new readers) is 6, 5, 1, 6 suites.
+	t.Run("one_row_per_slot old reader", func(t *testing.T) {
+		writeRetiredRecordedEmission(t, stack)
+		repoID := stack.repoID(t, retiredStaleAOrg)
+		started := retiredDay().Add(10*time.Hour + time.Minute)
+		if err := stack.conn.Exec(ctx, `INSERT INTO test_suite_results
+(org_id, repo_id, run_id, suite_id, suite_name, total_count, passed_count, failed_count, skipped_count, error_count, quarantined_count,
+ started_at, last_synced, report_slot, run_attempt, retracted)
+VALUES (?, ?, ?, '~retired-pin', '', 0, 0, 0, 0, 0, 0, ?, ?, 'total-b', 1, 1)`, retiredStaleAOrg, repoID, retiredRunID, started, retiredDay().Add(12*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		total, passed, failed, timed := retiredOldReaderSuiteSums(t, stack, retiredStaleAOrg, retiredDay())
+		if total != 8 || passed != 7 || failed != 1 || timed != 8 {
+			t.Errorf("old reader serves total %d, passed %d, failed %d, timed %d; pinned 8, 7, 1, 8 (CONTROL 6, 5, 1, 6)", total, passed, failed, timed)
+		}
+		if got := retiredMetricOf(t, stack, retiredStaleAOrg, retiredDay()); got.total != 6 || got.passed != 5 || got.suites != 6 {
+			t.Errorf("new readers serve %+v, want CONTROL 6 cases, 5 passed, 6 suites", got)
+		}
+	})
+
+	// suite_rows_only, old reader: K4 and K5 at the size that takes the fallback (no case retraction row). The old reader sees
+	// the slot's stale attempt-1 failure of left-0: flake 1 of 50,002 names (CONTROL, the new readers: 0), and a recurrence of
+	// today's failure of left-0, 1 of 1 (CONTROL: 0 of 1).
+	t.Run("suite_rows_only old reader", func(t *testing.T) {
+		flakeOrg := newOrg("suite-only-flake")
+		retiredLargeTwoAttemptRun(t, stack, flakeOrg, "43600014271", retiredDay())
+		flake, distinct, _, _ := retiredOldReaderCaseMeasures(t, stack, flakeOrg, retiredDay())
+		if flake != 1 || distinct != 50_002 {
+			t.Errorf("old reader serves flake %d of %d names; pinned 1 of 50,002 (CONTROL 0)", flake, distinct)
+		}
+		if got := retiredMetricOf(t, stack, flakeOrg, retiredDay()); got.flake != 0 || got.distinct != 50_002 {
+			t.Errorf("new readers serve flake %d of %d names, want CONTROL 0 of 50,002", got.flake, got.distinct)
+		}
+		historyOrg := newOrg("suite-only-history")
+		retiredLargeTwoAttemptRun(t, stack, historyOrg, "43600014272", retiredDay().AddDate(0, 0, -1))
+		stack.pass(t, historyOrg, "43600014273", retiredDay().Add(10*time.Hour), retiredState(false, []attemptsArtifact{
+			{21, "today", "2026-07-22T10:20:00Z", false, retiredArchive(t, "2026-07-22T10:02:00", matrixTotalsSuite{"t", "1.0", []matrixTotalsCase{{"left-0", "failed", "0.5"}}})},
+		}))
+		_, _, failedToday, recurrent := retiredOldReaderCaseMeasures(t, stack, historyOrg, retiredDay())
+		if failedToday != 1 || recurrent != 1 {
+			t.Errorf("old reader serves recurrent %d of %d failed names; pinned 1 of 1 (CONTROL 0 of 1)", recurrent, failedToday)
+		}
+		if got := retiredMetricOf(t, stack, historyOrg, retiredDay()); got.failedNames != 1 || got.recurrent != 0 {
+			t.Errorf("new readers serve recurrent %d of %d, want CONTROL 0 of 1", got.recurrent, got.failedNames)
+		}
+	})
+
+	// An earlier attempt whose suite names differ from the dropped report's: the case retraction keys of label 1 are derived from
+	// attempt 2's names, so the stale attempt-1 failure keeps its row. The old reader serves flake 2 of 3 names (CONTROL 1 of 3).
+	t.Run("earlier attempt with other names old reader", func(t *testing.T) {
+		org := newOrg("renamed")
+		runID := "43600014274"
+		stamp := func(clock string) string { return "2026-07-22T" + clock + "Z" }
+		ts1, ts2 := "2026-07-22T10:02:00", "2026-07-22T11:12:00"
+		attempt1 := []attemptsArtifact{
+			{6, "total-b", stamp("10:20:00"), false, retiredArchive(t, ts1, matrixTotalsSuite{"left-v1", "3.0", []matrixTotalsCase{{"a", "failed", "0.25"}}},
+				matrixTotalsSuite{"right-v1", "3.0", []matrixTotalsCase{{"b", "", "0.25"}}})},
+			{7, "unit", stamp("10:20:00"), false, retiredArchive(t, ts1, matrixTotalsSuite{"u", "1.0", []matrixTotalsCase{{"c", "failed", "0.5"}}})},
+		}
+		leg := []matrixTotalsSuite{{"left", "3.0", []matrixTotalsCase{{"a", "", "0.25"}}}, {"right", "3.0", []matrixTotalsCase{{"b", "", "0.25"}}}}
+		attempt2 := []attemptsArtifact{
+			{13, "leg-b-left", stamp("11:30:00"), false, retiredArchive(t, ts2, leg[0])},
+			{14, "leg-b-right", stamp("11:30:00"), false, retiredArchive(t, ts2, leg[1])},
+			{16, "total-b", stamp("11:30:00"), false, retiredArchive(t, ts2, leg...)},
+			{17, "unit", stamp("11:30:00"), false, retiredArchive(t, ts2, matrixTotalsSuite{"u", "1.0", []matrixTotalsCase{{"c", "", "0.5"}}})},
+		}
+		stack.pass(t, org, runID, retiredDay().Add(10*time.Hour), attemptsRunState{attempt: 1, started: stamp("10:01:00"), updated: stamp("10:30:00"), artifacts: attempt1})
+		stack.pass(t, org, runID, retiredDay().Add(11*time.Hour), attemptsRunState{created: stamp("10:01:00"), attempt: 2, started: stamp("11:10:00"),
+			updated: stamp("11:40:00"), artifacts: append(slices.Clone(attempt1), attempt2...)})
+		flake, distinct, _, _ := retiredOldReaderCaseMeasures(t, stack, org, retiredDay())
+		if flake != 2 || distinct != 3 {
+			t.Errorf("old reader serves flake %d of %d names; pinned 2 of 3 (CONTROL 1 of 3)", flake, distinct)
+		}
+		if got := retiredMetricOf(t, stack, org, retiredDay()); got.flake != 1 || got.distinct != 3 {
+			t.Errorf("new readers serve flake %d of %d names, want CONTROL 1 of 3", got.flake, got.distinct)
+		}
+	})
+
+	// 1b: a superseded artifact leaves the listing before a re-sync of the same attempt drops the slot. The full retraction
+	// rows replace the kept rows at their keys and list only the current artifact's pre-slot id, so the pre-slot copy under the
+	// superseded artifact's id is no longer hidden: the new readers serve 3 cases (CONTROL, leg B's parts: 2).
+	t.Run("superseded id lost on a same-attempt re-sync", func(t *testing.T) {
+		org := newOrg("lost-id")
+		runID := "43600014275"
+		stamp := func(clock string) string { return "2026-07-22T" + clock + "Z" }
+		ts1, ts2 := "2026-07-22T10:02:00", "2026-07-22T11:12:00"
+		leg := []matrixTotalsSuite{{"left", "3.0", []matrixTotalsCase{{"a", "", "0.25"}}}, {"right", "3.0", []matrixTotalsCase{{"b", "", "0.25"}}}}
+		old := attemptsArtifact{6, "total-b", stamp("10:20:00"), false, retiredArchive(t, ts1, leg...)}
+		current := attemptsArtifact{16, "total-b", stamp("11:30:00"), false, retiredArchive(t, ts2, leg...)}
+		state := func(updated string, artifacts ...attemptsArtifact) attemptsRunState {
+			return attemptsRunState{created: stamp("10:01:00"), attempt: 2, started: stamp("11:10:00"), updated: stamp(updated), artifacts: artifacts}
+		}
+		stack.pass(t, org, runID, retiredDay().Add(11*time.Hour), state("11:40:00", old, current))
+		var superseded string
+		if err := stack.conn.QueryRow(ctx, `SELECT legacy_suite_ids[2] FROM test_suite_results FINAL
+WHERE org_id = ? AND run_id = ? AND report_slot = 'total-b' AND suite_name = 'left'`, org, runID).Scan(&superseded); err != nil || superseded == "" {
+			t.Fatalf("total-b@2 lists no superseded pre-slot id (%v)", err)
+		}
+		retiredInsertPreSlotCopy(t, stack, org, runID, superseded, retiredDay().Add(11*time.Hour+11*time.Minute), "")
+		stack.pass(t, org, runID, retiredDay().Add(12*time.Hour), state("12:40:00", current,
+			attemptsArtifact{13, "leg-b-left", stamp("11:30:00"), false, retiredArchive(t, ts2, leg[0])},
+			attemptsArtifact{14, "leg-b-right", stamp("11:30:00"), false, retiredArchive(t, ts2, leg[1])}))
+		if got := retiredMetricOf(t, stack, org, retiredDay()); got.total != 3 || got.suites != 3 {
+			t.Errorf("new readers serve %d cases, %d suites; pinned 3 and 3 (CONTROL 2 and 2)", got.total, got.suites)
+		}
+	})
+
+	// 2: the stale case also stored under its pre-slot key (the artifact-id scope), BASE reader. The case retraction rows use the
+	// slot scope only, so the pre-slot case keeps its name: K4 flake 2 of 3 (CONTROL 1 of 3), K5 recurrent 1 of 1 (CONTROL 0 of
+	// 1). The new readers hide the copy (TestTestopsRetiredSlotRetiresItsPreSlotCopies).
+	t.Run("pre-slot case key old reader", func(t *testing.T) {
+		flakeOrg := newOrg("pre-slot-flake")
+		retiredTwoAttemptRun(t, stack, flakeOrg, "43600014261", retiredDay(), true)
+		retiredInsertPreSlotCopy(t, stack, flakeOrg, "43600014261", retiredAttemptLegacyID(t, stack, flakeOrg, "43600014261"),
+			retiredDay().Add(10*time.Hour+time.Minute), "a")
+		if flake, distinct, _, _ := retiredOldReaderCaseMeasures(t, stack, flakeOrg, retiredDay()); flake != 2 || distinct != 3 {
+			t.Errorf("K4 old reader serves flake %d of %d names; pinned 2 of 3 (CONTROL 1 of 3)", flake, distinct)
+		}
+		historyOrg := newOrg("pre-slot-history")
+		historyDay := retiredDay().AddDate(0, 0, -1)
+		retiredTwoAttemptRun(t, stack, historyOrg, "43600014262", historyDay, false)
+		retiredInsertPreSlotCopy(t, stack, historyOrg, "43600014262", retiredAttemptLegacyID(t, stack, historyOrg, "43600014262"),
+			historyDay.Add(10*time.Hour+time.Minute), "a")
+		stack.pass(t, historyOrg, "43600014263", retiredDay().Add(10*time.Hour), retiredState(false, []attemptsArtifact{
+			{21, "today", "2026-07-22T10:20:00Z", false, retiredArchive(t, "2026-07-22T10:02:00", matrixTotalsSuite{"t", "1.0", []matrixTotalsCase{{"a", "failed", "0.5"}}})},
+		}))
+		if _, _, failedToday, recurrent := retiredOldReaderCaseMeasures(t, stack, historyOrg, retiredDay()); failedToday != 1 || recurrent != 1 {
+			t.Errorf("K5 old reader serves recurrent %d of %d failed names; pinned 1 of 1 (CONTROL 0 of 1)", recurrent, failedToday)
+		}
+	})
+}

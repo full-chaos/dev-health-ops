@@ -458,7 +458,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 	case wantDay != nil:
 		day = wantDay
 	case breakout == model.CompoundingRiskScopeTeam:
-		if day, err = latestDay(ctx, client, orgID, scopeTeam, idList(teamIDs), startDay, endDay); err != nil {
+		if day, err = latestDay(ctx, client, orgID, scopeTeam, namedTeamIDs(teamIDs), startDay, endDay); err != nil {
 			return nil, err
 		}
 		if day == nil {
@@ -517,11 +517,16 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 			points = append(points, point(model.CompoundingRiskScopeRepo, d, r.scopeID, labelOr(labels, r.scopeID), r))
 		}
 	} else {
-		teamRows, err := latestRows(ctx, client, orgID, d, scopeTeam, teamIDs)
+		// A named list is bound whole; the row cap applies only to the read that names no team.
+		teamLimit := maxRows
+		if len(teamIDs) > teamLimit {
+			teamLimit = len(teamIDs)
+		}
+		teamRows, err := latestRowsLimit(ctx, client, orgID, d, scopeTeam, namedTeamIDs(teamIDs), teamLimit)
 		if err != nil {
 			return nil, err
 		}
-		storedReadCut := len(teamRows) >= maxRows
+		storedReadCut := len(teamRows) >= teamLimit
 		if len(teamIDs) == 0 && len(teamRows) > 0 {
 			// Which stored rows are rows of a team is a decision, not a label:
 			// a failed read of the active teams fails the answer. (teamLabels
@@ -579,6 +584,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 				}
 			}
 			// A read cut at its cap may leave out a team that has a live stored row.
+			// A named read reaches its limit only when every named team has its row.
 			if breakout == model.CompoundingRiskScopeTeam && !storedReadCut {
 				candidates := teamIDs
 				if len(candidates) == 0 {

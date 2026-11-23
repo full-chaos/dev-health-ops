@@ -59,8 +59,8 @@ var pinnedTableFiles = map[string]censusPin{
 		"not a reader: routes a measure to the table, the column rule lives elsewhere"},
 	"internal/queryapi/testopspooled/testopspooled.go": {"bf947030fa1bd287fbe7d2481d961d6c437a1495f27c7c2d37baa36a1f43b7d3",
 		"not a reader of pass_rate: the pooled sources read stored duration samples or raw rows; the live gate leaves a retired day out of both arms (CHAOS-13902 re-pin: the pipeline raw arm gives a re-run no queue sample, no suite or pass-rate read changed)"},
-	"internal/queryapi/testopswindow/testopswindow.go": {"9d5f75544bf86eb88b3153540f9a4c1fcfbe34ad3c20ebfb011e9fb37e6e9b20",
-		"reader rule applied: newest-row subquery then the live-row filter, the outer query names the case counts and the report completeness counts"},
+	"internal/queryapi/testopswindow/testopswindow.go": {"aacdf47f6643676d86e5e0261e2fca40da5e61e3b9c440661c9c5cd856d727c6",
+		"reader rule applied: newest-row subquery then the live-row filter, the outer query names the case counts and the report completeness counts (re-pin: only the repository filter of repoIds changed, no reader rule)"},
 	"internal/teamkeytables/teamkeytables.go": {"f42b820d1461322c830939efab4a1701959c262e4afb231bddae17fad9bfa1cd",
 		"not a reader: the registry of the tables, their marker column and carried values"},
 }

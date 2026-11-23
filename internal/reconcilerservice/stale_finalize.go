@@ -18,7 +18,6 @@ import (
 type staleFinalizeRedriver struct {
 	store     *daily.PostgresStore
 	publisher *daily.PostgresPublisher
-	clock     func() time.Time
 }
 
 func newStaleFinalizeRedriver(domainPool *pgxpool.Pool, registry joboutbox.PolicyRegistry) (staleFinalizeRedriver, error) {
@@ -30,15 +29,15 @@ func newStaleFinalizeRedriver(domainPool *pgxpool.Pool, registry joboutbox.Polic
 	if err != nil {
 		return staleFinalizeRedriver{}, err
 	}
-	return staleFinalizeRedriver{store: store, publisher: publisher, clock: time.Now}, nil
+	return staleFinalizeRedriver{store: store, publisher: publisher}, nil
 }
 
 // RedriveStaleFinalize redrives ONE run, so its return at the first error can
 // never stop another run. Under the run lock the redrive re-checks the
-// survey's outbox refusals (an unrelayed row, a row younger than the horizon).
-func (redriver staleFinalizeRedriver) RedriveStaleFinalize(ctx context.Context, runID, nonce string) (bool, error) {
-	redriven, err := redriver.store.RedriveStaleFinalize(ctx, redriver.publisher, runID, nonce,
-		redriver.clock().UTC().Add(-joboutbox.StaleFinalizeHorizon))
+// survey's outbox refusals (an unrelayed row, a row written after the survey's
+// own cutoff).
+func (redriver staleFinalizeRedriver) RedriveStaleFinalize(ctx context.Context, runID, nonce string, cutoff time.Time) (bool, error) {
+	redriven, err := redriver.store.RedriveStaleFinalize(ctx, redriver.publisher, runID, nonce, cutoff)
 	if err != nil {
 		if errors.Is(err, daily.ErrInvalidState) {
 			return false, fmt.Errorf("%w: %w", joboutbox.ErrStaleFinalizeInvalidState, err)

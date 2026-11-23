@@ -33,7 +33,7 @@ type scriptedStaleFinalizeRedriver struct {
 	before func(ctx context.Context, runID string) error
 }
 
-func (redriver *scriptedStaleFinalizeRedriver) RedriveStaleFinalize(ctx context.Context, runID, _ string) (bool, error) {
+func (redriver *scriptedStaleFinalizeRedriver) RedriveStaleFinalize(ctx context.Context, runID, _ string, _ time.Time) (bool, error) {
 	redriver.mu.Lock()
 	redriver.calls = append(redriver.calls, runID)
 	err := redriver.fail[runID]

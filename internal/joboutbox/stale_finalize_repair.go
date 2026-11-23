@@ -46,6 +46,9 @@ const (
 	staleFinalizeCandidatesStatementTimeout = "SET LOCAL statement_timeout = '400ms'"
 	staleFinalizeLevelsStatementTimeout     = "SET LOCAL statement_timeout = '250ms'"
 	staleFinalizeLockTimeout                = "SET LOCAL lock_timeout = '100ms'"
+	// JIT off for the whole survey: A and B price above jit_above_cost at prod
+	// sizes, and JIT compilation alone cost 543 ms of a 781 ms statement A.
+	staleFinalizeJITOff = "SET LOCAL jit = off"
 )
 
 // Failure steps and classes of the stage. A failure is counted, never returned:
@@ -71,7 +74,7 @@ var ErrStaleFinalizeInvalidState = errors.New("stale finalize redrive refused th
 // reports whether a fresh finalize was published. One run per call: a failure
 // of one run never stops the next.
 type StaleFinalizeRedriver interface {
-	RedriveStaleFinalize(ctx context.Context, runID, nonce string) (bool, error)
+	RedriveStaleFinalize(ctx context.Context, runID, nonce string, cutoff time.Time) (bool, error)
 }
 
 // StaleFinalizeFailure is one counted failure of a stage pass. It carries no
@@ -197,7 +200,7 @@ func (stage *staleFinalizeStage) step(ctx context.Context, now time.Time, limit 
 			break
 		}
 		runCtx, cancelRun := context.WithTimeout(passCtx, staleFinalizeRunDeadline)
-		redriven, err := stage.redriver.RedriveStaleFinalize(runCtx, candidate.runID, nonce)
+		redriven, err := stage.redriver.RedriveStaleFinalize(runCtx, candidate.runID, nonce, cutoff)
 		deadline := errors.Is(runCtx.Err(), context.DeadlineExceeded)
 		cancelRun()
 		lastTried = &staleFinalizeCursor{updatedAt: candidate.updatedAt, runID: candidate.runID, bound: bound}
@@ -294,7 +297,7 @@ func surveyStaleFinalize(
 		defer cancel()
 		_ = tx.Rollback(rollbackCtx)
 	}()
-	for _, statement := range []string{"SET TRANSACTION READ ONLY", staleFinalizeLockTimeout, staleFinalizeBaseStatementTimeout} {
+	for _, statement := range []string{"SET TRANSACTION READ ONLY", staleFinalizeLockTimeout, staleFinalizeJITOff, staleFinalizeBaseStatementTimeout} {
 		if _, err := tx.Exec(ctx, statement); err != nil {
 			return fail(StaleFinalizeStepSurvey, err)
 		}

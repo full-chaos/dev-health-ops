@@ -1550,8 +1550,12 @@ func TestTestopsRevivedSlotReadCost(t *testing.T) {
 	if err := stack.conn.QueryRow(ctx, "SELECT count() FROM test_suite_results").Scan(&suites); err != nil {
 		t.Fatal(err)
 	}
-	id := "chaos14555-read-cost-" + uuid.NewString()
+	id, alone := "chaos14555-read-cost-"+uuid.NewString(), "chaos14555-revived-alone-"+uuid.NewString()
 	day := retiredDay()
+	if err := loadNativeTestopsRevivedSlots(clickhouse.Context(ctx, clickhouse.WithQueryID(alone)), stack.conn, org, stack.repoID(t, org),
+		day, day.Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := computeTestopsTestMetricsWithoutTeams(clickhouse.Context(ctx, clickhouse.WithQueryID(id)), stack.conn, org, stack.repoID(t, org),
 		day.AddDate(0, 0, -29), day, day.Add(24*time.Hour)); err != nil {
 		t.Fatal(err)
@@ -1559,11 +1563,13 @@ func TestTestopsRevivedSlotReadCost(t *testing.T) {
 	if err := stack.conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 		t.Fatal(err)
 	}
+	// The revived-slot statement of the read is the one with the normalized query hash of the statement run alone.
 	var beforeRows, afterRows, beforeMemory, afterMemory, statements, revived uint64
 	if err := stack.conn.QueryRow(ctx, `SELECT
   sumIf(read_rows, NOT revived), sum(read_rows), toUInt64(maxIf(memory_usage, NOT revived)), toUInt64(max(memory_usage)), count(), countIf(revived)
-FROM (SELECT read_rows, memory_usage, position(query, 'HAVING max(retracted) = 1') > 0 AS revived
-      FROM system.query_log WHERE query_id = ? AND type = 'QueryFinish')`, id).
+FROM (SELECT read_rows, memory_usage, normalized_query_hash IN (
+        SELECT normalized_query_hash FROM system.query_log WHERE query_id = ? AND type = 'QueryFinish') AS revived
+      FROM system.query_log WHERE query_id = ? AND type = 'QueryFinish')`, alone, id).
 		Scan(&beforeRows, &afterRows, &beforeMemory, &afterMemory, &statements, &revived); err != nil {
 		t.Fatal(err)
 	}

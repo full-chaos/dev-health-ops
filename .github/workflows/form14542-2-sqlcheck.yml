@@ -1,0 +1,47 @@
+# Throwaway (never merged): executes FORM-14542-2 (SigNoz json + PG sql) in CI. Delete with the draft PR.
+name: form14542-2-sqlcheck
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/form14542-2-sqlcheck.yml"
+      - "ci/form14542-2-sqlcheck/**"
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  signoz-cell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Resolve the ClickHouse image digest
+        run: |
+          set -euo pipefail
+          for tag in 25.12.5.44 25.12; do
+            if digest=$(docker buildx imagetools inspect "clickhouse/clickhouse-server:${tag}" --format '{{.Manifest.Digest}}' 2>/dev/null) && [ -n "$digest" ]; then
+              echo "tag ${tag} index digest ${digest}"
+              echo "CH_IMAGE=clickhouse/clickhouse-server:${tag}@${digest}" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "tag ${tag}: not found"
+          done
+          echo "FAIL: neither 25.12.5.44 nor 25.12 exists"; exit 1
+      - name: Run the SigNoz cell
+        run: bash ci/form14542-2-sqlcheck/run.sh
+
+  pg-cell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Log in to the image mirror
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Run the PG cell
+        env:
+          PG_IMAGE: ghcr.io/full-chaos/postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+        run: bash ci/form14542-2-sqlcheck/pg_run.sh

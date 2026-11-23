@@ -648,7 +648,7 @@ SELECT EXISTS (
 // held after it, or a read error, is ErrPostSyncUnavailable at commit_check over its cause, so River retries the same
 // delivery.
 func (service *NativePostSyncService) postSyncCommitAllowed(ctx context.Context, tx pgx.Tx, args PostSyncArgs) (bool, error) {
-	fence := &transportFence{args: args, kind: outboxKindPostSync, unavailable: ErrPostSyncUnavailable, logger: service.logger,
+	fence := &transportFence{args: args, kind: outboxKindPostSync, unavailable: unavailable(stageCommitCheck, nil), logger: service.logger,
 		failure: func(cause error) error { return unavailable(stageCommitCheck, cause) }}
 	snapshot, err := fence.lockCommitSnapshot(ctx, tx)
 	if err != nil {

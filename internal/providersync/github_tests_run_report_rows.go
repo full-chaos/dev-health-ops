@@ -565,29 +565,102 @@ func githubTestsEffectsSplit(effects []EffectBatch) bool {
 	return err == nil
 }
 
-// githubTestsRunReportEffects builds a run's effects with the rows that retire its dropped reports' slots. One row per suite
-// (githubTestsRetractionRows) when the suite batch has room for them and the batch still splits into prepared chunks: a full
-// row sits at its suite's key, so it moves live rows to other chunk offsets, where two large rows of two destinations can meet.
-// Else one minimal row per slot, limited "one_row_per_slot": the split gives it a chunk of its own (effectOwnChunkRows), so it
-// adds no row to a chunk of the run's own rows. (When the run's own rows do not split, chunk preparation refuses the run
-// whatever it holds.)
+// githubTestsCaseRetractionRows neutralise a dropped report's stored cases for a reader without the retired-slot rule (an old
+// binary after a rollback, CHAOS-14259). An earlier sync may have stored the report's cases under this attempt's keys (a build
+// before CHAOS-14045) or under an earlier attempt's keys (a re-run that dropped the report only in its newest attempt): per
+// attempt label from 1 to the slot's, one row per parsed case at the key it has under that label, with no name, status, class,
+// duration or failure text and Retracted set. A case reader drops a row with no name. The keys of an earlier label assume the
+// report's suite and case names did not change between attempts; a report whose keys under its own label are not the parsed
+// keys (a parse this re-keying does not reproduce) gets no case row.
+func githubTestsCaseRetractionRows(retirement githubTestsRetirement) []testCaseResultRow {
+	var rows []testCaseResultRow
+	for _, drop := range retirement.dropped {
+		report := retirement.parsed[drop.Index]
+		if len(report.Suites) == 0 {
+			continue
+		}
+		type identity struct {
+			name       string
+			occurrence int
+		}
+		suites := make(map[string]identity, len(report.Suites))
+		named := map[string]int{}
+		for _, suite := range report.Suites {
+			suites[suite.SuiteID] = identity{suite.SuiteName, named[suite.SuiteName]}
+			named[suite.SuiteName]++
+		}
+		first := report.Suites[0]
+		var keyed []testCaseResultRow
+		valid := true
+		for label := int64(1); label <= first.RunAttempt && valid; label++ {
+			scope := githubTestsReportSlot{Name: first.ReportSlot, Attempt: label}.scope()
+			occurrences := map[string]map[string]int{}
+			for _, row := range report.Cases {
+				suite, known := suites[row.SuiteID]
+				if occurrences[row.SuiteID] == nil {
+					occurrences[row.SuiteID] = map[string]int{}
+				}
+				occurrence := occurrences[row.SuiteID][row.CaseName]
+				occurrences[row.SuiteID][row.CaseName]++
+				suiteID := githubTestsSuiteID(first.RunID, scope, suite.name, suite.occurrence)
+				caseID := githubTestsCaseID(suiteID, row.CaseName, occurrence)
+				if !known || (label == first.RunAttempt && (suiteID != row.SuiteID || caseID != row.CaseID)) {
+					valid = false
+					break
+				}
+				keyed = append(keyed, testCaseResultRow{RepoID: row.RepoID, RunID: row.RunID, SuiteID: suiteID, CaseID: caseID,
+					OrgID: row.OrgID, LastSynced: row.LastSynced, Retracted: true})
+			}
+		}
+		if valid {
+			rows = append(rows, keyed...)
+		}
+	}
+	return rows
+}
+
+// githubTestsCaseID is a case's key in its suite: newJUnitCaseRow's hash of the suite key and the case name, with the ordinal of
+// a repeated name in the suite folded in when it is not 0.
+func githubTestsCaseID(suiteID, name string, occurrence int) string {
+	caseID := hashTestIdentifier(suiteID, name)
+	if occurrence > 0 {
+		caseID = hashTestIdentifier(caseID, strconv.Itoa(occurrence))
+	}
+	return caseID
+}
+
+// githubTestsRunReportEffects builds a run's effects with the rows that retire its dropped reports' slots, the largest set of:
+//  1. one row per suite (githubTestsRetractionRows) and the case rows of githubTestsCaseRetractionRows;
+//  2. the suite rows alone, limited "suite_rows_only" (an old reader after a rollback still sees the slot's stale cases);
+//  3. one minimal row per slot, limited "one_row_per_slot".
+//
+// A set is taken when the batch holds it under the effect contract and still splits into prepared chunks: full rows sit at
+// their keys, so they move live rows to other chunk offsets, where two large rows of two destinations can meet. The minimal
+// row always fits: the split gives it a chunk of its own (effectOwnChunkRows), so it adds no row to a chunk of the run's own
+// rows. (When the run's own rows do not split, chunk preparation refuses the run whatever it holds.)
 func githubTestsRunReportEffects(room githubTestsRetractionRoom, retirement githubTestsRetirement, suites []testSuiteResultRow,
 	cases []testCaseResultRow, coverage []coverageSnapshotRow, completeness []testOpsRunReportCompletenessRow,
 ) (effects []EffectBatch, limited string, err error) {
-	build := func(retractions []testSuiteResultRow) ([]EffectBatch, error) {
-		return testOpsEffects(nil, nil, nil, append(slices.Clip(suites), retractions...), cases, coverage, completeness...)
+	build := func(suiteRetractions []testSuiteResultRow, caseRetractions []testCaseResultRow) ([]EffectBatch, error) {
+		return testOpsEffects(nil, nil, nil, append(slices.Clip(suites), suiteRetractions...), append(slices.Clip(cases), caseRetractions...),
+			coverage, completeness...)
 	}
 	full := githubTestsRetractionRows(retirement.parsed, retirement.dropped)
 	if len(full) == 0 {
-		effects, err = build(nil)
+		effects, err = build(nil, nil)
 		return effects, "", err
 	}
 	if room.fits(len(suites), full) {
-		if effects, err := build(full); err == nil && githubTestsEffectsSplit(effects) {
-			return effects, "", nil
+		if caseRows := githubTestsCaseRetractionRows(retirement); len(caseRows) > 0 {
+			if effects, err := build(full, caseRows); err == nil && githubTestsEffectsSplit(effects) {
+				return effects, "", nil
+			}
+		}
+		if effects, err := build(full, nil); err == nil && githubTestsEffectsSplit(effects) {
+			return effects, "suite_rows_only", nil
 		}
 	}
-	effects, err = build(githubTestsMinimalRetractionRows(retirement))
+	effects, err = build(githubTestsMinimalRetractionRows(retirement), nil)
 	if err != nil {
 		return nil, "", err
 	}

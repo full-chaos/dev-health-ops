@@ -19,6 +19,12 @@ var gitLabTestsGoOnlyFields = map[string]string{
 	"last_synced": "stamped by the Go complete-route effect boundary",
 }
 
+// gitLabTestsCaseGoOnlyFields adds the retraction flag of a case row (CHAOS-14259); GitLab writes none.
+var gitLabTestsCaseGoOnlyFields = map[string]string{
+	"last_synced": gitLabTestsGoOnlyFields["last_synced"],
+	"retracted":   "CHAOS-14259: Go-only column, Python writer frozen: GitLab writes no case retraction row",
+}
+
 // gitLabTestsSlotGoOnlyFields adds the GitHub-only report slot columns of the suite and coverage rows (CHAOS-13873).
 var gitLabTestsSlotGoOnlyFields = map[string]string{
 	"last_synced": gitLabTestsGoOnlyFields["last_synced"],
@@ -146,7 +152,7 @@ func TestGenericOracleMatchesFrozenPythonGitLabTestsRows(t *testing.T) {
 	compareRowsAgainstPythonOracle(t, "gitlab/tests/case", []oracleCase{testCase}, func(t *testing.T, input map[string]any) testCaseResultRow {
 		_, _, _, _, a, _ := gitLabTestsGoRows(t, input)
 		return a
-	}, gitLabTestsGoOnlyFields)
+	}, gitLabTestsCaseGoOnlyFields)
 	compareRowsAgainstPythonOracle(t, "gitlab/tests/coverage", []oracleCase{testCase}, func(t *testing.T, input map[string]any) coverageSnapshotRow {
 		_, _, _, _, _, a := gitLabTestsGoRows(t, input)
 		return a

@@ -1,6 +1,7 @@
 -- A report slot that a later sync of the same run no longer writes is retired (CHAOS-14259).
 --
 --   test_suite_results.retracted  UInt8 DEFAULT 0
+--   test_case_results.retracted   UInt8 DEFAULT 0
 --
 -- The GitHub run-report planner drops an artifact that is an aggregate of the run's other artifacts. An earlier sync of the
 -- run may have stored it as its own slot (a build before CHAOS-14045, or a listing without its parts). The writer then
@@ -11,4 +12,9 @@
 -- version column: ADD COLUMN changes the table metadata only, no part is rewritten and no mutation is queued. The
 -- statement can run again. There is no rollback file: an old binary writes no retraction row and its reader reads a
 -- retraction row as a suite with no case and no duration; the column can stay.
+--
+-- The writer also adds, per case of the dropped report and per attempt of its slot, a row at the case's key with no name or
+-- status and retracted = 1: an old reader after a rollback drops a case row with no name, so a stale case of the slot is no
+-- flake and no recurrent failure there either.
 ALTER TABLE test_suite_results ADD COLUMN IF NOT EXISTS retracted UInt8 DEFAULT 0;
+ALTER TABLE test_case_results ADD COLUMN IF NOT EXISTS retracted UInt8 DEFAULT 0;

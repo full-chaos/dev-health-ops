@@ -91,3 +91,45 @@ func TestTestOpsSinkReadsBackTheRetractionRowOfADroppedReport(t *testing.T) {
 		t.Fatalf("current row: %d rows, retracted %d, total %d, last_synced %s; want the live row at %s", rows, retracted, total, synced, revived)
 	}
 }
+
+// A case retraction row (no name, no status, retracted) replaces the stale case row at its key and reads back exactly.
+func TestTestOpsSinkReadsBackTheCaseRetractionRowOfADroppedReport(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	sink := newTestOpsMigratedSink(t, ctx)
+	claim := nativeTestClaim("github", "tests")
+	older, newer := time.Date(2026, 7, 22, 11, 5, 0, 0, time.UTC), time.Date(2026, 7, 22, 12, 5, 0, 0, time.UTC)
+	message := "boom"
+	stale := testCaseResultRow{OrgID: claim.OrgID, RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", RunID: "43600014259", SuiteID: "suite-total-b-left",
+		CaseID: "case-a", CaseName: "a", Status: "failed", FailureMessage: &message, LastSynced: older}
+	retraction := testCaseResultRow{OrgID: stale.OrgID, RepoID: stale.RepoID, RunID: stale.RunID, SuiteID: stale.SuiteID, CaseID: stale.CaseID,
+		LastSynced: newer, Retracted: true}
+	build := func(row testCaseResultRow) EffectBatch {
+		effect, err := effectBatchFromValues("test_case_results", EffectReadbackRequired, []testCaseResultRow{row})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return effect
+	}
+	if err := sink.WriteEffect(ctx, claim, build(stale)); err != nil {
+		t.Fatal(err)
+	}
+	for pass := 1; pass <= 2; pass++ {
+		if err := sink.WriteEffect(ctx, claim, build(retraction)); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := sink.InspectEffect(ctx, claim, build(retraction)); err != nil || got != EffectExact {
+			t.Fatalf("write %d: the case retraction reads back %v (%v), want exact", pass, got, err)
+		}
+	}
+	var rows uint64
+	var retracted uint8
+	var name, status string
+	if err := sink.Conn.QueryRow(ctx, `SELECT count(), any(retracted), any(case_name), any(status) FROM test_case_results FINAL
+WHERE org_id = 'org-acme' AND run_id = '43600014259'`).Scan(&rows, &retracted, &name, &status); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 || retracted != 1 || name != "" || status != "" {
+		t.Fatalf("current case row: %d rows, retracted %d, name %q, status %q; want 1 retracted row with no name or status", rows, retracted, name, status)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"maps"
 	"math/rand/v2"
 	"strings"
 	"testing"
@@ -154,13 +155,60 @@ func TestGitHubTestsRouteRetractsTheSlotOfADroppedAggregate(t *testing.T) {
 			t.Errorf("a retracted row shares the key of a live row: %v", row["suite_id"])
 		}
 	}
-	if len(cases) != 2 {
-		t.Errorf("case rows %d, want leg B's 2 parts only", len(cases))
-	}
+	// Its cases get a row each at their keys under the report's suites (attempt 1 is the slot's only label): no name, no status,
+	// retracted. A live case row is never under a retracted suite.
+	liveCases, retractedCases := 0, 0
 	for _, row := range cases {
-		if retractedIDs[row["suite_id"]] {
-			t.Errorf("a case row was written under a retracted suite: %v", row)
+		if row["retracted"] == true {
+			retractedCases++
+			if !retractedIDs[row["suite_id"]] || row["case_name"] != "" || row["status"] != "" || row["failure_message"] != nil {
+				t.Errorf("case retraction row %v, want one under a retracted suite with no name, status or failure text", row)
+			}
+			continue
 		}
+		liveCases++
+		if retractedIDs[row["suite_id"]] {
+			t.Errorf("a live case row was written under a retracted suite: %v", row)
+		}
+	}
+	if liveCases != 2 || retractedCases != 2 {
+		t.Errorf("case rows: %d live, %d retracted; want leg B's 2 parts and total-b's 2 cases retracted", liveCases, retractedCases)
+	}
+}
+
+// The case retraction rows of an earlier attempt sit at the keys the parser gives the same report under that attempt's label:
+// for a slot at attempt 3, the parsed keys under labels 1, 2 and 3 (the case key re-keyed per label, its ordinal kept).
+func TestGitHubTestsCaseRetractionRowsCoverEveryAttemptLabel(t *testing.T) {
+	body := retiredFxJUnit(retiredFxSuite{"left", "3.0", []retiredFxCase{{"a", "", "0.25"}, {"a", "", "0.5"}}}, retiredFxSuite{"left", "3.0", []retiredFxCase{{"b", "", "0.25"}}})
+	at := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	parse := func(attempt int64) githubTestsReportRows {
+		rows, err := parseGitHubTestsReportArtifact(githubTestsZip(t, map[string]string{"junit.xml": body}), "6", githubTestsReportSlot{Name: "total-b", Attempt: attempt},
+			nil, "c7198fbc-1945-3717-05d8-eb78866b4e79", "1", "org-acme", nil, nil, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rows
+	}
+	current := parse(3)
+	rows := githubTestsCaseRetractionRows(githubTestsRetirement{
+		parsed:  []githubTestsParsedReport{{Suites: current.Suites, Cases: current.Cases}},
+		dropped: []githubTestsReportDrop{{Index: 0, Cause: githubTestsAggregateOfPartsCause}},
+	})
+	want := map[string]bool{}
+	for _, attempt := range []int64{1, 2, 3} {
+		for _, row := range parse(attempt).Cases {
+			want[row.SuiteID+"/"+row.CaseID] = true
+		}
+	}
+	got := map[string]bool{}
+	for _, row := range rows {
+		got[row.SuiteID+"/"+row.CaseID] = true
+		if !row.Retracted || row.CaseName != "" || row.Status != "" {
+			t.Errorf("case retraction row %+v, want retracted with no name or status", row)
+		}
+	}
+	if len(rows) != 9 || !maps.Equal(got, want) {
+		t.Errorf("%d case retraction rows at %v, want the 9 parsed keys of labels 1-3 %v", len(rows), got, want)
 	}
 }
 

@@ -220,6 +220,9 @@ type testCaseResultRow struct {
 	IsQuarantined   bool      `json:"is_quarantined"`
 	OrgID           string    `json:"org_id"`
 	LastSynced      time.Time `json:"last_synced"`
+	// Retracted marks a row with no name or status that neutralises a dropped report's stored case (CHAOS-14259,
+	// githubTestsCaseRetractionRows); a live row omits it, so its JSON and effect digest are unchanged.
+	Retracted bool `json:"retracted,omitempty"`
 }
 
 type coverageSnapshotRow struct {

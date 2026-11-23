@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -756,6 +757,7 @@ func TestCallCancelledNeedsACancelledContextAndOnlyCancellationLeaves(t *testing
 	}{
 		{"raw cancel", cancelled, context.Canceled, nil, true},
 		{"wrapped cancel", cancelled, &url.Error{Op: "Get", URL: "x", Err: context.Canceled}, nil, true},
+		{"wrapped failure under a cancelled context", cancelled, fmt.Errorf("aaaa: %w", errors.New("aaaa")), nil, false},
 		{"transport canceled reason", cancelled, transportCanceled, nil, true},
 		{"label beside a cancel", cancelled, spanTestJoinErr{label, context.Canceled}, []error{label}, true},
 		{"cancel under a live context", context.Background(), context.Canceled, nil, false},
@@ -772,5 +774,25 @@ func TestCallCancelledNeedsACancelledContextAndOnlyCancellationLeaves(t *testing
 		if got := CallCancelled(tc.ctx, tc.err, tc.labels...); got != tc.want {
 			t.Errorf("%s: CallCancelled = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// A plain Do under a recording caller span is a child of that span in the caller's trace: never a new root.
+func TestProviderRequestSpanIsAChildOfTheCallersSpan(t *testing.T) {
+	pipeline := spantest.Install(t)
+	client := spanTestClient(t, "https://api.example.test", fakehttp.Client(spanTestStatusDoer(http.StatusOK, nil)), oneAttempt())
+	response, err := client.Do(pipeline.Parent, http.MethodGet, "/items", nil)
+	closeBody(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair := onlyRequestSpan(t, pipeline)
+	caller := trace.SpanContextFromContext(pipeline.Parent)
+	if pair.Raw.Parent().SpanID() != caller.SpanID() || pair.Raw.SpanContext().TraceID() != caller.TraceID() {
+		t.Errorf("request span parent=%s trace=%s, want the caller's span %s in the caller's trace %s",
+			pair.Raw.Parent().SpanID(), pair.Raw.SpanContext().TraceID(), caller.SpanID(), caller.TraceID())
+	}
+	if pair.Exported.Parent.SpanID() != caller.SpanID() || pair.Exported.SpanContext.TraceID() != caller.TraceID() {
+		t.Errorf("exported request span parent=%s trace=%s, want the caller's", pair.Exported.Parent.SpanID(), pair.Exported.SpanContext.TraceID())
 	}
 }

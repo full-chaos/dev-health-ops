@@ -143,7 +143,7 @@ func (p *requestProbe) responded(response *http.Response) {
 	}
 }
 
-// end closes the span with what the call returned. It only reads response and err.
+// end closes the span with the outcome of err. It reads err only: the status came from the wire (responded).
 func (p *requestProbe) end(ctx context.Context, err error) {
 	if p == nil {
 		return

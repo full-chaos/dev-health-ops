@@ -382,6 +382,9 @@ func (s *fenceServer) serve(connection net.Conn) error {
 				fenceCommand(backend, "SAVEPOINT")
 			case strings.HasPrefix(sql, "release savepoint "):
 				fenceCommand(backend, "RELEASE")
+			case sql == commitBarrierSQL:
+				s.trace = append(s.trace, "route-barrier")
+				fenceCommand(backend, "LOCK TABLE")
 			default:
 				handled, fenceErr := s.fenceQuery(backend, sql)
 				if fenceErr != nil {

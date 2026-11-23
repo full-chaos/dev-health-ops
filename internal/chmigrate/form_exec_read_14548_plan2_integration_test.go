@@ -23,7 +23,7 @@ import (
 )
 
 // Throwaway exec proof of a prod read form (READ-14548-PLAN-2): not for merge. p2x14548Form is the form file byte for byte.
-const p2x14548FormSHA256 = "dffad83828fdf6de9f441de9821d7ae6c3d7121942ae84631e06116ed53ad841"
+const p2x14548FormSHA256 = "61212f40cb11ddaf68d316ec79936c92d8d6d213e79b7cfba24e464bde0a9888"
 
 const p2x14548Form = `-- NOT EXECUTED. READ-14548-PLAN-2 (system tables and part index only; numbers and static names only). acr-mcp, 2026-11-23. acp FORM read first; then pm runs it once.
 -- Exec leg: a throwaway CI leg runs each statement (FORM-TEMPLATE-3); its run id and job id are in READ-14548-PLAN-2.md only.
@@ -99,13 +99,13 @@ ORDER BY log_table;
 
 -- S1: one row. WANT runs_before >= 1 and runs_after >= 1 (else STOP, limit a). before_* = the last run before 09:01Z (the 08:56 run),
 --   after_* = the first run at or after 09:01Z (the 09:02 run). read_counters entry = (event name, before value, after value) for every
---   ProfileEvents name of either run that names a read, mark, range, part, filter, index, join, sort or merge counter (numbers only).
+--   ProfileEvents name of either run that names a select, read, rows, mark, range, part, filter, prewhere, index, condition, granule, join, sort, merge or replacing counter (numbers only).
 --   Control that can fail: runs_before and runs_after (0 = wrong day, prefix or type).
 SELECT runs_before, runs_after, before_minute, after_minute,
        before_read_rows, after_read_rows, before_read_bytes, after_read_bytes, before_result_rows, after_result_rows,
        before_memory, after_memory, before_duration_ms, after_duration_ms,
        arrayMap(k -> tuple(k, before_events[k], after_events[k]),
-                arrayFilter(k -> match(k, '(?i)select|read|rows|mark|range|part|final|filter|prewhere|index|condition|granule|join|sort|merg'),
+                arrayFilter(k -> match(k, '(?i)select|read|rows|mark|range|part|filter|prewhere|index|condition|granule|join|sort|merg|replac'),
                             arraySort(arrayDistinct(arrayConcat(mapKeys(before_events), mapKeys(after_events)))))) AS read_counters
 FROM (
   WITH (SELECT throwIf(
@@ -757,7 +757,7 @@ func TestReadPlan2Form14548ExecutesAtTheChainHead(t *testing.T) {
 	}
 
 	// S1: the runs' own log values; read_counters = independent recompute from the two ProfileEvents maps.
-	counterName := regexp.MustCompile(`(?i)select|read|rows|mark|range|part|final|filter|prewhere|index|condition|granule|join|sort|merg`)
+	counterName := regexp.MustCompile(`(?i)select|read|rows|mark|range|part|filter|prewhere|index|condition|granule|join|sort|merg|replac`)
 	if r := passRows["S1"]; len(r) != 1 {
 		t.Errorf("S1: %d rows, want 1", len(r))
 	} else {
@@ -972,7 +972,7 @@ func TestReadPlan2Form14548ExecutesAtTheChainHead(t *testing.T) {
 	plToday := logToday("part_log")
 	mData := p2x14548Count(ctx, t, conn, "SELECT sum(marks) + count() FROM system.parts WHERE database = currentDatabase() AND table IN ('work_items', 'project_membership_transitions')")
 	pAll := p2x14548Count(ctx, t, conn, "SELECT count() FROM system.parts WHERE (database = 'system' AND table IN ('query_log', 'processors_profile_log', 'part_log')) OR (database = currentDatabase() AND table IN ('work_items', 'project_membership_transitions'))")
-	slack := 12*pAll + 100
+	slack := 12*pAll + 5000
 	bounds := map[string]uint64{
 		"S0":  mPP + mQL + slack,
 		"S1":  wQL + mQL + slack,

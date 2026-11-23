@@ -2837,6 +2837,9 @@ FROM run WHERE run.target_day <= DATE '2020-01-01' + 500`, old); err != nil {
 		if _, err := tx.Exec(ctx, staleFinalizeJITOff); err != nil {
 			t.Fatal(err)
 		}
+		if _, err := tx.Exec(ctx, "SET LOCAL work_mem = '64kB'"); err != nil {
+			t.Fatal(err)
+		}
 		var raw []byte
 		// VERBOSE: statement B evaluates the live-job arm in a target-list CASE, which only the Output lines show.
 		if err := tx.QueryRow(ctx, "EXPLAIN (ANALYZE, VERBOSE, FORMAT JSON) "+statement.query, statement.args...).Scan(&raw); err != nil {

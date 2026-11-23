@@ -1,4 +1,4 @@
--- FORM-14090-S0-2 (pm-14090): prod timing of the NEW statement 0 of ops #6850 (CHAOS-14511) before its roll.
+-- FORM-14090-S0-3 (pm-14090; -2 09fd95461514 frozen: bytes caps, null-safe STOP text, work math): prod timing of the NEW statement 0 of ops #6850 (CHAOS-14511) before its roll.
 -- Statement 0 = internal/joboutbox/stale_finalize_repair.go staleFinalizeBaseExistsSQL at ops 863efd3a6e77 (#6850 head), byte-equal
 -- through PREPARE (sha256 of the text from the leading newline to the last ')' = 89794a9d433d). It changed from FORM-14090-S0-1's text
 -- (f3d3a8ff9aa0): the base's partition check is now an uncorrelated `run.id NOT IN (...)` set (read once per statement).
@@ -7,13 +7,18 @@
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
 
 -- G0 catalog gate (reads no data table). WANT cost_gate_ok = 0.
--- Bounds S1-S2: statement 0 reads daily_metrics_partitions once in full (the NOT IN set: one Seq Scan, hashed) and
--- daily_metrics_runs until the first base row (all of it when the base is empty, as today); S2 the same once more.
--- Caps: runs <= 200,000; partitions <= 500,000 (SIZING-14090-2 stmt0b: 49,009 / 95,410).
+-- WORK MATH (caps; prod at SIZING-14090-2 2026-11-22: runs 49,009 rows / 18.9 MB, partitions 95,410 rows / 36.1 MB):
+--   S1, each of the 3 executions: one full read of daily_metrics_partitions for the NOT IN set (<= 500,000 rows, hashed) +
+--     daily_metrics_runs until the first base row (all <= 200,000 rows when the base is empty, as today) = <= 700,000 rows.
+--   S2: one runs seq scan (<= 200,000) + per running+pending run past the horizon one partition probe through
+--     (run_id, status) (<= 500,000 rows in all) = <= 700,000 rows.
+--   Every statement <= 20 M (TEMPLATE-3). Bytes caps bound the heap read: runs 100 MB, partitions 200 MB.
 WITH bs AS (SELECT current_setting('block_size')::bigint AS block_size),
 orgs AS (SELECT count(*) AS n FROM public.organizations o WHERE starts_with(o.id::text, 'f0f0f0f0')),
-rel AS (SELECT c.relname, c.reltuples::bigint AS reltuples
+rel AS (SELECT c.relname, c.reltuples::bigint AS reltuples,
+               (c.relpages::bigint + COALESCE(t.relpages::bigint, 0)) * bs.block_size AS bytes
         FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        CROSS JOIN bs LEFT JOIN pg_catalog.pg_class t ON t.oid = c.reltoastrelid
         WHERE n.nspname = 'public' AND c.relkind = 'r'
           AND c.relname IN ('daily_metrics_runs', 'daily_metrics_partitions')),
 facts AS (
@@ -21,11 +26,17 @@ facts AS (
          (SELECT count(*) FROM rel) AS tables,
          (SELECT count(*) FROM rel WHERE reltuples < 0) AS never_analyzed,
          (SELECT reltuples FROM rel WHERE relname = 'daily_metrics_runs') AS runs,
-         (SELECT reltuples FROM rel WHERE relname = 'daily_metrics_partitions') AS partitions)
+         (SELECT bytes FROM rel WHERE relname = 'daily_metrics_runs') AS runs_bytes,
+         (SELECT reltuples FROM rel WHERE relname = 'daily_metrics_partitions') AS partitions,
+         (SELECT bytes FROM rel WHERE relname = 'daily_metrics_partitions') AS partitions_bytes)
 SELECT CASE
-         WHEN orgs = 1 AND tables = 2 AND never_analyzed = 0 AND runs <= 200000 AND partitions <= 500000 THEN 0
-         ELSE ('STOP-G0 orgs=' || orgs || ' tables=' || tables || ' unanalyzed=' || never_analyzed
-               || ' runs=' || runs || ' partitions=' || partitions)::int
+         WHEN orgs = 1 AND tables = 2 AND never_analyzed = 0
+          AND runs <= 200000 AND runs_bytes <= 104857600 AND partitions <= 500000 AND partitions_bytes <= 209715200
+         THEN 0
+         ELSE ('STOP-G0 orgs=' || COALESCE(orgs::text, 'null') || ' tables=' || COALESCE(tables::text, 'null')
+               || ' unanalyzed=' || COALESCE(never_analyzed::text, 'null') || ' runs=' || COALESCE(runs::text, 'null')
+               || ' runs_bytes=' || COALESCE(runs_bytes::text, 'null') || ' partitions=' || COALESCE(partitions::text, 'null')
+               || ' partitions_bytes=' || COALESCE(partitions_bytes::text, 'null'))::int
        END AS cost_gate_ok
 FROM facts;
 

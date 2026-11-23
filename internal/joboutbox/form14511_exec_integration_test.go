@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// EXEC PROOF ONLY (never merged): FORM-14090-S0-2 and FORM-14511-RECHECK-2 on Postgres at the migrated schema (with
+// EXEC PROOF ONLY (never merged): FORM-14090-S0-3 and FORM-14511-RECHECK-3 on Postgres at the migrated schema (with
 // revision 0167's partial outbox index). The SQL files are the FORMs with the one org prefix literal replaced by the
 // fixture prefix 'f0f0f0f0'. Pass paths, each G0 STOP fired once, each control shown failing.
 func TestFormsS02AndRecheck2Execute(t *testing.T) {
@@ -26,7 +26,7 @@ func TestFormsS02AndRecheck2Execute(t *testing.T) {
 		}
 		return string(raw)
 	}
-	s02, recheck := read("FORM-14090-S0-2.sql"), read("FORM-14511-RECHECK-2.sql")
+	s02, recheck := read("FORM-14090-S0-3.sql"), read("FORM-14511-RECHECK-3.sql")
 	exec := func(query string, args ...any) {
 		t.Helper()
 		if _, err := admin.Exec(ctx, query, args...); err != nil {
@@ -76,6 +76,9 @@ VALUES (gen_random_uuid(), 'metrics.daily_finalize:' || $1, 'metrics.daily_final
 	exec("DELETE FROM public.daily_metrics_runs WHERE id = $1::uuid", base)
 	runFormScript(t, ctx, admin, strings.Replace(s02, "runs <= 200000", "runs <= 0", 1), "STOP-G0")
 	runFormScript(t, ctx, admin, strings.Replace(s02, "partitions <= 500000", "partitions <= 0", 1), "STOP-G0")
+	runFormScript(t, ctx, admin, strings.Replace(s02, "runs_bytes <= 104857600", "runs_bytes <= 0", 1), "STOP-G0")
+	runFormScript(t, ctx, admin, strings.Replace(s02, "partitions_bytes <= 209715200", "partitions_bytes <= 0", 1), "STOP-G0")
+	runFormScript(t, ctx, admin, strings.Replace(s02, "AND c.relname IN ('daily_metrics_runs', 'daily_metrics_partitions')", "AND c.relname IN ('daily_metrics_runs', 'daily_metrics_partitionsx')", 1), "partitions=null")
 	runFormScript(t, ctx, admin, strings.ReplaceAll(s02, "'f0f0f0f0'", "'e0e0e0e0'"), "STOP-G0 orgs=0")
 	if got := runFormScript(t, ctx, admin, strings.Replace(s02, "count(*) AS runs_total", "count(*) FILTER (WHERE false) AS runs_total", 1), "")[6][0][0]; got != "0" {
 		t.Fatalf("S0-2 S2 under a mutation = %v, want runs_total 0 (the control can fail)", got)
@@ -92,6 +95,9 @@ VALUES (gen_random_uuid(), 'metrics.daily_finalize:' || $1, 'metrics.daily_final
 		t.Fatalf("RECHECK-2 S3 with an unrelayed finalize row = %v, want true (the re-check can answer true)", got)
 	}
 	runFormScript(t, ctx, admin, strings.Replace(recheck, "outbox <= 2000000", "outbox <= 0", 1), "STOP-G0")
+	runFormScript(t, ctx, admin, strings.Replace(recheck, "runs_bytes <= 104857600", "runs_bytes <= 0", 1), "STOP-G0")
+	runFormScript(t, ctx, admin, strings.Replace(recheck, "partitions_bytes <= 209715200", "partitions_bytes <= 0", 1), "STOP-G0")
+	runFormScript(t, ctx, admin, strings.Replace(recheck, "outbox_bytes <= 2147483648", "outbox_bytes <= 0", 1), "STOP-G0")
 	runFormScript(t, ctx, admin, strings.ReplaceAll(recheck, "'f0f0f0f0'", "'e0e0e0e0'"), "STOP-G0 orgs=0")
 	if got := runFormScript(t, ctx, admin, strings.Replace(recheck, "WHERE outbox.job_kind = 'metrics.daily_finalize';", "WHERE outbox.job_kind = 'metrics.daily_finalizex';", 1), "")[8][0][0]; got != "0" {
 		t.Fatalf("RECHECK-2 S5 under a wrong literal = %v, want 0 (the control can fail)", got)

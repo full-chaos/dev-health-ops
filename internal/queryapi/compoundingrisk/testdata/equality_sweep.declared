@@ -1,0 +1,36 @@
+# compoundingRisk equality sweep: the declared differences from equality_sweep.golden (main's table).
+# Each block: the combination header, its class (G: grouping at the selected day, S: named scope at the selected day), then the block it serves. Every other combination serves main's block.
+== breakout=TEAM teamIds=absent repoIds=absent day=derived read=n/a world=moved
+class G
+  served breakout="TEAM" rows=3 trend=1
+  row TEAM unassigned "Unassigned team" score=0.875 coverage=1 severity=HIGH day=2026-03-09
+  row TEAM t2 "Infra" score=0.625 coverage=0.4000000000000001 severity=ELEVATED day=2026-03-09
+  row TEAM t1 "Platform" score=0.375 coverage=0.7000000000000001 severity=LOW day=2026-03-09
+  trend 2026-03-09 score=0.525
+== breakout=TEAM teamIds=named repoIds=absent day=derived read=n/a world=moved
+class G
+  served breakout="TEAM" rows=2 trend=1
+  row TEAM t2 "Infra" score=0.625 coverage=0.4000000000000001 severity=ELEVATED day=2026-03-09
+  row TEAM t1 "Platform" score=0.375 coverage=0.7000000000000001 severity=LOW day=2026-03-09
+  trend 2026-03-09 score=0.4375
+== breakout=TEAM teamIds=named-t1 repoIds=absent day=derived read=n/a world=moved
+class S
+  served breakout="TEAM" rows=1 trend=1
+  row TEAM t1 "Platform" score=0.375 coverage=0.7000000000000001 severity=LOW day=2026-03-09
+  trend 2026-03-09 score=0.375
+== breakout=TEAM teamIds=named-t2 repoIds=absent day=derived read=n/a world=moved
+class S
+  served breakout="TEAM" rows=1 trend=1
+  row TEAM t2 "Infra" score=0.625 coverage=0.4000000000000001 severity=ELEVATED day=2026-03-09
+  trend 2026-03-09 score=0.625
+== breakout=TEAM teamIds=absent repoIds=moved-narrowing day=stored read=under-cap world=moved
+class G
+  served breakout="TEAM" rows=2 trend=1
+  row TEAM unassigned "Unassigned team" score=0.875 coverage=1 severity=HIGH day=2026-03-09
+  row TEAM t1 "Platform" score=0.1875 coverage=0.7000000000000001 severity=LOW day=2026-03-09
+  trend 2026-03-09 score=0.4166666666666667
+== breakout=TEAM teamIds=named repoIds=moved-narrowing day=stored read=under-cap world=moved
+class G
+  served breakout="TEAM" rows=1 trend=1
+  row TEAM t1 "Platform" score=0.1875 coverage=0.7000000000000001 severity=LOW day=2026-03-09
+  trend 2026-03-09 score=0.1875

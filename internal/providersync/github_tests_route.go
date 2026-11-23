@@ -640,7 +640,9 @@ func (handler GitHubTestsRouteHandler) Collect(
 			if len(archive) == 0 {
 				continue
 			}
-			rows, parseErr := parseGitHubTestsReportArtifact(archive, string(artifact.ID), githubTestsReportSlotFor(run, artifact), supersededIDs[githubTestsArtifactSlotName(artifact)], repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
+			rows, parseErr := parseGitHubTestsReportArtifactInSpan(ctx, archive, func() (githubTestsReportRows, error) {
+				return parseGitHubTestsReportArtifact(archive, string(artifact.ID), githubTestsReportSlotFor(run, artifact), supersededIDs[githubTestsArtifactSlotName(artifact)], repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
+			})
 			if parseErr != nil {
 				// Same disposition as the chunked route: an archive that will
 				// not open is skipped and the walk continues (CHAOS-4177).
@@ -1146,6 +1148,11 @@ func downloadGitHubTestsListedArtifact(
 	ctx context.Context, client *providerfoundation.HTTPClient, root, artifactID string,
 	maxBytes, listedSize int64,
 ) (archive []byte, used int, notFound bool, err error) {
+	ctx, span := startGitHubTestsDownloadSpan(ctx)
+	rangeRead := false
+	defer func() {
+		endGitHubTestsDownloadSpan(ctx, span, len(archive), listedSize, used, notFound, rangeRead, err)
+	}()
 	ctx, wire := providerfoundation.WithWireCount(ctx)
 	defer func() { used = wire.Requests() }()
 	path := root + "/actions/artifacts/" + url.PathEscape(artifactID) + "/zip"
@@ -1226,6 +1233,7 @@ func downloadGitHubTestsListedArtifact(
 		}
 		if rangeErr == nil && !gone {
 			logGitHubTestsRangeOutcome(artifactID, over, maxBytes, "range_read", wire)
+			rangeRead = true
 		}
 		return archive, 0, gone, rangeErr
 	}

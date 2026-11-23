@@ -583,7 +583,9 @@ func TestStaleFinalizeCursorReachesAnOlderRunWhileNewerRunsKeepArriving(t *testi
 	const limit, passes = 3, 12
 	for name, failFirstTwo := range map[string]bool{"full pages": false, "two deadlines defer the tail": true} {
 		t.Run(name, func(t *testing.T) {
-			survey := &movingSurvey{perPass: limit + 1, late: staleFinalizeCandidate{
+			// 3 x limit + 1 arrivals per pass: one traversal spans several passes, so a bound that drifts after its
+			// first pass is seen.
+			survey := &movingSurvey{perPass: 3*limit + 1, late: staleFinalizeCandidate{
 				runID:     "00000000-0000-4000-8000-00000000aaaa",
 				updatedAt: staleFinalizeTestNow.Add(-30 * 24 * time.Hour),
 			}}
@@ -598,7 +600,18 @@ func TestStaleFinalizeCursorReachesAnOlderRunWhileNewerRunsKeepArriving(t *testi
 					return nil
 				}
 			}
-			stage := &staleFinalizeStage{survey: survey.read, redriver: redriver, clock: time.Now, newNonce: func() string { return "nonce" }}
+			// Every survey of one traversal gets the traversal's first cutoff as its bound: a bound taken from the
+			// previous pass would let each pass's arrivals back in.
+			var traversalStart time.Time
+			read := func(ctx context.Context, cutoff time.Time, limit int, cursor *staleFinalizeCursor) staleFinalizeSurvey {
+				if cursor == nil {
+					traversalStart = cutoff
+				} else if !cursor.bound.Equal(traversalStart) {
+					t.Fatalf("pass %d: cursor bound %s, want the traversal's first cutoff %s", survey.pass+1, cursor.bound, traversalStart)
+				}
+				return survey.read(ctx, cutoff, limit, cursor)
+			}
+			stage := &staleFinalizeStage{survey: read, redriver: redriver, clock: time.Now, newNonce: func() string { return "nonce" }}
 			for pass := 0; pass < passes; pass++ {
 				stage.step(context.Background(), staleFinalizeTestNow.Add(time.Duration(pass)*staleFinalizeInterval), limit)
 				for _, call := range redriver.takeCalls() {

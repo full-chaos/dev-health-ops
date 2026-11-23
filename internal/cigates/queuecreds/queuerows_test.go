@@ -191,7 +191,7 @@ var queueRowReadTable = map[string]queueRowRead{
 		"args, args#>>domain,id, args->>organization_id, dedupe_key",
 		roleInternal, "", "", "same as the partition shape"},
 	"internal/joboutbox/stale_finalize_repair.go#staleFinalizeLevelsSQLTemplate": {
-		"args, args#>>domain,id",
+		"args#>>domain,id",
 		roleInternal, "", "", "the stale-finalize survey: join and filter on the domain link; only run ids and counts leave the survey"},
 	"internal/joboutbox/repository.go#rowColumns": {
 		"args, dedupe_key",

@@ -367,14 +367,23 @@ func routeTemplate(ctx context.Context) string {
 	return template
 }
 
-func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader) (response *http.Response, err error) {
+// Do sends one provider request with every retry it needs. Under a recording parent the call is one
+// dev_health.provider.request span (request_span.go); the span reads the result and changes none of it.
+func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+	probe := c.startRequestSpan(ctx, method, requestTargetAPI)
+	response, err := c.doRequest(ctx, probe, method, path, body)
+	probe.end(ctx, err)
+	return response, err
+}
+
+func (c *HTTPClient) doRequest(ctx context.Context, probe *requestProbe, method, path string, body io.Reader) (response *http.Response, err error) {
 	if c == nil || c.BaseURL == nil {
 		return nil, ErrCredentialInvalid
 	}
-	if err := c.Lease.Assert(ctx); err != nil {
+	if err := c.assertLeaseMeasured(ctx, probe); err != nil {
 		return nil, err
 	}
-	if err := c.awaitGate(ctx); err != nil {
+	if err := c.awaitGate(ctx, probe); err != nil {
 		return nil, err
 	}
 	var requestBody []byte
@@ -387,7 +396,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 	}
 	var reservation Reservation
 	if c.Budget != nil {
-		reservation, err = c.Budget.Acquire(ctx, c.BudgetKey)
+		reservation, err = c.acquireMeasured(ctx, probe)
 		if err != nil {
 			if c.Metrics != nil {
 				c.Metrics.RecordBudgetDenied(c.Provider)
@@ -401,7 +410,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 			return nil, ErrBudgetUnavailable
 		}
 		defer func() {
-			releaseErr := c.releaseReservation(ctx, reservation)
+			releaseErr := c.releaseMeasured(ctx, probe, reservation)
 			if releaseErr == nil {
 				return
 			}
@@ -423,14 +432,14 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 	}
 	var last *ProviderError
 	for attempt := 1; attempt <= c.Retry.MaxAttempts; attempt++ {
-		if err := c.Lease.Assert(ctx); err != nil {
+		if err := c.assertLeaseMeasured(ctx, probe); err != nil {
 			return nil, err
 		}
 		// The first attempt passed the gate above. A retry is a wire attempt too:
 		// a sibling may have armed or extended the shared gate while this request
 		// waited to retry.
 		if attempt > 1 {
-			if err := c.awaitGate(ctx); err != nil {
+			if err := c.awaitGate(ctx, probe); err != nil {
 				return nil, err
 			}
 		}
@@ -445,11 +454,14 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		if err := c.Auth(request); err != nil {
 			return nil, c.authFailure(ctx, err, attempt)
 		}
+		request = probe.watch(request)
 		setByteRange(ctx, request)
 		var requestErr error
-		guarded, leftOrigin := originGuardedDoer(c.Doer, target, recorder.record)
+		guarded, leftOrigin := originGuardedDoer(c.Doer, target, probe.hop(recorder.record))
 		c.recordWireRequest(ctx, target.Path)
+		probe.sent(attempt)
 		response, requestErr = guarded.Do(request)
+		probe.responded(response)
 		if callLeft.Load() || leftOrigin.Load() || (requestErr == nil && responseLeftOrigin(response, target) && !strippedOfCredentials(response.Request)) {
 			// A redirect took the authenticated request off the credential's
 			// origin. The header may already have been sent by the Doer, so
@@ -542,8 +554,16 @@ func (c *HTTPClient) DoUnauthenticatedRoute(ctx context.Context, method, templat
 // downloads redirect to a short-lived pre-signed object URL, and forwarding
 // the provider token to that different host would disclose a credential.
 // The request still honors the live lease, backoff gate, and shared budget.
-func (c *HTTPClient) DoUnauthenticated(
+func (c *HTTPClient) DoUnauthenticated(ctx context.Context, method string, absoluteURL string) (*http.Response, error) {
+	probe := c.startRequestSpan(ctx, method, requestTargetRedirect)
+	response, err := c.doUnauthenticated(ctx, probe, method, absoluteURL)
+	probe.end(ctx, err)
+	return response, err
+}
+
+func (c *HTTPClient) doUnauthenticated(
 	ctx context.Context,
+	probe *requestProbe,
 	method string,
 	absoluteURL string,
 ) (response *http.Response, err error) {
@@ -555,15 +575,15 @@ func (c *HTTPClient) DoUnauthenticated(
 		(target.Scheme != "http" && target.Scheme != "https") {
 		return nil, ErrCredentialInvalid
 	}
-	if err := c.Lease.Assert(ctx); err != nil {
+	if err := c.assertLeaseMeasured(ctx, probe); err != nil {
 		return nil, err
 	}
-	if err := c.awaitGate(ctx); err != nil {
+	if err := c.awaitGate(ctx, probe); err != nil {
 		return nil, err
 	}
 	var reservation Reservation
 	if c.Budget != nil {
-		reservation, err = c.Budget.Acquire(ctx, c.BudgetKey)
+		reservation, err = c.acquireMeasured(ctx, probe)
 		if err != nil {
 			if c.Metrics != nil {
 				c.Metrics.RecordBudgetDenied(c.Provider)
@@ -577,7 +597,7 @@ func (c *HTTPClient) DoUnauthenticated(
 			return nil, ErrBudgetUnavailable
 		}
 		defer func() {
-			releaseErr := c.releaseReservation(ctx, reservation)
+			releaseErr := c.releaseMeasured(ctx, probe, reservation)
 			if releaseErr == nil {
 				return
 			}
@@ -598,10 +618,13 @@ func (c *HTTPClient) DoUnauthenticated(
 	if requestErr != nil {
 		return nil, ErrCredentialInvalid
 	}
+	request = probe.watch(request)
 	setByteRange(ctx, request)
 	c.recordWireRequest(ctx, target.Path)
-	counting := hopCountingDoer(c.Doer, recorder.record)
+	probe.sent(1)
+	counting := hopCountingDoer(c.Doer, probe.hop(recorder.record))
 	response, err = counting.Do(request)
+	probe.responded(response)
 	if err != nil {
 		failure := c.transportFailure(ctx, err, 1)
 		c.observe(failure.Class)
@@ -750,14 +773,17 @@ func retryJitter(entropy io.Reader, limit time.Duration) time.Duration {
 // instead of ending the try and restarting from zero. It sleeps only while the
 // total stays within GateWaitMax and the context outlasts the wait; otherwise
 // the try ends with ErrorRateLimited carrying the wait that remains, which the
-// provider-unit handler turns into a persisted deferral.
-func (c *HTTPClient) awaitGate(ctx context.Context) error {
+// provider-unit handler turns into a persisted deferral. The probe times the gate reads and sleeps as gate wait and
+// each lease assert as lease time.
+func (c *HTTPClient) awaitGate(ctx context.Context, probe *requestProbe) error {
 	if c.Gate == nil {
 		return nil
 	}
 	var slept time.Duration
 	for {
+		start := probe.clock()
 		wait, err := c.Gate.Wait(ctx)
+		probe.addGateWait(start)
 		if err != nil {
 			return err
 		}
@@ -775,11 +801,14 @@ func (c *HTTPClient) awaitGate(ctx context.Context) error {
 			slog.InfoContext(ctx, "provider_gate_wait_deferred", "provider", c.Provider, "wait_ms", wait.Milliseconds(), "slept_ms", slept.Milliseconds(), "reason", "deadline")
 			return &ProviderError{Class: ErrorRateLimited, RetryAfter: wait}
 		}
-		if err := c.wait(ctx, wait); err != nil {
+		start = probe.clock()
+		err = c.wait(ctx, wait)
+		probe.addGateWait(start)
+		if err != nil {
 			return err
 		}
 		slept += wait
-		if err := c.Lease.Assert(ctx); err != nil {
+		if err := c.assertLeaseMeasured(ctx, probe); err != nil {
 			return err
 		}
 	}

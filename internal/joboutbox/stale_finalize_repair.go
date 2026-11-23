@@ -414,11 +414,18 @@ const (
 		WHERE partition.run_id = run.id
 			AND (partition.status <> 'succeeded' OR partition.updated_at > $1)
 	)`
-	staleFinalizeLiveJobSQL = `(EXISTS (
-		SELECT 1 FROM %[1]s AS job
+	// The River arm is an uncorrelated IN, so it reads river_job once per
+	// statement (a hashed subplan), not once per base run: as a correlated
+	// EXISTS the planner priced an early match and scanned river_job for every
+	// run. The domain id is always a JSON string (jobcontract.DomainLink.ID),
+	// so #>> equals the old @> containment; the IS NOT NULL keeps a job with no
+	// domain id from putting a NULL into the set, which would turn
+	// "run.id IN (...)" into NULL instead of false.
+	staleFinalizeLiveJobSQL = `(run.id::text IN (
+		SELECT job.args #>> '{domain,id}' FROM %[1]s AS job
 		WHERE job.kind = 'metrics.daily_finalize'
-			AND job.args @> jsonb_build_object('domain', jsonb_build_object('id', run.id::text))
 			AND job.state::text NOT IN ('completed', 'discarded', 'cancelled')
+			AND job.args #>> '{domain,id}' IS NOT NULL
 	) OR EXISTS (
 		SELECT 1 FROM public.worker_job_outbox AS outbox
 		WHERE outbox.job_kind = 'metrics.daily_finalize'
@@ -432,16 +439,19 @@ const (
 			AND outbox.status = 'delivered'
 			AND outbox.args #>> '{domain,id}' = run.id::text
 	)`
+	// The River arm has the live-job arm's uncorrelated form (one read of
+	// river_job per statement, the same IS NOT NULL guard): correlated, the
+	// planner probed river_job by kind for every base run.
 	staleFinalizeRecentSQL = `(EXISTS (
 		SELECT 1 FROM public.worker_job_outbox AS outbox
 		WHERE outbox.job_kind = 'metrics.daily_finalize'
 			AND outbox.args #>> '{domain,id}' = run.id::text
 			AND outbox.created_at > $1
-	) OR EXISTS (
-		SELECT 1 FROM %[1]s AS job
+	) OR run.id::text IN (
+		SELECT job.args #>> '{domain,id}' FROM %[1]s AS job
 		WHERE job.kind = 'metrics.daily_finalize'
-			AND job.args @> jsonb_build_object('domain', jsonb_build_object('id', run.id::text))
 			AND job.created_at > $1
+			AND job.args #>> '{domain,id}' IS NOT NULL
 	))`
 	staleFinalizeNoPartitionsSQL = `NOT EXISTS (
 		SELECT 1 FROM public.daily_metrics_partitions AS partition
@@ -451,7 +461,7 @@ const (
 	// lock (daily.PostgresStore.RedriveStaleFinalize): the outbox arms of the
 	// live-job and recent refusals, on the same predicate, so the partial index
 	// ix_worker_job_outbox_finalize_domain_id serves it. $1 is the run id, $2
-	// the horizon cutoff.
+	// the survey's cutoff.
 	StaleFinalizeOutboxRecheckSQL = `
 SELECT EXISTS (
 	SELECT 1 FROM public.worker_job_outbox AS outbox

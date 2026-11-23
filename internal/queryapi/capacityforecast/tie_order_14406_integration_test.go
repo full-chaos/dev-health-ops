@@ -186,7 +186,7 @@ func TestCapacityTieOrder14406(t *testing.T) {
 		}
 		read := func(org string, teams ...string) string {
 			teamIDs, _ := selectedTeams(&model.CapacityForecastInput{TeamIds: teams})
-			capacity, err := loadBacklog(ctx, client, org, teamIDs, nil)
+			capacity, err := loadBacklog(ctx, client, org, teamIDs, nil, 90, capacityTeamViewToday())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -195,7 +195,7 @@ func TestCapacityTieOrder14406(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			return fmt.Sprintf("capacity=%d throughputForecast=%d", capacity, forecast.BacklogSize)
+			return fmt.Sprintf("capacity=%d throughputForecast=%d", capacity.size, forecast.BacklogSize)
 		}
 		for _, run := range capacityTieRuns(ctx, t, admin, "page", rows, read) {
 			for form, served := range map[string]string{"team": run.team, "org": run.all} {

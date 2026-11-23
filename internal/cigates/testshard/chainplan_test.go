@@ -343,6 +343,40 @@ func TestNoTestShardHoldsPartsOfTwoApartPackages(t *testing.T) {
 	}
 }
 
+// CHAOS-14513: test shard 6/13 ran a serial chain of checkgo, racescope, splitshards and testshard parts (815-935 s) because only
+// testshard of them was listed. The packages that took the leg over the cap stay listed; a deleted row is a red here, not a red leg.
+func TestTheApartListKeepsTheHeavyShellOutPackagesApart(t *testing.T) {
+	t.Parallel()
+	listed := testApartRows(t)
+	for _, p := range []string{"internal/cigates/testshard", "internal/cigates/checkgo", "internal/cigates/racescope", "internal/cigates/integrationshards"} {
+		if !listed[p] {
+			t.Errorf("ci/go_test_apart.tsv has no row for %s: its parts can chain with another heavy cigates package on one test shard", p)
+		}
+	}
+}
+
+// CHAOS-14513: one go test -run holding both internal/providersync parts is 247 KB of names, over the 128 KiB single-argument limit
+// (E2BIG, rc 126), and one part is already 122 KB. The apart list moves every other part, so a list change can bring both parts onto
+// one leg: at 3 legs (the merge-group cells) and at 13 legs no leg may hold more than one of them.
+func TestNoTestLegHoldsTwoPartsOfProvidersync(t *testing.T) {
+	t.Parallel()
+	for _, count := range []int{3, shardCount} {
+		_, parts := allLegs(t, nil, "test-shard-plan", count)
+		for k := 1; k <= count; k++ {
+			n := 0
+			for _, l := range strings.Split(parts[k], "\n") {
+				f := strings.Split(l, "\t")
+				if len(f) == 5 && f[0] == "." && f[2] == "internal/providersync" {
+					n++
+				}
+			}
+			if n > 1 {
+				t.Errorf("test shard %d/%d holds %d parts of internal/providersync: its go test -run argument passes the 128 KiB limit", k, count, n)
+			}
+		}
+	}
+}
+
 func TestTheTestPlanWithoutApartRowsPutsApartPackagesOnOneShard(t *testing.T) {
 	t.Parallel()
 	listed := testApartRows(t)

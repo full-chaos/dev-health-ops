@@ -470,6 +470,7 @@ internal/providersync	project_id_census_test.go	unexpressed	-	*.go
 internal/providersync	response_read_census_test.go	unexpressed	-	-
 internal/providersync	route_template_census_test.go	unexpressed	-	*.go
 internal/providersync	route_wiring_comment_drift_test.go	internal/providersync	dir	*
+internal/providersync	sink_connection_dropped_test.go	internal/chmigrate/sql	dir	*
 internal/providersync	snapshot_close_site_census_test.go	unexpressed	-	-
 internal/providersync	team_absence_test.go	internal/providersync	dir	*
 internal/providersync	team_id_carry_seam_test.go	cmd	tree	*.go

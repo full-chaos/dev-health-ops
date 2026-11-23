@@ -73,6 +73,22 @@ func (recorder *sqlRecorder) reset() {
 	recorder.mu.Unlock()
 }
 
+// sawBefore reports whether a statement holding first was sent before the first statement holding then.
+func (recorder *sqlRecorder) sawBefore(first, then string) bool {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	seenFirst := false
+	for _, statement := range recorder.statements {
+		if strings.Contains(statement, then) {
+			return seenFirst
+		}
+		if strings.Contains(statement, first) {
+			seenFirst = true
+		}
+	}
+	return false
+}
+
 func (recorder *sqlRecorder) sawContaining(fragment string) bool {
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
@@ -326,6 +342,8 @@ ORDER BY id`, runID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A Fatal inside the loop must not leave the connection busy: the pool's Close in the cleanup would wait forever.
+	defer rows.Close()
 	type job struct {
 		id   int64
 		args string
@@ -1287,6 +1305,10 @@ INSERT INTO public.worker_job_runs (
 	if result.StaleFinalizeLevels == nil || *result.StaleFinalizeLevels != want {
 		t.Fatalf("levels %+v, want %+v", result.StaleFinalizeLevels, want)
 	}
+	// JIT is off in the survey transaction before statement 0.
+	if !venue.queueSQL.sawBefore("SET LOCAL jit = off", "SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs AS run WHERE") {
+		t.Fatal("the survey sent statement 0 without SET LOCAL jit = off before it in its transaction")
+	}
 	for name, marker := range map[string]string{
 		"0": "SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs AS run WHERE",
 		"A": "AND ($3::timestamptz IS NULL OR (run.updated_at, run.id) > ($3::timestamptz, $4::uuid))",
@@ -1352,6 +1374,10 @@ WHERE wait_event_type = 'Lock' AND query LIKE '%FOR UPDATE OF run%'`).Scan(&wait
 	}
 	if rows := venue.redriveRows(t, ctx, runID); published != 1 || rows != 1 {
 		t.Fatalf("two concurrent redrives: %d reported a publish, %d redrive rows, want 1 and 1", published, rows)
+	}
+	// JIT is off in the re-check transaction before the re-check runs.
+	if !venue.domainSQL.sawBefore("SET LOCAL jit = off", "OR outbox.created_at > $2)") {
+		t.Fatal("the redrive re-check ran without SET LOCAL jit = off before it in its transaction")
 	}
 }
 

@@ -1602,6 +1602,56 @@ check_test_shard_split_list() {
   done
 }
 
+# go_run_name_chunks (CHAOS-14526): the test names on stdin (one per line; a repeat is dropped, the order kept) as lines "a|b|...",
+# each the body of one -run "^(...)$" of at most 60000 bytes: Linux refuses one argument over 128 KiB (MAX_ARG_STRLEN), and a
+# split part with thousands of names passed it ("Argument list too long", rc 126). A part that fits keeps one line, its names in
+# input order: one go test call, as before. No prefix or wildcard: each chunk names its tests exactly, so no other test runs.
+go_run_name_chunks() {
+  local regex_max=60000 name chunk="" chunk_len=0 names=0
+  local -A seen=()
+  while IFS= read -r name; do
+    [ -n "${name}" ] || continue
+    [ -z "${seen[${name}]+set}" ] || continue
+    seen["${name}"]=1
+    go_run_name_ok "${name}" || die "-run chunks: '${name}' is not a Test, Example or Fuzz name"
+    byte_len "${name}"
+    [ $((BYTE_LEN + 4)) -le "${regex_max}" ] || die "-run chunks: ${name} alone exceeds the ${regex_max}-byte -run budget"
+    if [ -n "${chunk}" ] && [ $((chunk_len + 1 + BYTE_LEN + 4)) -gt "${regex_max}" ]; then
+      printf '%s\n' "${chunk}"
+      chunk=""
+    fi
+    if [ -n "${chunk}" ]; then
+      chunk+="|${name}"
+      chunk_len=$((chunk_len + 1 + BYTE_LEN))
+    else
+      chunk="${name}"
+      chunk_len="${BYTE_LEN}"
+    fi
+    names=$((names + 1))
+  done
+  [ "${names}" -gt 0 ] || die "-run chunks: no test name"
+  printf '%s\n' "${chunk}"
+}
+
+# go_test_run_chunks PKG CHUNKS RUNNER ARG... (CHAOS-14526): RUNNER ARG... -run "^(<chunk>)$" PKG once per line of CHUNKS
+# (go_run_name_chunks), one after another; the runners append to their files, so the log and -json files hold every chunk. Every
+# chunk runs, also after one failed, so one run shows all failures; the rc is the first nonzero rc of a chunk, else 0.
+go_test_run_chunks() {
+  local pkg="$1" chunks="$2" chunk rc=0 crc
+  local -a list
+  shift 2
+  mapfile -t list <<<"${chunks}"
+  for chunk in "${list[@]}"; do
+    [ -n "${chunk}" ] || continue
+    set +e
+    (set -e; "$@" -run "^(${chunk})\$" "${pkg}")
+    crc=$?
+    set -e
+    [ "${crc}" -eq 0 ] || [ "${rc}" -ne 0 ] || rc="${crc}"
+  done
+  return "${rc}"
+}
+
 # test_split_job_start MODULE PKG SPLIT_LINES CENSUS_KEYS (CHAOS-13520): starts, in the background, one go test of the names of
 # PKG in SPLIT_LINES (test_shard_split_names) through -run, into its own log, -json and leg-events files. The split jobs of a
 # shard run one at a time beside the shard's other packages: each starts once the one before it has ended (a go test per part
@@ -1609,27 +1659,29 @@ check_test_shard_split_list() {
 # (go_test_json_run_t), so the shard reads the receipts of its rows from that run. Appends to SPLIT_JOB_PIDS, SPLIT_JOB_LABELS
 # and SPLIT_JOB_FILES of check_test_shard; test_split_jobs_finish waits for them.
 test_split_job_start() {
-  local module_dir="$1" pkg="$2" lines="$3" census_keys="$4" key regex n slog sjson slegjson serr prev=""
+  local module_dir="$1" pkg="$2" lines="$3" census_keys="$4" key chunks n slog sjson slegjson serr prev=""
   [ "${#SPLIT_JOB_PIDS[@]}" -eq 0 ] || prev="${SPLIT_JOB_PIDS[-1]}"
   key="$(printf '%s\n' "${lines}" | awk -F'\t' -v p="${pkg}" '$1 == p && key == "" { key = $2 } END { print key }')"
-  regex="$(printf '%s\n' "${lines}" | awk -F'\t' -v p="${pkg}" '$1 == p { printf "%s%s", (n++ ? "|" : ""), $3 }')"
+  chunks="$(printf '%s\n' "${lines}" | awk -F'\t' -v p="${pkg}" '$1 == p { print $3 }' | go_run_name_chunks)" || exit 2
   n="$(printf '%s\n' "${lines}" | awk -F'\t' -v p="${pkg}" '$1 == p' | wc -l)"
   slog="$(mktemp "${TMPDIR:-/tmp}/dev-health-split-log.XXXXXX")"
   sjson="$(mktemp "${TMPDIR:-/tmp}/dev-health-split-json.XXXXXX")"
   slegjson="$(mktemp "${TMPDIR:-/tmp}/dev-health-split-legjson.XXXXXX")"
   serr="$(mktemp "${TMPDIR:-/tmp}/dev-health-split-err.XXXXXX")"
   printf 'go test%s (split): %s: %d test name(s) of its parts here\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${key}" "${n}"
+  [ "$(printf '%s\n' "${chunks}" | grep -c .)" -le 1 ] \
+    || printf 'go test%s (split): %s: %d -run chunks of at most 60000 bytes, one go test each\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${key}" "$(printf '%s\n' "${chunks}" | grep -c .)"
   if [ "${module_dir}" = "." ] && grep -Fqx -- "${key}" <<<"${census_keys}"; then
     (
       [ -z "${prev}" ] || while kill -0 "${prev}" 2>/dev/null; do sleep 1; done
       cd "${ROOT}/${module_dir}"
-      go_test_json_run_t "$(cigates_go_test_timeout "${pkg}")" "${sjson}" "${slog}" -run "^(${regex})\$" "${pkg}"
+      go_test_run_chunks "${pkg}" "${chunks}" go_test_json_run_t "$(cigates_go_test_timeout "${pkg}")" "${sjson}" "${slog}"
     ) >/dev/null 2>"${serr}" &
   else
     (
       [ -z "${prev}" ] || while kill -0 "${prev}" 2>/dev/null; do sleep 1; done
       cd "${ROOT}/${module_dir}"
-      go_test_leg "${slog}" "${slegjson}" -timeout "$(cigates_go_test_timeout "${pkg}")" -run "^(${regex})\$" "${pkg}"
+      go_test_run_chunks "${pkg}" "${chunks}" go_test_leg "${slog}" "${slegjson}" -timeout "$(cigates_go_test_timeout "${pkg}")"
     ) >/dev/null 2>"${serr}" &
   fi
   SPLIT_JOB_PIDS+=("$!")
@@ -1976,7 +2028,7 @@ check_race_shard_plan() {
 }
 
 check_race_shard() {
-  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing racelog legjson ps_json="" spart sparts key names partjson plan_pkgs plan_solo
+  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing racelog legjson ps_json="" spart sparts key names chunks partjson plan_pkgs plan_solo
   check_race_shard_args "${shard}" "${count}"
   load_quality_selection
   local -a pkgs solo_pkgs pkgs_sec pkgs_all split_items
@@ -2056,13 +2108,14 @@ check_race_shard() {
       key="${pkg#"${modpath}/"}"
       names="$(race_split_part_names "${module_dir}" "${pkg}" "${key}" "${spart}" "${sparts}")" || { rm -f -- "${racelog}"; exit 2; }
       [ -n "${names}" ] || die "race split package ${key}: part ${spart}/${sparts} selects no test"
+      chunks="$(printf '%s\n' "${names}" | go_run_name_chunks)" || { rm -f -- "${racelog}"; exit 2; }
       selected=$((selected + 1))
       printf 'go test -race%s (shard %s/%s): %s: part %s/%s of %s, alone: %d test name(s)\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${shard}" "${count}" \
         "${module_dir}" "${spart}" "${sparts}" "${key}" "$(printf '%s\n' "${names}" | grep -c .)"
       partjson="$(mktemp "${TMPDIR:-/tmp}/dev-health-race-part-json.XXXXXX")" || die "no temp file for the race part's go test -json"
       (
         cd "${ROOT}/${module_dir}"
-        go_test_leg "${racelog}" "${partjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" -run "^($(printf '%s\n' "${names}" | paste -sd'|' -))\$" "${pkg}"
+        go_test_run_chunks "${pkg}" "${chunks}" go_test_leg "${racelog}" "${partjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}"
       ) || { cat -- "${partjson}" >>"${legjson}"; rm -f -- "${racelog}" "${partjson}"; return 1; }
       awk -v weights=<(awk -F'\t' -v k="${key}" '!/^#/ && $1 == k { print $2 "\t" $3 }' "${GO_RACE_SPLIT_WEIGHTS}") \
         -v thresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS:-30}" -v failthresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_FAIL_SECONDS:-45}" -v summary="${GITHUB_STEP_SUMMARY:-}" -v rowprefix="${key}"$'\t' -v rowunit=s -v label="${GO_RACE_SPLIT_WEIGHTS#"${ROOT}/"} (${key})" \
@@ -2451,13 +2504,28 @@ vo_awk() {
   [ "${rc}" -le 1 ] || die "venue-oracles --changed: awk failed (rc ${rc}) reading the change set or a selection file"
   return "${rc}"
 }
+# vo_paths FILE: the change set as lines. A file with a NUL is NUL-delimited (git diff -z): a NUL becomes the line break and
+# a newline INSIDE a name becomes \001, so one record stays one line and a newline-leading name still selects its package.
+# A file with no NUL is newline-separated and is printed as it is.
+vo_paths() {
+  if [ "$(tr -d -c '\0' < "$1" | wc -c)" -gt 0 ]; then
+    tr '\n\0' '\001\n' < "$1"
+  else
+    cat -- "$1"
+  fi
+}
+# venue_oracle_changed_dirs FILE: the package directory of every changed path (a path under .../testdata belongs to the
+# package above it), sorted and unique.
+venue_oracle_changed_dirs() {
+  vo_paths "$1" | awk 'NF { d = $0; sub(/\/[^\/]*$/, "", d); sub(/\/testdata(\/.*)?$/, "", d); print d }' | LC_ALL=C sort -u
+}
 venue_oracle_changed_selects() {
   local escaped pkg name path
   escaped="$(printf '%s' "$1" | sed 's/[][\\.*^$/]/\\&/g')"
   # grep -q stops at its first match: it reads a process substitution, never a pipe whose writer would die of SIGPIPE and
   # fail the whole pipeline under pipefail on a large change set (the match was lost and the run read as "nothing to run").
   local own=1
-  if vo_grep -qE "^${escaped}/([^/]+|testdata/.+)$" < <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
+  if vo_grep -qE "^${escaped}/([^/]+|testdata/.+)$" < <(vo_paths "${VENUE_CHANGED_FILE}"); then
     own=0
   fi
   # The dependency closure of the package's test binary (VENUE_CLOSURE_DIR, CHAOS-9935): a file directly in, or under
@@ -2482,7 +2550,7 @@ venue_oracle_changed_selects() {
     # "~dir" lines: a changed file anywhere under a directory a linked package embeds files from.
     if vo_awk 'FNR == NR { if (substr($0, 1, 1) == "~") prefix[substr($0, 2) "/"] = 1; next }
             { for (p in prefix) if (index($0, p) == 1) { found = 1; exit } }
-            END { exit !found }' "${closure_file}" <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
+            END { exit !found }' "${closure_file}" <(vo_paths "${VENUE_CHANGED_FILE}"); then
       return 0
     fi
   fi
@@ -2491,7 +2559,7 @@ venue_oracle_changed_selects() {
   while IFS=$'\t' read -r pkg name path; do
     { [ "${pkg}" = "$1" ] && [ "${name}" = "$2" ]; } || continue
     escaped="$(printf '%s' "${path}" | sed 's/[][\\.*^$/]/\\&/g')"
-    if vo_grep -qE "^${escaped}(/.*)?$" < <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
+    if vo_grep -qE "^${escaped}(/.*)?$" < <(vo_paths "${VENUE_CHANGED_FILE}"); then
       return 0
     fi
   done <<< "${VENUE_TRIGGER_ROWS:-}"
@@ -2595,7 +2663,7 @@ check_venue_oracles() {
     fi
     # The package directory of every changed path (a path under .../testdata belongs to the package
     # above it), for the closure rule of venue_oracle_changed_selects.
-    VENUE_CHANGED_DIRS="$(tr '\0' '\n' < "${changed}" | awk 'NF { d = $0; sub(/\/[^\/]*$/, "", d); sub(/\/testdata(\/.*)?$/, "", d); print d }' | LC_ALL=C sort -u)"
+    VENUE_CHANGED_DIRS="$(venue_oracle_changed_dirs "${changed}")"
     VENUE_TRIGGER_ROWS="$(venue_oracle_trigger_rows)" \
       || die "venue-oracles --changed: ci/venue_oracle_triggers.d/ could not be read (see above)"
   fi
@@ -5982,12 +6050,30 @@ auth_leg_units() {
   [ -z "${whole}" ] || printf '%s\t\n' "${whole% }"
 }
 
+# auth_leg_go_test JSON_FILE GO_TEST_ARG...: one go test call of an auth leg. JSON_FILE is /dev/null (GO_TEST_LEG_JSON_DIR unset: a local
+# run, a stand-in test): the call is plain go test, as before. Otherwise it runs go test -json, appends the events to JSON_FILE (the leg's
+# raw file, runner-only; the workflow converts it to a JUnit part) and prints the plain log rebuilt by GO_TEST_LEG_JQ on stdout, so the
+# AUTH_RACE_MARKER grep of the race-integration leg reads the same lines. pipefail keeps go test's exit code.
+auth_leg_go_test() {
+  local json="$1"
+  shift
+  if [ "${json}" = /dev/null ]; then
+    auth_go test "$@"
+    return
+  fi
+  command -v jq >/dev/null 2>&1 || die "the auth leg's JUnit part needs jq to read go test -json events"
+  auth_go test -json "$@" \
+    | tee -a "${json}" \
+    | jq -nR --unbuffered -rj "${GO_TEST_LEG_JQ}"
+}
+
 # check_auth_leg KIND LEG COUNT: runs the leg. A race-integration go test passes only when every TestRace* test it selected logged
 # AUTH_RACE_MARKER (the check of check_auth_race_integration, narrowed to the names of the leg's part).
 check_auth_leg() {
-  local kind="$1" leg="$2" count="$3" units pkg regex output want got listed total=0 p
+  local kind="$1" leg="$2" count="$3" units pkg regex output want got listed total=0 p json=/dev/null
   local -a flags=() pkgs=() runarg=()
   units="$(auth_leg_units "${kind}" "${leg}" "${count}")" || exit 2
+  [ "${AUTH_LEG_LIST:-}" = "1" ] || json="$(leg_json_file "auth-${kind}" "${leg}" "${count}")" || die "auth ${kind}: cannot create the leg's go test -json file under GO_TEST_LEG_JSON_DIR"
   mapfile -t flags < <(auth_leg_flags "${kind}") || exit 2
   [ "${#flags[@]}" -gt 0 ] || die "auth ${kind}: no go test flags"
   while IFS=$'\t' read -r pkg regex; do
@@ -6005,7 +6091,7 @@ check_auth_leg() {
     [ -z "${regex}" ] || runarg=(-run "${regex}")
     printf 'auth go test %s (leg %s/%s): %s%s\n' "${kind}" "${leg}" "${count}" "${pkg}" "${regex:+ -run ${regex}}"
     if [ "${kind}" != race-integration ]; then
-      auth_go test -mod=readonly -trimpath "${flags[@]}" "${runarg[@]}" "${pkgs[@]}"
+      auth_leg_go_test "${json}" -mod=readonly -trimpath "${flags[@]}" "${runarg[@]}" "${pkgs[@]}"
       continue
     fi
     want="$(cd "${ROOT}" && grep -hoE '^func TestRace[A-Za-z0-9_]+' "${pkg#"$(auth_go list -m)/"}"/*_test.go | sed 's/^func //' | LC_ALL=C sort -u || true)"
@@ -6016,7 +6102,7 @@ check_auth_leg() {
       [ -n "${want}" ] || die "auth race-integration: no TestRace* test found in ${pkg}"
     fi
     output="$(mktemp)"
-    if ! auth_go test -mod=readonly -trimpath "${flags[@]}" "${runarg[@]}" "${pkg}" >"${output}" 2>&1; then
+    if ! auth_leg_go_test "${json}" -mod=readonly -trimpath "${flags[@]}" "${runarg[@]}" "${pkg}" >"${output}" 2>&1; then
       cat "${output}" >&2
       rm -f "${output}"
       die "auth race-integration: ${pkg} failed"

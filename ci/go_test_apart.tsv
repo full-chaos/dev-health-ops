@@ -1,8 +1,13 @@
-# Split test packages ci/go_race_shard.awk (tapart=, chain=1) keeps apart in the non-race test legs (CHAOS-14334): no test shard holds
+# Split test packages ci/go_race_shard.awk (tapart=, chain=1) keeps apart in the non-race test legs (CHAOS-14334, CHAOS-14513): no test shard holds
 # parts of two of them. Format: package<TAB>reason. Key = import path relative to the root module; each row names a split package
 # (ci/go_test_splits.tsv). They shell out to ci/check_go.sh and run beside each other slower than the plan models: test shard 6/13
-# held parts of all four (p50 672 s, 919-940 s on slow runners, over the 900 s cap). internal/cigates/testshard checks the rule.
-internal/cigates/checkgoshards	shells out to check_go.sh test legs; 166-174 s on the 919-926 s legs
+# held parts of testshard, checkgo, splitshards and racescope (a chain of 815-935 s on 2026-11-22, over the 900 s cap).
+# internal/cigates/testshard checks the rule. Which packages are listed, and their order, change the whole plan (the rule moves every
+# other part): at 13 legs the modelled wall of a leg must stay under 600 s, and at 3 legs (the merge-group cells) no leg may hold both
+# internal/providersync parts (one go test -run of both is over the 128 KiB single-argument limit: E2BIG, CHAOS-14513 run 45095446776).
+# Measured over the subsets of the 7 candidates: testshard + checkgo + racescope + integrationshards 555 s at 13 legs, one providersync
+# part per leg at 3 legs; listing splitshards puts both providersync parts on one 3-leg leg, so it stays unlisted (it can share a leg with checkgo or racescope).
+internal/cigates/testshard	shells out to check_go.sh shard plans; 310-374 s on the 819-935 s legs
+internal/cigates/checkgo	shells out to check_go.sh; 211-249 s over 2 parts on the 819-935 s test shard 6/13 legs
+internal/cigates/racescope	shells out to check_go.sh; about 110 s on the 819-935 s test shard 6/13 legs
 internal/cigates/integrationshards	shells out to check_go.sh integration shards; 188-196 s on the 919-926 s legs
-internal/cigates/outboundtransport	shells out to check_go.sh; 147-160 s on the 919-926 s legs
-internal/cigates/testshard	shells out to check_go.sh shard plans; 374 s on the 919-926 s legs

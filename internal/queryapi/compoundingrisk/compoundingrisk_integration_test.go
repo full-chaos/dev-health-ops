@@ -49,9 +49,17 @@ const (
 
 func startStore(t *testing.T) (context.Context, stdclickhouse.Conn, QueryClient) {
 	t.Helper()
+	ctx, conn, client, _ := startStoreURI(t, containers.StartClickHouse)
+	return ctx, conn, client
+}
+
+// startStoreURI is startStore on the server start gives, and also returns the
+// server URI, for a cell that opens a client with other options.
+func startStoreURI(t *testing.T, start func(context.Context) (*containers.Instance, error)) (context.Context, stdclickhouse.Conn, QueryClient, string) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	t.Cleanup(cancel)
-	inst, err := containers.StartClickHouse(ctx)
+	inst, err := start(ctx)
 	if err != nil {
 		t.Fatalf("start ClickHouse: %v", err)
 	}
@@ -75,7 +83,7 @@ func startStore(t *testing.T) (context.Context, stdclickhouse.Conn, QueryClient)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	return ctx, conn, client
+	return ctx, conn, client, inst.URI
 }
 
 func exec(t *testing.T, ctx context.Context, conn stdclickhouse.Conn, q string, a ...any) {
@@ -317,10 +325,11 @@ func TestRealClickHouse_SameIDsInTwoOrgs(t *testing.T) {
 	}
 	// org-1 owns no repository (ownership of the shared repo id is org-2's), so
 	// its repository row is listed under the no-team value beside the team row.
+	// org-2's t2 owns the repository and has no stored row: it is derived beside t1.
 	for _, c := range []struct {
 		org, label, score string
 		rows              int
-	}{{"org-1", "Platform", "0.3", 2}, {"org-2", "Second", "0.9", 1}} {
+	}{{"org-1", "Platform", "0.3", 2}, {"org-2", "Second", "0.9", 2}} {
 		got, err := Resolve(ctx, client, c.org, &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TrendDays: 30}, now)
 		if err != nil {
 			t.Fatal(err)

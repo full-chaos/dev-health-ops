@@ -11,25 +11,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// scheduleRedispatch ports _schedule_redispatch verbatim, INCLUDING its
-// exception-swallowing. Python's bare `except Exception:` logs
-// dispatch_sync_run.redispatch_rearm_failed and never re-raises -- every
-// call site in Dispatch() calls this as a fire-and-forget re-arm, and the
-// caller-side wrappers Python leaves around some of those calls are
-// unreachable dead code precisely BECAUSE this function structurally
-// cannot fail its caller. Ported deliberately as a function with no error
-// return, not smoothed over as an implementation detail: a Go caller must
-// not add its own error handling assuming this can fail the pass.
-//
-// Opens its OWN transaction rather than accepting the caller's tx --
-// matching Python's own separate `with get_postgres_session_sync() as
-// session:` block, which is a DIFFERENT session than whatever transaction
-// the caller used to reach its own terminal state (Dispatch()'s main
-// claim/route/enqueue session has already closed by every call site that
-// reaches this).
 // redispatchCountdown is _schedule_redispatch's own default wakeup delay,
 // named so a caller that must compare against it (CHAOS-4605's
 // deferred-outside-snapshot arm in dispatch_sync_run) reads the SAME env var
@@ -139,16 +122,29 @@ func backoffCountdown(base, limit, idle time.Duration, syncRunID string) (time.D
 	return jittered, level
 }
 
-// lastRunProgressAt is the newest end of a unit of the run (success or
-// failed), else the oldest unit creation. A running unit's heartbeat is not
-// progress: a long chunked unit must not keep the re-arm at the base.
-func lastRunProgressAt(ctx context.Context, pool *pgxpool.Pool, syncRunID string) (*time.Time, error) {
-	var at *time.Time
-	err := pool.QueryRow(ctx, `
+// lastRunProgressSQL is lastRunProgressAt's read. A variable so the tests can plant a statement error; production
+// never changes it.
+var lastRunProgressSQL = `
 SELECT COALESCE(MAX(updated_at) FILTER (WHERE status IN ($2, $3)), MIN(created_at))
 FROM public.sync_run_units
-WHERE sync_run_id = $1::uuid`, syncRunID, syncRunUnitStatusSuccess, syncRunUnitStatusFailed).Scan(&at)
+WHERE sync_run_id = $1::uuid`
+
+// lastRunProgressAt is the newest end of a unit of the run (success or
+// failed), else the oldest unit creation. A running unit's heartbeat is not
+// progress: a long chunked unit must not keep the re-arm at the base. It reads
+// in a savepoint of the pass transaction, so a failed read leaves the pass
+// usable.
+func lastRunProgressAt(ctx context.Context, tx pgx.Tx, syncRunID string) (*time.Time, error) {
+	savepoint, err := tx.Begin(ctx)
 	if err != nil {
+		return nil, err
+	}
+	var at *time.Time
+	if err := savepoint.QueryRow(ctx, lastRunProgressSQL, syncRunID, syncRunUnitStatusSuccess, syncRunUnitStatusFailed).Scan(&at); err != nil {
+		_ = savepoint.Rollback(ctx)
+		return nil, err
+	}
+	if err := savepoint.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return at, nil
@@ -157,9 +153,9 @@ WHERE sync_run_id = $1::uuid`, syncRunID, syncRunUnitStatusSuccess, syncRunUnitS
 // rearmBackoff returns the countdown for a pass that claimed nothing and left
 // due-now work behind, plus log attributes when it grew. A failed read gives
 // the base: the back-off is an optimisation and must not delay a run.
-func rearmBackoff(ctx context.Context, pool *pgxpool.Pool, logger *synclog.Logger, syncRunID string, now time.Time) (time.Duration, []synclog.Attr) {
+func rearmBackoff(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, syncRunID string, now time.Time) (time.Duration, []synclog.Attr) {
 	base := redispatchCountdown()
-	progressAt, err := lastRunProgressAt(ctx, pool, syncRunID)
+	progressAt, err := lastRunProgressAt(ctx, tx, syncRunID)
 	if err != nil {
 		logger.Warn(ctx, synclog.MsgDispatchSyncRunRedispatchBackoffReadFailed, synclog.Run(synclog.ParseID(syncRunID)), synclog.Failure(err))
 		return base, nil
@@ -182,32 +178,32 @@ func countdownForIdle(base, limit, idle time.Duration, syncRunID string) (time.D
 	}
 }
 
-func scheduleRedispatch(ctx context.Context, pool *pgxpool.Pool, logger *synclog.Logger, syncRunID string, availableAt *time.Time, now time.Time, extra ...synclog.Attr) {
+// scheduleRedispatch re-arms the run's dispatch_sync_run row in the caller's
+// pass transaction (armPassWake: after the commit snapshot accepted the
+// delivery, before COMMIT) and returns every error, so a failed write rolls
+// the pass back and River retries an attempt that committed nothing
+// (CHAOS-14479). Python's _schedule_redispatch, which this ports, swallowed
+// its errors and ran in its own session after the pass; that was a port
+// detail, not a lock-order or pool rule. The snapshot already holds the row,
+// so the statements below wait on no other writer.
+func scheduleRedispatch(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, syncRunID string, availableAt *time.Time, now time.Time, extra ...synclog.Attr) error {
 	countdown := redispatchCountdown()
 	redispatchAt := now.Add(countdown)
 	if availableAt != nil {
 		redispatchAt = *availableAt
 	}
 
-	fail := func(err error) {
+	fail := func(err error) error {
 		logger.Warn(ctx, synclog.MsgDispatchSyncRunRedispatchRearmFailed, synclog.Run(synclog.ParseID(syncRunID)), synclog.Failure(err))
+		return err
 	}
-
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		fail(err)
-		return
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
 
 	rearmedByOther, err := dispatchWakeupAlreadyPending(ctx, tx, syncRunID)
 	if err != nil {
-		fail(err)
-		return
+		return fail(err)
 	}
-	if err := upsertDiscoveryOutboxWakeup(ctx, tx, "", syncRunID, outboxKindDispatchSyncRun, redispatchAt); err != nil {
-		fail(err)
-		return
+	if err := upsertOutboxWakeup(ctx, tx, "", syncRunID, outboxKindDispatchSyncRun, redispatchAt); err != nil {
+		return fail(err)
 	}
 	// The second write Python's own _schedule_redispatch does on top of the
 	// LEAST-semantics upsert above: a still-pending, not-yet-claimed row for
@@ -235,22 +231,18 @@ UPDATE public.sync_dispatch_outbox
 SET available_at = $2, updated_at = $3
 WHERE sync_run_id = $1::uuid AND kind = $4 AND status = 'pending' AND claim_token IS NULL`,
 			syncRunID, redispatchAt, now, outboxKindDispatchSyncRun); err != nil {
-			fail(err)
-			return
+			return fail(err)
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
-		fail(err)
-		return
-	}
 	attrs := append([]synclog.Attr{synclog.Run(synclog.ParseID(syncRunID)), synclog.Count(synclog.KeyCountdown, int(countdown.Seconds())), synclog.Instant(synclog.KeyAvailableAt, redispatchAt), synclog.Flag(synclog.KeyKeptEarlierWakeup, rearmedByOther)}, extra...)
-	logger.Info(ctx, synclog.MsgDispatchSyncRunRedispatchRearmed, attrs...)
+	logAfterCommit(ctx, func() { logger.Info(ctx, synclog.MsgDispatchSyncRunRedispatchRearmed, attrs...) })
+	return nil
 }
 
 // dispatchWakeupAlreadyPending locks the run's dispatch_sync_run outbox row
 // and reports whether it is already 'pending'. The lock holds the row until
-// scheduleRedispatch commits, so a concurrent writer cannot slip a wake in
-// between this read and the overwrite it decides on. No row is not pending.
+// the pass commits, so a concurrent writer cannot slip a wake in between this
+// read and the overwrite it decides on. No row is not pending.
 func dispatchWakeupAlreadyPending(ctx context.Context, tx pgx.Tx, syncRunID string) (bool, error) {
 	var status string
 	err := tx.QueryRow(ctx, `

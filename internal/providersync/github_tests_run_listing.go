@@ -438,6 +438,26 @@ func (handler GitHubTestsRouteHandler) lateRerunMaxPages() int {
 	return githubTestsLateRerunMaxPages
 }
 
+// The deep listings of the late re-run relist, as the listing label of a deep page-budget stop.
+const (
+	githubTestsDeepListingRuns    = "runs"
+	githubTestsDeepListingReports = "reports"
+)
+
+// recordGitHubTestsDeepPageBudgetStop writes ONE Warn line and steps ONE counter for a deep listing (the late re-run relist
+// of the runs or the reports) that stopped at its page budget (CHAOS-14520). The stop itself keeps its behavior: the
+// requests, pages and rows do not change. The line states a fact about the listing only: finalization decides the watermark
+// (another component of the same walk can hold it). The line carries no error operand (D4270).
+func recordGitHubTestsDeepPageBudgetStop(client *providerfoundation.HTTPClient, claim Claim, listing string, pages, budget int) {
+	if client != nil {
+		client.Metrics.RecordDeepListingStop(claim.Provider, claim.Dataset, listing)
+	}
+	slog.Warn(
+		"deep listing stop: page budget reached",
+		"provider", claim.Provider, "dataset", claim.Dataset, "listing", listing, "pages", pages, "budget", budget,
+	)
+}
+
 // recordGitHubTestsLateRerunRunsStop records that the deep range of the runs
 // phase ended before its end (page budget, walk bound or a saturated second),
 // as a cursor flag the result turns into its late_rerun_runs observation. The pair

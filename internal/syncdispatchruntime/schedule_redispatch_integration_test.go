@@ -11,8 +11,36 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// mustRearm runs scheduleRedispatch in its own transaction and commits it, as the pass's tail would.
+func mustRearm(t *testing.T, ctx context.Context, pool *pgxpool.Pool, syncRunID string, availableAt *time.Time, now time.Time) {
+	t.Helper()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := scheduleRedispatch(ctx, tx, nil, syncRunID, availableAt, now); err != nil {
+		t.Fatalf("scheduleRedispatch: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// inTx runs fn in a transaction on pool and rolls it back.
+func inTx(t *testing.T, ctx context.Context, pool *pgxpool.Pool, fn func(tx pgx.Tx)) {
+	t.Helper()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	fn(tx)
+}
 
 func dispatchOutboxAvailableAt(t *testing.T, ctx context.Context, pool *pgxpool.Pool, syncRunID string) time.Time {
 	t.Helper()
@@ -30,7 +58,7 @@ func dispatchOutboxAvailableAt(t *testing.T, ctx context.Context, pool *pgxpool.
 func TestScheduleRedispatchArmsANewWakeupWithTheDefaultCountdown(t *testing.T) {
 	withDispatchGatePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		now := pgNow()
-		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, nil, now)
+		mustRearm(t, ctx, pool, discoveryTestRun, nil, now)
 
 		got := dispatchOutboxAvailableAt(t, ctx, pool, discoveryTestRun)
 		want := now.Add(60 * time.Second)
@@ -47,7 +75,7 @@ func TestScheduleRedispatchUsesTheExplicitAvailableAtWhenGiven(t *testing.T) {
 	withDispatchGatePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		now := pgNow()
 		explicit := now.Add(45 * time.Minute)
-		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, &explicit, now)
+		mustRearm(t, ctx, pool, discoveryTestRun, &explicit, now)
 
 		got := dispatchOutboxAvailableAt(t, ctx, pool, discoveryTestRun)
 		if !got.Equal(explicit) {
@@ -78,7 +106,7 @@ VALUES ($1,$2,$3,$4,'pending',$5,0,now(),now())`,
 		}
 
 		later := now.Add(45 * time.Minute)
-		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, &later, now)
+		mustRearm(t, ctx, pool, discoveryTestRun, &later, now)
 
 		got := dispatchOutboxAvailableAt(t, ctx, pool, discoveryTestRun)
 		if !got.Equal(earlier) {
@@ -106,7 +134,7 @@ VALUES ($1,$2,$3,$4,'pending',$5,0,'some-claim-token',$6,now(),now())`,
 		}
 
 		later := now.Add(45 * time.Minute)
-		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, &later, now)
+		mustRearm(t, ctx, pool, discoveryTestRun, &later, now)
 
 		got := dispatchOutboxAvailableAt(t, ctx, pool, discoveryTestRun)
 		if !got.Equal(claimedAt) {
@@ -115,16 +143,26 @@ VALUES ($1,$2,$3,$4,'pending',$5,0,'some-claim-token',$6,now(),now())`,
 	})
 }
 
-// TestScheduleRedispatchNeverPanicsOrPropagatesWhenTheTransactionFails
-// pins the exception-swallowing property empirically: with the pool
-// already closed (forcing pool.Begin to fail), the call must return
-// cleanly -- no panic, and (being a bare function call with no error
-// return) structurally nothing to propagate.
-func TestScheduleRedispatchNeverPanicsOrPropagatesWhenTheTransactionFails(t *testing.T) {
+// TestScheduleRedispatchReturnsTheErrorOfAFailedWrite pins CHAOS-14479: a failed re-arm write is returned to the
+// pass, which then commits nothing and is retried. This reverses the earlier pin that it never propagated (a port of
+// Python's exception-swallowing _schedule_redispatch, not a lock-order or pool rule): a swallowed failure ended a
+// committed pass as a success with no wake.
+func TestScheduleRedispatchReturnsTheErrorOfAFailedWrite(t *testing.T) {
 	withDispatchGatePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		pool.Close()
-		now := pgNow()
-		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, nil, now) // must not panic
+		refuseRunWakeWrites(t, ctx, pool)
+		inTx(t, ctx, pool, func(tx pgx.Tx) {
+			if err := scheduleRedispatch(ctx, tx, nil, discoveryTestRun, nil, pgNow()); err == nil {
+				t.Fatal("scheduleRedispatch returned nil for a refused wake write, want the error")
+			}
+		})
+		var rows int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM sync_dispatch_outbox WHERE sync_run_id = $1 AND kind = $2`,
+			discoveryTestRun, outboxKindDispatchSyncRun).Scan(&rows); err != nil {
+			t.Fatal(err)
+		}
+		if rows != 0 {
+			t.Fatalf("%d dispatch rows after a failed re-arm, want 0", rows)
+		}
 	})
 }
 
@@ -151,18 +189,22 @@ func TestRearmBackoffGrowsWhileNoUnitEndsAndResetsWhenOneEnds(t *testing.T) {
 		seedBackoffUnit(t, ctx, pool, "00000000-0000-4000-8000-0000000012a2", "commits", "success", 2*time.Hour)
 		seedBackoffUnit(t, ctx, pool, "00000000-0000-4000-8000-0000000012a3", "blame", "planned", 0)
 
-		held, attrs := rearmBackoff(ctx, pool, nil, discoveryTestRun, time.Now().UTC())
-		if held <= 10*time.Second || held > 300*time.Second || len(attrs) == 0 {
-			t.Fatalf("held run got countdown=%s attrs=%d want a back-off in (10s,300s]", held, len(attrs))
-		}
+		inTx(t, ctx, pool, func(tx pgx.Tx) {
+			held, attrs := rearmBackoff(ctx, tx, nil, discoveryTestRun, time.Now().UTC())
+			if held <= 10*time.Second || held > 300*time.Second || len(attrs) == 0 {
+				t.Fatalf("held run got countdown=%s attrs=%d want a back-off in (10s,300s]", held, len(attrs))
+			}
+		})
 
 		if _, err := pool.Exec(ctx, `UPDATE sync_run_units SET status='success', updated_at=now() WHERE id=$1`, "00000000-0000-4000-8000-0000000012a1"); err != nil {
 			t.Fatal(err)
 		}
-		reset, attrs := rearmBackoff(ctx, pool, nil, discoveryTestRun, time.Now().UTC())
-		if reset != 10*time.Second || attrs != nil {
-			t.Fatalf("after a unit end got countdown=%s attrs=%v want the 10s base and no back-off fields", reset, attrs)
-		}
+		inTx(t, ctx, pool, func(tx pgx.Tx) {
+			reset, attrs := rearmBackoff(ctx, tx, nil, discoveryTestRun, time.Now().UTC())
+			if reset != 10*time.Second || attrs != nil {
+				t.Fatalf("after a unit end got countdown=%s attrs=%v want the 10s base and no back-off fields", reset, attrs)
+			}
+		})
 	})
 }
 
@@ -175,10 +217,12 @@ func TestRearmBackoffFallsBackToTheBaseWhenTheReadFails(t *testing.T) {
 		cancel()
 		var captured bytes.Buffer
 		logger := synclog.New(slog.New(slog.NewTextHandler(&captured, nil)))
-		got, attrs := rearmBackoff(cancelled, pool, logger, discoveryTestRun, time.Now().UTC())
-		if got != 10*time.Second || attrs != nil {
-			t.Fatalf("got countdown=%s attrs=%v want the base and no back-off fields on a read error", got, attrs)
-		}
+		inTx(t, ctx, pool, func(tx pgx.Tx) {
+			got, attrs := rearmBackoff(cancelled, tx, logger, discoveryTestRun, time.Now().UTC())
+			if got != 10*time.Second || attrs != nil {
+				t.Fatalf("got countdown=%s attrs=%v want the base and no back-off fields on a read error", got, attrs)
+			}
+		})
 		if !strings.Contains(captured.String(), "level=WARN") || !strings.Contains(captured.String(), "dispatch_sync_run.redispatch_backoff_read_failed") {
 			t.Fatalf("log=%q want a WARN dispatch_sync_run.redispatch_backoff_read_failed", captured.String())
 		}

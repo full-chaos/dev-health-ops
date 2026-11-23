@@ -31,6 +31,7 @@ type githubTestsChunkCountingDoer struct {
 	delegate providerfoundation.HTTPDoer
 	attempts *int
 	observed *githubTestsRateObserver
+	floor    *githubTestsRateFloorGate
 }
 
 func (doer githubTestsChunkCountingDoer) Do(request *http.Request) (*http.Response, error) {
@@ -38,8 +39,98 @@ func (doer githubTestsChunkCountingDoer) Do(request *http.Request) (*http.Respon
 	response, err := doer.delegate.Do(request)
 	if response != nil && doer.observed != nil {
 		doer.observed.observe(response.Header)
+		doer.floor.check(request, response)
 	}
 	return response, err
+}
+
+// githubTestsRateFloorGate stops an open-phase retry under the rate floor (CHAOS-14518). The HTTP client retries a
+// retryable answer inside one call, so the per-run floor check after the call saw only the last attempt's headers: a
+// retry sent under the floor, and its success headers hiding the low reading. While armed (the open phase only), the
+// counting doer reads each answer, with ONE source for each question:
+//   - headroom: the client's rate-limit parser (parseRequestRateLimit, aliases included) on the answer's own headers;
+//     no usable remaining/limit pair is unknown headroom (fail closed, as belowFloor); the floor is strict
+//     (remaining < floor), as the per-run check;
+//   - arming: the client's own classification. An answer it retries by its headers alone (5xx, 429, a 403 with rate
+//     headers) stops the gate at once; any other error answer only marks it pending, and the client's Penalize, which it
+//     calls exactly when it classes that answer a rate limit (here: a 403 by its body), confirms it. The doer reads no body
+//     (response_read census). A 403 permission denial, a 404 or a success never stop the gate;
+//   - a transient answer (5xx) with no remaining/limit pair keeps main's path: retried, then a transient skip.
+//
+// The client then refuses its next attempt in its own pre-attempt gate wait (githubTestsFloorBackoffGate): the call ends
+// before any wire request, and the context stays live, so a 429 still penalizes the shared backoff gate.
+type githubTestsRateFloorGate struct {
+	armed, stopped, pending bool
+	// remaining is the reading of the answer that stopped the gate (-1: unknown headroom); pendingRemaining that of the
+	// answer waiting for the client's rate-limit class.
+	remaining, pendingRemaining int64
+}
+
+var errGitHubTestsRateFloor = errors.New("github tests open phase: retry refused under the rate-limit floor")
+
+func (gate *githubTestsRateFloorGate) check(request *http.Request, response *http.Response) {
+	if gate == nil || !gate.armed || gate.stopped {
+		return
+	}
+	gate.pending = false
+	path := ""
+	if request != nil && request.URL != nil {
+		path = request.URL.Path
+	}
+	class := providerfoundation.ClassifyHTTPForRequest("github", path, response.StatusCode, response.Header, "")
+	if class == nil {
+		return
+	}
+	rateLimit, _ := parseRequestRateLimit(response.Header)
+	if class.Class == providerfoundation.ErrorTransient && rateLimit.Remaining == nil && rateLimit.Limit == nil {
+		return
+	}
+	var current githubTestsRateObserver
+	current.observe(response.Header)
+	hit, remaining := current.belowFloor()
+	switch {
+	case !hit:
+	case class.Retryable():
+		gate.stopped, gate.remaining = true, remaining
+	default:
+		gate.pending, gate.pendingRemaining = true, remaining
+	}
+}
+
+// confirm: the client classed the pending answer a rate limit (it penalizes the backoff gate for exactly that class).
+func (gate *githubTestsRateFloorGate) confirm() {
+	if gate.armed && gate.pending && !gate.stopped {
+		gate.stopped, gate.remaining = true, gate.pendingRemaining
+	}
+	gate.pending = false
+}
+
+// githubTestsFloorBackoffGate is the client's backoff gate while the open phase runs: the client waits on it before every
+// attempt after the first (and before each call), ahead of the wire request. A stopped floor refuses there, which ends the
+// call; otherwise it is the shared gate unchanged (none: no wait, no penalty).
+type githubTestsFloorBackoffGate struct {
+	inner providerfoundation.BackoffGate
+	floor *githubTestsRateFloorGate
+}
+
+func (gate githubTestsFloorBackoffGate) Wait(ctx context.Context) (time.Duration, error) {
+	if gate.floor.armed && gate.floor.stopped {
+		return 0, errGitHubTestsRateFloor
+	}
+	// A new call or attempt: an unconfirmed pending answer is not a rate limit.
+	gate.floor.pending = false
+	if gate.inner == nil {
+		return 0, nil
+	}
+	return gate.inner.Wait(ctx)
+}
+
+func (gate githubTestsFloorBackoffGate) Penalize(ctx context.Context, penalty time.Duration) error {
+	gate.floor.confirm()
+	if gate.inner == nil {
+		return nil
+	}
+	return gate.inner.Penalize(ctx, penalty)
 }
 
 // githubTestsMaxJobsPerRun bounds the jobs committed for ONE run (a hard bound). It is not the report-row bound: that is
@@ -118,6 +209,10 @@ type githubTestsChunkCursor struct {
 	LateRunsSaturated bool `json:"lrs,omitempty"`
 	// LateRecords counts the records the deep range wrote (githubTestsWindowRecords).
 	LateRecords int `json:"lrr,omitempty"`
+	// ExtraRecords counts the rows the walk wrote outside the six row counters: one run-report completeness row per run
+	// verdict (artifacts phase, both ranges) and one deleted pipeline row per open run GitHub no longer has (open phase).
+	// Cumulative, like the six counters (CHAOS-14487).
+	ExtraRecords int `json:"rx,omitempty"`
 	// The open phase re-reads, by id, stored pipeline rows that are still open
 	// and older than the runs listing reaches. OpenAfterStarted/OpenAfterRunID
 	// are the keyset position (rows finalized by earlier chunks drop out of the
@@ -607,7 +702,7 @@ var errGitHubTestsWalkBound = errors.New("github tests walk record bound reached
 // githubTestsWalkRecords is the rows the walk has written so far. Every addend is a cumulative cursor counter, so a stored
 // cursor of an earlier attempt or an earlier release already carries the total.
 func githubTestsWalkRecords(cursor githubTestsChunkCursor) int {
-	return cursor.Pipelines + cursor.Jobs + cursor.Acceptance + cursor.Suites + cursor.Cases + cursor.Coverage
+	return cursor.Pipelines + cursor.Jobs + cursor.Acceptance + cursor.Suites + cursor.Cases + cursor.Coverage + cursor.ExtraRecords
 }
 
 // githubTestsWindowRecords is the walk's records without those of the deep range: the phases after the deep range (the
@@ -1286,7 +1381,7 @@ func decodeGitHubTestsChunkCursor(raw string) (githubTestsChunkCursor, error) {
 		cursor.OpenSkipEvent != nil && (cursor.OpenSkipEvent.RunID == "" || cursor.OpenSkipEvent.Reason == "") ||
 		cursor.Index < 0 || cursor.NextURL == "" && cursor.Index != 0 ||
 		cursor.AnchorID != "" && !githubTestsCutRunDigits(cursor.AnchorID, 20) ||
-		cursor.RunPages < 0 || cursor.ArtifactPages < 0 || cursor.ReseekPages < 0 || cursor.PagesEntered < 0 || cursor.RecordCredit < 0 || cursor.DeletionProven < 0 || cursor.DeletionProven > 1 || cursor.Relist < 0 || cursor.Relist > githubTestsRelistStoppedSaturated ||
+		cursor.RunPages < 0 || cursor.ArtifactPages < 0 || cursor.ReseekPages < 0 || cursor.PagesEntered < 0 || cursor.RecordCredit < 0 || cursor.ExtraRecords < 0 || cursor.DeletionProven < 0 || cursor.DeletionProven > 1 || cursor.Relist < 0 || cursor.Relist > githubTestsRelistStoppedSaturated ||
 		// The counter pair is either both known or both unknown, never split:
 		// a cursor carrying exactly one is corrupt, not a legacy shape (a
 		// legacy cursor predates the field entirely, so it is missing BOTH).
@@ -1639,7 +1734,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	requests := 0
 	counted := *client
 	var rateObserved githubTestsRateObserver
-	counted.Doer = githubTestsChunkCountingDoer{delegate: client.Doer, attempts: &requests, observed: &rateObserved}
+	rateFloor := &githubTestsRateFloorGate{}
+	counted.Doer = githubTestsChunkCountingDoer{delegate: client.Doer, attempts: &requests, observed: &rateObserved, floor: rateFloor}
 	client = &counted
 	emitFinalMetadata := func(cursor githubTestsChunkCursor) error {
 		cursor.Phase = "done"
@@ -1761,7 +1857,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	// creditDeletion: the records a run deleted before the anchor was charged stay charged, while the uninterrupted walk of
 	// the survivors never charges them, so a proven deletion (githubTestsResumeDeleted) earns the average records of a read
 	// run per deleted run, rounded up (runs phase: pipeline, job and acceptance rows per pipeline; artifacts phase: report
-	// rows per pipeline, the artifacts listing lists the runs the runs phase read). The deletion credit stops at a twentieth
+	// rows per pipeline, the artifacts listing lists the runs the runs phase read; the report rows include the run-report
+	// completeness rows, CHAOS-14487: ExtraRecords holds only those while the artifacts phase runs, as the open phase, its
+	// other writer, comes after it). The deletion credit stops at a twentieth
 	// of the bound, checked against all the credit (the re-seek re-read credit above is not capped). A deep-range credit
 	// also comes off LateRecords, as creditRecords does (CHAOS-14434).
 	deletionCeiling := maxWalkRecords / 20
@@ -1775,7 +1873,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		records := cursor.Pipelines + cursor.Jobs + cursor.Acceptance
 		if phase == githubTestsArtifactsPhase {
-			records = cursor.Suites + cursor.Cases + cursor.Coverage
+			records = cursor.Suites + cursor.Cases + cursor.Coverage + cursor.ExtraRecords
 		}
 		perRun := (records + cursor.Pipelines - 1) / cursor.Pipelines
 		credit := min(deleted*perRun, max(0, deletionCeiling-cursor.RecordCredit))
@@ -1989,16 +2087,16 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		// remainder was never seen, which must not advance the
 		// watermark. Item cap is checked first: if both are somehow
 		// set, the observed boundary is the more specific fact.
+		// The truncation is recorded (observation, metric, log) only after the branch policy read succeeded, so a run that
+		// returns an error here (and is not emitted) publishes none (CHAOS-14518).
 		jobItems := jobPage.Items
+		truncation := ""
 		switch {
 		case jobPage.ItemCapReached:
 			if len(jobItems) > githubTestsMaxJobsPerRun {
 				jobItems = jobItems[:githubTestsMaxJobsPerRun]
 			}
-			cursor = recordGitHubTestsPerRunTruncation(
-				cursor, client, claim, githubTestsRunJobsComponent,
-				githubTestsPerRunCapCause, pipeline.RunID, len(jobItems),
-			)
+			truncation = githubTestsPerRunCapCause
 		// UNREACHABLE through configuration, and KEPT anyway.
 		// validatePerRunPageBudget refuses any jobPages that cannot
 		// outrun the item cap, so with full pages the cap above always
@@ -2009,10 +2107,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		// validation. A branch that cannot fire is honest; a missing
 		// branch is a trapdoor (CHAOS-4142, codex round 2).
 		case jobPage.PageBudgetExhausted:
-			cursor = recordGitHubTestsPerRunTruncation(
-				cursor, client, claim, githubTestsRunJobsComponent,
-				githubTestsPerRunPageBudgetCause, pipeline.RunID, len(jobItems),
-			)
+			truncation = githubTestsPerRunPageBudgetCause
 		}
 		for _, jobRaw := range jobItems {
 			var job githubTestsJobPayload
@@ -2046,6 +2141,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				policyCache[*targetBranch] = cached
 			}
 			policy = cached
+		}
+		if truncation != "" {
+			cursor = recordGitHubTestsPerRunTruncation(
+				cursor, client, claim, githubTestsRunJobsComponent, truncation, pipeline.RunID, len(jobItems),
+			)
 		}
 		acceptance := projectGitHubTestsChecks(claim, repoID, pipeline, jobs, policy, targetBranch, prNumber, testsOptionalString(stringValue(run.HTMLURL)), normalizedAt)
 		return jobs, acceptance, complete, nil
@@ -2211,6 +2311,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			// late_rerun_runs pair and the phase goes on.
 			allowance, budgetErr := githubTestsListingAllowance(lateMaxPages, cursor.LateRunPages, githubTestsFreePages(cursor))
 			exhausted := errors.Is(budgetErr, ErrPaginationCapExceeded)
+			walkBound := false
 			if budgetErr != nil && !exhausted {
 				return budgetErr
 			}
@@ -2236,7 +2337,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				if errors.Is(visitErr, errGitHubTestsWalkBound) {
 					logGitHubTestsWalkBound(cursor, claim, githubTestsLateRerunRunsComponent, maxWalkRecords)
 					cursor = githubTestsHoldDeepStopAfterDeletion(cursor, client, claim, githubTestsRunInventoryComponent)
-					visitErr, exhausted = nil, true
+					visitErr, exhausted, walkBound = nil, true, true
 				}
 				if visitErr != nil {
 					return visitErr
@@ -2244,6 +2345,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				exhausted = exhausted || collection.PageBudgetExhausted
 			}
 			if exhausted {
+				if !walkBound {
+					recordGitHubTestsDeepPageBudgetStop(client, claim, githubTestsDeepListingRuns, cursor.LateRunPages, lateMaxPages)
+				}
 				cursor = recordGitHubTestsLateRerunRunsStop(cursor, client, claim, githubTestsPageBudgetCause, cursor.LateRunPages)
 				cursor = nextRunsListing(cursor)
 				cursor.NextURL, cursor.Index = "", 0
@@ -2360,6 +2464,29 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		if stopAtWalkBound() {
 			return nil
 		}
+		// The floor is read before each run and, through rateFloor, on every retryable answer of the phase (CHAOS-14518).
+		stopAtFloorReading := func(remaining int64) {
+			cursor.OpenFloorHit, cursor.OpenFloorRemaining = true, remaining
+			// A refused retry ends its call before the caller stamps the wire count: stamp it here.
+			cursor.Requests = invocationBaseRequests + requests
+			slog.Warn(
+				"open phase stopped: the installation's rate-limit headroom is under the floor, or its headers are missing",
+				"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", logging.ProviderText(cursor.Repo),
+				"remaining", remaining, "limit", rateObserved.limit, "floor", rateObserved.floor(), "reread", cursor.OpenDone,
+			)
+			cursor.Phase = "done"
+		}
+		stopAtRateFloor := func() bool {
+			hit, remaining := rateObserved.belowFloor()
+			if hit {
+				stopAtFloorReading(remaining)
+			}
+			return hit
+		}
+		sharedGate := client.Gate
+		client.Gate = githubTestsFloorBackoffGate{inner: sharedGate, floor: rateFloor}
+		rateFloor.armed = true
+		defer func() { rateFloor.armed, client.Gate = false, sharedGate }()
 		startedBefore := claim.SinceAt.UTC().Add(-lookback)
 		if cursor.OpenCap == 0 {
 			backlog, err := handler.OpenRuns.OpenRunBacklog(ctx, claim, repoID, startedBefore, githubTestsOpenRunBacklogThreshold+1)
@@ -2394,20 +2521,17 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				if stopAtWalkBound() {
 					return nil
 				}
-				if hit, remaining := rateObserved.belowFloor(); hit {
-					cursor.OpenFloorHit, cursor.OpenFloorRemaining = true, remaining
-					slog.Warn(
-						"open phase stopped: the installation's rate-limit headroom is under the floor, or its headers are missing",
-						"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "repository", logging.ProviderText(cursor.Repo),
-						"remaining", remaining, "limit", rateObserved.limit, "floor", rateObserved.floor(), "reread", cursor.OpenDone,
-					)
-					cursor.Phase = "done"
+				if stopAtRateFloor() {
 					return nil
 				}
 				before := cursor
 				run, found, fetchErr := fetchGitHubTestsRun(ctx, client, root, row.RunID)
 				cursor.Requests = invocationBaseRequests + requests
 				if fetchErr != nil {
+					if errors.Is(fetchErr, errGitHubTestsRateFloor) {
+						stopAtFloorReading(rateFloor.remaining)
+						return nil
+					}
 					if err := skipOpenRun(before, row, fetchErr, false); err != nil {
 						return err
 					}
@@ -2418,6 +2542,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				acceptance := make([]githubTestsAcceptanceRow, 0)
 				if !found {
 					pipelines = []githubTestsPipelineRow{githubTestsDeletedRow(row, normalizedAt)}
+					// The deleted row is not a pipeline_runs_synced read (Pipelines), but the walk bound charges it (CHAOS-14487).
+					cursor.ExtraRecords++
 					slog.Info(
 						"open run no longer exists at the provider; its row is marked deleted",
 						"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
@@ -2427,6 +2553,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					var detailErr error
 					jobs, acceptance, _, detailErr = collectRunDetail(run, pipeline)
 					if detailErr != nil {
+						if errors.Is(detailErr, errGitHubTestsRateFloor) {
+							stopAtFloorReading(rateFloor.remaining)
+							return nil
+						}
 						if err := skipOpenRun(before, row, detailErr, true); err != nil {
 							return err
 						}
@@ -2901,7 +3031,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
 							continue
 						}
-						rows, parseErr := parseGitHubTestsReportArtifact(archive, string(artifact.ID), githubTestsReportSlotFor(run, artifact), supersededIDs[githubTestsArtifactSlotName(artifact)], repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
+						rows, parseErr := parseGitHubTestsReportArtifactInSpan(ctx, archive, func() (githubTestsReportRows, error) {
+							return parseGitHubTestsReportArtifact(archive, string(artifact.ID), githubTestsReportSlotFor(run, artifact), supersededIDs[githubTestsArtifactSlotName(artifact)], repoID, pipeline.RunID, claim.OrgID, pipeline.StartedAtPtr(), pipeline.FinishedAt, normalizedAt)
+						})
 						if parseErr != nil {
 							// An archive that will not open is provider data, not
 							// a fault of this unit. Skip it exactly as an expired
@@ -3067,6 +3199,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				cursor.Suites += len(suites)
 				cursor.Cases += len(cases)
 				cursor.Coverage += len(coverage)
+				cursor.ExtraRecords += len(completeness)
 				effects, effectErr := testOpsEffects(nil, nil, nil, suites, cases, coverage, completeness...)
 				if effectErr != nil {
 					return effectErr
@@ -3130,6 +3263,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			}
 		}
 		if errors.Is(budgetErr, ErrPaginationCapExceeded) && cursor.Relist == githubTestsRelistWalking {
+			recordGitHubTestsDeepPageBudgetStop(client, claim, githubTestsDeepListingReports, cursor.ArtifactPages, lateMaxPages)
 			cursor = recordGitHubTestsRelistStop(cursor, client, claim, githubTestsPageBudgetCause, cursor.RangeHi, cursor.RangeItems)
 			break
 		}
@@ -3154,6 +3288,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			return visitErr
 		}
 		if collection.PageBudgetExhausted && cursor.Relist == githubTestsRelistWalking {
+			recordGitHubTestsDeepPageBudgetStop(client, claim, githubTestsDeepListingReports, cursor.ArtifactPages, lateMaxPages)
 			cursor = recordGitHubTestsRelistStop(cursor, client, claim, githubTestsPageBudgetCause, cursor.RangeHi, cursor.RangeItems)
 			break
 		}

@@ -437,7 +437,9 @@ type ComplexityRoot struct {
 	}
 
 	CapacityForecast struct {
+		BacklogAsOfDay         func(childComplexity int) int
 		BacklogSize            func(childComplexity int) int
+		BacklogState           func(childComplexity int) int
 		CompletionDistribution func(childComplexity int) int
 		ComputedAt             func(childComplexity int) int
 		ForecastID             func(childComplexity int) int
@@ -1533,34 +1535,39 @@ type ComplexityRoot struct {
 	}
 
 	ThroughputEstimateCoverage struct {
+		AsOfDay          func(childComplexity int) int
 		BacklogSize      func(childComplexity int) int
 		EstimatedCount   func(childComplexity int) int
 		GrainCount       func(childComplexity int) int
 		Ratio            func(childComplexity int) int
+		State            func(childComplexity int) int
 		UnestimatedCount func(childComplexity int) int
 	}
 
 	ThroughputForecast struct {
-		BacklogAsOfDay      func(childComplexity int) int
-		BacklogSize         func(childComplexity int) int
-		BacklogState        func(childComplexity int) int
-		ComputedAt          func(childComplexity int) int
-		DegradedReason      func(childComplexity int) int
-		EstimateCoverage    func(childComplexity int) int
-		ForecastID          func(childComplexity int) int
-		HistoryWeeks        func(childComplexity int) int
-		IncidentLoad        func(childComplexity int) int
-		InsufficientHistory func(childComplexity int) int
-		P50Weeks            func(childComplexity int) int
-		P75Weeks            func(childComplexity int) int
-		P90Weeks            func(childComplexity int) int
-		PrimaryRisk         func(childComplexity int) int
-		ReviewBottleneck    func(childComplexity int) int
-		RollingWindows      func(childComplexity int) int
-		StaleWip            func(childComplexity int) int
-		TeamID              func(childComplexity int) int
-		WipCongestion       func(childComplexity int) int
-		WorkScopeID         func(childComplexity int) int
+		BacklogAsOfDay          func(childComplexity int) int
+		BacklogSize             func(childComplexity int) int
+		BacklogState            func(childComplexity int) int
+		ComputedAt              func(childComplexity int) int
+		DegradedReason          func(childComplexity int) int
+		EstimateCoverage        func(childComplexity int) int
+		ForecastID              func(childComplexity int) int
+		HistoryWeeks            func(childComplexity int) int
+		IncidentLoad            func(childComplexity int) int
+		InsufficientHistory     func(childComplexity int) int
+		P50Weeks                func(childComplexity int) int
+		P75Weeks                func(childComplexity int) int
+		P90Weeks                func(childComplexity int) int
+		PrimaryRisk             func(childComplexity int) int
+		ReviewBottleneck        func(childComplexity int) int
+		RollingWindows          func(childComplexity int) int
+		StaleWip                func(childComplexity int) int
+		TeamID                  func(childComplexity int) int
+		WipCongestion           func(childComplexity int) int
+		WipCongestionAsOfDay    func(childComplexity int) int
+		WipCongestionGrainCount func(childComplexity int) int
+		WipCongestionState      func(childComplexity int) int
+		WorkScopeID             func(childComplexity int) int
 	}
 
 	ThroughputRiskOverlay struct {
@@ -1580,8 +1587,11 @@ type ComplexityRoot struct {
 	}
 
 	ThroughputStaleWip struct {
+		AsOfDay     func(childComplexity int) int
+		GrainCount  func(childComplexity int) int
 		P50AgeHours func(childComplexity int) int
 		P90AgeHours func(childComplexity int) int
+		State       func(childComplexity int) int
 	}
 
 	TimeseriesBucket struct {
@@ -3679,12 +3689,26 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.CapacityDistributionBin.Value(childComplexity), true
 
+	case "CapacityForecast.backlogAsOfDay":
+		if e.complexity.CapacityForecast.BacklogAsOfDay == nil {
+			break
+		}
+
+		return e.complexity.CapacityForecast.BacklogAsOfDay(childComplexity), true
+
 	case "CapacityForecast.backlogSize":
 		if e.complexity.CapacityForecast.BacklogSize == nil {
 			break
 		}
 
 		return e.complexity.CapacityForecast.BacklogSize(childComplexity), true
+
+	case "CapacityForecast.backlogState":
+		if e.complexity.CapacityForecast.BacklogState == nil {
+			break
+		}
+
+		return e.complexity.CapacityForecast.BacklogState(childComplexity), true
 
 	case "CapacityForecast.completionDistribution":
 		if e.complexity.CapacityForecast.CompletionDistribution == nil {
@@ -8991,6 +9015,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.TestOpsTestWindowResult.UntilDate(childComplexity), true
 
+	case "ThroughputEstimateCoverage.asOfDay":
+		if e.complexity.ThroughputEstimateCoverage.AsOfDay == nil {
+			break
+		}
+
+		return e.complexity.ThroughputEstimateCoverage.AsOfDay(childComplexity), true
+
 	case "ThroughputEstimateCoverage.backlogSize":
 		if e.complexity.ThroughputEstimateCoverage.BacklogSize == nil {
 			break
@@ -9018,6 +9049,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.ThroughputEstimateCoverage.Ratio(childComplexity), true
+
+	case "ThroughputEstimateCoverage.state":
+		if e.complexity.ThroughputEstimateCoverage.State == nil {
+			break
+		}
+
+		return e.complexity.ThroughputEstimateCoverage.State(childComplexity), true
 
 	case "ThroughputEstimateCoverage.unestimatedCount":
 		if e.complexity.ThroughputEstimateCoverage.UnestimatedCount == nil {
@@ -9159,6 +9197,27 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ThroughputForecast.WipCongestion(childComplexity), true
 
+	case "ThroughputForecast.wipCongestionAsOfDay":
+		if e.complexity.ThroughputForecast.WipCongestionAsOfDay == nil {
+			break
+		}
+
+		return e.complexity.ThroughputForecast.WipCongestionAsOfDay(childComplexity), true
+
+	case "ThroughputForecast.wipCongestionGrainCount":
+		if e.complexity.ThroughputForecast.WipCongestionGrainCount == nil {
+			break
+		}
+
+		return e.complexity.ThroughputForecast.WipCongestionGrainCount(childComplexity), true
+
+	case "ThroughputForecast.wipCongestionState":
+		if e.complexity.ThroughputForecast.WipCongestionState == nil {
+			break
+		}
+
+		return e.complexity.ThroughputForecast.WipCongestionState(childComplexity), true
+
 	case "ThroughputForecast.workScopeId":
 		if e.complexity.ThroughputForecast.WorkScopeID == nil {
 			break
@@ -9236,6 +9295,20 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ThroughputRollingWindow.WindowWeeks(childComplexity), true
 
+	case "ThroughputStaleWip.asOfDay":
+		if e.complexity.ThroughputStaleWip.AsOfDay == nil {
+			break
+		}
+
+		return e.complexity.ThroughputStaleWip.AsOfDay(childComplexity), true
+
+	case "ThroughputStaleWip.grainCount":
+		if e.complexity.ThroughputStaleWip.GrainCount == nil {
+			break
+		}
+
+		return e.complexity.ThroughputStaleWip.GrainCount(childComplexity), true
+
 	case "ThroughputStaleWip.p50AgeHours":
 		if e.complexity.ThroughputStaleWip.P50AgeHours == nil {
 			break
@@ -9249,6 +9322,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.ThroughputStaleWip.P90AgeHours(childComplexity), true
+
+	case "ThroughputStaleWip.state":
+		if e.complexity.ThroughputStaleWip.State == nil {
+			break
+		}
+
+		return e.complexity.ThroughputStaleWip.State(childComplexity), true
 
 	case "TimeseriesBucket.date":
 		if e.complexity.TimeseriesBucket.Date == nil {
@@ -10405,7 +10485,12 @@ type CapacityForecast {
   computedAt: String!
   teamId: String
   workScopeId: String
+  "The sum of the WIP on each work-item key's (provider, work scope, team) newest day. It is not bounded by historyDays: a key whose newest day is before the window start still adds its WIP, and backlogState says so."
   backlogSize: Int!
+  "How backlogSize was found against the window start (the forecast day minus historyDays days): MEASURED, STALE or NO_ROWS (see NewestDayState). Null on a stored forecast (capacityForecasts), which keeps no read state."
+  backlogState: NewestDayState
+  "The oldest of the newest work-item days that backlogSize is read from. Null when backlogState is NO_ROWS or null."
+  backlogAsOfDay: Date
   targetItems: Int
   targetDate: Date
   p50Date: Date
@@ -11305,6 +11390,15 @@ type Mutation {
 
   """Trigger a manual report execution"""
   triggerReport(orgId: String!, reportId: String!): ReportRunType
+}
+
+"""
+How a value read from each key's newest day stands against the request window. A key is (provider, work scope, team), and each key gives its OWN newest day, not one day for the whole scope. MEASURED: the newest day of every key the value is read from is on or after the window start. STALE: the newest day of at least one key is before the window start; the value still holds that key's row, and the asOfDay field beside the state names the oldest of the newest days. NO_ROWS: no key was read, so a 0 is not a measured zero.
+"""
+enum NewestDayState {
+  MEASURED
+  STALE
+  NO_ROWS
 }
 
 type OperatingReview {
@@ -12228,6 +12322,11 @@ type TestOpsRiskBreakdownItem {
 input TestOpsRiskInput {
   startDate: Date!
   endDate: Date!
+  repoIds: [String!] = null
+  """
+  Team ids. Narrows to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. With ` + "`" + `` + "`" + `repoIds` + "`" + `` + "`" + ` both apply.
+  """
+  teamIds: [String!] = null
 }
 
 type TestOpsRiskQuadrantPoint {
@@ -12285,6 +12384,9 @@ enum ThroughputBacklogState {
   SUPPLIED
 }
 
+"""
+Estimate coverage of the scope, read from each coverage grain's (provider, work scope, team) own newest row: per grain, not one newest day for the scope, and not bounded by the window. Never null: with no coverage row it is the zero object.
+"""
 type ThroughputEstimateCoverage {
   ratio: Float
   estimatedCount: Int!
@@ -12292,6 +12394,10 @@ type ThroughputEstimateCoverage {
   backlogSize: Int!
   "The number of coverage grains (provider, work scope, team) the counts are read from. 0: the scope has no coverage row, and the zero counts and ratio 0 are not a measurement."
   grainCount: Int!
+  "How the newest days of the grains stand against the window start (the forecast day minus historyWeeks weeks): MEASURED, STALE, or NO_ROWS when grainCount is 0 (see NewestDayState)."
+  state: NewestDayState!
+  "The oldest of the newest days of the grains the counts are read from. Null when state is NO_ROWS."
+  asOfDay: Date
 }
 
 type ThroughputForecast {
@@ -12312,7 +12418,14 @@ type ThroughputForecast {
   p90Weeks: Int
   rollingWindows: [ThroughputRollingWindow!]!
   primaryRisk: ThroughputRiskOverlay!
+  "value: the current WIP (the sum of each work-item key's newest row INSIDE the window) over the window's average daily WIP. The current WIP is as of wipCongestionAsOfDay, not as of the forecast day."
   wipCongestion: ThroughputRiskOverlay!
+  "How the current WIP of wipCongestion was read: MEASURED (at least one measured key inside the window) or NO_ROWS (no measured key inside the window, or no throughput history, so the value 0 is not a measurement). Never STALE: the read is bounded to the window (see NewestDayState)."
+  wipCongestionState: NewestDayState!
+  "The oldest of the keys' newest days inside the window that the current WIP of wipCongestion is read from. Null when wipCongestionState is NO_ROWS."
+  wipCongestionAsOfDay: Date
+  "The number of measured work-item keys (provider, work scope, team) the current WIP of wipCongestion sums."
+  wipCongestionGrainCount: Int!
   staleWip: ThroughputStaleWip
   estimateCoverage: ThroughputEstimateCoverage
   reviewBottleneck: ThroughputRiskOverlay!
@@ -12344,8 +12457,16 @@ type ThroughputRollingWindow {
 }
 
 type ThroughputStaleWip {
+  "The average wip_age_p50_hours over the keys below, each on its own newest day. Not bounded by the window: a key whose newest day is before the window start counts, and state says so."
   p50AgeHours: Float
+  "The average wip_age_p90_hours over the keys below, each on its own newest day. Not bounded by the window: a key whose newest day is before the window start counts, and state says so."
   p90AgeHours: Float
+  "How the newest days of the keys stand against the window start (the forecast day minus historyWeeks weeks): MEASURED or STALE (see NewestDayState). Never NO_ROWS: staleWip is null when no key has an age."
+  state: NewestDayState!
+  "The oldest of the newest days of the keys the ages are read from."
+  asOfDay: Date!
+  "The number of work-item keys (provider, work scope, team) whose newest-day ages are averaged."
+  grainCount: Int!
 }
 
 enum TimeGranularity {
@@ -28583,6 +28704,88 @@ func (ec *executionContext) fieldContext_CapacityForecast_backlogSize(_ context.
 	return fc, nil
 }
 
+func (ec *executionContext) _CapacityForecast_backlogState(ctx context.Context, field graphql.CollectedField, obj *model.CapacityForecast) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CapacityForecast_backlogState(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.BacklogState, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*model.NewestDayState)
+	fc.Result = res
+	return ec.marshalONewestDayState2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐNewestDayState(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CapacityForecast_backlogState(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CapacityForecast",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type NewestDayState does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CapacityForecast_backlogAsOfDay(ctx context.Context, field graphql.CollectedField, obj *model.CapacityForecast) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CapacityForecast_backlogAsOfDay(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.BacklogAsOfDay, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*graphqldate.Date)
+	fc.Result = res
+	return ec.marshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphqldateᚐDate(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CapacityForecast_backlogAsOfDay(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CapacityForecast",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Date does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _CapacityForecast_targetItems(ctx context.Context, field graphql.CollectedField, obj *model.CapacityForecast) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_CapacityForecast_targetItems(ctx, field)
 	if err != nil {
@@ -29504,6 +29707,10 @@ func (ec *executionContext) fieldContext_CapacityForecastEdge_node(_ context.Con
 				return ec.fieldContext_CapacityForecast_workScopeId(ctx, field)
 			case "backlogSize":
 				return ec.fieldContext_CapacityForecast_backlogSize(ctx, field)
+			case "backlogState":
+				return ec.fieldContext_CapacityForecast_backlogState(ctx, field)
+			case "backlogAsOfDay":
+				return ec.fieldContext_CapacityForecast_backlogAsOfDay(ctx, field)
 			case "targetItems":
 				return ec.fieldContext_CapacityForecast_targetItems(ctx, field)
 			case "targetDate":
@@ -50452,6 +50659,10 @@ func (ec *executionContext) fieldContext_Query_capacityForecast(ctx context.Cont
 				return ec.fieldContext_CapacityForecast_workScopeId(ctx, field)
 			case "backlogSize":
 				return ec.fieldContext_CapacityForecast_backlogSize(ctx, field)
+			case "backlogState":
+				return ec.fieldContext_CapacityForecast_backlogState(ctx, field)
+			case "backlogAsOfDay":
+				return ec.fieldContext_CapacityForecast_backlogAsOfDay(ctx, field)
 			case "targetItems":
 				return ec.fieldContext_CapacityForecast_targetItems(ctx, field)
 			case "targetDate":
@@ -50633,6 +50844,12 @@ func (ec *executionContext) fieldContext_Query_throughputForecast(ctx context.Co
 				return ec.fieldContext_ThroughputForecast_primaryRisk(ctx, field)
 			case "wipCongestion":
 				return ec.fieldContext_ThroughputForecast_wipCongestion(ctx, field)
+			case "wipCongestionState":
+				return ec.fieldContext_ThroughputForecast_wipCongestionState(ctx, field)
+			case "wipCongestionAsOfDay":
+				return ec.fieldContext_ThroughputForecast_wipCongestionAsOfDay(ctx, field)
+			case "wipCongestionGrainCount":
+				return ec.fieldContext_ThroughputForecast_wipCongestionGrainCount(ctx, field)
 			case "staleWip":
 				return ec.fieldContext_ThroughputForecast_staleWip(ctx, field)
 			case "estimateCoverage":
@@ -62623,6 +62840,91 @@ func (ec *executionContext) fieldContext_ThroughputEstimateCoverage_grainCount(_
 	return fc, nil
 }
 
+func (ec *executionContext) _ThroughputEstimateCoverage_state(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputEstimateCoverage) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ThroughputEstimateCoverage_state(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.State, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.NewestDayState)
+	fc.Result = res
+	return ec.marshalNNewestDayState2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐNewestDayState(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ThroughputEstimateCoverage_state(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ThroughputEstimateCoverage",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type NewestDayState does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ThroughputEstimateCoverage_asOfDay(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputEstimateCoverage) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ThroughputEstimateCoverage_asOfDay(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.AsOfDay, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*graphqldate.Date)
+	fc.Result = res
+	return ec.marshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphqldateᚐDate(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ThroughputEstimateCoverage_asOfDay(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ThroughputEstimateCoverage",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Date does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ThroughputForecast_forecastId(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputForecast) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_ThroughputForecast_forecastId(ctx, field)
 	if err != nil {
@@ -63300,6 +63602,135 @@ func (ec *executionContext) fieldContext_ThroughputForecast_wipCongestion(_ cont
 	return fc, nil
 }
 
+func (ec *executionContext) _ThroughputForecast_wipCongestionState(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputForecast) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ThroughputForecast_wipCongestionState(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.WipCongestionState, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.NewestDayState)
+	fc.Result = res
+	return ec.marshalNNewestDayState2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐNewestDayState(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ThroughputForecast_wipCongestionState(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ThroughputForecast",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type NewestDayState does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ThroughputForecast_wipCongestionAsOfDay(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputForecast) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ThroughputForecast_wipCongestionAsOfDay(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.WipCongestionAsOfDay, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*graphqldate.Date)
+	fc.Result = res
+	return ec.marshalODate2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphqldateᚐDate(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ThroughputForecast_wipCongestionAsOfDay(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ThroughputForecast",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Date does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ThroughputForecast_wipCongestionGrainCount(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputForecast) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ThroughputForecast_wipCongestionGrainCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.WipCongestionGrainCount, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ThroughputForecast_wipCongestionGrainCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ThroughputForecast",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ThroughputForecast_staleWip(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputForecast) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_ThroughputForecast_staleWip(ctx, field)
 	if err != nil {
@@ -63340,6 +63771,12 @@ func (ec *executionContext) fieldContext_ThroughputForecast_staleWip(_ context.C
 				return ec.fieldContext_ThroughputStaleWip_p50AgeHours(ctx, field)
 			case "p90AgeHours":
 				return ec.fieldContext_ThroughputStaleWip_p90AgeHours(ctx, field)
+			case "state":
+				return ec.fieldContext_ThroughputStaleWip_state(ctx, field)
+			case "asOfDay":
+				return ec.fieldContext_ThroughputStaleWip_asOfDay(ctx, field)
+			case "grainCount":
+				return ec.fieldContext_ThroughputStaleWip_grainCount(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ThroughputStaleWip", field.Name)
 		},
@@ -63393,6 +63830,10 @@ func (ec *executionContext) fieldContext_ThroughputForecast_estimateCoverage(_ c
 				return ec.fieldContext_ThroughputEstimateCoverage_backlogSize(ctx, field)
 			case "grainCount":
 				return ec.fieldContext_ThroughputEstimateCoverage_grainCount(ctx, field)
+			case "state":
+				return ec.fieldContext_ThroughputEstimateCoverage_state(ctx, field)
+			case "asOfDay":
+				return ec.fieldContext_ThroughputEstimateCoverage_asOfDay(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ThroughputEstimateCoverage", field.Name)
 		},
@@ -64077,6 +64518,138 @@ func (ec *executionContext) fieldContext_ThroughputStaleWip_p90AgeHours(_ contex
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ThroughputStaleWip_state(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputStaleWip) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ThroughputStaleWip_state(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.State, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.NewestDayState)
+	fc.Result = res
+	return ec.marshalNNewestDayState2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐNewestDayState(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ThroughputStaleWip_state(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ThroughputStaleWip",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type NewestDayState does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ThroughputStaleWip_asOfDay(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputStaleWip) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ThroughputStaleWip_asOfDay(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.AsOfDay, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(graphqldate.Date)
+	fc.Result = res
+	return ec.marshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphqldateᚐDate(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ThroughputStaleWip_asOfDay(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ThroughputStaleWip",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Date does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ThroughputStaleWip_grainCount(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputStaleWip) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ThroughputStaleWip_grainCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.GrainCount, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ThroughputStaleWip_grainCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ThroughputStaleWip",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
 		},
 	}
 	return fc, nil
@@ -70667,7 +71240,7 @@ func (ec *executionContext) unmarshalInputTestOpsRiskInput(ctx context.Context, 
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"startDate", "endDate"}
+	fieldsInOrder := [...]string{"startDate", "endDate", "repoIds", "teamIds"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -70688,6 +71261,20 @@ func (ec *executionContext) unmarshalInputTestOpsRiskInput(ctx context.Context, 
 				return it, err
 			}
 			it.EndDate = data
+		case "repoIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("repoIds"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.RepoIds = data
+		case "teamIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("teamIds"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TeamIds = data
 		}
 	}
 
@@ -73572,6 +74159,10 @@ func (ec *executionContext) _CapacityForecast(ctx context.Context, sel ast.Selec
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "backlogState":
+			out.Values[i] = ec._CapacityForecast_backlogState(ctx, field, obj)
+		case "backlogAsOfDay":
+			out.Values[i] = ec._CapacityForecast_backlogAsOfDay(ctx, field, obj)
 		case "targetItems":
 			out.Values[i] = ec._CapacityForecast_targetItems(ctx, field, obj)
 		case "targetDate":
@@ -81673,6 +82264,13 @@ func (ec *executionContext) _ThroughputEstimateCoverage(ctx context.Context, sel
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "state":
+			out.Values[i] = ec._ThroughputEstimateCoverage_state(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "asOfDay":
+			out.Values[i] = ec._ThroughputEstimateCoverage_asOfDay(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -81758,6 +82356,18 @@ func (ec *executionContext) _ThroughputForecast(ctx context.Context, sel ast.Sel
 			}
 		case "wipCongestion":
 			out.Values[i] = ec._ThroughputForecast_wipCongestion(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "wipCongestionState":
+			out.Values[i] = ec._ThroughputForecast_wipCongestionState(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "wipCongestionAsOfDay":
+			out.Values[i] = ec._ThroughputForecast_wipCongestionAsOfDay(ctx, field, obj)
+		case "wipCongestionGrainCount":
+			out.Values[i] = ec._ThroughputForecast_wipCongestionGrainCount(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -81936,6 +82546,21 @@ func (ec *executionContext) _ThroughputStaleWip(ctx context.Context, sel ast.Sel
 			out.Values[i] = ec._ThroughputStaleWip_p50AgeHours(ctx, field, obj)
 		case "p90AgeHours":
 			out.Values[i] = ec._ThroughputStaleWip_p90AgeHours(ctx, field, obj)
+		case "state":
+			out.Values[i] = ec._ThroughputStaleWip_state(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "asOfDay":
+			out.Values[i] = ec._ThroughputStaleWip_asOfDay(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "grainCount":
+			out.Values[i] = ec._ThroughputStaleWip_grainCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -85921,6 +86546,16 @@ func (ec *executionContext) marshalNMissingMapping2ᚕgithubᚗcomᚋfullᚑchao
 	return ret
 }
 
+func (ec *executionContext) unmarshalNNewestDayState2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐNewestDayState(ctx context.Context, v any) (model.NewestDayState, error) {
+	var res model.NewestDayState
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNNewestDayState2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐNewestDayState(ctx context.Context, sel ast.SelectionSet, v model.NewestDayState) graphql.Marshaler {
+	return v
+}
+
 func (ec *executionContext) marshalNOperatingReview2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐOperatingReview(ctx context.Context, sel ast.SelectionSet, v model.OperatingReview) graphql.Marshaler {
 	return ec._OperatingReview(ctx, sel, &v)
 }
@@ -89439,6 +90074,22 @@ func (ec *executionContext) marshalOMetricLineage2ᚖgithubᚗcomᚋfullᚑchaos
 		return graphql.Null
 	}
 	return ec._MetricLineage(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalONewestDayState2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐNewestDayState(ctx context.Context, v any) (*model.NewestDayState, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(model.NewestDayState)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalONewestDayState2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐNewestDayState(ctx context.Context, sel ast.SelectionSet, v *model.NewestDayState) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
 }
 
 func (ec *executionContext) marshalOOperatingReviewSizing2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐOperatingReviewSizing(ctx context.Context, sel ast.SelectionSet, v *model.OperatingReviewSizing) graphql.Marshaler {

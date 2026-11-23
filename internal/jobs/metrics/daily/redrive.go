@@ -557,7 +557,7 @@ FOR UPDATE OF run`, runID).Scan(
 		return false, nil
 	}
 	if outboxRecentSince != nil {
-		// JIT off as in the survey: without the partial outbox index the planner
+		// JIT off as in the survey: with no index on this predicate the planner
 		// prices this read above jit_above_cost, and JIT alone costs ~0.5 s.
 		if _, err := tx.Exec(ctx, "SET LOCAL jit = off"); err != nil {
 			return false, ErrUnavailable

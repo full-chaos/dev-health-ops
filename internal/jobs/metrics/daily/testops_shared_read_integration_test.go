@@ -138,7 +138,10 @@ func TestTestopsTestAndRiskReadCaseResultsOnceAgainstRealClickHouse(t *testing.T
 	// test_suite_results: today's run set takes the kept suites (the suite
 	// read's newest-attempt rule, CHAOS-13926), whose inner selects add 42 of
 	// these rows; with that set back on every suite row the pass reads 64.
-	const wantCaseReadRows = 106
+	// The retired-slot rule (CHAOS-14259) adds 46: one retired-slot select in
+	// the kept suites and one in each own-suite set (today, history), each
+	// with its window run-set select.
+	const wantCaseReadRows = 152
 	if firstPass.readRows != wantCaseReadRows {
 		t.Errorf("one partition pass read %d rows through test_case_results queries, want %d",
 			firstPass.readRows, wantCaseReadRows)

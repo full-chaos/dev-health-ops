@@ -353,10 +353,10 @@ func retiredMetricOf(t *testing.T, stack attemptsStack, org string, day time.Tim
 		distinct: m.DistinctCases, recurrent: m.RecurrentFailedNames, failedNames: m.DistinctFailedNames, flakeUnknown: m.FlakeUnknown}
 }
 
-func retiredRows(t *testing.T, stack attemptsStack, org, slot string) (live, retracted uint64) {
+func retiredRows(t *testing.T, stack attemptsStack, org, runID, slot string) (live, retracted uint64) {
 	t.Helper()
 	if err := stack.conn.QueryRow(stack.ctx, `SELECT countIf(retracted = 0), countIf(retracted = 1) FROM test_suite_results FINAL
-WHERE org_id = ? AND report_slot = ?`, org, slot).Scan(&live, &retracted); err != nil {
+WHERE org_id = ? AND run_id = ? AND report_slot = ?`, org, runID, slot).Scan(&live, &retracted); err != nil {
 		t.Fatal(err)
 	}
 	return live, retracted
@@ -387,7 +387,7 @@ func retiredTwoAttemptRun(t *testing.T, stack attemptsStack, org, runID string, 
 	stack.pass(t, org, runID, day.Add(10*time.Hour), attemptsRunState{attempt: 1, started: stamp("10:01:00"), updated: stamp("10:30:00"), artifacts: attempt1})
 	stack.pass(t, org, runID, day.Add(11*time.Hour), attemptsRunState{created: stamp("10:01:00"), attempt: 2, started: stamp("11:10:00"),
 		updated: stamp("11:40:00"), artifacts: append(slices.Clone(attempt1), attempt2...)})
-	if live, retracted := retiredRows(t, stack, org, "total-b"); live != 2 || retracted != 2 {
+	if live, retracted := retiredRows(t, stack, org, runID, "total-b"); live != 2 || retracted != 2 {
 		t.Fatalf("run %s slot total-b: %d live (attempt 1) and %d retracted (attempt 2) rows, want 2 and 2", runID, live, retracted)
 	}
 }
@@ -417,7 +417,7 @@ func TestTestopsRetiredSlotKeepCells(t *testing.T) {
 		}
 		stack.pass(t, org, retiredRunID, retiredDay().Add(12*time.Hour), attemptsRunState{attempt: 1, started: "2026-07-22T10:01:00Z",
 			updated: "2026-07-22T12:40:00Z", artifacts: withoutLegB})
-		if live, retracted := retiredRows(t, stack, org, "total-b"); live != 2 || retracted != 0 {
+		if live, retracted := retiredRows(t, stack, org, retiredRunID, "total-b"); live != 2 || retracted != 0 {
 			t.Fatalf("revived total-b: %d live, %d retracted rows; want 2 and 0", live, retracted)
 		}
 		if got := retiredMetricOf(t, stack, org, retiredDay()); got.total != 8 || got.suites != 8 {
@@ -445,7 +445,7 @@ func TestTestopsRetiredSlotKeepCells(t *testing.T) {
 		if err := stack.conn.QueryRow(ctx, `SELECT uniqExact(run_attempt) FROM test_suite_results FINAL WHERE org_id = ? AND report_slot = 'leg-a-left'`, org).Scan(&attempts); err != nil {
 			t.Fatal(err)
 		}
-		if live, retracted := retiredRows(t, stack, org, "total-b"); attempts != 2 || live != 0 || retracted != 2 {
+		if live, retracted := retiredRows(t, stack, org, retiredRunID, "total-b"); attempts != 2 || live != 0 || retracted != 2 {
 			t.Fatalf("leg-a-left attempts %d, total-b %d live / %d retracted; want 2 attempts and total-b retired", attempts, live, retracted)
 		}
 	})
@@ -561,8 +561,8 @@ VALUES (?, ?, ?, ?, 'tie', ?, ?, 0, 0, 0, 0, ?, ?, 'slot', 1, ?)`, org, repoID, 
 		stack.pass(t, staleOff, retiredRunID, retiredDay().Add(11*time.Hour), offState(true, both))
 		served := map[string]matrixTotalsServed{}
 		for _, org := range []string{controlOff, staleOff} {
-			if err := stack.conn.Exec(ctx, `INSERT INTO repos (id, repo, created_at, settings, last_synced, org_id) VALUES (?, 'acme/api', ?, '{"default_branch":"main"}', ?, ?)`,
-				stack.repoID(t, org), retiredDay(), retiredDay().Add(23*time.Hour), org); err != nil {
+			if err := stack.conn.Exec(ctx, `INSERT INTO repos (id, repo, created_at, settings, last_synced, org_id) VALUES (?, 'acme/api', ?, ?, ?, ?)`,
+				stack.repoID(t, org), retiredDay(), `{"default_branch":"main"}`, retiredDay().Add(23*time.Hour), org); err != nil {
 				t.Fatal(err)
 			}
 			if got := retiredMetricOf(t, stack, org, retiredDay()); !got.flakeUnknown || got.total != 6 {
@@ -620,8 +620,8 @@ func TestTestopsRetiredSlotReadsStayInTheirScans(t *testing.T) {
 	stack.pass(t, org, retiredRunID, retiredDay().Add(11*time.Hour), retiredState(true, both))
 	retiredTwoAttemptRun(t, stack, org, "43600014261", retiredDay(), true)
 	repoID := stack.repoID(t, org)
-	if err := stack.conn.Exec(ctx, `INSERT INTO repos (id, repo, created_at, settings, last_synced, org_id) VALUES (?, 'acme/api', ?, '{"default_branch":"main"}', ?, ?)`,
-		repoID, retiredDay(), retiredDay().Add(23*time.Hour), org); err != nil {
+	if err := stack.conn.Exec(ctx, `INSERT INTO repos (id, repo, created_at, settings, last_synced, org_id) VALUES (?, 'acme/api', ?, ?, ?, ?)`,
+		repoID, retiredDay(), `{"default_branch":"main"}`, retiredDay().Add(23*time.Hour), org); err != nil {
 		t.Fatal(err)
 	}
 	rowsOf := func(table string) uint64 {

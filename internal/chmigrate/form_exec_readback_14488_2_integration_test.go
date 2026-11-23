@@ -450,7 +450,7 @@ func TestReadback144882FormExecutesAtTheChainHead(t *testing.T) {
 	differs("stmt3 wide window", mutate("stmt3", "2026-11-09 00:00:00", "2026-11-08 00:00:00"), want["stmt3"])
 	differs("stmt2 retry rule", mutate("stmt2", "retry_count = 0 AND ", ""), want["stmt2"])
 	differs("stmt2 queued_at rule", mutate("stmt2", "OR (queued_at IS NOT NULL AND started_at >= queued_at)", ""), want["stmt2"])
-	differs("stmt2 key without team", mutate("stmt2", "GROUP BY repo_id, day, team, service_id", "GROUP BY repo_id, day"), want["stmt2"])
+	differs("stmt2 key without team", mutate("stmt2", "ifNull(team_id, '') AS team", "'' AS team"), want["stmt2"])
 
 	// PASS-path cells: query_log read_rows = T + 2P + 1 (one table scan + gate system.parts twice + system.one).
 	if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {

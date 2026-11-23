@@ -265,6 +265,18 @@ func formExecDaily14190Pieces(t *testing.T, text string) []formExecDaily14190Pie
 	return pieces
 }
 
+// formExecDaily14190Banned names what a read FORM must not hold: a SET statement (SET at the start of a line or after
+// ";", any case) and a write or plan keyword as a whole word.
+func formExecDaily14190Banned(sqlText string) []string {
+	setStatement := regexp.MustCompile(`(?im)(^|;)\s*SET\s`)
+	keyword := regexp.MustCompile(`(?i)\b(INSERT|UPDATE|DELETE|EXPLAIN|COPY|TRUNCATE|ALTER|CREATE|DROP)\b`)
+	var found []string
+	if setStatement.MatchString(sqlText) {
+		found = append(found, "SET statement")
+	}
+	return append(found, keyword.FindAllString(sqlText, -1)...)
+}
+
 type formExecDaily14190Result struct {
 	columns []string
 	rows    [][]string
@@ -402,11 +414,21 @@ func TestFormExecDaily14190ReadsTheBackfillDailyRuns(t *testing.T) {
 		if strings.Contains(pieces[index].text, "{{") {
 			t.Errorf("%s: a placeholder is left", piece.id)
 		}
-		upper := strings.ToUpper(formExecDaily14190SQLLines(pieces[index].text))
-		for _, banned := range []string{"SET ", "INSERT ", "UPDATE ", "DELETE ", "EXPLAIN", "COPY "} {
-			if strings.Contains(upper, banned) {
-				t.Errorf("%s holds %q", piece.id, banned)
-			}
+		if found := formExecDaily14190Banned(formExecDaily14190SQLLines(pieces[index].text)); len(found) > 0 {
+			t.Errorf("%s holds %v", piece.id, found)
+		}
+	}
+	// The ban can fail: a real SET statement (at the start of a line or after ";", any case) and a write are caught; a
+	// name that only contains the letters (key_set, OFFSET) is not.
+	for text, want := range map[string]bool{
+		"SET statement_timeout = 1;\nSELECT 1":                      true,
+		"SELECT 1; set work_mem = '1MB'":                            true,
+		"  Set LOCAL lock_timeout = 0":                              true,
+		"UPDATE t SET a = 1":                                        true,
+		"WITH key_set AS (SELECT 1) SELECT * FROM key_set OFFSET 0": false,
+	} {
+		if got := len(formExecDaily14190Banned(text)) > 0; got != want {
+			t.Errorf("ban on %q = %v, want %v", text, got, want)
 		}
 	}
 	if got := strings.Join(ids, ","); got != "BEGIN,G0,C0,S0,D1,D2,D3,D4-2,ROLLBACK" {

@@ -548,3 +548,42 @@ func TestRunChunkBudgetEdge(t *testing.T) {
 		}
 	})
 }
+
+// On merge_group every "go test" line a leg prints shows -count=1 (the merge-group census reads them), the chunk line too.
+func TestSplitJobGoTestLinesShowCountOneOnMergeGroup(t *testing.T) {
+	t.Parallel()
+	names := syntheticNames("Fresh", 3000)
+	var lines strings.Builder
+	for _, n := range names {
+		fmt.Fprintf(&lines, "%s\tinternal/fake\t%s\n", chunkCellPkg, n)
+	}
+	linesFile := filepath.Join(t.TempDir(), "lines")
+	if err := os.WriteFile(linesFile, []byte(lines.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := "set -euo pipefail\n" +
+		chunkCellFunctions(t, []string{"die", "go_run_name_ok", "byte_len", "cigates_go_test_timeout", "test_split_job_start", "test_split_jobs_finish"}, chunkCellOptional) +
+		chunkCellStubs + `
+ROOT="${CELL_ROOT}"
+MERGE_GROUP_FRESH=1
+log="${W}/log"; json="${W}/json"; legjson="${W}/legjson"
+: > "${log}"; : > "${json}"; : > "${legjson}"
+SPLIT_JOB_PIDS=(); SPLIT_JOB_LABELS=(); SPLIT_JOB_FILES=()
+test_split_job_start . "${CELL_PKG}" "$(cat "${CELL_LINES}")" "" > "${W}/start.out"
+test_split_jobs_finish 1 3 > /dev/null
+`
+	r := runChunkCell(t, script, "CELL_LINES="+linesFile)
+	headers := 0
+	for _, l := range strings.Split(readCellFile(t, filepath.Join(r.work, "start.out")), "\n") {
+		if !strings.HasPrefix(l, "go test") {
+			continue
+		}
+		headers++
+		if !strings.Contains(l, "-count=1") {
+			t.Errorf("on merge_group a go test line does not show -count=1: %s", l)
+		}
+	}
+	if headers < 2 {
+		t.Errorf("want the part line and the chunk line, got %d go test line(s)", headers)
+	}
+}

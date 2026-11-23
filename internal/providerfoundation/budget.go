@@ -298,6 +298,7 @@ type Metrics struct {
 	chunkContinuation              map[string]uint64
 	rateLimitEpisodeRestart        map[string]uint64
 	unitDeferred                   map[string]uint64
+	lookupUnavailable              map[string]uint64
 	gitlabTestsWindowStartFallback map[string]uint64
 	// jiraDevStatus counts CHAOS-4757's dev-status (GitHub-for-Jira panel)
 	// fetches, by outcome -- see RecordJiraDevStatus.
@@ -366,6 +367,7 @@ func NewMetrics() *Metrics {
 		rateLimitEpisodeRestart:        map[string]uint64{},
 		gitlabTestsWindowStartFallback: map[string]uint64{},
 		unitDeferred:                   map[string]uint64{},
+		lookupUnavailable:              map[string]uint64{},
 		jiraDevStatus:                  map[string]uint64{},
 		gitlabClosingMR:                map[string]uint64{},
 		workItemDerivedLeftToDaily:     map[string]uint64{},
@@ -1118,6 +1120,32 @@ func MetricUnitDeferralReasonLabel(value string) string {
 		return "other"
 	}
 	return lowered
+}
+
+var metricLookupUnavailableReasonVocabulary = map[string]struct{}{
+	"forbidden": {}, "bad_request": {}, "other_4xx": {},
+}
+
+// MetricLookupUnavailableReasonLabel bounds the reason label by allowlist.
+func MetricLookupUnavailableReasonLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricLookupUnavailableReasonVocabulary[lowered]; !known {
+		return "other_4xx"
+	}
+	return lowered
+}
+
+// RecordLookupUnavailable counts one core lookup whose 4xx answer was served as
+// an empty source without being a documented absence: a permission 403
+// (forbidden), a 400 or 422 (bad_request), or another 4xx (other_4xx).
+func (m *Metrics) RecordLookupUnavailable(provider, dataset, reason string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lookupUnavailable[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
+		":"+MetricLookupUnavailableReasonLabel(reason)]++
 }
 
 // RecordUnitDeferred counts one provider-unit attempt that ended in an
@@ -2081,6 +2109,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_provider_gitlab_tests_window_start_fallback_total",
 		"GitLab tests/cicd walks whose window start used our clock because the project read had no usable Date header, by bounded provider and dataset (CHAOS-14415).",
 		m.gitlabTestsWindowStartFallback,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetReasonCounter(
+		writer, "dev_health_provider_lookup_unavailable_total",
+		"Core lookups whose 4xx answer was served as an empty source without being a documented absence, by bounded provider, dataset, and reason (CHAOS-14552).",
+		"reason", m.lookupUnavailable,
 	); err != nil {
 		return err
 	}

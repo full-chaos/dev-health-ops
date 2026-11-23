@@ -473,6 +473,14 @@ func (e *ProviderError) ResponseBodySnippet() string {
 	return body
 }
 
+// AuthStepError wraps a ProviderError raised while the client prepared the
+// credential for a request. The request itself was never sent.
+type AuthStepError struct{ Err error }
+
+func (e *AuthStepError) Error() string { return e.Err.Error() }
+
+func (e *AuthStepError) Unwrap() error { return e.Err }
+
 func (e *ProviderError) Retryable() bool {
 	return e.Class == ErrorTransient || e.Class == ErrorRateLimited
 }

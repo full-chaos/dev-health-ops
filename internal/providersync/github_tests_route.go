@@ -1150,7 +1150,9 @@ func downloadGitHubTestsListedArtifact(
 ) (archive []byte, used int, notFound bool, err error) {
 	ctx, span := startGitHubTestsDownloadSpan(ctx)
 	rangeRead := false
-	defer func() { endGitHubTestsDownloadSpan(span, len(archive), listedSize, used, notFound, rangeRead, err) }()
+	defer func() {
+		endGitHubTestsDownloadSpan(ctx, span, len(archive), listedSize, used, notFound, rangeRead, err)
+	}()
 	ctx, wire := providerfoundation.WithWireCount(ctx)
 	defer func() { used = wire.Requests() }()
 	path := root + "/actions/artifacts/" + url.PathEscape(artifactID) + "/zip"

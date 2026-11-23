@@ -47,6 +47,45 @@ docker exec ch clickhouse-client -q "SELECT name, value, changed FROM system.set
 docker cp "$work/query.sql" ch:/tmp/query.sql
 
 status=0
+# PRECHECK-S-14542-1.sql (sha12 2e95c7acef5b): its cost gate reads system.parts of the LOCAL table signoz_index_v3, so the
+# local table holds the fixture rows in both variants (the plain variant gets a second copy in a local table).
+# Rows in the ts_bucket_start range 1795414703..1795502903: all 19 fixture rows (T4 bucket START-1 s is 1795415400, T5 bucket END+1 s is 1795501800).
+run_precheck() {
+  local variant=$1
+  [ "$(sha256sum "$here/precheck_s.sql" | cut -c1-12)" = 2e95c7acef5b ] || { echo "FAIL ${variant}: precheck_s.sql sha12 differs"; status=1; return; }
+  if [ "$variant" = plain ]; then
+    docker cp "$here/ddl_local.sql" ch:/tmp/ddl_local.sql
+    docker exec ch clickhouse-client --queries-file /tmp/ddl_local.sql || { echo "FAIL ${variant}: local DDL errored"; status=1; return; }
+    sed -e "s/TABLE_NAME/signoz_traces.signoz_index_v3/" -e "s/__START_S__/${start_s}/g" "$here/rows.sql" > "$work/rows_local.sql"
+    docker cp "$work/rows_local.sql" ch:/tmp/rows_local.sql
+    docker exec ch clickhouse-client --queries-file /tmp/rows_local.sql || { echo "FAIL ${variant}: local insert errored"; status=1; return; }
+  fi
+  docker exec ch clickhouse-client -q 'SELECT count() FROM signoz_traces.signoz_index_v3'
+  docker cp "$here/precheck_s.sql" ch:/tmp/precheck_s.sql
+  # pass case
+  local got
+  got=$(docker exec ch clickhouse-client --format TSV --queries-file /tmp/precheck_s.sql 2>"$work/pc-err-${variant}.txt") || { echo "FAIL ${variant}: PRECHECK-S errored:"; cat "$work/pc-err-${variant}.txt"; status=1; return; }
+  if [ "$got" = 19 ]; then echo "PASS ${variant}: PRECHECK-S s_spans = 19 (all fixture rows in the range)"; else echo "FAIL ${variant}: PRECHECK-S s_spans '${got}', want 19"; status=1; fi
+  # gate fires at a low cap (the cap literal 20000000 -> 10, local rows 19)
+  sed -e 's/20000000/10/' "$here/precheck_s.sql" > "$work/precheck_cap.sql"
+  docker cp "$work/precheck_cap.sql" ch:/tmp/precheck_cap.sql
+  if docker exec ch clickhouse-client --queries-file /tmp/precheck_cap.sql >/dev/null 2>"$work/pc-cap-${variant}.txt"; then
+    echo "FAIL ${variant}: low-cap PRECHECK-S did not fire"; status=1
+  elif grep -q 'Code: 395' "$work/pc-cap-${variant}.txt" && grep -q 'STOP-COST-GATE' "$work/pc-cap-${variant}.txt"; then
+    echo "PASS ${variant}: low cap fires: $(head -c 200 "$work/pc-cap-${variant}.txt" | head -1)"
+  else
+    echo "FAIL ${variant}: low-cap error is not code 395 STOP-COST-GATE:"; head -3 "$work/pc-cap-${variant}.txt"; status=1
+  fi
+  # gate fires with 0 rows (empty local table)
+  docker exec ch clickhouse-client -q 'TRUNCATE TABLE signoz_traces.signoz_index_v3'
+  if docker exec ch clickhouse-client --queries-file /tmp/precheck_s.sql >/dev/null 2>"$work/pc-empty-${variant}.txt"; then
+    echo "FAIL ${variant}: empty-table PRECHECK-S did not fire"; status=1
+  elif grep -q 'Code: 395' "$work/pc-empty-${variant}.txt" && grep -q 'STOP-COST-GATE' "$work/pc-empty-${variant}.txt"; then
+    echo "PASS ${variant}: empty table fires: $(head -c 200 "$work/pc-empty-${variant}.txt" | head -1)"
+  else
+    echo "FAIL ${variant}: empty-table error is not code 395 STOP-COST-GATE:"; head -3 "$work/pc-empty-${variant}.txt"; status=1
+  fi
+}
 run_variant() {
   local variant=$1 target=$2; shift 2
   echo "=== variant ${variant}"
@@ -95,6 +134,7 @@ run_variant() {
       echo "FAIL ${variant}: sum ${span} ${label} = '${got}', want ${want}"; status=1
     fi
   done < "$here/expected_sums.tsv"
+  run_precheck "$variant"
 }
 run_variant plain signoz_traces.distributed_signoz_index_v3 ddl_plain.sql
 run_variant distributed signoz_traces.signoz_index_v3 ddl_local.sql ddl_distributed.sql

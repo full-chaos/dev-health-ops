@@ -57,7 +57,75 @@ func storedRows(batch CompleteRouteBatch) int {
 	return total
 }
 
+func gitHubDeploymentsSite(name, path string, failAt int) lookupRoute {
+	return lookupRoute{
+		name: name, suffix: path, failAt: failAt,
+		claim: func() Claim { return nativeTestClaim("github", "deployments") },
+		collect: func(t *testing.T, status int, metrics *providerfoundation.Metrics, tweak func(*providerfoundation.HTTPClient)) (CompleteRouteBatch, error) {
+			doer := statusLookupDoer{inner: &gitHubDeploymentsDoer{}, path: path, status: status}
+			client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
+			client.Metrics = metrics
+			if tweak != nil {
+				tweak(client)
+			}
+			return (GitHubDeploymentsRouteHandler{}).Collect(context.Background(), nativeTestClaim("github", "deployments"),
+				providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
+		},
+	}
+}
+
+func gitHubSecuritySite(name, path string, failAt int) lookupRoute {
+	return lookupRoute{
+		name: name, suffix: path, failAt: failAt,
+		claim: func() Claim { return nativeTestClaim("github", "security") },
+		collect: func(t *testing.T, status int, metrics *providerfoundation.Metrics, tweak func(*providerfoundation.HTTPClient)) (CompleteRouteBatch, error) {
+			doer := statusLookupDoer{inner: &gitHubSecurityDoer{}, path: path, status: status}
+			client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
+			client.Metrics = metrics
+			if tweak != nil {
+				tweak(client)
+			}
+			return (GitHubSecurityRouteHandler{}).Collect(context.Background(), nativeTestClaim("github", "security"),
+				providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
+		},
+	}
+}
+
+func gitLabReleasesSite() lookupRoute {
+	return lookupRoute{
+		name: "gitlab releases", suffix: "/releases", failAt: 2,
+		claim: func() Claim { return nativeTestClaim("gitlab", "deployments") },
+		collect: func(t *testing.T, status int, metrics *providerfoundation.Metrics, tweak func(*providerfoundation.HTTPClient)) (CompleteRouteBatch, error) {
+			releases := gitLabDeploymentsResponse{body: `[]`}
+			if status != 0 {
+				releases = gitLabDeploymentsResponse{status: status, body: `{"message":"refused"}`}
+			}
+			doer := &gitLabDeploymentsDoer{t: t, responses: []gitLabDeploymentsResponse{
+				{body: gitLabRepositoryFixture}, releases,
+				{body: `[{"id":501,"iid":7,"status":"success","environment":{"name":"production"},"created_at":"2026-07-22T10:00:00Z","sha":"abc"}]`},
+				{body: `[]`},
+			}}
+			client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
+			client.Metrics = metrics
+			if tweak != nil {
+				tweak(client)
+			}
+			return (GitLabDeploymentsRouteHandler{}).Collect(context.Background(), nativeTestClaim("gitlab", "deployments"),
+				providerfoundation.Credential{}, client, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC))
+		},
+	}
+}
+
 func lookupRoutes() []lookupRoute {
+	return append(coreLookupRoutes(),
+		gitHubDeploymentsSite("github releases", "/repos/acme/api/releases", 2),
+		gitHubSecuritySite("github code scanning", "/repos/acme/api/code-scanning/alerts", 3),
+		gitHubSecuritySite("github advisory", "/repos/acme/api/security-advisories", 4),
+		gitLabReleasesSite(),
+	)
+}
+
+func coreLookupRoutes() []lookupRoute {
 	return []lookupRoute{
 		{
 			name: "github deployments", suffix: "/repos/acme/api/deployments", failAt: 3,
@@ -380,6 +448,9 @@ func TestClassifyLookupFailureByClass(t *testing.T) {
 		"403 text in another field":      {&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 403, Body: `{"message":"x","note":"Feature X is disabled."}`}, lookupRecorded, "forbidden"},
 		"403 Message key":                {&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 403, Body: `{"message":"x","Message":"Feature X is disabled."}`}, lookupRecorded, "forbidden"},
 		"403 duplicate key":              {&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 403, Body: `{"message":"Feature X is disabled.","message":"y"}`}, lookupRecorded, "forbidden"},
+		"403 truncated body":             {&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 403, Body: `{"message":"Feature X is disabled."`}, lookupRecorded, "forbidden"},
+		"403 message plus Message":       {&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 403, Body: `{"message":"Feature X is disabled.","Message":"other"}`}, lookupRecorded, "forbidden"},
+		"403 message plus MESSAGE":       {&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 403, Body: `{"MESSAGE":"other","message":"Feature X is disabled."}`}, lookupRecorded, "forbidden"},
 		"403 non-JSON":                   {&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 403, Body: "Feature X is disabled."}, lookupRecorded, "forbidden"},
 		"404 joined with a budget error": {errors.Join(&providerfoundation.ProviderError{Class: providerfoundation.ErrorNotFound, StatusCode: 404}, providerfoundation.ErrBudgetUnavailable), lookupFails, ""},
 		"403 wrapped and joined":         {fmt.Errorf("lookup: %w", errors.Join(&providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: 403}, errors.New("release failed"))), lookupFails, ""},

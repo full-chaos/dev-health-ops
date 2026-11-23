@@ -525,6 +525,15 @@ func (store *PostgresStore) redriveOneStrandedFinalize(
 		_ = tx.Rollback(rollbackCtx)
 	}()
 
+	if outboxRecentSince != nil {
+		var held bool
+		if err := tx.QueryRow(ctx, staleFinalizeOutboxRecheckSQL, runID, *outboxRecentSince).Scan(&held); err != nil {
+			return false, ErrUnavailable
+		}
+		if held {
+			return false, nil
+		}
+	}
 	var run Run
 	var targetDay, finalizationStatus string
 	var leaseExpiresAt *time.Time
@@ -566,15 +575,6 @@ FOR UPDATE OF run`, runID).Scan(
 	eligible := finalizationStatus == "pending" || (allowPriorAttempt && priorAttempt)
 	if !eligible {
 		return false, nil
-	}
-	if outboxRecentSince != nil {
-		var held bool
-		if err := tx.QueryRow(ctx, staleFinalizeOutboxRecheckSQL, run.ID, *outboxRecentSince).Scan(&held); err != nil {
-			return false, ErrUnavailable
-		}
-		if held {
-			return false, nil
-		}
 	}
 	if run.TargetDay, err = time.Parse(dailyTargetDayLayout, targetDay); err != nil {
 		return false, ErrInvalidState

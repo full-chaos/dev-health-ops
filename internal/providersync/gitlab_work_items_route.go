@@ -129,6 +129,35 @@ func gitLabFetchEpicsFromEnv() *bool {
 	return pythonEnvFlag(gitLabFetchEpicsEnv, raw, ok)
 }
 
+// The worker environment flags Python's GitLab provider reads for merge
+// requests, notes, links, and milestones (providers/gitlab/provider.py:110-113).
+const (
+	gitLabIncludeMRsEnv      = "GITLAB_INCLUDE_MRS"
+	gitLabFetchNotesEnv      = "GITLAB_FETCH_NOTES"
+	gitLabFetchLinksEnv      = "GITLAB_FETCH_LINKS"
+	gitLabFetchMilestonesEnv = "GITLAB_FETCH_MILESTONES"
+)
+
+func gitLabIncludeMRsFromEnv() *bool {
+	raw, ok := os.LookupEnv(gitLabIncludeMRsEnv)
+	return pythonEnvFlag(gitLabIncludeMRsEnv, raw, ok)
+}
+
+func gitLabFetchNotesFromEnv() *bool {
+	raw, ok := os.LookupEnv(gitLabFetchNotesEnv)
+	return pythonEnvFlag(gitLabFetchNotesEnv, raw, ok)
+}
+
+func gitLabFetchLinksFromEnv() *bool {
+	raw, ok := os.LookupEnv(gitLabFetchLinksEnv)
+	return pythonEnvFlag(gitLabFetchLinksEnv, raw, ok)
+}
+
+func gitLabFetchMilestonesFromEnv() *bool {
+	raw, ok := os.LookupEnv(gitLabFetchMilestonesEnv)
+	return pythonEnvFlag(gitLabFetchMilestonesEnv, raw, ok)
+}
+
 // pythonEnvFlag is Python's env_flag (providers/utils.py) on a value the
 // caller read: 1/true/yes/on is true, 0/false/no/off is false, trimmed and
 // case-insensitive; unset or any other value is nil, so the route keeps its

@@ -3,6 +3,7 @@
 package compoundingrisk
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -68,5 +69,39 @@ func TestRealClickHouse_ResolvedSetOf50000IdsIsServedWhole(t *testing.T) {
 	}
 	if picked == nil || picked.Format(dateLayout) != day.Format(dateLayout) {
 		t.Errorf("latestDay %v; want %s", picked, day.Format(dateLayout))
+	}
+}
+
+// CHAOS-14521: stored team rows for 501 named teams on real ClickHouse. "rows":
+// every team has a stored row on d; "day": only tm-500, the 501st named team,
+// has a stored row on d (every other row is on the day before). Both pick the
+// day and serve tm-500's stored row on d.
+func TestRealClickHouse_FiveHundredOneNamedTeamsStoredRowsAnswerTheLastTeamsRowAndDay(t *testing.T) {
+	_, conn, client := startStore(t)
+	// Each answer reads ownership once per named team, more than once.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	t.Cleanup(cancel)
+	d := time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name     string
+		lastOnly bool
+		wantRows int
+	}{
+		{"rows", false, maxRows + 1},
+		{"day", true, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			world, teamIDs := namedTeamsWorld(maxRows+1, d, c.lastOnly)
+			uuidOf, _ := sweepUUIDs(world)
+			sweepSeed(t, ctx, conn, world, uuidOf)
+			got, err := Resolve(ctx, client, sweepOrg, namedTeamsFilter(teamIDs, nil), sweepNow())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if last := servedTeamRow(got, "tm-500"); len(got.Rows) != c.wantRows || last != lastNamedTeamStoredRow {
+				t.Errorf("rows=%d tm-500 row %s; want %d rows and tm-500 row %s (its stored row on the picked day)",
+					len(got.Rows), last, c.wantRows, lastNamedTeamStoredRow)
+			}
+		})
 	}
 }

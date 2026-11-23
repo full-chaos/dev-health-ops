@@ -72,6 +72,7 @@ type flakyPageDoer struct {
 	mu     sync.Mutex
 	budget int
 	left   map[int]int
+	status map[int]int // page -> 5xx status; default 503
 }
 
 func (doer *flakyPageDoer) Do(request *http.Request) (*http.Response, error) {
@@ -82,7 +83,11 @@ func (doer *flakyPageDoer) Do(request *http.Request) (*http.Response, error) {
 		if flaky && remaining > 0 {
 			doer.left[index] = remaining - 1
 			doer.mu.Unlock()
-			return jsonResponse(request, http.StatusServiceUnavailable, strings.NewReader(`{}`)), nil
+			code := http.StatusServiceUnavailable
+			if override := doer.status[index]; override != 0 {
+				code = override
+			}
+			return jsonResponse(request, code, strings.NewReader(`{}`)), nil
 		}
 		doer.mu.Unlock()
 	}
@@ -109,6 +114,10 @@ type exhaustWalk struct {
 }
 
 func driveTransientPageWalk(t *testing.T, pages int, flakyPages ...int) exhaustWalk {
+	return driveTransientPageWalkStatus(t, pages, nil, flakyPages...)
+}
+
+func driveTransientPageWalkStatus(t *testing.T, pages int, status map[int]int, flakyPages ...int) exhaustWalk {
 	t.Helper()
 	now := time.Date(2026, 11, 23, 13, 0, 0, 0, time.UTC)
 	unit := providerUnit()
@@ -122,7 +131,7 @@ func driveTransientPageWalk(t *testing.T, pages int, flakyPages ...int) exhaustW
 	}
 	unit.SourceExternalID, unit.SourceName = "acme/api", "acme/api"
 	unit.Provider, unit.Dataset, unit.CostClass = "github", "cicd", capability.CostClass
-	doer := &flakyPageDoer{budget: exhaustReproHTTPTries, left: map[int]int{}}
+	doer := &flakyPageDoer{budget: exhaustReproHTTPTries, left: map[int]int{}, status: status}
 	for _, page := range flakyPages {
 		doer.left[page] = exhaustReproHTTPTries
 	}
@@ -230,12 +239,13 @@ func TestChunkedWalkSurvivesTwoTransientAttemptFailuresControl(t *testing.T) {
 	}
 }
 
-// RED (defect proof): five attempt-failing 503 pages, each 100 committed chunks
+// RED (defect proof): five attempt-failing 5xx pages (503 and 502 mixed, as on prod), each 100 committed chunks
 // after the last (more than the 64-chunk attempt bound, so continuations sit between), with continuations between. Every attempt committed chunks and
 // the checkpoint advanced; the healthy outcome is a finished unit. Today the 5th
 // ordinary failure ends it provider_unit_exhausted / provider_transient.
 func TestChunkedWalkWithCheckpointProgressDoesNotExhaustOnFiveSparseTransientFailures(t *testing.T) {
-	walk := driveTransientPageWalk(t, exhaustReproRedPages, 2, 100, 200, 300, 400)
+	walk := driveTransientPageWalkStatus(t, exhaustReproRedPages,
+		map[int]int{100: http.StatusBadGateway, 300: http.StatusBadGateway}, 2, 100, 200, 300, 400)
 	if len(walk.accounting) != 0 {
 		t.Fatalf("attempts arithmetic: %v", walk.accounting)
 	}

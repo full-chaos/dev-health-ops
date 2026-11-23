@@ -96,6 +96,14 @@ func runLegs(t *testing.T, mergeGroup bool) []legCalls {
 	return out
 }
 
+func tailLines(s string, n int) string {
+	l := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(l) > n {
+		l = l[len(l)-n:]
+	}
+	return strings.Join(l, "\n")
+}
+
 func goTestHeaders(stdout string) []string {
 	var h []string
 	for _, l := range strings.Split(stdout, "\n") {
@@ -111,7 +119,7 @@ func TestOnMergeGroupEveryGoTestOfTheTestAndRaceLegsCarriesCountOne(t *testing.T
 	seen := map[string]bool{}
 	for _, l := range runLegs(t, true) {
 		if l.run.Err != nil {
-			t.Errorf("ci-leg %s: %v\n%s", l.leg, l.run.Err, l.run.Stderr)
+			t.Errorf("ci-leg %s: %v\nstdout tail:\n%s\nstderr:\n%s", l.leg, l.run.Err, tailLines(l.run.Stdout, 40), l.run.Stderr)
 			continue
 		}
 		if len(l.calls) == 0 {
@@ -162,7 +170,7 @@ func TestOnAPullRequestTheLegsKeepTheirArgvAndTheirLogLines(t *testing.T) {
 	t.Parallel()
 	for _, l := range runLegs(t, false) {
 		if l.run.Err != nil {
-			t.Errorf("ci-leg %s: %v\n%s", l.leg, l.run.Err, l.run.Stderr)
+			t.Errorf("ci-leg %s: %v\nstdout tail:\n%s\nstderr:\n%s", l.leg, l.run.Err, tailLines(l.run.Stdout, 40), l.run.Stderr)
 			continue
 		}
 		for _, c := range l.calls {

@@ -4,10 +4,12 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 : "${CH_IMAGE:?CH_IMAGE is required}"
+# FORM-14553-2 N = 3 fill: START 2026-11-24T00:00Z, END = START + 3 d. Rows have 15 d TTL from the row time (last day 2026-11-26).
+start_ms=1795478400000; end_ms=1795737600000
+start_s=$(( start_ms / 1000 )); end_s=$(( end_ms / 1000 ))
 now_s=$(date -u +%s)
-end_s=$(( now_s / 86400 * 86400 ))
-start_s=$(( end_s - 604800 ))
-start_ms=$(( start_s * 1000 )); end_ms=$(( end_s * 1000 ))
+if [ "$now_s" -ge $(( end_s + 1296000 - 86400 )) ]; then echo "FAIL: CI clock is past the row TTL"; exit 1; fi
+old_s=$(( now_s / 86400 * 86400 - 5 * 86400 ))
 echo "run window [${start_ms}, ${end_ms}) = $(date -u -d @${start_s} +%FT%TZ) .. $(date -u -d @${end_s} +%FT%TZ)"
 work=$(mktemp -d)
 status=0
@@ -16,15 +18,13 @@ sha12() { sha256sum "$1" | cut -c1-12; }
 body_sha12() {
   python3 -I -c 'import hashlib,sys; t=open(sys.argv[1],"rb").read(); i=t.index(b"\"body\": {"); print(hashlib.sha256(t[i:]).hexdigest()[:12])' "$1"
 }
-[ "$(sha12 "$here/form.json")" = 00d094c96d51 ] || { echo "FAIL: form.json sha12 $(sha12 "$here/form.json")"; exit 1; }
+[ "$(sha12 "$here/form.json")" = 3153f2f8023a ] || { echo "FAIL: form.json sha12 $(sha12 "$here/form.json")"; exit 1; }
 [ "$(sha12 "$here/pre_ttl.sql")" = fe48b20a1f06 ] || { echo "FAIL: pre_ttl.sql sha12 $(sha12 "$here/pre_ttl.sql")"; exit 1; }
 [ "$(body_sha12 "$here/form.json")" = 93c7fce802e9 ] || { echo "FAIL: template body sha12 differs"; exit 1; }
 fill() { sed -e "s/\${START_MS}/$1/g" -e "s/\${END_MS}/$2/g" "$here/form.json" > "$3"; }
-fill 1794873600000 1795478400000 "$work/example.json"
-[ "$(body_sha12 "$work/example.json")" = ddf93f450367 ] || { echo "FAIL: example fill body sha12 $(body_sha12 "$work/example.json")"; exit 1; }
-echo "PASS: form.json 00d094c96d51, template body 93c7fce802e9, example fill ddf93f450367, pre_ttl.sql fe48b20a1f06"
 fill "$start_ms" "$end_ms" "$work/real.json"
-echo "run fill body sha12 $(body_sha12 "$work/real.json")"
+[ "$(body_sha12 "$work/real.json")" = a6735dbdc17a ] || { echo "FAIL: N=3 fill body sha12 $(body_sha12 "$work/real.json")"; exit 1; }
+echo "PASS: form.json 3153f2f8023a, template body 93c7fce802e9, N=3 fill a6735dbdc17a, pre_ttl.sql fe48b20a1f06"
 python3 -I - "$work/real.json" "$work/real.sql" <<'PY'
 import json, sys
 body = json.load(open(sys.argv[1]))["body"]
@@ -51,7 +51,7 @@ for ddl in ddl_local.sql ddl_distributed.sql; do
   docker cp "$here/$ddl" "ch:/tmp/$ddl"
   ch --queries-file "/tmp/$ddl" || { echo "FAIL: DDL $ddl"; exit 1; }
 done
-python3 -I "$here/fixture.py" rows "$start_s" > "$work/rows.sql"
+python3 -I "$here/fixture.py" rows "$start_s" "$old_s" > "$work/rows.sql"
 docker cp "$work/rows.sql" ch:/tmp/rows.sql
 ch --queries-file /tmp/rows.sql || { echo "FAIL: insert"; exit 1; }
 echo "rows: local $(ch -q 'SELECT count() FROM signoz_traces.signoz_index_v3'), distributed $(ch -q 'SELECT count() FROM signoz_traces.distributed_signoz_index_v3')"
@@ -61,12 +61,12 @@ sys_rows=$(ch -q "SELECT (SELECT count() FROM system.parts) + (SELECT count() FR
 echo "system table rows (parts + clusters): ${sys_rows}"
 if [ "$sys_rows" -lt "$f" ]; then echo "PASS: system table rows ${sys_rows} < F ${f}"; else fail "system table rows ${sys_rows} >= F"; fi
 
-# PRE-TTL-14542-1.sql: WANT active_parts > 0 and oldest_days >= 8 (fixture: one part 9 days before END)
+# PRE-TTL-14542-1.sql: WANT active_parts > 0 and oldest_days >= 4 (fixture: one part 5 days before now; the -2 WANT is N + 1 = 4)
 docker cp "$here/pre_ttl.sql" ch:/tmp/pre_ttl.sql
 pre=$(ch --format TSV --queries-file /tmp/pre_ttl.sql) || { echo "FAIL: PRE-TTL errored"; exit 1; }
 echo "PRE-TTL out (active_parts, oldest_days): ${pre}"
 parts=$(echo "$pre" | cut -f1); days=$(echo "$pre" | cut -f2)
-if [ "$parts" -gt 0 ] && [ "$days" -ge 8 ]; then echo "PASS: PRE-TTL active_parts ${parts} > 0, oldest_days ${days} >= 8"; else fail "PRE-TTL active_parts ${parts}, oldest_days ${days}"; fi
+if [ "$parts" -gt 0 ] && [ "$days" -ge 4 ]; then echo "PASS: PRE-TTL active_parts ${parts} > 0, oldest_days ${days} >= 4"; else fail "PRE-TTL active_parts ${parts}, oldest_days ${days}"; fi
 
 run() {
   local label=$1 file=$2
@@ -79,6 +79,22 @@ run real "$work/real.sql"
 if [ "$rc" -ne 0 ]; then echo "FAIL real: errored:"; cat "$work/err-real.txt"; exit 1; fi
 echo "real: $(wc -l < "$work/out-real.tsv") rows (WANT < 2000)"
 if diff "$work/expected.tsv" "$work/out-real.tsv"; then echo "PASS real: output = expected ($(wc -l < "$work/expected.tsv") rows, derived from the fixture rule)"; else fail "real: output differs from expected"; fi
+# FORM-14553-2 WANT (P2-1): per route failed | rate_limited n >= 403_rate_limited n; on the first route the two extra 429 spans
+# (cancelled, failed | other) are in class 429 (3) and not in failed | rate_limited (3)
+awk -F'\t' '
+  $1=="outcome" && $3=="failed | rate_limited" {o[$2]=$4}
+  $1=="class" && $3=="403_rate_limited" {c403[$2]=$4}
+  $1=="class" && $3=="429" {c429[$2]=$4}
+  $1=="outcome" && $3=="cancelled | " {canc[$2]=$4}
+  $1=="outcome" && $3=="failed | other" {oth[$2]=$4}
+  END {
+    bad=0; nr=0
+    for (r in c403) { nr++; if (o[r] < c403[r]) { print "route " r ": failed|rate_limited " o[r] " < 403_rate_limited " c403[r]; bad=1 } }
+    r="/repos/{owner}/{repo}/releases"
+    if (c429[r] != 3 || o[r] != 3 || canc[r] != 2 || oth[r] != 1) { print "first route: class429=" c429[r] " fail_rl=" o[r] " cancelled=" canc[r] " failed_other=" oth[r]; bad=1 }
+    if (nr != 11) { print "routes with a 403_rate_limited row: " nr; bad=1 }
+    exit bad
+  }' "$work/out-real.tsv" && echo "PASS real: P2-1 WANT (failed|rate_limited >= 403_rate_limited on 11 routes; the 2 extra 429 spans in class 429 n 3, outside failed|rate_limited n 3; cancelled| 2, failed|other 1)" || fail "real: P2-1 WANT"
 if [ "$(wc -l < "$work/out-real.tsv")" -lt 2000 ]; then echo "PASS real: row count < 2000"; else fail "row count"; fi
 ch -q 'SYSTEM FLUSH LOGS'
 rr=$(ch -q "SELECT read_rows FROM system.query_log WHERE query_id = '${qid}' AND type = 'QueryFinish' AND is_initial_query")

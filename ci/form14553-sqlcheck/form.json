@@ -1,7 +1,7 @@
 {
- "form": "FORM-14553-1",
+ "form": "FORM-14553-2",
  "pin": "a7febdf500025f5ac628a1bdf34d0f817a90e323",
- "run_rule": "ONE call (REAL), only after the CI exec cell of FORM-14553-1.md is green and acp names this file's sha12. pm substitutes ONLY the tokens ${START_MS} and ${END_MS} (epoch ms integers), every occurrence: END_MS = 00:00:00Z of the call day, START_MS = END_MS - 604800000 (7 days exactly). start/end are JSON NUMBERS (no quotes): this file is a template and is valid JSON only after the fill. Before the call: PRE-TTL-14542-1.sql (text unchanged) with WANT oldest_days >= 8; a miss = STOP, no call. The statement gates itself (cost_gate on system.clusters + system.parts, STOP-COST-GATE). An error or a timeout = STOP, no re-run.",
+ "run_rule": "ONE call per part (section 4 of FORM-14553-2.md), only on an acp line that names this file's sha12. The body is byte-equal to FORM-14553-1.json (body sha256 prefix 93c7fce802e9, executed in CI job 137624736012). pm substitutes ONLY the tokens ${START_MS} and ${END_MS} (epoch ms integers), every occurrence. Window (acp ruling): START_MS = 1795478400000 (2026-11-24T00:00:00Z); END_MS = START_MS + N x 86400000 with N an integer, 3 <= N <= 7, named in the run line (N = 3: END_MS 1795737600000, 2026-11-27T00:00:00Z). If a go-sync-provider workers roll inside the window has a non-empty diff of the md section 4 file list, the window is split at that roll into two parts, each its own fill and call. start/end are JSON NUMBERS (no quotes): this file is a template and is valid JSON only after the fill. Before the call(s): PRE-TTL-14542-1.sql (text unchanged; its header WANT is NOT binding) with the binding WANT oldest_days >= N + 1. The call is at or after END + 35 min. The statement gates itself (cost_gate on system.clusters + system.parts, STOP-COST-GATE). An error or a timeout = STOP, no re-run.",
  "body": {
   "schemaVersion": "v1",
   "start": ${START_MS},

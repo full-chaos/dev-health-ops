@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # Synthetic SigNoz v3 rows for the FORM-14553-1 exec cell, and the expected output derived from the fixture rule
-# (FORM-14553-1.md section 3 class table), independent of the SQL. Usage: fixture.py rows|expected START_S
+# (FORM-14553-1.md section 3 class table), independent of the SQL. Usage: fixture.py rows START_S OLD_S | expected START_S
 import datetime
 import sys
 
 mode, START_S = sys.argv[1], int(sys.argv[2])
-END_S = START_S + 7 * 86400
+OLD_S = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+N = 3
+END_S = START_S + N * 86400
 SVC = "dev-health-go-sync-provider"
 REQ = "dev_health.provider.request"
 ROUTES = [
@@ -46,23 +48,25 @@ def at(day):
 
 for ri, route in enumerate(ROUTES):
     for ci, (st, oc, et, att, gw) in enumerate(CLASSES):
-        add(at((ri + ci) % 7), route, prov_of(route), oc, et, st, att, gw)
+        add(at((ri + ci) % N), route, prov_of(route), oc, et, st, att, gw)
     add(START_S * 1000 - 1, route, prov_of(route))   # excluded: START - 1 ms
     add(END_S * 1000, route, prov_of(route))         # excluded: END
+# optional (md -2 section 10): two 429 spans on the first route that are NOT a rate-limit loss
+add(at(0), ROUTES[0], "github", "cancelled", "", 429)
+add(at(1), ROUTES[0], "github", "failed", "other", 429)
 SHARED = "/repos/{owner}/{repo}"
 for d in range(3):
     add(at(d), SHARED)
-add(at(3), "unrouted")
-add(at(4), None, prov="gitlab")
+add(at(0), "unrouted")
+add(at(1), None, prov="gitlab")
 for _ in range(5):
-    add(at(5), None, prov="", name="dev_health.job.execute")
+    add(at(2), None, prov="", name="dev_health.job.execute")
 for i in range(5):
-    add(at(i), ROUTES[i], svc="other-svc")
+    add(at(i % N), ROUTES[i], svc="other-svc")
 FILLER = 5000
 for i in range(FILLER):
-    add((START_S + 5 + i * 100) * 1000, None, prov="", name="filler.op", svc="other-service")
-OLD = (END_S - 9 * 86400) * 1000
-add(OLD, None, prov="", name="old.op", svc="other-service")
+    add((START_S + 5 + i * 50) * 1000, None, prov="", name="filler.op", svc="other-service")
+add(OLD_S * 1000, None, prov="", name="old.op", svc="other-service")
 
 
 def utc(ms):
@@ -132,13 +136,18 @@ for s in spans:
         bump(("unrouted", s["prov"], s["route"] or ""), s)
 # the md WANT per route (section 10 item 1), checked against the model
 for route in ROUTES:
-    assert acc[("control", route, "all")] == [15, 1, 1, 1, 17], route
+    x = 2 if route == ROUTES[0] else 0
+    assert acc[("control", route, "all")] == [15 + x, 1, 1, 1, 17 + x], route
     want = {"401": 1, "403_rate_limited": 1, "403_permission": 1, "403_other_outcome": 1, "404": 1, "409": 1,
             "400_422": 2, "4xx_other": 1, "429": 1, "5xx": 1, "2xx_3xx": 2, "no_status": 2}
+    want["429"] += x
     for k, v in want.items():
         assert acc[("class", route, k)][0] == v, (route, k)
+    # md -2 WANT: failed | rate_limited >= 403_rate_limited; the two extra 429 spans are in class 429, not in failed | rate_limited
+    assert acc[("outcome", route, "failed | rate_limited")][0] == 3 >= acc[("class", route, "403_rate_limited")][0]
     assert acc[("class", route, "2xx_3xx")][1:4] == [1, 1, 1]
-assert len({k[2] for k in acc if k[0] == "day"}) == 7
+assert len({k[2] for k in acc if k[0] == "day"}) == N
+assert acc[("outcome", ROUTES[0], "cancelled | ")][0] == 2 and acc[("outcome", ROUTES[0], "failed | other")][0] == 1
 assert acc[("unrouted", "github", "unrouted")][0] == 1 and acc[("unrouted", "gitlab", "")][0] == 1
 for key in sorted(acc):
     print("\t".join(str(c) for c in key + tuple(acc[key])))

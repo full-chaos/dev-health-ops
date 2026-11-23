@@ -447,11 +447,11 @@ const (
 		WHERE outbox.job_kind = 'metrics.daily_finalize'
 			AND outbox.args #>> '{domain,id}' = run.id::text
 			AND outbox.created_at > $1
-	) OR run.id::text IN (
-		SELECT job.args #>> '{domain,id}' FROM %[1]s AS job
+	) OR EXISTS (
+		SELECT 1 FROM %[1]s AS job
 		WHERE job.kind = 'metrics.daily_finalize'
+			AND job.args @> jsonb_build_object('domain', jsonb_build_object('id', run.id::text))
 			AND job.created_at > $1
-			AND job.args #>> '{domain,id}' IS NOT NULL
 	))`
 	staleFinalizeNoPartitionsSQL = `NOT EXISTS (
 		SELECT 1 FROM public.daily_metrics_partitions AS partition

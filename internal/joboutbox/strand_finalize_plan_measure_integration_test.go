@@ -118,7 +118,7 @@ FROM generate_series(1, $2::int) AS n`, old, finalizeRows-strandRuns, otherOutbo
 INSERT INTO public.worker_job_outbox
     (id, dedupe_key, job_kind, contract_version, args, payload_hash, queue, priority, max_attempts, scheduled_at,
      status, attempt_count, next_attempt_at, river_job_id, delivered_at, created_at, updated_at)
-SELECT gen_random_uuid(), 'metrics.daily_finalize:' || job.args #>> '{domain,id}', 'metrics.daily_finalize', 1,
+SELECT gen_random_uuid(), 'metrics.daily_finalize:' || (job.args #>> '{domain,id}'), 'metrics.daily_finalize', 1,
        json_build_object('contract_version', 1, 'organization_id', $2::text, 'pad', $3::text,
            'domain', json_build_object('type', 'daily_metrics_run', 'id', job.args #>> '{domain,id}')),
        'sha256:' || repeat('0', 64), 'metrics', 2, 4, $1, 'delivered', 1, $1, job.id, $1, $1, $1

@@ -284,6 +284,7 @@ type Metrics struct {
 	unitFailed                     map[string]uint64
 	treeWalkNearCeiling            map[string]uint64
 	cursorCutListDropped           map[string]uint64
+	reportRetractionLimited        map[string]uint64
 	cicdPartialSuccess             map[string]uint64
 	duplicateTestCase              map[string]uint64
 	duplicateTestSuite             map[string]uint64
@@ -353,6 +354,7 @@ func NewMetrics() *Metrics {
 		unitFailed:                     map[string]uint64{},
 		treeWalkNearCeiling:            map[string]uint64{},
 		cursorCutListDropped:           map[string]uint64{},
+		reportRetractionLimited:        map[string]uint64{},
 		cicdPartialSuccess:             map[string]uint64{},
 		duplicateTestCase:              map[string]uint64{},
 		duplicateTestSuite:             map[string]uint64{},
@@ -1257,6 +1259,22 @@ func (m *Metrics) RecordCursorCutListDropped(list string) {
 	m.cursorCutListDropped[list]++
 }
 
+// RecordReportRetractionLimited counts ONE run whose dropped reports' retraction rows did not all fit the run's suite batch
+// (CHAOS-14259), by the fallback taken: "one_row_per_slot" retires each dropped report's slot with one minimal row at the
+// key of its first suite instead of one row per suite. The slots are retired in the same walk; an old reader after a rollback
+// then still counts the other suites of a stale slot. An unknown reason collapses to "other".
+func (m *Metrics) RecordReportRetractionLimited(provider, reason string) {
+	if m == nil {
+		return
+	}
+	if reason != "one_row_per_slot" {
+		reason = "other"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reportRetractionLimited[metricProvider(provider)+":"+reason]++
+}
+
 // RecordAllArtifactsUnreadable counts ONE provider unit that failed because
 // every cicd/tests artifact it observed was unreadable (CHAOS-4185). The
 // condition terminalizes on its first attempt (deterministicTerminalCategory
@@ -2085,6 +2103,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_github_tests_cursor_cut_list_dropped_total",
 		"Chunk cursor emissions that dropped a cut list to fit the cursor byte budget, by the dropped list (CHAOS-14315).",
 		"list", m.cursorCutListDropped,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderLabeledCounter(
+		writer, "dev_health_provider_report_retraction_limited_total",
+		"Runs whose dropped reports were retired with one minimal row per slot because one row per suite did not fit the run's suite batch, by bounded provider and fallback (CHAOS-14259).",
+		"reason", m.reportRetractionLimited,
 	); err != nil {
 		return err
 	}

@@ -654,8 +654,22 @@ func buildReconcilerRelay(
 	// domain pool is reused from the reconciler's existing dependencies rather
 	// than opened again. Without the queue grants every pass returns
 	// joboutbox.ErrNotAuthorized rather than a silent zero.
+	//
+	// The stale-finalize stage (CHAOS-14090) splits the same way: its survey
+	// reads river_job and runs on the QUEUE pool through the strand repair;
+	// its redrive locks the run and inserts the outbox row on the DOMAIN pool
+	// through the daily store below. Neither half may move: the domain role
+	// has no River access, and the queue role holds no outbox INSERT and no
+	// runs UPDATE (queue readiness asserts both are absent).
 	strandRepair, err := joboutbox.NewStrandRepair(queuePool, domainPool, riverSchema)
 	if err != nil {
+		return nil, err
+	}
+	staleFinalize, err := newStaleFinalizeRedriver(domainPool, registry)
+	if err != nil {
+		return nil, err
+	}
+	if err := strandRepair.SetStaleFinalizeRedriver(staleFinalize); err != nil {
 		return nil, err
 	}
 	// The relay ticks once a second because a handoff must reach River

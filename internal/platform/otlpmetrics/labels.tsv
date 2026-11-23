@@ -490,6 +490,14 @@ worker_outbox_reconciler_lease_lost_total		code: internal/joboutbox/loop.go
 worker_outbox_reconciler_post_repair_contract_rejections_recovered_total		code: internal/joboutbox/loop.go
 worker_outbox_reconciler_provider_unit_strands_rearmed_total		code: internal/joboutbox/loop.go
 worker_outbox_reconciler_retried_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_stale_finalize_deferred_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_stale_finalize_errors_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_stale_finalize_redriven_total		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_stale_finalize_standing_live		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_stale_finalize_standing_no_partitions		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_stale_finalize_standing_recent		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_stale_finalize_standing_strand_shape		code: internal/joboutbox/loop.go
+worker_outbox_reconciler_stale_finalize_standing_truncated		code: internal/joboutbox/loop.go
 worker_outbox_reconciler_step_failures_total		code: internal/joboutbox/loop.go
 worker_outbox_reconciler_strand_claims_live_total		code: internal/joboutbox/loop.go
 worker_outbox_reconciler_strand_claims_settled_total		code: internal/joboutbox/loop.go

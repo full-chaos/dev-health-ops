@@ -66,6 +66,13 @@ type StepResult struct {
 	// the strand repair ran no survey in this step because its idle backoff
 	// held the pass back.
 	StrandPassSkippedIdle bool
+	// StaleFinalizeRedriven, StaleFinalizeFailures, StaleFinalizeDeferred,
+	// StaleFinalizeLevels: see StrandRepairResult. Relayed unmodified so
+	// ReconcilerLoop can count them and log the failures.
+	StaleFinalizeRedriven []string
+	StaleFinalizeFailures []StaleFinalizeFailure
+	StaleFinalizeDeferred int
+	StaleFinalizeLevels   *StaleFinalizeLevels
 	// DeadDeliveries names every row this step moved to 'dead', with its
 	// bounded reason code, so a dropped delivery is never only a number in
 	// Dead.
@@ -273,6 +280,10 @@ func (relay *Relay) stepRecovery(ctx context.Context, now time.Time, limit int) 
 		result.UndeliveredBlocked = rearmed.UndeliveredBlocked
 		result.UndeliveredRaceLost = rearmed.UndeliveredRaceLost
 		result.StrandPassSkippedIdle = rearmed.PassSkippedIdle
+		result.StaleFinalizeRedriven = rearmed.StaleFinalizeRedriven
+		result.StaleFinalizeFailures = rearmed.StaleFinalizeFailures
+		result.StaleFinalizeDeferred = rearmed.StaleFinalizeDeferred
+		result.StaleFinalizeLevels = rearmed.StaleFinalizeLevels
 		if err != nil {
 			// Same naming as the terminal-delivery seam above; strandRepair's
 			// own error already names its shape (see stepShape), this adds

@@ -150,9 +150,13 @@ func nextStrandRepairIdleWait(current, ceiling time.Duration) time.Duration {
 // which no pass acts on. A standing blocked backlog is the normal state of a
 // stack with post-sync chains in flight, and treating it as work would keep
 // the repair at full cadence for as long as any chain existed.
+//
+// StaleFinalizeLevels is a level too: standing refusals of the stale-finalize
+// stage, which a pass reports whether or not anything changed.
 var strandPassLevelFields = map[string]bool{
-	"UndeliveredBlocked": true,
-	"PassSkippedIdle":    true,
+	"UndeliveredBlocked":  true,
+	"PassSkippedIdle":     true,
+	"StaleFinalizeLevels": true,
 }
 
 // strandPassSawNothing reports whether a pass found no candidate, no refusal

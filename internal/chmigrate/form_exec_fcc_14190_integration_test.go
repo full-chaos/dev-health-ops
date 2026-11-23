@@ -21,13 +21,15 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// DO NOT MERGE. This file executes the text of the prod read FORM-14190-GAP-1.sql byte for byte (the sha256 below is
+// DO NOT MERGE. This file executes the text of the prod read FORM-14190-GAP-2.sql byte for byte (the sha256 below is
 // the sha256 of the .sql file) on the head schema with a synthetic fixture, checks each WANT, checks each data
 // statement's pass-path read_rows against its work math, and fires each cost gate cap once (pm-guard FORM-TEMPLATE-3).
 const (
-	formExecFcc14190SHA256 = "b7d173093380e0f060aeaa786484fff1944034a650a7357ec911511666efdfd5"
-	formExecFcc14190SQL    = `-- FORM-14190-GAP-1 (lane-14190g, 2026-11-23, ops base a4906f2cd6eb). ClickHouse prod, SELECT only, CHAOS-14190 gap size.
--- Shape: pm-guard/FORM-TEMPLATE-3.md (sha12 6b9e73a3c45a). WANT text and work math: FORM-14190-GAP-1.md.
+	formExecFcc14190SHA256 = "68a7ae72297b9663b48d69446d70d4361c99d0d8df3b5bd6e89b327fd57f56ab"
+	formExecFcc14190SQL    = `-- FORM-14190-GAP-2 (lane-14190g, 2026-11-23, ops base a4906f2cd6eb). ClickHouse prod, SELECT only, CHAOS-14190 gap size.
+-- Shape: pm-guard/FORM-TEMPLATE-3.md (sha12 6b9e73a3c45a). WANT text and work math: FORM-14190-GAP-2.md.
+-- Replaces FORM-14190-GAP-1 (b7d173093380): its statements, from the first statement id line to the end, are kept
+-- byte for byte. ADDED: the last statement, a lower bound of lost CLOSES per provider (github, jira, linear).
 -- No SET, SETTINGS, EXPLAIN, FORMAT or write. Org prefix c6a38355 by startsWith on every FROM with org_id.
 -- Each data statement starts with WITH (SELECT throwIf(...)) AS cost_gate over exactly the tables it reads (system.parts
 -- and system.one only), and every WHERE of a query level that reads a table, and the outer WHERE, tests the gate.
@@ -40,6 +42,10 @@ const (
 -- Both tables are read FINAL (ReplacingMergeTree(last_synced)): the stored state after merges.
 -- lost_tie = the instant holds other transitions but not this one (the same-instant collapse signature).
 -- lost_bare = the instant holds no transition of the item at all (another cause, not the collapse).
+-- Lost close. A reopen row at X proves a close before it: the provider reopens only a closed item. The close must be
+-- a transition of the item in [the item's previous reopen, X] (both ends included) to done or canceled, or with
+-- to_status_raw = the reopen's from_status_raw. None there, and the item has a transition before X = a missing close.
+-- No transition before X = no_history (an item created closed, or a first-event tie): not counted as missing.
 
 -- S0 INFO cost inputs, metadata only (system.one + system.parts). WANT 2 rows, table_rows > 0 in each (a wrong table
 -- name gives a row with 0).
@@ -95,21 +101,104 @@ LEFT JOIN (
 ) AS t ON t.org_id = r.org_id AND t.work_item_id = r.work_item_id AND t.occurred_at = r.occurred_at
 WHERE cost_gate = 0
 GROUP BY r.provider ORDER BY provider;
+
+-- F2 lost closes per provider (github = ids 'gh:' and 'ghpr:', jira = 'jira:', linear = 'linear:'), one row each.
+-- closes_missing = the LOWER BOUND of lost closes. Control: closes_found > 0 in >= 1 row. Each reopen is one of
+-- closes_found, closes_missing, reopens_no_history. reopens_kept = F1 reopens_kept for github and linear.
+-- INFO for the read of 2026-11-19: reopens_pair_mismatch = kept by to_status_raw but no transition at X with the
+-- reopen's (from_status, to_status); reopens_kept_provider_empty = kept only by rows with provider ''
+-- (no Go writer name); reopens_kept_synced_after_1119 = kept by a row with last_synced >= 2026-11-19 09:40 UTC.
+-- rs[0] (i = 1) is the default tuple, occurred_at 1970-01-01: the first reopen has no lower bound.
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_item_reopen_events', 'work_item_transitions')) > 6000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('work_item_reopen_events', 'work_item_transitions')) > 4294967296,
+    'STOP-COST-GATE')) AS cost_gate
+SELECT provider,
+       sum(length(rs))                                                                        AS reopens_all,
+       sum(arraySum(found))                                                                   AS closes_found,
+       sum(arraySum(arrayMap((f, p) -> toUInt8(f = 0 AND p = 1), found, prior)))             AS closes_missing,
+       countIf(arrayExists((f, p) -> f = 0 AND p = 1, found, prior))                          AS items_close_missing,
+       sum(arraySum(arrayMap((f, p, k) -> toUInt8(f = 0 AND p = 1 AND k = 1), found, prior, kept))) AS closes_missing_reopen_kept,
+       sum(arraySum(arrayMap((f, p) -> toUInt8(f = 0 AND p = 0), found, prior)))             AS reopens_no_history,
+       sum(arraySum(kept))                                                                    AS reopens_kept,
+       sum(arraySum(arrayMap((k, q) -> toUInt8(k = 1 AND q = 0), kept, pair)))               AS reopens_pair_mismatch,
+       sum(arraySum(arrayMap((k, n) -> toUInt8(k = 1 AND n = 0), kept, named)))              AS reopens_kept_provider_empty,
+       sum(arraySum(late))                                                                    AS reopens_kept_synced_after_1119
+FROM (
+    SELECT r.provider AS provider, r.rs AS rs,
+           arrayMap(i -> toUInt8(arrayExists(x -> tupleElement(x, 1) >= tupleElement(rs[i - 1], 1)
+                    AND tupleElement(x, 1) <= tupleElement(rs[i], 1)
+                    AND (has(['done', 'canceled'], tupleElement(x, 3)) OR tupleElement(x, 5) = tupleElement(rs[i], 2)), t.ts)),
+                    arrayEnumerate(rs)) AS found,
+           arrayMap(i -> toUInt8(arrayExists(x -> tupleElement(x, 1) < tupleElement(rs[i], 1), t.ts)),
+                    arrayEnumerate(rs)) AS prior,
+           arrayMap(i -> toUInt8(arrayExists(x -> tupleElement(x, 1) = tupleElement(rs[i], 1)
+                    AND tupleElement(x, 5) = tupleElement(rs[i], 3), t.ts)), arrayEnumerate(rs)) AS kept,
+           arrayMap(i -> toUInt8(arrayExists(x -> tupleElement(x, 1) = tupleElement(rs[i], 1)
+                    AND tupleElement(x, 2) = tupleElement(rs[i], 4) AND tupleElement(x, 3) = tupleElement(rs[i], 5), t.ts)),
+                    arrayEnumerate(rs)) AS pair,
+           arrayMap(i -> toUInt8(arrayExists(x -> tupleElement(x, 1) = tupleElement(rs[i], 1)
+                    AND tupleElement(x, 5) = tupleElement(rs[i], 3) AND tupleElement(x, 6) != '', t.ts)),
+                    arrayEnumerate(rs)) AS named,
+           arrayMap(i -> toUInt8(arrayExists(x -> tupleElement(x, 1) = tupleElement(rs[i], 1)
+                    AND tupleElement(x, 5) = tupleElement(rs[i], 3)
+                    AND tupleElement(x, 7) >= toDateTime64('2026-11-19 09:40:00', 3, 'UTC'), t.ts)),
+                    arrayEnumerate(rs)) AS late
+    FROM (
+        SELECT org_id, work_item_id,
+               multiIf(startsWith(work_item_id, 'linear:'), 'linear', startsWith(work_item_id, 'jira:'), 'jira', 'github') AS provider,
+               arraySort(groupArray((occurred_at, ifNull(from_status_raw, ''), ifNull(to_status_raw, ''), from_status, to_status))) AS rs
+        FROM work_item_reopen_events FINAL
+        WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0
+          AND (startsWith(work_item_id, 'gh:') OR startsWith(work_item_id, 'ghpr:') OR startsWith(work_item_id, 'linear:')
+               OR startsWith(work_item_id, 'jira:'))
+        GROUP BY org_id, work_item_id
+    ) AS r
+    LEFT JOIN (
+        SELECT org_id, work_item_id,
+               groupArray((occurred_at, from_status, to_status, from_status_raw, to_status_raw, provider, last_synced)) AS ts
+        FROM work_item_transitions FINAL
+        WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0
+          AND (startsWith(work_item_id, 'gh:') OR startsWith(work_item_id, 'ghpr:') OR startsWith(work_item_id, 'linear:')
+               OR startsWith(work_item_id, 'jira:'))
+        GROUP BY org_id, work_item_id
+    ) AS t ON t.org_id = r.org_id AND t.work_item_id = r.work_item_id
+    WHERE cost_gate = 0
+)
+WHERE cost_gate = 0
+GROUP BY provider ORDER BY provider;
 `
 )
 
 // formExecFcc14190Gates are the cost gates of the data statements: the tables each reads (the gate's IN list), its cap
 // literals, how many times it holds cost_gate = 0 (the outer WHERE plus each subquery that reads a table), and
-// fixtureReadRows, the query_log read_rows of the statement on this fixture by the scan model of FORM-14190-GAP-1.md
-// (merges stopped, one part per table: E 9 reopen event rows, T 11 transition rows, P 1 + 1). A gate evaluation reads
-// 2 x P + 1, each further cost_gate reference 1 more row, a plain or FINAL read of a one-part table its rows once.
+// fixtureReadRows, the query_log read_rows of the statement on this fixture by the scan model of FORM-14190-GAP-2.md
+// (merges stopped: E 12 reopen event rows in 1 part; T 18 transition rows in 2 parts, part A 1 older copy, part B 17
+// rows). A gate evaluation reads 2 x P + 1, each further cost_gate reference 1 more row, a plain or FINAL read of a
+// one-part table its rows once (measured on the GAP-1 leg: F0 12, F1 27), and a FINAL read of two intersecting parts
+// part A once and part B twice (measured on the FORM-14531-7 leg: 1 + 2 x 10 = 21): here 1 + 2 x 17 = 35.
 var formExecFcc14190Gates = []struct {
 	id, tables, rowsCap, bytesCap string
 	uses                          int
 	fixtureReadRows               uint64
 }{
-	{"F0", "'work_item_reopen_events'", "> 5000000", "> 4294967296", 1, 12},
-	{"F1", "'work_item_reopen_events', 'work_item_transitions'", "> 6000000", "> 4294967296", 3, 27},
+	{"F0", "'work_item_reopen_events'", "> 5000000", "> 4294967296", 1, 12 + 3},
+	{"F1", "'work_item_reopen_events', 'work_item_transitions'", "> 6000000", "> 4294967296", 3, 12 + 35 + 7 + 2},
+	{"F2", "'work_item_reopen_events', 'work_item_transitions'", "> 6000000", "> 4294967296", 4, 12 + 35 + 7 + 3},
+}
+
+// formExecFcc14190Mutants are copies of one statement with one predicate changed; each must change the named value.
+var formExecFcc14190Mutants = []struct {
+	name, id, from, to string
+	row                int
+	column, killed     string
+}{
+	// The close of a reopen at its own instant (the healed tie, a close in the same second) is no longer found.
+	{"close-upper-bound-exclusive", "F2", "tupleElement(x, 1) <= tupleElement(rs[i], 1)", "tupleElement(x, 1) < tupleElement(rs[i], 1)", 0, "closes_found", "5"},
+	// A close before the previous reopen is taken for the later reopen: gh:fx/repo#6's lost close is hidden.
+	{"close-no-lower-bound", "F2", "tupleElement(x, 1) >= tupleElement(rs[i - 1], 1)", "1 = 1", 0, "closes_missing", "1"},
+	// Without FINAL the superseded copy (reopened, part A) still matches the reopen of gh:fx/repo#1 at 10-01.
+	{"transitions-no-final", "F1", "FROM work_item_transitions FINAL", "FROM work_item_transitions", 0, "reopens_lost", "3"},
 }
 
 type formExecFcc14190Result struct {
@@ -292,18 +381,25 @@ func formExecFcc14190Rows(t *testing.T, results map[string]formExecFcc14190Resul
 	}
 }
 
-// CHAOS-14190 fixture. Org c6a38355-... (the org the FORM reads), one INSERT per table (one part each):
+// CHAOS-14190 fixture. Org c6a38355-... (the org the FORM reads). work_item_reopen_events: one INSERT (one part).
+// work_item_transitions: two INSERTs (two parts, merges stopped): part A holds one older copy (reopened, last synced
+// 11-01) of the key of gh:fx/repo#1 at 10-01, tie_ordinal 0; part B holds the newer copy of that key (closed, 11-23),
+// which FINAL keeps, and every other row.
 //
 //	gh:fx/repo#1: reopened 10-01 and 10-05; the transitions at each instant hold only another row (closed at 10-01,
-//	    a status label at 10-05): two lost reopens of one item, both with the same-instant signature (lost_tie).
-//	gh:fx/repo#2: reopened 10-02; the instant holds closed (tie_ordinal 0) and reopened (tie_ordinal 1): healed.
-//	ghpr:fx/repo#3: reopened 10-03; its reopened transition is alone at the instant: kept.
-//	gh:fx/repo#4: reopened 10-04; the item's only transition is at 10-03: lost with no transition at the instant
-//	    (lost_bare).
+//	    a status label at 10-05): two lost reopens of one item, both lost_tie. Both closes are found (closed 10-01).
+//	gh:fx/repo#2: reopened 10-02; the instant holds closed (tie_ordinal 0) and reopened (tie_ordinal 1): healed; its
+//	    close is found at the reopen's own instant.
+//	ghpr:fx/repo#3: reopened 10-03; its reopened transition (canceled -> in_progress) is alone at the instant: kept,
+//	    a (from, to) pair mismatch, no transition before it (no_history).
+//	gh:fx/repo#4: reopened 10-04; the item's only transition is the close at 10-03: lost_bare, close found.
 //	gh:fx/repo#5: closed 10-08, never reopened: no reopen row, not counted.
-//	linear:FX-1: reopened Done -> Todo 10-06; the instant holds only the Done transition: lost (lost_tie).
-//	linear:FX-2: reopened Canceled -> Todo 10-07 with its Todo transition: kept.
-//	jira:FX-9: a reopen with its transition: another provider, not counted.
+//	gh:fx/repo#6: closed 09-01, reopened 09-02 (kept by a row with no provider, last synced 11-01), reopened 09-03
+//	    (kept) with no close between: one missing close (the old writer's tie: the reopen won the second).
+//	linear:FX-1: reopened Done -> Todo 10-06; the instant holds only the Done transition: lost (lost_tie), close found.
+//	linear:FX-2: reopened Canceled -> Todo 10-07 with its Todo transition: kept, no transition before it (no_history).
+//	linear:FX-3: In Progress 09-10, reopened Done -> Todo 09-20 with its Todo transition: kept, one missing close.
+//	jira:FX-9: closed 10-07, reopened Done -> Open 10-08 with its transition: kept, close found (F2 only).
 //
 // Org d6a38355-... holds a reopen of gh:fx/repo#4 at 10-04 and its reopened transition, and must not count.
 func TestFormExecFcc14190Gap(t *testing.T) {
@@ -312,8 +408,10 @@ func TestFormExecFcc14190Gap(t *testing.T) {
 		org, other = "c6a38355-1419-4000-8000-000000000001", "d6a38355-1419-4000-8000-000000000002"
 		zero       = "00000000-0000-0000-0000-000000000000"
 		synced     = "2026-11-23 03:00:00.000"
+		older      = "2026-11-01 00:00:00.000"
 	)
-	// Merges stay off, so the part and row counts of the work math do not move while the test runs.
+	// Merges stay off, so the part and row counts of the work math do not move while the test runs, and the older
+	// copy in part A stays for FINAL to fold.
 	formExecFcc14190Exec(ctx, t, conn, "SYSTEM STOP MERGES work_item_reopen_events")
 	formExecFcc14190Exec(ctx, t, conn, "SYSTEM STOP MERGES work_item_transitions")
 	reopen := func(orgID, id, from, to, fromRaw, toRaw, occurred string) string {
@@ -326,36 +424,48 @@ func TestFormExecFcc14190Gap(t *testing.T) {
 		reopen(org, "ghpr:fx/repo#3", "done", "todo", "closed", "reopened", "2026-10-03 10:00:00.000"),
 		reopen(org, "gh:fx/repo#4", "done", "todo", "closed", "reopened", "2026-10-04 10:00:00.000"),
 		reopen(org, "gh:fx/repo#1", "done", "todo", "closed", "reopened", "2026-10-05 10:00:00.000"),
+		reopen(org, "gh:fx/repo#6", "done", "todo", "closed", "reopened", "2026-09-02 10:00:00.000"),
+		reopen(org, "gh:fx/repo#6", "done", "todo", "closed", "reopened", "2026-09-03 10:00:00.000"),
 		reopen(org, "linear:FX-1", "done", "todo", "Done", "Todo", "2026-10-06 10:00:00.000"),
 		reopen(org, "linear:FX-2", "canceled", "todo", "Canceled", "Todo", "2026-10-07 10:00:00.000"),
+		reopen(org, "linear:FX-3", "done", "todo", "Done", "Todo", "2026-09-20 10:00:00.000"),
 		reopen(org, "jira:FX-9", "done", "todo", "Done", "Open", "2026-10-08 10:00:00.000"),
 		reopen(other, "gh:fx/repo#4", "done", "todo", "closed", "reopened", "2026-10-04 10:00:00.000"),
 	}, ", "))
-	transition := func(orgID, id, provider, from, to, toRaw, occurred string, ordinal int) string {
+	transition := func(orgID, id, provider, from, to, toRaw, occurred, lastSynced string, ordinal int) string {
 		return fmt.Sprintf("('%s', '%s', '%s', '%s', '%s', '%s', '', '%s', '', '%s', '%s', %d)",
-			orgID, zero, id, provider, from, to, toRaw, occurred, synced, ordinal)
+			orgID, zero, id, provider, from, to, toRaw, occurred, lastSynced, ordinal)
 	}
-	formExecFcc14190Exec(ctx, t, conn, `INSERT INTO work_item_transitions (org_id, repo_id, work_item_id, provider, from_status, to_status, from_status_raw, to_status_raw, actor, occurred_at, last_synced, tie_ordinal) VALUES `+strings.Join([]string{
-		transition(org, "gh:fx/repo#1", "github", "todo", "done", "closed", "2026-10-01 10:00:00.000", 0),
-		transition(org, "gh:fx/repo#1", "github", "todo", "blocked", "blocked", "2026-10-05 10:00:00.000", 0),
-		transition(org, "gh:fx/repo#2", "github", "todo", "done", "closed", "2026-10-02 10:00:00.000", 0),
-		transition(org, "gh:fx/repo#2", "github", "done", "todo", "reopened", "2026-10-02 10:00:00.000", 1),
-		transition(org, "ghpr:fx/repo#3", "github", "canceled", "in_progress", "reopened", "2026-10-03 10:00:00.000", 0),
-		transition(org, "gh:fx/repo#4", "github", "todo", "done", "closed", "2026-10-03 10:00:00.000", 0),
-		transition(org, "gh:fx/repo#5", "github", "todo", "done", "closed", "2026-10-08 10:00:00.000", 0),
-		transition(org, "linear:FX-1", "linear", "in_progress", "done", "Done", "2026-10-06 10:00:00.000", 0),
-		transition(org, "linear:FX-2", "linear", "canceled", "todo", "Todo", "2026-10-07 10:00:00.000", 0),
-		transition(org, "jira:FX-9", "jira", "done", "todo", "Open", "2026-10-08 10:00:00.000", 0),
-		transition(other, "gh:fx/repo#4", "github", "done", "todo", "reopened", "2026-10-04 10:00:00.000", 0),
+	transitions := `INSERT INTO work_item_transitions (org_id, repo_id, work_item_id, provider, from_status, to_status, from_status_raw, to_status_raw, actor, occurred_at, last_synced, tie_ordinal) VALUES `
+	formExecFcc14190Exec(ctx, t, conn, transitions+
+		transition(org, "gh:fx/repo#1", "github", "done", "todo", "reopened", "2026-10-01 10:00:00.000", older, 0))
+	formExecFcc14190Exec(ctx, t, conn, transitions+strings.Join([]string{
+		transition(org, "gh:fx/repo#1", "github", "todo", "done", "closed", "2026-10-01 10:00:00.000", synced, 0),
+		transition(org, "gh:fx/repo#1", "github", "todo", "blocked", "blocked", "2026-10-05 10:00:00.000", synced, 0),
+		transition(org, "gh:fx/repo#2", "github", "todo", "done", "closed", "2026-10-02 10:00:00.000", synced, 0),
+		transition(org, "gh:fx/repo#2", "github", "done", "todo", "reopened", "2026-10-02 10:00:00.000", synced, 1),
+		transition(org, "ghpr:fx/repo#3", "github", "canceled", "in_progress", "reopened", "2026-10-03 10:00:00.000", synced, 0),
+		transition(org, "gh:fx/repo#4", "github", "todo", "done", "closed", "2026-10-03 10:00:00.000", synced, 0),
+		transition(org, "gh:fx/repo#5", "github", "todo", "done", "closed", "2026-10-08 10:00:00.000", synced, 0),
+		transition(org, "gh:fx/repo#6", "github", "todo", "done", "closed", "2026-09-01 10:00:00.000", synced, 0),
+		transition(org, "gh:fx/repo#6", "", "done", "todo", "reopened", "2026-09-02 10:00:00.000", older, 0),
+		transition(org, "gh:fx/repo#6", "github", "done", "todo", "reopened", "2026-09-03 10:00:00.000", synced, 0),
+		transition(org, "linear:FX-1", "linear", "in_progress", "done", "Done", "2026-10-06 10:00:00.000", synced, 0),
+		transition(org, "linear:FX-2", "linear", "canceled", "todo", "Todo", "2026-10-07 10:00:00.000", synced, 0),
+		transition(org, "linear:FX-3", "linear", "todo", "in_progress", "In Progress", "2026-09-10 10:00:00.000", synced, 0),
+		transition(org, "linear:FX-3", "linear", "done", "todo", "Todo", "2026-09-20 10:00:00.000", synced, 0),
+		transition(org, "jira:FX-9", "jira", "in_progress", "done", "Done", "2026-10-07 10:00:00.000", synced, 0),
+		transition(org, "jira:FX-9", "jira", "done", "todo", "Open", "2026-10-08 10:00:00.000", synced, 0),
+		transition(other, "gh:fx/repo#4", "github", "done", "todo", "reopened", "2026-10-04 10:00:00.000", synced, 0),
 	}, ", "))
 
 	sum := sha256.Sum256([]byte(formExecFcc14190SQL))
 	if got := hex.EncodeToString(sum[:]); got != formExecFcc14190SHA256 {
-		t.Fatalf("sha256 of the embedded text = %s, want %s (FORM-14190-GAP-1.sql)", got, formExecFcc14190SHA256)
+		t.Fatalf("sha256 of the embedded text = %s, want %s (FORM-14190-GAP-2.sql)", got, formExecFcc14190SHA256)
 	}
 	ids, statements := formExecFcc14190Statements(t, formExecFcc14190SQL)
-	if got := strings.Join(ids, ","); got != "S0,F0,F1" {
-		t.Fatalf("statements = %s, want S0,F0,F1", got)
+	if got := strings.Join(ids, ","); got != "S0,F0,F1,F2" {
+		t.Fatalf("statements = %s, want S0,F0,F1,F2", got)
 	}
 	// Static gate checks: one gate per data statement, over exactly the tables it reads, with one rows cap and one bytes
 	// cap, and cost_gate = 0 in the outer WHERE and in every subquery that reads a table. S0 reads metadata only.
@@ -403,33 +513,67 @@ func TestFormExecFcc14190Gap(t *testing.T) {
 		qctx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"log_comment": comment}))
 		result, err := formExecFcc14190Query(qctx, conn, statements[id])
 		if err != nil {
-			t.Fatalf("FORM-14190-GAP-1 %s: %v", id, err)
+			t.Fatalf("FORM-14190-GAP-2 %s: %v", id, err)
 		}
-		t.Logf("FORM-14190-GAP-1 %s columns %v", id, result.columns)
+		t.Logf("FORM-14190-GAP-2 %s columns %v", id, result.columns)
 		for index, row := range result.rows {
-			t.Logf("FORM-14190-GAP-1 %s row %d %v", id, index, row)
+			t.Logf("FORM-14190-GAP-2 %s row %d %v", id, index, row)
 		}
 		results[id] = result
 	}
 
 	formExecFcc14190Rows(t, results, "S0", 2)
-	formExecFcc14190Row(t, results, "S0", 0, map[string]string{"table_name": "work_item_reopen_events", "table_rows": "9", "active_parts": "1"})
-	formExecFcc14190Row(t, results, "S0", 1, map[string]string{"table_name": "work_item_transitions", "table_rows": "11", "active_parts": "1"})
+	formExecFcc14190Row(t, results, "S0", 0, map[string]string{"table_name": "work_item_reopen_events", "table_rows": "12", "active_parts": "1"})
+	formExecFcc14190Row(t, results, "S0", 1, map[string]string{"table_name": "work_item_transitions", "table_rows": "18", "active_parts": "2"})
 
 	formExecFcc14190Rows(t, results, "F0", 1)
-	formExecFcc14190Row(t, results, "F0", 0, map[string]string{"orgs": "1", "org_rows": "8"})
+	formExecFcc14190Row(t, results, "F0", 0, map[string]string{"orgs": "1", "org_rows": "11"})
 
 	formExecFcc14190Rows(t, results, "F1", 2)
 	formExecFcc14190Row(t, results, "F1", 0, map[string]string{
-		"provider": "github", "reopens_all": "5", "items_kept": "2", "reopens_kept": "2", "items_lost": "2",
+		"provider": "github", "reopens_all": "7", "items_kept": "3", "reopens_kept": "4", "items_lost": "2",
 		"reopens_lost": "3", "reopens_lost_tie": "2", "reopens_lost_bare": "1",
 		"lost_first_day": "2026-10-01*", "lost_last_day": "2026-10-05*",
 	})
 	formExecFcc14190Row(t, results, "F1", 1, map[string]string{
-		"provider": "linear", "reopens_all": "2", "items_kept": "1", "reopens_kept": "1", "items_lost": "1",
+		"provider": "linear", "reopens_all": "3", "items_kept": "2", "reopens_kept": "2", "items_lost": "1",
 		"reopens_lost": "1", "reopens_lost_tie": "1", "reopens_lost_bare": "0",
 		"lost_first_day": "2026-10-06*", "lost_last_day": "2026-10-06*",
 	})
+
+	formExecFcc14190Rows(t, results, "F2", 3)
+	formExecFcc14190Row(t, results, "F2", 0, map[string]string{
+		"provider": "github", "reopens_all": "7", "closes_found": "5", "closes_missing": "1", "items_close_missing": "1",
+		"closes_missing_reopen_kept": "1", "reopens_no_history": "1", "reopens_kept": "4", "reopens_pair_mismatch": "1",
+		"reopens_kept_provider_empty": "1", "reopens_kept_synced_after_1119": "3",
+	})
+	formExecFcc14190Row(t, results, "F2", 1, map[string]string{
+		"provider": "jira", "reopens_all": "1", "closes_found": "1", "closes_missing": "0", "items_close_missing": "0",
+		"closes_missing_reopen_kept": "0", "reopens_no_history": "0", "reopens_kept": "1", "reopens_pair_mismatch": "0",
+		"reopens_kept_provider_empty": "0", "reopens_kept_synced_after_1119": "1",
+	})
+	formExecFcc14190Row(t, results, "F2", 2, map[string]string{
+		"provider": "linear", "reopens_all": "3", "closes_found": "1", "closes_missing": "1", "items_close_missing": "1",
+		"closes_missing_reopen_kept": "1", "reopens_no_history": "1", "reopens_kept": "2", "reopens_pair_mismatch": "0",
+		"reopens_kept_provider_empty": "0", "reopens_kept_synced_after_1119": "2",
+	})
+
+	// Mutation cells: each mutant (a test copy; the embedded text stays as checked) runs and must change its value.
+	for _, mutant := range formExecFcc14190Mutants {
+		text := statements[mutant.id]
+		if got := strings.Count(text, mutant.from); got != 1 {
+			t.Fatalf("MUTANT %s: %q %d time(s) in %s, want 1", mutant.name, mutant.from, got, mutant.id)
+		}
+		result, err := formExecFcc14190Query(ctx, conn, strings.Replace(text, mutant.from, mutant.to, 1))
+		if err != nil {
+			t.Fatalf("MUTANT %s: %v", mutant.name, err)
+		}
+		got := formExecFcc14190Cell(t, map[string]formExecFcc14190Result{mutant.id: result}, mutant.id, mutant.row, mutant.column)
+		t.Logf("MUTANT %s: %s row %d %s = %s (unmutated %s)", mutant.name, mutant.id, mutant.row, mutant.column, got, mutant.killed)
+		if got == mutant.killed {
+			t.Errorf("MUTANT %s SURVIVED: %s row %d %s = %s", mutant.name, mutant.id, mutant.row, mutant.column, got)
+		}
+	}
 
 	// Sizes of the work math: E, T = active rows, P = active parts (system.parts, as the gate reads them).
 	parts, sizes := map[string]uint64{}, map[string]uint64{}
@@ -447,9 +591,9 @@ func TestFormExecFcc14190Gap(t *testing.T) {
 		parts[table], sizes[table] = count, rows
 	}
 	_ = partRows.Close()
-	if sizes["work_item_reopen_events"] != 9 || sizes["work_item_transitions"] != 11 ||
-		parts["work_item_reopen_events"] != 1 || parts["work_item_transitions"] != 1 {
-		t.Fatalf("fixture sizes E=%d T=%d P(work_item_reopen_events)=%d P(work_item_transitions)=%d, want 9, 11, 1, 1",
+	if sizes["work_item_reopen_events"] != 12 || sizes["work_item_transitions"] != 18 ||
+		parts["work_item_reopen_events"] != 1 || parts["work_item_transitions"] != 2 {
+		t.Fatalf("fixture sizes E=%d T=%d P(work_item_reopen_events)=%d P(work_item_transitions)=%d, want 12, 18, 1, 2",
 			sizes["work_item_reopen_events"], sizes["work_item_transitions"], parts["work_item_reopen_events"], parts["work_item_transitions"])
 	}
 	gateParts := func(tables string) uint64 {
@@ -561,6 +705,6 @@ func TestFormExecFcc14190Gap(t *testing.T) {
 		}
 	}
 	if len(fires) != 2*len(formExecFcc14190Gates) {
-		t.Errorf("gates fired %d times, want %d (2 statements x 2 caps)", len(fires), 2*len(formExecFcc14190Gates))
+		t.Errorf("gates fired %d times, want %d (3 statements x 2 caps)", len(fires), 2*len(formExecFcc14190Gates))
 	}
 }

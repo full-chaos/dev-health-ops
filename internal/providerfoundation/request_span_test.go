@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"net/url"
 	"reflect"
 	"slices"
@@ -478,6 +479,33 @@ func spanTestRedirectThenFail() *http.Client {
 	})}
 }
 
+// spanTestLateWrite answers the first request with status at once and holds back its write report; the next request
+// (a redirect hop, or a retry when retry is set) first delivers that late report, then fails before it is written, as
+// HTTP/1 can report a write after the response arrived.
+func spanTestLateWrite(status int, retry bool) *http.Client {
+	var held *httptrace.ClientTrace
+	answered := false
+	transport := spanTestTransport(func(request *http.Request) (*http.Response, error) {
+		if !answered {
+			answered = true
+			held = httptrace.ContextClientTrace(request.Context())
+			header := http.Header{}
+			if !retry {
+				header.Set("Location", "/hop")
+			}
+			return &http.Response{StatusCode: status, Header: header, Body: io.NopCloser(strings.NewReader("")), Request: request}, nil
+		}
+		if held != nil && held.WroteRequest != nil {
+			held.WroteRequest(httptrace.WroteRequestInfo{})
+		}
+		return nil, errors.New("aaaa")
+	})
+	if retry {
+		return fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) { return transport(request) })).(*http.Client)
+	}
+	return &http.Client{Transport: transport}
+}
+
 func spanTestStatusDoer(status int, header http.Header) HTTPDoerFunc {
 	return func(request *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: status, Header: header, Body: io.NopCloser(strings.NewReader(`{}`)), Request: request}, nil
@@ -584,6 +612,25 @@ func TestProviderRequestSpanKeepsTheStatusOfTheLastAttempt(t *testing.T) {
 			closeBody(response)
 			return err
 		}, status: http.StatusFound, attempts: 1, outcome: "failed", errorType: "transient"},
+		{name: "a redirect whose write reports late, then the next hop fails before it is written", call: func(t *testing.T, ctx context.Context) error {
+			client := spanTestClient(t, "https://api.example.test", spanTestLateWrite(http.StatusFound, false), oneAttempt())
+			response, err := client.Do(ctx, http.MethodGet, "/repos/"+spanTestOwner+"/"+spanTestRepo, nil)
+			closeBody(response)
+			return err
+		}, status: http.StatusFound, attempts: 1, outcome: "failed", errorType: "transient"},
+		{name: "an unauthenticated redirect whose write reports late, then the next hop fails before it is written", call: func(t *testing.T, ctx context.Context) error {
+			client := spanTestClient(t, "https://api.example.test", spanTestLateWrite(http.StatusFound, false), oneAttempt())
+			response, err := client.DoUnauthenticated(ctx, http.MethodGet, "https://objects.example.test/blob")
+			closeBody(response)
+			return err
+		}, status: http.StatusFound, attempts: 1, outcome: "failed", errorType: "transient"},
+		{name: "503 whose write reports late, then a retry that fails before it is written", call: func(t *testing.T, ctx context.Context) error {
+			client := spanTestClient(t, "https://api.example.test", spanTestLateWrite(http.StatusServiceUnavailable, true),
+				RetryPolicy{MaxAttempts: 2, InitialWait: time.Millisecond, MaxWait: 2 * time.Millisecond})
+			response, err := client.Do(ctx, http.MethodGet, "/repos/"+spanTestOwner+"/"+spanTestRepo, nil)
+			closeBody(response)
+			return err
+		}, status: http.StatusServiceUnavailable, attempts: 2, outcome: "failed", errorType: "transient"},
 		{name: "an unauthenticated redirect, then the next hop fails before it is written", call: func(t *testing.T, ctx context.Context) error {
 			client := spanTestClient(t, "https://api.example.test", spanTestRedirectThenFail(), oneAttempt())
 			response, err := client.DoUnauthenticated(ctx, http.MethodGet, "https://objects.example.test/blob")

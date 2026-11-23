@@ -4,6 +4,7 @@ package testopsrisk
 
 import (
 	"context"
+	"strings"
 	"math"
 	"testing"
 	"time"
@@ -137,6 +138,54 @@ func TestRealClickHouse_TestopsRiskRepoIdsMatch(t *testing.T) {
 		}
 		if !near(got.ReleaseConfidence, 0.9) || !near(got.QualityDragHours, 1) || !near(got.PipelineStability, 0.8) || len(got.QuadrantData) != 1 || got.QuadrantData[0].ID != rC {
 			t.Errorf("an id the quadrant returned selects nothing: confidence %v drag %v stability %v quadrant %#v", got.ReleaseConfidence, got.QualityDragHours, got.PipelineStability, got.QuadrantData)
+		}
+	})
+
+	t.Run("an id or a name of another organization never selects from this one", func(t *testing.T) {
+		const org, other = "org-own", "org-other"
+		repo(org, rA, "acme/a", t1)
+		repo(other, rB, "acme/b", t1)
+		repo(other, rC, "acme/a", t1) // the same name in the other organization
+		seed(org, rA, 0.8, 2, 0.9)
+		seed(other, rB, 0.4, 7, 0.3)
+		seed(other, rC, 0.2, 9, 0.1)
+		for name, ids := range map[string][]string{"name of the other org": {"acme/b"}, "id of the other org": {rB, rC}} {
+			got, err := Resolve(ctx, client, org, window(ids...))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.ReleaseConfidence != nil || got.QualityDragHours != nil || len(got.QuadrantData) != 0 {
+				t.Errorf("%s: confidence %v drag %v quadrant %#v, want an empty answer", name, got.ReleaseConfidence, got.QualityDragHours, got.QuadrantData)
+			}
+		}
+		same, err := Resolve(ctx, client, org, window("acme/a"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !near(same.ReleaseConfidence, 0.8) || !near(same.QualityDragHours, 2) || len(same.QuadrantData) != 1 {
+			t.Errorf("a name both organizations hold: confidence %v drag %v quadrant %#v, want this organization's own", same.ReleaseConfidence, same.QualityDragHours, same.QuadrantData)
+		}
+	})
+
+	t.Run("a blank entry beside an id drops out; an id is matched as sent, so an upper-case UUID selects nothing", func(t *testing.T) {
+		const org = "org-mixed"
+		repo(org, rA, "acme/a", t1)
+		repo(org, rB, "acme/b", t1)
+		seed(org, rA, 0.8, 2, 0.9)
+		seed(org, rB, 0.4, 7, 0.3)
+		mixed, err := Resolve(ctx, client, org, window("", rB))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !near(mixed.ReleaseConfidence, 0.4) || !near(mixed.QualityDragHours, 7) || len(mixed.QuadrantData) != 1 {
+			t.Errorf("blank and an id: confidence %v drag %v quadrant %#v, want only that repository", mixed.ReleaseConfidence, mixed.QualityDragHours, mixed.QuadrantData)
+		}
+		upper, err := Resolve(ctx, client, org, window(strings.ToUpper(rB)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if upper.ReleaseConfidence != nil || upper.QualityDragHours != nil || len(upper.QuadrantData) != 0 {
+			t.Errorf("an upper-case id: confidence %v drag %v quadrant %#v; ids are matched as sent (exact text), want an empty answer", upper.ReleaseConfidence, upper.QualityDragHours, upper.QuadrantData)
 		}
 	})
 }

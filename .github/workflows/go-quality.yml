@@ -683,6 +683,12 @@ jobs:
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
         run: bash scripts/drill-auth-pitr_test.sh
 
+      - name: Test the venue-oracles change-set reader
+        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
+        # CHAOS-11108: hermetic. The functions are cut out of ci/check_go.sh; a NUL-delimited change set with a newline
+        # inside a name must still select its package.
+        run: bash ci/venue_oracle_changed_test.sh
+
       - name: Log out of GitHub Container Registry
         if: always()
         run: docker logout ghcr.io

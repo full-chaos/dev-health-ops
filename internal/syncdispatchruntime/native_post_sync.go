@@ -643,12 +643,16 @@ SELECT EXISTS (
 }
 
 // postSyncCommitAllowed is the pass's last statement before COMMIT: the shared commit snapshot of the post_sync row
-// (locked to the commit, NOWAIT) judged by decideCommit. A superseded delivery is refused with one line; a held row
-// (55P03) or a read error is ErrPostSyncUnavailable, so River retries the same delivery.
+// (locked to the commit, NOWAIT) judged by decideCommit. A superseded delivery is refused with one line. A held row or
+// route barrier (55P03) is read again within the fence's bound (lockCommitSnapshot, one savepoint per read); one still
+// held after it, or a read error, is ErrPostSyncUnavailable at commit_check over its cause, so River retries the same
+// delivery.
 func (service *NativePostSyncService) postSyncCommitAllowed(ctx context.Context, tx pgx.Tx, args PostSyncArgs) (bool, error) {
-	snapshot, err := readCommitSnapshot(ctx, tx, args, outboxKindPostSync)
+	fence := &transportFence{args: args, kind: outboxKindPostSync, unavailable: unavailable(stageCommitCheck, nil), logger: service.logger,
+		failure: func(cause error) error { return unavailable(stageCommitCheck, cause) }}
+	snapshot, err := fence.lockCommitSnapshot(ctx, tx)
 	if err != nil {
-		return false, unavailable(stageCommitCheck, err)
+		return false, err
 	}
 	allowed, reason := decideCommit(snapshot, args.RouteGeneration(), args.Attempt())
 	if !allowed {

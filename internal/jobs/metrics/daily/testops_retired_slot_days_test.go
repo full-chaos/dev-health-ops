@@ -57,7 +57,7 @@ func TestRetiredSlotRecomputeDaysCoverDThroughDPlus29UpToThrough(t *testing.T) {
 
 // retiredSlotFormSQL renders FORM-14544-SEL-1 S1 from RetiredSlotRepoDaysSQL: the prod read form takes the verb's own text and
 // only swaps each parameter for its literal, adds the cost gate (FORM-TEMPLATE-3) and the org prefix, and counts.
-func retiredSlotFormSQL(t *testing.T, orgPrefix, from, to string, rowsCap, bytesCap, rowCap int64) string {
+func retiredSlotFormSQL(t *testing.T, orgPrefix, from, to, through string, rowsCap, bytesCap, rowCap int64) string {
 	t.Helper()
 	query := RetiredSlotRepoDaysSQL
 	swap := func(old, replacement string, times int) {
@@ -70,8 +70,9 @@ func retiredSlotFormSQL(t *testing.T, orgPrefix, from, to string, rowsCap, bytes
 	swap("org_id = {org_id:String}", "startsWith(org_id, '"+orgPrefix+"') AND cost_gate = 0", 2)
 	swap("{day_from:Date}", "toDate('"+from+"')", 1)
 	swap("{day_to:Date}", "toDate('"+to+"')", 1)
+	swap("{day_through:Date}", "toDate('"+through+"')", 1)
 	swap("(empty({repo_ids:Array(String)}) OR has({repo_ids:Array(String)}, toString(repo_id)))", "1", 1)
-	swap("{row_cap:UInt32}", formatInt(rowCap), 1)
+	swap("{row_cap:UInt64}", formatInt(rowCap), 1)
 	return `WITH (SELECT throwIf(
   (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('test_suite_results')) > ` + formatInt(rowsCap) + `
   OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('test_suite_results')) > ` + formatInt(bytesCap) + `,
@@ -88,7 +89,7 @@ func formatInt(value int64) string { return strconv.FormatInt(value, 10) }
 // The FORM text is the verb's statement: a change to RetiredSlotRepoDaysSQL changes this hash, so the FORM is rendered and read
 // again. FORM14544_OUT=<path> writes the rendered text for the card.
 func TestRetiredSlotFormRendersFromTheVerbConstant(t *testing.T) {
-	form := retiredSlotFormSQL(t, "c6a38355", "2026-11-17", "2026-11-23", 6_000_000, 4_000_000_000, 201)
+	form := retiredSlotFormSQL(t, "c6a38355", "2026-11-17", "2026-11-23", "2026-11-24", 6_000_000, 4_000_000_000, 201)
 	sum := sha256.Sum256([]byte(form))
 	got := hex.EncodeToString(sum[:])[:12]
 	if out := os.Getenv("FORM14544_OUT"); out != "" {
@@ -96,7 +97,7 @@ func TestRetiredSlotFormRendersFromTheVerbConstant(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	const pinned = "5f2ed667d21d"
+	const pinned = "eca4f85de80a"
 	if got != pinned {
 		t.Fatalf("FORM-14544-SEL-1 S1 sha12 %s, pinned %s: the verb statement changed; render the FORM again for its read\n%s", got, pinned, form)
 	}

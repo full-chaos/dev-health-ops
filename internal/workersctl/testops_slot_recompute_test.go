@@ -19,7 +19,6 @@ func TestTestopsSlotRecomputeRefusesAMalformedRequestBeforeAnyRead(t *testing.T)
 		"to before from":       {"metrics", "testops-slot-recompute", "--org", org, "--from", "2026-07-02", "--to", "2026-07-01", "--rerun-tag", "fix-1"},
 		"window over 31 days":  {"metrics", "testops-slot-recompute", "--org", org, "--from", "2026-07-01", "--to", "2026-08-01", "--rerun-tag", "fix-1"},
 		"malformed through":    base("--through", "soon"),
-		"through before from":  base("--through", "2026-06-30"),
 		"cap zero":             base("--max-repo-days", "0"),
 		"malformed repo id":    base("--repo-id", "not-a-uuid"),
 		"positional":           base("extra"),
@@ -44,6 +43,7 @@ func TestTestopsSlotRecomputeRefusesAMalformedRequestBeforeAnyRead(t *testing.T)
 	auditor := &recordingAuditor{}
 	runtime := commandRuntimeWithAuditor(t, commandAuthorizer{}, auditor)
 	runtime.lookup = func(string) (string, bool) { return "", false }
+	runtime.retiredSlotPlan = nil
 	var stdout, stderr bytes.Buffer
 	code := dispatch(context.Background(), runtime, base("--through", "2026-07-31", "--max-repo-days", "5", "--repo-id", org), &stdout, &stderr)
 	if code != 1 || !strings.Contains(stderr.String(), "configuration_error") || stdout.Len() != 0 || len(auditor.events) != 0 {
@@ -62,6 +62,7 @@ func TestTestopsSlotRecomputeBoundsTheCapAndAnApplyNamesItsThrough(t *testing.T)
 		auditor := &recordingAuditor{}
 		runtime := commandRuntimeWithAuditor(t, commandAuthorizer{}, auditor)
 		runtime.lookup = func(string) (string, bool) { return "", false }
+		runtime.retiredSlotPlan = nil
 		var stdout, stderr bytes.Buffer
 		code := dispatch(context.Background(), runtime, append(append([]string{}, base...), extra...), &stdout, &stderr)
 		return code, stderr.String(), len(auditor.events)

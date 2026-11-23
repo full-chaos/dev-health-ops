@@ -24,7 +24,7 @@ func orgStdinVerbs() map[string][]string {
 		"metrics partition-recompute": {"metrics", "partition-recompute", "--from", "2026-08-01", "--to", "2026-08-01",
 			"--family", "repo_user_commit", "--review-evidence", "testing"},
 		"metrics testops-slot-recompute": {"metrics", "testops-slot-recompute", "--from", "2026-08-01", "--to", "2026-08-01",
-			"--rerun-tag", "fix-1", "--apply"},
+			"--through", "2026-08-01", "--rerun-tag", "fix-1", "--apply"},
 		"providersync retire-jira-project-as-team": {"providersync", "retire-jira-project-as-team"},
 		"providersync carry-team-ids":              {"providersync", "carry-team-ids"},
 		"providersync compact-ownership-intervals": {"providersync", "compact-ownership-intervals", "--apply", "--workers-paused"},

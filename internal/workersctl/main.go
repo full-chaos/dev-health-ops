@@ -101,6 +101,9 @@ type operatorRuntime struct {
 	// stdin is the process stdin; nil reads as empty. Only `--org-stdin`
 	// reads it (CHAOS-8892).
 	stdin io.Reader
+	// retiredSlotPlan reads the plan of `metrics testops-slot-recompute`;
+	// nil reads ClickHouse through CLICKHOUSE_URI. Unit tests set it.
+	retiredSlotPlan func(context.Context, string, daily.RetiredSlotPlanRequest) (daily.RetiredSlotPlan, error)
 }
 
 type streamProfileStatus struct {

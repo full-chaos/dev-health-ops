@@ -18,11 +18,13 @@ const RetiredSlotHistoryDays = 29
 // RetiredSlotRepoDaysSQL selects the repository-days of every run that holds a retired report slot: a test_suite_results key
 // whose newest version is a retraction row (retracted = 1), with the retraction's day in [from, to]. It names no provider: every
 // writer of retraction rows is selected the same way. The day is the touched-day expression (recordTouchedTestsSQL), and the
-// outer read takes every day of such a run, so a run whose suites span two days names both. The non-key filters sit outside
-// the FINAL read, so they test the newest version of each key: a slot revived at the same key is not selected.
+// outer read takes every day of such a run up to through, so a run whose suites span two days names both, and the row cap counts
+// only days the plan can compute. The non-key filters sit outside the FINAL read, so they test the newest version of each key: a
+// slot revived at the same key is not selected.
 const RetiredSlotRepoDaysSQL = `SELECT toString(repo_id) AS repo, toDate(coalesce(started_at, finished_at), 'UTC') AS day
 FROM test_suite_results
 WHERE org_id = {org_id:String} AND coalesce(started_at, finished_at) IS NOT NULL
+  AND toDate(coalesce(started_at, finished_at), 'UTC') <= {day_through:Date}
   AND (repo_id, run_id) IN (
       SELECT repo_id, run_id
       FROM (SELECT repo_id, run_id, retracted, started_at, finished_at FROM test_suite_results FINAL WHERE org_id = {org_id:String})
@@ -31,7 +33,7 @@ WHERE org_id = {org_id:String} AND coalesce(started_at, finished_at) IS NOT NULL
         AND (empty({repo_ids:Array(String)}) OR has({repo_ids:Array(String)}, toString(repo_id))))
 GROUP BY repo, day
 ORDER BY repo, day
-LIMIT {row_cap:UInt32}`
+LIMIT {row_cap:UInt64}`
 
 // RetiredSlotRepoDay is one repository-day of a run with a retired report slot.
 type RetiredSlotRepoDay struct {
@@ -41,14 +43,15 @@ type RetiredSlotRepoDay struct {
 
 // LoadRetiredSlotRepoDays runs RetiredSlotRepoDaysSQL for the organization, at most limit rows.
 func LoadRetiredSlotRepoDays(
-	ctx context.Context, conn driver.Conn, organizationID string, from, to time.Time, repoIDs []string, limit int,
+	ctx context.Context, conn driver.Conn, organizationID string, from, to, through time.Time, repoIDs []string, limit uint64,
 ) ([]RetiredSlotRepoDay, error) {
 	if repoIDs == nil {
 		repoIDs = []string{}
 	}
 	rows, err := conn.Query(ctx, RetiredSlotRepoDaysSQL,
 		clickhouse.Named("org_id", organizationID), clickhouse.Named("day_from", from.UTC().Format(time.DateOnly)),
-		clickhouse.Named("day_to", to.UTC().Format(time.DateOnly)), clickhouse.Named("repo_ids", repoIDs), clickhouse.Named("row_cap", uint32(limit)))
+		clickhouse.Named("day_to", to.UTC().Format(time.DateOnly)), clickhouse.Named("day_through", through.UTC().Format(time.DateOnly)),
+		clickhouse.Named("repo_ids", repoIDs), clickhouse.Named("row_cap", limit))
 	if err != nil {
 		return nil, fmt.Errorf("read the retired-slot repository days: %w", err)
 	}
@@ -112,4 +115,60 @@ func RetiredSlotRepoDayCount(days []RetiredSlotRecomputeDay) int {
 		total += len(day.RepoIDs)
 	}
 	return total
+}
+
+// RetiredSlotMaxRepoDays is the largest repository-day cap one plan may ask for.
+const RetiredSlotMaxRepoDays = 10_000
+
+// RetiredSlotPlanRequest is the scope of one plan: retraction days From .. To, compute days up to Through, the repositories (all
+// when empty) and the repository-day cap (1 .. RetiredSlotMaxRepoDays).
+type RetiredSlotPlanRequest struct {
+	From, To, Through time.Time
+	RepoIDs           []string
+	MaxRepoDays       int
+}
+
+// RetiredSlotPlan is the days to compute again and the selected repository-days they come from.
+type RetiredSlotPlan struct {
+	RetiredRepoDays int
+	Days            []RetiredSlotRecomputeDay
+}
+
+// RetiredSlotPlanStop is a plan refused before any run starts: more repository-days than the cap (repo_day_cap), or a day of more
+// repositories than one daily run admits (day_repo_cap, MaxRepositoriesPerRun).
+type RetiredSlotPlanStop struct {
+	Code            string
+	RetiredRepoDays int
+	RepoDays        int
+	MaxRepoDays     int
+	Day             string
+	DayRepos        int
+}
+
+func (stop RetiredSlotPlanStop) Error() string {
+	return "retired-slot recompute plan stopped: " + stop.Code
+}
+
+// PlanRetiredSlotRecompute selects the retired-slot repository-days (at most MaxRepoDays+1 rows) and expands them. It stops when
+// the plan holds more repository-days than MaxRepoDays, or a day of more repositories than one daily run admits.
+func PlanRetiredSlotRecompute(ctx context.Context, conn driver.Conn, organizationID string, request RetiredSlotPlanRequest) (RetiredSlotPlan, error) {
+	if request.MaxRepoDays < 1 || request.MaxRepoDays > RetiredSlotMaxRepoDays {
+		return RetiredSlotPlan{}, fmt.Errorf("retired-slot repository-day cap %d is outside 1 .. %d", request.MaxRepoDays, RetiredSlotMaxRepoDays)
+	}
+	pairs, err := LoadRetiredSlotRepoDays(ctx, conn, organizationID, request.From, request.To, request.Through, request.RepoIDs,
+		uint64(request.MaxRepoDays)+1)
+	if err != nil {
+		return RetiredSlotPlan{}, err
+	}
+	days := RetiredSlotRecomputeDays(pairs, request.Through)
+	if count := RetiredSlotRepoDayCount(days); len(pairs) > request.MaxRepoDays || count > request.MaxRepoDays {
+		return RetiredSlotPlan{}, RetiredSlotPlanStop{Code: "repo_day_cap", RetiredRepoDays: len(pairs), RepoDays: count, MaxRepoDays: request.MaxRepoDays}
+	}
+	for _, day := range days {
+		if len(day.RepoIDs) > MaxRepositoriesPerRun {
+			return RetiredSlotPlan{}, RetiredSlotPlanStop{Code: "day_repo_cap", RetiredRepoDays: len(pairs), RepoDays: RetiredSlotRepoDayCount(days),
+				MaxRepoDays: request.MaxRepoDays, Day: day.Day.Format(time.DateOnly), DayRepos: len(day.RepoIDs)}
+		}
+	}
+	return RetiredSlotPlan{RetiredRepoDays: len(pairs), Days: days}, nil
 }

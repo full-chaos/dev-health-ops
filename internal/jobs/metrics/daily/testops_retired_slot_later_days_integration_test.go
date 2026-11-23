@@ -152,7 +152,7 @@ func TestTestopsRetiredSlotLaterDaysServeTheControlRecurrence(t *testing.T) {
 // statement), expanded to D .. D+29 up to through (RetiredSlotRecomputeDays), each day computed for its repositories.
 func (e *f3Env) laterDaysRepair(org string, dayD, through time.Time) {
 	e.t.Helper()
-	pairs, err := LoadRetiredSlotRepoDays(e.ctx, e.stack.conn, org, dayD, dayD, nil, 1000)
+	pairs, err := LoadRetiredSlotRepoDays(e.ctx, e.stack.conn, org, dayD, dayD, through, nil, 1000)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -193,9 +193,9 @@ func TestRetiredSlotRepoDaysSelectsTheNewestRetraction(t *testing.T) {
 	plant(org, repoGitLab, "9001", "gitlab-suite", at(dayD), newer, 1) // a GitLab pipeline's key: no provider is read
 	plant(other, repoA, "r1", "s1", at(dayD), newer, 1)
 
-	load := func(repos []string, limit int) []RetiredSlotRepoDay {
+	load := func(repos []string, limit uint64) []RetiredSlotRepoDay {
 		t.Helper()
-		got, err := LoadRetiredSlotRepoDays(e.ctx, e.stack.conn, org, dayD, dayD.AddDate(0, 0, 1), repos, limit)
+		got, err := LoadRetiredSlotRepoDays(e.ctx, e.stack.conn, org, dayD, dayD.AddDate(0, 0, 1), dayD.AddDate(0, 0, 365), repos, limit)
 		if err != nil {
 			t.Fatal(err)
 		}

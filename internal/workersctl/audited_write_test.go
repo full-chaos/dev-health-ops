@@ -52,7 +52,7 @@ func directWriteVerbs() map[string]directWriteVerb {
 		"workgraph repair":                                   {argv: []string{"workgraph", "repair", "--request", id, "--resolution", "retry_safe", "--expected-attempt-count", "1", "--review-evidence", "checked the target has no rows"}, dryRun: true},
 		"metrics exec-repair":                                {argv: []string{"metrics", "execution-repair", "--execution", id, "--expected-state", "ambiguous", "--expected-attempt-count", "1", "--resolution", "retry_safe", "--review-evidence", "checked the target has no rows"}, dryRun: true},
 		"metrics daily-start":                                {argv: []string{"metrics", "daily-start", "--org", org, "--day", "2026-08-01"}},
-		"metrics testops-slot-recompute":                     {argv: []string{"metrics", "testops-slot-recompute", "--org", org, "--from", "2026-08-01", "--to", "2026-08-01", "--rerun-tag", "fix-1", "--apply"}},
+		"metrics testops-slot-recompute":                     {argv: []string{"metrics", "testops-slot-recompute", "--org", org, "--from", "2026-08-01", "--to", "2026-08-01", "--through", "2026-08-01", "--rerun-tag", "fix-1", "--apply"}},
 		"metrics daily-redrive":                              {argv: []string{"metrics", "daily-redrive", "--org", org, "--from", "2026-08-01", "--to", "2026-08-01", "--review-evidence", "testing"}},
 		"metrics daily-finalize":                             {argv: []string{"metrics", "daily-finalize", "--run", id, "--review-evidence", "testing"}},
 		"metrics finalize-redrive":                           {argv: []string{"metrics", "finalize-redrive", "--org", org, "--from", "2026-08-01", "--to", "2026-08-01", "--review-evidence", "testing"}, dryRun: true},

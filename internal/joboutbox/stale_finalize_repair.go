@@ -416,8 +416,7 @@ const (
 	AND run.updated_at <= $1
 	AND run.id NOT IN (
 		SELECT partition.run_id FROM public.daily_metrics_partitions AS partition
-		WHERE (partition.status <> 'succeeded' OR partition.updated_at > $1)
-			AND partition.run_id IS NOT NULL
+		WHERE partition.run_id IS NOT NULL AND $1::timestamptz IS NOT NULL
 	)`
 	// The River arm is an uncorrelated IN, so it reads river_job once per
 	// statement (a hashed subplan), not once per base run: as a correlated

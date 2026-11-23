@@ -221,13 +221,16 @@ func (row securityAlertRow) validate(claim Claim) error {
 
 var _ CompleteRouteHandler = GitHubSecurityRouteHandler{}
 
-// GitHub's documented 403 bodies for a source that is switched off. Code scanning:
-// "Advanced Security must be enabled for this repository to use code scanning"
-// (docs.github.com, code-scanning troubleshooting: advanced-security-must-be-enabled;
-// newer wording says Code Security). Dependabot: "Dependabot alerts are disabled
-// for this repository"; if GitHub words it differently the 403 returns and the
-// unit fails instead of acknowledging an empty source.
+// GitHub's documented 403 messages for a source that is switched off, matched
+// exactly against the JSON "message" field. Code scanning: "Advanced Security
+// must be enabled for this repository to use code scanning." (docs.github.com,
+// code-scanning troubleshooting: advanced-security-must-be-enabled; newer wording
+// says Code Security). Dependabot: "Dependabot alerts are disabled for this
+// repository." (wording not verified in GitHub docs; any other 403 is counted).
 var (
-	githubCodeScanningOffBodies = []string{"advanced security must be enabled", "code security must be enabled"}
-	githubDependabotOffBodies   = []string{"dependabot alerts are disabled"}
+	githubCodeScanningOffBodies = []string{
+		"Advanced Security must be enabled for this repository to use code scanning.",
+		"Code Security must be enabled for this repository to use code scanning.",
+	}
+	githubDependabotOffBodies = []string{"Dependabot alerts are disabled for this repository."}
 )

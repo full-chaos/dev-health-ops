@@ -2,10 +2,10 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
@@ -18,9 +18,35 @@ const (
 	lookupRecorded
 )
 
+func joinedError(err error) bool {
+	for ; err != nil; err = errors.Unwrap(err) {
+		if _, joined := err.(interface{ Unwrap() []error }); joined {
+			return true
+		}
+	}
+	return false
+}
+
+func featureOffMessage(body string, featureOff []string) bool {
+	var answer struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal([]byte(body), &answer) != nil {
+		return false
+	}
+	for _, text := range featureOff {
+		if text != "" && answer.Message == text {
+			return true
+		}
+	}
+	return false
+}
+
 func classifyLookupFailure(err error, featureOff []string) (lookupVerdict, string) {
 	var providerErr *providerfoundation.ProviderError
-	if !errors.As(err, &providerErr) || providerErr == nil || providerErr.AfterResponse() {
+	var authStep *providerfoundation.AuthStepError
+	if !errors.As(err, &providerErr) || providerErr == nil || providerErr.AfterResponse() ||
+		errors.As(err, &authStep) || joinedError(err) {
 		return lookupFails, ""
 	}
 	switch providerErr.Class {
@@ -33,11 +59,8 @@ func classifyLookupFailure(err error, featureOff []string) (lookupVerdict, strin
 		if providerErr.StatusCode != http.StatusForbidden {
 			return lookupFails, ""
 		}
-		body := strings.ToLower(providerErr.Body)
-		for _, text := range featureOff {
-			if text != "" && strings.Contains(body, strings.ToLower(text)) {
-				return lookupAbsent, ""
-			}
+		if featureOffMessage(providerErr.Body, featureOff) {
+			return lookupAbsent, ""
 		}
 		return lookupRecorded, "forbidden"
 	case providerfoundation.ErrorPermanent:

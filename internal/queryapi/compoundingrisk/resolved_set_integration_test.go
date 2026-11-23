@@ -117,7 +117,12 @@ func TestRealClickHouse_FiveHundredOneNamedTeamsStoredRowsAnswerTheLastTeamsRowA
 // max_bytes_to_read unrestricted, max_result_rows 500,000) and its default
 // max_execution_time of 10 s per statement. The work bound reads
 // system.query_log: two statements, each with read_rows at most 1.5 x the
-// 50,000 stored rows, each run with max_execution_time 10. No wall-clock bound.
+// 50,000 stored rows, each run under the 10 s statement deadline. No wall-clock
+// bound. dev-health-go puts that deadline on the context of each statement, and
+// clickhouse-go sends a context deadline to the server as max_execution_time =
+// int(seconds left + 5) (context.go queryOptions), so the server reads 6..15,
+// not 10; a statement run without the 10 s deadline (the 5 min context of this
+// test) would read about 300.
 // The server is private (SYSTEM FLUSH LOGS is a server command) and the log
 // read keeps only this database and the log_comment the two reads carry.
 func TestRealClickHouse_StoredTeamReadsBind50000NamedTeams(t *testing.T) {
@@ -171,16 +176,18 @@ func TestRealClickHouse_StoredTeamReadsBind50000NamedTeams(t *testing.T) {
 
 	exec(t, ctx, conn, "SYSTEM FLUSH LOGS")
 	var statements, overBound, otherLimit uint64
-	if err := conn.QueryRow(ctx, `SELECT count(), countIf(read_rows > ?), countIf(Settings['max_execution_time'] != '10')
+	var limits []string
+	if err := conn.QueryRow(ctx, `SELECT count(), countIf(read_rows > ?),
+        countIf(toUInt64OrZero(Settings['max_execution_time']) NOT BETWEEN 6 AND 15), groupArray(Settings['max_execution_time'])
       FROM system.query_log
       WHERE log_comment = ? AND current_database = currentDatabase()
         AND type = 'QueryFinish' AND query_kind = 'Select'
         AND position(query, 'FROM compounding_risk_daily') > 0`,
-		uint64(n*3/2), tag).Scan(&statements, &overBound, &otherLimit); err != nil {
+		uint64(n*3/2), tag).Scan(&statements, &overBound, &otherLimit, &limits); err != nil {
 		t.Fatalf("read system.query_log: %v", err)
 	}
 	if statements != 2 || overBound != 0 || otherLimit != 0 {
-		t.Errorf("query_log: %d stored team statements, %d with read_rows over %d, %d without max_execution_time 10; want 2, 0, 0",
-			statements, overBound, n*3/2, otherLimit)
+		t.Errorf("query_log: %d stored team statements, %d with read_rows over %d, %d with max_execution_time outside 6..15 (%v); want 2, 0, 0",
+			statements, overBound, n*3/2, otherLimit, limits)
 	}
 }

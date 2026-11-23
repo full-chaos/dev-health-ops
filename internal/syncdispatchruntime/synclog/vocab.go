@@ -131,8 +131,8 @@ var (
 	KeyGuardCappedStale             = Key{"guard.capped_stale"}
 	KeyGuardSlotHeadroom            = Key{"guard.slot_headroom"}
 	KeyGuardHeldBack                = Key{"guard.held_back"}
-	KeyGuardHeldBackRun             = Key{"guard.held_back_run"}
-	KeyGuardHeldBackSignal          = Key{"guard.held_back_signal"}
+	KeyGuardOldestHeldRun           = Key{"guard.oldest_held_run"}
+	KeyGuardOldestHeldSignal        = Key{"guard.oldest_held_signal"}
 	KeyLockWaitBudget               = Key{"lock_wait_budget"}
 	KeyInvalidClaimUnits            = Key{"invalid_claim_units"}
 	KeyCappedCount                  = Key{"capped_count"}

@@ -823,7 +823,7 @@ func emitBucketDecision(ctx context.Context, logger *synclog.Logger, bucket disp
 	if heldBackRun != "" {
 		runLabel = synclog.ParseLabel(runPrefix)
 	}
-	logger.Info(ctx, synclog.MsgDispatchGuardBucketDecision, synclog.Org(synclog.ParseID(bucket.orgID)), synclog.Text(synclog.KeyBucket, synclog.ParseLabel(logBucket)), synclog.Count(synclog.KeyGuardActiveCount, activeCount), synclog.Count(synclog.KeyGuardReclaimedStale, reclaimedStale), synclog.Count(synclog.KeyGuardCappedNew, cappedNew), synclog.Count(synclog.KeyGuardCappedStale, cappedStale), synclog.Count(synclog.KeyGuardSlotHeadroom, slotHeadroom), synclog.Count(synclog.KeyGuardHeldBack, heldBack), synclog.Text(synclog.KeyGuardHeldBackRun, runLabel), synclog.Text(synclog.KeyGuardHeldBackSignal, signal.label()))
+	logger.Info(ctx, synclog.MsgDispatchGuardBucketDecision, synclog.Org(synclog.ParseID(bucket.orgID)), synclog.Text(synclog.KeyBucket, synclog.ParseLabel(logBucket)), synclog.Count(synclog.KeyGuardActiveCount, activeCount), synclog.Count(synclog.KeyGuardReclaimedStale, reclaimedStale), synclog.Count(synclog.KeyGuardCappedNew, cappedNew), synclog.Count(synclog.KeyGuardCappedStale, cappedStale), synclog.Count(synclog.KeyGuardSlotHeadroom, slotHeadroom), synclog.Count(synclog.KeyGuardHeldBack, heldBack), synclog.Text(synclog.KeyGuardOldestHeldRun, runLabel), synclog.Text(synclog.KeyGuardOldestHeldSignal, signal.label()))
 	span := oteltrace.SpanFromContext(ctx)
 	if span == nil || !span.IsRecording() {
 		return
@@ -836,8 +836,8 @@ func emitBucketDecision(ctx context.Context, logger *synclog.Logger, bucket disp
 		attribute.Int("guard.capped_stale", cappedStale),
 		attribute.Int("guard.slot_headroom", slotHeadroom),
 		attribute.Int("guard.held_back", heldBack),
-		attribute.String("guard.held_back_run", runPrefix),
-		attribute.String("guard.held_back_signal", string(signal)),
+		attribute.String("guard.oldest_held_run", runPrefix),
+		attribute.String("guard.oldest_held_signal", string(signal)),
 	}
 	span.SetAttributes(attrs...)
 	span.AddEvent("dispatch_guard.bucket_decision", oteltrace.WithAttributes(attrs...))

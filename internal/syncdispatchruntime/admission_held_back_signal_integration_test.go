@@ -156,9 +156,9 @@ func bucketDecisionLine(t *testing.T, ctx context.Context, pool *pgxpool.Pool, n
 
 func assertHeldBackLine(t *testing.T, line map[string]any, raw string, heldBack float64, run, signal string) {
 	t.Helper()
-	if line["guard.held_back"] != heldBack || line["guard.held_back_run"] != run || line["guard.held_back_signal"] != signal {
-		t.Fatalf("bucket_decision: guard.held_back=%v guard.held_back_run=%v guard.held_back_signal=%v, want %v %q %q:\n%s",
-			line["guard.held_back"], line["guard.held_back_run"], line["guard.held_back_signal"], heldBack, run, signal, raw)
+	if line["guard.held_back"] != heldBack || line["guard.oldest_held_run"] != run || line["guard.oldest_held_signal"] != signal {
+		t.Fatalf("bucket_decision: guard.held_back=%v guard.oldest_held_run=%v guard.oldest_held_signal=%v, want %v %q %q:\n%s",
+			line["guard.held_back"], line["guard.oldest_held_run"], line["guard.oldest_held_signal"], heldBack, run, signal, raw)
 	}
 }
 
@@ -371,7 +371,7 @@ func assertRecheckKeepsTheDecision(t *testing.T, planted, wantSignal string) tim
 		if !reflect.DeepEqual(decision, control) {
 			t.Fatalf("decision = %+v, want the control decision %+v", decision, control)
 		}
-		if want := `"guard.held_back":2,"guard.held_back_run":"14403a0e","guard.held_back_signal":"` + wantSignal + `"`; !strings.Contains(logs.String(), want) {
+		if want := `"guard.held_back":2,"guard.oldest_held_run":"14403a0e","guard.oldest_held_signal":"` + wantSignal + `"`; !strings.Contains(logs.String(), want) {
 			t.Fatalf("no %s bucket_decision line:\n%s", wantSignal, logs.String())
 		}
 		for _, leaked := range []string{"division", "22012", "57014", "cancel", "timeout"} {

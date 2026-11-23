@@ -58,8 +58,8 @@ func TestHeldBackSignalsLogAsTheirClosedLabels(t *testing.T) {
 	for _, signal := range allHeldBackSignals {
 		var buf bytes.Buffer
 		synclog.New(slog.New(slog.NewTextHandler(&buf, nil))).Info(context.Background(), synclog.MsgDispatchGuardBucketDecision,
-			synclog.Text(synclog.KeyGuardHeldBackSignal, signal.label()))
-		want := "guard.held_back_signal=" + string(signal) + "\n"
+			synclog.Text(synclog.KeyGuardOldestHeldSignal, signal.label()))
+		want := "guard.oldest_held_signal=" + string(signal) + "\n"
 		if !strings.HasSuffix(buf.String(), want) || seen[string(signal)] {
 			t.Fatalf("signal %q logged as %q", signal, buf.String())
 		}
@@ -154,21 +154,23 @@ func TestHeldBackSignalIsReadOnlyWhenTheBucketHeldSlotsBack(t *testing.T) {
 	}
 }
 
-// guard.held_back keeps its key and bare integer form (a roll script greps it followed by a number); the new keys
-// follow it.
+// guard.held_back keeps its key and bare integer form (a roll script greps it followed by a number), and no other key
+// of the line starts with it.
 func TestBucketDecisionHeldBackValueFormIsUnchanged(t *testing.T) {
 	bucket := dispatchBucket{orgID: "123e4567-e89b-12d3-a456-426614174000", provider: "github", costClass: "medium"}
 	var text, json bytes.Buffer
 	emitBucketDecision(context.Background(), synclog.New(slog.New(slog.NewTextHandler(&text, nil))), bucket, 0, 0, 3, 0, 0, 2, "14403a0e-0000-4000-8000-000000014403", heldBackSignalWakeArmed)
 	emitBucketDecision(context.Background(), synclog.New(slog.New(slog.NewJSONHandler(&json, nil))), bucket, 0, 0, 3, 0, 0, 2, "14403a0e-0000-4000-8000-000000014403", heldBackSignalWakeArmed)
-	if want := " guard.held_back=2 guard.held_back_run=14403a0e guard.held_back_signal=wake_armed\n"; !strings.HasSuffix(text.String(), want) {
+	if want := " guard.held_back=2 guard.oldest_held_run=14403a0e guard.oldest_held_signal=wake_armed\n"; !strings.HasSuffix(text.String(), want) {
 		t.Fatalf("text line %q, want suffix %q", text.String(), want)
 	}
-	if want := `,"guard.held_back":2,"guard.held_back_run":"14403a0e","guard.held_back_signal":"wake_armed"}`; !strings.Contains(json.String(), want) {
+	if want := `,"guard.held_back":2,"guard.oldest_held_run":"14403a0e","guard.oldest_held_signal":"wake_armed"}`; !strings.Contains(json.String(), want) {
 		t.Fatalf("json line %q, want %q", json.String(), want)
 	}
-	if matches := regexp.MustCompile(`guard\.held_back[=":]+[0-9]`).FindAllString(text.String()+json.String(), -1); len(matches) != 2 {
-		t.Fatalf("guard.held_back followed by a number appears %d times (%v), want once per line", len(matches), matches)
+	for _, line := range []string{text.String(), json.String()} {
+		if count := strings.Count(line, "guard.held_back"); count != 1 {
+			t.Fatalf("guard.held_back appears %d times in %q, want once: no other key may start with it", count, line)
+		}
 	}
 }
 
@@ -194,7 +196,7 @@ func TestBucketDecisionSpanEventCarriesTheHeldBackRunAndSignal(t *testing.T) {
 			got[string(attr.Key)] = attr.Value
 		}
 		if got["guard.held_back"].Type() != attribute.INT64 || got["guard.held_back"].AsInt64() != want.heldBack ||
-			got["guard.held_back_run"].AsString() != want.run || got["guard.held_back_signal"].AsString() != want.signal {
+			got["guard.oldest_held_run"].AsString() != want.run || got["guard.oldest_held_signal"].AsString() != want.signal {
 			t.Fatalf("event %d attributes %v, want held_back=%d run=%q signal=%q", index, got, want.heldBack, want.run, want.signal)
 		}
 	}

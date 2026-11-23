@@ -181,3 +181,22 @@ func TestGitHubTestsDeepStopIsCountedAndLogged(t *testing.T) {
 		})
 	}
 }
+
+// A walk record bound reached inside the runs deep range is not a page-budget stop: main records it as the same
+// late_rerun_runs observation, but the deep-stop line and counter stay at 0 (they count the page budget only).
+func TestGitHubTestsDeepWalkBoundIsNotCountedAsAPageBudgetStop(t *testing.T) {
+	claim := lateRerunMidnightClaim("incremental")
+	runs := append(lateRerunRuns(1, 3, claim.SinceAt.UTC()), makeListingRuns(9000, 1, claim.SinceAt.Add(5*time.Minute), time.Second)...)
+	walk := walkDeepStop(t, GitHubTestsRouteHandler{MaxWalkRecords: 2, OpenRuns: &fakeOpenRuns{}}, claim, runs)
+	if observed := deepStopObservations(t, walk.final, githubTestsLateRerunRunsComponent); observed != 1 {
+		t.Fatalf("late_rerun_runs observations=%d, want 1 (the fixture: a walk bound inside the deep range)", observed)
+	}
+	for _, listing := range []string{"runs", "reports"} {
+		if lines, counted := deepStopLines(t, walk.records, listing, 0), deepStopCount(t, walk.metrics, listing); lines != 0 || counted != 0 {
+			t.Errorf("%s: deep-stop lines=%d counter=%d at a walk bound, want 0", listing, lines, counted)
+		}
+	}
+	if walk.final.Watermark == nil || !walk.final.Watermark.Equal(*claim.BeforeAt) {
+		t.Errorf("watermark=%v, want the window end (main)", walk.final.Watermark)
+	}
+}

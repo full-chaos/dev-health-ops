@@ -264,6 +264,7 @@ type Metrics struct {
 	budgetReleaseErrors            map[string]uint64
 	gatePenalizeErrors             map[string]uint64
 	inventoryPageCap               map[string]uint64
+	deepStop                       map[string]uint64
 	perRunTruncation               map[string]uint64
 	artifactSkipped                map[string]uint64
 	openRunSkipped                 map[string]uint64
@@ -332,6 +333,7 @@ func NewMetrics() *Metrics {
 		budgetReleaseErrors:            map[string]uint64{},
 		gatePenalizeErrors:             map[string]uint64{},
 		inventoryPageCap:               map[string]uint64{},
+		deepStop:                       map[string]uint64{},
 		perRunTruncation:               map[string]uint64{},
 		artifactSkipped:                map[string]uint64{},
 		openRunSkipped:                 map[string]uint64{},
@@ -465,6 +467,21 @@ func (m *Metrics) RecordInventoryPageCap(provider, dataset string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.inventoryPageCap[metricProvider(provider)+":"+MetricDatasetLabel(dataset)]++
+}
+
+// RecordDeepListingStop counts ONE deep listing (the GitHub tests/cicd late re-run relist: listing "runs" or "reports")
+// that stopped at its page budget before its oldest runs (CHAOS-14520). The stop advances the watermark, as before; this
+// series is the only signal that it happened. An unknown listing collapses to "other".
+func (m *Metrics) RecordDeepListingStop(provider, dataset, listing string) {
+	if m == nil {
+		return
+	}
+	if listing != "runs" && listing != "reports" {
+		listing = "other"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deepStop[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+":"+listing]++
 }
 
 // metricPerRunComponentVocabulary is the closed set of per-run truncation
@@ -1893,6 +1910,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_provider_inventory_page_cap_total",
 		"Provider inventory phases that stopped at their cumulative page budget, by bounded provider and dataset.",
 		m.inventoryPageCap,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetReasonCounter(
+		writer, "dev_health_provider_deep_stop_total",
+		"Deep listings (the late re-run relist of the runs or the reports) that stopped at their page budget; the watermark advances. By bounded provider, dataset, and listing (CHAOS-14520).",
+		"listing", m.deepStop,
 	); err != nil {
 		return err
 	}

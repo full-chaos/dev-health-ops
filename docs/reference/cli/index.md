@@ -1098,6 +1098,35 @@ WHERE dedupe_key LIKE 'metrics.daily_partition:redrive:%'
 ORDER BY created_at DESC;
 ```
 
+#### `metrics testops-slot-recompute`
+
+The daily recurrence of a day X reads the 29 days before it. A later sync that retires
+a test report slot of a run on day D writes retraction rows, and the post-sync run
+computes only D. The days D+1 .. D+29 that were computed before keep the recurrence
+that counted the retired slot. This verb computes those days again.
+
+```bash
+kubectl exec -i <worker-pod> -- dho workers metrics testops-slot-recompute \
+  --org-stdin --from 2026-08-01 --to 2026-08-07 [--repo-id <uuid> ...] [--through 2026-09-05] \
+  --rerun-tag <tag> [--max-repo-days 200] [--apply --reason <code> --correlation-id <id>] < org-id-source
+```
+
+- The verb selects every repository-day of a run whose test suite key has a retraction
+  row as its newest version, with the retraction's day in `--from` .. `--to` (at most
+  31 days). No provider is named: every provider that writes retraction rows is
+  selected. It expands each day D to D .. D+29, up to `--through` (default: today, UTC).
+  D is in the set, so a lost post-sync run of D is repaired too.
+- Without `--apply` it only previews: it prints the days, the repository count of each
+  day and the first 8 characters of each repository id, and writes nothing.
+- `--apply` starts one tagged daily run per day for its repositories, through the
+  `metrics daily-start --rerun-tag` path, so a second call with the same tag starts
+  nothing. It needs `--reason` and `--correlation-id`, and the audit row is written
+  before the selection.
+- More repository-days than `--max-repo-days` (default 200) is a stop with the count
+  (`repo_day_cap`), before any run starts.
+- Run it from a `go-scheduler` or `go-reconciler` pod: like every `dho workers` verb it
+  needs the coordinator DSN, and it reads ClickHouse through `CLICKHOUSE_URI`.
+
 #### `metrics daily-finalize`
 
 Repair a daily-metrics run stranded one step LATER than `daily-redrive`

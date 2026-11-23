@@ -9,13 +9,21 @@ package daily
 // the production executors, and compare the STORED rows with CONTROL: the same syncs with every day computed after them.
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"os"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
 
 // laterDaysRetiredDay is the day D of the run whose slot total-b is retired.
@@ -33,10 +41,16 @@ func laterDaysFailure(t *testing.T, day time.Time) attemptsRunState {
 // laterDaysCompute runs the pipeline, test and risk executors for the org's repository and day, as one daily partition does.
 func (e *f3Env) laterDaysCompute(org string, day time.Time) {
 	e.t.Helper()
+	// computed_at is whole seconds: keep two computes of one day two units apart (f3Env.compute).
 	time.Sleep(2100 * time.Millisecond)
-	repo := e.stack.repoID(e.t, org)
+	e.laterDaysComputeRepos(org, day, []RepositoryID{RepositoryID(e.stack.repoID(e.t, org).String())})
+}
+
+// laterDaysComputeRepos is laterDaysCompute for the given repositories, with no pause: the caller keeps a day's computes apart.
+func (e *f3Env) laterDaysComputeRepos(org string, day time.Time, repos []RepositoryID) {
+	e.t.Helper()
 	run := Run{ID: "run-" + org + "-" + day.Format(time.DateOnly) + "-" + uuid.NewString()[:8], OrganizationID: org, TargetDay: day}
-	part := Partition{ID: "part-" + run.ID, RunID: run.ID, RepoIDs: []RepositoryID{RepositoryID(repo.String())}}
+	part := Partition{ID: "part-" + run.ID, RunID: run.ID, RepoIDs: repos}
 	pipeline, err := NewTestopsPipelineExecutor(e.stack.conn)
 	if err != nil {
 		e.t.Fatal(err)
@@ -108,6 +122,11 @@ func TestTestopsRetiredSlotLaterDaysServeTheControlRecurrence(t *testing.T) {
 			t.Fatalf("k=%d: total-b %d live, %d retracted rows; want 2 and 2", k, live, retracted)
 		}
 		e.laterDaysCompute(stale, dayD)
+		if os.Getenv("CELL14544_PLANT_NO_REPAIR") == "1" {
+			t.Logf("CELL PLANT: the repair is skipped")
+		} else {
+			e.laterDaysRepair(stale, dayD, dayX)
+		}
 
 		if got := e.row(stale, dayX); !reflect.DeepEqual(got, want) {
 			t.Errorf("k=%d: STALE stores D+%d as %v; want CONTROL %v", k, k, got, want)
@@ -115,7 +134,93 @@ func TestTestopsRetiredSlotLaterDaysServeTheControlRecurrence(t *testing.T) {
 		if got := e.laterDaysRisk(stale, dayX); got != wantRisk {
 			t.Errorf("k=%d: STALE stores the D+%d release confidence %+v; want CONTROL %+v", k, k, got, wantRisk)
 		}
+
+		// A second repair of the same window stores the same measures: the recompute is idempotent.
+		if os.Getenv("CELL14544_PLANT_NO_REPAIR") != "1" {
+			e.laterDaysRepair(stale, dayD, dayX)
+			if got := e.row(stale, dayX); !reflect.DeepEqual(got, want) {
+				t.Errorf("k=%d: after a second repair STALE stores D+%d as %v; want CONTROL %v", k, k, got, want)
+			}
+			if got := e.laterDaysRisk(stale, dayX); got != wantRisk {
+				t.Errorf("k=%d: after a second repair the D+%d release confidence %+v; want CONTROL %+v", k, k, got, wantRisk)
+			}
+		}
 	}
+}
+
+// laterDaysRepair is the repair of one org: the retired-slot repository-days of [D, D] (LoadRetiredSlotRepoDays, the verb's
+// statement), expanded to D .. D+29 up to through (RetiredSlotRecomputeDays), each day computed for its repositories.
+func (e *f3Env) laterDaysRepair(org string, dayD, through time.Time) {
+	e.t.Helper()
+	pairs, err := LoadRetiredSlotRepoDays(e.ctx, e.stack.conn, org, dayD, dayD, nil, 1000)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	repo := e.stack.repoID(e.t, org).String()
+	if want := []RetiredSlotRepoDay{{repo, dayD}}; !reflect.DeepEqual(pairs, want) {
+		e.t.Fatalf("retired-slot repository-days %v, want %v", pairs, want)
+	}
+	days := RetiredSlotRecomputeDays(pairs, through)
+	time.Sleep(2100 * time.Millisecond)
+	for _, day := range days {
+		e.laterDaysComputeRepos(org, day.Day, day.RepoIDs)
+	}
+	e.t.Logf("CELL REPAIR org=%s computed %d days (%s .. %s)", org, len(days), days[0].Day.Format(time.DateOnly), days[len(days)-1].Day.Format(time.DateOnly))
+}
+
+// TestRetiredSlotRepoDaysSelectsTheNewestRetraction: the verb's statement on planted rows. It returns every day of a run whose
+// newest version of a key is a retraction row with the retraction's day in the window, for any provider (no provider column is
+// read), and nothing for a revived key, another org, a day outside the window or a repository outside the filter.
+func TestRetiredSlotRepoDaysSelectsTheNewestRetraction(t *testing.T) {
+	e := f3Start(t)
+	dayD := laterDaysRetiredDay()
+	org, other := "c14544-select-"+uuid.NewString()[:8], "c14544-other-"+uuid.NewString()[:8]
+	repoA, repoB, repoGitLab := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	older, newer := dayD.AddDate(0, 0, 2), dayD.AddDate(0, 0, 3)
+	plant := func(org, repo, run, suite string, started, synced time.Time, retracted uint8) {
+		t.Helper()
+		e.exec(`INSERT INTO test_suite_results (org_id, repo_id, run_id, suite_id, suite_name, total_count, passed_count, failed_count,
+  skipped_count, started_at, last_synced, retracted) VALUES (?, ?, ?, ?, 's', 1, 1, 0, 0, ?, ?, ?)`, org, repo, run, suite, started, synced, retracted)
+	}
+	at := func(day time.Time) time.Time { return day.Add(10 * time.Hour) }
+	plant(org, repoA, "r1", "s1", at(dayD), older, 0)
+	plant(org, repoA, "r1", "s1", at(dayD), newer, 1)                  // retired on D
+	plant(org, repoA, "r1", "s2", at(dayD.AddDate(0, 0, 1)), older, 0) // the same run on D+1
+	plant(org, repoA, "r2", "s3", at(dayD), older, 1)
+	plant(org, repoA, "r2", "s3", at(dayD), newer, 0)                   // revived at the same key
+	plant(org, repoA, "r3", "s4", at(dayD.AddDate(0, 0, 40)), newer, 1) // outside the window
+	plant(org, repoB, "r4", "s5", at(dayD), newer, 1)
+	plant(org, repoGitLab, "9001", "gitlab-suite", at(dayD), newer, 1) // a GitLab pipeline's key: no provider is read
+	plant(other, repoA, "r1", "s1", at(dayD), newer, 1)
+
+	load := func(repos []string, limit int) []RetiredSlotRepoDay {
+		t.Helper()
+		got, err := LoadRetiredSlotRepoDays(e.ctx, e.stack.conn, org, dayD, dayD.AddDate(0, 0, 1), repos, limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	want := []RetiredSlotRepoDay{{repoA, dayD}, {repoA, dayD.AddDate(0, 0, 1)}, {repoB, dayD}, {repoGitLab, dayD}}
+	sortRetiredSlotRepoDays(want)
+	if got := load(nil, 100); !reflect.DeepEqual(got, want) {
+		t.Errorf("selection %v, want %v", got, want)
+	}
+	if got := load([]string{repoB}, 100); !reflect.DeepEqual(got, []RetiredSlotRepoDay{{repoB, dayD}}) {
+		t.Errorf("repository filter: %v, want only repo B's day", got)
+	}
+	if got := load(nil, 2); !reflect.DeepEqual(got, want[:2]) {
+		t.Errorf("row cap 2: %v, want %v", got, want[:2])
+	}
+}
+
+func sortRetiredSlotRepoDays(rows []RetiredSlotRepoDay) {
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].RepoID != rows[j].RepoID {
+			return rows[i].RepoID < rows[j].RepoID
+		}
+		return rows[i].Day.Before(rows[j].Day)
+	})
 }
 
 // TestTestopsBackfillReWalkRetiresAStoredStaleSlot: the repair's re-walk is a backfill unit (`dho backfill run`) over the run's
@@ -166,5 +271,78 @@ func TestTestopsBackfillReWalkRetiresAStoredStaleSlot(t *testing.T) {
 				t.Errorf("pending days after the walk %v: D touched %t, want %t", pending.Days, touched, arm.retracted > 0)
 			}
 		})
+	}
+}
+
+// TestRecordChaos14544VerbFixture records internal/workersctl/testdata/chaos14544_retired_slot_emission.json, the fixture of the
+// verb's end-state cell (workersctl cannot import these helpers): the emissions of the production chunked route for run R on D
+// at attempt 1 (R1) and attempt 2 (R2, total-b retired) and for run S on D+1 (case a failed). It needs no database and runs only
+// with CHAOS14544_RECORD=<path>.
+func TestRecordChaos14544VerbFixture(t *testing.T) {
+	out := os.Getenv("CHAOS14544_RECORD")
+	if out == "" {
+		t.Skip("CHAOS14544_RECORD is not set")
+	}
+	const org = "00000000-0000-4000-8000-000000014544"
+	dayD := laterDaysRetiredDay()
+	dayX := dayD.AddDate(0, 0, 1)
+	first, second := retiredTwoAttemptStates(t, dayD, false)
+	type pass struct {
+		Name    string                  `json:"name"`
+		Effects []retiredRecordedEffect `json:"effects"`
+	}
+	var passes []pass
+	for _, item := range []struct {
+		name, run string
+		since     time.Time
+		state     attemptsRunState
+	}{
+		{"R1", "43600014544", dayD.Add(10 * time.Hour), first},
+		{"R2", "43600014544", dayD.Add(11 * time.Hour), second},
+		{"S", "43600014545", dayX.Add(10 * time.Hour), laterDaysFailure(t, dayX)},
+	} {
+		before := item.since.Add(time.Hour)
+		capability, _ := providersync.Capability("github", "tests")
+		claim := providersync.Claim{
+			Unit: providersync.Unit{
+				ID: uuid.NewString(), SyncRunID: uuid.NewString(), OrgID: org,
+				IntegrationID: uuid.NewString(), SourceID: uuid.NewString(),
+				SourceExternalID: "acme/api", SourceName: "acme/api",
+				Provider: "github", Dataset: "tests", CostClass: capability.CostClass,
+				Mode: "incremental", SinceAt: &item.since, BeforeAt: &before,
+				CredentialID: uuid.NewString(), AuthSource: "integration_credential",
+			},
+			Owner: uuid.NewString(), Attempt: 1, LeaseExpiresAt: before.Add(time.Hour),
+		}
+		doer := &attemptsDoer{t: t, runID: item.run, state: item.state}
+		lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+		client, err := providerfoundation.NewHTTPClient("github", "https://api.github.com", fakehttp.Client(doer),
+			func(request *http.Request) error { request.Header.Set("Authorization", "Bearer secret"); return nil },
+			providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}, lease)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recorded := pass{Name: item.name}
+		err = providersync.GitHubTestsRouteHandler{}.CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client,
+			before.Add(5*time.Minute), "", func(emission providersync.ChunkRouteEmission) error {
+				for _, effect := range emission.Batch.Effects {
+					if len(effect.Rows) == 0 {
+						continue
+					}
+					recorded.Effects = append(recorded.Effects, retiredRecordedEffect{Destination: effect.Destination, Rows: effect.Rows})
+				}
+				return nil
+			})
+		if err != nil {
+			t.Fatalf("%s: CollectChunks: %v", item.name, err)
+		}
+		passes = append(passes, recorded)
+	}
+	encoded, err := json.MarshalIndent(passes, "", " ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(out, append(encoded, '\n'), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -1295,8 +1295,8 @@ func TestReadPlan4Form14548ExecutesAtTheChainHead(t *testing.T) {
 		return n
 	}
 	// threshold above every read: the known-overlap runs (D) read "low" -> 'fails'.
-	high := strings.ReplaceAll(replaced("S3", ">= 47000", ">= 99999999"), "< 47000", "< 99999999")
-	if n := verdicts(mutateWith("S3-threshold", high), "fails"); n == 0 {
+	allLow := strings.ReplaceAll(replaced("S3", ">= 47000", ">= 99999999"), "< 47000", "< 99999999")
+	if n := verdicts(mutateWith("S3-threshold", allLow), "fails"); n == 0 {
 		t.Errorf("MUTATE S3 threshold: no 'fails' verdict, the prediction cannot fail")
 	}
 	// org range moved: D loses its known overlap -> high read with no overlap shown = 'not_shown' (lower bound, never 'fails').

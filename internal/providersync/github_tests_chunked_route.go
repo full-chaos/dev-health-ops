@@ -39,46 +39,70 @@ func (doer githubTestsChunkCountingDoer) Do(request *http.Request) (*http.Respon
 	response, err := doer.delegate.Do(request)
 	if response != nil && doer.observed != nil {
 		doer.observed.observe(response.Header)
-		doer.floor.check(response.StatusCode, response.Header)
+		doer.floor.check(request, response)
 	}
 	return response, err
 }
 
 // githubTestsRateFloorGate stops an open-phase retry under the rate floor (CHAOS-14518). The HTTP client retries a
-// retryable answer (5xx, 429, a 403 rate limit) inside one call, so the per-run floor check after the call saw only the
-// last attempt's headers: a retry sent under the floor, and its success headers hiding the low reading. While armed (the
-// open phase only), the counting doer marks the gate stopped when a 5xx, a 429 or a 403 reports the remaining requests
-// under the floor. Every 403 counts: the client classes a 403 as a retryable rate limit by its headers or by its body text
-// (providerfoundation ClassifyHTTPWithMessage), and the doer reads no body (response_read census); a 403 the client does
-// not retry is not refused, as nothing follows it in that call. The client then refuses its next attempt in its own
-// pre-attempt gate wait (githubTestsFloorBackoffGate): the call ends before any wire request, and the context stays live,
-// so a 429 still penalizes the shared backoff gate. Disarmed, it does nothing.
+// retryable answer inside one call, so the per-run floor check after the call saw only the last attempt's headers: a
+// retry sent under the floor, and its success headers hiding the low reading. While armed (the open phase only), the
+// counting doer reads each answer, with ONE source for each question:
+//   - headroom: the client's rate-limit parser (parseRequestRateLimit, aliases included) on the answer's own headers;
+//     no usable remaining/limit pair is unknown headroom (fail closed, as belowFloor); the floor is strict
+//     (remaining < floor), as the per-run check;
+//   - arming: the client's own classification. An answer it retries by its headers alone (5xx, 429, a 403 with rate
+//     headers) stops the gate at once; any other error answer only marks it pending, and the client's Penalize, which it
+//     calls exactly when it classes that answer a rate limit (here: a 403 by its body), confirms it. The doer reads no body
+//     (response_read census). A 403 permission denial, a 404 or a success never stop the gate;
+//   - a transient answer (5xx) with no remaining/limit pair keeps main's path: retried, then a transient skip.
+//
+// The client then refuses its next attempt in its own pre-attempt gate wait (githubTestsFloorBackoffGate): the call ends
+// before any wire request, and the context stays live, so a 429 still penalizes the shared backoff gate.
 type githubTestsRateFloorGate struct {
-	armed, stopped bool
-	// remaining is the reading of the answer that stopped the gate: -1 when that answer cannot show headroom (no rate
-	// headers, or not both of remaining and limit): fail closed.
-	remaining int64
+	armed, stopped, pending bool
+	// remaining is the reading of the answer that stopped the gate (-1: unknown headroom); pendingRemaining that of the
+	// answer waiting for the client's rate-limit class.
+	remaining, pendingRemaining int64
 }
 
 var errGitHubTestsRateFloor = errors.New("github tests open phase: retry refused under the rate-limit floor")
 
-// check reads the floor on the answer's OWN headers, never on an earlier reading: a 429 or a 403 that cannot show headroom,
-// or a 5xx whose rate headers are not a usable pair, stops the gate (fail closed). The invocation's observer still keeps the latest usable reading for the per-run check.
-func (gate *githubTestsRateFloorGate) check(status int, header http.Header) {
-	if gate == nil || !gate.armed || gate.stopped ||
-		status < http.StatusInternalServerError && status != http.StatusTooManyRequests && status != http.StatusForbidden {
+func (gate *githubTestsRateFloorGate) check(request *http.Request, response *http.Response) {
+	if gate == nil || !gate.armed || gate.stopped {
 		return
 	}
-	// A 5xx with no rate header at all (an edge or gateway answer) keeps main's path: the client retries it, and a last
-	// failure takes the open phase's transient skip, so one such run never ends the phase for the runs after it.
-	if status >= http.StatusInternalServerError && header.Get("X-RateLimit-Remaining") == "" && header.Get("X-RateLimit-Limit") == "" {
+	gate.pending = false
+	path := ""
+	if request != nil && request.URL != nil {
+		path = request.URL.Path
+	}
+	class := providerfoundation.ClassifyHTTPForRequest("github", path, response.StatusCode, response.Header, "")
+	if class == nil {
+		return
+	}
+	rateLimit, _ := parseRequestRateLimit(response.Header)
+	if class.Class == providerfoundation.ErrorTransient && rateLimit.Remaining == nil && rateLimit.Limit == nil {
 		return
 	}
 	var current githubTestsRateObserver
-	current.observe(header)
-	if hit, remaining := current.belowFloor(); hit {
+	current.observe(response.Header)
+	hit, remaining := current.belowFloor()
+	switch {
+	case !hit:
+	case class.Retryable():
 		gate.stopped, gate.remaining = true, remaining
+	default:
+		gate.pending, gate.pendingRemaining = true, remaining
 	}
+}
+
+// confirm: the client classed the pending answer a rate limit (it penalizes the backoff gate for exactly that class).
+func (gate *githubTestsRateFloorGate) confirm() {
+	if gate.armed && gate.pending && !gate.stopped {
+		gate.stopped, gate.remaining = true, gate.pendingRemaining
+	}
+	gate.pending = false
 }
 
 // githubTestsFloorBackoffGate is the client's backoff gate while the open phase runs: the client waits on it before every
@@ -93,6 +117,8 @@ func (gate githubTestsFloorBackoffGate) Wait(ctx context.Context) (time.Duration
 	if gate.floor.armed && gate.floor.stopped {
 		return 0, errGitHubTestsRateFloor
 	}
+	// A new call or attempt: an unconfirmed pending answer is not a rate limit.
+	gate.floor.pending = false
 	if gate.inner == nil {
 		return 0, nil
 	}
@@ -100,6 +126,7 @@ func (gate githubTestsFloorBackoffGate) Wait(ctx context.Context) (time.Duration
 }
 
 func (gate githubTestsFloorBackoffGate) Penalize(ctx context.Context, penalty time.Duration) error {
+	gate.floor.confirm()
 	if gate.inner == nil {
 		return nil
 	}

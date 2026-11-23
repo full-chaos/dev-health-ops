@@ -1353,6 +1353,12 @@ func transitionInstantKey(row workItemTransitionStoredRow) string {
 	}, workItemKeySeparator)
 }
 
+// transitionSortingKey is the work_item_transitions sorting key of a row: (org_id, repo_id, work_item_id,
+// occurred_at, tie_ordinal).
+func transitionSortingKey(row workItemTransitionStoredRow) string {
+	return transitionInstantKey(row) + workItemKeySeparator + strconv.FormatUint(uint64(row.TieOrdinal), 10)
+}
+
 func transitionTieOrder(row workItemTransitionStoredRow) string {
 	return strings.Join([]string{
 		row.ToStatusRaw, row.FromStatusRaw, row.Actor, row.ToStatus, row.FromStatus,

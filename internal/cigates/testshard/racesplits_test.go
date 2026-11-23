@@ -392,7 +392,9 @@ func TestTheRaceLegRunsEachPartAloneByItsAnchoredNames(t *testing.T) {
 		`names="$(test_split_listed_names "${module_dir}" "${pkg}" "${parts}" -race)"`,
 		`-v cutkey="${key}" -v cutparts="${parts}" -v cutpart="${part}" -v restpart="${parts}"`,
 		`-v splits="${GO_RACE_SPLITS}" -v tests="${GO_RACE_SPLIT_WEIGHTS}" -v rserial="${GO_RACE_SERIAL_WEIGHTING}" -v rk="${GO_RACE_BATCH_OVERLAP}" -v apart="$(if [ "${module_dir}" = "." ]; then printf '%s' "${GO_RACE_APART}"; fi)" -v rcap="$(if [ "${module_dir}" = "." ]; then race_leg_weight_cap "${count}"; else printf '0\n'; fi)" -f "${ROOT}/ci/go_race_shard.awk"`,
-		`-run "^($(printf '%s\n' "${names}" | paste -sd'|' -))\$" "${pkg}"`,
+		`chunks="$(printf '%s\n' "${names}" | go_run_name_chunks)"`,
+		`go_test_run_chunks "${pkg}" "${chunks}" go_test_leg "${racelog}" "${partjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}"`,
+		`    (set -e; "$@" -run "^(${chunk})\$" "${pkg}")` + "\n",
 		`-f "${GO_RACE_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_race_unweighted_slow.awk}" "${partjson}"`,
 		`-v failthresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_FAIL_SECONDS:-45}" -v summary="${GITHUB_STEP_SUMMARY:-}" -v rowprefix="${key}"$'\t' -v rowunit=s`,
 	} {

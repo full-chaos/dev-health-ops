@@ -111,15 +111,26 @@ type chaos14184Stored []githubWorkItemTransitionRow
 func (stored chaos14184Stored) StoredTransitions(
 	_ context.Context, orgID string, ids []string,
 ) ([]githubWorkItemTransitionRow, error) {
+	// Each row at the key the transitions writer gives it.
+	keys := map[string]uint32{}
+	for _, row := range rankTransitionTies(projectRows(stored, projectWorkItemTransition)) {
+		keys[chaos14184StoredContent(row)] = row.TieOrdinal
+	}
 	var out []githubWorkItemTransitionRow
 	for _, row := range stored {
 		for _, id := range ids {
 			if row.OrgID == orgID && row.WorkItemID == id {
+				row.storedTieOrdinals = []uint32{keys[chaos14184StoredContent(projectWorkItemTransition(row))]}
 				out = append(out, row)
 			}
 		}
 	}
 	return out, nil
+}
+
+func chaos14184StoredContent(row workItemTransitionStoredRow) string {
+	return transitionInstantKey(row) + workItemKeySeparator + strconv.FormatUint(uint64(row.BoardSlot), 10) +
+		workItemKeySeparator + transitionTieOrder(row)
 }
 
 func chaos14184Merge(t *testing.T, repository, board githubWorkItemRows, stored ...githubWorkItemTransitionRow) githubWorkItemRows {

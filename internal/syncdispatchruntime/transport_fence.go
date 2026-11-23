@@ -33,14 +33,25 @@ const transportReferencePredicate = `
       AND route.generation = $4
       AND route.paused = false`
 
+// commitBarrierSQL is the statement right before commitSnapshotSQL, in the same
+// (sub)transaction. syncroute.Controller (Pause, Resume, ApplyCheckedIn) and the
+// river migrate route converge take the route row FOR UPDATE and then SHARE ROW
+// EXCLUSIVE on this table; ROW EXCLUSIVE conflicts with that, so no route
+// mutation can commit between the snapshot and the pass's COMMIT (CHAOS-14523).
+// A mutation that holds or waits for its barrier fails this lock (55P03); after
+// it commits, the snapshot sees its route. The domain role cannot lock routes,
+// but its table INSERT/UPDATE grant on sync_dispatch_outbox allows this lock.
+// NOWAIT, for the same reason as the snapshot: no wait-for edge.
+const commitBarrierSQL = `LOCK TABLE public.sync_dispatch_outbox IN ROW EXCLUSIVE MODE NOWAIT`
+
 // commitSnapshotSQL is the pass's last statement before COMMIT: it locks the
 // delivery's outbox row and returns the row and route images that decideCommit
 // judges, so the decision and the reason a refusal reports come from one
 // snapshot. The lock is held to COMMIT or to the refusal's rollback, so neither
 // a wake nor a relay claim can move the row in between. NOWAIT: the pass, which
 // already holds its unit, run and sibling outbox locks, never waits for this
-// row, so the lock adds no wait-for edge. Only the outbox row is locked: the
-// domain role cannot lock routes.
+// row, so the lock adds no wait-for edge. The route row is read, not locked:
+// commitBarrierSQL holds route mutations off.
 const commitSnapshotSQL = `
 SELECT outbox.status, outbox.dispatched_transport, outbox.dispatched_route_generation, outbox.attempts,
        outbox.claim_token IS NULL,
@@ -176,6 +187,22 @@ const FenceCommitSnapshotBusyCounter = "sync_fence_commit_snapshot_busy_total"
 // commitSnapshotBusyReason names a fenced commit that gave up on a held row.
 const commitSnapshotBusyReason = "outbox_row_held_past_bound"
 
+// commitBarrierBusyReason names a fenced commit that gave up because a route
+// mutation held (or waited for) its barrier to the end of the retry window.
+const commitBarrierBusyReason = "outbox_route_barrier_held_past_bound"
+
+// errCommitBarrierHeld marks a 55P03 of commitBarrierSQL; the PostgreSQL error
+// stays in the chain, so isLockNotAvailable still sees it.
+var errCommitBarrierHeld = errors.New("route mutation barrier held")
+
+// commitBusyReason is the give-up reason for the last 55P03 of the window.
+func commitBusyReason(err error) string {
+	if errors.Is(err, errCommitBarrierHeld) {
+		return commitBarrierBusyReason
+	}
+	return commitSnapshotBusyReason
+}
+
 // commitOutcome is a fenced commit's result: a refusal carries the reason and
 // the route generation from the same snapshot that refused it.
 type commitOutcome struct {
@@ -193,10 +220,10 @@ func (fence *transportFence) current(ctx context.Context, tx pgx.Tx) (bool, erro
 
 // commit commits tx only while the delivery is not superseded. A refusal
 // (committed false, nil error) commits nothing: the caller's deferred Rollback
-// discards the pass and releases the row. A row held by another transaction
-// (SQLSTATE 55P03) is read again within commitSnapshotLockBackoff; a row still
-// held after it, or any other read error, returns the service's unavailable
-// error, so River retries the same delivery.
+// discards the pass and releases the row. A row held by another transaction, or
+// a route barrier a route mutation holds (SQLSTATE 55P03), is read again within
+// commitSnapshotLockBackoff; one still held after it, or any other read error,
+// returns the service's unavailable error, so River retries the same delivery.
 func (fence *transportFence) commit(ctx context.Context, tx pgx.Tx) (commitOutcome, error) {
 	return fence.commitAfter(ctx, tx, nil)
 }
@@ -296,26 +323,27 @@ func (fence *transportFence) lockCommitSnapshot(ctx context.Context, tx pgx.Tx) 
 	}
 }
 
-// commitSnapshotBusy reports a fenced commit that gave up on a held outbox row and returns its error: the service's
-// unavailable error naming the reason.
+// commitSnapshotBusy reports a fenced commit that gave up on a held outbox row or a held route barrier and returns
+// its error: the service's unavailable error naming the reason.
 func (fence *transportFence) commitSnapshotBusy(ctx context.Context, reads int, err error) error {
-	fence.reportCommitSnapshotBusy(ctx, reads, commitSnapshotWindow, err)
+	reason := commitBusyReason(err)
+	fence.reportCommitSnapshotBusy(ctx, reads, commitSnapshotWindow, reason, err)
 	return fmt.Errorf("%w: commit snapshot: %s (SQLSTATE 55P03 after %d reads in a %s window)",
-		fence.unavailable, commitSnapshotBusyReason, reads, commitSnapshotWindow)
+		fence.unavailable, reason, reads, commitSnapshotWindow)
 }
 
-// reportCommitSnapshotBusy counts and logs one fenced commit that gave up on a held outbox row.
-func (fence *transportFence) reportCommitSnapshotBusy(ctx context.Context, tries int, bound time.Duration, err error) {
+// reportCommitSnapshotBusy counts and logs one fenced commit that gave up on a held outbox row or route barrier.
+func (fence *transportFence) reportCommitSnapshotBusy(ctx context.Context, tries int, bound time.Duration, reason string, err error) {
 	if counter, counterErr := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime").Int64Counter(
 		FenceCommitSnapshotBusyCounter,
 		metric.WithUnit("{delivery}"),
-		metric.WithDescription("fenced commits that gave up because another transaction held the delivery's outbox row past the retry bound, by outbox kind and reason")); counterErr == nil {
-		counter.Add(ctx, 1, metric.WithAttributes(attribute.String("kind", fence.kind), attribute.String("reason", commitSnapshotBusyReason)))
+		metric.WithDescription("fenced commits that gave up because another transaction held the delivery's outbox row or a route mutation held the outbox barrier past the retry bound, by outbox kind and reason")); counterErr == nil {
+		counter.Add(ctx, 1, metric.WithAttributes(attribute.String("kind", fence.kind), attribute.String("reason", reason)))
 	}
 	fence.logger.Warn(ctx, synclog.MsgSyncDispatchCommitSnapshotBusy,
 		synclog.Run(synclog.ParseID(fence.args.SyncRunID())),
 		synclog.Text(synclog.KeyOutboxKind, synclog.ParseLabel(fence.kind)),
-		synclog.Text(synclog.KeyReason, synclog.ParseLabel(commitSnapshotBusyReason)),
+		synclog.Text(synclog.KeyReason, synclog.ParseLabel(reason)),
 		synclog.Count(synclog.KeyTries, tries),
 		synclog.Elapsed(synclog.KeyLockWaitBudget, bound),
 		synclog.Failure(err))
@@ -326,10 +354,17 @@ func isLockNotAvailable(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "55P03"
 }
 
-// readCommitSnapshot runs commitSnapshotSQL for one delivery: it locks the outbox row and returns the images
-// decideCommit judges. A missing row is the zero snapshot (found false, nothing locked); any other error, 55P03
-// included, is returned as it is.
+// readCommitSnapshot takes the route barrier (commitBarrierSQL), then runs commitSnapshotSQL for one delivery: it
+// locks the outbox row and returns the images decideCommit judges. A missing row is the zero snapshot (found false,
+// only the barrier is held). A 55P03 of the barrier is returned wrapped in errCommitBarrierHeld; any other error, a
+// 55P03 of the row included, is returned as it is.
 func readCommitSnapshot(ctx context.Context, tx pgx.Tx, args Args, kind string) (commitSnapshot, error) {
+	if _, err := tx.Exec(ctx, commitBarrierSQL); err != nil {
+		if isLockNotAvailable(err) {
+			return commitSnapshot{}, fmt.Errorf("%w: %w", errCommitBarrierHeld, err)
+		}
+		return commitSnapshot{}, err
+	}
 	snapshot := commitSnapshot{found: true}
 	err := tx.QueryRow(ctx, commitSnapshotSQL, args.OutboxID(), args.SyncRunID(), args.OrganizationID(), kind).
 		Scan(&snapshot.status, &snapshot.dispatchedTransport, &snapshot.dispatchedGeneration, &snapshot.attempts,

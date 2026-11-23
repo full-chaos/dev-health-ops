@@ -116,6 +116,16 @@ type snapshotTx struct {
 	result                                                  func(read int) error
 	onBegin, onRead, onRollback                             func(n int)
 	savepoints, reads, rollbacks, released, commit, readSQL int
+	// barrier is the result of route barrier statement n (from 1); nil takes the lock. statements is every statement
+	// the fence sent, with the savepoint it ran in.
+	barrier    func(n int) error
+	barriers   int
+	statements []snapshotStatement
+}
+
+type snapshotStatement struct {
+	savepoint int
+	sql       string
 }
 
 func (tx *snapshotTx) Begin(context.Context) (pgx.Tx, error) {
@@ -136,8 +146,19 @@ type snapshotSavepoint struct {
 	parent *snapshotTx
 }
 
+func (savepoint *snapshotSavepoint) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+	tx := savepoint.parent
+	tx.barriers++
+	tx.statements = append(tx.statements, snapshotStatement{tx.savepoints, sql})
+	if tx.barrier != nil {
+		return pgconn.CommandTag{}, tx.barrier(tx.barriers)
+	}
+	return pgconn.CommandTag{}, nil
+}
+
 func (savepoint *snapshotSavepoint) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 	tx := savepoint.parent
+	tx.statements = append(tx.statements, snapshotStatement{tx.savepoints, sql})
 	tx.reads++
 	if sql == commitSnapshotSQL {
 		tx.readSQL++
@@ -198,14 +219,21 @@ func testFence(logs io.Writer) *transportFence {
 // busy WARN and counted one give-up.
 func assertGaveUp(t *testing.T, outcome commitOutcome, err error, tx *snapshotTx, logs *bytes.Buffer, reader *sdkmetric.ManualReader) {
 	t.Helper()
-	if !errors.Is(err, ErrDispatchSyncRunUnavailable) || !strings.Contains(err.Error(), commitSnapshotBusyReason) || outcome.committed || tx.commit != 0 {
-		t.Fatalf("commit = %+v, %v (commits %d); want not committed and %v naming %s", outcome, err, tx.commit, ErrDispatchSyncRunUnavailable, commitSnapshotBusyReason)
+	assertGaveUpNaming(t, commitSnapshotBusyReason, outcome, err, tx, logs, reader)
+}
+
+// assertGaveUpNaming is assertGaveUp for one give-up reason: the error, the WARN and the counter name it, and no other
+// reason is counted.
+func assertGaveUpNaming(t *testing.T, reason string, outcome commitOutcome, err error, tx *snapshotTx, logs *bytes.Buffer, reader *sdkmetric.ManualReader) {
+	t.Helper()
+	if !errors.Is(err, ErrDispatchSyncRunUnavailable) || !strings.Contains(err.Error(), reason) || outcome.committed || tx.commit != 0 {
+		t.Fatalf("commit = %+v, %v (commits %d); want not committed and %v naming %s", outcome, err, tx.commit, ErrDispatchSyncRunUnavailable, reason)
 	}
-	if warns := strings.Count(logs.String(), "level=WARN msg=sync_dispatch_fence.commit_snapshot_busy"); warns != 1 {
-		t.Fatalf("busy WARN lines = %d, want 1:\n%s", warns, logs.String())
+	if warns := strings.Count(logs.String(), "level=WARN msg=sync_dispatch_fence.commit_snapshot_busy"); warns != 1 || !strings.Contains(logs.String(), "reason="+reason) {
+		t.Fatalf("busy WARN lines = %d, want 1 naming reason=%s:\n%s", warns, reason, logs.String())
 	}
-	if want := outboxKindDispatchSyncRun + "/" + commitSnapshotBusyReason; busyCounts(t, reader)[want] != 1 {
-		t.Fatalf("%s = %v, want {%s: 1}", FenceCommitSnapshotBusyCounter, busyCounts(t, reader), want)
+	if want := outboxKindDispatchSyncRun + "/" + reason; busyCounts(t, reader)[want] != 1 || len(busyCounts(t, reader)) != 1 {
+		t.Fatalf("%s = %v, want exactly {%s: 1}", FenceCommitSnapshotBusyCounter, busyCounts(t, reader), want)
 	}
 }
 
@@ -380,5 +408,69 @@ func TestASlowFirstSavepointDoesNotShiftTheWindow(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "commit_snapshot_busy") || len(busyCounts(t, reader)) != 0 {
 		t.Fatalf("a slow first savepoint cost the last retry: %v\n%s", busyCounts(t, reader), logs.String())
+	}
+}
+
+// The route mutation barrier (CHAOS-14523). syncroute.Controller takes SHARE ROW EXCLUSIVE on sync_dispatch_outbox
+// before it pauses, resumes or moves a route; the commit snapshot takes ROW EXCLUSIVE on the same table, NOWAIT, so
+// a route mutation cannot commit between the snapshot and the pass's COMMIT. The literals pin the wire values.
+const (
+	testRouteBarrierSQL        = "LOCK TABLE public.sync_dispatch_outbox IN ROW EXCLUSIVE MODE NOWAIT"
+	testRouteBarrierBusyReason = "outbox_route_barrier_held_past_bound"
+)
+
+// TestTheRouteBarrierGoesOutBeforeTheSnapshotInItsSavepoint: each read sends the barrier lock first, then the snapshot,
+// in the same savepoint; the savepoint is released (the lock stays with the pass) and the pass commits.
+func TestTheRouteBarrierGoesOutBeforeTheSnapshotInItsSavepoint(t *testing.T) {
+	installFakeSnapshotClock(t)
+	tx := &snapshotTx{result: func(read int) error {
+		if read == 1 {
+			return &pgconn.PgError{Code: "55P03"}
+		}
+		return nil
+	}}
+	outcome, err := testFence(io.Discard).commit(context.Background(), tx)
+	if err != nil || !outcome.committed || tx.commit != 1 || tx.released != 1 {
+		t.Fatalf("commit = %+v, %v (released %d, commits %d); want committed after 2 reads", outcome, err, tx.released, tx.commit)
+	}
+	want := []snapshotStatement{{1, testRouteBarrierSQL}, {1, commitSnapshotSQL}, {2, testRouteBarrierSQL}, {2, commitSnapshotSQL}}
+	if len(tx.statements) != len(want) {
+		t.Fatalf("statements = %+v, want %+v", tx.statements, want)
+	}
+	for index := range want {
+		if tx.statements[index] != want[index] {
+			t.Fatalf("statement %d = %+v, want %+v (all: %+v)", index, tx.statements[index], want[index], tx.statements)
+		}
+	}
+}
+
+// TestARouteBarrierHeldPastTheWindowNamesTheBarrierReason: a route mutation holds (or waits for) SHARE ROW EXCLUSIVE,
+// so every barrier lock fails 55P03. It is polled like a held row: one savepoint per read, the snapshot never sent,
+// and the pass gives up with the barrier reason, one WARN and the counter at 1.
+func TestARouteBarrierHeldPastTheWindowNamesTheBarrierReason(t *testing.T) {
+	reader := installBusyMeter(t)
+	installFakeSnapshotClock(t)
+	var logs bytes.Buffer
+	tx := &snapshotTx{result: func(int) error { return nil }, barrier: lockNotAvailable}
+	outcome, err := testFence(&logs).commit(context.Background(), tx)
+	if want := len(commitSnapshotLockBackoff) + 1; tx.barriers != want || tx.savepoints != want || tx.rollbacks != want || tx.reads != 0 {
+		t.Fatalf("barrier locks = %d, savepoints = %d, rollbacks = %d, snapshot reads = %d; want %d, %d, %d and 0",
+			tx.barriers, tx.savepoints, tx.rollbacks, tx.reads, want, want, want)
+	}
+	assertGaveUpNaming(t, testRouteBarrierBusyReason, outcome, err, tx, &logs, reader)
+}
+
+// TestARouteBarrierErrorOtherThanLockNotAvailableIsNotRetried: any other barrier error returns the unavailable error
+// after one savepoint, with nothing committed and no busy line.
+func TestARouteBarrierErrorOtherThanLockNotAvailableIsNotRetried(t *testing.T) {
+	installFakeSnapshotClock(t)
+	var logs bytes.Buffer
+	tx := &snapshotTx{result: func(int) error { return nil }, barrier: func(int) error { return &pgconn.PgError{Code: "42501"} }}
+	outcome, err := testFence(&logs).commit(context.Background(), tx)
+	if !errors.Is(err, ErrDispatchSyncRunUnavailable) || outcome.committed || tx.commit != 0 || tx.barriers != 1 || tx.reads != 0 {
+		t.Fatalf("commit = %+v, %v (barrier locks %d, reads %d, commits %d); want one barrier lock, no read, not committed", outcome, err, tx.barriers, tx.reads, tx.commit)
+	}
+	if strings.Contains(logs.String(), "commit_snapshot_busy") {
+		t.Fatalf("a non-55P03 barrier error logged the busy line:\n%s", logs.String())
 	}
 }

@@ -46,7 +46,7 @@ func TestArtifactExcludeParseBounds(t *testing.T) {
 		{name: "one byte over max", value: listOf("ok", longest+"b"), refusal: true, refuseAt: 1, forbidden: longest},
 		{name: "empty entry", value: listOf("ok", ""), refusal: true, refuseAt: 1},
 		{name: "space", value: listOf("ci images"), refusal: true, refuseAt: 0, forbidden: "ci images"},
-		{name: "slash", value: listOf("ci/images"), refusal: true, refuseAt: 0, forbidden: "ci/images"},
+		{name: "slash", value: listOf("zz9/images"), refusal: true, refuseAt: 0, forbidden: "zz9/images"},
 		{name: "glob", value: listOf("ci-*"), refusal: true, refuseAt: 0, forbidden: "ci-*"},
 		{name: "non-ascii look-alike", value: listOf("ci-іmages"), refusal: true, refuseAt: 0, forbidden: "іmages"},
 		{name: "control character", value: listOf("ci\n"), refusal: true, refuseAt: 0},

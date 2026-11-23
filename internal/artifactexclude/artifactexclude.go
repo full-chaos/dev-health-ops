@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/pydict"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
@@ -220,6 +219,48 @@ func Stored(configText *string) (pyjson.Value, bool, error) {
 	return stored, present, nil
 }
 
+// objectOf is the stored JSON document as an object to edit: null (or a column never written) is {}, anything else
+// but an object is refused.
+func objectOf(value pyjson.Value) (*pyjson.Object, error) {
+	switch typed := value.(type) {
+	case nil:
+		return pyjson.NewObject(), nil
+	case *pyjson.Object:
+		out := pyjson.NewObject()
+		for _, key := range typed.Keys() {
+			item, _ := typed.Get(key)
+			out.Set(key, item)
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("the stored document is a %T, not an object", value)
+}
+
+// OverlayText is Overlay on a configuration's stored sync_options text: changed is false (and the text is the stored
+// one, byte for byte) when neither the options nor the integration hold a list, or the text is not an object.
+func OverlayText(options *string, value pyjson.Value, present bool) (string, bool, error) {
+	if options == nil {
+		return "", false, nil
+	}
+	decoded, err := pyjson.DecodeString(*options)
+	if err != nil {
+		return "", false, err
+	}
+	document, ok := decoded.(*pyjson.Object)
+	if !ok {
+		return *options, false, nil
+	}
+	if _, had := document.Get(Key); !had && !present {
+		return *options, false, nil
+	}
+	Overlay(document, value, present)
+	text, err := pyjson.Dumps(document)
+	if err != nil {
+		return "", false, err
+	}
+	return text, true, nil
+}
+
 // Overlay shows the integration's list in a sync config's shown sync_options: the key the config itself may hold is
 // dropped and the integration's list (present) is put in at the end. With neither, options stay as they are.
 func Overlay(options *pyjson.Object, value pyjson.Value, present bool) {
@@ -263,7 +304,7 @@ func apply(stored *string, change Change) (string, bool, error) {
 		}
 		current = value
 	}
-	document, err := pydict.Plain(current)
+	document, err := objectOf(current)
 	if err != nil {
 		return "", false, err
 	}

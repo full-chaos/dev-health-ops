@@ -23,3 +23,11 @@ func keepArtifactExclude(current *integration, next *pyjson.Object) error {
 	}
 	return nil
 }
+
+// keepArtifactExcludeAndDecode is keepArtifactExclude, then the stored config decoded for the update's compare.
+func keepArtifactExcludeAndDecode(current *integration, next *pyjson.Object) (pyjson.Value, error) {
+	if err := keepArtifactExclude(current, next); err != nil {
+		return nil, err
+	}
+	return pyjson.DecodeString(current.Config)
+}

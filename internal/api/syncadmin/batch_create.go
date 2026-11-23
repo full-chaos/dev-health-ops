@@ -102,12 +102,8 @@ func (h *handlers) batchCreateSyncConfigs(w http.ResponseWriter, r *http.Request
 		h.answerOrFail(w, r, "batch_create_sync_configs", err)
 		return
 	}
-	if err := deriveShownTargets(ctx, h.store.enabledDatasetKeys, org, created.config); err != nil {
-		h.fail(w, r, "enabled_datasets", err)
-		return
-	}
-	if err := deriveArtifactExclude(ctx, h.store.integrationExcludeLists, org, created.config); err != nil {
-		h.fail(w, r, "artifact_exclude", err)
+	if step, err := h.deriveShown(ctx, org, created.config); err != nil {
+		h.fail(w, r, step, err)
 		return
 	}
 	parent, err := syncConfigResponse(created.config, int64(0), created.credentialID)
@@ -181,7 +177,7 @@ func (h *handlers) batchCreateSyncConfigsTx(ctx context.Context, tx pgx.Tx, org 
 		detail.Set("unsupported_auto_import_categories", unsupported)
 		return nil, refuse(http.StatusUnprocessableEntity, detail)
 	}
-	excludeChange, err := createArtifactExclude(provider, parentOptions)
+	excludeChange, err := takeArtifactExclude(provider, parentOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +224,7 @@ func (h *handlers) batchCreateSyncConfigsTx(ctx context.Context, tx pgx.Tx, org 
 	if err != nil {
 		return nil, err
 	}
-	if err := createArtifactExcludeWrite(ctx, tx, org, created.config.ID, excludeChange, h.now().UTC()); err != nil {
+	if err := writeArtifactExclude(ctx, tx, org, created.config, excludeChange, h.now().UTC()); err != nil {
 		return nil, err
 	}
 	return created, nil

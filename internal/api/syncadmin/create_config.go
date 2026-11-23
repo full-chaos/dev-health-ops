@@ -111,12 +111,8 @@ func (h *handlers) createSyncConfig(w http.ResponseWriter, r *http.Request) {
 	if jiraConfigMaterializesZeroSources(in.provider, options) {
 		h.discoverJiraProjects(ctx, org, created, options)
 	}
-	if err := deriveShownTargets(ctx, h.store.enabledDatasetKeys, org, created.config); err != nil {
-		h.fail(w, r, "enabled_datasets", err)
-		return
-	}
-	if err := deriveArtifactExclude(ctx, h.store.integrationExcludeLists, org, created.config); err != nil {
-		h.fail(w, r, "artifact_exclude", err)
+	if step, err := h.deriveShown(ctx, org, created.config); err != nil {
+		h.fail(w, r, step, err)
 		return
 	}
 	out, err := syncConfigResponse(created.config, nil, created.credentialID)
@@ -171,7 +167,7 @@ func (h *handlers) createSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 		detail.Set("unsupported_auto_import_categories", unsupported)
 		return nil, nil, refuse(http.StatusUnprocessableEntity, detail)
 	}
-	excludeChange, err := createArtifactExclude(in.provider, options)
+	excludeChange, err := takeArtifactExclude(in.provider, options)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -201,7 +197,7 @@ func (h *handlers) createSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := createArtifactExcludeWrite(ctx, tx, org, created.config.ID, excludeChange, h.now().UTC()); err != nil {
+	if err := writeArtifactExclude(ctx, tx, org, created.config, excludeChange, h.now().UTC()); err != nil {
 		return nil, nil, err
 	}
 	return created, options, nil

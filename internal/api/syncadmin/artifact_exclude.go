@@ -44,10 +44,10 @@ func artifactExcludeAnswer(err error) error {
 	return refuse(http.StatusUnprocessableEntity, detail)
 }
 
-// createArtifactExclude validates the key of a create's options and takes it out of them: the list is the
-// integration's (it applies to every sync config of this integration), written by createArtifactExcludeWrite once the
-// configuration and its integration exist, never into sync_options.
-func createArtifactExclude(provider string, options *pyjson.Object) (*artifactexclude.Change, error) {
+// takeArtifactExclude validates the key of a create's or a PATCH's options and takes it out of them: the list is the
+// integration's (it applies to every sync config of this integration), written by writeArtifactExclude once the
+// configuration and its integration exist, never into sync_options. nil when the options do not carry the key.
+func takeArtifactExclude(provider string, options *pyjson.Object) (*artifactexclude.Change, error) {
 	change, err := artifactExcludeChange(provider, options)
 	if err != nil {
 		return nil, err
@@ -56,15 +56,42 @@ func createArtifactExclude(provider string, options *pyjson.Object) (*artifactex
 	return change, nil
 }
 
-// createArtifactExcludeWrite writes a create's list into the new configuration's integration (artifactexclude.WriteTx).
-func createArtifactExcludeWrite(ctx context.Context, tx pgx.Tx, org string, configID uuid.UUID, change *artifactexclude.Change, now time.Time) error {
-	if change == nil || change.Clear {
+// writeArtifactExclude writes a create's or a PATCH's list into the configuration's integration (artifactexclude.WriteTx,
+// the writer of the dho verb too); config takes the stored sync_options when the write removed an old copy from them.
+func writeArtifactExclude(ctx context.Context, tx pgx.Tx, org string, config *syncConfig, change *artifactexclude.Change, now time.Time) error {
+	if change == nil {
 		return nil
 	}
-	if _, err := artifactexclude.WriteTx(ctx, tx, org, configID, *change, now); err != nil {
+	written, err := artifactexclude.WriteTx(ctx, tx, org, config.ID, *change, now)
+	if err != nil {
 		return artifactExcludeAnswer(err)
 	}
+	if written.SyncOptionsChanged {
+		config.SyncOptions = &written.SyncOptions
+		config.UpdatedAt = now
+	}
 	return nil
+}
+
+// excludeListReader is the read deriveShown makes for the list; store has it (below), and a test reader may.
+type excludeListReader interface {
+	integrationExcludeLists(ctx context.Context, orgID string, integrationIDs []uuid.UUID) (map[uuid.UUID]*string, error)
+}
+
+var _ excludeListReader = store{}
+
+// deriveShown derives what a rendered configuration shows from its integration: the targets (deriveShownTargets) and
+// the CI artifact exclude list (deriveArtifactExclude). step names the read that failed.
+func (h *handlers) deriveShown(ctx context.Context, org string, configs ...*syncConfig) (string, error) {
+	if err := deriveShownTargets(ctx, h.store.enabledDatasetKeys, org, configs...); err != nil {
+		return "enabled_datasets", err
+	}
+	if lists, ok := h.store.(excludeListReader); ok {
+		if err := deriveArtifactExclude(ctx, lists.integrationExcludeLists, org, configs...); err != nil {
+			return "artifact_exclude", err
+		}
+	}
+	return "", nil
 }
 
 // integrationExcludeLists reads the config text of each integration (one read for all), for deriveArtifactExclude.
@@ -96,9 +123,9 @@ func (s store) integrationExcludeLists(ctx context.Context, orgID string, integr
 	return integrationExcludeLists(ctx, s.pool, orgID, integrationIDs)
 }
 
-// deriveArtifactExclude sets, on every config with an integration, the integration's exclude list its response shows
-// in sync_options (artifactexclude.Overlay). One read serves all the configs; a config without an integration shows
-// its stored options as they are.
+// deriveArtifactExclude puts, into the sync_options every config with an integration shows, its integration's exclude
+// list (artifactexclude.OverlayText): one read serves all the configs. Options that hold no list and whose integration
+// holds none stay the stored text, byte for byte; a config without an integration shows its stored options as they are.
 func deriveArtifactExclude(ctx context.Context, read func(context.Context, string, []uuid.UUID) (map[uuid.UUID]*string, error),
 	orgID string, configs ...*syncConfig) error {
 	var integrationIDs []uuid.UUID
@@ -124,7 +151,13 @@ func deriveArtifactExclude(ctx context.Context, read func(context.Context, strin
 		if err != nil {
 			return fmt.Errorf("decode integration config: %w", err)
 		}
-		config.artifactExclude, config.artifactExcludePresent, config.artifactExcludeDerived = value, present, true
+		shown, changed, err := artifactexclude.OverlayText(config.SyncOptions, value, present)
+		if err != nil {
+			return fmt.Errorf("show the integration's list: %w", err)
+		}
+		if changed {
+			config.SyncOptions = &shown
+		}
 	}
 	return nil
 }

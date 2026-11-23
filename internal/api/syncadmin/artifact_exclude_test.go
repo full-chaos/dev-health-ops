@@ -23,11 +23,11 @@ func artifactExcludeOptions(value pyjson.Value) *pyjson.Object {
 // list as given, every other provider is a 422 whose detail names the field and never the value.
 func TestCreateArtifactExcludeRefusesEveryNonGitHubProvider(t *testing.T) {
 	list := []pyjson.Value{"ci-zz9-"}
-	if _, err := createArtifactExclude("github", artifactExcludeOptions(list)); err != nil {
+	if _, err := takeArtifactExclude("github", artifactExcludeOptions(list)); err != nil {
 		t.Fatalf("github: %v, want accepted", err)
 	}
 	for _, provider := range []string{"gitlab", "jira", "linear", "launchdarkly", "pagerduty"} {
-		_, err := createArtifactExclude(provider, artifactExcludeOptions(list))
+		_, err := takeArtifactExclude(provider, artifactExcludeOptions(list))
 		var raised *answer
 		if !errors.As(err, &raised) || raised.status != http.StatusUnprocessableEntity {
 			t.Errorf("%s: err=%v, want a 422", provider, err)
@@ -39,10 +39,10 @@ func TestCreateArtifactExcludeRefusesEveryNonGitHubProvider(t *testing.T) {
 		}
 	}
 	options := artifactExcludeOptions(pyjson.NewObject())
-	if _, err := createArtifactExclude("gitlab", pyjson.NewObject()); err != nil {
+	if _, err := takeArtifactExclude("gitlab", pyjson.NewObject()); err != nil {
 		t.Errorf("gitlab without the key: %v, want no refusal", err)
 	}
-	if _, err := createArtifactExclude("github", options); err == nil {
+	if _, err := takeArtifactExclude("github", options); err == nil {
 		t.Error("github with an object value: accepted, want a 422")
 	}
 }
@@ -58,7 +58,7 @@ func TestCreateArtifactExcludeBoundsAnswerWithTheEntryIndex(t *testing.T) {
 		{name: "duplicate", value: []pyjson.Value{"ci-zz9-", "CI-ZZ9-"}, index: `"index": 1`},
 		{name: "too long", value: []pyjson.Value{strings.Repeat("z", 101)}, index: `"index": 0`},
 	} {
-		_, err := createArtifactExclude("github", artifactExcludeOptions(cell.value))
+		_, err := takeArtifactExclude("github", artifactExcludeOptions(cell.value))
 		var raised *answer
 		if !errors.As(err, &raised) || raised.status != http.StatusUnprocessableEntity {
 			t.Errorf("%s: err=%v, want a 422", cell.name, err)
@@ -71,13 +71,13 @@ func TestCreateArtifactExcludeBoundsAnswerWithTheEntryIndex(t *testing.T) {
 	}
 }
 
-func TestCreateArtifactExcludeTakesTheKeyOutOfTheOptions(t *testing.T) {
+func TestTakeArtifactExcludeTakesTheKeyOutOfTheOptions(t *testing.T) {
 	for _, cell := range []struct {
 		value pyjson.Value
 		clear bool
 	}{{nil, true}, {[]pyjson.Value{}, true}, {[]pyjson.Value{"ci-zz9-"}, false}} {
 		options := artifactExcludeOptions(cell.value)
-		change, err := createArtifactExclude("github", options)
+		change, err := takeArtifactExclude("github", options)
 		if err != nil || change == nil || change.Clear != cell.clear {
 			t.Fatalf("%#v: change=%+v err=%v", cell.value, change, err)
 		}

@@ -101,12 +101,16 @@ key="${DEVHEALTH_AUTH_ORACLE_SIGNING_KEY_FILE-unset}"
 printf '%s %s %s %s\n' "$key" "${DEVHEALTH_AUTH_ORACLE_SIGNING_KEY_ID-unset}" "$(stat -c %a "$key" 2>/dev/null)" "$(stat -c %a "$(dirname "$key")" 2>/dev/null)" >> "$FAKE_RECORD.signing"
 if [ -f "$key" ]; then cat "$key" >> "$FAKE_RECORD.signingcontent"; fi
 if [ -n "$FAKE_GO_TEST_EXITS" ]; then exit 0; fi
+[ -n "${DEVHEALTH_AUTH_ORACLE_SEEDED_FILE:-}" ] || { echo "fake corpus test: DEVHEALTH_AUTH_ORACLE_SEEDED_FILE is empty" >&2; exit 1; }
+[ -n "${DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE:-}" ] || { echo "fake corpus test: DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE is empty" >&2; exit 1; }
 printf '%s\n' "$$" > "$FAKE_TEST_PID_FILE"
 printf 'SEEDED\n' >> "$FAKE_RECORD"
 : > "$DEVHEALTH_AUTH_ORACLE_SEEDED_FILE"
+# /bin/sleep, not the PATH sleep: the retry cells put a no-op sleep first on PATH, which made this bound a call count.
+tries="${FAKE_FLIP_TRIES:-300}"
 i=0
-while [ ! -e "$DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i+1)); done
-[ -e "$DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE" ] || exit 1
+while [ ! -e "$DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE" ] && [ "$i" -lt "$tries" ]; do /bin/sleep 0.1; i=$((i+1)); done
+[ -e "$DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE" ] || { echo "fake corpus test: no flipped file after $tries tries of 0.1 s: $DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE" >&2; exit 1; }
 printf 'FLIPPED %s\n' "$(cat "$DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE")" >> "$FAKE_RECORD"
 BIN
         chmod 0755 "$out" ;;
@@ -115,7 +119,12 @@ esac
 exit 0
 `
 	chmodShim := `#!/bin/sh
-if [ "$1" = 0600 ]; then stat -c %a "$2" >> "` + record + `.premode"; fi
+if [ "$1" = 0600 ]; then
+  [ "${2:-}" != -- ] || shift
+  [ -n "${2:-}" ] || { echo "fake chmod: no path after mode 0600" >&2; exit 1; }
+  stat -c %a -- "$2" >> "` + record + `.premode" || { echo "fake chmod: cannot read the mode of $2" >&2; exit 1; }
+  exec /bin/chmod 0600 "$2"
+fi
 exec /bin/chmod "$@"
 `
 	for name, body := range map[string]string{"docker": docker, "go": goShim, "chmod": chmodShim} {

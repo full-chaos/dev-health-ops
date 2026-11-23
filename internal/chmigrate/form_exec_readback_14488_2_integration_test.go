@@ -21,13 +21,13 @@ import (
 
 // Throwaway exec proof of a prod read form: not for merge. rb14488bForm is the form file byte for byte.
 const (
-	rb14488bRowsCap  = "> 20000000"
+	rb14488bRowsCap  = "> 10000000"
 	rb14488bBytesCap = "> 4000000000"
 )
 
-const rb14488bFormSHA256 = "e92569d858e6d9640eb84f48eb6fd6eeb852cb4289556ad3b9d26f605a158abb"
+const rb14488bFormSHA256 = "da75e839d4b38d010177429acada729a2fc2a2b4ed443a03e924e7b402bb4d24"
 
-const rb14488bForm = `-- NOT EXECUTED. READBACK-14488-2 (ClickHouse, prod, read-only). acr-mcp, 2026-11-23. A CI exec leg first, then acp FORM read; then pm runs it once.
+const rb14488bForm = `-- NOT EXECUTED. READBACK-14488-3 (ClickHouse, prod, read-only). acr-mcp, 2026-11-23. A CI exec leg first, then acp FORM read; then pm runs it once.
 -- Form: lane-scratch/pm-guard/FORM-TEMPLATE-3.md 6b9e73a3c45a (CH shape, one statement per call, self-gating) + PM-RULES MAC §4 (8e04e2613b6f).
 -- Not executed: no local CH at the prod schema and no CI exec leg yet. Per the template pm does not run it until an exec proof exists
 --   (each gate fired once with cap 0 = code 395 STOP-COST-GATE; a pass-path cell on a fixture; control mutations fail).
@@ -50,7 +50,7 @@ const rb14488bForm = `-- NOT EXECUTED. READBACK-14488-2 (ClickHouse, prod, read-
 --   the RAW team_id, so stmt2 groups_no_sample is an UPPER bound of the Go groups (a raw-NULL split can count a group Go merges with a
 --   sampled one). stmt3 counts repo-days in which NO counted run has a sample: every Go group of such a day has no sample = a LOWER bound.
 -- Window: started_at >= 2026-11-09 00:00:00 UTC (14 days before the roll day) and no upper bound (today included).
--- WORK MATH: READBACK-14488-2.md. Each of stmt0..stmt3 reads ci_pipeline_runs once (one FINAL scan in a subquery or the FROM),
+-- WORK MATH: READBACK-14488-3.md. Each of stmt0..stmt3 reads ci_pipeline_runs once (one FINAL scan in a subquery or the FROM),
 --   no CTE reference to data, no join. The gate reads system.parts only.
 -- Output: counts and days only. No ids, no names, no payload text.
 -- S0: the table exists and has rows. WANT 1 row, rows > 0, active_parts > 0 (0 = wrong name: STOP).
@@ -66,7 +66,7 @@ SELECT 'ci_pipeline_runs' AS t, sum(rows) AS rows, sum(bytes_on_disk) AS bytes, 
 FROM system.parts WHERE active AND database = currentDatabase() AND table = 'ci_pipeline_runs';
 
 WITH (SELECT throwIf(
-  (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('ci_pipeline_runs')) > 20000000
+  (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('ci_pipeline_runs')) > 10000000
   OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('ci_pipeline_runs')) > 4000000000,
   'STOP-COST-GATE')) AS cost_gate
 SELECT uniqExact(org_id) AS orgs
@@ -76,7 +76,7 @@ WHERE startsWith(org_id, 'c6a38355') AND cost_gate = 0;
 SELECT sum(n_runs) AS runs, count() AS groups, countIf(n_sample > 0) AS groups_with_sample
 FROM (
   WITH (SELECT throwIf(
-    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('ci_pipeline_runs')) > 20000000
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('ci_pipeline_runs')) > 10000000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('ci_pipeline_runs')) > 4000000000,
     'STOP-COST-GATE')) AS cost_gate
   SELECT repo_id, toDate(started_at, 'UTC') AS day, ifNull(team_id, '') AS team, service_id,
@@ -94,7 +94,7 @@ SELECT day, count() AS groups, countIf(n_sample = 0) AS groups_no_sample,
        uniqExactIf(repo_id, n_sample = 0) AS repos_no_sample, sumIf(n_runs, n_sample = 0) AS runs_in_no_sample_groups
 FROM (
   WITH (SELECT throwIf(
-    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('ci_pipeline_runs')) > 20000000
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('ci_pipeline_runs')) > 10000000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('ci_pipeline_runs')) > 4000000000,
     'STOP-COST-GATE')) AS cost_gate
   SELECT repo_id, toDate(started_at, 'UTC') AS day, ifNull(team_id, '') AS team, service_id,
@@ -113,7 +113,7 @@ ORDER BY day;
 SELECT day, countIf(n_sample = 0) AS repodays_all_no_sample, count() AS repodays
 FROM (
   WITH (SELECT throwIf(
-    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('ci_pipeline_runs')) > 20000000
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('ci_pipeline_runs')) > 10000000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('ci_pipeline_runs')) > 4000000000,
     'STOP-COST-GATE')) AS cost_gate
   SELECT repo_id, toDate(started_at, 'UTC') AS day,

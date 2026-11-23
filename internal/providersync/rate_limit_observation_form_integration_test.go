@@ -84,20 +84,11 @@ const (
 
 func observationFormFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	for _, statement := range []string{
-		`CREATE TABLE public.organizations (id uuid PRIMARY KEY)`,
-		`CREATE TABLE public.sync_run_units (id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL, dataset_key character varying NOT NULL)`,
-		`CREATE TABLE public.provider_rate_limit_observations (
-			id uuid NOT NULL, org_id text NOT NULL, provider text NOT NULL, host text,
-			integration_id uuid NOT NULL, sync_run_id uuid NOT NULL, sync_run_unit_id uuid NOT NULL,
-			route_family text, route_family_attribution text, dimension text,
-			retry_after_seconds double precision, reset_at timestamp with time zone,
-			reason text, request_id text, observed_at timestamp with time zone NOT NULL)`,
-		`INSERT INTO public.organizations VALUES ('` + observationFormOrg + `')`,
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
+	createProviderSyncFixture(t, ctx, pool)
+	seedProviderSyncFixture(t, ctx, pool)
+	if _, err := pool.Exec(ctx, `INSERT INTO public.organizations (id, slug, name) VALUES ($1, 'form-org', 'form-org')`,
+		observationFormOrg); err != nil {
+		t.Fatal(err)
 	}
 	for _, unit := range [][4]string{
 		{formUnitGitHubDeploy, observationFormOrg, "github", "deployments"},
@@ -108,8 +99,11 @@ func observationFormFixture(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 		{formUnitGitLabSecurity, observationFormOrg, "gitlab", "security"},
 		{formUnitOtherOrg, observationFormOtherOrg, "github", "deployments"},
 	} {
-		if _, err := pool.Exec(ctx, `INSERT INTO public.sync_run_units (id, org_id, provider, dataset_key) VALUES ($1, $2, $3, $4)`,
-			unit[0], unit[1], unit[2], unit[3]); err != nil {
+		if _, err := pool.Exec(ctx, `INSERT INTO public.sync_run_units (
+				id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode,
+				status, attempts, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, 'medium', 'incremental', 'dispatching', 0, NOW(), NOW())`,
+			unit[0], unit[1], firstRunID, firstIntegrationID, firstSourceID, unit[2], unit[3]); err != nil {
 			t.Fatal(err)
 		}
 	}

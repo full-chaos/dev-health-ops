@@ -32,7 +32,8 @@ type floorAnswer struct {
 	status           int
 	remaining, limit string
 	body             string
-	link             string // a Link header value, "" none
+	link             string            // a Link header value, "" none
+	raw              map[string]string // extra headers set as given (an empty value stays present)
 }
 
 func (answer floorAnswer) response(request *http.Request) *http.Response {
@@ -45,6 +46,9 @@ func (answer floorAnswer) response(request *http.Request) *http.Response {
 	}
 	if answer.link != "" {
 		header.Set("Link", answer.link)
+	}
+	for name, value := range answer.raw {
+		header[http.CanonicalHeaderKey(name)] = []string{value}
 	}
 	return &http.Response{StatusCode: answer.status, Header: header, Body: io.NopCloser(strings.NewReader(answer.body)), Request: request}
 }
@@ -370,6 +374,201 @@ func TestGitHubTestsOpenPhaseFloorHeaderless5xxKeepsTheTransientPath(t *testing.
 			}
 			if got := result.final.Result["open_runs_reread"]; got != tc.wantRead {
 				t.Errorf("open_runs_reread = %v, want %d", got, tc.wantRead)
+			}
+		})
+	}
+}
+
+// Contract case: the rate headers the client's parser reads (parseRequestRateLimit: X-RateLimit-* and the RateLimit-*
+// aliases) count for the floor at every site. A 503 with the alias pair under the floor is not retried (marker 100); a
+// 503 with only an alias remaining count is not a header-less answer: it fails closed (marker -1). (A present but empty
+// header is no header to the parser: TestGitHubTestsOpenPhaseFloorEntryTable, row 503/empty.)
+func TestGitHubTestsOpenPhaseFloorReadsEveryRateHeaderName(t *testing.T) {
+	shapes := []struct {
+		name   string
+		raw    map[string]string
+		marker int64
+	}{
+		{"alias pair under the floor", map[string]string{"RateLimit-Remaining": "100", "RateLimit-Limit": "5000"}, 100},
+		{"alias remaining only", map[string]string{"RateLimit-Remaining": "100"}, -1},
+	}
+	for _, site := range []string{floorSiteRun, floorSiteJobs, floorSitePolicy} {
+		for _, shape := range shapes {
+			t.Run(site+"/"+shape.name, func(t *testing.T) {
+				answer := floorAnswer{status: http.StatusServiceUnavailable, body: `{"message":"Service Unavailable"}`, raw: shape.raw}
+				result := floorSiteWalk(t, map[string]map[int]floorAnswer{site: {1: answer, 2: answer}}, GitHubTestsRouteHandler{}, false)
+				t.Logf("CELL NAMES %s/%s attempts=%v marker=%v err=%v", site, shape.name, result.doer.attempts, result.marker(), result.err)
+				if result.err != nil {
+					t.Fatalf("walk: %v", result.err)
+				}
+				if got := result.doer.attempts[site]; got != 1 {
+					t.Errorf("%s: %d wire attempts, want 1: the retry was sent although the answer's rate headers show no headroom", site, got)
+				}
+				if marker := result.marker(); marker != shape.marker {
+					t.Errorf("open_phase_rate_floor = %v, want %d", marker, shape.marker)
+				}
+			})
+		}
+	}
+}
+
+// Contract case: a 403 the client does not class as a rate limit (a permission denial without rate headers) on the
+// branch protection read of run 7100 does not stop the floor: run 7100 is written with an unknown policy (as main), and
+// the later open runs 7101 and 7102 are read.
+func TestGitHubTestsOpenPhaseFloorPermissionDenial403DoesNotStopThePhase(t *testing.T) {
+	denial := floorAnswer{status: http.StatusForbidden, body: `{"message":"Resource not accessible by integration"}`}
+	result := floorSiteWalk(t, map[string]map[int]floorAnswer{floorSitePolicy: {1: denial}}, GitHubTestsRouteHandler{}, false)
+	t.Logf("CELL DENY403 attempts=%v later_reads=%v reread=%v marker=%v err=%v", result.doer.attempts, result.doer.fake.runGets,
+		result.final.Result["open_runs_reread"], result.marker(), result.err)
+	if result.err != nil {
+		t.Fatalf("walk: %v", result.err)
+	}
+	if got := result.doer.attempts[floorSitePolicy]; got != 1 {
+		t.Errorf("policy: %d attempts, want 1 (a 403 permission denial is not retried)", got)
+	}
+	if marker, hit := result.final.Result["open_phase_rate_floor"]; hit {
+		t.Errorf("open_phase_rate_floor = %v, want absent: a permission denial is not a rate limit", marker)
+	}
+	read := map[int]bool{}
+	for _, id := range result.doer.fake.runGets {
+		read[id] = true
+	}
+	if !read[7101] || !read[7102] {
+		t.Errorf("later open runs read = %v, want 7101 and 7102", result.doer.fake.runGets)
+	}
+	if got := result.final.Result["open_runs_reread"]; got != 3 {
+		t.Errorf("open_runs_reread = %v, want 3 (run 7100 written with an unknown policy, then 7101 and 7102)", got)
+	}
+}
+
+// floorEntryRow is one row of the gate's entry table: an answer at one site of run 7100 (the run by id, or its branch
+// protection read), first attempt only; a retry gets a healthy answer.
+type floorEntryRow struct {
+	site, class, shape string
+	answer             floorAnswer
+	action             string // see TestGitHubTestsOpenPhaseFloorEntryTable
+	marker             any
+	mainSame           bool // the row's action equals main (and the 487ea61b1367 tip)
+}
+
+// floorEntryRows is the table {site} x {answer class} x {rate header shape}. One source answers each question: the
+// headroom is the client's parser's reading of the answer's own headers (aliases included; an empty value is no value);
+// the gate arms only on an answer the client retries (its classification: 5xx, 429, and a 403 the client classes a rate
+// limit, here by its body); the floor is strict (remaining < floor, as the per-run check); a 5xx with no rate header
+// keeps main's transient path.
+func floorEntryRows() []floorEntryRow {
+	classes := []struct {
+		name      string
+		status    int
+		body      map[string]string // site -> body
+		retried   bool
+		transient bool
+	}{
+		{"200", http.StatusOK, map[string]string{floorSiteRun: floorPullRun, floorSitePolicy: `{"contexts":[],"checks":[]}`}, false, false},
+		{"404", http.StatusNotFound, nil, false, false},
+		{"403 permission", http.StatusForbidden, map[string]string{"": `{"message":"Resource not accessible by integration"}`}, false, false},
+		{"403 rate limit", http.StatusForbidden, map[string]string{"": `{"message":"You have exceeded a secondary rate limit."}`}, true, false},
+		{"429", http.StatusTooManyRequests, nil, true, false},
+		{"5xx", http.StatusServiceUnavailable, nil, true, true},
+	}
+	shapes := []struct {
+		name    string
+		raw     map[string]string
+		reading string // "absent", "unknown", "ok", "low", "floor"
+	}{
+		{"none", nil, "absent"},
+		{"canonical", map[string]string{"X-RateLimit-Remaining": "4000", "X-RateLimit-Limit": "5000"}, "ok"},
+		{"alias", map[string]string{"RateLimit-Remaining": "4000", "RateLimit-Limit": "5000"}, "ok"},
+		{"alias low", map[string]string{"RateLimit-Remaining": "100", "RateLimit-Limit": "5000"}, "low"},
+		{"one of two", map[string]string{"X-RateLimit-Remaining": "100"}, "unknown"},
+		{"empty", map[string]string{"X-RateLimit-Remaining": "", "X-RateLimit-Limit": ""}, "absent"},
+		{"low", map[string]string{"X-RateLimit-Remaining": "100", "X-RateLimit-Limit": "5000"}, "low"},
+		{"at the floor", map[string]string{"X-RateLimit-Remaining": "1000", "X-RateLimit-Limit": "5000"}, "floor"},
+	}
+	var rows []floorEntryRow
+	for _, site := range []string{floorSiteRun, floorSitePolicy} {
+		for _, class := range classes {
+			body := class.body[site]
+			if body == "" {
+				body = class.body[""]
+			}
+			if body == "" {
+				body = `{"message":"error"}`
+			}
+			for _, shape := range shapes {
+				row := floorEntryRow{site: site, class: class.name, shape: shape.name,
+					answer: floorAnswer{status: class.status, body: body, raw: shape.raw}, mainSame: true}
+				lastOfRun := site == floorSitePolicy || class.status != http.StatusOK // no later request of run 7100 follows
+				switch {
+				case site == floorSiteRun && class.name == "403 permission":
+					row.action = "unit fails"
+				case !class.retried && shape.reading == "low" && lastOfRun:
+					row.action, row.marker = "not gated, stop before next run", int64(100)
+				case !class.retried:
+					row.action = "not gated"
+				case class.transient && shape.reading == "absent":
+					row.action = "retry sent"
+				case shape.reading == "low":
+					row.action, row.marker, row.mainSame = "refused", int64(100), false
+				case shape.reading == "absent" || shape.reading == "unknown":
+					row.action, row.marker, row.mainSame = "refused", int64(-1), false
+				default:
+					row.action = "retry sent"
+				}
+				rows = append(rows, row)
+			}
+		}
+	}
+	return rows
+}
+
+// The entry table of the open-phase floor gate. Each row checks the wire attempts at the site, the floor marker, and
+// whether the later open runs (7101, 7102) are read:
+//   - "retry sent": 2 attempts, no marker, later runs read;
+//   - "refused": 1 attempt, the marker, no later run;
+//   - "not gated": 1 attempt, no marker, later runs read (at the branch protection read: run 7100 written with the policy
+//     the answer gives, unknown for a 404 or 403);
+//   - "not gated, stop before next run": 1 attempt, the per-run check's marker, no later run;
+//   - "unit fails": a 403 permission denial of the run read fails the unit, as main.
+func TestGitHubTestsOpenPhaseFloorEntryTable(t *testing.T) {
+	for _, row := range floorEntryRows() {
+		t.Run(row.site+"/"+row.class+"/"+row.shape, func(t *testing.T) {
+			result := floorSiteWalk(t, map[string]map[int]floorAnswer{row.site: {1: row.answer}}, GitHubTestsRouteHandler{}, false)
+			read := map[int]bool{}
+			for _, id := range result.doer.fake.runGets {
+				read[id] = true
+			}
+			later := read[7101] && read[7102]
+			marker := result.final.Result["open_phase_rate_floor"]
+			t.Logf("ROW %s/%s/%s want=%q main_same=%v attempts=%d marker=%v later_read=%v reread=%v err=%v", row.site, row.class,
+				row.shape, row.action, row.mainSame, result.doer.attempts[row.site], marker, later, result.final.Result["open_runs_reread"], result.err)
+			if row.action == "unit fails" {
+				if result.err == nil || !strings.Contains(result.err.Error(), "authentication") {
+					t.Errorf("unit fails: err = %v, want the authentication failure", result.err)
+				}
+				return
+			}
+			if result.err != nil {
+				t.Fatalf("walk: %v", result.err)
+			}
+			wantAttempts, wantLater := 1, true
+			switch row.action {
+			case "retry sent":
+				wantAttempts = 2
+			case "refused", "not gated, stop before next run":
+				wantLater = false
+			}
+			if got := result.doer.attempts[row.site]; got != wantAttempts {
+				t.Errorf("%s: %d wire attempts at %s, want %d", row.action, got, row.site, wantAttempts)
+			}
+			if marker != row.marker {
+				t.Errorf("%s: open_phase_rate_floor = %v, want %v", row.action, marker, row.marker)
+			}
+			if later != wantLater {
+				t.Errorf("%s: later open runs read = %v, want %v", row.action, later, wantLater)
+			}
+			if row.action == "not gated" && row.site == floorSitePolicy && result.final.Result["open_runs_reread"] != 3 {
+				t.Errorf("not gated: open_runs_reread = %v, want 3 (run 7100 written, then 7101 and 7102)", result.final.Result["open_runs_reread"])
 			}
 		})
 	}

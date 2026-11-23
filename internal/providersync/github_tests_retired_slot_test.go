@@ -395,10 +395,10 @@ func TestGitHubTestsRetractionRowsDoNotBreakTheChunkSplit(t *testing.T) {
 	}
 }
 
-// The last fallback: when even the minimal row breaks a prepared chunk the run's own rows fit (it lands next to a case row
-// within a few KiB of the chunk bound), no row is written and the fallback is "not_retired"; when the run's own rows do not
-// split either, the minimal row is kept (chunk preparation refuses the run whatever it holds).
-func TestGitHubTestsRunReportEffectsFallsBackToNotRetiredOnlyForTheRunsOwnFit(t *testing.T) {
+// A minimal retraction row takes a prepared chunk of its own, after every other row of the run: it cannot break a chunk the run's
+// own rows fit, even next to a case row at the bound (round r1-6906: no "not_retired" fallback). When the run's own rows do not
+// split, chunk preparation refuses the run whatever it holds, and the minimal row is kept.
+func TestGitHubTestsMinimalRetractionRowsTakeTheirOwnChunk(t *testing.T) {
 	at := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	suite := func(id, slot string) testSuiteResultRow {
 		return testSuiteResultRow{OrgID: "org", RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", RunID: "1", SuiteID: id, SuiteName: "s",
@@ -421,13 +421,39 @@ func TestGitHubTestsRunReportEffectsFallsBackToNotRetiredOnlyForTheRunsOwnFit(t 
 			near = letters[:size]
 		}
 	}
-	_, limited, err := githubTestsRunReportEffects(githubTestsRetractionRoom{}, retirement, []testSuiteResultRow{suite("a1", "kept")},
+	effects, limited, err := githubTestsRunReportEffects(githubTestsRetractionRoom{}, retirement, []testSuiteResultRow{suite("a1", "kept")},
 		[]testCaseResultRow{caseRow("c0", "x"), caseRow("c1", near)}, nil, nil)
-	if err != nil || limited != "not_retired" {
-		t.Errorf("a minimal row next to a near-bound case: limited %q (%v), want not_retired", limited, err)
+	if err != nil || limited != "one_row_per_slot" {
+		t.Fatalf("a slot next to a near-bound case: limited %q (%v), want the minimal row (one_row_per_slot)", limited, err)
+	}
+	chunks, err := splitCompleteRouteBatch(CompleteRouteBatch{Effects: effects}, ShadowComparison{}, githubTestsRetractionSplitPolicy())
+	if err != nil {
+		t.Fatalf("the run with its minimal row does not split: %v", err)
+	}
+	own := 0
+	for _, chunk := range chunks {
+		minimal, others := 0, 0
+		for _, effect := range chunk.Effects {
+			for _, row := range effect.Rows {
+				if strings.Contains(string(row), `"suite_id":"~retired-`) {
+					minimal++
+				} else if effect.Destination != testOpsRunReportCompletenessDestination {
+					others++
+				}
+			}
+		}
+		if minimal > 0 {
+			own++
+			if others > 0 {
+				t.Errorf("the minimal row shares a chunk with %d report rows", others)
+			}
+		}
+	}
+	if own != 1 {
+		t.Errorf("%d chunks hold the minimal row, want 1", own)
 	}
 	over := retiredLetters(githubTestsRetractionSplitPolicy().MaxPreparedBytes + 10)
-	effects, limited, err := githubTestsRunReportEffects(githubTestsRetractionRoom{}, retirement, []testSuiteResultRow{suite("a1", "kept")},
+	effects, limited, err = githubTestsRunReportEffects(githubTestsRetractionRoom{}, retirement, []testSuiteResultRow{suite("a1", "kept")},
 		[]testCaseResultRow{caseRow("c0", over)}, nil, nil)
 	retracted := 0
 	for _, effect := range effects {

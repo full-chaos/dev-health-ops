@@ -1582,3 +1582,52 @@ FROM (SELECT read_rows, memory_usage, normalized_query_hash IN (
 		t.Errorf("the revived-slot statement read %d rows, want at most %d (2 scans of %d rows + 50 %%)", afterRows-beforeRows, bound, suites)
 	}
 }
+
+// The old reader after a rollback counts one marker per dropped slot retired by minimal rows, as the parent fallback does
+// (CHAOS-14555): two dropped aggregates of 16,385 one-case suites each (their legacy unions take two minimal rows) next to their
+// exact parts. The base suite rule (from the base source) serves the parts' 32,770 suites + 2 markers, not one row per minimal row.
+func TestTestopsRetiredSlotOldReaderCountsOneMarkerPerDroppedSlot(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	env := startRetiredStack(t, ctx)
+	stack := env.stack
+	org := "org-chaos14555-one-marker-" + uuid.NewString()[:8]
+	const made, timestamp = "2026-07-22T10:20:00Z", "2026-07-22T10:02:00"
+	suites := func(prefix string, from, to int) []matrixTotalsSuite {
+		out := make([]matrixTotalsSuite, 0, to-from)
+		for index := from; index < to; index++ {
+			name := prefix + "-" + strconv.Itoa(index)
+			out = append(out, matrixTotalsSuite{name, "1.0", []matrixTotalsCase{{name + "-case", "", "0.01"}}})
+		}
+		return out
+	}
+	var artifacts []attemptsArtifact
+	for slot, prefix := range []string{"a", "b"} {
+		left, right := suites(prefix, 0, 8_193), suites(prefix, 8_193, 16_385)
+		id := 10 * (slot + 1)
+		artifacts = append(artifacts,
+			attemptsArtifact{id + 1, prefix + "-left", made, false, retiredArchive(t, timestamp, left...)},
+			attemptsArtifact{id + 2, prefix + "-right", made, false, retiredArchive(t, timestamp, right...)},
+			attemptsArtifact{id + 3, "total-" + prefix, made, false, retiredArchive(t, timestamp, append(slices.Clone(left), right...)...)})
+	}
+	stack.pass(t, org, retiredRunID, retiredDay().Add(11*time.Hour), retiredState(true, artifacts))
+	var minimal, retractedSuites uint64
+	if err := stack.conn.QueryRow(ctx, `SELECT countIf(startsWith(suite_id, '~retired-')), countIf(retracted = 1) FROM test_suite_results FINAL WHERE org_id = ?`, org).
+		Scan(&minimal, &retractedSuites); err != nil {
+		t.Fatal(err)
+	}
+	if minimal < 4 || minimal != retractedSuites {
+		t.Fatalf("%d minimal rows of %d retraction rows, want the one_row_per_slot arm with two rows per slot", minimal, retractedSuites)
+	}
+	var rows uint64
+	if err := stack.conn.QueryRow(ctx, "SELECT count() FROM ("+retiredBaseReaderSQL(t, "loadNativeTestopsSuites")+")",
+		testopsSourceArgs(org, []uuid.UUID{stack.repoID(t, org)}, retiredDay(), retiredDay().Add(24*time.Hour))...).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 32_770+2 {
+		t.Errorf("old reader counts %d suites, want the parts' 32,770 + one marker per dropped slot (32,772)", rows)
+	}
+	if got := retiredMetricOf(t, stack, org, retiredDay()); got.suites != 32_770 || got.total != 32_770 {
+		t.Errorf("new readers serve %d suites, %d cases, want CONTROL 32,770 and 32,770", got.suites, got.total)
+	}
+}

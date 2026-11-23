@@ -747,3 +747,64 @@ func TestGitHubTestsRunReportEffectsCapsTheMinimalLegacyIDs(t *testing.T) {
 		}
 	}
 }
+
+// Each minimal retraction row takes a prepared chunk of its own, apart from every other report row and from the other minimal
+// rows: one slot whose legacy union takes two rows (20,000 ids), and three slots with one small row each.
+func TestGitHubTestsEveryMinimalRetractionRowTakesItsOwnChunk(t *testing.T) {
+	at := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	report := func(slot string, suites int) githubTestsParsedReport {
+		rows := make([]testSuiteResultRow, suites)
+		for index := range rows {
+			id := fmt.Sprintf("%s-%05d", slot, index)
+			rows[index] = testSuiteResultRow{OrgID: "org", RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", RunID: "1", SuiteID: id, SuiteName: id,
+				TotalCount: 1, PassedCount: 1, LastSynced: at, ReportSlot: slot, RunAttempt: 2, LegacySuiteIDs: []string{"legacy-" + id}}
+		}
+		return githubTestsParsedReport{Suites: rows}
+	}
+	live := report("kept", 3)
+	for _, cell := range []struct {
+		name    string
+		dropped []githubTestsParsedReport
+		rows    int
+	}{
+		{"one slot, a two-row union", []githubTestsParsedReport{report("total", 20_000)}, 2},
+		{"three slots, small rows", []githubTestsParsedReport{report("total-a", 2), report("total-b", 2), report("total-c", 2)}, 3},
+	} {
+		retirement := githubTestsRetirement{parsed: append([]githubTestsParsedReport{live}, cell.dropped...)}
+		for index := range cell.dropped {
+			retirement.dropped = append(retirement.dropped, githubTestsReportDrop{Index: index + 1, Cause: githubTestsAggregateOfPartsCause})
+		}
+		effects, limited, err := githubTestsRunReportEffects(githubTestsRetractionRoom{rows: 1}, retirement, live.Suites, nil, nil, nil)
+		if err != nil || limited != "one_row_per_slot" {
+			t.Fatalf("%s: limited %q (%v), want one_row_per_slot", cell.name, limited, err)
+		}
+		chunks, err := splitCompleteRouteBatch(CompleteRouteBatch{Effects: effects}, ShadowComparison{}, TestOpsRouteChunkPolicy())
+		if err != nil {
+			t.Fatalf("%s: %v", cell.name, err)
+		}
+		own := 0
+		for ordinal, chunk := range chunks {
+			minimal, others := 0, 0
+			for _, effect := range chunk.Effects {
+				for _, row := range effect.Rows {
+					switch {
+					case strings.Contains(string(row), `"suite_id":"~retired-`):
+						minimal++
+					case effect.Destination != testOpsRunReportCompletenessDestination:
+						others++
+					}
+				}
+			}
+			if minimal == 0 {
+				continue
+			}
+			own++
+			if minimal != 1 || others != 0 {
+				t.Errorf("%s: chunk %d holds %d minimal rows and %d other report rows, want 1 and 0", cell.name, ordinal, minimal, others)
+			}
+		}
+		if own != cell.rows {
+			t.Errorf("%s: %d chunks hold a minimal row, want %d", cell.name, own, cell.rows)
+		}
+	}
+}

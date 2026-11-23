@@ -226,7 +226,7 @@ func sweepAnswer(t *testing.T, world sweepWorld, filter *model.CompoundingRiskFi
 // repoIds is cut at maxRows before the team scope resolves it: its entry 501
 // selects nothing. teamIds is not cut: every named team answers its row, as on
 // main. An explicit empty repoIds keeps its answer of main.
-func TestARequestListOver500IsCutBeforeTheTeamScopeResolvesIt(t *testing.T) {
+func TestARepoIdsListOver500IsCutBeforeTheTeamScopeResolvesIt(t *testing.T) {
 	now := sweepNow()
 	d := time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC)
 	team := func(teamIDs, repoIDs []string) *model.CompoundingRiskFilterInput {

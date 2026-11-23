@@ -1,8 +1,12 @@
-# Split test packages ci/go_race_shard.awk (tapart=, chain=1) keeps apart in the non-race test legs (CHAOS-14334): no test shard holds
+# Split test packages ci/go_race_shard.awk (tapart=, chain=1) keeps apart in the non-race test legs (CHAOS-14334, CHAOS-14513): no test shard holds
 # parts of two of them. Format: package<TAB>reason. Key = import path relative to the root module; each row names a split package
 # (ci/go_test_splits.tsv). They shell out to ci/check_go.sh and run beside each other slower than the plan models: test shard 6/13
-# held parts of all four (p50 672 s, 919-940 s on slow runners, over the 900 s cap). internal/cigates/testshard checks the rule.
-internal/cigates/checkgoshards	shells out to check_go.sh test legs; 166-174 s on the 919-926 s legs
+# held parts of testshard, checkgo, splitshards and racescope (a chain of 815-935 s on 2026-11-22, over the 900 s cap).
+# internal/cigates/testshard checks the rule. Rows are limited by the modelled-wall cap of that package (600 s): the apart rule puts all
+# parts of a listed package on few legs, so each row added raises the modelled maximum (measured over the subsets of the 7 candidate
+# packages at 13 legs: testshard + checkgo + splitshards + integrationshards 567 s, all four of leg 6 listed 622 s). racescope (166 s in two
+# parts), checkgoshards (177 s) and outboundtransport (146 s) are not listed: their parts can share a leg with a listed package.
+internal/cigates/checkgo	shells out to check_go.sh; 211-222 s over 2 parts on the 819-935 s test shard 6/13 legs
 internal/cigates/integrationshards	shells out to check_go.sh integration shards; 188-196 s on the 919-926 s legs
-internal/cigates/outboundtransport	shells out to check_go.sh; 147-160 s on the 919-926 s legs
-internal/cigates/testshard	shells out to check_go.sh shard plans; 374 s on the 919-926 s legs
+internal/cigates/splitshards	shells out to check_go.sh; 183-206 s on the 819-935 s test shard 6/13 legs
+internal/cigates/testshard	shells out to check_go.sh shard plans; 310-374 s on the 819-935 s legs

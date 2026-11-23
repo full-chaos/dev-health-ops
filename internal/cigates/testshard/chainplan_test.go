@@ -343,6 +343,18 @@ func TestNoTestShardHoldsPartsOfTwoApartPackages(t *testing.T) {
 	}
 }
 
+// CHAOS-14513: test shard 6/13 ran a serial chain of checkgo, racescope, splitshards and testshard parts (815-935 s) because only
+// testshard of them was listed. The four packages that took the leg over the cap stay listed; a deleted row is a red here, not a red leg.
+func TestTheApartListKeepsTheHeavyShellOutPackagesApart(t *testing.T) {
+	t.Parallel()
+	listed := testApartRows(t)
+	for _, p := range []string{"internal/cigates/testshard", "internal/cigates/checkgo", "internal/cigates/splitshards", "internal/cigates/integrationshards"} {
+		if !listed[p] {
+			t.Errorf("ci/go_test_apart.tsv has no row for %s: its parts can chain with another heavy cigates package on one test shard", p)
+		}
+	}
+}
+
 func TestTheTestPlanWithoutApartRowsPutsApartPackagesOnOneShard(t *testing.T) {
 	t.Parallel()
 	listed := testApartRows(t)

@@ -21,6 +21,7 @@
 # The weights only need to be roughly right: a wrong one costs balance, never coverage (the shards always partition `go list ./...`). Key = import path relative to the module root.
 # Sorted (LC_ALL=C), no duplicates; internal/cigates/testshard checks each row names a real package.
 # CHAOS-14341 (both directions): a row whose measured value differs from it by more than 10 % and 2 s or more is set to that value, and a package of 20 s or more with no row gets one; measured = the median `ok` time (a split package: the sum of its parts in the run) over the uncached test legs of the 12 main-push go-quality runs 44688756656, 44691224737, 44692598105, 44692697437, 44694143146, 44694742462, 44695713797, 44696582818, 44696704698, 44707329623, 44712216369, 44713323366 (n = 12 for every changed row). It drops the larger-of-warm-and-cold rule (CHAOS-13730) for these rows: the go.sum-change run 44694742462 measured like warm runs (shared build cache); 377 s of modelled headroom covers a cold run; a cold-cache wall red reruns warm.
+# CHAOS-14513: internal/cigates/checkgo (471 -> 629), racescope (142 -> 166) and splitshards (641 -> 713) are the median of the summed `ok` seconds of their parts over the 5 full push runs 45080177613, 45078564493, 45076738801, 45074535053, 45062145483 (the chain on test leg 6/13 ran 815-935 s against a modelled 488).
 cmd/dho	41
 cmd/gqlgen-guard	52
 deploy/helm/dev-health	539
@@ -49,7 +50,7 @@ internal/cigates/affectedreject	134
 internal/cigates/bigboy	90
 internal/cigates/bigboyrender	12
 internal/cigates/chartgates	570
-internal/cigates/checkgo	471
+internal/cigates/checkgo	629
 internal/cigates/checkgoshards	177
 internal/cigates/docs	76
 internal/cigates/docstools	55
@@ -60,12 +61,12 @@ internal/cigates/livee2e	1
 internal/cigates/outboundtransport	146
 internal/cigates/proofteardown	35
 internal/cigates/queuecreds	16
-internal/cigates/racescope	142
+internal/cigates/racescope	166
 internal/cigates/raceunweighted	112
 internal/cigates/releasetag	18
 internal/cigates/scripts	615
 internal/cigates/sharedserver	45
-internal/cigates/splitshards	641
+internal/cigates/splitshards	713
 internal/cigates/suitecatalog	19
 internal/cigates/testshard	1119
 internal/cigates/weightsfiles	66

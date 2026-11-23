@@ -31,6 +31,8 @@ const (
 	routePauseRacePlannedB = "00000000-0000-4000-8000-000000144798"
 	routePauseRaceRetrying = "00000000-0000-4000-8000-000000144799"
 	routePauseRaceApp      = "route_pause_race"
+
+	routePauseRaceGeneration = dispatchRouteGeneration + 1
 )
 
 type routePauseRaceQueryKey struct{}
@@ -92,11 +94,14 @@ func (shape routePauseRaceShape) seed(t *testing.T, ctx context.Context, pool *p
 	t.Setenv("SYNC_UNIT_CONCURRENCY_PER_BUCKET", shape.cap)
 	seedDispatchRoute(t, ctx, pool)
 	markReferenceDiscoverySucceeded(t, ctx, pool)
-	// The checked-in policy names rollback_route none for dispatch_sync_run; Pause validates the row against it.
-	if _, err := pool.Exec(ctx, `UPDATE sync_dispatch_transport_routes SET rollback_transport = 'none' WHERE kind = $1`, outboxKindDispatchSyncRun); err != nil {
+	// The checked-in policy names rollback_route none for dispatch_sync_run and Pause validates the row against it; the
+	// route table's trigger wants a generation increase for that change, so the delivery is at routePauseRaceGeneration.
+	if _, err := pool.Exec(ctx, `UPDATE sync_dispatch_transport_routes SET rollback_transport = 'none', generation = $2 WHERE kind = $1`,
+		outboxKindDispatchSyncRun, routePauseRaceGeneration); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE sync_dispatch_outbox SET attempts = 1 WHERE id = $1`, dispatchServiceTestOutbox); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE sync_dispatch_outbox SET attempts = 1, dispatched_route_generation = $2 WHERE id = $1`,
+		dispatchServiceTestOutbox, routePauseRaceGeneration); err != nil {
 		t.Fatal(err)
 	}
 	now := pgNow()
@@ -166,7 +171,7 @@ func routePauseRaceCount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 }
 
 // TestRoutePauseInTheCommitWindowCommitsNothingForTheOldGeneration: a real route pause commits between the accepted
-// commit snapshot and the pass's next statement. WANT per shape: the pass of generation 3 commits no publish, no
+// commit snapshot and the pass's next statement. WANT per shape: the pass of the delivery generation commits no publish, no
 // wake and no finalize arm. When the pause instead waits on a lock the pass holds, the window is closed for that
 // shape and the cell says so.
 func TestRoutePauseInTheCommitWindowCommitsNothingForTheOldGeneration(t *testing.T) {
@@ -242,8 +247,8 @@ func TestRoutePauseInTheCommitWindowCommitsNothingForTheOldGeneration(t *testing
 				t.Logf("shape=%s hook_at=%q pause_in_window=%v pause_waited=%v pause_generation=%d route=%d/paused=%v dispatch_err=%v published=%d planned=%d->%d row=%s/%d finalize_rows=%d",
 					shape.name, tracer.firedAt, pauseInWindow, pauseWaited, pausedGeneration, routeGeneration, routePaused, dispatchErr,
 					published, planned, plannedAfter, status, attempts, finalize)
-				if !routePaused || routeGeneration != dispatchRouteGeneration+1 {
-					t.Fatalf("precondition: route generation=%d paused=%v, want %d paused", routeGeneration, routePaused, dispatchRouteGeneration+1)
+				if !routePaused || routeGeneration != routePauseRaceGeneration+1 {
+					t.Fatalf("precondition: route generation=%d paused=%v, want %d paused", routeGeneration, routePaused, routePauseRaceGeneration+1)
 				}
 				if !pauseInWindow {
 					t.Logf("shape=%s: the pause waited on a lock the pass holds, so it committed after the pass; no window", shape.name)
@@ -251,14 +256,14 @@ func TestRoutePauseInTheCommitWindowCommitsNothingForTheOldGeneration(t *testing
 				}
 				if published != 0 || plannedAfter != planned {
 					t.Errorf("publish: the generation-%d pass committed %d unit publishes (planned %d->%d) after the route paused at generation %d",
-						dispatchRouteGeneration, published, planned, plannedAfter, routeGeneration)
+						routePauseRaceGeneration, published, planned, plannedAfter, routeGeneration)
 				}
 				if status != "dispatched" || attempts != 1 {
 					t.Errorf("wake: the generation-%d pass left the row %s/%d after the route paused, want dispatched/1 (no old-generation wake)",
-						dispatchRouteGeneration, status, attempts)
+						routePauseRaceGeneration, status, attempts)
 				}
 				if finalize != 0 {
-					t.Errorf("finalize: the generation-%d pass armed finalize (%d rows) after the route paused", dispatchRouteGeneration, finalize)
+					t.Errorf("finalize: the generation-%d pass armed finalize (%d rows) after the route paused", routePauseRaceGeneration, finalize)
 				}
 			})
 		})
@@ -268,5 +273,6 @@ func TestRoutePauseInTheCommitWindowCommitsNothingForTheOldGeneration(t *testing
 func routePauseRaceArgs() DispatchSyncRunArgs {
 	args := dispatchTestArgs()
 	args.DeliveryAttempt = 1
+	args.TransportArgs.RouteGeneration = routePauseRaceGeneration
 	return args
 }

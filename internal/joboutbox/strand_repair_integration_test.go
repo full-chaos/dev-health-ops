@@ -4,6 +4,7 @@ package joboutbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -2625,35 +2626,40 @@ func assertUndeliveredInvariant(t *testing.T, ctx context.Context, pool *pgxpool
 	}
 }
 
-// Round 1 P2 (acp P2-2): statement A on Postgres honours the cursor's frozen bound. With a cursor set, a candidate
-// written after the bound (and before the cutoff) is NOT read; once the cursor wraps (nil) it is.
-func TestStaleFinalizeStatementAHoldsTheCursorBound(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	defer cancel()
+// startStaleFinalizeAdmin is a fresh Postgres at the migrated schema with the River tables, as admin.
+func startStaleFinalizeAdmin(t *testing.T, ctx context.Context, rolePrefix string) *pgxpool.Pool {
+	t.Helper()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = instance.Close(context.Background()) }()
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
 	admin := openIntegrationPool(t, ctx, instance.URI)
-	defer admin.Close()
+	t.Cleanup(admin.Close)
 	createStrandSchema(t, ctx, admin)
-	domainRole, err := containers.RoleName("sfbound_domain", instance)
+	domainRole, err := containers.RoleName(rolePrefix+"_domain", instance)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer containers.DropRole(admin, domainRole, t.Logf)
-	queueRole, err := containers.RoleName("sfbound_queue", instance)
+	queueRole, err := containers.RoleName(rolePrefix+"_queue", instance)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer containers.DropRole(admin, queueRole, t.Logf)
 	createStrandRoles(t, ctx, admin, domainRole, queueRole)
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{
 		Schema: "river", DomainRole: domainRole, QueueRole: queueRole,
 	}); err != nil {
 		t.Fatal(err)
 	}
+	return admin
+}
+
+// Round 1 P2 (acp P2-2): statement A on Postgres honours the cursor's frozen bound. With a cursor set, a candidate
+// written after the bound (and before the cutoff) is NOT read; once the cursor wraps (nil) it is.
+func TestStaleFinalizeStatementAHoldsTheCursorBound(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	admin := startStaleFinalizeAdmin(t, ctx, "sfbound")
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	cutoff := now.Add(-StaleFinalizeHorizon)
 	cursorAt, bound := cutoff.Add(-10*time.Hour), cutoff.Add(-5*time.Hour)
@@ -2697,4 +2703,172 @@ SELECT gen_random_uuid(), run.id, 0, '[]'::jsonb, 'succeeded', 1, $2, $2, $2 FRO
 	if got := read(nil); !reflect.DeepEqual(got, []string{"00000000-0000-4000-8000-0000000b0001", "00000000-0000-4000-8000-0000000b0002"}) {
 		t.Fatalf("after the wrap: candidates %v, want both runs, oldest first", got)
 	}
+}
+
+// seedStaleFinalizeRuns writes base runs (shape D: running, finalize pending, one succeeded partition, all written at
+// the given time) with the given ids.
+func seedStaleFinalizeRuns(t *testing.T, ctx context.Context, admin *pgxpool.Pool, at time.Time, runIDs ...string) {
+	t.Helper()
+	for index, runID := range runIDs {
+		if _, err := admin.Exec(ctx, `
+WITH run AS (
+    INSERT INTO public.daily_metrics_runs (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at)
+    VALUES ($1::uuid, '00000000-0000-4000-8000-0000000c0000'::uuid, DATE '2025-01-01' + $3::int, 'live-arm:' || $1, 'running', 'pending', $2, $2)
+    RETURNING id
+)
+INSERT INTO public.daily_metrics_partitions (id, run_id, ordinal, repo_ids, status, attempt_count, completed_at, created_at, updated_at)
+SELECT gen_random_uuid(), run.id, 0, '[]'::jsonb, 'succeeded', 1, $2, $2, $2 FROM run`, runID, at, index); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// seedRiverFinalizeJob writes one metrics.daily_finalize River job with the given args and state.
+func seedRiverFinalizeJob(t *testing.T, ctx context.Context, admin *pgxpool.Pool, args, state string, at time.Time) {
+	t.Helper()
+	var finalizedAt *time.Time
+	if state == "completed" || state == "discarded" || state == "cancelled" {
+		finalizedAt = &at
+	}
+	if _, err := admin.Exec(ctx, `
+INSERT INTO river.river_job (args, attempt, created_at, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at)
+VALUES ($1::jsonb, 1, $2, $3, 'metrics.daily_finalize', 4, '{}'::jsonb, 2, 'metrics', $4::river.river_job_state, $2)`,
+		args, at, finalizedAt, state); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// pm ruling on #6867 (2): the live-job fragment's River arm, now an uncorrelated IN, answers as the old EXISTS did at
+// both use sites -- statement A (AND NOT live) and statement B (CASE WHEN live). A finalize job with no domain id, one
+// whose domain id is a JSON number, and one in each excluded state make no run live; a run with a live job is live,
+// once, also with two live jobs. Without the IS NOT NULL in the subquery, the no-id job puts a NULL into the set and
+// "NOT (run.id IN (...) OR ...)" turns NULL: statement A then drops every candidate.
+func TestStaleFinalizeLiveJobArmAnswersAsTheContainmentCheck(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	admin := startStaleFinalizeAdmin(t, ctx, "sflive")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	old := now.Add(-72 * time.Hour)
+	cutoff := now.Add(-StaleFinalizeHorizon)
+	const (
+		noJob      = "00000000-0000-4000-8000-0000000c0001"
+		completed  = "00000000-0000-4000-8000-0000000c0002"
+		discarded  = "00000000-0000-4000-8000-0000000c0003"
+		cancelled  = "00000000-0000-4000-8000-0000000c0004"
+		live       = "00000000-0000-4000-8000-0000000c0005"
+		twoLive    = "00000000-0000-4000-8000-0000000c0006"
+		numericIDs = "00000000-0000-4000-8000-0000000c0007"
+	)
+	seedStaleFinalizeRuns(t, ctx, admin, old, noJob, completed, discarded, cancelled, live, twoLive, numericIDs)
+	domain := func(id string) string {
+		return `{"domain": {"type": "daily_metrics_run", "id": "` + id + `"}}`
+	}
+	seedRiverFinalizeJob(t, ctx, admin, `{"domain": {"type": "daily_metrics_run"}}`, "available", old)
+	seedRiverFinalizeJob(t, ctx, admin, `{}`, "available", old)
+	seedRiverFinalizeJob(t, ctx, admin, `{"domain": {"type": "daily_metrics_run", "id": 7}}`, "available", old)
+	seedRiverFinalizeJob(t, ctx, admin, domain(completed), "completed", old)
+	seedRiverFinalizeJob(t, ctx, admin, domain(discarded), "discarded", old)
+	seedRiverFinalizeJob(t, ctx, admin, domain(cancelled), "cancelled", old)
+	seedRiverFinalizeJob(t, ctx, admin, domain(live), "available", old)
+	seedRiverFinalizeJob(t, ctx, admin, domain(twoLive), "scheduled", old)
+	seedRiverFinalizeJob(t, ctx, admin, domain(twoLive), "retryable", old)
+
+	jobTable := `"river"."river_job"`
+	survey := surveyStaleFinalize(ctx, admin.Begin, staleFinalizeBaseExistsSQL,
+		fmt.Sprintf(staleFinalizeCandidatesSQLTemplate, jobTable), fmt.Sprintf(staleFinalizeLevelsSQLTemplate, jobTable),
+		cutoff, 20, nil)
+	if len(survey.failures) != 0 {
+		t.Fatalf("survey failures %+v", survey.failures)
+	}
+	got := map[string]bool{}
+	for _, candidate := range survey.candidates {
+		got[candidate.runID] = true
+	}
+	want := map[string]bool{noJob: true, completed: true, discarded: true, cancelled: true, numericIDs: true}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("statement A candidates %v, want %v (every run but the two with a live job)", got, want)
+	}
+	if survey.levels == nil || *survey.levels != (StaleFinalizeLevels{Live: 2}) {
+		t.Fatalf("statement B levels %+v, want Live 2 (one per run with a live job) and nothing else", survey.levels)
+	}
+}
+
+// pm ruling on #6867 (3): at 1000 live runs the plans of statements A and B read river_job through no Seq Scan that
+// runs once per base run. The live-job River arm is a hashed subplan read once; the recent arm (unchanged) may still
+// probe river_job's args index per run.
+func TestStaleFinalizeSurveyReadsRiverJobOnceAtTheCap(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	admin := startStaleFinalizeAdmin(t, ctx, "sfonce")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	old := now.Add(-72 * time.Hour)
+	cutoff := now.Add(-StaleFinalizeHorizon)
+	if _, err := admin.Exec(ctx, `
+WITH run AS (
+    INSERT INTO public.daily_metrics_runs (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at)
+    SELECT gen_random_uuid(), '00000000-0000-4000-8000-0000000c1000'::uuid, DATE '2020-01-01' + n, 'live-level:' || n, 'running', 'pending', $1, $1
+    FROM generate_series(1, 1000) AS n
+    RETURNING id
+), partition AS (
+    INSERT INTO public.daily_metrics_partitions (id, run_id, ordinal, repo_ids, status, attempt_count, completed_at, created_at, updated_at)
+    SELECT gen_random_uuid(), run.id, 0, '[]'::jsonb, 'succeeded', 1, $1, $1, $1 FROM run
+)
+INSERT INTO river.river_job (args, attempt, created_at, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at)
+SELECT jsonb_build_object('domain', jsonb_build_object('type', 'daily_metrics_run', 'id', run.id::text)),
+       0, $1, NULL, 'metrics.daily_finalize', 4, '{}'::jsonb, 2, 'metrics', 'scheduled', $1 + interval '30 days'
+FROM run`, old); err != nil {
+		t.Fatal(err)
+	}
+	jobTable := `"river"."river_job"`
+	for _, statement := range []struct {
+		name, query string
+		args        []any
+	}{
+		{"statement A", fmt.Sprintf(staleFinalizeCandidatesSQLTemplate, jobTable), []any{cutoff, 100, nil, nil, nil}},
+		{"statement B", fmt.Sprintf(staleFinalizeLevelsSQLTemplate, jobTable), []any{cutoff, staleFinalizeLevelCap + 1}},
+	} {
+		tx, err := admin.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, staleFinalizeJITOff); err != nil {
+			t.Fatal(err)
+		}
+		var raw []byte
+		if err := tx.QueryRow(ctx, "EXPLAIN (ANALYZE, FORMAT JSON) "+statement.query, statement.args...).Scan(&raw); err != nil {
+			t.Fatalf("EXPLAIN %s: %v", statement.name, err)
+		}
+		_ = tx.Rollback(ctx)
+		var plans []struct {
+			Plan explainNode `json:"Plan"`
+		}
+		if err := json.Unmarshal(raw, &plans); err != nil || len(plans) != 1 {
+			t.Fatalf("EXPLAIN %s: %v", statement.name, err)
+		}
+		var riverNodes int
+		var walk func(node explainNode)
+		walk = func(node explainNode) {
+			if node.RelationName == "river_job" {
+				riverNodes++
+				if node.NodeType == "Seq Scan" && node.ActualLoops > 1 {
+					t.Fatalf("%s scans river_job %.0f times (once per base run):\n%s", statement.name, node.ActualLoops, raw)
+				}
+			}
+			for _, child := range node.Plans {
+				walk(child)
+			}
+		}
+		walk(plans[0].Plan)
+		if riverNodes == 0 {
+			t.Fatalf("%s: no river_job node in the plan:\n%s", statement.name, raw)
+		}
+	}
+}
+
+// explainNode is one node of EXPLAIN (ANALYZE, FORMAT JSON).
+type explainNode struct {
+	NodeType     string        `json:"Node Type"`
+	RelationName string        `json:"Relation Name"`
+	ActualLoops  float64       `json:"Actual Loops"`
+	Plans        []explainNode `json:"Plans"`
 }

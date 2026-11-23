@@ -414,11 +414,18 @@ const (
 		WHERE partition.run_id = run.id
 			AND (partition.status <> 'succeeded' OR partition.updated_at > $1)
 	)`
-	staleFinalizeLiveJobSQL = `(EXISTS (
-		SELECT 1 FROM %[1]s AS job
+	// The River arm is an uncorrelated IN, so it reads river_job once per
+	// statement (a hashed subplan), not once per base run: as a correlated
+	// EXISTS the planner priced an early match and scanned river_job for every
+	// run. The domain id is always a JSON string (jobcontract.DomainLink.ID),
+	// so #>> equals the old @> containment; the IS NOT NULL keeps a job with no
+	// domain id from putting a NULL into the set, which would turn
+	// "run.id IN (...)" into NULL instead of false.
+	staleFinalizeLiveJobSQL = `(run.id::text IN (
+		SELECT job.args #>> '{domain,id}' FROM %[1]s AS job
 		WHERE job.kind = 'metrics.daily_finalize'
-			AND job.args @> jsonb_build_object('domain', jsonb_build_object('id', run.id::text))
 			AND job.state::text NOT IN ('completed', 'discarded', 'cancelled')
+			AND job.args #>> '{domain,id}' IS NOT NULL
 	) OR EXISTS (
 		SELECT 1 FROM public.worker_job_outbox AS outbox
 		WHERE outbox.job_kind = 'metrics.daily_finalize'

@@ -34,7 +34,7 @@ func chunkSharePass(t *testing.T, self runOrder, costClass string, units []dispa
 		activeCount: func(dispatchBucket) (int, int, int, error) {
 			return state.active, state.activeBackfill, state.activeChunked, nil
 		},
-		emit:      func(dispatchBucket, int, int, int, int, int, int) {},
+		emit:      func(dispatchBucket, int, int, int, int, int, int, string, heldBackSignal) {},
 		self:      self,
 		olderRuns: func(dispatchBucket) ([]olderRun, error) { return state.older, nil },
 	}

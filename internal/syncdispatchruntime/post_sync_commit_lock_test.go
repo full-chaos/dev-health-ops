@@ -26,11 +26,14 @@ func untimedLogger(w io.Writer) *synclog.Logger {
 	})))
 }
 
-const commitLockUnitRun = "00000000-0000-4000-8000-000000000001"
+const (
+	commitLockUnitOrg = "00000000-0000-4000-8000-0000000000a1"
+	commitLockUnitRun = "00000000-0000-4000-8000-000000000001"
+)
 
 func commitLockUnitTransport() TransportArgs {
 	return TransportArgs{
-		Version: ContractVersionV1, OrgID: "org-1", RunID: commitLockUnitRun,
+		Version: ContractVersionV1, OrgID: commitLockUnitOrg, RunID: commitLockUnitRun,
 		DispatchOutbox: "00000000-0000-4000-8000-000000000002", RouteGeneration: 1, DeliveryAttempt: 1,
 	}
 }
@@ -157,5 +160,53 @@ func TestFencesWithoutAFailureFuncKeepTheirErrors(t *testing.T) {
 				t.Fatalf("non-lock read error = %T %v, want the sentinel value %v itself", err, err, c.sentinel)
 			}
 		})
+	}
+}
+
+// TestPostSyncCommitGateJudgesTheRetriedRead: decideCommit judges the snapshot of the read that succeeded, not the
+// delivery the pass started with. Read 1 meets the held row (55P03); the holder bumps the row's attempts to 2 (a newer
+// delivery owns it) and releases; read 2 returns that row. The gate refuses delivery attempt 1 exactly as a fresh read of
+// the same row does (false, nil error, one INFO post_sync_fanout.delivery_not_current line with
+// reason=delivery_attempt_mismatch), and the bound was not hit, so there is no WARN and no busy count.
+func TestPostSyncCommitGateJudgesTheRetriedRead(t *testing.T) {
+	args := PostSyncArgs{commitLockUnitTransport()}
+	if allowed, reason := decideCommit(commitSnapshot{found: true, attempts: 2}, args.RouteGeneration(), args.Attempt()); allowed || reason != "delivery_attempt_mismatch" {
+		t.Fatalf("decideCommit on a row at attempts 2 for delivery attempt 1 = %t, %q; want false, delivery_attempt_mismatch", allowed, reason)
+	}
+	gate := func(t *testing.T, tx *snapshotTx) (bool, error, string, map[string]int64) {
+		t.Helper()
+		reader := installBusyMeter(t)
+		installFakeSnapshotClock(t)
+		var logs bytes.Buffer
+		service := &NativePostSyncService{logger: untimedLogger(&logs)}
+		allowed, err := service.postSyncCommitAllowed(context.Background(), tx, args)
+		return allowed, err, logs.String(), busyCounts(t, reader)
+	}
+	fresh := &snapshotTx{result: func(int) error { return nil }, attempts: func(int) int64 { return 2 }}
+	freshAllowed, freshErr, freshLog, _ := gate(t, fresh)
+	if freshAllowed || freshErr != nil || fresh.reads != 1 {
+		t.Fatalf("fresh read of the superseded row = %t, %v (reads %d); want refused with no error after 1 read", freshAllowed, freshErr, fresh.reads)
+	}
+	retried := &snapshotTx{
+		result: func(read int) error {
+			if read == 1 {
+				return &pgconn.PgError{Code: "55P03"}
+			}
+			return nil
+		},
+		attempts: func(read int) int64 { return 2 },
+	}
+	allowed, err, log, counted := gate(t, retried)
+	if allowed || err != nil || retried.reads != 2 || retried.rollbacks != 1 || retried.released != 1 || retried.commit != 0 {
+		t.Fatalf("retried read of the superseded row = %t, %v (reads %d, rollbacks %d, released %d, commits %d); want refused with no error after 2 reads",
+			allowed, err, retried.reads, retried.rollbacks, retried.released, retried.commit)
+	}
+	want := "level=INFO msg=post_sync_fanout.delivery_not_current org_id=" + commitLockUnitOrg + " sync_run_id=" + commitLockUnitRun +
+		" reason=delivery_attempt_mismatch delivery_route_generation=1 current_route_generation=1\n"
+	if freshLog != want || log != freshLog {
+		t.Fatalf("refusal log after the retry =\n%q\nfresh read =\n%q\nwant both exactly\n%q", log, freshLog, want)
+	}
+	if len(counted) != 0 {
+		t.Fatalf("%s = %v after a retry inside the bound, want none", FenceCommitSnapshotBusyCounter, counted)
 	}
 }

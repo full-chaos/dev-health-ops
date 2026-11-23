@@ -249,3 +249,61 @@ func TestPostSyncRetryStagesTheFanoutOnce(t *testing.T) {
 		}
 	})
 }
+
+// TestPostSyncRefusesADeliverySupersededWhileItsRowWasHeld: the holder of the post_sync row is a redelivery that moves
+// the row's attempts to 2; it commits on the first 55P03. The pass (delivery attempt 1) reads the snapshot again and
+// decideCommit judges that read: the delivery is refused (delivery_attempt_mismatch), Fanout returns nil, no fan-out
+// marker is written, no outcome is counted, and the only lines are one delivery_not_current refusal (no failure line, no
+// give-up WARN: the bound was not hit).
+func TestPostSyncRefusesADeliverySupersededWhileItsRowWasHeld(t *testing.T) {
+	logs := &lockedLogBuffer{}
+	observer := &recordingFanoutObserver{}
+	kind := postSyncFenceKind(postSyncPassOptions{logs: logs, observer: observer})
+	withCommitLockPools(t, func(ctx context.Context, pool, other *pgxpool.Pool, tracer *commitLockTracer) {
+		kind.seed(t, ctx, other)
+		if _, err := other.Exec(ctx, `UPDATE sync_dispatch_outbox SET attempts = 1 WHERE id = $1`, kind.outbox); err != nil {
+			t.Fatal(err)
+		}
+		holder, err := other.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = holder.Rollback(context.Background()) }()
+		tag, err := holder.Exec(ctx, `UPDATE sync_dispatch_outbox SET attempts = attempts + 1 WHERE id = $1`, kind.outbox)
+		if err != nil || tag.RowsAffected() != 1 {
+			t.Fatalf("redelivery holding the row: rows=%d err=%v, want 1 row held", tag.RowsAffected(), err)
+		}
+		var released error
+		tracer.onBusy = func() { released = holder.Commit(ctx) }
+
+		err = kind.pass(t, ctx, pool, 1)
+		if busy := tracer.busyReads(); busy != 1 || released != nil {
+			t.Fatalf("commit snapshot 55P03 reads = %d (release %v), want 1 and a clean release", busy, released)
+		}
+		if err != nil || kind.wrote(t, ctx, other) {
+			t.Fatalf("delivery superseded while its row was held: err=%v wrote=%t, want nil/false", err, kind.wrote(t, ctx, other))
+		}
+		if len(observer.outcomes) != 0 {
+			t.Fatalf("fan-out outcomes %v on a refused delivery, want none", observer.outcomes)
+		}
+		refusals := 0
+		for _, line := range logs.lines() {
+			switch {
+			case strings.Contains(line, "msg=post_sync_fanout.delivery_not_current"):
+				refusals++
+				if !strings.Contains(line, "reason=delivery_attempt_mismatch ") || !strings.Contains(line, "sync_run_id="+postSyncFenceRun) {
+					t.Errorf("refusal line without its reason or run: %s", line)
+				}
+			case strings.Contains(line, "msg=post_sync_fanout.failed"), strings.Contains(line, "msg=sync_dispatch_fence.commit_snapshot_busy"):
+				t.Errorf("a refused delivery logged a failure or give-up line: %s", line)
+			}
+		}
+		if refusals != 1 {
+			t.Fatalf("%d post_sync_fanout.delivery_not_current lines, want 1:\n%s", refusals, strings.Join(logs.lines(), "\n"))
+		}
+		var attempts int64
+		if err := other.QueryRow(ctx, `SELECT attempts FROM sync_dispatch_outbox WHERE id = $1`, kind.outbox).Scan(&attempts); err != nil || attempts != 2 {
+			t.Fatalf("outbox attempts after the redelivery = %d (%v), want 2", attempts, err)
+		}
+	})
+}

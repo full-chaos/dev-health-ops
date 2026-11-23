@@ -210,3 +210,102 @@ func TestPostSyncCommitGateJudgesTheRetriedRead(t *testing.T) {
 		t.Fatalf("%s = %v after a retry inside the bound, want none", FenceCommitSnapshotBusyCounter, counted)
 	}
 }
+
+// fenceFailureMarker is what the cell's failure func returns: a second marker over the cause it was given.
+type fenceFailureMarker struct{ cause error }
+
+func (marker *fenceFailureMarker) Error() string { return "fence failure marker" }
+func (marker *fenceFailureMarker) Unwrap() error { return marker.cause }
+
+// TestAFenceWithAFailureFuncNeverReturnsItsFallback: with a failure func set, every return path of lockCommitSnapshot
+// (and commitSnapshotBusy) returns that func's value over the path's own cause, never the fence's unavailable value.
+// Each subcase drives one path (transport_fence.go line of its return) through the fake transaction and clock.
+func TestAFenceWithAFailureFuncNeverReturnsItsFallback(t *testing.T) {
+	fallback := errors.New("fallback marker")
+	errBegin, errRollback, errRelease := errors.New("begin"), errors.New("rollback"), errors.New("release")
+	is := func(want error) func(error) bool { return func(cause error) bool { return cause == want } }
+	sqlstate := func(code string) func(error) bool {
+		return func(cause error) bool {
+			var pgErr *pgconn.PgError
+			return errors.As(cause, &pgErr) && pgErr.Code == code
+		}
+	}
+	free := func(int) error { return nil }
+	for _, c := range []struct {
+		name      string
+		zero      bool // a zero window: read 1 starts at the deadline and does not count
+		canceled  bool
+		tx        func(clock *fakeSnapshotClock) *snapshotTx
+		wantCause func(error) bool
+	}{
+		{name: "savepoint begin fails (295)", wantCause: is(errBegin), tx: func(*fakeSnapshotClock) *snapshotTx {
+			return &snapshotTx{result: lockNotAvailable, beginErr: func(int) error { return errBegin }}
+		}},
+		{name: "rollback fails when a read may not start (302)", wantCause: is(errRollback), tx: func(clock *fakeSnapshotClock) *snapshotTx {
+			return &snapshotTx{result: lockNotAvailable,
+				onBegin: func(n int) {
+					if n == 2 {
+						clock.advance(commitSnapshotWindow)
+					}
+				},
+				rollbackErr: func(n int) error {
+					if n == 2 {
+						return errRollback
+					}
+					return nil
+				}}
+		}},
+		{name: "a read may not start at the deadline (304)", wantCause: sqlstate("55P03"), tx: func(clock *fakeSnapshotClock) *snapshotTx {
+			return &snapshotTx{result: lockNotAvailable, onBegin: func(n int) {
+				if n == 2 {
+					clock.advance(commitSnapshotWindow)
+				}
+			}}
+		}},
+		{name: "rollback fails on a read that does not count (310)", zero: true, wantCause: is(errRollback), tx: func(*fakeSnapshotClock) *snapshotTx {
+			return &snapshotTx{result: free, rollbackErr: func(int) error { return errRollback }}
+		}},
+		{name: "a read that does not count (312)", zero: true, wantCause: is(nil), tx: func(*fakeSnapshotClock) *snapshotTx {
+			return &snapshotTx{result: free}
+		}},
+		{name: "savepoint release fails (315)", wantCause: is(errRelease), tx: func(*fakeSnapshotClock) *snapshotTx {
+			return &snapshotTx{result: free, releaseErr: errRelease}
+		}},
+		{name: "a read error other than 55P03 (320)", wantCause: sqlstate("40001"), tx: func(*fakeSnapshotClock) *snapshotTx {
+			return &snapshotTx{result: func(int) error { return &pgconn.PgError{Code: "40001"} }}
+		}},
+		{name: "rollback fails after a 55P03 read (323)", wantCause: is(errRollback), tx: func(*fakeSnapshotClock) *snapshotTx {
+			return &snapshotTx{result: lockNotAvailable, rollbackErr: func(int) error { return errRollback }}
+		}},
+		{name: "the read cap is exhausted (326)", wantCause: sqlstate("55P03"), tx: func(*fakeSnapshotClock) *snapshotTx {
+			return &snapshotTx{result: lockNotAvailable}
+		}},
+		{name: "the wait ends with the context (331)", canceled: true, wantCause: is(context.Canceled), tx: func(*fakeSnapshotClock) *snapshotTx {
+			return &snapshotTx{result: lockNotAvailable}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			installBusyMeter(t)
+			clock := installFakeSnapshotClock(t)
+			if c.zero {
+				previous := commitSnapshotWindow
+				commitSnapshotWindow = 0
+				t.Cleanup(func() { commitSnapshotWindow = previous })
+			}
+			ctx := context.Background()
+			if c.canceled {
+				canceled, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = canceled
+			}
+			fence := testFence(io.Discard)
+			fence.unavailable = fallback
+			fence.failure = func(cause error) error { return &fenceFailureMarker{cause: cause} }
+			_, err := fence.lockCommitSnapshot(ctx, c.tx(clock))
+			marker, ok := err.(*fenceFailureMarker)
+			if errors.Is(err, fallback) || !ok || !c.wantCause(marker.cause) {
+				t.Fatalf("lockCommitSnapshot = %T %v; want the failure func's value over this path's cause, never the fallback", err, err)
+			}
+		})
+	}
+}

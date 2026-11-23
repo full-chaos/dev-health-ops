@@ -123,6 +123,10 @@ type snapshotTx struct {
 	statements []snapshotStatement
 	// attempts is the outbox attempts read n (from 1) scans; nil scans 1.
 	attempts func(read int) int64
+	// beginErr fails savepoint n (from 1), rollbackErr the n-th rollback to a savepoint, releaseErr every release; nil fails
+	// nothing.
+	beginErr, rollbackErr func(n int) error
+	releaseErr            error
 }
 
 type snapshotStatement struct {
@@ -134,6 +138,11 @@ func (tx *snapshotTx) Begin(context.Context) (pgx.Tx, error) {
 	tx.savepoints++
 	if tx.onBegin != nil {
 		tx.onBegin(tx.savepoints)
+	}
+	if tx.beginErr != nil {
+		if err := tx.beginErr(tx.savepoints); err != nil {
+			return nil, err
+		}
 	}
 	return &snapshotSavepoint{parent: tx}, nil
 }
@@ -180,12 +189,15 @@ func (savepoint *snapshotSavepoint) Rollback(context.Context) error {
 	if savepoint.parent.onRollback != nil {
 		savepoint.parent.onRollback(savepoint.parent.reads)
 	}
+	if savepoint.parent.rollbackErr != nil {
+		return savepoint.parent.rollbackErr(savepoint.parent.rollbacks)
+	}
 	return nil
 }
 
 func (savepoint *snapshotSavepoint) Commit(context.Context) error {
 	savepoint.parent.released++
-	return nil
+	return savepoint.parent.releaseErr
 }
 
 // snapshotRow scans a row dispatched to River at generation 1 with its attempts (decideCommit commits attempt 1) or fails

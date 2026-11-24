@@ -1,7 +1,6 @@
 package providersync
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -16,7 +15,7 @@ type wireDeferralRun struct {
 	deferrals int
 }
 
-// runWireDeferral runs one deferral write ("rate_limit" or "budget") against a
+// runWireDeferral swaps the process default logger, so its callers must not run in parallel. It runs one deferral write ("rate_limit" or "budget") against a
 // storeWire. priorDeferrals is the contention count the claim carries.
 func runWireDeferral(t *testing.T, w *storeWire, write string, priorDeferrals int) wireDeferralRun {
 	t.Helper()
@@ -34,7 +33,7 @@ func runWireDeferral(t *testing.T, w *storeWire, write string, priorDeferrals in
 	defer repository.Close()
 	repository.storeRetrySleep = func(context.Context, int) error { return nil }
 	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	slog.SetDefault(slog.New(slog.NewTextHandler(&lockedLogBuffer{}, nil)))
 	defer slog.SetDefault(previous)
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	var run wireDeferralRun
@@ -53,7 +52,6 @@ func runWireDeferral(t *testing.T, w *storeWire, write string, priorDeferrals in
 // read back and reported as done, once, with the count the statement would have
 // returned.
 func TestBudgetContentionDeferralWithALostReplyAfterTheCommitIsReadBack(t *testing.T) {
-	t.Parallel()
 	w := &storeWire{faults: []*wireFault{{step: "commit", code: "08006", times: 1}}}
 	run := runWireDeferral(t, w, "budget", 0)
 	if run.err != nil || run.deferrals != 1 || w.updates != 1 || w.commits != 1 || w.reads != 1 {
@@ -65,7 +63,6 @@ func TestBudgetContentionDeferralWithALostReplyAfterTheCommitIsReadBack(t *testi
 // The read-back path takes the count from the claim: a unit that carried 2
 // contention deferrals gets 3.
 func TestBudgetContentionDeferralReadBackCountsFromTheClaim(t *testing.T) {
-	t.Parallel()
 	w := &storeWire{faults: []*wireFault{{step: "commit", code: "08006", times: 1}}}
 	run := runWireDeferral(t, w, "budget", 2)
 	if run.err != nil || run.deferrals != 3 || w.commits != 1 || w.reads != 1 {
@@ -75,7 +72,6 @@ func TestBudgetContentionDeferralReadBackCountsFromTheClaim(t *testing.T) {
 
 // Control: an acknowledged write returns the statement's own RETURNING value.
 func TestBudgetContentionDeferralWithAnAcknowledgedCommitReturnsTheStatementCount(t *testing.T) {
-	t.Parallel()
 	w := &storeWire{}
 	run := runWireDeferral(t, w, "budget", 7)
 	if run.err != nil || run.deferrals != 1 || w.updates != 1 || w.commits != 1 || w.reads != 0 {
@@ -87,17 +83,14 @@ func TestBudgetContentionDeferralWithAnAcknowledgedCommitReturnsTheStatementCoun
 // Controls that hold before and after: no row for this owner, and a lost reply
 // while another owner holds the unit, are ErrLeaseLost for both writes.
 func TestDeferralWritesThatDidNotLandKeepTheirAnswers(t *testing.T) {
-	t.Parallel()
 	for _, write := range []string{"rate_limit", "budget"} {
 		t.Run(write+", no row", func(t *testing.T) {
-			t.Parallel()
 			w := &storeWire{done: true}
 			if run := runWireDeferral(t, w, write, 0); !errors.Is(run.err, ErrLeaseLost) {
 				t.Fatalf("err=%v, want ErrLeaseLost", run.err)
 			}
 		})
 		t.Run(write+", lost reply, another owner holds the unit", func(t *testing.T) {
-			t.Parallel()
 			w := &storeWire{firstCommitState: "other", faults: []*wireFault{{step: "commit", code: "08006", times: 1}}}
 			if run := runWireDeferral(t, w, write, 0); !errors.Is(run.err, ErrLeaseLost) {
 				t.Fatalf("err=%v, want ErrLeaseLost", run.err)
@@ -110,10 +103,8 @@ func TestDeferralWritesThatDidNotLandKeepTheirAnswers(t *testing.T) {
 // in place by retryUnitWrite (a deadlock is transient in IsTransientStoreError,
 // not through dialclass) and lands.
 func TestDeferralWritesRetryADeadlockInPlace(t *testing.T) {
-	t.Parallel()
 	for _, write := range []string{"rate_limit", "budget"} {
 		t.Run(write, func(t *testing.T) {
-			t.Parallel()
 			w := &storeWire{faults: []*wireFault{{step: "commit", code: "40P01", times: 1}}}
 			run := runWireDeferral(t, w, write, 0)
 			if run.err != nil || w.updates != 2 || w.commits != 1 {

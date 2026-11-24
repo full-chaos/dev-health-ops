@@ -7,7 +7,6 @@ import (
 // A server crash shutdown (SQLSTATE 57P02) is a lost connection like 57P01 and
 // 57P03, which the store already retries in place. Complete is the write.
 func TestCompleteRetriesAConnectionLossRefusalInPlace(t *testing.T) {
-	t.Parallel()
 	for _, test := range []struct {
 		name  string
 		code  string
@@ -18,7 +17,6 @@ func TestCompleteRetriesAConnectionLossRefusalInPlace(t *testing.T) {
 		{"28P01 authentication (control, stays final)", "28P01", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
 			w := &storeWire{faults: []*wireFault{{step: "unit_update", code: test.code, times: 1}}}
 			run := runWireWrite(t, w, "complete", nil)
 			if test.retry && (run.err != nil || w.updates != 2 || w.commits != 1) {
@@ -36,10 +34,8 @@ func TestCompleteRetriesAConnectionLossRefusalInPlace(t *testing.T) {
 // The write committed and the connection was lost at COMMIT with 57P02: the
 // write is read back and reported as done, once, like the same loss with 57P01.
 func TestCompleteWithAConnectionLossAtCommitIsReadBack(t *testing.T) {
-	t.Parallel()
 	for _, code := range []string{"57P02", "57P01"} {
 		t.Run(code, func(t *testing.T) {
-			t.Parallel()
 			w := &storeWire{faults: []*wireFault{{step: "commit", code: code, times: 1}}}
 			run := runWireWrite(t, w, "complete", nil)
 			if run.err != nil || w.updates != 1 || w.commits != 1 || w.reads != 1 {

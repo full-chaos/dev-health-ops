@@ -155,7 +155,9 @@ func defaultDeps() deps {
 			}
 		},
 		openStore: func(ctx context.Context, dsn string) (driver.Conn, error) {
-			return clickhousestore.Open(ctx, clickhousestore.DefaultConfig(dsn))
+			config := clickhousestore.DefaultConfig(dsn)
+			config.RawCause = true
+			return clickhousestore.Open(ctx, config)
 		},
 		now:          time.Now,
 		doer:         productionDoer(),
@@ -247,7 +249,7 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 		return writeError(env.Stderr, cli.ExitRefused, "configuration", detail)
 	}
 	boundary := secrets.Join(secrets.NewBoundary(dsn.Reveal()), settings.boundary())
-	redact := func(err error) string { return boundary.Redact(err).Error() }
+	redact := func(err error) string { return secrets.Join(boundary, driverCredentials(err)).Redact(err).Error() }
 	// What the collector and the writer log (not only what they return) is
 	// redacted with the same boundary.
 	defer redactProcessLogger(boundary.RedactText)()
@@ -332,7 +334,7 @@ type settings struct {
 // rejected request.
 func (s settings) boundary() secrets.Boundary {
 	// The token and the email (CHAOS-7132): the gateway can echo either into its error text.
-	return secrets.NewBoundaryWith(s.token, s.email)
+	return secrets.NewBoundaryWith("", s.token, s.email)
 }
 
 // envOverrides is what the ATLASSIAN_* environment carries for one run. Every

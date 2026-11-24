@@ -10,6 +10,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -384,6 +385,12 @@ type wireRun struct {
 	metrics string
 }
 
+// wireRunSeq numbers each runWireWrite call; the number is the call's log marker.
+var wireRunSeq atomic.Int64
+
+// runWireWrite swaps the process default logger, so its callers must not run in
+// parallel. The capture is locked and run.logs holds only this call's lines: the
+// claim carries a per-call source, external source and sync run id that every counted event logs.
 func runWireWrite(t *testing.T, w *storeWire, write string, watermark *time.Time) wireRun {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -394,6 +401,8 @@ func runWireWrite(t *testing.T, w *storeWire, write string, watermark *time.Time
 		claim, linearRoute = linearTypedLifecycleFixture(t)
 		claim.LeaseExpiresAt = time.Date(2026, 7, 23, 13, 0, 0, 0, time.UTC)
 	}
+	marker := fmt.Sprintf("00000000-0000-4000-8000-%012d", wireRunSeq.Add(1))
+	claim.SourceID, claim.SourceExternalID, claim.SyncRunID = marker, marker, marker
 	w.sourceID = claim.SourceID
 	repository, err := NewPostgresRepository(w.pool(t, ctx), providerfoundation.NewMetrics())
 	if err != nil {
@@ -402,8 +411,8 @@ func runWireWrite(t *testing.T, w *storeWire, write string, watermark *time.Time
 	defer repository.Close()
 	repository.storeRetrySleep = func(context.Context, int) error { return nil }
 	previous := slog.Default()
-	var logs bytes.Buffer
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	logs := &lockedLogBuffer{}
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	defer slog.SetDefault(previous)
 	start := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	if w.clampCeiling == "window_end" {
@@ -440,7 +449,13 @@ func runWireWrite(t *testing.T, w *storeWire, write string, watermark *time.Time
 		t.Fatalf("unknown write %q", write)
 	}
 	slog.SetDefault(previous)
-	run.logs = logs.String()
+	var own []string
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(line, marker) {
+			own = append(own, line)
+		}
+	}
+	run.logs = strings.Join(own, "\n")
 	var metrics bytes.Buffer
 	if err := repository.Metrics.WritePrometheus(&metrics); err != nil {
 		t.Fatal(err)

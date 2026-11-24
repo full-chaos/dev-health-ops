@@ -195,7 +195,7 @@ func clientBuildDetail(provider string, err error) string {
 // runCatalogTeams runs one provider's catalog into the ClickHouse the DSN names.
 func runCatalogTeams(ctx context.Context, env cli.Env, d deps, request catalogRequest) int {
 	boundary := secrets.Join(secrets.NewBoundary(request.dsn), secrets.NewBoundary(request.pgDSN))
-	redact := func(err error) string { return boundary.Redact(err).Error() }
+	redact := func(err error) string { return secrets.Join(boundary, driverCredentials(err)).Redact(err).Error() }
 	// What the collector logs (the roster-preservation warnings carry the
 	// driver's error) is redacted with the same boundary.
 	defer redactProcessLogger(boundary.RedactText)()

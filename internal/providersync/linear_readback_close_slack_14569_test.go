@@ -19,8 +19,8 @@ func linearCloseReproPayload14569(t *testing.T, identifier, state, stateType, hi
 }
 
 // readBackCloseSlack14569 mirrors the close window of the read-back rule (FORM-14190-READBACK-1 F2): a close counts for a
-// reopen when it lies in [previous reopen, reopen + readBackCloseSlack14569]. Today the window ends at the reopen (0).
-const readBackCloseSlack14569 = 0 * time.Millisecond
+// reopen when it lies in [previous reopen, reopen + readBackCloseSlack14569], both ends included.
+const readBackCloseSlack14569 = time.Second
 
 // linearReadBackMissingCloses14569 returns, per reopen, whether the read-back rule finds its close in the transitions, and
 // how many transitions in that window go to done or canceled.
@@ -47,7 +47,7 @@ func linearReadBackMissingCloses14569(transitions []linearWorkItemTransitionRow,
 // Linear can stamp a reopen BEFORE the close it reopens: "Done -> In Progress" at T+0.552 s and "In Progress -> Done"
 // at T+0.559 s, with no earlier node into Done. The writer stores three rows at three instants (distinct keys) and one
 // reopen at .552; the read-back rule looks for the close in [previous reopen, reopen] and the close sits 7 ms later.
-// The proposed fix is the read-back rule (readBackCloseSlack14569 1 s, here and in the FORM text): until then this is red.
+// The read-back rule counts a close up to readBackCloseSlack14569 (1 s) after its reopen.
 func TestLinearReopenStampedBeforeItsCloseIsReadAsClosed(t *testing.T) {
 	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
 	claim := nativeTestClaim("linear", "work-items")
@@ -77,5 +77,29 @@ func TestLinearReopenStampedBeforeItsCloseIsReadAsClosed(t *testing.T) {
 	if missing, _ := linearReadBackMissingCloses14569(transitions, reopens); len(missing) > 0 {
 		t.Errorf("reopen at %v: the read-back rule (window [previous reopen, reopen + %s]) finds no close; the close is stored 7 ms after the reopen",
 			missing, readBackCloseSlack14569)
+	}
+}
+
+// The window end is inclusive: a close 1 s after its reopen counts, a close 1 s + 1 ms after it does not.
+func TestLinearReadBackCloseWindowEndIsOneSecondInclusive14569(t *testing.T) {
+	base := time.Date(2026, 10, 15, 10, 0, 0, 0, time.UTC)
+	reopens := []linearWorkItemReopenRow{{OccurredAt: base}}
+	closeAt := func(offset time.Duration) []linearWorkItemTransitionRow {
+		return []linearWorkItemTransitionRow{{OccurredAt: base.Add(offset), ToStatus: "done"}}
+	}
+	for _, tc := range []struct {
+		name    string
+		offset  time.Duration
+		missing bool
+	}{
+		{"one second after", time.Second, false},
+		{"one second and one millisecond after", time.Second + time.Millisecond, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			missing, _ := linearReadBackMissingCloses14569(closeAt(tc.offset), reopens)
+			if (len(missing) > 0) != tc.missing {
+				t.Errorf("close at reopen + %s: missing=%v, want missing=%v", tc.offset, missing, tc.missing)
+			}
+		})
 	}
 }

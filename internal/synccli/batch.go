@@ -96,7 +96,7 @@ func runBatch(ctx context.Context, deps InlineDeps, plan Plan, datasets []string
 	redact := func(err error) string { return boundary.RedactText(err.Error()) }
 	repos, err := deps.List(ctx, run, batchListing(plan))
 	if err != nil {
-		return redactedError{fmt.Sprintf("%s: list repositories: %s", plan.Provider, redact(err))}
+		return redactedError{text: fmt.Sprintf("%s: list repositories: %s", plan.Provider, redact(err)), cause: err}
 	}
 	if len(repos) == 0 {
 		writeLine(env.Stderr, fmt.Sprintf("dho sync %s: no repositories matched %q", plan.Target, plan.Search))

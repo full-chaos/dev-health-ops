@@ -952,11 +952,16 @@ func planBoundary(plan Plan) func(string) string {
 	return planBoundaryOf(plan).RedactText
 }
 
-// planBoundaryOf is one Boundary over the sink URI and the PostgreSQL URI.
+// planBoundaryOf is one Boundary over the sink URI, the PostgreSQL URI and the
+// provider credential values the plan holds (the token, or the app's private key),
+// which a store-open or provider error can echo.
 func planBoundaryOf(plan Plan) secrets.Boundary {
 	boundary := secrets.Join(secrets.NewBoundary(plan.SinkURI), sinkResolvedCredentials(plan.SinkURI))
 	if plan.DB != nil && strings.TrimSpace(*plan.DB) != "" {
 		boundary = secrets.Join(boundary, pgstorage.Boundary(*plan.DB))
+	}
+	if values := planCredentialValues(plan); len(values) > 0 {
+		boundary = secrets.Join(boundary, secrets.NewBoundaryWith("", values...))
 	}
 	return boundary
 }
@@ -967,6 +972,22 @@ func planBoundaryOf(plan Plan) secrets.Boundary {
 // error after a good open can still name the login.
 func sinkResolvedCredentials(sinkURI string) secrets.Boundary {
 	return secrets.NewBoundaryWith("", clickhousestore.ResolvedCredentials(sinkURI)...)
+}
+
+// planCredentialValues are the provider credential values of the plan.
+func planCredentialValues(plan Plan) []string {
+	var values []string
+	if creds := plan.GitHub; creds != nil && creds.Mode != CredentialDB {
+		for _, value := range []string{creds.Token, creds.PrivateKey} {
+			if value != "" {
+				values = append(values, value)
+			}
+		}
+	}
+	if plan.GitLabToken != "" {
+		values = append(values, plan.GitLabToken)
+	}
+	return values
 }
 
 // driverCredentials is the Boundary of the login and password the ClickHouse
@@ -983,9 +1004,13 @@ func driverCredentials(err error) secrets.Boundary {
 // redactedError is an error whose text a print path already redacted once with
 // its whole credential union: runTarget prints it as it is, not through the plan
 // boundary a second time.
-type redactedError struct{ text string }
+type redactedError struct {
+	text  string
+	cause error
+}
 
 func (e redactedError) Error() string { return e.text }
+func (e redactedError) Unwrap() error { return e.cause }
 
 // redactProcessLogger makes every text the process logger is given pass through
 // redact until the returned function is called: the sinks and collectors under

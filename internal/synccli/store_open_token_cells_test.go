@@ -1,13 +1,16 @@
 package synccli
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
 
@@ -49,5 +52,47 @@ func TestStoreOpenErrorKeepsTheProviderTokenHidden(t *testing.T) {
 				t.Errorf("the provider token printed: %q", stderr)
 			}
 		})
+	}
+}
+
+// A credential the database lookup resolved (no --auth) is held by the executor's
+// plan only: the store-open text is redacted there with it. The process logger,
+// given the same token in a log line, hides it too.
+func TestStoreOpenErrorKeepsADatabaseResolvedProviderTokenHidden(t *testing.T) {
+	executor := InlineExecutor(InlineDeps{
+		OpenStore: func(context.Context, string) (driver.Conn, error) { return nil, errors.New(openServer) },
+		GitHubCredential: func(context.Context, string, string, cli.Env) (*GitHubCredentials, error) {
+			return &GitHubCredentials{Mode: "token", Name: "database", Token: openCredential}, nil
+		},
+	})
+	env := openCredentialEnv()
+	env["POSTGRES_URI"] = "postgres://zz9-open-db:zz9-open-dbpass@pg.example:5432/db"
+	code, stdout, stderr := runVerb(t, "prs", executor, []string{"--provider", "github", "--owner", "acme", "--repo", "api"}, env)
+	if code == 0 || !strings.Contains(stderr, "handshake echoed") {
+		t.Fatalf("exit %d: the open failure never reached the printing path (or lost the server's text): %q", code, stderr)
+	}
+	if strings.Contains(stdout+stderr, openCredential) {
+		t.Errorf("the provider token printed: %q", stderr)
+	}
+}
+
+func TestProcessLogHidesTheProviderTokenOfTheRun(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	executor := InlineExecutor(InlineDeps{
+		OpenStore: func(context.Context, string) (driver.Conn, error) { return fakeStore{}, nil },
+		Run: func(context.Context, providersync.InProcessRun) (providersync.CompleteRouteExecutionResult, error) {
+			slog.Error("provider write failed", "error", errors.New(openServer))
+			return providersync.CompleteRouteExecutionResult{}, nil
+		},
+	})
+	code, _, stderr := runVerb(t, "prs", executor, []string{"--provider", "github", "--owner", "acme", "--repo", "api", "--auth", openCredential}, openCredentialEnv())
+	if code != 0 || !strings.Contains(logs.String(), "handshake echoed") {
+		t.Fatalf("exit %d: the run logged nothing the cell can check: stderr %q logs %q", code, stderr, logs.String())
+	}
+	if strings.Contains(logs.String(), openCredential) {
+		t.Errorf("the provider token was logged: %q", logs.String())
 	}
 }

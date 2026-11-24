@@ -325,8 +325,9 @@ type githubTestsChunkCursor struct {
 	ExcludedNonReportSuffix int `json:"excluded_non_report_suffix,omitempty"`
 	ExcludedNonReportPrefix int `json:"excluded_non_report_prefix,omitempty"`
 	// ExcludedNonReportPrefixSources is the set of lists (githubTestsPrefixExclusionSourceBit) whose prefix matched an
-	// ExcludedNonReportPrefix exclusion, for the skip summary log only: no result key carries it.
-	ExcludedNonReportPrefixSources int      `json:"excluded_non_report_prefix_sources,omitempty"`
+	// ExcludedNonReportPrefix exclusion, for the skip summary log only: resume state, no result key carries it, and a
+	// cursor without it (a worker before this field) leaves those exclusions unsourced. A short key: 7 bytes at its widest.
+	ExcludedNonReportPrefixSources int      `json:"xs,omitempty"`
 	ExcludedArtifactSample         []string `json:"excluded_artifact_sample,omitempty"`
 	// ArtifactsExcludedNotFound counts routine 404/410 download-time
 	// disappearances (see the notFound branch below), which -- like an

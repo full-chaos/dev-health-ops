@@ -264,6 +264,10 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 				}
 			} else if collector.Strict {
 				return githubTeamCatalogRows{}, evidence, memberErr
+			} else if isClassifiedRateLimit(memberErr) {
+				// A rate limit says nothing about this team's roster: end the run before any catalog write so the
+				// caller can snooze and read the catalog again (CHAOS-14602). Every other class keeps the skip.
+				return githubTeamCatalogRows{}, evidence, memberErr
 			} else {
 				evidence.SkippedTeamMemberships++
 				// A skipped roster is visible at Info level only through the
@@ -400,6 +404,12 @@ func perPageQuery(perPage int) url.Values {
 	values := url.Values{}
 	values.Set("per_page", strconv.Itoa(perPage))
 	return values
+}
+
+// isClassifiedRateLimit reports a provider answer the shared client classified as rate_limited.
+func isClassifiedRateLimit(err error) bool {
+	var providerErr *providerfoundation.ProviderError
+	return errors.As(err, &providerErr) && providerErr.Class == providerfoundation.ErrorRateLimited
 }
 
 // memberReadFailureCause is the fixed word for why a team's member read failed:

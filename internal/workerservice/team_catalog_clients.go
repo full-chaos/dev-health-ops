@@ -612,6 +612,8 @@ func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
 		// every other error keeps the nonfatal answer below.
 		if delay, snooze := teamCatalogRateLimitSnooze(collectErr, syncdispatchruntime.JobCreatedAt(ctx), dispatcher.nowUTC()); snooze {
 			dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeRateLimitDeferred)
+			slog.Default().InfoContext(ctx, "team_catalog_rate_limit_snoozed",
+				"org_id", orgID, "sync_run_id", runID, "provider", provider, "delay_ms", delay.Milliseconds())
 			return river.JobSnooze(delay)
 		}
 		// The failure is still visible via the dedicated nonfatal outcome,

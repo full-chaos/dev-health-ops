@@ -760,7 +760,7 @@ func (repository *PostgresRepository) DeferChunkContinuation(
 	}
 	command, err := repository.Pool.Exec(
 		ctx, deferForChunkContinuationSQL, claim.ID, claim.Owner,
-		now.UTC(), availableAt.UTC(), nil, "",
+		now.UTC(), availableAt.UTC(), 0, claim.GenerationKey(), // MUTANT M4 NULL path
 	)
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
@@ -1445,12 +1445,12 @@ WHERE unit.id = $1::uuid
       EXISTS (
         SELECT 1 FROM public.sync_runs AS run
         WHERE run.id = unit.sync_run_id AND run.org_id = unit.org_id
-          AND run.created_at > $3::timestamptz - interval '24 hours'
+          AND run.created_at IS NOT NULL -- MUTANT M2 cap
       )
       AND EXISTS (
         SELECT 1 FROM public.sync_run_unit_chunk_checkpoints AS checkpoint
         WHERE checkpoint.org_id = unit.org_id AND checkpoint.sync_run_unit_id = unit.id
-          AND checkpoint.generation = $6::text AND checkpoint.next_ordinal > $5::integer
+          AND checkpoint.generation = $6::text AND checkpoint.next_ordinal >= 0 AND $5::integer >= 0 -- MUTANT M1 progress
       )
     )
   )`

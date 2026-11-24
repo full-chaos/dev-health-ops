@@ -1452,7 +1452,7 @@ func (handler *Handler) refundProgressFailure(
 	err error,
 	completedAt time.Time,
 ) (time.Duration, bool) {
-	if !result.AttemptStartRead || causeClass(err, false) != causeClassProviderTransient {
+	if !result.AttemptStartRead { // MUTANT M3 class
 		return 0, false
 	}
 	refunder, supported := handler.Repository.(ChunkProgressRefundRepository)

@@ -19,7 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-// DO NOT MERGE. Throwaway exec proof of a prod read form (FORM-332-RETR-2). retr332Form is the form file with ONE swap
+// DO NOT MERGE. Throwaway exec proof of a prod read form (FORM-332-RETR-3). retr332Form is the form file with ONE swap
 // (the app org prefix c6a38355 -> the synthetic f0f0f0f0, public repo); its sha256 is pinned. The {{KP}} placeholder is
 // filled with retr332KP as pm's one sed does. Synthetic rows only.
 const (
@@ -30,19 +30,22 @@ const (
 	retr332Other    = "b0000000-0000-4000-8000-000000000000"
 )
 
-const retr332FormSHA256 = "337a41ac8cfd2e6909e793aefa8e4db2429fae4e90aef869894cec6f806c9f00"
+const retr332FormSHA256 = "a49dde14dd980dcaa9f60f43b55947be54a4154d3d4491fd6d0951f422d38ad9"
 
-const retr332Form = `-- FORM-332-RETR-2 (ClickHouse, prod, read-only). acp-train34, 2026-11-24. STEP 332 READBACK R-RETR (acp Q4 named limit scope).
--- -2 = FORM-332-RETR-1 5efe006b403f with acp F1: stmt1 / stmt2 print days (toDate of min / max last_synced), no ms times.
--- Form: lane-scratch/pm-guard/FORM-TEMPLATE-3.md 6b9e73a3c45a (CH shape, one statement per call, self-gating). Replaces FORM-332-RETR-1.sql 5efe006b403f.
--- What: the retraction rows (retracted = 1, CH 171 column) that the 332 workers wrote after STEP-KIT-PASS (KP), per table.
+const retr332Form = `-- FORM-332-RETR-3 (ClickHouse, prod, read-only). acp-train34, 2026-11-24. STEP 332 READBACK R-RETR (acp Q4 named limit scope).
+-- -3 = FORM-332-RETR-2 09903734a555 with acp F2: stmt1 / stmt2 have NO KP bound (all retracted = 1 rows); stmt3 keeps KP.
+--   Premise (md, census at the pin 3207ac62): retracted = 1 on these 2 tables is written only by the 332 workers (github_tests_run_report_rows.go
+--   :488 / :660 / :692 through the 2 INSERTs); CH 171 adds the column only (DEFAULT 0). last_synced is the stream sync clock, so a KP
+--   bound would miss a stream that started before KP and resumed after it.
+-- Form: lane-scratch/pm-guard/FORM-TEMPLATE-3.md 6b9e73a3c45a (CH shape, one statement per call, self-gating). Replaces FORM-332-RETR-2.sql 09903734a555.
+-- What: the retraction rows (retracted = 1, CH 171 column) that the 332 workers wrote (all of them), per table.
 --   Each one is a report slot that query-api 155276ecf30e (no #6906 / #6938 reader) shows as an EMPTY suite until STEP 333.
---   Writer: ops #6906 d4b4c5a38ab2 / #6938 e46d7611fd3a internal/providersync/github_tests_effects_clickhouse.go:158 / :195 (the two INSERTs; a retraction row has retracted = 1). Cites at the DRY pin 6f901840.
+--   Writer: ops #6906 d4b4c5a38ab2 / #6938 e46d7611fd3a internal/providersync/github_tests_effects_clickhouse.go:158 / :195 (the two INSERTs; a retraction row has retracted = 1). Cites at the pin 3207ac62.
 -- Tables at the chain head (baseline head.json + chain 171): test_suite_results / test_case_results, ReplacingMergeTree(last_synced),
 --   ORDER BY (repo_id, run_id, suite_id[, case_id]), no PARTITION BY, org_id LowCardinality(String), last_synced DateTime64(3, 'UTC'),
 --   retracted UInt8 DEFAULT 0 (171).
--- Placeholder: {{KP}} = the RUNLOG STEP-KIT-PASS time, UTC, 'YYYY-MM-DD hh:mm:ss'. pm makes the run copy with ONE sed:
---   sed "s/{{KP}}/<KP>/g" FORM-332-RETR-2.sql > FORM-332-RETR-2-run.sql ; WANT grep -c '{{' FORM-332-RETR-2-run.sql = 0.
+-- Placeholder: {{KP}} (stmt3 only) = the RUNLOG STEP-KIT-PASS time, UTC, 'YYYY-MM-DD hh:mm:ss'. pm makes the run copy with ONE sed:
+--   sed "s/{{KP}}/<KP>/g" FORM-332-RETR-3.sql > FORM-332-RETR-3-run.sql ; WANT grep -c '{{' FORM-332-RETR-3-run.sql = 0.
 --   The file sha12 acp names is of THIS file (with {{KP}}).
 -- WORK MATH (fill from S0 before the run): stmt0, stmt1, stmt3 each read test_suite_results x 1 = R_s rows; stmt2 reads
 --   test_case_results x 1 = R_c rows. No FINAL, no CTE, no self-join, no scalar subquery on data. Each cap = 20,000,000 rows
@@ -65,7 +68,7 @@ SELECT uniqExact(org_id) AS orgs, count() AS org_rows
 FROM test_suite_results
 WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0;
 
--- stmt1 suite retraction rows written at or after KP. WANT a count (0 = NOT EXERCISED, allowed); first_day / last_day = INFO.
+-- stmt1 suite retraction rows (all; no KP bound). WANT a count (0 = NOT EXERCISED, allowed); first_day / last_day = INFO.
 WITH (SELECT throwIf(
   (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('test_suite_results')) > 20000000
   OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('test_suite_results')) > 4000000000,
@@ -73,10 +76,9 @@ WITH (SELECT throwIf(
 SELECT count() AS retracted_suite_rows, uniqExact(repo_id) AS repos, toDate(min(last_synced)) AS first_day, toDate(max(last_synced)) AS last_day
 FROM test_suite_results
 WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0
-  AND retracted = 1
-  AND last_synced >= toDateTime64('{{KP}}', 3, 'UTC');
+  AND retracted = 1;
 
--- stmt2 case retraction rows written at or after KP. WANT a count (0 = NOT EXERCISED, allowed); first_day / last_day = INFO.
+-- stmt2 case retraction rows (all; no KP bound). WANT a count (0 = NOT EXERCISED, allowed); first_day / last_day = INFO.
 WITH (SELECT throwIf(
   (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('test_case_results')) > 20000000
   OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('test_case_results')) > 4000000000,
@@ -84,8 +86,7 @@ WITH (SELECT throwIf(
 SELECT count() AS retracted_case_rows, uniqExact(repo_id) AS repos, toDate(min(last_synced)) AS first_day, toDate(max(last_synced)) AS last_day
 FROM test_case_results
 WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0
-  AND retracted = 1
-  AND last_synced >= toDateTime64('{{KP}}', 3, 'UTC');
+  AND retracted = 1;
 
 -- stmt3 control: plain (retracted = 0) suite rows written at or after KP. WANT > 0 once a wave-2 row or a scheduled sync wrote
 --   a tests suite after KP (0 with stmt1 > 0 = report: the window or the filter is wrong).
@@ -102,7 +103,8 @@ WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0
 
 // test_suite_results rows. KP = 2026-11-24 10:00:00 (inclusive). O = the org, X = another org.
 // s1-s3 O retracted at/after KP (repos r1, r1, r2); s4 O retracted 1 ms before KP; s5-s8 O plain after KP; s9-s10 O plain
-// before KP; x1-x2 X retracted after KP; x3 X plain after KP; filler 2000 O plain on 2026-11-01.
+// before KP; s11 O retracted on 2026-11-20 (repo r4, long before KP); x1-x2 X retracted after KP; x3 X plain after KP;
+// filler 2000 O plain on 2026-11-01. Cases: c6 O retracted 1 h before KP; c11 O retracted on 2026-11-20 (repo r4).
 const retr332Fixture = `
 SYSTEM STOP MERGES test_suite_results;
 SYSTEM STOP MERGES test_case_results;
@@ -117,6 +119,7 @@ INSERT INTO test_suite_results (repo_id, run_id, suite_id, suite_name, org_id, l
 ('00000000-0000-4000-8000-0000000000a3', 'run-s8', 'suite-1', 'a', 'f0f0f0f0-0000-4000-8000-000000000000', '2026-11-24 13:00:00.000', 0),
 ('00000000-0000-4000-8000-0000000000a3', 'run-s9', 'suite-1', 'a', 'f0f0f0f0-0000-4000-8000-000000000000', '2026-11-24 08:00:00.000', 0),
 ('00000000-0000-4000-8000-0000000000a3', 'run-s10', 'suite-1', 'a', 'f0f0f0f0-0000-4000-8000-000000000000', '2026-11-24 08:00:00.000', 0),
+('00000000-0000-4000-8000-0000000000a4', 'run-s11', 'suite-1', 'a', 'f0f0f0f0-0000-4000-8000-000000000000', '2026-11-20 08:00:00.000', 1),
 ('00000000-0000-4000-8000-0000000000b9', 'run-x1', 'suite-1', 'a', 'b0000000-0000-4000-8000-000000000000', '2026-11-24 11:00:00.000', 1),
 ('00000000-0000-4000-8000-0000000000b9', 'run-x2', 'suite-1', 'a', 'b0000000-0000-4000-8000-000000000000', '2026-11-24 11:00:00.000', 1),
 ('00000000-0000-4000-8000-0000000000b9', 'run-x3', 'suite-1', 'a', 'b0000000-0000-4000-8000-000000000000', '2026-11-24 11:00:00.000', 0);
@@ -133,6 +136,7 @@ INSERT INTO test_case_results (repo_id, run_id, suite_id, case_id, case_name, st
 ('00000000-0000-4000-8000-0000000000a3', 'run-c7', 'suite-1', 'case-1', 'c', 'passed', 'f0f0f0f0-0000-4000-8000-000000000000', '2026-11-24 11:00:00.000', 0),
 ('00000000-0000-4000-8000-0000000000a3', 'run-c8', 'suite-1', 'case-1', 'c', 'passed', 'f0f0f0f0-0000-4000-8000-000000000000', '2026-11-24 11:00:00.000', 0),
 ('00000000-0000-4000-8000-0000000000a3', 'run-c9', 'suite-1', 'case-1', 'c', 'passed', 'f0f0f0f0-0000-4000-8000-000000000000', '2026-11-24 11:00:00.000', 0),
+('00000000-0000-4000-8000-0000000000a4', 'run-c11', 'suite-1', 'case-1', 'c', 'passed', 'f0f0f0f0-0000-4000-8000-000000000000', '2026-11-20 08:00:00.000', 1),
 ('00000000-0000-4000-8000-0000000000b9', 'run-cx1', 'suite-1', 'case-1', 'c', 'passed', 'b0000000-0000-4000-8000-000000000000', '2026-11-24 11:00:00.000', 1),
 ('00000000-0000-4000-8000-0000000000b9', 'run-cx2', 'suite-1', 'case-1', 'c', 'passed', 'b0000000-0000-4000-8000-000000000000', '2026-11-24 11:00:00.000', 1);
 INSERT INTO test_case_results (repo_id, run_id, suite_id, case_id, case_name, status, org_id, last_synced, retracted)
@@ -241,8 +245,8 @@ func TestForm332RetrExecutesAtTheChainHead(t *testing.T) {
 	if got := hex.EncodeToString(sum[:]); got != retr332FormSHA256 {
 		t.Fatalf("form sha256 = %s, want %s", got, retr332FormSHA256)
 	}
-	if n := strings.Count(retr332Form, "{{KP}}"); n != 6 {
-		t.Fatalf("{{KP}} found %d times, want 6 (3 statements + 3 header lines)", n)
+	if n := strings.Count(retr332Form, "{{KP}}"); n != 4 {
+		t.Fatalf("{{KP}} found %d times, want 4 (stmt3 + 3 header lines)", n)
 	}
 	run := strings.ReplaceAll(retr332Form, "{{KP}}", retr332KP)
 	statements := retr332Split(run)
@@ -318,8 +322,8 @@ func TestForm332RetrExecutesAtTheChainHead(t *testing.T) {
 		size[table] = [2]uint64{rowsN, partsN}
 		t.Logf("fixture: %s rows=%d active_parts=%d", table, rowsN, partsN)
 	}
-	if size["test_suite_results"][0] != 2013 || size["test_case_results"][0] != 1011 {
-		t.Fatalf("fixture rows %v, want suite 2013 / case 1011", size)
+	if size["test_suite_results"][0] != 2014 || size["test_case_results"][0] != 1012 {
+		t.Fatalf("fixture rows %v, want suite 2014 / case 1012", size)
 	}
 
 	one := func(phase, label, text string) map[string]string {
@@ -349,14 +353,14 @@ func TestForm332RetrExecutesAtTheChainHead(t *testing.T) {
 		t.Fatalf("PASS S0: err=%v rows=%d, want 2", err, len(s0))
 	}
 	t.Logf("PASS S0 ROWS %v", s0)
-	if s0[0]["t"] != "test_case_results" || s0[0]["rows"] != "1011" || s0[1]["t"] != "test_suite_results" || s0[1]["rows"] != "2013" {
+	if s0[0]["t"] != "test_case_results" || s0[0]["rows"] != "1012" || s0[1]["t"] != "test_suite_results" || s0[1]["rows"] != "2014" {
 		t.Errorf("PASS S0: %v", s0)
 	}
 
 	cleanWant := map[string]map[string]string{
-		"stmt0": {"orgs": "1", "org_rows": "2010"},
-		"stmt1": {"retracted_suite_rows": "3", "repos": "2", "first_day": "2026-11-24", "last_day": "2026-11-24"},
-		"stmt2": {"retracted_case_rows": "5", "repos": "3", "first_day": "2026-11-24", "last_day": "2026-11-24"},
+		"stmt0": {"orgs": "1", "org_rows": "2011"},
+		"stmt1": {"retracted_suite_rows": "5", "repos": "3", "first_day": "2026-11-20", "last_day": "2026-11-24"},
+		"stmt2": {"retracted_case_rows": "7", "repos": "4", "first_day": "2026-11-20", "last_day": "2026-11-24"},
 		"stmt3": {"plain_suite_rows": "4"},
 	}
 	passComments := map[string]string{}
@@ -399,18 +403,17 @@ func TestForm332RetrExecutesAtTheChainHead(t *testing.T) {
 	mutants := []mutant{
 		{"S0", "rule: table list without test_case_results", "'test_suite_results', 'test_case_results'", "'test_suite_results'", nil},
 		{"stmt0", "org: prefix of another org", "", "", map[string]string{"orgs": "1", "org_rows": "3"}},
-		{"stmt0", "rule: no org filter", "startsWith(org_id, 'f0f0f0f0') AND ", "", map[string]string{"orgs": "2", "org_rows": "2013"}},
+		{"stmt0", "rule: no org filter", "startsWith(org_id, 'f0f0f0f0') AND ", "", map[string]string{"orgs": "2", "org_rows": "2014"}},
 		{"stmt1", "org: prefix of another org", "", "", map[string]string{"retracted_suite_rows": "2", "repos": "1"}},
-		{"stmt1", "rule: retracted = 0", "AND retracted = 1", "AND retracted = 0", map[string]string{"retracted_suite_rows": "4", "repos": "1"}},
-		{"stmt1", "rule: window after every row", retr332KP, "2030-01-01 00:00:00", map[string]string{"retracted_suite_rows": "0"}},
-		{"stmt1", "rule: window without the KP bound (>= -> <)", "last_synced >= ", "last_synced < ", map[string]string{"retracted_suite_rows": "1"}},
+		{"stmt1", "rule: retracted = 0", "AND retracted = 1", "AND retracted = 0", map[string]string{"retracted_suite_rows": "2006", "repos": "2001"}},
+		{"stmt1", "rule: no org filter", "startsWith(org_id, 'f0f0f0f0') AND ", "", map[string]string{"retracted_suite_rows": "7", "repos": "4"}},
 		{"stmt2", "org: prefix of another org", "", "", map[string]string{"retracted_case_rows": "2", "repos": "1"}},
-		{"stmt2", "rule: retracted = 0", "AND retracted = 1", "AND retracted = 0", map[string]string{"retracted_case_rows": "3", "repos": "1"}},
-		{"stmt2", "rule: window after every row", retr332KP, "2030-01-01 00:00:00", map[string]string{"retracted_case_rows": "0"}},
-		{"stmt2", "rule: window without the KP bound (>= -> <)", "last_synced >= ", "last_synced < ", map[string]string{"retracted_case_rows": "1"}},
+		{"stmt2", "rule: retracted = 0", "AND retracted = 1", "AND retracted = 0", map[string]string{"retracted_case_rows": "1003", "repos": "1001"}},
+		{"stmt2", "rule: no org filter", "startsWith(org_id, 'f0f0f0f0') AND ", "", map[string]string{"retracted_case_rows": "9", "repos": "5"}},
 		{"stmt3", "org: prefix of another org", "", "", map[string]string{"plain_suite_rows": "1"}},
 		{"stmt3", "rule: retracted = 1", "AND retracted = 0", "AND retracted = 1", map[string]string{"plain_suite_rows": "3"}},
 		{"stmt3", "rule: window after every row", retr332KP, "2030-01-01 00:00:00", map[string]string{"plain_suite_rows": "0"}},
+		{"stmt3", "rule: KP bound flipped (>= -> <)", "last_synced >= ", "last_synced < ", map[string]string{"plain_suite_rows": "2002"}},
 	}
 	for _, m := range mutants {
 		text := byLabel[m.label]
@@ -493,5 +496,27 @@ func TestForm332RetrExecutesAtTheChainHead(t *testing.T) {
 	}
 	if len(fires) != 8 {
 		t.Errorf("gates fired %d times, want 8 (4 statements x 2 caps)", len(fires))
+	}
+
+	// acp F2 (d): a retracted = 1 row with last_synced BEFORE KP (a stream that started before the roll) is counted by
+	// stmt1 / stmt2 (no KP bound) and NOT by stmt3 (KP-bounded, retracted = 0). One more suite + one more case row.
+	for _, statement := range chmigrate.SplitStatements(`
+INSERT INTO test_suite_results (repo_id, run_id, suite_id, suite_name, org_id, last_synced, retracted) VALUES
+('00000000-0000-4000-8000-0000000000a5', 'run-s12', 'suite-1', 'a', 'f0f0f0f0-0000-4000-8000-000000000000', '2026-11-24 09:00:00.000', 1);
+INSERT INTO test_case_results (repo_id, run_id, suite_id, case_id, case_name, status, org_id, last_synced, retracted) VALUES
+('00000000-0000-4000-8000-0000000000a5', 'run-c12', 'suite-1', 'case-1', 'c', 'passed', 'f0f0f0f0-0000-4000-8000-000000000000', '2026-11-24 09:00:00.000', 1);
+`) {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("pre-KP rows: %v\n%s", err, statement)
+		}
+	}
+	preKP := map[string]map[string]string{
+		"stmt1": {"retracted_suite_rows": "6", "repos": "4"},
+		"stmt2": {"retracted_case_rows": "8", "repos": "5"},
+		"stmt3": {"plain_suite_rows": "4"},
+	}
+	for _, label := range []string{"stmt1", "stmt2", "stmt3"} {
+		got := one("PREKP", label, byLabel[label])
+		expect("PREKP", label, got, preKP[label])
 	}
 }

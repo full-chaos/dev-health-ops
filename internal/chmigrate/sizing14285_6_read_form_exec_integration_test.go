@@ -545,7 +545,7 @@ func TestSizing14285s6ReadFormPassPathAndEveryGateFires(t *testing.T) {
 	}
 
 	// run executes one statement as pm does. It returns the log comment and the error (nil = pass).
-	run := func(phase string, s sizing14285s6Statement, wantCap uint64) (string, error) {
+	run := func(phase string, s sizing14285s6Statement, wantRow map[string]string, wantCap uint64) (string, error) {
 		comment := fmt.Sprintf("sizing14285s6-%s-%s-%d", phase, s.label, time.Now().UnixNano())
 		rows, err := conn.Query(clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"log_comment": comment})), s.text)
 		if err != nil {
@@ -580,7 +580,7 @@ func TestSizing14285s6ReadFormPassPathAndEveryGateFires(t *testing.T) {
 			t.Errorf("%s %s: %d rows, want 1", phase, s.label, len(got))
 			return comment, nil
 		}
-		for name, value := range want[s.label] {
+		for name, value := range wantRow {
 			if got[0][name] != value {
 				t.Errorf("%s %s: %s = %s, want %s", phase, s.label, name, got[0][name], value)
 			}
@@ -589,7 +589,7 @@ func TestSizing14285s6ReadFormPassPathAndEveryGateFires(t *testing.T) {
 			t.Errorf("%s %s: read_rows_cap = %s, want %d (Go formula on live system.parts)", phase, s.label, got[0]["read_rows_cap"], wantCap)
 		}
 		for _, name := range columns {
-			if _, ok := want[s.label][name]; !ok && name != "read_rows_cap" {
+			if _, ok := wantRow[name]; !ok && name != "read_rows_cap" {
 				t.Errorf("%s %s: column %s has no WANT in the cell", phase, s.label, name)
 			}
 		}
@@ -616,7 +616,7 @@ func TestSizing14285s6ReadFormPassPathAndEveryGateFires(t *testing.T) {
 			if (readRowsCap >= 20000000) != fire[label] {
 				t.Fatalf("%s %s: derived read_rows_cap %d, fixture must make fire = %v", phase, label, readRowsCap, fire[label])
 			}
-			comment, err := run(phase, byLabel[label], readRowsCap)
+			comment, err := run(phase, byLabel[label], want[label], readRowsCap)
 			if fire[label] {
 				if err == nil || !strings.Contains(err.Error(), "STOP-COST-GATE") || !strings.Contains(err.Error(), "395") {
 					t.Errorf("%s %s: err = %v, want code 395 STOP-COST-GATE", phase, label, err)
@@ -631,6 +631,61 @@ func TestSizing14285s6ReadFormPassPathAndEveryGateFires(t *testing.T) {
 	}
 
 	step("PASS", nil, "stmt0", "stmt6", "stmt7")
+
+	// Org and rule mutants (acp standing FORM rule, every statement): a cell-side copy of the swapped text with ONE change.
+	// Each must CHANGE the output (exact WANT below, differing from the PASS WANT); none fires (the gate text is untouched).
+	// ORG: the prefix swapped to another synthetic org ('b0000000' = the fixture's other org; stmt0 uses 'a0a0a0a0', an
+	// org with no rows, since every stmt0 table also holds one 'b0000000' org: its row would stay all 1).
+	// RULE: stmt0 the prefix match admits every org; stmt6 the FINAL of stat_rows_final; stmt7 the FINAL of the new rule.
+	mutants := []struct {
+		label, kind, from, to string
+		places                int
+		want                  map[string]string
+	}{
+		{"stmt0", "ORG", "'f0f0f0f0'", "'a0a0a0a0'", 7, map[string]string{"commits_orgs": "0", "stats_orgs": "0",
+			"prs_orgs": "0", "reviews_orgs": "0", "repo_orgs": "0", "user_orgs": "0", "commit_orgs": "0"}},
+		{"stmt0", "RULE", "startsWith(org_id, 'f0f0f0f0')", "startsWith(org_id, '')", 7, map[string]string{
+			"commits_orgs": "2", "stats_orgs": "2", "prs_orgs": "2", "reviews_orgs": "2", "repo_orgs": "2", "user_orgs": "2",
+			"commit_orgs": "2"}},
+		{"stmt6", "ORG", "'f0f0f0f0'", "'b0000000'", 4, map[string]string{"commit_rows_raw": "1", "commit_rows_final": "1",
+			"stat_rows_raw": "1", "stat_rows_final": "1", "commit_versions_unmerged": "0", "stat_versions_unmerged": "0",
+			"raw_first_day": "2026-11-16", "raw_last_day": "2026-11-16"}},
+		{"stmt6", "RULE", "(SELECT count() FROM git_commit_stats FINAL WHERE", "(SELECT count() FROM git_commit_stats WHERE", 1,
+			map[string]string{"commit_rows_raw": "9", "commit_rows_final": "7", "stat_rows_raw": "10", "stat_rows_final": "10",
+				"commit_versions_unmerged": "2", "stat_versions_unmerged": "0", "raw_first_day": "2026-11-10",
+				"raw_last_day": "2026-11-22"}},
+		{"stmt7", "ORG", "'f0f0f0f0'", "'b0000000'", 3, map[string]string{"commits_now": "1", "oldrule_same_commits": "1",
+			"oldrule_over_commits": "0", "oldrule_ratio2_commits": "0", "oldrule_under_commits": "0"}},
+		{"stmt7", "RULE", "FROM git_commit_stats FINAL WHERE startsWith(org_id, 'f0f0f0f0') GROUP BY repo_id, commit_hash",
+			"FROM git_commit_stats WHERE startsWith(org_id, 'f0f0f0f0') GROUP BY repo_id, commit_hash", 1,
+			map[string]string{"commits_now": "7", "oldrule_same_commits": "5", "oldrule_over_commits": "2",
+				"oldrule_ratio2_commits": "2", "oldrule_under_commits": "0"}},
+	}
+	mutantLive := sizing14285s6LiveParts(t, ctx, conn)
+	for _, m := range mutants {
+		base := byLabel[m.label]
+		if n := strings.Count(base.text, m.from); n != m.places {
+			t.Fatalf("MUTANT-%s %s: %q found %d times, want %d", m.kind, m.label, m.from, n, m.places)
+		}
+		var changed []string
+		for name, value := range m.want {
+			if want[m.label][name] != value {
+				changed = append(changed, name+" "+want[m.label][name]+"->"+value)
+			}
+		}
+		sort.Strings(changed)
+		if len(changed) == 0 || len(m.want) != len(want[m.label]) {
+			t.Fatalf("MUTANT-%s %s: WANT must name every column and change at least one", m.kind, m.label)
+		}
+		readRowsCap, kRows, p := derive(m.label, mutantLive)
+		phase := "MUTANT-" + m.kind
+		comment, err := run(phase, sizing14285s6Statement{label: m.label, text: strings.ReplaceAll(base.text, m.from, m.to)}, m.want, readRowsCap)
+		if err != nil {
+			t.Fatalf("%s %s: SQL error (a mutant must change the output, not fire): %v", phase, m.label, err)
+		}
+		t.Logf("%s %s CHANGED (%d places %q -> %q): %s", phase, m.label, m.places, m.from, m.to, strings.Join(changed, ", "))
+		checks = append(checks, logged{phase, m.label, comment, readRowsCap, kRows, p, false})
+	}
 	if err := conn.Exec(ctx, sizing14285s6FireRows1); err != nil {
 		t.Fatalf("fire rows 1: %v", err)
 	}

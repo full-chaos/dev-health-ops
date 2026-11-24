@@ -262,10 +262,10 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 				if !provesEnd {
 					rows.UnprovenMembershipTeamIDs = append(rows.UnprovenMembershipTeamIDs, githubTeamID(slug))
 				}
-			} else if collector.Strict || teamMemberReadRateLimited(memberErr) {
-				// A rate limit is the provider scheduling the retry, not a team
-				// the roster cannot be read for: it ends the unit so the handler
-				// defers it without using an attempt.
+			} else if collector.Strict || teamMemberReadDeadlineShortened(memberErr) {
+				// A rate-limited retry whose wait was cut short by the deadline
+				// is the base's deadline error: it ends the run. An exhausted
+				// rate limit with time left stays a skipped team.
 				return githubTeamCatalogRows{}, evidence, memberErr
 			} else {
 				evidence.SkippedTeamMemberships++
@@ -405,9 +405,9 @@ func perPageQuery(perPage int) url.Values {
 	return values
 }
 
-func teamMemberReadRateLimited(err error) bool {
+func teamMemberReadDeadlineShortened(err error) bool {
 	var providerErr *providerfoundation.ProviderError
-	return errors.As(err, &providerErr) && providerErr.Class == providerfoundation.ErrorRateLimited
+	return errors.Is(err, context.DeadlineExceeded) && errors.As(err, &providerErr) && providerErr.Class == providerfoundation.ErrorRateLimited
 }
 
 // memberReadFailureCause is the fixed word for why a team's member read failed:

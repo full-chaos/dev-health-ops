@@ -16,20 +16,22 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/deploymentstatus"
 )
 
-// Throwaway exec proof (CHAOS-13902, not for merge): the GONE statement (stmt4) of the prod read form FLOOR-13902-4 counts,
+// Throwaway exec proof (CHAOS-13902, not for merge): the GONE statement (stmt4) of the prod read form FLOOR-13902-5 counts,
 // per table, exactly the live keys that the real end of a run of the whole organization (RunStaleKeyRetractor.RetractStaleKeys)
 // zeroes; the form's synthesized repository id equals icfinalize.SynthesizedRepoID; the form's canceled exclusion equals
 // deploymentstatus.CanceledExclusionSQL. floor4Form is the form file with its org prefix (8 hex) replaced by "f0f0f0f0";
 // its sha256 is pinned.
-const floor4GoneSHA256 = "733f79a10335c5d34fc1616ba0ee87ad185d0da13e76a60921767e7bd23f4c97"
+const floor4GoneSHA256 = "cb6c39b6ad28b79352666782bd6626257d6c45ff1a142bad330026968f7cb7f7"
 
-const floor4GoneForm = `-- FLOOR-13902-4: raw floor + gone-repository read of CARD-13902-recompute-14 (CHAOS-13902), every family the recompute can
+const floor4GoneForm = `-- FLOOR-13902-5: raw floor + gone-repository read of CARD-13902-recompute-15 (CHAOS-13902), every family the recompute can
 --   ERASE. ClickHouse, SELECT only, FOUR statements (one per connector call), run by pm ONCE per chunk at the run minute, right
 --   before 'chunk-start.sh <FROM> <TO> <DIGEST> --go' (card s4 step 1, (y)), and ONCE right before the pass-2 batch over
 --   [2026-04-17, P2_TO_DAY] (chunk P2F; finalize-pass2.sh run --go checks it). Lane l13902 (lead fcdev), 2026-11-24.
---   Prod: NOT EXECUTED. CI exec: EXEC-PROOF-FLOOR-13902-4.md. acp FORM read: OPEN. Supersedes FLOOR-13902-3 1a9ae3c8bf4d
---   (+ acp READ-CARD-13902-12-1 75c1b3e48f70 s3: stmt4 GONE, ic_landscape live rule + inputs, synth input,
---   repo_change_failure incidents + the loader's day rule, deploy canceled exclusion, incident org-scope note).
+--   Prod: NOT EXECUTED. CI exec: EXEC-PROOF-FLOOR-13902-5.md. acp FORM read: OPEN. Supersedes FLOOR-13902-4 a41d9e6318cc
+--   (+ acp READ-CARD-13902-14-1 ea1ec94bf5ba: F4-P2-1 operational_incidents = the NEWEST revision per (org_id, id) first, then
+--   the is_deleted / started_at filters, as the loader; F4-P3-2 work_item_user_metrics_daily.live keeps the loader's row views
+--   '' and 'org'; F4-P3-3 the snapshot-deferred keys of stmt4 named). FLOOR-13902-4 = FLOOR-13902-3 1a9ae3c8bf4d + acp
+--   READ-CARD-13902-12-1 75c1b3e48f70 s3 (stmt4 GONE, ic_landscape, synth input, change_failure incidents, deploy canceled).
 --   Code cites at ops 3207ac6258c0 (the run binary, STEP 332).
 -- Placeholders: {{FROM}} {{TO}} = the chunk bounds; {{FILL_ID}} = 12 hex written by the fill (S-P2-1 a). Only
 --   'chunk-start.sh --floor-sql <FROM> <TO>' fills them (ledger line FLOOR-FILL <C> fill=<id> sql_sha12=<..>).
@@ -173,7 +175,7 @@ ORDER BY family, raw_table, scope_id;
 --   FINAL joined to ci_pipeline_runs FINAL on (org_id, repo_id, run_id), day = toDate(started_at) of the run;
 --   deployments FINAL, canceled excluded (deploymentstatus CanceledExclusionSQL as text): .deployed = toDate(deployed_at)
 --   (deploy loader), .any = toDate(coalesce(deployed_at, finished_at, started_at, last_synced)) (the change-failure loader);
---   operational_incidents FINAL org first toDate(started_at), is_deleted 0 = the 2nd raw of repo_change_failure_daily (an
+--   operational_incidents (newest revision per (org_id, id), then is_deleted 0) org first toDate(started_at) = the 2nd raw of repo_change_failure_daily (an
 --   org-scope raw: the join takes 'org' for it, the out keeps the repo cut).
 -- Cost gate k ci_pipeline_runs 3, deployments 2, cicd_metrics_daily 2 (+ ORG-1), every other table 1; f 2; s 1.
 WITH (SELECT 2 * intDiv(5 * (sum(marks * multiIf(table = 'ci_pipeline_runs', 3, table = 'cicd_metrics_daily', 2, table = 'deployments', 2, 1)) * 8192 + count()) + 3, 4) + 2 * (2 * count() + 1) FROM system.parts WHERE active AND database = currentDatabase()
@@ -295,8 +297,10 @@ FROM (
       AND lowerUTF8(replaceRegexpAll(coalesce(status, ''), '^(?:\\x09|\\x0a|\\x0b|\\x0c|\\x0d|\\x20|\xC2\x85|\xC2\xA0|\xE1\x9A\x80|\xE2\x80\x80|\xE2\x80\x81|\xE2\x80\x82|\xE2\x80\x83|\xE2\x80\x84|\xE2\x80\x85|\xE2\x80\x86|\xE2\x80\x87|\xE2\x80\x88|\xE2\x80\x89|\xE2\x80\x8A|\xE2\x80\xA8|\xE2\x80\xA9|\xE2\x80\xAF|\xE2\x81\x9F|\xE3\x80\x80)+|(?:\\x09|\\x0a|\\x0b|\\x0c|\\x0d|\\x20|\xC2\x85|\xC2\xA0|\xE1\x9A\x80|\xE2\x80\x80|\xE2\x80\x81|\xE2\x80\x82|\xE2\x80\x83|\xE2\x80\x84|\xE2\x80\x85|\xE2\x80\x86|\xE2\x80\x87|\xE2\x80\x88|\xE2\x80\x89|\xE2\x80\x8A|\xE2\x80\xA8|\xE2\x80\xA9|\xE2\x80\xAF|\xE2\x81\x9F|\xE3\x80\x80)+$', '')) NOT IN ('canceled', 'cancelled')
     GROUP BY repo_id
     UNION ALL
-    SELECT 'operational_incidents' AS r_raw, 'org' AS r_scope, min(toDate(assumeNotNull(started_at))) AS f, toUInt8(1) AS present
-    FROM operational_incidents FINAL WHERE startsWith(org_id, 'f0f0f0f0') AND is_deleted = 0 AND started_at IS NOT NULL HAVING count() > 0
+    SELECT 'operational_incidents' AS r_raw, 'org' AS r_scope, min(toDate(assumeNotNull(oi.started_at))) AS f, toUInt8(1) AS present
+    FROM (SELECT org_id, id, is_deleted, started_at FROM operational_incidents WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0
+          ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC LIMIT 1 BY org_id, id) AS oi
+    WHERE oi.is_deleted = 0 AND oi.started_at IS NOT NULL HAVING count() > 0
   ) AS r ON r.r_raw = p.p_raw AND r.r_scope = p.p_rscope
   UNION ALL
   SELECT toUInt8(2) AS stmt, '_stmt' AS family, '_cap' AS raw_table, 'org' AS scope_full, 'none' AS raw_first_day,
@@ -310,14 +314,19 @@ ORDER BY family, raw_table, scope_id;
 --   key not retracted; work_item_metrics_daily, estimate_coverage_metrics_daily, work_item_state_durations_daily,
 --   issue_type_metrics_daily, work_item_completion_daily, team_complexity_daily, team_cognitive_load_daily,
 --   compounding_risk_daily (scope 'team'), ai_governance_coverage_daily: every stored row.
--- Raw / input (org-wide first day, ALL days): operational_incidents FINAL toDate(started_at), is_deleted 0;
+-- Raw / input (org-wide first day, ALL days): operational_incidents toDate(started_at) of the NEWEST revision per (org_id, id)
+--   (ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC LIMIT 1 BY org_id, id; no FINAL:
+--   the engine is ReplacingMergeTree(ingest_revision) ORDER BY (org_id, id, source_revision, source_conflict_key), so FINAL keeps
+--   one row PER REVISION), THEN is_deleted 0 and started_at not NULL: the loader's order (operationalordering.go:27 RevisionOrder,
+--   :34-50 RevisionCurrentRows, postFilters after the selection; incident_native_clickhouse.go:181-186);
 --   work_items FINAL toDate(created_at); repo_complexity_daily day (stored by a job this card does not run);
 --   user_metrics_daily / repo_metrics_daily first LIVE day (the stored inputs of team_cognitive_load / compounding team);
 --   ai_attribution FINAL toDate(observed_at), superseded_by IS NULL (= the view ai_attribution_resolved).
 --   work_item_measure_capability (live = newest item_count > 0 per (provider, measure, window_end); day = window_end;
 --   retirement rows work_item_measure_capability.go:186-245), ic_landscape_rolling_30d (day = as_of_day; live = the newest row
 --   holds a measure (teamkeytables LiveHaving); zeros over points not produced, ic_finalize_native_executor.go:51-63) vs
---   user_metrics_daily.live AND work_item_user_metrics_daily.live (first day of a key whose newest row is not retracted), and
+--   user_metrics_daily.live AND work_item_user_metrics_daily.live (first day of a key whose newest row is not retracted, row views
+--   '' and 'org' only, as the loader: icfinalize/loader.go:181 rowview.OrgPredicate, rowview.go:76-84), and
 --   user_metrics_daily.synth (the ic_finalize synthesized keys, :64-84) vs work_item_user_metrics_daily.live.
 --   benchmarking: the six output tables (day column per table, newest retracted 0 per key) vs the 3 testops input tables.
 -- Cost gate k user_metrics_daily 3 (the .live input, the .synth family, the ORG-1 scalar), work_item_user_metrics_daily 2 (the
@@ -444,8 +453,10 @@ FROM (
                      ['?']) AS raw_name
   ) AS p
   LEFT JOIN (
-    SELECT 'operational_incidents' AS r_raw, 'org' AS r_scope, min(toDate(assumeNotNull(started_at))) AS f, toUInt8(1) AS present
-    FROM operational_incidents FINAL WHERE startsWith(org_id, 'f0f0f0f0') AND is_deleted = 0 AND started_at IS NOT NULL HAVING count() > 0
+    SELECT 'operational_incidents' AS r_raw, 'org' AS r_scope, min(toDate(assumeNotNull(oi.started_at))) AS f, toUInt8(1) AS present
+    FROM (SELECT org_id, id, is_deleted, started_at FROM operational_incidents WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0
+          ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC LIMIT 1 BY org_id, id) AS oi
+    WHERE oi.is_deleted = 0 AND oi.started_at IS NOT NULL HAVING count() > 0
     UNION ALL
     SELECT 'work_items' AS r_raw, 'org' AS r_scope, min(toDate(created_at)) AS f, toUInt8(1) AS present
     FROM work_items FINAL WHERE startsWith(org_id, 'f0f0f0f0') HAVING count() > 0
@@ -455,7 +466,8 @@ FROM (
     UNION ALL
     SELECT 'work_item_user_metrics_daily.live' AS r_raw, 'org' AS r_scope, min(w.day) AS f, toUInt8(1) AS present
     FROM (SELECT provider, work_scope_id, user_identity, day, row_view, argMax(retracted, computed_at) AS rt FROM work_item_user_metrics_daily
-          WHERE startsWith(org_id, 'f0f0f0f0') GROUP BY provider, work_scope_id, user_identity, day, row_view) AS w WHERE w.rt = 0 HAVING count() > 0
+          WHERE startsWith(org_id, 'f0f0f0f0') AND row_view IN ('', 'org') GROUP BY provider, work_scope_id, user_identity, day, row_view) AS w
+    WHERE w.rt = 0 HAVING count() > 0
     UNION ALL
     SELECT 'user_metrics_daily.live' AS r_raw, 'org' AS r_scope, min(u.day) AS f, toUInt8(1) AS present
     FROM (SELECT repo_id, author_email, day, argMax(retracted, computed_at) AS rt FROM user_metrics_daily
@@ -492,7 +504,8 @@ ORDER BY family, raw_table, scope_id;
 --   .RepositoryIDs: every repos id of the org, any version, + the nil id when a work item has no repository; daily/clickhouse.go
 --   :85-125, :226-240) gets a row of zeros. Synthesized user keys are skipped (stale_team_keys.go:714-718). Raw rows of a gone
 --   repository do not save its keys. For a full-org run partitions = the same discovery (stale_team_keys_run.go:301-307), so a
---   key is ERASED when its repo_id is not in held_repos.
+--   key is ERASED when its repo_id is not in held_repos. A snapshot-stamped table defers a gone key that is newer than the run's
+--   snapshot (stale_team_keys.go:723-728); this statement counts it as gone too = more STOPs, the safe side (acp ruled it).
 -- repo_id '' (legacy team_metrics_daily rows written before migration 080, wellbeing_native_clickhouse.go:276-284): '' is in
 --   no partition and no repos id, so the rule zeroes such a live key too: counted as empty_repo_keys (lib: STOP, acp reads).
 -- Rows: one per table (8, always), family gone:<table>, raw_table repos, scope org, raw_first_day 1970-01-01 (no day floor),
@@ -610,10 +623,10 @@ func floor4Stmt(t *testing.T, marker string) string {
 	return ""
 }
 
-func TestFloor13902v4GoneCountsWhatTheRunOfTheWholeOrganizationZeroes(t *testing.T) {
+func TestFloor13902v5GoneCountsWhatTheRunOfTheWholeOrganizationZeroes(t *testing.T) {
 	sum := sha256.Sum256([]byte(floor4GoneForm))
 	if got := hex.EncodeToString(sum[:]); got != floor4GoneSHA256 {
-		t.Fatalf("FLOOR-13902-4 (prefix swapped) sha256 = %s, want %s", got, floor4GoneSHA256)
+		t.Fatalf("FLOOR-13902-5 (prefix swapped) sha256 = %s, want %s", got, floor4GoneSHA256)
 	}
 	ctx := context.Background()
 	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)

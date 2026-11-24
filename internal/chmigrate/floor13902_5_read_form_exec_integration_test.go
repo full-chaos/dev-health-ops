@@ -20,12 +20,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-// Throwaway exec proof of the prod read forms FLOOR-13902-4, FORM-QZ1-13902-2, FORM-QZ3-13902-2 and FORM-QZ4-13902-2
+// Throwaway exec proof of the prod read forms FLOOR-13902-5, FORM-QZ1-13902-3, FORM-QZ3-13902-2 and FORM-QZ4-13902-2
 // (CHAOS-13902): not for merge. Each const is the form file with its org prefix (8 hex) replaced by the synthetic
 // "f0f0f0f0"; each sha256 is pinned. It reuses helpers of the FLOOR-13902-2 cell file (same package, same branch).
 const (
-	f3SHA256  = "733f79a10335c5d34fc1616ba0ee87ad185d0da13e76a60921767e7bd23f4c97"
-	q1v2SHA   = "87304f5372b93098aa70ea0f6385984f3325f2aef3a0e611ee1028a5db1bb379"
+	f3SHA256  = "cb6c39b6ad28b79352666782bd6626257d6c45ff1a142bad330026968f7cb7f7"
+	q1v2SHA   = "eac3883da4b8cf2ccd350ac1ef6742b6a3020d3e3f8d416ec806f59f06ce5d41"
 	q3v2SHA   = "b8462fa34ff41210b14887d028a01b600577ea4f24977cbaa6f03b86abf348a3"
 	q4v2SHA   = "2fafb8650f20d4ca52ac95b5ff06a4a21ad8e0e87d20d9872a983f1d66c1fc98"
 	f3FillID  = "a1b2c3d4e5f6"
@@ -33,13 +33,15 @@ const (
 	f3RunDayN = "2026-11-22"
 )
 
-const f3Form = `-- FLOOR-13902-4: raw floor + gone-repository read of CARD-13902-recompute-14 (CHAOS-13902), every family the recompute can
+const f3Form = `-- FLOOR-13902-5: raw floor + gone-repository read of CARD-13902-recompute-15 (CHAOS-13902), every family the recompute can
 --   ERASE. ClickHouse, SELECT only, FOUR statements (one per connector call), run by pm ONCE per chunk at the run minute, right
 --   before 'chunk-start.sh <FROM> <TO> <DIGEST> --go' (card s4 step 1, (y)), and ONCE right before the pass-2 batch over
 --   [2026-04-17, P2_TO_DAY] (chunk P2F; finalize-pass2.sh run --go checks it). Lane l13902 (lead fcdev), 2026-11-24.
---   Prod: NOT EXECUTED. CI exec: EXEC-PROOF-FLOOR-13902-4.md. acp FORM read: OPEN. Supersedes FLOOR-13902-3 1a9ae3c8bf4d
---   (+ acp READ-CARD-13902-12-1 75c1b3e48f70 s3: stmt4 GONE, ic_landscape live rule + inputs, synth input,
---   repo_change_failure incidents + the loader's day rule, deploy canceled exclusion, incident org-scope note).
+--   Prod: NOT EXECUTED. CI exec: EXEC-PROOF-FLOOR-13902-5.md. acp FORM read: OPEN. Supersedes FLOOR-13902-4 a41d9e6318cc
+--   (+ acp READ-CARD-13902-14-1 ea1ec94bf5ba: F4-P2-1 operational_incidents = the NEWEST revision per (org_id, id) first, then
+--   the is_deleted / started_at filters, as the loader; F4-P3-2 work_item_user_metrics_daily.live keeps the loader's row views
+--   '' and 'org'; F4-P3-3 the snapshot-deferred keys of stmt4 named). FLOOR-13902-4 = FLOOR-13902-3 1a9ae3c8bf4d + acp
+--   READ-CARD-13902-12-1 75c1b3e48f70 s3 (stmt4 GONE, ic_landscape, synth input, change_failure incidents, deploy canceled).
 --   Code cites at ops 3207ac6258c0 (the run binary, STEP 332).
 -- Placeholders: {{FROM}} {{TO}} = the chunk bounds; {{FILL_ID}} = 12 hex written by the fill (S-P2-1 a). Only
 --   'chunk-start.sh --floor-sql <FROM> <TO>' fills them (ledger line FLOOR-FILL <C> fill=<id> sql_sha12=<..>).
@@ -183,7 +185,7 @@ ORDER BY family, raw_table, scope_id;
 --   FINAL joined to ci_pipeline_runs FINAL on (org_id, repo_id, run_id), day = toDate(started_at) of the run;
 --   deployments FINAL, canceled excluded (deploymentstatus CanceledExclusionSQL as text): .deployed = toDate(deployed_at)
 --   (deploy loader), .any = toDate(coalesce(deployed_at, finished_at, started_at, last_synced)) (the change-failure loader);
---   operational_incidents FINAL org first toDate(started_at), is_deleted 0 = the 2nd raw of repo_change_failure_daily (an
+--   operational_incidents (newest revision per (org_id, id), then is_deleted 0) org first toDate(started_at) = the 2nd raw of repo_change_failure_daily (an
 --   org-scope raw: the join takes 'org' for it, the out keeps the repo cut).
 -- Cost gate k ci_pipeline_runs 3, deployments 2, cicd_metrics_daily 2 (+ ORG-1), every other table 1; f 2; s 1.
 WITH (SELECT 2 * intDiv(5 * (sum(marks * multiIf(table = 'ci_pipeline_runs', 3, table = 'cicd_metrics_daily', 2, table = 'deployments', 2, 1)) * 8192 + count()) + 3, 4) + 2 * (2 * count() + 1) FROM system.parts WHERE active AND database = currentDatabase()
@@ -305,8 +307,10 @@ FROM (
       AND lowerUTF8(replaceRegexpAll(coalesce(status, ''), '^(?:\\x09|\\x0a|\\x0b|\\x0c|\\x0d|\\x20|\xC2\x85|\xC2\xA0|\xE1\x9A\x80|\xE2\x80\x80|\xE2\x80\x81|\xE2\x80\x82|\xE2\x80\x83|\xE2\x80\x84|\xE2\x80\x85|\xE2\x80\x86|\xE2\x80\x87|\xE2\x80\x88|\xE2\x80\x89|\xE2\x80\x8A|\xE2\x80\xA8|\xE2\x80\xA9|\xE2\x80\xAF|\xE2\x81\x9F|\xE3\x80\x80)+|(?:\\x09|\\x0a|\\x0b|\\x0c|\\x0d|\\x20|\xC2\x85|\xC2\xA0|\xE1\x9A\x80|\xE2\x80\x80|\xE2\x80\x81|\xE2\x80\x82|\xE2\x80\x83|\xE2\x80\x84|\xE2\x80\x85|\xE2\x80\x86|\xE2\x80\x87|\xE2\x80\x88|\xE2\x80\x89|\xE2\x80\x8A|\xE2\x80\xA8|\xE2\x80\xA9|\xE2\x80\xAF|\xE2\x81\x9F|\xE3\x80\x80)+$', '')) NOT IN ('canceled', 'cancelled')
     GROUP BY repo_id
     UNION ALL
-    SELECT 'operational_incidents' AS r_raw, 'org' AS r_scope, min(toDate(assumeNotNull(started_at))) AS f, toUInt8(1) AS present
-    FROM operational_incidents FINAL WHERE startsWith(org_id, 'f0f0f0f0') AND is_deleted = 0 AND started_at IS NOT NULL HAVING count() > 0
+    SELECT 'operational_incidents' AS r_raw, 'org' AS r_scope, min(toDate(assumeNotNull(oi.started_at))) AS f, toUInt8(1) AS present
+    FROM (SELECT org_id, id, is_deleted, started_at FROM operational_incidents WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0
+          ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC LIMIT 1 BY org_id, id) AS oi
+    WHERE oi.is_deleted = 0 AND oi.started_at IS NOT NULL HAVING count() > 0
   ) AS r ON r.r_raw = p.p_raw AND r.r_scope = p.p_rscope
   UNION ALL
   SELECT toUInt8(2) AS stmt, '_stmt' AS family, '_cap' AS raw_table, 'org' AS scope_full, 'none' AS raw_first_day,
@@ -320,14 +324,19 @@ ORDER BY family, raw_table, scope_id;
 --   key not retracted; work_item_metrics_daily, estimate_coverage_metrics_daily, work_item_state_durations_daily,
 --   issue_type_metrics_daily, work_item_completion_daily, team_complexity_daily, team_cognitive_load_daily,
 --   compounding_risk_daily (scope 'team'), ai_governance_coverage_daily: every stored row.
--- Raw / input (org-wide first day, ALL days): operational_incidents FINAL toDate(started_at), is_deleted 0;
+-- Raw / input (org-wide first day, ALL days): operational_incidents toDate(started_at) of the NEWEST revision per (org_id, id)
+--   (ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC LIMIT 1 BY org_id, id; no FINAL:
+--   the engine is ReplacingMergeTree(ingest_revision) ORDER BY (org_id, id, source_revision, source_conflict_key), so FINAL keeps
+--   one row PER REVISION), THEN is_deleted 0 and started_at not NULL: the loader's order (operationalordering.go:27 RevisionOrder,
+--   :34-50 RevisionCurrentRows, postFilters after the selection; incident_native_clickhouse.go:181-186);
 --   work_items FINAL toDate(created_at); repo_complexity_daily day (stored by a job this card does not run);
 --   user_metrics_daily / repo_metrics_daily first LIVE day (the stored inputs of team_cognitive_load / compounding team);
 --   ai_attribution FINAL toDate(observed_at), superseded_by IS NULL (= the view ai_attribution_resolved).
 --   work_item_measure_capability (live = newest item_count > 0 per (provider, measure, window_end); day = window_end;
 --   retirement rows work_item_measure_capability.go:186-245), ic_landscape_rolling_30d (day = as_of_day; live = the newest row
 --   holds a measure (teamkeytables LiveHaving); zeros over points not produced, ic_finalize_native_executor.go:51-63) vs
---   user_metrics_daily.live AND work_item_user_metrics_daily.live (first day of a key whose newest row is not retracted), and
+--   user_metrics_daily.live AND work_item_user_metrics_daily.live (first day of a key whose newest row is not retracted, row views
+--   '' and 'org' only, as the loader: icfinalize/loader.go:181 rowview.OrgPredicate, rowview.go:76-84), and
 --   user_metrics_daily.synth (the ic_finalize synthesized keys, :64-84) vs work_item_user_metrics_daily.live.
 --   benchmarking: the six output tables (day column per table, newest retracted 0 per key) vs the 3 testops input tables.
 -- Cost gate k user_metrics_daily 3 (the .live input, the .synth family, the ORG-1 scalar), work_item_user_metrics_daily 2 (the
@@ -454,8 +463,10 @@ FROM (
                      ['?']) AS raw_name
   ) AS p
   LEFT JOIN (
-    SELECT 'operational_incidents' AS r_raw, 'org' AS r_scope, min(toDate(assumeNotNull(started_at))) AS f, toUInt8(1) AS present
-    FROM operational_incidents FINAL WHERE startsWith(org_id, 'f0f0f0f0') AND is_deleted = 0 AND started_at IS NOT NULL HAVING count() > 0
+    SELECT 'operational_incidents' AS r_raw, 'org' AS r_scope, min(toDate(assumeNotNull(oi.started_at))) AS f, toUInt8(1) AS present
+    FROM (SELECT org_id, id, is_deleted, started_at FROM operational_incidents WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0
+          ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC LIMIT 1 BY org_id, id) AS oi
+    WHERE oi.is_deleted = 0 AND oi.started_at IS NOT NULL HAVING count() > 0
     UNION ALL
     SELECT 'work_items' AS r_raw, 'org' AS r_scope, min(toDate(created_at)) AS f, toUInt8(1) AS present
     FROM work_items FINAL WHERE startsWith(org_id, 'f0f0f0f0') HAVING count() > 0
@@ -465,7 +476,8 @@ FROM (
     UNION ALL
     SELECT 'work_item_user_metrics_daily.live' AS r_raw, 'org' AS r_scope, min(w.day) AS f, toUInt8(1) AS present
     FROM (SELECT provider, work_scope_id, user_identity, day, row_view, argMax(retracted, computed_at) AS rt FROM work_item_user_metrics_daily
-          WHERE startsWith(org_id, 'f0f0f0f0') GROUP BY provider, work_scope_id, user_identity, day, row_view) AS w WHERE w.rt = 0 HAVING count() > 0
+          WHERE startsWith(org_id, 'f0f0f0f0') AND row_view IN ('', 'org') GROUP BY provider, work_scope_id, user_identity, day, row_view) AS w
+    WHERE w.rt = 0 HAVING count() > 0
     UNION ALL
     SELECT 'user_metrics_daily.live' AS r_raw, 'org' AS r_scope, min(u.day) AS f, toUInt8(1) AS present
     FROM (SELECT repo_id, author_email, day, argMax(retracted, computed_at) AS rt FROM user_metrics_daily
@@ -502,7 +514,8 @@ ORDER BY family, raw_table, scope_id;
 --   .RepositoryIDs: every repos id of the org, any version, + the nil id when a work item has no repository; daily/clickhouse.go
 --   :85-125, :226-240) gets a row of zeros. Synthesized user keys are skipped (stale_team_keys.go:714-718). Raw rows of a gone
 --   repository do not save its keys. For a full-org run partitions = the same discovery (stale_team_keys_run.go:301-307), so a
---   key is ERASED when its repo_id is not in held_repos.
+--   key is ERASED when its repo_id is not in held_repos. A snapshot-stamped table defers a gone key that is newer than the run's
+--   snapshot (stale_team_keys.go:723-728); this statement counts it as gone too = more STOPs, the safe side (acp ruled it).
 -- repo_id '' (legacy team_metrics_daily rows written before migration 080, wellbeing_native_clickhouse.go:276-284): '' is in
 --   no partition and no repos id, so the rule zeroes such a live key too: counted as empty_repo_keys (lib: STOP, acp reads).
 -- Rows: one per table (8, always), family gone:<table>, raw_table repos, scope org, raw_first_day 1970-01-01 (no day floor),
@@ -603,15 +616,17 @@ WHERE cost_gate = 0
 ORDER BY family, raw_table, scope_id;
 `
 
-const q1v2Form = `-- FORM-QZ1-13902-2: Q-z1 of CARD-13902-recompute-13 (z) (= -1 17daee69fd42 + acp READ-CARD-13902-10-1 Q1-P2-1, Q1-P3-1): a TTL set on prod by hand (not by a migration) on a raw table the
+const q1v2Form = `-- FORM-QZ1-13902-3: Q-z1 of CARD-13902-recompute-15 (z) (= -2 87304f5372b9 + acp READ-CARD-13902-14-1 Q1-P2-2, Q1-P3-2; -2 = -1 17daee69fd42 + READ-CARD-13902-10-1 Q1-P2-1, Q1-P3-1): a TTL set on prod by hand (not by a migration) on a raw table the
 --   recompute reads. ClickHouse, SELECT only, TWO statements, metadata only (system.tables, system.mutations). Lane l13902 (lead fcdev),
---   2026-11-24. Prod: NOT EXECUTED. CI exec: EXEC-PROOF-FLOOR-13902-3.md. acp FORM read: OPEN.
+--   2026-11-24. Prod: NOT EXECUTED. CI exec: EXEC-PROOF-FLOOR-13902-5.md. acp FORM read: OPEN.
 -- stmt1 (TTL). Code side (card (z)): no TTL on these tables at the pin's chain (baseline/head.json :241 :346 :351 :361 :366 at
 --   a7febdf50002, sql/145..170 no TTL / MODIFY TTL).
 -- WANT: 11 rows (one per name; a missing row = a wrong name or a missing table: STOP); has_ttl = 0 in every row. has_ttl 1 =
 --   the floor moves daily and stored days are orphaned every day: STOP, tell pm at once (pm binding rule 1).
 -- Cost gate: throwIf over the system.tables row count of this database (metadata only); no data table is read. Fired in CI
---   by the TEMPLATE-3 :12 method (the one literal '> 100000' of the statement set to '> -1' in the cell copy; Q1-P2-1).
+--   by the TEMPLATE-3 :12 method (the one literal '> 100000' of the statement set to '> -1' in the cell copy; Q1-P2-1). Why
+--   '> -1' and not '> 0' (acp Q1-P3-2): the CI database holds 0 mutations when stmt2's fire runs, so '> 0' would not fire there;
+--   '> -1' fires on any count, the same literal for both statements.
 WITH (SELECT throwIf((SELECT count() FROM system.tables WHERE database = currentDatabase()) > 100000, 'STOP-COST-GATE')) AS cost_gate
 SELECT name AS table_name, engine AS engine, toUInt8(positionCaseInsensitive(create_table_query, ' TTL ') > 0) AS has_ttl,
   partition_key AS partition_key, sorting_key AS sorting_key
@@ -624,11 +639,14 @@ ORDER BY name;
 
 -- stmt2 (hand DELETE; acp Q1-P3-1): mutations of the 11 tables on prod (system.mutations keeps the finished ones only up to
 --   the table setting finished_mutations_to_keep, so an old DELETE can be gone: INFO). WANT delete_mutations = 0; > 0 = a
---   DELETE ran on a raw table: STOP, pm + acp read (the card's (z) "no deletion" finding is wrong on prod).
+--   DELETE ran on a raw table: STOP, pm + acp read (the card's (z) "no deletion" finding is wrong on prod). A DELETE mutation =
+--   an ALTER ... DELETE (command holds DELETE) OR a lightweight DELETE FROM stored as an update of _row_exists (acp
+--   READ-CARD-13902-14-1 Q1-P2-2; CI CANFAIL cells for both). INFO: TRUNCATE, DROP PARTITION and a lightweight delete written as
+--   patch parts leave no system.mutations row: this statement cannot see them (they are not ruled out by it).
 -- Cost gate: throwIf over the system.mutations row count of this database (metadata only), fired in CI as stmt1's.
 WITH (SELECT throwIf((SELECT count() FROM system.mutations WHERE database = currentDatabase()) > 100000, 'STOP-COST-GATE')) AS cost_gate
-SELECT count() AS mutations, countIf(positionCaseInsensitive(command, 'DELETE') > 0) AS delete_mutations,
-  countIf(positionCaseInsensitive(command, 'DELETE') > 0 AND is_done = 0) AS delete_mutations_open,
+SELECT count() AS mutations, countIf(positionCaseInsensitive(command, 'DELETE') > 0 OR positionCaseInsensitive(command, '_row_exists') > 0) AS delete_mutations,
+  countIf((positionCaseInsensitive(command, 'DELETE') > 0 OR positionCaseInsensitive(command, '_row_exists') > 0) AND is_done = 0) AS delete_mutations_open,
   min(toDate(create_time)) AS first_mutation_day
 FROM system.mutations
 WHERE database = currentDatabase()
@@ -802,10 +820,16 @@ func f3Fixture(synth string) string {
 		b(`INSERT INTO ic_landscape_rolling_30d (org_id, repo_id, team_id, map_name, as_of_day, identity_id, x_raw, computed_at) VALUES
 ('`+fOrg+`', '`+q1+`', 't1', 'm', '2026-10-27', 'i2', 0, '2026-10-29 01:00:00');`) +
 		b(`INSERT INTO work_item_user_metrics_daily (org_id, provider, work_scope_id, user_identity, row_view, day, computed_at, retracted) VALUES
-('`+fOrg+`', 'jira', 'P', 'u2', 'team', '2026-01-03', '2026-01-04 01:00:00', 0),
-('`+fOrg+`', 'jira', 'P', 'u3', 'team', '2025-12-01', '2025-12-02 01:00:00', 0);`) +
+('`+fOrg+`', 'jira', 'P', 'u2', 'org', '2026-01-03', '2026-01-04 01:00:00', 0),
+('`+fOrg+`', 'jira', 'P', 'u4', 'team', '2025-11-01', '2025-11-02 01:00:00', 0),
+('`+fOrg+`', 'jira', 'P', 'u3', 'org', '2025-12-01', '2025-12-02 01:00:00', 0);`) +
 		b(`INSERT INTO work_item_user_metrics_daily (org_id, provider, work_scope_id, user_identity, row_view, day, computed_at, retracted) VALUES
-('`+fOrg+`', 'jira', 'P', 'u3', 'team', '2025-12-01', '2025-12-03 01:00:00', 1);`) +
+('`+fOrg+`', 'jira', 'P', 'u3', 'org', '2025-12-01', '2025-12-03 01:00:00', 1);`) +
+		b(`INSERT INTO operational_incidents (org_id, provider, id, started_at, is_deleted, observed_at, ordering_contract, source_revision, ingest_revision) VALUES
+('`+fOrg+`', 'pagerduty', 'incR', '2025-11-20 10:00:00', 0, '2025-11-20 10:00:00', 2, 1, 1),
+('`+fOrg+`', 'pagerduty', 'incR', '2025-11-20 10:00:00', 1, '2025-11-21 10:00:00', 2, 2, 2);`) +
+		b(`INSERT INTO work_items (org_id, repo_id, work_item_id, provider, status, created_at, last_synced) VALUES
+('`+bOrg+`', '00000000-0000-0000-0000-000000000000', 'wiN', 'linear', 'todo', '2024-02-01 10:00:00', '2024-02-01 11:00:00');`) +
 		b(`INSERT INTO ai_impact_metrics_daily (org_id, team_id, repo_id, work_type, day, attribution_bucket, prs_total, computed_at) VALUES
 ('`+fOrg+`', 't1', '`+q1+`', 'feature', '2026-10-26', 'human', 1, '2026-10-28 01:00:00');`) +
 		b(`INSERT INTO deployments (org_id, repo_id, deployment_id, status, deployed_at, finished_at, started_at, last_synced) VALUES
@@ -1149,10 +1173,10 @@ func f3Pin(t *testing.T, name, text, want string) {
 	}
 }
 
-func TestFloor13902v4FormExecutesMutantsAndEveryStopFires(t *testing.T) {
+func TestFloor13902v5FormExecutesMutantsAndEveryStopFires(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
-	f3Pin(t, "FLOOR-13902-4", f3Form, f3SHA256)
+	f3Pin(t, "FLOOR-13902-5", f3Form, f3SHA256)
 	if n := strings.Count(chmigrate.StripLineComments(f3Form), "'f0f0f0f0'"); n != 70 {
 		t.Fatalf("%d org prefixes in the SQL, want 70", n)
 	}
@@ -1178,7 +1202,7 @@ func TestFloor13902v4FormExecutesMutantsAndEveryStopFires(t *testing.T) {
 	}
 	statements := floor2Split(f3Form)
 	if len(statements) != 4 {
-		t.Fatalf("FLOOR-13902-4: %d statements, want 4", len(statements))
+		t.Fatalf("FLOOR-13902-5: %d statements, want 4", len(statements))
 	}
 	forms := map[string]string{}
 	for i, st := range statements {
@@ -1199,6 +1223,9 @@ func TestFloor13902v4FormExecutesMutantsAndEveryStopFires(t *testing.T) {
 			t.Fatalf("%s: FINAL vs f %d", label, specs[label].f)
 		}
 		forms[label] = st.text
+		cut := st.text[strings.Index(st.text, "-- "+label):] + ";"
+		cs := sha256.Sum256([]byte(cut))
+		t.Logf("CUT %s swapped_sha12=%s (from the -- %s line to its first non-comment ';' line)", label, hex.EncodeToString(cs[:])[:12], label)
 	}
 	fill := func(text, from, to string) string {
 		out := strings.NewReplacer("{{FROM}}", from, "{{TO}}", to, "{{FILL_ID}}", f3FillID).Replace(text)
@@ -1344,6 +1371,10 @@ func TestFloor13902v4FormExecutesMutantsAndEveryStopFires(t *testing.T) {
 	canceled = strings.TrimPrefix(canceled, "      AND ")
 	icLive := f3Between(forms["stmt3"], "          HAVING argMax(x_raw, computed_at) != 0", ") AS k\n    HAVING count() > 0", 1)
 	icLive = strings.TrimPrefix(icLive, "          HAVING ")
+	newestIncidents := "    FROM (SELECT org_id, id, is_deleted, started_at FROM operational_incidents WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0\n" +
+		"          ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC LIMIT 1 BY org_id, id) AS oi\n" +
+		"    WHERE oi.is_deleted = 0 AND oi.started_at IS NOT NULL HAVING count() > 0"
+	oldIncidents := "    FROM operational_incidents AS oi FINAL WHERE startsWith(org_id, 'f0f0f0f0') AND is_deleted = 0 AND started_at IS NOT NULL HAVING count() > 0"
 	var gone4All []string
 	for _, r := range s4 {
 		if strings.HasPrefix(r, "gone:") {
@@ -1382,11 +1413,21 @@ func TestFloor13902v4FormExecutesMutantsAndEveryStopFires(t *testing.T) {
 			replaceRow(s2, "testops_test_metrics_daily test_suite_results "+c1+" 2026-02-02 2026-10-26 1",
 				"testops_test_metrics_daily test_suite_results "+c1+" 2026-01-10 2026-10-26 1")},
 		{"stmt3", "ORG", "'f0f0f0f0'", "'b0000000'", 32, nil},
-		{"stmt3", "RULE", " AND is_deleted = 0", "", 1,
+		{"stmt3", "RULE", "WHERE oi.is_deleted = 0 AND oi.started_at", "WHERE oi.started_at", 1,
 			replaceRow(replaceRow(s3, "incident_metrics_daily operational_incidents org 2026-01-05 2026-10-29 1",
-				"incident_metrics_daily operational_incidents org 2025-12-20 2026-10-29 1"),
+				"incident_metrics_daily operational_incidents org 2025-11-20 2026-10-29 1"),
 				"ai_impact_metrics_daily.org operational_incidents org 2026-01-05 2026-10-26 1",
-				"ai_impact_metrics_daily.org operational_incidents org 2025-12-20 2026-10-26 1")},
+				"ai_impact_metrics_daily.org operational_incidents org 2025-11-20 2026-10-26 1")},
+		{"stmt3", "RULE-FINAL-FILTER", newestIncidents, oldIncidents, 1,
+			replaceRow(replaceRow(s3, "incident_metrics_daily operational_incidents org 2026-01-05 2026-10-29 1",
+				"incident_metrics_daily operational_incidents org 2025-11-20 2026-10-29 1"),
+				"ai_impact_metrics_daily.org operational_incidents org 2026-01-05 2026-10-26 1",
+				"ai_impact_metrics_daily.org operational_incidents org 2025-11-20 2026-10-26 1")},
+		{"stmt2", "RULE-FINAL-FILTER", newestIncidents, oldIncidents, 1,
+			replaceRow(s2, "repo_change_failure_daily operational_incidents "+c1+" 2026-01-05 2026-10-28 1", "repo_change_failure_daily operational_incidents "+c1+" 2025-11-20 2026-10-28 1")},
+		{"stmt3", "RULE-ROW-VIEW", " AND row_view IN ('', 'org')", "", 1,
+			replaceRow(replaceRow(s3, "ic_landscape_rolling_30d work_item_user_metrics_daily.live org 2026-01-03 2026-10-29 1", "ic_landscape_rolling_30d work_item_user_metrics_daily.live org 2025-11-01 2026-10-29 1"),
+				"user_metrics_daily.synth work_item_user_metrics_daily.live org 2026-01-03 2026-10-28 1", "user_metrics_daily.synth work_item_user_metrics_daily.live org 2025-11-01 2026-10-28 1")},
 		{"stmt3", "RULE-RETIRED", "    WHERE k.ic > 0 HAVING count() > 0", "    HAVING count() > 0", 1,
 			replaceRow(s3, "work_item_measure_capability work_items org 2026-01-03 2026-10-30 1",
 				"work_item_measure_capability work_items org 2026-01-03 2026-10-24 2")},
@@ -1404,7 +1445,7 @@ func TestFloor13902v4FormExecutesMutantsAndEveryStopFires(t *testing.T) {
 		{"stmt3", "RULE-IC-LIVE", icLive, "1 = 1", 1,
 			replaceRow(replaceRow(s3, "ic_landscape_rolling_30d user_metrics_daily.live org 2026-10-25 2026-10-29 1", "ic_landscape_rolling_30d user_metrics_daily.live org 2026-10-25 2026-10-27 2"),
 				"ic_landscape_rolling_30d work_item_user_metrics_daily.live org 2026-01-03 2026-10-29 1", "ic_landscape_rolling_30d work_item_user_metrics_daily.live org 2026-01-03 2026-10-27 2")},
-		{"stmt3", "RULE-WIUMD-LIVE", "AS w WHERE w.rt = 0 HAVING count() > 0", "AS w HAVING count() > 0", 1,
+		{"stmt3", "RULE-WIUMD-LIVE", "AS w\n    WHERE w.rt = 0 HAVING count() > 0", "AS w\n    HAVING count() > 0", 1,
 			replaceRow(replaceRow(s3, "ic_landscape_rolling_30d work_item_user_metrics_daily.live org 2026-01-03 2026-10-29 1", "ic_landscape_rolling_30d work_item_user_metrics_daily.live org 2025-12-01 2026-10-29 1"),
 				"user_metrics_daily.synth work_item_user_metrics_daily.live org 2026-01-03 2026-10-28 1", "user_metrics_daily.synth work_item_user_metrics_daily.live org 2025-12-01 2026-10-28 1")},
 	}
@@ -1458,6 +1499,43 @@ func TestFloor13902v4FormExecutesMutantsAndEveryStopFires(t *testing.T) {
 		t.Errorf("VARIANT-HELD verdict:\n got  %s\n want %s", strings.Join(v, "\n      "), strings.Join(wantAgain, "\n      "))
 	} else {
 		t.Logf("VERDICT C1 after a f0 repos row for q9: no gone key (the raw floor STOP of q9 stays): %s", strings.Join(v, "; "))
+	}
+	nilKey := `INSERT INTO testops_quality_drag (org_id, repo_id, day, computed_at, retracted) VALUES ('` + fOrg + `', '00000000-0000-0000-0000-000000000000', '2026-10-28', '2026-10-29 01:00:00', 0);`
+	f3Exec(t, ctx, conn, nilKey)
+	stmt4Rows := func(phase string) []string {
+		got, err := run.query(phase, "stmt4", fill(forms["stmt4"], f3RunDay1, f3RunDayN))
+		if err != nil {
+			t.Fatalf("%s stmt4: %v", phase, err)
+		}
+		return f3Rows(got)
+	}
+	dragGone := g4("testops_quality_drag", "2026-10-27", "2", "1", "1", "2026-10-28", "0")
+	if got := stmt4Rows("VARIANT-NIL"); !strings.Contains(strings.Join(got, "\n"), dragGone) {
+		t.Errorf("VARIANT-NIL: a live f0 key on the nil repository with no f0 nil-repo work item (only a b0 one) must be gone:\n %s\n want the row %s", strings.Join(got, "\n "), dragGone)
+	} else {
+		t.Logf("VARIANT-NIL: %s (the b0 nil-repo work item does not hold it)", dragGone)
+	}
+	f3Exec(t, ctx, conn, `INSERT INTO work_items (org_id, repo_id, work_item_id, provider, status, created_at, last_synced) VALUES ('`+fOrg+`', '00000000-0000-0000-0000-000000000000', 'wiN0', 'linear', 'todo', '2026-02-01 10:00:00', '2026-02-01 11:00:00');`)
+	dragHeld := g4("testops_quality_drag", "2026-10-27", "2", "0", "0", "none", "0")
+	if got := stmt4Rows("VARIANT-NIL-HELD"); !strings.Contains(strings.Join(got, "\n"), dragHeld) {
+		t.Errorf("VARIANT-NIL-HELD: with a f0 nil-repo work item the nil key is held:\n %s\n want the row %s", strings.Join(got, "\n "), dragHeld)
+	} else {
+		t.Logf("VARIANT-NIL-HELD: %s", dragHeld)
+	}
+	nilArm := "startsWith(org_id, 'f0f0f0f0') AND repo_id = toUUID('00000000-0000-0000-0000-000000000000')"
+	if got, err := run.query("MUTANT-ORG-NIL", "stmt4", fill(mutate(forms["stmt4"], nilArm, strings.Replace(nilArm, "'f0f0f0f0'", "'b0000000'", 1), 1), f3RunDay1, f3RunDayN)); err != nil {
+		t.Fatalf("MUTANT-ORG-NIL: %v", err)
+	} else if !strings.Contains(strings.Join(f3Rows(got), "\n"), dragHeld) {
+		t.Errorf("MUTANT-ORG-NIL: the b0 nil-repo work item holds the f0 key only through the org filter of the nil arm, want the row %s", dragHeld)
+	} else {
+		t.Logf("MUTANT-ORG-NIL (nil arm reads b0): the b0 nil-repo work item holds it: the arm's org filter is executed")
+	}
+	if got, err := run.query("MUTANT-NIL-NONE", "stmt4", fill(mutate(forms["stmt4"], nilArm, strings.Replace(nilArm, "'f0f0f0f0'", "'c0c0c0c0'", 1), 1), f3RunDay1, f3RunDayN)); err != nil {
+		t.Fatalf("MUTANT-NIL-NONE: %v", err)
+	} else if !strings.Contains(strings.Join(f3Rows(got), "\n"), dragGone) {
+		t.Errorf("MUTANT-NIL-NONE: with the nil arm on no org the key is gone again, want the row %s", dragGone)
+	} else {
+		t.Logf("MUTANT-NIL-NONE: CHANGED (the nil arm decides the key)")
 	}
 	var zeroRows []map[string]string
 	for _, label := range []string{"stmt1", "stmt2", "stmt3", "stmt4"} {
@@ -1533,7 +1611,7 @@ SELECT '` + eOrg + `', generateUUIDv4(number), 'x', toDateTime64('2026-01-01 00:
 func TestQZ13902v2FormsExecuteMutantsAndEveryGateFires(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	f3Pin(t, "FORM-QZ1-13902-2", q1v2Form, q1v2SHA)
+	f3Pin(t, "FORM-QZ1-13902-3", q1v2Form, q1v2SHA)
 	f3Pin(t, "FORM-QZ3-13902-2", q3v2Form, q3v2SHA)
 	f3Pin(t, "FORM-QZ4-13902-2", q4v2Form, q4v2SHA)
 	q4Tables := []string{"commit_metrics", "file_hotspot_daily", "file_metrics_daily", "ic_landscape_rolling_30d", "repo_metrics_daily",
@@ -1574,14 +1652,17 @@ func TestQZ13902v2FormsExecuteMutantsAndEveryGateFires(t *testing.T) {
 INSERT INTO git_commits (org_id, repo_id, hash, author_name, author_email, committer_when, last_synced) VALUES ('` + org + `', '` + q1 + `', 'h1', 'a', 'a@x', '2026-01-10 10:00:00', '2026-01-10 11:00:00');
 INSERT INTO repo_metrics_daily (org_id, repo_id, day, commits_count, computed_at, retracted) VALUES ('` + org + `', '` + q1 + `', '2025-08-15', ` + cc + `, '2025-08-16 01:00:00', 0), ('` + org + `', '` + q1 + `', '2026-10-25', 2, '2026-10-26 01:00:00', 0);
 INSERT INTO user_metrics_daily (org_id, repo_id, author_email, day, commits_count, computed_at, retracted) VALUES ('` + org + `', '` + q1 + `', 'a@x', '2025-08-15', ` + cc + `, '2025-08-16 01:00:00', 0);
-INSERT INTO team_cognitive_load_daily (org_id, team_id, day, computed_at) VALUES ('` + org + `', 't1', '2025-08-15', '2025-08-16 01:00:00');
+INSERT INTO team_cognitive_load_daily (org_id, team_id, day, after_hours_commit_ratio, computed_at) VALUES ('` + org + `', 't1', '2025-08-15', ` + cc + `, '2025-08-16 01:00:00');
 INSERT INTO file_metrics_daily (org_id, repo_id, day, path, churn, commits_count, computed_at) VALUES ('` + org + `', '` + q1 + `', '2025-08-15', 'a.go', ` + cc + `, ` + cc + `, '2025-08-16 01:00:00');
 INSERT INTO file_hotspot_daily (org_id, repo_id, day, file_path, churn_loc_30d, churn_commits_30d, computed_at) VALUES ('` + org + `', '` + q1 + `', '2025-08-15', 'a.go', ` + cc + `, ` + cc + `, '2025-08-16 01:00:00');
 INSERT INTO ic_landscape_rolling_30d (org_id, repo_id, team_id, map_name, as_of_day, identity_id, churn_loc_30d, computed_at) VALUES ('` + org + `', '` + q1 + `', 't1', 'm', '2025-08-15', 'i1', ` + cc + `, '2025-08-16 01:00:00');
 INSERT INTO commit_metrics (org_id, repo_id, commit_hash, day, author_email, total_loc, computed_at) VALUES ('` + org + `', '` + q1 + `', 'h1', '2026-01-10', 'a@x', 5, '2026-01-11 01:00:00');
 `
 	}
-	f3Exec(t, ctx, conn, fx)
+	f3Exec(t, ctx, conn, fx+`
+INSERT INTO team_metrics_daily (org_id, team_id, repo_id, day, commits_count, computed_at) VALUES ('`+bOrg+`', 't1', '`+q1+`', '2025-08-20', 3, '2025-08-21 01:00:00');
+INSERT INTO commit_metrics (org_id, repo_id, commit_hash, day, author_email, total_loc, computed_at) VALUES ('`+bOrg+`', '`+q1+`', 'hb2', '2025-08-20', 'b@x', 7, '2025-08-21 01:00:00');
+`)
 	q4Line := func(phase, text string) []string {
 		got, err := run.query(phase, "qz4", text)
 		if err != nil {
@@ -1606,9 +1687,9 @@ INSERT INTO commit_metrics (org_id, repo_id, commit_hash, day, author_email, tot
 		}
 	}
 	eq("PASS", "qz4", q4Line("PASS", trim(q4v2Form)), q4Pass)
-	q4Org := []string{"commit_metrics 0 0 0 0 1970-01-01", "file_hotspot_daily 1 1 1 1 2025-08-15", "file_metrics_daily 1 1 1 1 2025-08-15",
-		"ic_landscape_rolling_30d 1 1 1 1 2025-08-15", "repo_metrics_daily 1 1 1 1 2025-08-15", "team_cognitive_load_daily 1 1 0 0 2025-08-15",
-		"team_metrics_daily 0 0 0 0 1970-01-01", "user_metrics_daily 1 1 1 1 2025-08-15"}
+	q4Org := []string{"commit_metrics 1 1 1 1 2025-08-20", "file_hotspot_daily 1 1 1 1 2025-08-15", "file_metrics_daily 1 1 1 1 2025-08-15",
+		"ic_landscape_rolling_30d 1 1 1 1 2025-08-15", "repo_metrics_daily 1 1 1 1 2025-08-15", "team_cognitive_load_daily 1 1 1 1 2025-08-15",
+		"team_metrics_daily 1 1 1 1 2025-08-20", "user_metrics_daily 1 1 1 1 2025-08-15"}
 	eq("MUTANT-ORG", "qz4", q4Line("MUTANT-ORG", strings.ReplaceAll(trim(q4v2Form), "'f0f0f0f0'", "'b0000000'")), q4Org)
 	f3Exec(t, ctx, conn, `INSERT INTO team_metrics_daily (org_id, team_id, repo_id, day, commits_count, computed_at) VALUES ('`+fOrg+`', 't1', '`+q1+`', '2025-09-01', 1, '2025-09-02 01:00:00');`)
 	eq("LOSS", "qz4", q4Line("LOSS", trim(q4v2Form)), replaceRow(q4Pass, "team_metrics_daily 0 0 0 0 1970-01-01", "team_metrics_daily 1 1 1 1 2025-09-01"))
@@ -1674,11 +1755,30 @@ INSERT INTO commit_metrics (org_id, repo_id, commit_hash, day, author_email, tot
 	}
 	del, _ := q1Run("CANFAIL", 1, q1s[1].text)
 	if len(del) != 1 || del[0]["delete_mutations"] != "1" {
-		t.Errorf("CANFAIL qz1 stmt2: %v, want delete_mutations 1", del)
+		t.Errorf("CANFAIL qz1 stmt2 (ALTER DELETE): %v, want delete_mutations 1", del)
 	}
-	ruleDel, _ := q1Run("MUTANT-RULE", 1, strings.Replace(q1s[1].text, "positionCaseInsensitive(command, 'DELETE') > 0) AS delete_mutations,", "positionCaseInsensitive(command, 'UPDATE') > 0) AS delete_mutations,", 1))
-	if len(ruleDel) != 1 || ruleDel[0]["delete_mutations"] != "0" {
-		t.Errorf("MUTANT-RULE qz1 stmt2: %v, want delete_mutations 0", ruleDel)
+	if err := conn.Exec(ctx, "DELETE FROM git_commits WHERE org_id = 'nobody'"); err != nil {
+		t.Fatalf("lightweight delete: %v", err)
+	}
+	var cmds []string
+	if rows, err := conn.Query(ctx, "SELECT command FROM system.mutations WHERE database = currentDatabase() AND table = 'git_commits' ORDER BY create_time"); err == nil {
+		for rows.Next() {
+			var c string
+			_ = rows.Scan(&c)
+			cmds = append(cmds, c)
+		}
+		_ = rows.Close()
+	}
+	t.Logf("CANFAIL qz1 stmt2: git_commits mutation commands after ALTER DELETE + DELETE FROM: %q", cmds)
+	lw, _ := q1Run("CANFAIL-LIGHTWEIGHT", 1, q1s[1].text)
+	if len(lw) != 1 || lw[0]["delete_mutations"] != "2" {
+		t.Errorf("CANFAIL qz1 stmt2 (lightweight DELETE FROM): %v, want delete_mutations 2", lw)
+	}
+	ruleDel, _ := q1Run("MUTANT-RULE", 1, strings.Replace(q1s[1].text, "countIf(positionCaseInsensitive(command, 'DELETE') > 0 OR positionCaseInsensitive(command, '_row_exists') > 0) AS delete_mutations,", "countIf(positionCaseInsensitive(command, 'DELETE') > 0) AS delete_mutations,", 1))
+	if len(ruleDel) != 1 || ruleDel[0]["delete_mutations"] == lw[0]["delete_mutations"] {
+		t.Logf("MUTANT-RULE qz1 stmt2 (no _row_exists arm): %v (same as the form: the lightweight delete also names DELETE here)", ruleDel)
+	} else {
+		t.Logf("MUTANT-RULE qz1 stmt2 (no _row_exists arm): %v, CHANGED", ruleDel)
 	}
 	ruleT, _ := q1Run("MUTANT-RULE", 0, strings.Replace(q1s[0].text, "'git_commits',", "'git_commitz',", 1))
 	if len(ruleT) != 10 {

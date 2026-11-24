@@ -23,21 +23,23 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// Throwaway exec proof of the prod read form FORM-QZ2-13902-2 (CHAOS-13902, Q-z2): not for merge. qz2Form is the form
+// Throwaway exec proof of the prod read form FORM-QZ2-13902-3 (CHAOS-13902, Q-z2): not for merge. qz2Form is the form
 // file with its org prefix (8 hex) replaced by the synthetic "f0f0f0f0"; its sha256 is pinned. The cell runs the text the
 // way pm does (psql -X -A -F'|' -v ON_ERROR_STOP=1 -f -, the form on stdin, PGOPTIONS statement_timeout=30000) against a
 // scratch database at the repo chain head, with a synthetic org f0 and a foreign org b0 in every table the form reads.
-const qz2SHA256 = "e15adb9919df7d193babbb545d7e3a8b8b1234a4399143417135cd422b395d2e"
+const qz2SHA256 = "3f9cc04490e847e8cd0476504eb3784167bd84086ff199cc4dd678fa56dfcb84"
 
-const qz2Form = `-- FORM-QZ2-13902-2: Q-z2 of CARD-13902-recompute-13 (z): which sync window set the raw floor 2025-11-01 of git_commits.
--- Postgres, database devhealth, READ ONLY. Lane l13902 (lead fcdev), 2026-11-24. Prod: NOT EXECUTED. CI exec: OPEN (cell
---   internal/pgmigrate/qz2_13902_read_form_exec_integration_test.go). acp FORM read: OPEN. md: FORM-QZ2-13902-2.md.
--- -2 = FORM-QZ2-13902-1 (fc0a43549fed) + the acp fixes of READ-CARD-13902-10-1 (Q2-P2-1 ORG-1 in G0, Q2-P2-2 no
---   sub-second timestamps, Q2-P2-3 caps + work math in the md, Q2-P3-1 'incidents' in the dataset list) + stmt S0 (catalog
---   sizes, INFO) + BACKFILL as aggregates (no row list).
--- Shape: FORM-TEMPLATE-3 (b): one transaction REPEATABLE READ READ ONLY, G0 catalog gate first, ends ROLLBACK; no SET
+const qz2Form = `-- FORM-QZ2-13902-3: Q-z2 of CARD-13902-recompute-15 (z): which sync window set the raw floor 2025-11-01 of git_commits.
+-- Postgres, database devhealth, READ ONLY. Lane l13902 (lead fcdev), 2026-11-24. Prod: NOT EXECUTED. CI exec: OPEN
+--   (EXEC-PROOF-QZ2-13902-3.md; cell internal/pgmigrate/qz2exec/qz2_13902_read_form_exec_integration_test.go). acp FORM
+--   read: OPEN. md: FORM-QZ2-13902-3.md.
+-- -3 = FORM-QZ2-13902-2 (310d738cb457) + the acp fixes of READ-CARD-13902-14-1 (ea1ec94bf5ba): Q2-P2-4 G0 caps the real
+--   file size (pg_relation_size of heap + TOAST), not the stats (relpages); row caps dropped; reltuples -1 still STOPs.
+--   Q2-P2-5 the run line is the FORM-TEMPLATE-4 PG_REMOTE_TMPL line, in the md. Data statements and ROLLBACK as in -2.
+-- Shape: FORM-TEMPLATE-5 (b): one transaction REPEATABLE READ READ ONLY, G0 catalog gate first, ends ROLLBACK; no SET
 --   (statement_timeout comes from PGOPTIONS); no write. Output = counts, text keys, UTC days, UTC times cut to the second.
--- Run: pm's PG read line: psql -X -A -F'|' -v ON_ERROR_STOP=1 -f -, this file on stdin. No placeholder.
+-- Run: pm only, the FORM-TEMPLATE-4 PG_REMOTE_TMPL line in FORM-QZ2-13902-3.md (psql -X -A -F"|" -v ON_ERROR_STOP=1
+--   -f -, this file on stdin). No placeholder.
 -- Org scope: the org prefix is in 4 places, each a starts_with: G0 (organizations), UNITS, BACKFILL, FIRST-RUN.
 -- Tables + columns: internal/pgmigrate/baseline/head.json at 3207ac6258c0 (chain 0163..0166 alter none of them):
 --   organizations (id uuid), sync_run_units (org_id text, dataset_key varchar, mode varchar, since_at timestamptz,
@@ -47,54 +49,57 @@ const qz2Form = `-- FORM-QZ2-13902-2: Q-z2 of CARD-13902-recompute-13 (z): which
 --   pagerduty). Modes: planner.go:19-21 ('incremental', 'full_resync', 'backfill'). A unit's window start = since_at
 --   (providersync/inprocess.go:431; github_commits_route.go:104-105 uses it as the since parameter).
 -- Question: which unit (dataset, mode, created second) first fetched with a window start at or before 2025-11-01 00:00 UTC,
---   and whether any window started earlier. WANTs + reading: FORM-QZ2-13902-2.md.
--- Cost: starts_with uses no index: UNITS, BACKFILL, FIRST-RUN each read their one table at most once. G0 (catalog + the
---   organizations count) caps every table before any data statement; a STOP text names every size. Work math: the md.
+--   and whether any window started earlier. WANTs + reading: FORM-QZ2-13902-3.md.
+-- Cost: starts_with uses no index: UNITS, BACKFILL, FIRST-RUN each read their one table at most once. G0 (catalog, file
+--   sizes, the organizations count) caps every table before any data statement; a STOP text names every size. Work math:
+--   the md.
 
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
 
 -- G0 catalog gate. WANT cost_gate_ok 0. Else the cast error 'STOP-G0 ...' aborts the transaction and ON_ERROR_STOP ends
 -- the file: STOP (no later statement runs). STOP when: orgs != 1, a table missing, never analyzed (reltuples -1), or a
--- table over its row or byte cap. Each cap literal is in this statement only, once.
+-- table over its byte cap. Bytes = pg_relation_size of the heap + of the TOAST table (the real file sizes; no row is
+-- read), not pg_class stats. reltuples is INFO in the STOP text. Each cap literal is in this statement only, once.
 SELECT 'G0' AS stmt,
        CASE WHEN g.orgs = 1 AND g.tables_found = 4 AND g.min_est_rows >= 0
-                 AND g.org_rows <= 40000 AND g.org_bytes <= 67108864
-                 AND g.units_rows <= 6000000 AND g.units_bytes <= 1610612736
-                 AND g.runs_rows <= 3000000 AND g.runs_bytes <= 536870912
-                 AND g.backfill_rows <= 250000 AND g.backfill_bytes <= 134217728
+                 AND g.org_bytes <= 67108864
+                 AND g.units_bytes <= 1610612736
+                 AND g.runs_bytes <= 536870912
+                 AND g.backfill_bytes <= 134217728
             THEN 0
-            ELSE concat('STOP-G0 orgs=', g.orgs, ' tables=', g.tables_found, ' min_rows=', g.min_est_rows,
-                        ' organizations=', g.org_rows, '/', g.org_bytes, ' units=', g.units_rows, '/', g.units_bytes,
-                        ' runs=', g.runs_rows, '/', g.runs_bytes,
-                        ' backfill=', g.backfill_rows, '/', g.backfill_bytes)::int
+            ELSE concat('STOP-G0 orgs=', g.orgs, ' tables=', g.tables_found, ' min_est_rows=', g.min_est_rows,
+                        ' organizations_bytes=', g.org_bytes, ' units_bytes=', g.units_bytes,
+                        ' runs_bytes=', g.runs_bytes, ' backfill_bytes=', g.backfill_bytes,
+                        ' INFO organizations_est_rows=', g.org_rows, ' units_est_rows=', g.units_rows,
+                        ' runs_est_rows=', g.runs_rows, ' backfill_est_rows=', g.backfill_rows)::int
        END AS cost_gate_ok
 FROM (SELECT (SELECT count(*) FROM public.organizations AS o WHERE starts_with(o.id::text, 'f0f0f0f0')) AS orgs,
              count(*) AS tables_found,
              min(rel.est_rows) AS min_est_rows,
+             COALESCE(max(rel.rel_bytes) FILTER (WHERE rel.rel_name = 'organizations'), -1) AS org_bytes,
+             COALESCE(max(rel.rel_bytes) FILTER (WHERE rel.rel_name = 'sync_run_units'), -1) AS units_bytes,
+             COALESCE(max(rel.rel_bytes) FILTER (WHERE rel.rel_name = 'sync_runs'), -1) AS runs_bytes,
+             COALESCE(max(rel.rel_bytes) FILTER (WHERE rel.rel_name = 'backfill_jobs'), -1) AS backfill_bytes,
              COALESCE(max(rel.est_rows) FILTER (WHERE rel.rel_name = 'organizations'), -1) AS org_rows,
-             COALESCE(max(rel.est_bytes) FILTER (WHERE rel.rel_name = 'organizations'), -1) AS org_bytes,
              COALESCE(max(rel.est_rows) FILTER (WHERE rel.rel_name = 'sync_run_units'), -1) AS units_rows,
-             COALESCE(max(rel.est_bytes) FILTER (WHERE rel.rel_name = 'sync_run_units'), -1) AS units_bytes,
              COALESCE(max(rel.est_rows) FILTER (WHERE rel.rel_name = 'sync_runs'), -1) AS runs_rows,
-             COALESCE(max(rel.est_bytes) FILTER (WHERE rel.rel_name = 'sync_runs'), -1) AS runs_bytes,
-             COALESCE(max(rel.est_rows) FILTER (WHERE rel.rel_name = 'backfill_jobs'), -1) AS backfill_rows,
-             COALESCE(max(rel.est_bytes) FILTER (WHERE rel.rel_name = 'backfill_jobs'), -1) AS backfill_bytes
+             COALESCE(max(rel.est_rows) FILTER (WHERE rel.rel_name = 'backfill_jobs'), -1) AS backfill_rows
       FROM (SELECT c.relname AS rel_name, c.reltuples::bigint AS est_rows,
-                   (c.relpages::bigint + COALESCE(tc.relpages::bigint, 0)) * current_setting('block_size')::bigint AS est_bytes
+                   pg_relation_size(c.oid) + CASE WHEN c.reltoastrelid = 0 THEN 0 ELSE pg_relation_size(c.reltoastrelid) END AS rel_bytes
             FROM pg_catalog.pg_class AS c
               JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
-              LEFT JOIN pg_catalog.pg_class AS tc ON tc.oid = c.reltoastrelid
             WHERE n.nspname = 'public' AND c.relkind = 'r'
               AND c.relname IN ('organizations', 'sync_run_units', 'sync_runs', 'backfill_jobs')) AS rel) AS g;
 
--- S0 (INFO, catalog only): the size of each read table, one row per table: estimated rows (reltuples), heap pages, TOAST
--- pages, est_bytes = (heap + TOAST pages) x block_size (the value G0 caps). The md's work math reads these on the first run.
-SELECT 'S0' AS stmt, c.relname AS table_name, c.reltuples::bigint AS est_rows, c.relpages AS heap_pages,
-       COALESCE(tc.relpages, 0) AS toast_pages,
-       (c.relpages::bigint + COALESCE(tc.relpages::bigint, 0)) * current_setting('block_size')::bigint AS est_bytes
+-- S0 (INFO, catalog + file sizes only): one row per table: est_rows = reltuples (stats, INFO), heap_bytes =
+-- pg_relation_size(heap), toast_bytes = pg_relation_size(TOAST) (0 if none), total_bytes = heap + TOAST (the value G0
+-- caps). The md's work math reads these on the first run.
+SELECT 'S0' AS stmt, c.relname AS table_name, c.reltuples::bigint AS est_rows,
+       pg_relation_size(c.oid) AS heap_bytes,
+       CASE WHEN c.reltoastrelid = 0 THEN 0 ELSE pg_relation_size(c.reltoastrelid) END AS toast_bytes,
+       pg_relation_size(c.oid) + CASE WHEN c.reltoastrelid = 0 THEN 0 ELSE pg_relation_size(c.reltoastrelid) END AS total_bytes
 FROM pg_catalog.pg_class AS c
   JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
-  LEFT JOIN pg_catalog.pg_class AS tc ON tc.oid = c.reltoastrelid
 WHERE n.nspname = 'public' AND c.relkind = 'r'
   AND c.relname IN ('backfill_jobs', 'organizations', 'sync_runs', 'sync_run_units')
 ORDER BY c.relname COLLATE "C";
@@ -301,13 +306,79 @@ const (
 
 func qz2G0Pass() []string { return qz2Block("stmt|cost_gate_ok", "G0|0") }
 
+const qz2S0Header = "stmt|table_name|est_rows|heap_bytes|toast_bytes|total_bytes"
+
+// qz2S0 is the S0 block of the PASS path (after the fixture and ANALYZE): every read table is one 8192-byte heap page
+// (ANALYZE sets relpages to the real block count; -2 CI saw relpages 1 on each) and an empty TOAST file (no fixture value
+// is large enough to be toasted). The PASS cell checks these against qz2S0FromDB.
 func qz2S0() []string {
-	return qz2Block("stmt|table_name|est_rows|heap_pages|toast_pages|est_bytes",
-		"S0|backfill_jobs|4|1|0|8192",
-		"S0|organizations|2|1|0|8192",
-		"S0|sync_run_units|10|1|0|8192",
-		"S0|sync_runs|3|1|0|8192")
+	return qz2Block(qz2S0Header,
+		"S0|backfill_jobs|4|8192|0|8192",
+		"S0|organizations|2|8192|0|8192",
+		"S0|sync_run_units|10|8192|0|8192",
+		"S0|sync_runs|3|8192|0|8192")
 }
+
+// qz2S0FromDB reads the S0 values from the database now: reltuples and the pg_relation_size of heap and TOAST.
+func qz2S0FromDB(t *testing.T, ctx context.Context, conn *pgx.Conn) []string {
+	t.Helper()
+	rows, err := conn.Query(ctx, `SELECT c.relname, c.reltuples::bigint, pg_relation_size(c.oid),
+		CASE WHEN c.reltoastrelid = 0 THEN 0 ELSE pg_relation_size(c.reltoastrelid) END
+		FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = 'public' AND c.relkind = 'r'
+		  AND c.relname IN ('organizations', 'sync_run_units', 'sync_runs', 'backfill_jobs')
+		ORDER BY c.relname COLLATE "C"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		var estRows, heap, toast int64
+		if err := rows.Scan(&name, &estRows, &heap, &toast); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, fmt.Sprintf("S0|%s|%d|%d|%d|%d", name, estRows, heap, toast, heap+toast))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return qz2Block(qz2S0Header, out...)
+}
+
+// qz2UnitsSizes: the sync_run_units size on the -2 stats basis ((relpages + TOAST relpages) x block_size), on the -3
+// file basis (pg_relation_size heap + TOAST), and its reltuples.
+func qz2UnitsSizes(t *testing.T, ctx context.Context, conn *pgx.Conn) (statsBytes, fileBytes, estRows int64) {
+	t.Helper()
+	if err := conn.QueryRow(ctx, `SELECT (c.relpages::bigint + COALESCE(tc.relpages::bigint, 0)) * current_setting('block_size')::bigint,
+		pg_relation_size(c.oid) + CASE WHEN c.reltoastrelid = 0 THEN 0 ELSE pg_relation_size(c.reltoastrelid) END,
+		c.reltuples::bigint
+		FROM pg_class c LEFT JOIN pg_class tc ON tc.oid = c.reltoastrelid
+		WHERE c.oid = 'public.sync_run_units'::regclass`).Scan(&statsBytes, &fileBytes, &estRows); err != nil {
+		t.Fatal(err)
+	}
+	return statsBytes, fileBytes, estRows
+}
+
+// qz2BytesExpr is G0's per-table size (the -3 file basis); qz2StatsExpr is the -2 stats basis in its place (the mutant
+// that shows the basis matters).
+const (
+	qz2BytesExpr = "pg_relation_size(c.oid) + CASE WHEN c.reltoastrelid = 0 THEN 0 ELSE pg_relation_size(c.reltoastrelid) END AS rel_bytes"
+	qz2StatsExpr = "(c.relpages::bigint + COALESCE((SELECT t.relpages::bigint FROM pg_catalog.pg_class AS t WHERE t.oid = c.reltoastrelid), 0)) * current_setting('block_size')::bigint AS rel_bytes"
+)
+
+// qz2Growth adds 2000 synthetic f0 units of dataset 'files' (not in the form's list, so UNITS does not change) to grow
+// sync_run_units far past its one analyzed page.
+const qz2Growth = `
+INSERT INTO sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode,
+    since_at, before_at, status, attempts, created_at, updated_at)
+SELECT ('41000000-0000-4000-8000-' || lpad(g::text, 12, '0'))::uuid, 'f0f0f0f0-0000-4000-8000-000000000000',
+       '30000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-0000000000f0', '20000000-0000-4000-8000-0000000000f0',
+       'github', 'files', 'heavy', 'incremental', '2025-10-01 00:00:00+00', '2025-12-01 06:00:00+00', 'success', 1,
+       '2025-12-01 06:00:04+00', now()
+FROM generate_series(1, 2000) AS g;
+`
 
 func qz2UnitsPass() []string {
 	return qz2Block(qz2UnitsHeader,
@@ -328,10 +399,15 @@ func qz2BackfillPass() []string {
 
 func qz2RunsPass() []string { return qz2Block(qz2RunsHeader, "FIRST-RUN|2|2025-12-01 06:00:00") }
 
-// qz2Transcript is the whole stdout of a run that passes G0.
+// qz2Transcript is the whole stdout of a run that passes G0 on the PASS-path sizes.
 func qz2Transcript(units, backfill, runs []string) []string {
+	return qz2TranscriptS0(qz2S0(), units, backfill, runs)
+}
+
+// qz2TranscriptS0 is the whole stdout of a run that passes G0, with the given S0 block.
+func qz2TranscriptS0(s0, units, backfill, runs []string) []string {
 	out := []string{"BEGIN"}
-	for _, block := range [][]string{qz2G0Pass(), qz2S0(), units, backfill, runs} {
+	for _, block := range [][]string{qz2G0Pass(), s0, units, backfill, runs} {
 		out = append(out, block...)
 	}
 	return append(out, "ROLLBACK")
@@ -443,7 +519,8 @@ func TestQZ213902ReadFormExec(t *testing.T) {
 		t.Fatalf("fixture: %v", err)
 	}
 
-	// Before ANALYZE: every read table is never analyzed (reltuples -1), so G0 must STOP.
+	// Before ANALYZE: every read table is never analyzed (reltuples -1), so G0 must STOP (acp READ-CARD-13902-14-1 Q2-P2-4:
+	// keep reltuples -1 = STOP). The STOP text still prints the real file size (one 8192-byte page), not a stats 0.
 	var neverAnalyzed int
 	if err := conn.QueryRow(ctx, `SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.reltuples < 0
@@ -454,7 +531,8 @@ func TestQZ213902ReadFormExec(t *testing.T) {
 		t.Fatalf("before ANALYZE %d of the 4 read tables have reltuples -1, want 4 (the fire cell needs a never-analyzed table)", neverAnalyzed)
 	}
 	t.Run("G0 fires on reltuples -1", func(t *testing.T) {
-		qz2WantStop(t, "fire-reltuples", qz2Psql(t, psql, uri, "fire-reltuples", qz2Form), "min_rows=-1")
+		qz2WantStop(t, "fire-reltuples", qz2Psql(t, psql, uri, "fire-reltuples", qz2Form), "min_est_rows=-1", "units_bytes=8192",
+			"units_est_rows=-1")
 	})
 
 	if _, err := conn.Exec(ctx, "ANALYZE "+qz2Tables); err != nil {
@@ -462,6 +540,9 @@ func TestQZ213902ReadFormExec(t *testing.T) {
 	}
 
 	t.Run("PASS", func(t *testing.T) {
+		if got, want := qz2S0FromDB(t, ctx, conn), qz2S0(); !reflect.DeepEqual(got, want) {
+			t.Fatalf("S0 sizes in the database\n%s\nwant (the PASS block)\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+		}
 		qz2WantLines(t, "pass", qz2Psql(t, psql, uri, "pass", qz2Form), qz2Transcript(qz2UnitsPass(), qz2BackfillPass(), qz2RunsPass()))
 	})
 
@@ -530,23 +611,20 @@ func TestQZ213902ReadFormExec(t *testing.T) {
 	t.Run("G0 fires on a missing table", func(t *testing.T) {
 		form := qz2Mutate(t, qz2Form, "('organizations', 'sync_run_units', 'sync_runs', 'backfill_jobs')",
 			"('organizations', 'sync_run_units', 'sync_runs', 'backfill_jobz')")
-		qz2WantStop(t, "fire-table", qz2Psql(t, psql, uri, "fire-table", form), "tables=3", "backfill=-1/-1")
+		qz2WantStop(t, "fire-table", qz2Psql(t, psql, uri, "fire-table", form), "tables=3", "backfill_bytes=-1",
+			"backfill_est_rows=-1")
 	})
-	for _, limit := range []struct{ name, literal string }{
-		{"organizations rows", "<= 40000 "},
-		{"organizations bytes", "<= 67108864\n"},
-		{"units rows", "<= 6000000 "},
-		{"units bytes", "<= 1610612736\n"},
-		{"runs rows", "<= 3000000 "},
-		{"runs bytes", "<= 536870912\n"},
-		{"backfill rows", "<= 250000 "},
-		{"backfill bytes", "<= 134217728\n"},
+	for _, limit := range []struct{ name, literal, size string }{
+		{"organizations bytes", "<= 67108864\n", "organizations_bytes=8192"},
+		{"units bytes", "<= 1610612736\n", "units_bytes=8192"},
+		{"runs bytes", "<= 536870912\n", "runs_bytes=8192"},
+		{"backfill bytes", "<= 134217728\n", "backfill_bytes=8192"},
 	} {
 		t.Run("G0 fires on cap "+limit.name, func(t *testing.T) {
 			lowered := strings.Replace(limit.literal, strings.TrimSpace(strings.TrimPrefix(limit.literal, "<= ")), "0", 1)
 			form := qz2Mutate(t, qz2Form, limit.literal, lowered)
 			name := "fire-cap-" + strings.ReplaceAll(limit.name, " ", "-")
-			qz2WantStop(t, name, qz2Psql(t, psql, uri, name, form), "orgs=1 tables=4")
+			qz2WantStop(t, name, qz2Psql(t, psql, uri, name, form), "orgs=1 tables=4 min_est_rows=2 ", limit.size)
 		})
 	}
 	t.Run("G0 fires on orgs 2", func(t *testing.T) {
@@ -575,6 +653,38 @@ func TestQZ213902ReadFormExec(t *testing.T) {
 		want := append([]string{"BEGIN"}, qz2G0Pass()...)
 		if !reflect.DeepEqual(got.lines, want) {
 			t.Fatalf("write mutant: stdout %q, want %q (G0 then nothing)", got.lines, want)
+		}
+	})
+
+	// LAST cell (it adds rows; no cell after it reads the form): acp READ-CARD-13902-14-1 Q2-P2-4. sync_run_units grows
+	// past its ANALYZEd size with no new ANALYZE (autovacuum off on it, so no autoanalyze moves relpages / reltuples in
+	// the cell). Its cap is set between the two sizes: the -3 file basis fires, the -2 stats basis does not.
+	t.Run("G0 fires on real bytes after growth", func(t *testing.T) {
+		const capBytes = 65536
+		if _, err := conn.Exec(ctx, "ALTER TABLE sync_run_units SET (autovacuum_enabled = false)"); err != nil {
+			t.Fatalf("autovacuum off: %v", err)
+		}
+		if _, err := conn.Exec(ctx, qz2Growth); err != nil {
+			t.Fatalf("growth: %v", err)
+		}
+		statsBytes, fileBytes, estRows := qz2UnitsSizes(t, ctx, conn)
+		t.Logf("grown sync_run_units: stats basis %d bytes, file basis %d bytes, reltuples %d, cap %d", statsBytes, fileBytes,
+			estRows, capBytes)
+		if !(statsBytes <= capBytes && capBytes < fileBytes) || estRows != 10 {
+			t.Fatalf("grown sync_run_units: stats %d, file %d, reltuples %d; want stats <= %d < file and reltuples 10 (no new ANALYZE)",
+				statsBytes, fileBytes, estRows, capBytes)
+		}
+		form := qz2Mutate(t, qz2Form, "<= 1610612736\n", fmt.Sprintf("<= %d\n", capBytes))
+		qz2WantStop(t, "grown", qz2Psql(t, psql, uri, "grown", form), "orgs=1 tables=4 min_est_rows=2 ",
+			fmt.Sprintf(" units_bytes=%d ", fileBytes), "units_est_rows=10 ")
+
+		stats := qz2Mutate(t, form, qz2BytesExpr, qz2StatsExpr)
+		want := qz2TranscriptS0(qz2S0FromDB(t, ctx, conn), qz2UnitsPass(), qz2BackfillPass(), qz2RunsPass())
+		qz2WantLines(t, "grown-stats-basis", qz2Psql(t, psql, uri, "grown-stats-basis", stats), want)
+
+		if s, f, r := qz2UnitsSizes(t, ctx, conn); s != statsBytes || f != fileBytes || r != estRows {
+			t.Fatalf("sync_run_units sizes moved during the cell: stats %d->%d, file %d->%d, reltuples %d->%d", statsBytes, s,
+				fileBytes, f, estRows, r)
 		}
 	})
 

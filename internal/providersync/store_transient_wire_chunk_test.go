@@ -1,7 +1,6 @@
 package providersync
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -16,7 +15,7 @@ type wireChunkRun struct {
 	refunded bool
 }
 
-// runWireChunkWrite runs one chunk-continuation write ("continuation" or "refund")
+// runWireChunkWrite swaps the process default logger, so its callers must not run in parallel. It runs one chunk-continuation write ("continuation" or "refund")
 // against a storeWire. The wire server answers a unit UPDATE sent outside BEGIN
 // through commitPoint, so a "commit" fault of class 08 applies the write and then
 // drops the connection: a reply lost after the commit.
@@ -33,7 +32,7 @@ func runWireChunkWrite(t *testing.T, w *storeWire, write string) wireChunkRun {
 	defer repository.Close()
 	repository.storeRetrySleep = func(context.Context, int) error { return nil }
 	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	slog.SetDefault(slog.New(slog.NewTextHandler(&lockedLogBuffer{}, nil)))
 	defer slog.SetDefault(previous)
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	availableAt := now.Add(5 * time.Second)
@@ -52,7 +51,6 @@ func runWireChunkWrite(t *testing.T, w *storeWire, write string) wireChunkRun {
 // C1: the continuation committed and its reply was lost: the write is read back
 // and reported as done, not run a second time.
 func TestChunkContinuationWithALostReplyAfterTheCommitIsReadBack(t *testing.T) {
-	t.Parallel()
 	w := &storeWire{faults: []*wireFault{{step: "commit", code: "08006", times: 1}}}
 	run := runWireChunkWrite(t, w, "continuation")
 	if run.err != nil || w.updates != 1 || w.commits != 1 || w.reads != 1 {
@@ -63,7 +61,6 @@ func TestChunkContinuationWithALostReplyAfterTheCommitIsReadBack(t *testing.T) {
 
 // C2: the same for the progress refund.
 func TestProgressRefundWithALostReplyAfterTheCommitIsReadBack(t *testing.T) {
-	t.Parallel()
 	w := &storeWire{faults: []*wireFault{{step: "commit", code: "08006", times: 1}}}
 	run := runWireChunkWrite(t, w, "refund")
 	if run.err != nil || !run.refunded || w.updates != 1 || w.commits != 1 || w.reads != 1 {
@@ -76,23 +73,19 @@ func TestProgressRefundWithALostReplyAfterTheCommitIsReadBack(t *testing.T) {
 // continuation is ErrLeaseLost and the refund is (false, nil). A lost reply when
 // another owner holds the unit is read back as lease lost.
 func TestChunkContinuationWritesThatDidNotLandKeepTheirAnswers(t *testing.T) {
-	t.Parallel()
 	t.Run("no row, continuation", func(t *testing.T) {
-		t.Parallel()
 		w := &storeWire{done: true}
 		if run := runWireChunkWrite(t, w, "continuation"); !errors.Is(run.err, ErrLeaseLost) {
 			t.Fatalf("err=%v, want ErrLeaseLost", run.err)
 		}
 	})
 	t.Run("no row, refund", func(t *testing.T) {
-		t.Parallel()
 		w := &storeWire{done: true}
 		if run := runWireChunkWrite(t, w, "refund"); run.err != nil || run.refunded {
 			t.Fatalf("refunded=%v err=%v, want false, nil", run.refunded, run.err)
 		}
 	})
 	t.Run("lost reply, another owner holds the unit", func(t *testing.T) {
-		t.Parallel()
 		w := &storeWire{firstCommitState: "other", faults: []*wireFault{{step: "commit", code: "08006", times: 1}}}
 		if run := runWireChunkWrite(t, w, "continuation"); !errors.Is(run.err, ErrLeaseLost) {
 			t.Fatalf("err=%v, want ErrLeaseLost", run.err)
@@ -103,7 +96,6 @@ func TestChunkContinuationWritesThatDidNotLandKeepTheirAnswers(t *testing.T) {
 // C6: a deadlock refused the write before COMMIT: nothing applied, the write is
 // retried in place and lands.
 func TestChunkContinuationRetriesADeadlockInPlace(t *testing.T) {
-	t.Parallel()
 	w := &storeWire{faults: []*wireFault{{step: "commit", code: "40P01", times: 1}}}
 	run := runWireChunkWrite(t, w, "continuation")
 	if run.err != nil || w.updates != 2 || w.commits != 1 {

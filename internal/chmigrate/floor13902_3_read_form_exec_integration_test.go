@@ -787,7 +787,7 @@ func (sp f3Spec) gate() string {
 	}
 	return fmt.Sprintf("WITH (SELECT %d * intDiv(5 * (sum(marks%s) * 8192 + count()) + 3, 4) + %d * (2 * count() + 1) FROM system.parts WHERE active AND database = currentDatabase()\n"+
 		"      AND table IN ('%s')) AS read_rows_cap,\n"+
-		"  (SELECT throwIf(read_rows_cap >= 20000000, 'STOP-COST-GATE')) AS cost_gate\n", sp.f, 1+sp.s, weight, strings.Join(names, "', '"))
+		"  (SELECT throwIf(read_rows_cap >= 20000000, 'STOP-COST-GATE')) AS cost_gate\n", sp.f, weight, 1+sp.s, strings.Join(names, "', '"))
 }
 
 func (sp f3Spec) derive(live map[string]floor2Parts) (uint64, uint64) {
@@ -1449,7 +1449,10 @@ INSERT INTO commit_metrics (org_id, repo_id, commit_hash, day, author_email, tot
 		}
 		low := strings.Replace(st.text, "> 100000", "> -1", 1)
 		comment := fmt.Sprintf("qz1-fire-%d-%d", i, time.Now().UnixNano())
-		_, ferr := conn.Query(clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"log_comment": comment})), low)
+		frows, ferr := conn.Query(clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"log_comment": comment})), low)
+		if ferr == nil {
+			_ = frows.Close()
+		}
 		if ferr == nil || !strings.Contains(ferr.Error(), "STOP-COST-GATE") || !strings.Contains(ferr.Error(), "395") {
 			t.Errorf("FIRE qz1 stmt%d ('> 100000' -> '> -1'): err = %v, want code 395 STOP-COST-GATE", i+1, ferr)
 			continue

@@ -183,8 +183,13 @@ func WriteTx(ctx context.Context, tx pgx.Tx, lock SelectionLock, org string, con
 		return Result{}, err
 	}
 	var configText *string
-	if err := tx.QueryRow(ctx, `SELECT config::text FROM integrations WHERE org_id = $1 AND id = $2 FOR NO KEY UPDATE`,
-		org, *integrationID).Scan(&configText); err != nil {
+	err = tx.QueryRow(ctx, `SELECT config::text FROM integrations WHERE org_id = $1 AND id = $2 FOR NO KEY UPDATE`,
+		org, *integrationID).Scan(&configText)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// An integration_id into another org (a data anomaly no API path makes) reads as no integration of this org.
+		return Result{}, refusal(-1, "the sync configuration has no integration")
+	}
+	if err != nil {
 		return Result{}, fmt.Errorf("read integration: %w", err)
 	}
 	var lockedIntegration *uuid.UUID

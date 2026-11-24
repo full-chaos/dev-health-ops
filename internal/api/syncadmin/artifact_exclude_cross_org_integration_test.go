@@ -90,16 +90,18 @@ func TestGitHubRuntimeOptionsLockSkipsAnotherOrgsIntegration(t *testing.T) {
 	if got.err != nil {
 		t.Fatalf("PATCH: %v", got.err)
 	}
-	t.Logf("PATCH answered %d", got.status)
+	if got.status != 200 {
+		t.Errorf("the PATCH without the list answered %d %s, want main's 200 (the not-scoped path)", got.status, got.body)
+	}
 	if text := v.integrationConfigText(other); !strings.Contains(text, `"ci-other-"`) {
 		t.Errorf("the other org's integration config changed: %s", text)
 	}
 }
 
 // A configuration pointed at another org's integration never shows or writes that integration's list: GET shows no
-// ci_artifact_exclude_prefixes, a PATCH with the key answers today's 500 (artifactexclude.WriteTx reads the integration
-// by org and id and finds no row; not a Refusal, so h.fail answers Internal Server Error) and writes nothing, and the
-// other org's integration config is byte-equal before and after.
+// ci_artifact_exclude_prefixes; a PATCH with the key is the named 422 refusal of a configuration with no integration
+// (artifactexclude.WriteTx reads the integration by org and id and finds none of this org), never a 500, and writes
+// nothing; the other org's integration config is byte-equal before and after.
 func TestArtifactExcludeNeverCrossesIntoAnotherOrgsIntegration(t *testing.T) {
 	v := startCascadeVenue(t, true)
 	one, other := v.seedCrossOrgIntegration()
@@ -119,8 +121,9 @@ func TestArtifactExcludeNeverCrossesIntoAnotherOrgsIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	status, body := v.call("PATCH", "/api/v1/admin/sync-configs/"+one.config.String(), `{"sync_options":{"ci_artifact_exclude_prefixes":["ci-mine-"]}}`)
-	if status != 500 || !strings.Contains(body, "Internal Server Error") || strings.Contains(body, "ci-other-") || strings.Contains(body, "ci-mine-") {
-		t.Errorf("PATCH with the key: %d %s, want today's 500 Internal Server Error naming no list", status, body)
+	if status != 422 || !strings.Contains(body, `"field"`) || !strings.Contains(body, "ci_artifact_exclude_prefixes") ||
+		!strings.Contains(body, "the sync configuration has no integration") || strings.Contains(body, "ci-other-") || strings.Contains(body, "ci-mine-") {
+		t.Errorf("PATCH with the key: %d %s, want the 422 refusal naming the field and \"the sync configuration has no integration\", no list", status, body)
 	}
 	if after := v.integrationConfigText(other); after != before {
 		t.Errorf("the other org's integration config changed: %s -> %s", before, after)

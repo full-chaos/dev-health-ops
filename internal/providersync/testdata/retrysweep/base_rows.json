@@ -371,18 +371,18 @@
   "watermark": false
  },
  "github/deployments|req04|429": {
-  "deadline": false,
-  "effects": 1,
-  "ok": true,
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
   "path": "GET /repos/acme/api/commits/abc/pulls",
-  "watermark": true
+  "watermark": false
  },
  "github/deployments|req04|503": {
-  "deadline": false,
-  "effects": 1,
-  "ok": true,
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
   "path": "GET /repos/acme/api/commits/abc/pulls",
-  "watermark": true
+  "watermark": false
  },
  "github/deployments|req05|429": {
   "deadline": false,

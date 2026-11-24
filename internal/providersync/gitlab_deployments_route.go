@@ -150,9 +150,12 @@ func (handler GitLabDeploymentsRouteHandler) Collect(
 			return CompleteRouteBatch{}, controlErr
 		}
 		if mergeRequestErr != nil {
-			// Python permits a failed MR lookup for one deployed SHA to leave
-			// only that deployment unattributed in this batch; the effects
-			// sink carries a stored attribution forward over it.
+			// A lookup that failed (rate limited, 5xx, transport) stops the unit, so the window is read again
+			// (Python kept the deployment unattributed and acknowledged the window). An answered 4xx still leaves only
+			// that deployment unattributed in this batch; the effects sink carries a stored attribution forward over it.
+			if verdict, _ := classifyLookupFailure(mergeRequestErr, nil); verdict == lookupFails {
+				return CompleteRouteBatch{}, mergeRequestErr
+			}
 			slog.Warn("gitlab_deployments.merge_request_lookup_failed", logging.ProviderIDAttr("deployment_id", stringValue(deployment["id"])), "cause", mergeRequestErr.Error())
 			mergeRequestLookupFailed[stringValue(deployment["id"])] = true
 			continue

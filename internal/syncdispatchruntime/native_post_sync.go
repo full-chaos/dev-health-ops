@@ -100,8 +100,13 @@ type NativePostSyncService struct {
 	teamRepoOwnershipDerivationObserver jobruntime.TeamRepoOwnershipDerivationObserver
 	touched                             TouchedDaysStore
 	touchedWriter                       TouchedDayPostSyncWriter
-	touchedObserver                     jobruntime.PostSyncTouchedDaysObserver
-	now                                 func() time.Time
+	testopsWindow                       TouchedDaysStore
+	testopsWindowWriter                 TouchedDayPostSyncWriter
+	// testopsWindowBudget replaces PostSyncTestopsWindowRepoDaysPerFanout when
+	// above zero (SetTestopsWindowRepoDayCap).
+	testopsWindowBudget int
+	touchedObserver     jobruntime.PostSyncTouchedDaysObserver
+	now                 func() time.Time
 }
 
 // SetFanoutObserver wires the optional CHAOS-4263 fanout-outcome telemetry
@@ -191,12 +196,20 @@ func (service *NativePostSyncService) fanout(ctx context.Context, args PostSyncA
 	var (
 		touchedTake   *touchedDaysTake
 		touchedResult touchedDaysResult
+		windowTake    *touchedDaysTake
+		windowResult  touchedDaysResult
 	)
 	if service.touched != nil {
 		touchedTake, err = service.takeTouchedDays(ctx, args, now)
 		if err != nil {
 			service.observeTouchedDaysFailure(ctx, args, "record", jobruntime.PostSyncTouchedDaysRecordFailed)
 			return err
+		}
+		// The keys of the testops window lane are recorded already: a failed
+		// read leaves them pending for the drain and does not fail the fan-out.
+		if windowTake, err = service.takeTestopsWindowDays(ctx, touchedTake); err != nil {
+			service.observeTouchedDaysFailure(ctx, args, "testops_window_take", jobruntime.PostSyncTouchedDaysTestopsWindowTakeFailed)
+			windowTake, err = nil, nil
 		}
 	}
 	state.step = stageBegin
@@ -309,7 +322,13 @@ func (service *NativePostSyncService) fanout(ctx context.Context, args PostSyncA
 		outcome = jobruntime.PostSyncFanoutOutcomePublished
 		if touchedTake != nil {
 			state.step = stageTouchedStart
-			if err = service.startTouchedDaysTx(ctx, tx, *plan, touchedTake, &touchedResult); err != nil {
+			if err = service.startTouchedDaysTx(ctx, tx, service.touchedWriter, *plan, touchedTake, &touchedResult); err != nil {
+				return err
+			}
+		}
+		if windowTake != nil {
+			state.step = stageTouchedStart
+			if err = service.startTouchedDaysTx(ctx, tx, service.testopsWindowWriter, *plan, windowTake, &windowResult); err != nil {
 				return err
 			}
 		}
@@ -377,6 +396,7 @@ func (service *NativePostSyncService) fanout(ctx context.Context, args PostSyncA
 	afterCommit.Run()
 	if touchedTake != nil {
 		service.finishTouchedDays(ctx, args, touchedTake, touchedResult)
+		service.finishTestopsWindowDays(ctx, args, touchedTake.testopsWindow, windowTake, windowResult)
 	}
 	return nil
 }

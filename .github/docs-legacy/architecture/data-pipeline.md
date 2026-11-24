@@ -841,6 +841,67 @@ the age is a lower bound.
   floor trigger: its pending days wait for the end of a daily run.
 - A pod of an older build runs no pass. Its fan-out still takes 31 days.
 
+## Testops window lane of the touched days
+
+The recurrence of a testops day X reads the history days [X-29, X)
+(`testops_test` failure recurrence, and `testops_risk`, which scores the same
+record and the suite history). A re-sync that retires a report slot on day D
+writes retraction rows (`test_suite_results.retracted = 1`) on D. The touched
+record of the run names D, so D is computed again. The days D+1..D+29 read D
+in their history, so they are marked in a lane of their own.
+
+- Record: `RecordTouchedTests` also appends one `touched_testops_window`
+  event for each of the 29 days after every suite day of each run that had a
+  retraction row written in the sync run, for the repository of that run
+  only, up to the day of the record. Every key is written; the record logs a
+  warning (`post_sync_fanout.testops_window_keys_over_bound`) above 29,000
+  keys.
+- Lane: the keys use the kinds `touched_testops_window` and
+  `dispatched_testops_window` of `daily_metrics_touched_days`. Every reader
+  of the record reads the kinds of its own lane only.
+- Runs: a run of the lane has the generation `tw-sync:<sync run>` (post-sync
+  fan-out) or `tw-drain:<pass>` (drain). Its partitions compute
+  `testops_test` and `testops_risk` only, its zero-row check judges those
+  families only, and its finalize writes nothing (no stale-key retraction, no
+  finalize family, no activity refresh). The benchmarking of the days it
+  computes again is not computed again.
+- Ownership: every key of the lane is started by a run of the lane. The
+  window writer has no full-organization days, so an ordinary run of the
+  same day never marks a window key it could fail to compute.
+- Cap: a fan-out, and a pass of the drain, starts runs for at most 899
+  (31 x 29) keys of the lane, newest day first. A day is split to fit the cap
+  and the repository limit of one run, never skipped whole; a due retry ranks
+  by its day. The keys of the eligible days a cap leaves stay pending. After
+  the runs commit, one warning with counts only
+  (`post_sync_fanout.testops_window_cut`,
+  `touched_days_drain.testops_window_keys_deferred`) and the counter event
+  `testops_window_keys_deferred` report them. A day skipped after failed runs
+  is not counted.
+- Drain: the drain of the lane runs after the drain of the touched days for
+  the same trigger, with its own advisory locks (8848, 8849), its own skip of
+  failed days and its own state of the runs (it counts `tw-` runs only; the
+  touched-day lane counts every other run, so a run of one lane never stops a
+  pass of the other), the same chain stop on a missing mark and the same
+  return of the keys of a run that ended without a result. It sets no
+  pending-age gauge.
+- Limits: the record reads the retraction rows of the organization written
+  since the start of the sync run (less the clock margin), not the rows of
+  this sync only. A retraction of an earlier or a concurrent sync can be
+  marked again: one more correct recompute, bounded by the cap of each
+  fan-out. A tests unit that writes a retraction and then fails does not
+  advance its watermark, so the next sync of the source walks the run again,
+  writes the retraction rows again and records them. A nightly pass that
+  reads after a batch ended and before its mark landed can start that batch
+  again: one more correct recompute of at most one capped batch.
+
+Counters: `dev_health_post_sync_touched_days_total{event}` with
+`testops_window_keys_recorded`, `testops_window_days_dispatched`,
+`testops_window_keys_deferred`, `testops_window_over_bound`,
+`testops_window_take_failed`, `testops_window_mark_failed`;
+`dev_health_touched_days_drain_total{event}` with the `testops_window_` events
+of the drain. Log lines: `post_sync_fanout.testops_window_days` and the drain
+lines with a pass label that starts with `tw_`.
+
 ## Storage Schema Highlights
 
 ### ClickHouse Tables

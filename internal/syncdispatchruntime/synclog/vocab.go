@@ -67,6 +67,10 @@ var (
 	MsgPostSyncTouchedDays                               = Msg{"post_sync_fanout.touched_days"}
 	MsgPostSyncTouchedDaysFailed                         = Msg{"post_sync_fanout.touched_days_failed"}
 	MsgPostSyncTouchedWindowOverBound                    = Msg{"post_sync_fanout.touched_window_keys_over_bound"}
+	MsgPostSyncTestopsWindowDays                         = Msg{"post_sync_fanout.testops_window_days"}
+	MsgPostSyncTestopsWindowCut                          = Msg{"post_sync_fanout.testops_window_cut"}
+	MsgPostSyncTestopsWindowOverBound                    = Msg{"post_sync_fanout.testops_window_keys_over_bound"}
+	MsgTouchedDaysDrainTestopsWindowDeferred             = Msg{"touched_days_drain.testops_window_keys_deferred"}
 	MsgTouchedDaysDrainPass                              = Msg{"touched_days_drain.pass"}
 	MsgTouchedDaysDrainFailed                            = Msg{"touched_days_drain.failed"}
 	MsgTouchedDaysDrainSplit                             = Msg{"touched_days_drain.day_split"}
@@ -168,6 +172,11 @@ var (
 	KeyTouchedDaysOverLimit         = Key{"touched_days_over_limit"}
 	KeyTouchedDaysOverLimitNewest   = Key{"touched_days_over_limit_newest"}
 	KeyTouchedDaysOverLimitOldest   = Key{"touched_days_over_limit_oldest"}
+	KeyTestopsWindowKeysRecorded    = Key{"testops_window_keys_recorded"}
+	KeyTestopsWindowKeysBound       = Key{"testops_window_keys_bound"}
+	KeyTestopsWindowRepoDaysTaken   = Key{"testops_window_repo_days_taken"}
+	KeyTestopsWindowRepoDaysCap     = Key{"testops_window_repo_days_cap"}
+	KeyTestopsWindowKeysDeferred    = Key{"testops_window_keys_deferred"}
 	KeyDrainPass                    = Key{"drain_pass"}
 	KeyDrainDaysStarted             = Key{"drain_days_started"}
 	KeyDrainDaysPendingLeft         = Key{"drain_days_pending_left"}

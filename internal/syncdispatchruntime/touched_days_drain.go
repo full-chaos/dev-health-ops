@@ -3,6 +3,7 @@ package syncdispatchruntime
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -152,6 +153,13 @@ type TouchedDaysDrain struct {
 	logger   *synclog.Logger
 	observer jobruntime.TouchedDaysDrainObserver
 	now      func() time.Time
+	// testopsWindow is true for the drain of the testops window lane: its own
+	// lock keys, a cap on the keys of a pass, its own counters and no
+	// pending-age gauge.
+	testopsWindow bool
+	// repoDayBudget replaces PostSyncTestopsWindowRepoDaysPerFanout for the
+	// window lane when above zero (SetRepoDayCap).
+	repoDayBudget int
 }
 
 // NewTouchedDaysDrain builds the drain. Every collaborator but the logger is
@@ -166,6 +174,57 @@ func NewTouchedDaysDrain(
 		logger = synclog.Default()
 	}
 	return &TouchedDaysDrain{pool: pool, store: store, runs: runs, logger: logger, now: time.Now}, nil
+}
+
+// NewTestopsWindowDrain builds the drain of the testops window lane
+// (CHAOS-14562): store and runs are the lane's (the window kinds of the
+// record, the tw- generations of the runs). A pass runs under lock keys of its
+// own, so it is serialized with the passes of its lane only, and takes at most
+// PostSyncTestopsWindowRepoDaysPerFanout keys.
+func NewTestopsWindowDrain(
+	pool *pgxpool.Pool, store TouchedDaysDrainStore, runs TouchedDaysDrainRuns, logger *synclog.Logger,
+) (*TouchedDaysDrain, error) {
+	drain, err := NewTouchedDaysDrain(pool, store, runs, logger)
+	if err != nil {
+		return nil, err
+	}
+	drain.testopsWindow = true
+	return drain, nil
+}
+
+// SetRepoDayCap replaces the cap on the keys of one pass of the testops window
+// lane (PostSyncTestopsWindowRepoDaysPerFanout). It is for tests; n < 1 keeps
+// the default.
+func (drain *TouchedDaysDrain) SetRepoDayCap(n int) {
+	if drain != nil {
+		drain.repoDayBudget = n
+	}
+}
+
+func (drain *TouchedDaysDrain) startLockNamespace() int {
+	if drain.testopsWindow {
+		return testopsWindowDrainLockNamespace
+	}
+	return touchedDrainLockNamespace
+}
+
+func (drain *TouchedDaysDrain) checkLockNamespace() int {
+	if drain.testopsWindow {
+		return testopsWindowCheckLockNamespace
+	}
+	return touchedCheckLockNamespace
+}
+
+// repoDayCap is the cap on the (day, repository) keys of one pass: none for the
+// touched-day lane (its passes are bounded in days).
+func (drain *TouchedDaysDrain) repoDayCap() int {
+	if !drain.testopsWindow {
+		return 0
+	}
+	if drain.repoDayBudget > 0 {
+		return drain.repoDayBudget
+	}
+	return PostSyncTestopsWindowRepoDaysPerFanout
 }
 
 // SetObserver wires the optional counters and the pending-age gauge. A nil
@@ -212,6 +271,9 @@ type touchedDrainPass struct {
 	// triggerChecked is true when the run whose end triggered the pass was
 	// among the runs whose mark the pass checked.
 	triggerChecked bool
+	// keysTaken and keysDeferred are, for a pass with a key cap, the keys it
+	// chose and the keys of its eligible days that a cap left pending.
+	keysTaken, keysDeferred int
 }
 
 // DrainTouchedDays runs one pass for the organization. passID names the
@@ -328,7 +390,7 @@ func (drain *TouchedDaysDrain) markOfPassMissing(ctx context.Context, pass *touc
 	}
 	defer func() { _ = lock.Rollback(ctx) }()
 	if _, err := lock.Exec(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`,
-		touchedCheckLockNamespace, pass.organizationID); err != nil {
+		drain.checkLockNamespace(), pass.organizationID); err != nil {
 		return false, unavailable(stageDrainCheckLock, err)
 	}
 	runs, truncated, err := drain.runs.MarkingRunsToCheck(
@@ -341,7 +403,7 @@ func (drain *TouchedDaysDrain) markOfPassMissing(ctx context.Context, pass *touc
 		// is a healthy state, not a fault: a warning and the counter say so.
 		drain.logger.Warn(ctx, synclog.MsgTouchedDaysDrainFailed,
 			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("stop_check_truncated")),
-			synclog.Org(synclog.ParseID(pass.organizationID)), drainPassAttr(pass.passID))
+			synclog.Org(synclog.ParseID(pass.organizationID)), drain.passAttr(pass.passID))
 		drain.observe(jobruntime.TouchedDaysDrainStopCheckTruncated, 1)
 	}
 	checkable := make([]TouchedRunKeys, 0, len(runs))
@@ -353,7 +415,7 @@ func (drain *TouchedDaysDrain) markOfPassMissing(ctx context.Context, pass *touc
 			if run.RunID == endedRunID {
 				drain.logger.Warn(ctx, synclog.MsgTouchedDaysDrainFailed,
 					synclog.Text(synclog.KeyPhase, synclog.ParseLabel("take_time_absent")),
-					synclog.Org(synclog.ParseID(pass.organizationID)), drainPassAttr(pass.passID))
+					synclog.Org(synclog.ParseID(pass.organizationID)), drain.passAttr(pass.passID))
 				drain.observe(jobruntime.TouchedDaysDrainTakeTimeAbsent, 1)
 			}
 			continue
@@ -376,7 +438,7 @@ func (drain *TouchedDaysDrain) markOfPassMissing(ctx context.Context, pass *touc
 		case errors.Is(err, ErrTouchedChecksUnwritten):
 			drain.logger.Warn(ctx, synclog.MsgTouchedDaysDrainFailed,
 				synclog.Text(synclog.KeyPhase, synclog.ParseLabel("checked_column_absent")),
-				synclog.Org(synclog.ParseID(pass.organizationID)), drainPassAttr(pass.passID))
+				synclog.Org(synclog.ParseID(pass.organizationID)), drain.passAttr(pass.passID))
 			drain.observe(jobruntime.TouchedDaysDrainChecksUnwritten, 1)
 			return false, nil
 		case err != nil:
@@ -387,7 +449,7 @@ func (drain *TouchedDaysDrain) markOfPassMissing(ctx context.Context, pass *touc
 	drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
 		synclog.Text(synclog.KeyPhase, synclog.ParseLabel("chain_stopped_mark_missing")),
 		synclog.Org(synclog.ParseID(pass.organizationID)),
-		drainPassAttr(pass.passID),
+		drain.passAttr(pass.passID),
 		synclog.Count(synclog.KeyDrainDaysNotMarked, len(days)),
 		synclog.Flag(synclog.KeyDrainTriggerChecked, pass.triggerChecked),
 	)
@@ -417,7 +479,7 @@ func (drain *TouchedDaysDrain) returnFailedDays(ctx context.Context, pass *touch
 		// too.
 		drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
 			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("return_read_truncated")),
-			synclog.Org(synclog.ParseID(pass.organizationID)), drainPassAttr(pass.passID))
+			synclog.Org(synclog.ParseID(pass.organizationID)), drain.passAttr(pass.passID))
 		drain.observe(jobruntime.TouchedDaysDrainReturnReadTruncated, 1)
 	}
 	if len(runs) == 0 {
@@ -481,8 +543,18 @@ func (drain *TouchedDaysDrain) take(ctx context.Context, pass *touchedDrainPass)
 		candidates = append(candidates, day)
 	}
 	candidates = append(candidates, retries...)
+	if drain.testopsWindow {
+		// The window lane takes its eligible keys newest day first, a due
+		// retry by its day like any other: its cap is on keys, and the newest
+		// days are the ones the next recurrences read.
+		sort.Slice(candidates, func(left, right int) bool { return candidates[left].After(candidates[right]) })
+	}
 	limit := drain.runs.RepositoryLimit()
-	for scanned := 0; scanned < len(candidates) && len(pass.starts) < TouchedDaysPerDrainPass; {
+	budget := drain.repoDayCap()
+	remaining := budget
+	spent := func() bool { return budget > 0 && remaining <= 0 }
+	scanned := 0
+	for scanned < len(candidates) && len(pass.starts) < TouchedDaysPerDrainPass && !spent() {
 		end := min(scanned+TouchedDaysPerDrainPass, len(candidates))
 		chunk := candidates[scanned:end]
 		repositories, err := drain.store.PendingRepositories(ctx, pass.organizationID, chunk, limit+1)
@@ -490,7 +562,7 @@ func (drain *TouchedDaysDrain) take(ctx context.Context, pass *touchedDrainPass)
 			return err
 		}
 		for _, day := range chunk {
-			if len(pass.starts) >= TouchedDaysPerDrainPass {
+			if len(pass.starts) >= TouchedDaysPerDrainPass || spent() {
 				break
 			}
 			scanned++
@@ -499,12 +571,26 @@ func (drain *TouchedDaysDrain) take(ctx context.Context, pass *touchedDrainPass)
 				// A fan-out dispatched the day between the two reads.
 				continue
 			}
+			key := day.UTC().Format("2006-01-02")
 			start := touchedDrainStart{day: day, repositories: identifiers}
-			start.retry = onlyFailed[day.UTC().Format("2006-01-02")]
-			if len(identifiers) > limit {
+			start.retry = onlyFailed[key]
+			if budget > 0 {
+				taken := min(len(identifiers), limit, remaining)
+				start.repositories, start.split = identifiers[:taken], taken < len(identifiers)
+				remaining -= taken
+				pass.keysTaken += taken
+				pass.keysDeferred += max(backlog.Keys[key]-taken, 0)
+			} else if len(identifiers) > limit {
 				start.repositories, start.split = identifiers[:limit], true
 			}
 			pass.starts = append(pass.starts, start)
+		}
+	}
+	if budget > 0 {
+		// The eligible days the walk did not reach: every key of theirs is
+		// deferred by a cap. Skipped days are not eligible and not counted.
+		for _, day := range candidates[scanned:] {
+			pass.keysDeferred += backlog.Keys[day.UTC().Format("2006-01-02")]
 		}
 	}
 	return nil
@@ -517,6 +603,13 @@ const touchedDrainLockNamespace = 8846
 // touchedCheckLockNamespace is the first key of the advisory lock of a mark
 // check; the second key is a hash of the organization id.
 const touchedCheckLockNamespace = 8847
+
+// testopsWindowDrainLockNamespace and testopsWindowCheckLockNamespace are the
+// same two locks for the drain of the testops window lane.
+const (
+	testopsWindowDrainLockNamespace = 8848
+	testopsWindowCheckLockNamespace = 8849
+)
 
 // start starts the runs of the pass in one transaction.
 //
@@ -544,7 +637,7 @@ func (drain *TouchedDaysDrain) start(ctx context.Context, pass *touchedDrainPass
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`,
-		touchedDrainLockNamespace, pass.organizationID); err != nil {
+		drain.startLockNamespace(), pass.organizationID); err != nil {
 		return unavailable(stageDrainStartLock, err)
 	}
 	inFlight, err := drain.runs.InFlightTx(
@@ -595,7 +688,7 @@ func (drain *TouchedDaysDrain) start(ctx context.Context, pass *touchedDrainPass
 	if takeUnwritten {
 		drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
 			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("take_time_unwritten")),
-			synclog.Org(synclog.ParseID(pass.organizationID)), drainPassAttr(pass.passID))
+			synclog.Org(synclog.ParseID(pass.organizationID)), drain.passAttr(pass.passID))
 		drain.observe(jobruntime.TouchedDaysDrainTakeTimeUnwritten, 1)
 	}
 	return nil
@@ -622,7 +715,7 @@ func (drain *TouchedDaysDrain) mark(ctx context.Context, pass *touchedDrainPass)
 		drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
 			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("mark")),
 			synclog.Org(synclog.ParseID(pass.organizationID)),
-			drainPassAttr(pass.passID),
+			drain.passAttr(pass.passID),
 		)
 		drain.observe(jobruntime.TouchedDaysDrainMarkFailed, 1)
 	}
@@ -631,7 +724,7 @@ func (drain *TouchedDaysDrain) mark(ctx context.Context, pass *touchedDrainPass)
 // report logs and counts one pass that read the pending days.
 func (drain *TouchedDaysDrain) report(ctx context.Context, pass *touchedDrainPass) {
 	org := synclog.Org(synclog.ParseID(pass.organizationID))
-	passAttr := drainPassAttr(pass.passID)
+	passAttr := drain.passAttr(pass.passID)
 	split, retried := 0, 0
 	for _, start := range pass.started {
 		if start.retry {
@@ -641,6 +734,10 @@ func (drain *TouchedDaysDrain) report(ctx context.Context, pass *touchedDrainPas
 			continue
 		}
 		split++
+		if drain.testopsWindow {
+			// The window lane reports its cut once, counts only (above).
+			continue
+		}
 		// One line for each split day: its numbers are whole only after the
 		// passes that take the rest of its repositories.
 		drain.logger.Warn(ctx, synclog.MsgTouchedDaysDrainSplit, org, passAttr,
@@ -672,6 +769,19 @@ func (drain *TouchedDaysDrain) report(ctx context.Context, pass *touchedDrainPas
 		}
 	}
 	pendingLeft := len(pass.backlog.Days) - whole
+	if drain.testopsWindow && pass.keysDeferred > 0 && len(pass.started) > 0 {
+		// After the runs committed, one line, counts only: the keys a cap of
+		// the pass left pending. The next pass, which the end of these runs
+		// triggers, takes them.
+		drain.logger.Warn(ctx, synclog.MsgTouchedDaysDrainTestopsWindowDeferred,
+			synclog.Count(synclog.KeyTestopsWindowRepoDaysTaken, pass.keysTaken),
+			synclog.Count(synclog.KeyTestopsWindowKeysDeferred, pass.keysDeferred),
+			synclog.Count(synclog.KeyTestopsWindowRepoDaysCap, drain.repoDayCap()),
+		)
+		if drain.observer != nil {
+			_ = drain.observer.ObserveTouchedDaysDrain(jobruntime.TouchedDaysDrainTestopsWindowKeysDeferred, uint64(pass.keysDeferred))
+		}
+	}
 	var age time.Duration
 	if pendingLeft > 0 && !pass.backlog.OldestTouchedAt.IsZero() {
 		age = max(pass.backlog.TakenAt.Sub(pass.backlog.OldestTouchedAt), time.Millisecond)
@@ -738,25 +848,56 @@ func drainPassAttr(passID string) synclog.Attr {
 	return synclog.Text(synclog.KeyDrainPass, synclog.ParseLabel(strings.ReplaceAll(passID, "-", "_")))
 }
 
+// passAttr is drainPassAttr, with "tw_" before the pass of the testops window
+// lane: the two drains run for the same trigger.
+func (drain *TouchedDaysDrain) passAttr(passID string) synclog.Attr {
+	if drain.testopsWindow {
+		return drainPassAttr("tw_" + passID)
+	}
+	return drainPassAttr(passID)
+}
+
 // fail logs and counts one pass that failed before its runs were committed.
 // phase is a fixed word of this file, never an error text.
 func (drain *TouchedDaysDrain) fail(ctx context.Context, pass *touchedDrainPass, phase string) {
 	drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
 		synclog.Text(synclog.KeyPhase, synclog.ParseLabel(phase)),
 		synclog.Org(synclog.ParseID(pass.organizationID)),
-		drainPassAttr(pass.passID),
+		drain.passAttr(pass.passID),
 	)
 	drain.observe(jobruntime.TouchedDaysDrainPassFailed, 1)
 }
 
 func (drain *TouchedDaysDrain) observe(event jobruntime.TouchedDaysDrainEvent, count uint64) {
-	if drain.observer != nil {
-		_ = drain.observer.ObserveTouchedDaysDrain(event, count)
+	if drain.observer == nil {
+		return
 	}
+	if drain.testopsWindow {
+		windowEvent, counted := testopsWindowDrainEvents[event]
+		if !counted {
+			return
+		}
+		event = windowEvent
+	}
+	_ = drain.observer.ObserveTouchedDaysDrain(event, count)
 }
 
+// testopsWindowDrainEvents are the events the drain of the testops window lane
+// counts, under names of its own. The others are not counted for the lane.
+var testopsWindowDrainEvents = map[jobruntime.TouchedDaysDrainEvent]jobruntime.TouchedDaysDrainEvent{
+	jobruntime.TouchedDaysDrainPasses:       jobruntime.TouchedDaysDrainTestopsWindowPasses,
+	jobruntime.TouchedDaysDrainDaysStarted:  jobruntime.TouchedDaysDrainTestopsWindowDaysStarted,
+	jobruntime.TouchedDaysDrainDaysReturned: jobruntime.TouchedDaysDrainTestopsWindowDaysReturned,
+	jobruntime.TouchedDaysDrainDaysSkipped:  jobruntime.TouchedDaysDrainTestopsWindowDaysSkipped,
+	jobruntime.TouchedDaysDrainChainStopped: jobruntime.TouchedDaysDrainTestopsWindowChainStopped,
+	jobruntime.TouchedDaysDrainPassFailed:   jobruntime.TouchedDaysDrainTestopsWindowPassFailed,
+	jobruntime.TouchedDaysDrainMarkFailed:   jobruntime.TouchedDaysDrainTestopsWindowMarkFailed,
+}
+
+// observeAge sets the pending-age gauge of the touched-day lane; the testops
+// window lane has none.
 func (drain *TouchedDaysDrain) observeAge(organizationID string, age time.Duration) {
-	if drain.observer != nil {
+	if drain.observer != nil && !drain.testopsWindow {
 		_ = drain.observer.ObserveTouchedDaysOldestPendingAge(organizationID, age)
 	}
 }

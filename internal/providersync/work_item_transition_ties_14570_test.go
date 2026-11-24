@@ -450,3 +450,204 @@ type credentialDecryptor14570 struct{}
 func (credentialDecryptor14570) Decrypt(secrets.Value) ([]byte, error) {
 	return []byte(`{"token":"fixture-token","api_key":"fixture-key","email":"dev@example.invalid","base_url":"https://example.invalid"}`), nil
 }
+
+// mainSplitEmission14570 is splitEmission of main at ede68fe0f (before the tie groups), copied verbatim and renamed: the oracle the
+// tie-group split is measured against.
+func mainSplitEmission14570(
+	batch CompleteRouteBatch,
+	comparison ShadowComparison,
+	stamps *chunkStamps,
+	policy ChunkPolicy,
+) ([]PreparedProviderChunk, error) {
+	if policy.Validate() != nil || len(batch.Effects) == 0 {
+		return nil, ErrInvalidConfiguration
+	}
+	ordered := append([]EffectBatch(nil), batch.Effects...)
+	sortEffectBatches(ordered)
+	// A prepared chunk is bounded by both the provider-page budget and the
+	// sink effect-row budget. The smaller bound is intentional: a provider can
+	// emit several normalized effects for one source item, so using only the
+	// effect cap would allow one source page to grow without limit.
+	maxRows := min(policy.MaxEffectRows, policy.MaxSourceItems)
+	// Rows of their own chunks (effectOwnChunkRows) are split apart from the other rows of their destination.
+	regular, own := make([][]json.RawMessage, len(ordered)), make([][]json.RawMessage, len(ordered))
+	for index, effect := range ordered {
+		regular[index], own[index] = effectOwnChunkRows(effect)
+	}
+	for maxRows >= 1 {
+		shared, ownChunks := 1, 0
+		for index := range ordered {
+			if rows := (len(regular[index]) + maxRows - 1) / maxRows; rows > shared {
+				shared = rows
+			}
+			if len(own[index]) > ownChunks {
+				ownChunks = len(own[index])
+			}
+		}
+		count := shared + ownChunks
+		chunks := make([]PreparedProviderChunk, 0, count)
+		valid := true
+		var storeRefusal error
+		for ordinal := 0; ordinal < count; ordinal++ {
+			effects := make([]EffectBatch, 0, len(ordered))
+			for index, effect := range ordered {
+				rows, first, last, size := regular[index], 0, shared, maxRows
+				if ordinal >= shared {
+					// The own chunks come after every shared chunk and hold one row of their own each (and a trailing
+					// destination's rows, which fill the last chunks).
+					rows, first, last, size = own[index], shared, count, 1
+				}
+				// A trailing destination's rows fill the LAST sub-chunks of the emission, so they commit after every row
+				// of the other destinations (effectSplitsLast).
+				shift := first
+				if effectSplitsLast(effect.Destination) {
+					rows, shift = effect.Rows, count-(len(effect.Rows)+maxRows-1)/maxRows
+					last, size = count, maxRows
+				}
+				start := (ordinal - shift) * size
+				if ordinal < shift || ordinal >= last || start > len(rows) {
+					start = len(rows)
+				}
+				end := start + size
+				if end > len(rows) {
+					end = len(rows)
+				}
+				part, err := BuildEffectBatch(effect.Destination, effect.Recovery, rows[start:end])
+				if err != nil {
+					return nil, err
+				}
+				effects = append(effects, part)
+			}
+			payloadBytes := 0
+			for _, effect := range effects {
+				payloadBytes += effect.PayloadBytes
+			}
+			if payloadBytes > policy.MaxPreparedBytes {
+				valid = false
+				break
+			}
+			if stamps != nil {
+				chunk, stampErr := stampEmissionChunk(effects, ordinal, count, *stamps)
+				if stampErr != nil {
+					return nil, stampErr
+				}
+				if chunk.PayloadBytes > policy.MaxPreparedBytes {
+					valid = false
+					break
+				}
+				if kind, refusal := preparedChunkStoreRefusal(stamps.Claim, chunk, stamps.StampAt); refusal != nil {
+					if kind != chunkRefusalSize {
+						return nil, refusal
+					}
+					storeRefusal, valid = refusal, false
+					break
+				}
+				chunks = append(chunks, chunk)
+				continue
+			}
+			chunk := PreparedProviderChunk{
+				SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion,
+				Ordinal: ordinal, TotalChunks: count, Effects: effects,
+				InventoryComplete: ordinal == count-1, PayloadBytes: payloadBytes,
+			}
+			if chunk.InventoryComplete {
+				chunk.Result = cloneChunkResult(batch.Result)
+				chunk.Watermark = batch.Watermark
+				chunk.Evidence = batch.Evidence
+				chunk.Comparison = comparison
+				chunk.WorklogObservations = append([]JiraWorklogFetchObservation(nil), batch.WorklogObservations...)
+			}
+			encoded, encodeErr := encodedPreparedChunkPayload(chunk)
+			if encodeErr != nil {
+				return nil, encodeErr
+			}
+			chunk.PayloadBytes = len(encoded)
+			if chunk.PayloadBytes > policy.MaxPreparedBytes {
+				valid = false
+				break
+			}
+			chunk.ManifestDigest = preparedChunkDigest(chunk)
+			chunks = append(chunks, chunk)
+		}
+		if valid {
+			return chunks, nil
+		}
+		if maxRows == 1 {
+			if storeRefusal != nil {
+				return nil, storeRefusal
+			}
+			break
+		}
+		maxRows = nextSplitCap(maxRows, policy)
+	}
+	return nil, ErrChunkPolicyExceeded
+}
+
+// The round's case: one work item with a 1,000-character description and a close and reopen in one millisecond, at a row cap of one
+// and a byte cap equal to the larger of the two sidecars main splits it into. Main stores it (work item + close, then the reopen); the
+// tie group must not make the split refuse it: the intact pair takes a sidecar of its own, under the same byte and store checks.
+func TestTransitionTieGroupMovesToItsOwnSidecarWhenSharingExceedsTheByteCap14570(t *testing.T) {
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	claim := nativeTestClaim("linear", "work-items")
+	payload := linearCloseReproPayload14570(t, "ZZZ-5", "Todo", "unstarted", `[
+		{"id":"z2","createdAt":"2026-10-15T10:00:00.050Z","fromState":{"name":"Backlog","type":"backlog"},"toState":{"name":"Canceled","type":"canceled"}},
+		{"id":"z3","createdAt":"2026-10-15T10:00:00.050Z","fromState":{"name":"Canceled","type":"canceled"},"toState":{"name":"Todo","type":"unstarted"}}]`)
+	description := strings.Repeat("d", 1000)
+	payload.Description, payload.DescriptionStated = &description, true
+	item, transitions, err := normalizeLinearWorkItem(claim, payload, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effects, err := buildLinearWorkItemEffectsFromRows(linearWorkItemRows{WorkItems: []linearWorkItemRow{item}, StatusTransitions: transitions})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := CompleteRouteBatch{Effects: effects}
+	policy := DefaultChunkPolicy()
+	policy.MaxSourceItems, policy.MaxEffectRows = 1, 1
+	stamps := chunkStamps{Claim: claim, CursorBefore: "page-1", CursorAfter: "page-2", StampAt: now}
+	for _, leg := range []struct {
+		name   string
+		stamps *chunkStamps
+		split  func(ChunkPolicy) ([]PreparedProviderChunk, error)
+	}{
+		{"direct", nil, func(policy ChunkPolicy) ([]PreparedProviderChunk, error) {
+			return SplitCompleteRouteBatch(batch, policy)
+		}},
+		{"stamped non-final", &stamps, func(policy ChunkPolicy) ([]PreparedProviderChunk, error) {
+			return splitStampedEmission(batch, stamps, policy)
+		}},
+	} {
+		t.Run(leg.name, func(t *testing.T) {
+			mainChunks, err := mainSplitEmission14570(batch, ShadowComparison{}, leg.stamps, policy)
+			if err != nil || len(mainChunks) != 2 {
+				t.Fatalf("setup: main gives %d sidecars, err=%v; want 2", len(mainChunks), err)
+			}
+			capped := policy
+			capped.MaxPreparedBytes = max(mainChunks[0].PayloadBytes, mainChunks[1].PayloadBytes)
+			if again, err := mainSplitEmission14570(batch, ShadowComparison{}, leg.stamps, capped); err != nil || len(again) != 2 {
+				t.Fatalf("setup: at %d bytes main gives %d sidecars, err=%v; want 2", capped.MaxPreparedBytes, len(again), err)
+			}
+			chunks, err := leg.split(capped)
+			if err != nil {
+				t.Fatalf("at %d bytes (main stores 2 sidecars) the split refuses (ErrChunkPolicyExceeded=%v): %v",
+					capped.MaxPreparedBytes, errors.Is(err, ErrChunkPolicyExceeded), err)
+			}
+			pairChunks, rows := map[int]int{}, 0
+			for index, chunk := range chunks {
+				if chunk.PayloadBytes > capped.MaxPreparedBytes {
+					t.Errorf("sidecar %d is %d bytes, over the %d-byte cap", index, chunk.PayloadBytes, capped.MaxPreparedBytes)
+				}
+				for _, effect := range chunk.Effects {
+					if effect.Destination == "work_item_transitions" && len(effect.Rows) > 0 {
+						pairChunks[index] += len(effect.Rows)
+						rows += len(effect.Rows)
+					}
+				}
+			}
+			if len(pairChunks) != 1 || rows != 2 {
+				t.Errorf("the pair sits in sidecars %v (%d rows), want both rows in one sidecar", pairChunks, rows)
+			}
+		})
+	}
+}

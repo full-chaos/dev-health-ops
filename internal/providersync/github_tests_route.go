@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/artifactexclude"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
@@ -264,7 +265,8 @@ func (artifact githubTestsArtifactPayload) listedSize() int64 {
 var githubTestsNonReportArtifactSuffixes = []string{".dockerbuild", ".spdx.json"}
 
 // githubTestsNonReportArtifactPrefixes is a named deployment exception: this repository's own CI artifact names (go.yml) in product
-// code, kept on purpose until a per-config exclude exists; content alone does not replace them (TestGitHubTestsArtifactNamePrefixesAreLoadBearing).
+// code. The seam joins it with the integration's ci_artifact_exclude_prefixes (one list per integration, it applies to every sync
+// config of this integration, CHAOS-14559); it goes once that list is written for every integration that syncs this repository. Content alone does not replace it (TestGitHubTestsArtifactNamePrefixesAreLoadBearing):
 // "go-images-": an image artifact keeps 1 day; an expired one has no content to inspect, so selected it reads reports_complete=false.
 // "go-test-timings-": timing tables, never reports; selected, all 17 of a run are downloaded and take per-run cap slots.
 // "go-junit-part-": JUnit parts beside their lossless merged report; githubTestsPlanRunReports keeps the parts and drops the aggregate, so case keys move, the merged rows are retracted and the run reads reports_complete=false.
@@ -282,23 +284,21 @@ const (
 // non-report noise crowds out real report artifacts exactly the way it did
 // before this fix.
 //
-// This is a fixed closed-list implementation today. CHAOS-4591 (per-sync-
-// config selectable artifact ingestion) is expected to replace the body of
-// this one function with a config-driven predicate (an org/repo-scoped
-// include/exclude list) without moving either call site or changing the
-// (selected, reason) contract -- `reason` is already the closed vocabulary
-// an admin view would show next to each excluded artifact.
-func githubTestsArtifactSelectionSeam(name string) (selected bool, reason string) {
+// The suffix list is fixed; the prefixes are the code list joined with the
+// configuration's own list (configPrefixes, githubTestsConfigExcludePrefixes),
+// so a configuration can add names and never takes one of the code list away.
+// The (selected, reason) contract holds: `reason` is the closed vocabulary an
+// admin view would show next to each excluded artifact, never the prefix that
+// matched.
+func githubTestsArtifactSelectionSeam(name string, configPrefixes []string) (selected bool, reason string) {
 	lower := strings.ToLower(name)
 	for _, suffix := range githubTestsNonReportArtifactSuffixes {
 		if strings.HasSuffix(lower, suffix) {
 			return false, githubTestsExclusionReasonSuffix
 		}
 	}
-	for _, prefix := range githubTestsNonReportArtifactPrefixes {
-		if strings.HasPrefix(lower, prefix) {
-			return false, githubTestsExclusionReasonPrefix
-		}
+	if artifactexclude.Matches(lower, githubTestsNonReportArtifactPrefixes) || artifactexclude.Matches(lower, configPrefixes) {
+		return false, githubTestsExclusionReasonPrefix
 	}
 	return true, ""
 }
@@ -581,7 +581,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 			if artifact.ID == "" {
 				return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 			}
-			if selected, _ := githubTestsArtifactSelectionSeam(artifact.Name); !selected {
+			if selected, _ := githubTestsArtifactSelectionSeam(artifact.Name, githubTestsConfigExcludePrefixes(claim)); !selected {
 				continue
 			}
 			artifacts = append(artifacts, artifact)

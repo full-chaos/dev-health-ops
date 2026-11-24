@@ -108,13 +108,12 @@ var PipelineRunsSource = `(
     WHERE ` + LiveRepoDays("testops_pipeline_metrics_daily") + `
 ) AS testops_pipeline_runs`
 
-// SuiteRunsSource reads, for a repository-day without stored samples, the suite rows the readers count: the newest
-// attempt of each report slot, a legacy row only when no kept slotted row lists its id (SuiteRowsNewestAttempt). A var:
-// the fragment is built, not written. Both arms read only the keys whose NEWEST row is live (package liverow): a retired
-// repository-day (newest row retracted = 1, a row that holds no samples) admits no stored sample and no raw suite. The
-// raw read and the rule's inner selects read only the runs with a suite row on such a repository-day (legacySuiteRuns, one
-// read of those repositories' rows): the table has no day key, so an organization-wide select reads the organization's whole
-// history once per select.
+// SuiteRunsSource reads, for a repository-day without stored samples, the suite rows the readers count: the rule of
+// SuiteRowsNewestAttempt (the newest attempt of each report slot, no retracted row and no row of a retired slot, a legacy row
+// only when no row of the newest attempt of a slot and no row of a retired slot lists its id), computed with window
+// functions over ONE read of the repositories that have such a day (suiteRawRowsRuled). A var: the fragment is built, not
+// written. Both arms read only the keys whose NEWEST row is live (package liverow): a retired repository-day (newest row
+// retracted = 1, a row that holds no samples) admits no stored sample and no raw suite.
 var SuiteRunsSource = `(
     SELECT org_id, repo_id, service_id, day, duration_sample
     FROM (
@@ -128,25 +127,37 @@ var SuiteRunsSource = `(
         ARRAY JOIN pooled_service_ids AS stored_service_id, pooled_durations AS stored_duration
         WHERE pooled_samples_stored = 1
         UNION ALL
-        SELECT
-            org_id,
-            repo_id,
-            service_id,
-            toDate(coalesce(started_at, finished_at)) AS day,
-            if(duration_seconds >= 0, duration_seconds, NULL) AS duration_sample
-        FROM test_suite_results FINAL
-        WHERE org_id = {org_id:String} AND (repo_id, run_id) IN (` + legacySuiteRuns + `)
-          AND toDate(coalesce(started_at, finished_at)) >= {start_date:Date} AND toDate(coalesce(started_at, finished_at)) < {end_date:Date}
-          AND ` + SuiteRowsNewestAttempt("", Scope{runs: legacySuiteRuns}) + `
-          AND (repo_id, toDate(coalesce(started_at, finished_at))) IN (` + LegacyRepoDays("testops_test_metrics_daily") + `)
+        SELECT org_id, repo_id, service_id, day, duration_sample
+        FROM ` + suiteRawRowsRuled + `
+        WHERE day >= {start_date:Date} AND day < {end_date:Date}
+          AND (repo_id, day) IN (` + LegacyRepoDays("testops_test_metrics_daily") + `)
+          AND ((report_slot != '' AND run_attempt = newest_attempt AND retracted = 0 AND slot_retired = 0)
+            OR (report_slot = '' AND NOT has(newest_legacy_ids, suite_id) AND NOT has(retired_legacy_ids, suite_id)))
     )
     WHERE ` + LiveRepoDays("testops_test_metrics_daily") + `
 ) AS testops_suite_runs`
 
-// legacySuiteRuns are the runs with a suite row (any version) on a repository-day without stored samples: the runs the raw
-// arm of SuiteRunsSource can count. The repository is the second key column, so the read is the rows of those repositories.
-var legacySuiteRuns = `SELECT repo_id, run_id FROM test_suite_results WHERE org_id = {org_id:String}
-          AND (repo_id, toDate(coalesce(started_at, finished_at))) IN (` + LegacyRepoDays("testops_test_metrics_daily") + `)`
+// suiteRawRowsRuled is every suite row of the repositories with a repository-day without stored samples, read ONCE (FINAL),
+// with what SuiteRowsNewestAttempt decides per run: the newest attempt of the row's slot, whether the slot is retired (its
+// newest row of its newest attempt is a retraction row), and the legacy ids listed by the newest attempt of every slot of
+// the run and by every row of a retired slot. The table has no day key, so a select per rule part reads the repositories'
+// whole history once each; the window functions read it once. An empty repository set reads nothing.
+var suiteRawRowsRuled = `(
+            SELECT org_id, repo_id, service_id, day, duration_sample, suite_id, report_slot, retracted, run_attempt, newest_attempt,
+                slot_retired,
+                groupUniqArrayArrayIf(legacy_suite_ids, report_slot != '' AND run_attempt = newest_attempt) OVER (PARTITION BY repo_id, run_id) AS newest_legacy_ids,
+                groupUniqArrayArrayIf(legacy_suite_ids, report_slot != '' AND slot_retired = 1) OVER (PARTITION BY repo_id, run_id) AS retired_legacy_ids
+            FROM (
+                SELECT org_id, repo_id, run_id, service_id, suite_id, report_slot, retracted, run_attempt, legacy_suite_ids,
+                    toDate(coalesce(started_at, finished_at)) AS day,
+                    if(duration_seconds >= 0, duration_seconds, NULL) AS duration_sample,
+                    max(run_attempt) OVER (PARTITION BY repo_id, run_id, report_slot) AS newest_attempt,
+                    argMax(retracted, (run_attempt, last_synced, retracted)) OVER (PARTITION BY repo_id, run_id, report_slot) AS slot_retired
+                FROM test_suite_results FINAL
+                WHERE org_id = {org_id:String}
+                  AND repo_id IN (SELECT repo_id FROM (` + LegacyRepoDays("testops_test_metrics_daily") + `))
+            )
+        )`
 
 // P95 is the 95th percentile of a group's duration samples, NULL for a group with none.
 const P95 = "if(count(" + DurationSample + ") = 0, NULL, quantileExactInclusive(0.95)(" + DurationSample + "))"

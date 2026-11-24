@@ -29,15 +29,9 @@ type Scope struct {
 	RepoIDsParam     string
 	WindowStartParam string
 	WindowEndParam   string
-	// runs is a select of (repo_id, run_id) written in this package (never a caller's text): every inner select reads only the
-	// rows of those runs. The rules group by run, so they keep the same rows of every run of the set.
-	runs string
 }
 
 func (s Scope) validate() {
-	if s.runs != "" && (s.RepoIDsParam != "" || s.WindowStartParam != "") {
-		panic("testopspooled: a run-set scope takes no repository list or window")
-	}
 	for _, name := range []string{s.RepoIDsParam, s.WindowStartParam, s.WindowEndParam} {
 		if name != "" && !paramPattern.MatchString(name) {
 			panic(fmt.Sprintf("testopspooled: parameter name %q is not a lower-case identifier", name))
@@ -154,9 +148,6 @@ func outerColumns(alias string, scope Scope) func(string) string {
 // bound is the predicate every inner select of t carries: the repository list and, with a window, the window's runs.
 func (t attemptTable) bound(scope Scope) string {
 	bound := scope.repoPredicate()
-	if scope.runs != "" {
-		bound += " AND (repo_id, run_id) IN (" + scope.runs + ")"
-	}
 	if scope.WindowStartParam != "" {
 		bound += " AND run_id IN (" + t.windowRuns(scope.RepoIDsParam, scope.WindowStartParam, scope.WindowEndParam) + ")"
 	}

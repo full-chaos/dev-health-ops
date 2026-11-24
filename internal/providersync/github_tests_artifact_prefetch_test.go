@@ -525,10 +525,13 @@ func TestGitHubTestsPrefetchEmissionsEqualTheSerialWalk(t *testing.T) {
 	}
 	serialDoer := newPrefetchCellDoer(t, 2, 6)
 	configure(serialDoer)
-	serial, serialErr := prefetchCellWalk(t, prefetchCellClient(t, serialDoer, nil, "medium", 1))
+	serialClient := prefetchCellClient(t, serialDoer, nil, "medium", 1)
+	serialClient.Ledger = providerfoundation.NewRequestLedger()
+	serial, serialErr := prefetchCellWalk(t, serialClient)
 	if serialErr != nil {
 		t.Fatalf("the serial walk failed: %v (the fixture must walk both runs to the end)", serialErr)
 	}
+	serialLedger, _ := serialClient.Ledger.Snapshot()
 	for seed := int64(1); seed <= 5; seed++ {
 		random := rand.New(rand.NewSource(seed))
 		delays := map[int]time.Duration{}
@@ -542,7 +545,13 @@ func TestGitHubTestsPrefetchEmissionsEqualTheSerialWalk(t *testing.T) {
 		doer.latency = func(id int) time.Duration { return delays[id] }
 		doer.holdBlob[101] = 102
 		store := newPrefetchCellStore()
-		got, err := prefetchCellWalk(t, prefetchCellClient(t, doer, store, "medium", 1))
+		client := prefetchCellClient(t, doer, store, "medium", 1)
+		client.Ledger = providerfoundation.NewRequestLedger()
+		got, err := prefetchCellWalk(t, client)
+		// The prefetch's requests reach the unit's request ledger: the same entries as the serial walk's.
+		if ledger, _ := client.Ledger.Snapshot(); fmt.Sprint(ledger) != fmt.Sprint(serialLedger) || len(ledger) == 0 {
+			t.Fatalf("seed %d: unit ledger %v, want the serial walk's %v", seed, ledger, serialLedger)
+		}
 		if fmt.Sprint(err) != fmt.Sprint(serialErr) {
 			t.Fatalf("seed %d: err %v, want the serial walk's %v", seed, err, serialErr)
 		}

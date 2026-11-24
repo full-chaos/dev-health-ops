@@ -85,16 +85,18 @@ func censusOf(t *testing.T, sources map[string]string) []string {
 // Every place providersync holds, builds or bypasses an HTTP client, with the
 // reason its requests are in the unit's ledger or why there is no unit.
 var listedClientSites = map[string]string{
-	"jira_atlassian_route.go: field JiraAtlassianRouteHandler.GraphQLClient":   "second client of a unit route: the route gives its copy the unit client's Ledger (TestJiraAtlassianRouteCountsTheGraphQLClientsRequestsInTheUnitLedger)",
-	"github_team_catalog_route.go: field GitHubTeamCatalogRouteHandler.Client": "post-sync team import service, not a sync unit: no unit ledger exists",
-	"linear_absence.go: field LinearAbsenceProver.Client":                      "absence lookup of the team import, not a sync unit: no unit ledger exists",
-	"membership_absence.go: field githubMembershipAbsence.client":              "absence lookup of the team import, not a sync unit: no unit ledger exists",
-	"membership_absence.go: field gitlabMembershipAbsence.client":              "absence lookup of the team import, not a sync unit: no unit ledger exists",
-	"ownership_absence.go: field githubRepoGrantAbsence.client":                "absence lookup of the ownership derivation, not a sync unit: no unit ledger exists",
-	"ownership_absence.go: field githubTeamAbsence.client":                     "absence lookup of the ownership derivation, not a sync unit: no unit ledger exists",
-	"ownership_absence.go: field gitlabGroupProjectAbsence.client":             "absence lookup of the ownership derivation, not a sync unit: no unit ledger exists",
-	"ownership_absence.go: field gitlabTeamAbsence.client":                     "absence lookup of the ownership derivation, not a sync unit: no unit ledger exists",
-	"ownership_absence.go: field jiraProjectAbsence.client":                    "absence lookup of the ownership derivation, not a sync unit: no unit ledger exists",
+	"github_tests_artifact_prefetch.go: field githubTestsArtifactPrefetcher.base":   "the unit client under the walk's counting doer: the prefetch's own counting doer wraps its Doer on a copy of the unit client that keeps its Ledger and the walk's context (TestGitHubTestsPrefetchEmissionsEqualTheSerialWalk: the unit ledger equals the serial walk's)",
+	"github_tests_artifact_prefetch.go: field githubTestsArtifactPrefetcher.client": "the walk's own unit client: the prefetch downloads on a copy of it that keeps its Ledger and the walk's context (TestGitHubTestsPrefetchEmissionsEqualTheSerialWalk: the unit ledger equals the serial walk's)",
+	"jira_atlassian_route.go: field JiraAtlassianRouteHandler.GraphQLClient":        "second client of a unit route: the route gives its copy the unit client's Ledger (TestJiraAtlassianRouteCountsTheGraphQLClientsRequestsInTheUnitLedger)",
+	"github_team_catalog_route.go: field GitHubTeamCatalogRouteHandler.Client":      "post-sync team import service, not a sync unit: no unit ledger exists",
+	"linear_absence.go: field LinearAbsenceProver.Client":                           "absence lookup of the team import, not a sync unit: no unit ledger exists",
+	"membership_absence.go: field githubMembershipAbsence.client":                   "absence lookup of the team import, not a sync unit: no unit ledger exists",
+	"membership_absence.go: field gitlabMembershipAbsence.client":                   "absence lookup of the team import, not a sync unit: no unit ledger exists",
+	"ownership_absence.go: field githubRepoGrantAbsence.client":                     "absence lookup of the ownership derivation, not a sync unit: no unit ledger exists",
+	"ownership_absence.go: field githubTeamAbsence.client":                          "absence lookup of the ownership derivation, not a sync unit: no unit ledger exists",
+	"ownership_absence.go: field gitlabGroupProjectAbsence.client":                  "absence lookup of the ownership derivation, not a sync unit: no unit ledger exists",
+	"ownership_absence.go: field gitlabTeamAbsence.client":                          "absence lookup of the ownership derivation, not a sync unit: no unit ledger exists",
+	"ownership_absence.go: field jiraProjectAbsence.client":                         "absence lookup of the ownership derivation, not a sync unit: no unit ledger exists",
 }
 
 func TestEveryClientAProvidersyncRouteHoldsBuildsOrBypassesIsListed(t *testing.T) {

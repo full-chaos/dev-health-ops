@@ -11,10 +11,10 @@ require (
 	github.com/99designs/gqlgen v0.17.66
 	github.com/ClickHouse/ch-go v0.75.0
 	github.com/ClickHouse/clickhouse-go/v2 v2.51.0
-	github.com/beevik/etree v1.7.0
+	github.com/beevik/etree v1.8.1
 	github.com/compose-spec/compose-go/v2 v2.16.1
 	github.com/coreos/go-oidc/v3 v3.21.0
-	github.com/crewjam/saml v0.5.1
+	github.com/crewjam/saml v0.5.2
 	github.com/full-chaos/dev-health-go v0.49.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/jsonschema-go v0.4.3

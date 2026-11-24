@@ -24,7 +24,7 @@ import (
 // (CHAOS-13902): not for merge. Each const is the form file with its org prefix (8 hex) replaced by the synthetic
 // "f0f0f0f0"; each sha256 is pinned. It reuses helpers of the FLOOR-13902-2 cell file (same package, same branch).
 const (
-	f3SHA256  = "5118d4142c6ebc356406fb72a8ea6b1f4317809c5152bcbbf2d7696ba4455c46"
+	f3SHA256  = "955fd757df75187d9da02b485dbd3be9e7337e65f8675a52a488cdbf6dc0d51f"
 	q1v2SHA   = "87304f5372b93098aa70ea0f6385984f3325f2aef3a0e611ee1028a5db1bb379"
 	q3v2SHA   = "b8462fa34ff41210b14887d028a01b600577ea4f24977cbaa6f03b86abf348a3"
 	q4v2SHA   = "2fafb8650f20d4ca52ac95b5ff06a4a21ad8e0e87d20d9872a983f1d66c1fc98"
@@ -67,9 +67,12 @@ const f3Form = `-- FLOOR-13902-3: raw floor read of CARD-13902-recompute-13 (CHA
 --   retraction, ic_finalize_native_executor.go:51-84; synthesized repo_id = UUIDv5(1b4e28ba-2fa1-11d2-883f-b9a761bde3fb,
 --   org_id || 0x1F || author_email), icfinalize/executor.go:124-160, :333); ai_impact_metrics_daily.org (incidents,
 --   ai_impact_native_executor.go:120-130); benchmarking (testops_metric_baselines: retireDay when the input window holds no
---   live key and the run is full_org, benchmarking_finalize_native_executor.go:198-230; empty run :162-176 /
---   benchmarking_empty_run_retire.go:148-182; inputs testops pipeline / test / coverage stored live, benchmarking/run.go
---   DefaultBenchmarkMetrics, benchmarking/clickhouse.go:371-420 LiveInputKeys).
+--   live key and the run is full_org, benchmarking_finalize_native_executor.go:198-230; empty run :162-177 /
+--   benchmarking_empty_run_retire.go:148-183; retireDay :187-201 retracts every live key of the day in the SIX output tables
+--   :46-62 (baselines, maturity_bands, metric_anomalies, period_comparisons, metric_correlations, benchmark_insights; live =
+--   newest retracted 0 per key, :74-80): all six are the stored side; inputs testops pipeline / test / coverage stored live,
+--   benchmarking/run.go:14-25 DefaultBenchmarkMetrics + comparisons.go:17-21 pairs -> run.go:229-250 InputTables,
+--   benchmarking/clickhouse.go:372-428 LiveInputKeys).
 --   stmt4 the 8 repository tables of the full-org finalize (stale_team_keys_run.go:83-93, :300-330): repository held.
 -- No ERASE (no row here; card s13 with cites): file_metrics_daily, file_hotspot_daily, review_edges_daily,
 --   compounding_risk_daily scope repo, ai_workflow_*, work_graph_*_edges, work_item_team_attributions, work_item_cycle_times
@@ -283,9 +286,10 @@ ORDER BY family, raw_table, scope_id;
 --   retirement rows work_item_measure_capability.go:186-245), ic_landscape_rolling_30d (day = as_of_day; zeros over points
 --   not produced, ic_finalize_native_executor.go:51-63) and user_metrics_daily.synth (the ic_finalize synthesized keys, :64-84):
 --   inputs user_metrics_daily live (all days) and work_items.
+--   benchmarking: the six output tables (day column per table, newest retracted 0 per key) vs the 3 testops input tables.
 -- Cost gate k user_metrics_daily 3 (the .live input, the .synth family, the ORG-1 scalar), every other table 1, f 2, s 1.
 WITH (SELECT 2 * intDiv(5 * (sum(marks * multiIf(table = 'user_metrics_daily', 3, 1)) * 8192 + count()) + 3, 4) + 2 * (2 * count() + 1) FROM system.parts WHERE active AND database = currentDatabase()
-      AND table IN ('ai_attribution', 'ai_governance_coverage_daily', 'ai_impact_metrics_daily', 'compounding_risk_daily', 'estimate_coverage_metrics_daily', 'ic_landscape_rolling_30d', 'incident_metrics_daily', 'issue_type_metrics_daily', 'operational_incidents', 'repo_complexity_daily', 'repo_metrics_daily', 'team_cognitive_load_daily', 'team_complexity_daily', 'testops_coverage_metrics_daily', 'testops_metric_baselines', 'testops_pipeline_metrics_daily', 'testops_test_metrics_daily', 'user_metrics_daily', 'work_item_completion_daily', 'work_item_measure_capability', 'work_item_metrics_daily', 'work_item_state_durations_daily', 'work_item_user_metrics_daily', 'work_items')) AS read_rows_cap,
+      AND table IN ('ai_attribution', 'ai_governance_coverage_daily', 'ai_impact_metrics_daily', 'compounding_risk_daily', 'estimate_coverage_metrics_daily', 'ic_landscape_rolling_30d', 'incident_metrics_daily', 'issue_type_metrics_daily', 'operational_incidents', 'repo_complexity_daily', 'repo_metrics_daily', 'team_cognitive_load_daily', 'team_complexity_daily', 'testops_benchmark_insights', 'testops_coverage_metrics_daily', 'testops_maturity_bands', 'testops_metric_anomalies', 'testops_metric_baselines', 'testops_metric_correlations', 'testops_period_comparisons', 'testops_pipeline_metrics_daily', 'testops_test_metrics_daily', 'user_metrics_daily', 'work_item_completion_daily', 'work_item_measure_capability', 'work_item_metrics_daily', 'work_item_state_durations_daily', 'work_item_user_metrics_daily', 'work_items')) AS read_rows_cap,
   (SELECT throwIf(read_rows_cap >= 20000000, 'STOP-COST-GATE')) AS cost_gate
 SELECT o.stmt AS stmt, o.family AS family, o.raw_table AS raw_table,
   if(o.scope_full = 'org', 'org', substring(o.scope_full, 1, 8)) AS scope_id, o.raw_first_day AS raw_first_day,
@@ -363,9 +367,23 @@ FROM (
     FROM ai_impact_metrics_daily WHERE startsWith(org_id, 'f0f0f0f0') AND day >= toDate('{{FROM}}') AND day <= toDate('{{TO}}') HAVING count() > 0
     UNION ALL
     SELECT 'benchmarking' AS s_family, 'org' AS s_scope, min(k.day) AS s_sf, uniqExact(k.day) AS s_sd
-    FROM (SELECT metric_name, scope_type, scope_key, period_end AS day, rolling_window_days, argMax(retracted, computed_at) AS rt
-          FROM testops_metric_baselines WHERE startsWith(org_id, 'f0f0f0f0') AND period_end >= toDate('{{FROM}}') AND period_end <= toDate('{{TO}}')
-          GROUP BY metric_name, scope_type, scope_key, period_end, rolling_window_days) AS k
+    FROM (SELECT period_end AS day, argMax(retracted, computed_at) AS rt FROM testops_metric_baselines
+          WHERE startsWith(org_id, 'f0f0f0f0') AND period_end >= toDate('{{FROM}}') AND period_end <= toDate('{{TO}}') GROUP BY metric_name, scope_type, scope_key, rolling_window_days, period_end
+          UNION ALL
+          SELECT period_end AS day, argMax(retracted, computed_at) AS rt FROM testops_maturity_bands
+          WHERE startsWith(org_id, 'f0f0f0f0') AND period_end >= toDate('{{FROM}}') AND period_end <= toDate('{{TO}}') GROUP BY metric_name, scope_type, scope_key, period_end
+          UNION ALL
+          SELECT day AS day, argMax(retracted, computed_at) AS rt FROM testops_metric_anomalies
+          WHERE startsWith(org_id, 'f0f0f0f0') AND day >= toDate('{{FROM}}') AND day <= toDate('{{TO}}') GROUP BY metric_name, scope_type, scope_key, anomaly_type, day
+          UNION ALL
+          SELECT current_period_end AS day, argMax(retracted, computed_at) AS rt FROM testops_period_comparisons
+          WHERE startsWith(org_id, 'f0f0f0f0') AND current_period_end >= toDate('{{FROM}}') AND current_period_end <= toDate('{{TO}}') GROUP BY metric_name, scope_type, scope_key, comparison_period_end, current_period_end
+          UNION ALL
+          SELECT period_end AS day, argMax(retracted, computed_at) AS rt FROM testops_metric_correlations
+          WHERE startsWith(org_id, 'f0f0f0f0') AND period_end >= toDate('{{FROM}}') AND period_end <= toDate('{{TO}}') GROUP BY metric_name, paired_metric_name, scope_type, scope_key, period_end
+          UNION ALL
+          SELECT assumeNotNull(period_end) AS day, argMax(retracted, computed_at) AS rt FROM testops_benchmark_insights
+          WHERE startsWith(org_id, 'f0f0f0f0') AND assumeNotNull(period_end) >= toDate('{{FROM}}') AND assumeNotNull(period_end) <= toDate('{{TO}}') GROUP BY insight_id, period_end) AS k
     WHERE k.rt = 0 HAVING count() > 0
     ) AS st
     ARRAY JOIN multiIf(st.s_family = 'incident_metrics_daily', ['operational_incidents'],
@@ -720,6 +738,25 @@ func f3Fixture(synth string) string {
 		b(`INSERT INTO testops_metric_baselines (org_id, metric_name, scope_type, scope_key, period_end, rolling_window_days, computed_at, retracted) VALUES
 ('`+fOrg+`', 'pass_rate', 'repo', 'k1', '2026-10-29', 30, '2026-10-30 01:00:00', 0),
 ('`+bOrg+`', 'pass_rate', 'repo', 'k1', '2026-10-23', 30, '2026-10-24 01:00:00', 0);`) +
+		b(`INSERT INTO testops_maturity_bands (org_id, metric_name, scope_type, scope_key, period_start, period_end, computed_at, retracted) VALUES
+('`+fOrg+`', 'pass_rate', 'repo', 'k1', '2026-10-01', '2026-10-29', '2026-10-30 01:00:00', 0),
+('`+bOrg+`', 'pass_rate', 'repo', 'k1', '2026-09-25', '2026-10-23', '2026-10-24 01:00:00', 0);`) +
+		b(`INSERT INTO testops_metric_anomalies (org_id, metric_name, scope_type, scope_key, day, anomaly_type, computed_at, retracted) VALUES
+('`+fOrg+`', 'pass_rate', 'repo', 'k1', '2026-10-27', 'spike', '2026-10-28 01:00:00', 0),
+('`+bOrg+`', 'pass_rate', 'repo', 'k1', '2026-10-23', 'spike', '2026-10-24 01:00:00', 0);`) +
+		b(`INSERT INTO testops_period_comparisons (org_id, metric_name, scope_type, scope_key, current_period_start, current_period_end, comparison_period_start, comparison_period_end, computed_at, retracted) VALUES
+('`+fOrg+`', 'pass_rate', 'repo', 'k1', '2026-10-23', '2026-10-29', '2026-10-16', '2026-10-22', '2026-10-30 01:00:00', 0),
+('`+fOrg+`', 'pass_rate', 'repo', 'k1', '2026-10-20', '2026-10-26', '2026-10-13', '2026-10-19', '2026-10-27 01:00:00', 0),
+('`+bOrg+`', 'pass_rate', 'repo', 'k1', '2026-10-17', '2026-10-23', '2026-10-10', '2026-10-16', '2026-10-24 01:00:00', 0);`) +
+		b(`INSERT INTO testops_period_comparisons (org_id, metric_name, scope_type, scope_key, current_period_start, current_period_end, comparison_period_start, comparison_period_end, computed_at, retracted) VALUES
+('`+fOrg+`', 'pass_rate', 'repo', 'k1', '2026-10-20', '2026-10-26', '2026-10-13', '2026-10-19', '2026-10-28 01:00:00', 1);`) +
+		b(`INSERT INTO testops_metric_correlations (org_id, metric_name, paired_metric_name, scope_type, scope_key, period_start, period_end, computed_at, retracted) VALUES
+('`+fOrg+`', 'flake_rate', 'cycle_time_hours', 'team', 't1', '2026-09-30', '2026-10-29', '2026-10-30 01:00:00', 0),
+('`+bOrg+`', 'flake_rate', 'cycle_time_hours', 'team', 't1', '2026-09-24', '2026-10-23', '2026-10-24 01:00:00', 0);`) +
+		b(`INSERT INTO testops_benchmark_insights (org_id, insight_id, insight_type, scope_type, scope_key, metric_name, period_start, period_end, severity, summary, computed_at, retracted) VALUES
+('`+fOrg+`', 'in-f0', 't', 'repo', 'k1', 'pass_rate', '2026-10-01', '2026-10-29', 'low', 's', '2026-10-30 01:00:00', 0),
+('`+fOrg+`', 'in-f0-null', 't', 'repo', 'k1', 'pass_rate', NULL, NULL, 'low', 's', '2026-10-30 01:00:00', 0),
+('`+bOrg+`', 'in-b0', 't', 'repo', 'k1', 'pass_rate', '2026-09-25', '2026-10-23', 'low', 's', '2026-10-24 01:00:00', 0);`) +
 		b(`INSERT INTO git_pull_request_reviews (org_id, repo_id, number, review_id, reviewer, state, submitted_at, last_synced) VALUES
 ('`+bOrg+`', '`+q1+`', 9, 'rvb', 'y', 'APPROVED', '2024-01-02 09:00:00', '2024-01-02 10:00:00');`) +
 		b(`INSERT INTO commit_metrics (org_id, repo_id, commit_hash, day, author_email, total_loc, computed_at) VALUES
@@ -985,8 +1022,8 @@ func TestFloor13902v3FormExecutesMutantsAndEveryStopFires(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	f3Pin(t, "FLOOR-13902-3", f3Form, f3SHA256)
-	if n := strings.Count(chmigrate.StripLineComments(f3Form), "'f0f0f0f0'"); n != 63 {
-		t.Fatalf("%d org prefixes in the SQL, want 63", n)
+	if n := strings.Count(chmigrate.StripLineComments(f3Form), "'f0f0f0f0'"); n != 68 {
+		t.Fatalf("%d org prefixes in the SQL, want 68", n)
 	}
 	specs := map[string]f3Spec{
 		"stmt1": {f: 2, s: 1, orgsTab: "repo_metrics_daily", reads: map[string]uint64{"ai_impact_metrics_daily": 1, "commit_metrics": 1, "git_commits": 1,
@@ -1000,6 +1037,8 @@ func TestFloor13902v3FormExecutesMutantsAndEveryStopFires(t *testing.T) {
 			"incident_metrics_daily": 1, "issue_type_metrics_daily": 1, "operational_incidents": 1, "repo_complexity_daily": 1, "repo_metrics_daily": 1,
 			"team_cognitive_load_daily": 1, "team_complexity_daily": 1, "testops_coverage_metrics_daily": 1, "testops_metric_baselines": 1,
 			"testops_pipeline_metrics_daily": 1, "testops_test_metrics_daily": 1, "user_metrics_daily": 3, "work_item_completion_daily": 1,
+			"testops_benchmark_insights": 1, "testops_maturity_bands": 1, "testops_metric_anomalies": 1, "testops_metric_correlations": 1,
+			"testops_period_comparisons":   1,
 			"work_item_measure_capability": 1, "work_item_metrics_daily": 1, "work_item_state_durations_daily": 1, "work_item_user_metrics_daily": 1,
 			"work_items": 1}},
 		"stmt4": {f: 1, s: 1, orgsTab: "repos", reads: map[string]uint64{"ai_impact_metrics_daily": 1, "repos": 2, "team_metrics_daily": 1,
@@ -1076,7 +1115,7 @@ func TestFloor13902v3FormExecutesMutantsAndEveryStopFires(t *testing.T) {
 	s3 := []string{ctl(f3RunDay1),
 		"ai_governance_coverage_daily ai_attribution org 2026-01-06 2026-10-29 1",
 		"ai_impact_metrics_daily.org operational_incidents org 2026-01-05 2026-10-26 1",
-		"benchmarking benchmarking.inputs org 2026-10-25 2026-10-29 1",
+		"benchmarking benchmarking.inputs org 2026-10-25 2026-10-27 2",
 		"compounding_risk_daily.team repo_metrics_daily.live org 2025-08-15 2026-10-26 1",
 		"estimate_coverage_metrics_daily work_items org 2026-01-03 2026-10-29 1",
 		"ic_landscape_rolling_30d user_metrics_daily.live org 2026-10-25 2026-10-29 1",
@@ -1178,7 +1217,7 @@ func TestFloor13902v3FormExecutesMutantsAndEveryStopFires(t *testing.T) {
 		{"stmt2", "RULE", " AND lowerUTF8(trimBoth(ifNull(status, ''))) NOT IN ('deleted', 'running', 'queued')", "", 1,
 			replaceRow(s2, "cicd_metrics_daily ci_pipeline_runs.finished "+c1+" 2026-02-01 2026-10-25 1",
 				"cicd_metrics_daily ci_pipeline_runs.finished "+c1+" 2025-12-01 2026-10-25 1")},
-		{"stmt3", "ORG", "'f0f0f0f0'", "'b0000000'", 26, nil},
+		{"stmt3", "ORG", "'f0f0f0f0'", "'b0000000'", 31, nil},
 		{"stmt3", "RULE", " AND is_deleted = 0", "", 1,
 			replaceRow(replaceRow(s3, "incident_metrics_daily operational_incidents org 2026-01-05 2026-10-29 1",
 				"incident_metrics_daily operational_incidents org 2025-12-20 2026-10-29 1"),

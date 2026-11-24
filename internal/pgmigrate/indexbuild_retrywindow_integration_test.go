@@ -4,6 +4,7 @@ package pgmigrate_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 )
@@ -73,8 +75,12 @@ func TestBuildIndexRetryPauseEndsWithTheBuildWindow(t *testing.T) {
 						LockTimeout: time.Second, Attempts: 3, RetryDelay: 30 * time.Minute, Deadline: 3 * time.Second, CleanupBudget: 3 * time.Second,
 					}, slog.New(slog.NewJSONHandler(logs, nil)))
 				})
-			if err == nil || !strings.Contains(err.Error(), "the build window ended") {
+			if !errors.Is(err, pgmigrate.ErrWindowExpired) {
 				t.Fatalf("err = %v, want the window end; log %s", err, logs.String())
+			}
+			var cause *pgconn.PgError
+			if !errors.As(err, &cause) || cause.Code != "55P03" {
+				t.Fatalf("err = %v, want it to wrap the last attempt's probe failure (55P03); log %s", err, logs.String())
 			}
 			if result.Attempts != 1 {
 				t.Fatalf("attempts = %d, want 1; log %s", result.Attempts, logs.String())
@@ -110,7 +116,7 @@ func TestBuildIndexRetriesWithZeroRetryDelay(t *testing.T) {
 						LockTimeout: time.Second, Attempts: 3, RetryDelay: 0, Deadline: 60 * time.Second, CleanupBudget: 3 * time.Second,
 					}, slog.New(slog.NewJSONHandler(logs, nil)))
 				})
-			if err == nil || strings.Contains(err.Error(), "the build window ended") {
+			if err == nil || errors.Is(err, pgmigrate.ErrWindowExpired) {
 				t.Fatalf("err = %v, want the probe failure of the last attempt; log %s", err, logs.String())
 			}
 			if result.Attempts != 3 {

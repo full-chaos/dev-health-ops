@@ -2,18 +2,22 @@
 
 package analytics
 
-// CHAOS-14259 pooled TEST_SUITE_DURATION_P95 at three times the production size (2,700,000 synthetic suite rows of one
-// organization): the measure's statement reads at most TestopsPooledMaxRowsToRead rows (system.query_log read_rows) and is
-// served on the production query client, both when the window's repository-days hold stored samples and when one does not
-// (the raw arm reads). The table has no day key, so an organization-wide inner select reads the organization's whole history:
-// the raw arm's newest-attempt rule reads only the runs of the repository-days without stored samples. The source text of the
-// query-api build before the retired-slot rule (ops 84d5d1da, rendered verbatim below) is read too, as the logged reference.
+// CHAOS-14591 pooled TEST_SUITE_DURATION_P95 at 3,000,000 synthetic suite rows of one organization (repository A 2,700,000,
+// repository B 300,000), on the test ClickHouse (its version is logged). The statement's read
+// (system.query_log read_rows) must be: <= 1,000 rows when every window day holds stored samples; <= 1.2 x B's rows when
+// only B has a day without stored samples (the repository filter prunes A: without it the read is A + B); <= 1.2 x the
+// organization's rows and <= TestopsPooledMaxRowsToRead when both have such a day. A mutant without the repository filter
+// reads the whole organization even when every day is stored. The measure is served on the production query client
+// (chclient.Options) in every phase, and the statement's memory stays under 1 GiB (query-api sends no max_memory_usage).
+// The source text of the query-api build before the retired-slot rule (ops 84d5d1da, verbatim below) is read once as the
+// logged reference.
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
@@ -77,29 +81,49 @@ func TestTestopsPooledSuiteP95ReadStaysUnderTheRowBoundAtThreeTimesProductionSiz
 	if sum := sha256.Sum256([]byte(suiteRunsSourceLive)); hex.EncodeToString(sum[:]) != suiteRunsSourceLiveSHA256 {
 		t.Fatalf("the live source text changed: sha256 %x", sum)
 	}
+	repoFilter := "AND repo_id IN (SELECT repo_id FROM (" + testopspooled.LegacyRepoDays("testops_test_metrics_daily") + "))"
+	if got := strings.Count(testopspooled.SuiteRunsSource, repoFilter); got != 1 {
+		t.Fatalf("SuiteRunsSource holds the repository filter %d times, want 1", got)
+	}
+	mutant := strings.Replace(testopspooled.SuiteRunsSource, repoFilter, "", 1)
 	e := startOwnersEnv(t)
-	const org = "f0f0f0f0-0000-4000-8000-000000014259"
-	const repo = "b0b0b0b0-0000-4000-8000-000000014259"
-	const history = 2_700_000
-	e.repo(org, repo, "acme/history")
-	e.owner(org, "team-a", repo, "acme/history", 1, openFrom(), nil)
-	e.durations(org, repo, day1, 10, 20, 30)
-	e.write(org, day1, repo)
-	e.exec(fmt.Sprintf(`INSERT INTO test_suite_results (repo_id, run_id, suite_id, suite_name, total_count, passed_count, failed_count,
+	const org = "f0f0f0f0-0000-4000-8000-000000014591"
+	const repoA, repoB = "b0b0b0b0-0000-4000-8000-00000014591a", "b0b0b0b0-0000-4000-8000-00000014591b"
+	const rowsA, rowsB = 2_700_000, 300_000
+	var version string
+	if err := e.admin.QueryRow(e.ctx, `SELECT version()`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []struct {
+		id   string
+		rows int
+	}{{repoA, rowsA}, {repoB, rowsB}} {
+		e.repo(org, r.id, "acme/"+r.id[len(r.id)-1:])
+		e.owner(org, "team-a", r.id, "acme/"+r.id[len(r.id)-1:], 1, openFrom(), nil)
+		e.durations(org, r.id, day1, 10, 20, 30)
+		e.exec(fmt.Sprintf(`INSERT INTO test_suite_results (repo_id, run_id, suite_id, suite_name, total_count, passed_count, failed_count,
   skipped_count, duration_seconds, started_at, finished_at, org_id, last_synced, report_slot, run_attempt)
 SELECT toUUID('%s'), concat('h-', toString(intDiv(number, 10))), concat('hs-', toString(number)), 'pkg', 1, 1, 0, 0,
   toFloat64(number %% 600), toDateTime64('2025-01-01 00:00:00', 3, 'UTC') + intDiv(number, 3), NULL, '%s',
   toDateTime64('2025-12-31 00:00:00', 3, 'UTC'), if(number %% 2 = 0, '', concat('slot-', toString(number %% 5))), 1
-FROM numbers(%d)`, repo, org, history))
-	e.exec(`OPTIMIZE TABLE test_suite_results FINAL`)
-	var suiteRows uint64
-	if err := e.admin.QueryRow(e.ctx, `SELECT count() FROM test_suite_results WHERE org_id = ?`, org).Scan(&suiteRows); err != nil {
-		t.Fatal(err)
+FROM numbers(%d)`, r.id, org, r.rows))
 	}
-
-	read := func(phase, label, source string) uint64 {
+	e.write(org, day1, repoA, repoB)
+	e.exec(`OPTIMIZE TABLE test_suite_results FINAL`)
+	suiteRows := func(repo string) uint64 {
 		t.Helper()
-		id := "c14259-" + phase + "-" + label + "-" + uuid.NewString()[:8]
+		var n uint64
+		if err := e.admin.QueryRow(e.ctx, `SELECT count() FROM test_suite_results WHERE org_id = ? AND repo_id = ?`, org, repo).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	inA, inB := suiteRows(repoA), suiteRows(repoB)
+	all := inA + inB
+
+	read := func(phase, label, source string) (rows, memory uint64) {
+		t.Helper()
+		id := "c14591-" + phase + "-" + label + "-" + uuid.NewString()[:8]
 		ctx := stdclickhouse.Context(e.ctx, stdclickhouse.WithQueryID(id))
 		var p95 *float64
 		var samples uint64
@@ -109,44 +133,51 @@ FROM numbers(%d)`, repo, org, history))
 			t.Fatalf("%s %s: %v", phase, label, err)
 		}
 		e.exec(`SYSTEM FLUSH LOGS`)
-		var rows uint64
-		if err := e.admin.QueryRow(e.ctx, `SELECT read_rows FROM system.query_log WHERE query_id = ? AND type = 'QueryFinish'`, id).Scan(&rows); err != nil {
+		if err := e.admin.QueryRow(e.ctx, `SELECT read_rows, memory_usage FROM system.query_log WHERE query_id = ? AND type = 'QueryFinish'`, id).
+			Scan(&rows, &memory); err != nil {
 			t.Fatalf("%s %s query_log: %v", phase, label, err)
 		}
-		t.Logf("CELL14259 %s %s: read_rows %d = %.2f x the %d suite rows of the organization (p95 %v over %d samples)",
-			phase, label, rows, float64(rows)/float64(suiteRows), suiteRows, p95, samples)
-		return rows
+		t.Logf("CELL14591 %s %s %s: read_rows %d = %.3f x the %d suite rows (A %d, B %d), memory %d bytes, p95 %v over %d samples",
+			version, phase, label, rows, float64(rows)/float64(all), all, inA, inB, memory, p95, samples)
+		return rows, memory
 	}
-	// The served path runs on the production query client (chclient.Options: no byte bound, CHAOS-4651), so only the pooled
-	// row bound can refuse the read.
 	prod, err := dhclickhouse.NewClickHouseQueryClientWithOptions(chclient.Options(e.uri))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = prod.Close() })
-	served := func(phase string) error {
+	served := func(phase string) {
 		t.Helper()
 		_, err := resolveOneTimeseries(e.ctx, prod, org, tsInput(model.DimensionInputTeam, model.MeasureInputTestSuiteDurationP95), false, nil, true)
 		var refused *PooledReadBoundError
-		if errors.As(err, &refused) {
-			t.Logf("CELL14259 %s served TEST_SUITE_DURATION_P95 under the %d-row bound: refused, code %d (%v)", phase, TestopsPooledMaxRowsToRead, refused.Code, err)
-		} else {
-			t.Logf("CELL14259 %s served TEST_SUITE_DURATION_P95 under the %d-row bound: err %v", phase, TestopsPooledMaxRowsToRead, err)
+		if errors.As(err, &refused) || err != nil {
+			t.Errorf("%s %s: TEST_SUITE_DURATION_P95 under the %d-row bound: %v; want served", version, phase, TestopsPooledMaxRowsToRead, err)
 		}
-		return err
+	}
+	const memoryCap = 1 << 30
+	check := func(phase string, want uint64, wantText string) {
+		t.Helper()
+		rows, memory := read(phase, "head", testopspooled.SuiteRunsSource)
+		if rows > want || rows > TestopsPooledMaxRowsToRead {
+			t.Errorf("%s %s: the statement reads %d rows, want at most %d (%s) and the %d-row bound", version, phase, rows, want, wantText, TestopsPooledMaxRowsToRead)
+		}
+		if memory > memoryCap {
+			t.Errorf("%s %s: the statement uses %d bytes of memory, want at most %d", version, phase, memory, memoryCap)
+		}
+		served(phase)
+	}
+	legacy := func(repo string) {
+		// A newest daily row without stored samples (written before the writer stored them): the raw arm reads that day.
+		e.exec(`INSERT INTO testops_test_metrics_daily (repo_id, day, org_id, computed_at) VALUES (?, ?, ?, now() + INTERVAL 1 HOUR)`, repo, day1, org)
 	}
 
-	for _, phase := range []string{"stored", "legacy"} {
-		if phase == "legacy" {
-			// A newest daily row without stored samples (written before the writer stored them): the raw arm reads the day too.
-			e.exec(`INSERT INTO testops_test_metrics_daily (repo_id, day, org_id, computed_at) VALUES (?, ?, ?, now() + INTERVAL 1 HOUR)`, repo, day1, org)
-		}
-		live := read(phase, "live-84d5d1da", suiteRunsSourceLive)
-		head := read(phase, "head", testopspooled.SuiteRunsSource)
-		err := served(phase)
-		if head > TestopsPooledMaxRowsToRead || err != nil {
-			t.Errorf("%s: the statement reads %d rows (the 84d5d1da text %d) for %d suite rows; the measure is served with err %v; want at most the %d-row bound and served",
-				phase, head, live, suiteRows, err, TestopsPooledMaxRowsToRead)
-		}
+	check("stored", 1_000, "every window day holds stored samples")
+	if rows, _ := read("stored", "mutant-without-repository-filter", mutant); rows < all {
+		t.Errorf("%s stored: the mutant without the repository filter reads %d rows, want at least the %d suite rows (the filter is what prunes)", version, rows, all)
 	}
+	legacy(repoB)
+	check("legacy-B", inB+inB/5+1_000, "1.2 x repository B's rows: A is pruned")
+	legacy(repoA)
+	check("legacy-A-and-B", all+all/5+1_000, "1.2 x the organization's rows")
+	read("legacy-A-and-B", "reference-84d5d1da", suiteRunsSourceLive)
 }

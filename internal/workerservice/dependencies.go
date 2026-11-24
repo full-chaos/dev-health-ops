@@ -2014,6 +2014,11 @@ func budgetDimensionsForQueues(queues []string) []jobruntime.BudgetLabels {
 			labels = append(labels, jobruntime.BudgetLabels{
 				Provider: provider, CostClass: string(costClass),
 			})
+			// The GitHub tests/cicd artifact prefetch waits on its class's own sub-budget (CHAOS-14542): an
+			// unregistered class would be dropped from the histogram.
+			if prefetch, ok := providersync.PrefetchBudgetCostClass(costClass); ok && provider == "github" {
+				labels = append(labels, jobruntime.BudgetLabels{Provider: provider, CostClass: string(prefetch)})
+			}
 		}
 	}
 	return labels

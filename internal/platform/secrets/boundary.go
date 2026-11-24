@@ -313,6 +313,20 @@ func NewBoundaryWith(dsn string, resolved ...string) Boundary {
 	return Boundary{values: plain, escaped: escaped}
 }
 
+// Join is one Boundary over the values of every part, so one union of matches
+// runs over a text instead of one Boundary after another: a spelling of one
+// part's credential cannot eat bytes of another part's. It is unparsable when
+// any part is (fail closed, as the chain of the parts was).
+func Join(parts ...Boundary) Boundary {
+	var joined Boundary
+	for _, part := range parts {
+		joined.values = append(joined.values, part.values...)
+		joined.escaped = append(joined.escaped, part.escaped...)
+		joined.unparsable = joined.unparsable || part.unparsable
+	}
+	return joined
+}
+
 // Redact returns err with every occurrence of the boundary's values
 // replaced by RedactedMarker, or err unchanged if it is nil or contains
 // none of them.

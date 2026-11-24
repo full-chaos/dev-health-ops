@@ -194,12 +194,11 @@ func clientBuildDetail(provider string, err error) string {
 
 // runCatalogTeams runs one provider's catalog into the ClickHouse the DSN names.
 func runCatalogTeams(ctx context.Context, env cli.Env, d deps, request catalogRequest) int {
-	boundary := secrets.NewBoundary(request.dsn)
-	pgBoundary := secrets.NewBoundary(request.pgDSN)
-	redact := func(err error) string { return pgBoundary.Redact(boundary.Redact(err)).Error() }
+	boundary := secrets.Join(secrets.NewBoundary(request.dsn), secrets.NewBoundary(request.pgDSN))
+	redact := func(err error) string { return boundary.Redact(err).Error() }
 	// What the collector logs (the roster-preservation warnings carry the
 	// driver's error) is redacted with the same boundary.
-	defer redactProcessLogger(func(text string) string { return pgBoundary.RedactText(boundary.RedactText(text)) })()
+	defer redactProcessLogger(boundary.RedactText)()
 	spec, ok := catalogProviderSpecs[request.provider]
 	if !ok {
 		return writeError(env.Stderr, cli.ExitUsage, "unsupported_provider", "provider "+request.provider+" has no team catalog verb")

@@ -1,6 +1,8 @@
 package secrets
 
 import (
+	"context"
+	"errors"
 	"math/rand"
 	"net/url"
 	"strconv"
@@ -179,5 +181,44 @@ func TestSeededOverlapCorpusHidesEveryByteMainHides(t *testing.T) {
 	}
 	if hidMore == 0 {
 		t.Error("the corpus never made the boundary hide more than main: it proves nothing")
+	}
+}
+
+// Join is one Boundary: the union runs over every part's values at once.
+func TestJoinRedactsTheUnionAcrossParts(t *testing.T) {
+	sink := NewBoundary("clickhouse://svc%3A:zz9q@c/d")
+	database := NewBoundary("postgres://acct:A7kZ2@h/db")
+	const text = "echo svc%3A7kZ2 end"
+	if got := Join(sink, database).RedactText(text); got != "echo [REDACTED] end" {
+		t.Errorf("Join RedactText: got %q", got)
+	}
+	if got := Join(sink, database).Redact(errors.New(text)).Error(); got != "echo [REDACTED] end" {
+		t.Errorf("Join Redact: got %q", got)
+	}
+	if got := Join(database, sink).RedactText(text); got != "echo [REDACTED] end" {
+		t.Errorf("Join in the other order: got %q", got)
+	}
+	if got := Join().RedactText(text); got != text {
+		t.Errorf("Join of nothing: got %q", got)
+	}
+}
+
+// One unparsable part makes the joined Boundary unparsable: Redact fails closed.
+func TestJoinIsUnparsableWhenAnyPartIs(t *testing.T) {
+	parsable := NewBoundary("postgres://acct:A7kZ2@h/db")
+	unparsable := NewUnparsableBoundary("host=h password=Bq4rT %zz")
+	for name, b := range map[string]Boundary{"last": Join(parsable, unparsable), "first": Join(unparsable, parsable)} {
+		if got := b.Redact(errors.New("boom")); got == nil || got.Error() != UnparsableMarker {
+			t.Errorf("%s: got %v, want %q", name, got, UnparsableMarker)
+		}
+		if got := b.Redact(context.Canceled); !errors.Is(got, context.Canceled) {
+			t.Errorf("%s: a cancellation lost its identity: %v", name, got)
+		}
+		if got := b.RedactText("x Bq4rT y"); got != "x [REDACTED] y" {
+			t.Errorf("%s: RedactText keeps the credential redaction: got %q", name, got)
+		}
+	}
+	if got := Join(parsable, parsable).Redact(errors.New("boom")); got.Error() != "boom" {
+		t.Errorf("parsable parts: got %v", got)
 	}
 }

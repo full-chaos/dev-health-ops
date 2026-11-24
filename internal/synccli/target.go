@@ -943,19 +943,11 @@ func fillSynthetic(plan *Plan, v map[string]string, in Inputs) *Refusal {
 // planBoundary redacts the credential components of the ClickHouse sink URI and
 // of the PostgreSQL URI (resolved the way the driver resolves it) from a text.
 func planBoundary(plan Plan) func(string) string {
-	sink := secrets.NewBoundary(plan.SinkURI)
-	var postgres *secrets.Boundary
+	boundary := secrets.NewBoundary(plan.SinkURI)
 	if plan.DB != nil && strings.TrimSpace(*plan.DB) != "" {
-		boundary := pgstorage.Boundary(*plan.DB)
-		postgres = &boundary
+		boundary = secrets.Join(boundary, pgstorage.Boundary(*plan.DB))
 	}
-	return func(text string) string {
-		text = sink.RedactText(text)
-		if postgres != nil {
-			text = postgres.RedactText(text)
-		}
-		return text
-	}
+	return boundary.RedactText
 }
 
 // redactProcessLogger makes every text the process logger is given pass through

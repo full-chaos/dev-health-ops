@@ -136,3 +136,32 @@ func TestBuildIndexRetriesWithZeroRetryDelay(t *testing.T) {
 		})
 	}
 }
+
+// RetryDelay 0 retries at once while the window has time left: with the blocker gone after attempt 1, attempt 2 builds
+// a valid index.
+func TestBuildIndexZeroRetryDelayBuildsOnTheNextAttempt(t *testing.T) {
+	for name, verb := range retryWindowVerbs() {
+		t.Run(name, func(t *testing.T) {
+			d := newDownInstance(t)
+			uri := d.withoutIndex(t, verb.revision)
+			release := holdShareLock(t, uri)
+			conn := connect(t, uri)
+			logs := &syncBuffer{}
+			go func() {
+				for !strings.Contains(logs.String(), "build-index: attempt failed") {
+					time.Sleep(10 * time.Millisecond)
+				}
+				release()
+			}()
+			result, err := runBuildGuarded(t, 90*time.Second, "the second attempt must build the index", release,
+				func(ctx context.Context) (pgmigrate.IndexBuildResult, error) {
+					return verb.build(ctx, conn, pgmigrate.IndexBuildOptions{
+						LockTimeout: 5 * time.Second, Attempts: 2, RetryDelay: 0, Deadline: time.Minute, CleanupBudget: 10 * time.Second,
+					}, slog.New(slog.NewJSONHandler(logs, nil)))
+				})
+			if err != nil || !result.Valid || result.Attempts != 2 {
+				t.Fatalf("result %+v err %v, want a valid index on attempt 2; log %s", result, err, logs.String())
+			}
+		})
+	}
+}

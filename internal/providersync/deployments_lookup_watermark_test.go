@@ -23,6 +23,7 @@ const (
 	deploymentsLookup503             deploymentsLookupCase = "503"
 	deploymentsLookupNoPR            deploymentsLookupCase = "no pull request (an empty list)"
 	deploymentsLookupHappy           deploymentsLookupCase = "one merged pull request"
+	deploymentsLookup401             deploymentsLookupCase = "an answered 401"
 )
 
 // deploymentsLookupDoer serves one repository with one deployment (sha abc) and answers its lookup per the case.
@@ -49,6 +50,8 @@ func (d deploymentsLookupDoer) Do(request *http.Request) (*http.Response, error)
 			return nil, request.Context().Err()
 		case deploymentsLookup503:
 			return reply(http.StatusServiceUnavailable, http.Header{}, `{"message":"unavailable"}`)
+		case deploymentsLookup401:
+			return reply(http.StatusUnauthorized, http.Header{}, `{"message":"401 Unauthorized"}`)
 		case deploymentsLookupNoPR:
 			return reply(http.StatusOK, http.Header{}, `[]`)
 		}
@@ -155,5 +158,98 @@ func TestDeploymentsLookupAnswerAdvancesTheWatermarkAsMain(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// deploymentsWindowDoer serves one deployment inside the claim window (sha abc, answered with a merged pull request)
+// and one newer and one older deployment outside it, whose lookup FAILS with the given kind.
+type deploymentsWindowDoer struct {
+	provider string
+	failure  deploymentsLookupCase
+}
+
+func (d *deploymentsWindowDoer) Do(request *http.Request) (*http.Response, error) {
+	path := request.URL.Path
+	if strings.Contains(path, "/commits/newer/") || strings.Contains(path, "/commits/older/") {
+		switch d.failure {
+		case deploymentsLookup503:
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Status: "503", Header: http.Header{"Content-Type": {"application/json"}},
+				Body: io.NopCloser(strings.NewReader(`{"message":"unavailable"}`)), Request: request}, nil
+		case deploymentsLookup429Exhausted:
+			return &http.Response{StatusCode: http.StatusTooManyRequests, Status: "429", Header: http.Header{"Content-Type": {"application/json"}, "Retry-After": {"0"}},
+				Body: io.NopCloser(strings.NewReader(`{"message":"rate limited"}`)), Request: request}, nil
+		}
+		return nil, errors.New("synthetic transport failure")
+	}
+	switch path {
+	case "/repos/acme/api/deployments":
+		return deploymentsLookupDoer{provider: d.provider, lookup: deploymentsLookupHappy}.reply(request, `[
+			{"id":100,"sha":"newer","environment":"production","created_at":"2026-08-02T10:00:00Z"},
+			{"id":101,"sha":"abc","environment":"production","created_at":"2026-07-22T10:00:00Z"},
+			{"id":99,"sha":"older","environment":"production","created_at":"2026-06-02T10:00:00Z"}]`)
+	case "/api/v4/projects/123/deployments":
+		return deploymentsLookupDoer{provider: d.provider, lookup: deploymentsLookupHappy}.reply(request, `[
+			{"id":500,"iid":6,"status":"success","environment":{"name":"production"},"created_at":"2026-08-02T10:00:00Z","sha":"newer"},
+			{"id":501,"iid":7,"status":"success","environment":{"name":"production"},"created_at":"2026-07-22T10:00:00Z","sha":"abc"},
+			{"id":499,"iid":5,"status":"success","environment":{"name":"production"},"created_at":"2026-06-02T10:00:00Z","sha":"older"}]`)
+	}
+	return deploymentsLookupDoer{provider: d.provider, lookup: deploymentsLookupHappy}.Do(request)
+}
+
+func (d deploymentsLookupDoer) reply(request *http.Request, body string) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusOK, Status: "200", Header: http.Header{"Content-Type": {"application/json"}}, Request: request,
+		Body: io.NopCloser(strings.NewReader(body))}, nil
+}
+
+// Only a deployment this batch keeps can stop it: every listed deployment is still looked up (as Python does), but a
+// failed lookup (503, rate limit spent, transport) of a deployment outside the claim window (newer than its end, older
+// than its start) does not stop the unit, and the in-window deployment's row and the watermark are main's. RED for
+// GitLab at 8ff06bc47bad. (GitHub filters by the window before its lookup, so it never looks such a deployment up.)
+func TestDeploymentsLookupOutsideTheWindowDoesNotBlock(t *testing.T) {
+	for _, provider := range []string{"gitlab"} {
+		for _, failure := range []deploymentsLookupCase{deploymentsLookup503, deploymentsLookup429Exhausted, "transport failure"} {
+			t.Run(provider+"/"+string(failure), func(t *testing.T) {
+				doer := &deploymentsWindowDoer{provider: provider, failure: failure}
+				base := map[string]string{"github": "https://api.github.com", "gitlab": "https://gitlab.example"}[provider]
+				client, err := providerfoundation.NewHTTPClient(provider, base, fakehttp.Client(doer),
+					func(*http.Request) error { return nil },
+					providerfoundation.RetryPolicy{MaxAttempts: 3, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
+					providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defaultGitHubTreeWalkCache.clear()
+				claim := nativeTestClaim(provider, "deployments")
+				now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
+				var batch CompleteRouteBatch
+				if provider == "github" {
+					batch, err = (GitHubDeploymentsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, now)
+				} else {
+					batch, err = (GitLabDeploymentsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, now)
+				}
+				if err != nil || batch.Watermark == nil || claim.BeforeAt == nil || !batch.Watermark.Equal(*claim.BeforeAt) || len(batch.Effects) != 1 || len(batch.Effects[0].Rows) != 1 {
+					t.Fatalf("err = %v, watermark = %v, effects = %+v: want the in-window row and the claim's end", err, batch.Watermark, batch.Effects)
+				}
+				if got := "[" + string(batch.Effects[0].Rows[0]) + "]"; got != deploymentsLookupRowsAtMain[provider+"/"+string(deploymentsLookupHappy)] {
+					t.Errorf("row = %s\nwant main's in-window row", got)
+				}
+			})
+		}
+	}
+}
+
+// An answered 401 on the lookup is not "no pull request": the shared lookup classifier (lookup_failure.go) fails the
+// unit on an authentication answer other than a 403, so the route returns the error with the authentication class and
+// no watermark. (At main 9c3e2a074c5a the deployment was kept unattributed and the window acknowledged.)
+func TestDeploymentsLookupAnswered401FailsTheUnit(t *testing.T) {
+	for _, provider := range []string{"github", "gitlab"} {
+		t.Run(provider, func(t *testing.T) {
+			batch, err, _ := collectDeploymentsLookup(t, provider, deploymentsLookup401)
+			var providerErr *providerfoundation.ProviderError
+			if err == nil || batch.Watermark != nil || len(batch.Effects) != 0 || !errors.As(err, &providerErr) ||
+				providerErr.Class != providerfoundation.ErrorAuthentication || providerErr.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("err = %v, watermark = %v, %d effect(s): want the 401 authentication error and no watermark", err, batch.Watermark, len(batch.Effects))
+			}
+		})
 	}
 }

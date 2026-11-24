@@ -419,23 +419,25 @@ const (
 		WHERE (partition.status <> 'succeeded' OR partition.updated_at > $1)
 			AND partition.run_id IS NOT NULL
 	)`
-	// The River arm is an uncorrelated IN, so it reads river_job once per
-	// statement (a hashed subplan), not once per base run: as a correlated
-	// EXISTS the planner priced an early match and scanned river_job for every
-	// run. The domain id is always a JSON string (jobcontract.DomainLink.ID),
-	// so #>> equals the old @> containment; the IS NOT NULL keeps a job with no
-	// domain id from putting a NULL into the set, which would turn
-	// "run.id IN (...)" into NULL instead of false.
+	// Both arms are uncorrelated INs, read once per statement (hashed
+	// subplans), not once per base run. As a correlated EXISTS the planner
+	// priced an early match and scanned river_job for every run; the outbox
+	// arm, correlated, was planned on some ANALYZE samples as a walk of
+	// ix_worker_job_outbox_due per base run. The domain id is always a JSON
+	// string (jobcontract.DomainLink.ID), so #>> equals the old @>
+	// containment; the IS NOT NULL keeps a job or row with no domain id from
+	// putting a NULL into a set, which would turn "run.id IN (...)" into NULL
+	// instead of false.
 	staleFinalizeLiveJobSQL = `(run.id::text IN (
 		SELECT job.args #>> '{domain,id}' FROM %[1]s AS job
 		WHERE job.kind = 'metrics.daily_finalize'
 			AND job.state::text NOT IN ('completed', 'discarded', 'cancelled')
 			AND job.args #>> '{domain,id}' IS NOT NULL
-	) OR EXISTS (
-		SELECT 1 FROM public.worker_job_outbox AS outbox
+	) OR run.id::text IN (
+		SELECT outbox.args #>> '{domain,id}' FROM public.worker_job_outbox AS outbox
 		WHERE outbox.job_kind = 'metrics.daily_finalize'
-			AND outbox.args #>> '{domain,id}' = run.id::text
 			AND outbox.status IN ('pending', 'claimed')
+			AND outbox.args #>> '{domain,id}' IS NOT NULL
 	))`
 	// Uncorrelated like the River arms (one join per statement, the same IS
 	// NOT NULL guard): as a correlated EXISTS the planner could re-run a merge

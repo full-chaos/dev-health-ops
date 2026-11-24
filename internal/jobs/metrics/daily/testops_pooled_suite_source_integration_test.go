@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopspooled"
@@ -104,25 +105,30 @@ func TestTestopsPooledSuiteSourceServesTheRowsOfTheOrganizationWideRead(t *testi
 		{21, "plain", "2026-07-22T10:20:00Z", false, retiredArchive(t, "2026-07-22T10:02:00", matrixTotalsSuite{"p", "2.0", []matrixTotalsCase{{"z", "", "0.5"}}})},
 	}))
 	repo := stack.repoID(t, org)
-	// An OLDER version of a kept key with another duration, in a part of its own: FINAL drops it, a non-FINAL read would see it.
-	if err := stack.conn.Exec(ctx, `INSERT INTO test_suite_results SELECT * REPLACE (toFloat64(999) AS duration_seconds, last_synced - INTERVAL 1 DAY AS last_synced)
-FROM test_suite_results FINAL WHERE org_id = ? AND run_id = '43600014605' LIMIT 1`, org); err != nil {
-		t.Fatal(err)
-	}
-	// The other organization: the same repository and run ids (a copy of every row).
-	if err := stack.conn.Exec(ctx, `INSERT INTO test_suite_results SELECT * REPLACE ({other_org:String} AS org_id) FROM test_suite_results
-WHERE org_id = {org_id:String}`, clickhouse.Named("other_org", other), clickhouse.Named("org_id", org)); err != nil {
-		t.Fatal(err)
-	}
-	countOf := func(of string) uint64 {
+	countOf := func(of string, final bool) uint64 {
 		t.Helper()
+		from := "test_suite_results"
+		if final {
+			from += " FINAL"
+		}
 		var n uint64
-		if err := stack.conn.QueryRow(ctx, `SELECT count() FROM test_suite_results WHERE org_id = ?`, of).Scan(&n); err != nil {
+		if err := stack.conn.QueryRow(ctx, `SELECT count() FROM `+from+` WHERE org_id = ?`, of).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		return n
 	}
-	if copied, source := countOf(other), countOf(org); copied == 0 || copied != source {
+	// An OLDER version of a kept key with another duration, in a part of its own: FINAL drops it, a non-FINAL read would see it.
+	finalBefore, rawBefore := countOf(org, true), countOf(org, false)
+	copySuiteRows(t, ctx, stack.conn, "FINAL WHERE org_id = ? AND run_id = '43600014605' LIMIT 1", []any{org}, func(row map[string]any) {
+		row["duration_seconds"] = ptrFloat(999)
+		row["last_synced"] = row["last_synced"].(time.Time).Add(-24 * time.Hour)
+	})
+	if final, raw := countOf(org, true), countOf(org, false); final != finalBefore || raw != rawBefore+1 {
+		t.Fatalf("control: after the older version the organization holds %d rows (FINAL %d); want %d (FINAL %d)", raw, final, rawBefore+1, finalBefore)
+	}
+	// The other organization: the same repository and run ids (a copy of every row version).
+	copySuiteRows(t, ctx, stack.conn, "WHERE org_id = ?", []any{org}, func(row map[string]any) { row["org_id"] = other })
+	if copied, source := countOf(other, false), countOf(org, false); copied == 0 || copied != source {
 		t.Fatalf("control: the other organization holds %d suite rows, want the first organization's %d", copied, source)
 	}
 
@@ -224,4 +230,69 @@ func nullableText(value *float64) string {
 		return "NULL"
 	}
 	return strconv.FormatFloat(*value, 'g', -1, 64)
+}
+
+func ptrFloat(value float64) *float64 { return &value }
+
+// copySuiteRows reads the test_suite_results rows selected by where (every stored column, by name), lets edit change them, and
+// writes them back as new rows in one batch.
+func copySuiteRows(t *testing.T, ctx context.Context, conn driver.Conn, where string, args []any, edit func(map[string]any)) {
+	t.Helper()
+	var columns []string
+	names, err := conn.Query(ctx, `SELECT name FROM system.columns WHERE database = currentDatabase() AND table = 'test_suite_results'
+  AND default_kind NOT IN ('MATERIALIZED', 'ALIAS', 'EPHEMERAL') ORDER BY position`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for names.Next() {
+		var name string
+		if err := names.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		columns = append(columns, name)
+	}
+	names.Close()
+	rows, err := conn.Query(ctx, "SELECT "+strings.Join(columns, ", ")+" FROM test_suite_results "+where, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var copies [][]any
+	for rows.Next() {
+		pointers := make([]any, len(columns))
+		for i, columnType := range rows.ColumnTypes() {
+			pointers[i] = reflect.New(columnType.ScanType()).Interface()
+		}
+		if err := rows.Scan(pointers...); err != nil {
+			t.Fatal(err)
+		}
+		row := make(map[string]any, len(columns))
+		for i, name := range columns {
+			row[name] = reflect.ValueOf(pointers[i]).Elem().Interface()
+		}
+		edit(row)
+		values := make([]any, len(columns))
+		for i, name := range columns {
+			values[i] = row[name]
+		}
+		copies = append(copies, values)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	rows.Close()
+	if len(copies) == 0 {
+		t.Fatalf("copySuiteRows: no row %s %v", where, args)
+	}
+	batch, err := conn.PrepareBatch(ctx, "INSERT INTO test_suite_results ("+strings.Join(columns, ", ")+")")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, values := range copies {
+		if err := batch.Append(values...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatal(err)
+	}
 }

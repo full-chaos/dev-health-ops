@@ -287,10 +287,20 @@ func buildUnderLock(ctx context.Context, session lockedSession, index unitsIndex
 	for attempt := 1; attempt <= options.Attempts; attempt++ {
 		result.Attempts = attempt
 		if attempt > 1 {
+			// The pause ends with the build window: a retry delay longer than the window must not keep the build (and
+			// the hook Job, whose deadline is sized from the window) waiting past it.
+			pause := options.RetryDelay
+			if left := time.Until(windowEnd); left < pause {
+				pause = left
+			}
+			if pause <= 0 {
+				logger.Warn("build-index: the build window ended before the next attempt", "attempt", attempt)
+				break
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(options.RetryDelay):
+			case <-time.After(pause):
 			}
 		}
 		if info, err = readIndexInfo(ctx, conn, index); err != nil {

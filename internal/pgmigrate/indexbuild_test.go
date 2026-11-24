@@ -182,9 +182,19 @@ func chainFile(t *testing.T, dir, revision string) string {
 }
 
 // The Job's finalize-outbox definition and revision 0167's statement are one, so a database the Job built and a
-// database revision 0167 built hold the same index.
+// database revision 0167 built hold the same index. Before it, 0167 drops an INVALID index of that name only.
 func TestFinalizeOutboxIndexDefinitionMatchesRevision0167(t *testing.T) {
-	want := squash("CREATE INDEX IF NOT EXISTS " + pgmigrate.FinalizeOutboxIndexBody + ";")
+	want := squash(`DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_catalog.pg_index AS i
+        WHERE i.indexrelid = to_regclass('public.` + pgmigrate.FinalizeOutboxIndexName + `') AND NOT i.indisvalid
+    ) THEN
+        DROP INDEX public.` + pgmigrate.FinalizeOutboxIndexName + `;
+    END IF;
+END
+$$;
+CREATE INDEX IF NOT EXISTS ` + pgmigrate.FinalizeOutboxIndexBody + ";")
 	if got := squash(chainFile(t, "sql/", "0167")); got != want {
 		t.Fatalf("revision 0167 =\n%s\nwant\n%s", got, want)
 	}

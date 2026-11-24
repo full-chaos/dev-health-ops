@@ -232,7 +232,23 @@ func NextRetryAt(descriptor Descriptor, job *rivertype.JobRow) time.Time {
 	if descriptor.RetryPolicy != "bounded_exponential_jitter" || job == nil {
 		return time.Time{}
 	}
-	attempt := job.Attempt
+	delay := RetryBackoff(descriptor, job.ID, job.Attempt)
+	base := job.ScheduledAt
+	if job.AttemptedAt != nil {
+		base = *job.AttemptedAt
+	}
+	if base.IsZero() {
+		base = job.CreatedAt
+	}
+	return base.Add(delay)
+}
+
+// RetryBackoff is the delay NextRetryAt adds after the given attempt of a job,
+// 0 for a policy without retries.
+func RetryBackoff(descriptor Descriptor, jobID int64, attempt int) time.Duration {
+	if descriptor.RetryPolicy != "bounded_exponential_jitter" {
+		return 0
+	}
 	if attempt < 1 {
 		attempt = 1
 	}
@@ -245,17 +261,9 @@ func NextRetryAt(descriptor Descriptor, job *rivertype.JobRow) time.Time {
 		delay = 5 * time.Minute
 	}
 	// Stable +/-10% jitter avoids correlated retries without process-global RNG.
-	seed := uint64(job.ID)*11400714819323198485 + uint64(attempt)*14029467366897019727
+	seed := uint64(jobID)*11400714819323198485 + uint64(attempt)*14029467366897019727
 	offsetPermille := int64(seed%201) - 100
-	delay += time.Duration(int64(delay) * offsetPermille / 1000)
-	base := job.ScheduledAt
-	if job.AttemptedAt != nil {
-		base = *job.AttemptedAt
-	}
-	if base.IsZero() {
-		base = job.CreatedAt
-	}
-	return base.Add(delay)
+	return delay + time.Duration(int64(delay)*offsetPermille/1000)
 }
 
 func (adapter *Adapter[T]) Work(parent context.Context, job *river.Job[T]) error {

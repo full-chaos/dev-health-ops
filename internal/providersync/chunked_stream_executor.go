@@ -50,6 +50,7 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 			checkpoint = ChunkCheckpoint{}
 		}
 		result.CommittedRows = checkpoint.CommittedRows
+		result.AttemptStartOrdinal, result.AttemptStartRead = checkpoint.NextOrdinal, true
 		nextOrdinal := checkpoint.PreparedChunks
 
 		// Recovery always drains already-prepared sidecars first. A restart

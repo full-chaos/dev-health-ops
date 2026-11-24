@@ -9,6 +9,7 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"net/http/httptest"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,6 +42,14 @@ type prefetchCellDoer struct {
 	// holdBlob: the blob call of key is held until the /zip of value starts, or a 2 s liveness guard passes.
 	holdBlob map[int]int
 	latency  func(id int) time.Duration
+	// rangeArchive: the blob of the id is this (over-cap) zip, served whole with Accept-Ranges and by Range request,
+	// each Range answer after rangeLatency. holdZipUntilRange: the /zip of key waits until a Range request of value
+	// starts (2 s liveness guard).
+	rangeArchive      map[int][]byte
+	rangeLatency      time.Duration
+	holdZipUntilRange map[int]int
+	rangeStarted      map[int]chan struct{}
+	ranged            map[int]int
 
 	mu          sync.Mutex
 	events      []string
@@ -65,6 +74,7 @@ func newPrefetchCellDoer(t *testing.T, runs, perRun int) *prefetchCellDoer {
 		t: t, runs: runs, perRun: perRun, listed: map[int]int64{}, noLocation: map[int]bool{}, readError: map[int]bool{},
 		zipTransportError: map[int]bool{}, zipFirst: map[int]prefetchCellAnswer{}, unsafeBounds: map[int]bool{},
 		holdBlob: map[int]int{}, startedAt: map[string]time.Time{}, zipStarted: map[int]chan struct{}{},
+		rangeArchive: map[int][]byte{}, holdZipUntilRange: map[int]int{}, rangeStarted: map[int]chan struct{}{}, ranged: map[int]int{},
 		firstServed: map[int]bool{}, active: map[int]int{}, overlaps: map[[2]int]bool{}, requests: map[string]int{},
 	}
 }
@@ -74,6 +84,15 @@ func (doer *prefetchCellDoer) zipStartedChannel(id int) chan struct{} {
 	if !ok {
 		channel = make(chan struct{})
 		doer.zipStarted[id] = channel
+	}
+	return channel
+}
+
+func (doer *prefetchCellDoer) rangeStartedChannel(id int) chan struct{} {
+	channel, ok := doer.rangeStarted[id]
+	if !ok {
+		channel = make(chan struct{})
+		doer.rangeStarted[id] = channel
 	}
 	return channel
 }
@@ -177,6 +196,15 @@ func (doer *prefetchCellDoer) Do(request *http.Request) (*http.Response, error) 
 		if doer.latency != nil {
 			time.Sleep(doer.latency(id))
 		}
+		if wait, ok := doer.holdZipUntilRange[id]; ok {
+			doer.mu.Lock()
+			channel := doer.rangeStartedChannel(wait)
+			doer.mu.Unlock()
+			select {
+			case <-channel:
+			case <-time.After(2 * time.Second): // liveness guard only
+			}
+		}
 		if doer.zipTransportError[id] {
 			return nil, errors.New("prefetch cell: transport reset")
 		}
@@ -213,6 +241,30 @@ func (doer *prefetchCellDoer) Do(request *http.Request) (*http.Response, error) 
 		}
 		if doer.latency != nil {
 			time.Sleep(doer.latency(id))
+		}
+		if archive, ok := doer.rangeArchive[id]; ok {
+			if request.Header.Get("Range") == "" {
+				return &http.Response{
+					StatusCode: http.StatusOK, ContentLength: int64(len(archive)), Request: request,
+					Header: http.Header{"Accept-Ranges": {"bytes"}, "Content-Type": {"application/zip"}, "Content-Length": {strconv.Itoa(len(archive))}},
+					Body:   io.NopCloser(bytes.NewReader(archive)),
+				}, nil
+			}
+			doer.mu.Lock()
+			doer.ranged[id]++
+			channel := doer.rangeStartedChannel(id)
+			select {
+			case <-channel:
+			default:
+				close(channel)
+			}
+			doer.mu.Unlock()
+			time.Sleep(doer.rangeLatency)
+			recorder := httptest.NewRecorder()
+			http.ServeContent(recorder, request, "artifact.zip", time.Time{}, bytes.NewReader(archive))
+			response := recorder.Result()
+			response.Request = request
+			return response, nil
 		}
 		blobHeader := http.Header{"Content-Type": {"application/zip"}}
 		if doer.readError[id] {
@@ -338,13 +390,19 @@ func prefetchCellClient(t *testing.T, doer *prefetchCellDoer, budget providerfou
 // final flag) as JSON lines, and the route error.
 func prefetchCellWalk(t *testing.T, client *providerfoundation.HTTPClient) ([]string, error) {
 	t.Helper()
+	return prefetchCellWalkCap(t, client, 0)
+}
+
+// prefetchCellWalkCap is prefetchCellWalk with a per-artifact cap (0 = the default cap).
+func prefetchCellWalkCap(t *testing.T, client *providerfoundation.HTTPClient, maxArtifactBytes int64) ([]string, error) {
+	t.Helper()
 	claim := nativeTestClaim("github", "cicd")
 	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	var emissions []string
 	resume := ""
 	for pass := 0; pass < 200; pass++ {
 		last, finalSeen := resume, false
-		err := GitHubTestsRouteHandler{}.CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt, resume,
+		err := GitHubTestsRouteHandler{MaxArtifactBytes: maxArtifactBytes}.CollectChunks(context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt, resume,
 			func(emission ChunkRouteEmission) error {
 				encoded, marshalErr := json.Marshal(struct {
 					Batch                     CompleteRouteBatch
@@ -740,4 +798,83 @@ func TestGitHubTestsPrefetchHonoursTheSharedGate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// pm P2-A: a prefetch whose listed size is too low reads its body by range (over the cap). Healthy: the emissions
+// equal the serial walk's. Fatal while the range read runs: the serial error, nothing in flight, every slot back, and
+// the extra wire is bounded by one artifact's whole download (its range read included) plus one relocate /zip.
+func TestGitHubTestsPrefetchIntoARangeRead(t *testing.T) {
+	archive := githubTestsPlaywrightLikeZip(t)
+	capBytes := int64(githubTestsRangeCap)
+	configure := func(doer *prefetchCellDoer) {
+		doer.rangeArchive[104] = archive // listed 1000: too low, the body is over the cap
+		doer.rangeLatency = time.Millisecond
+	}
+	t.Run("healthy: the emissions equal the serial walk's", func(t *testing.T) {
+		serialDoer := newPrefetchCellDoer(t, 1, 4)
+		configure(serialDoer)
+		serial, err := prefetchCellWalkCap(t, prefetchCellClient(t, serialDoer, nil, "medium", 1), capBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		doer := newPrefetchCellDoer(t, 1, 4)
+		configure(doer)
+		store := newPrefetchCellStore()
+		got, err := prefetchCellWalkCap(t, prefetchCellClient(t, doer, store, "medium", 1), capBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prefetchCellEqual(t, "range read", got, serial)
+		_, _, _, acquired := store.snapshot()
+		if doer.ranged[104] == 0 || serialDoer.ranged[104] == 0 || acquired[prefetchCellPrefetchKey] != 2 {
+			t.Fatalf("range requests %d (serial %d), prefetches %d: want the prefetch of 104 (one of 2) to read by range",
+				doer.ranged[104], serialDoer.ranged[104], acquired[prefetchCellPrefetchKey])
+		}
+		if doer.wire() != serialDoer.wire() {
+			t.Fatalf("wire %d, want the serial %d", doer.wire(), serialDoer.wire())
+		}
+	})
+	t.Run("fatal while the prefetch reads by range", func(t *testing.T) {
+		serialDoer := newPrefetchCellDoer(t, 1, 4)
+		configure(serialDoer)
+		serialDoer.zipTransportError[103] = true
+		_, serialErr := prefetchCellWalkCap(t, prefetchCellClient(t, serialDoer, nil, "medium", 1), capBytes)
+		if serialErr == nil {
+			t.Fatal("the serial walk did not fail: the fixture is wrong")
+		}
+		doer := newPrefetchCellDoer(t, 1, 4)
+		configure(doer)
+		doer.zipTransportError[103] = true
+		doer.holdZipUntilRange[103] = 104 // the walk's 103 fails only once the prefetch of 104 reads by range
+		doer.rangeLatency = 5 * time.Millisecond
+		store := newPrefetchCellStore()
+		_, err := prefetchCellWalkCap(t, prefetchCellClient(t, doer, store, "medium", 1), capBytes)
+		if fmt.Sprint(err) != fmt.Sprint(serialErr) {
+			t.Fatalf("err %v, want the serial walk's %v", err, serialErr)
+		}
+		counts, _, _, _ := store.snapshot()
+		for key, n := range counts {
+			if n != 0 {
+				t.Fatalf("budget %s holds %d slots at return, want 0", key, n)
+			}
+		}
+		doer.mu.Lock()
+		inFlight, ranged := doer.inFlight, doer.ranged[104]
+		doer.mu.Unlock()
+		if inFlight != 0 || ranged == 0 {
+			t.Fatalf("in flight %d, range requests of 104 %d: want 0 in flight and the range read started", inFlight, ranged)
+		}
+		// One artifact's whole download, measured alone: /zip, the whole-body blob call, every range request.
+		alone := newPrefetchCellDoer(t, 1, 4)
+		configure(alone)
+		if _, _, _, err := downloadGitHubTestsListedArtifact(context.Background(), prefetchCellClient(t, alone, nil, "medium", 1),
+			"/repos/acme/api", "104", capBytes, 1000); err != nil {
+			t.Fatal(err)
+		}
+		extra, bound := doer.wire()-serialDoer.wire(), alone.wire()+1
+		t.Logf("wire: serial %d, prefetch %d (extra %d); one whole download of 104 = %d, bound %d (+1 relocate /zip)", serialDoer.wire(), doer.wire(), extra, alone.wire(), bound)
+		if extra < 1 || extra > bound {
+			t.Fatalf("extra wire %d, want 1..%d", extra, bound)
+		}
+	})
 }

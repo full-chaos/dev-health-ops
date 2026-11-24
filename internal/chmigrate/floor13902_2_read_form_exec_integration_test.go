@@ -23,9 +23,9 @@ import (
 // (CHAOS-13902): not for merge. Each const is the form file with its org prefix (8 hex) replaced by the synthetic
 // "f0f0f0f0"; each sha256 is pinned.
 const (
-	floor2SHA256 = "72ab00d09be6a3606c161562199a9c0ddd29f082c4c9469c6b8d6371bb7ff507"
-	qz4SHA256    = "0c5e13ab5b970314dbef000289835704322c0b9fb4f50502ddf4f090705165e9"
-	qz3SHA256    = "67dcfba4d6c597fa0ff5eec87a920efce4323ab920455782b616499036133b2f"
+	floor2SHA256 = "74b8f431a56ffa720e9e4198e033a267fc7e58ee277315c3f4bf38b4f46aeb87"
+	qz4SHA256    = "6c3bb23699e144d32ddf5c18f6fc1c13e5b6eb92558fcc4b7480aa319563760c"
+	qz3SHA256    = "0ffe9362db20b04b5ef936205109fc7662bf282cf39270d5182c4d0bbe0a1d18"
 	qz1SHA256    = "17daee69fd42bae5462fcddffb523eeaf601a6ad7ed57ce9eb936eafc4344d33"
 )
 
@@ -59,11 +59,11 @@ WITH (SELECT 2 * intDiv(5 * (sum(marks) * 8192 + count()) + 3, 4) + 1 * (2 * cou
       AND table IN ('ai_impact_metrics_daily', 'commit_metrics', 'git_commits', 'git_pull_request_reviews', 'git_pull_requests', 'repo_metrics_daily', 'team_metrics_daily', 'user_metrics_daily')) AS read_rows_cap,
   (SELECT throwIf(read_rows_cap >= 20000000, 'STOP-COST-GATE')) AS cost_gate
 SELECT o.stmt AS stmt, o.family AS family, o.raw_table AS raw_table, o.scope_id AS scope_id, o.raw_first_day AS raw_first_day,
-  o.stored_first_day AS stored_first_day, o.stored_days AS stored_days, o.read_rows_cap AS read_rows_cap
+  o.stored_first_day AS stored_first_day, o.stored_days AS stored_days, read_rows_cap
 FROM (
   SELECT toUInt8(1) AS stmt, p.p_family AS family, p.p_raw AS raw_table, p.p_scope AS scope_id,
     if(ifNull(r.present, 0) = 1, toString(r.f), 'none') AS raw_first_day, toString(p.p_sf) AS stored_first_day,
-    toUInt64(p.p_sd) AS stored_days, read_rows_cap AS read_rows_cap
+    toUInt64(p.p_sd) AS stored_days
   FROM (
     SELECT st.s_family AS p_family, st.s_scope AS p_scope, st.s_sf AS p_sf, st.s_sd AS p_sd, raw_name AS p_raw
     FROM (
@@ -107,7 +107,7 @@ FROM (
   ) AS r ON r.r_raw = p.p_raw AND r.r_scope = p.p_scope
   UNION ALL
   SELECT toUInt8(1) AS stmt, '_stmt' AS family, '_cap' AS raw_table, 'org' AS scope_id, 'none' AS raw_first_day,
-    '{{FROM}}' AS stored_first_day, toUInt64(0) AS stored_days, read_rows_cap AS read_rows_cap
+    '{{FROM}}' AS stored_first_day, toUInt64(0) AS stored_days
 ) AS o
 WHERE cost_gate = 0
 ORDER BY o.family, o.raw_table, o.scope_id;
@@ -124,11 +124,11 @@ WITH (SELECT 2 * intDiv(5 * (sum(marks * multiIf(table = 'ci_pipeline_runs', 3, 
       AND table IN ('ci_pipeline_runs', 'cicd_metrics_daily', 'coverage_snapshots', 'deploy_metrics_daily', 'deployments', 'repo_change_failure_daily', 'test_suite_results', 'testops_coverage_metrics_daily', 'testops_pipeline_metrics_daily', 'testops_pipeline_stability', 'testops_quality_drag', 'testops_release_confidence', 'testops_test_metrics_daily')) AS read_rows_cap,
   (SELECT throwIf(read_rows_cap >= 20000000, 'STOP-COST-GATE')) AS cost_gate
 SELECT o.stmt AS stmt, o.family AS family, o.raw_table AS raw_table, o.scope_id AS scope_id, o.raw_first_day AS raw_first_day,
-  o.stored_first_day AS stored_first_day, o.stored_days AS stored_days, o.read_rows_cap AS read_rows_cap
+  o.stored_first_day AS stored_first_day, o.stored_days AS stored_days, read_rows_cap
 FROM (
   SELECT toUInt8(2) AS stmt, p.p_family AS family, p.p_raw AS raw_table, p.p_scope AS scope_id,
     if(ifNull(r.present, 0) = 1, toString(r.f), 'none') AS raw_first_day, toString(p.p_sf) AS stored_first_day,
-    toUInt64(p.p_sd) AS stored_days, read_rows_cap AS read_rows_cap
+    toUInt64(p.p_sd) AS stored_days
   FROM (
     SELECT st.s_family AS p_family, st.s_scope AS p_scope, st.s_sf AS p_sf, st.s_sd AS p_sd, raw_name AS p_raw
     FROM (
@@ -218,7 +218,7 @@ FROM (
   ) AS r ON r.r_raw = p.p_raw AND r.r_scope = p.p_scope
   UNION ALL
   SELECT toUInt8(2) AS stmt, '_stmt' AS family, '_cap' AS raw_table, 'org' AS scope_id, 'none' AS raw_first_day,
-    '{{FROM}}' AS stored_first_day, toUInt64(0) AS stored_days, read_rows_cap AS read_rows_cap
+    '{{FROM}}' AS stored_first_day, toUInt64(0) AS stored_days
 ) AS o
 WHERE cost_gate = 0
 ORDER BY o.family, o.raw_table, o.scope_id;
@@ -237,11 +237,11 @@ WITH (SELECT 2 * intDiv(5 * (sum(marks) * 8192 + count()) + 3, 4) + 1 * (2 * cou
       AND table IN ('ai_attribution', 'ai_governance_coverage_daily', 'compounding_risk_daily', 'estimate_coverage_metrics_daily', 'incident_metrics_daily', 'issue_type_metrics_daily', 'operational_incidents', 'repo_complexity_daily', 'repo_metrics_daily', 'team_cognitive_load_daily', 'team_complexity_daily', 'user_metrics_daily', 'work_item_completion_daily', 'work_item_metrics_daily', 'work_item_state_durations_daily', 'work_item_user_metrics_daily', 'work_items')) AS read_rows_cap,
   (SELECT throwIf(read_rows_cap >= 20000000, 'STOP-COST-GATE')) AS cost_gate
 SELECT o.stmt AS stmt, o.family AS family, o.raw_table AS raw_table, o.scope_id AS scope_id, o.raw_first_day AS raw_first_day,
-  o.stored_first_day AS stored_first_day, o.stored_days AS stored_days, o.read_rows_cap AS read_rows_cap
+  o.stored_first_day AS stored_first_day, o.stored_days AS stored_days, read_rows_cap
 FROM (
   SELECT toUInt8(3) AS stmt, p.p_family AS family, p.p_raw AS raw_table, p.p_scope AS scope_id,
     if(ifNull(r.present, 0) = 1, toString(r.f), 'none') AS raw_first_day, toString(p.p_sf) AS stored_first_day,
-    toUInt64(p.p_sd) AS stored_days, read_rows_cap AS read_rows_cap
+    toUInt64(p.p_sd) AS stored_days
   FROM (
     SELECT st.s_family AS p_family, st.s_scope AS p_scope, st.s_sf AS p_sf, st.s_sd AS p_sd, raw_name AS p_raw
     FROM (
@@ -320,7 +320,7 @@ FROM (
   ) AS r ON r.r_raw = p.p_raw AND r.r_scope = p.p_scope
   UNION ALL
   SELECT toUInt8(3) AS stmt, '_stmt' AS family, '_cap' AS raw_table, 'org' AS scope_id, 'none' AS raw_first_day,
-    '{{FROM}}' AS stored_first_day, toUInt64(0) AS stored_days, read_rows_cap AS read_rows_cap
+    '{{FROM}}' AS stored_first_day, toUInt64(0) AS stored_days
 ) AS o
 WHERE cost_gate = 0
 ORDER BY o.family, o.raw_table, o.scope_id;
@@ -363,52 +363,52 @@ WITH (SELECT 1 * intDiv(5 * (sum(marks) * 8192 + count()) + 3, 4) + 1 * (2 * cou
       AND table IN ('commit_metrics', 'file_hotspot_daily', 'file_metrics_daily', 'ic_landscape_rolling_30d', 'repo_metrics_daily', 'team_cognitive_load_daily', 'team_metrics_daily', 'user_metrics_daily')) AS read_rows_cap,
   (SELECT throwIf(read_rows_cap >= 20000000, 'STOP-COST-GATE')) AS cost_gate
 SELECT o.table_name AS table_name, o.rows_in_range AS rows_in_range, o.keys_in_range AS keys_in_range,
-  o.commit_rows_any_version AS commit_rows_any_version, o.commit_keys_newest AS commit_keys_newest, o.read_rows_cap AS read_rows_cap
+  o.commit_rows_any_version AS commit_rows_any_version, o.commit_keys_newest AS commit_keys_newest, read_rows_cap
 FROM (
   SELECT 'repo_metrics_daily' AS table_name, sum(k.n) AS rows_in_range, count() AS keys_in_range,
-    sum(k.c_any) AS commit_rows_any_version, countIf(k.c_new = 1) AS commit_keys_newest, read_rows_cap AS read_rows_cap
+    sum(k.c_any) AS commit_rows_any_version, countIf(k.c_new = 1) AS commit_keys_newest
   FROM (SELECT repo_id, day, count() AS n, countIf(commits_count > 0 OR total_loc_touched > 0 OR avg_commit_size_loc > 0 OR large_commit_ratio > 0 OR rework_churn_ratio_30d > 0 OR single_owner_file_ratio_30d > 0 OR bus_factor > 0 OR code_ownership_gini > 0) AS c_any, argMax(toUInt8(commits_count > 0 OR total_loc_touched > 0 OR avg_commit_size_loc > 0 OR large_commit_ratio > 0 OR rework_churn_ratio_30d > 0 OR single_owner_file_ratio_30d > 0 OR bus_factor > 0 OR code_ownership_gini > 0), computed_at) AS c_new
         FROM repo_metrics_daily WHERE startsWith(org_id, 'f0f0f0f0') AND day >= toDate('2025-07-26') AND day <= toDate('2025-10-31')
         GROUP BY repo_id, day) AS k
   UNION ALL
   SELECT 'user_metrics_daily' AS table_name, sum(k.n) AS rows_in_range, count() AS keys_in_range,
-    sum(k.c_any) AS commit_rows_any_version, countIf(k.c_new = 1) AS commit_keys_newest, read_rows_cap AS read_rows_cap
+    sum(k.c_any) AS commit_rows_any_version, countIf(k.c_new = 1) AS commit_keys_newest
   FROM (SELECT repo_id, author_email, day, count() AS n, countIf(commits_count > 0 OR loc_added > 0 OR loc_deleted > 0 OR files_changed > 0 OR large_commits_count > 0 OR avg_commit_size_loc > 0 OR loc_touched > 0) AS c_any, argMax(toUInt8(commits_count > 0 OR loc_added > 0 OR loc_deleted > 0 OR files_changed > 0 OR large_commits_count > 0 OR avg_commit_size_loc > 0 OR loc_touched > 0), computed_at) AS c_new
         FROM user_metrics_daily WHERE startsWith(org_id, 'f0f0f0f0') AND day >= toDate('2025-07-26') AND day <= toDate('2025-10-31')
         GROUP BY repo_id, author_email, day) AS k
   UNION ALL
   SELECT 'commit_metrics' AS table_name, sum(k.n) AS rows_in_range, count() AS keys_in_range,
-    sum(k.c_any) AS commit_rows_any_version, countIf(k.c_new = 1) AS commit_keys_newest, read_rows_cap AS read_rows_cap
+    sum(k.c_any) AS commit_rows_any_version, countIf(k.c_new = 1) AS commit_keys_newest
   FROM (SELECT repo_id, day, author_email, commit_hash, count() AS n, countIf(1 = 1) AS c_any, argMax(toUInt8(1 = 1), computed_at) AS c_new
         FROM commit_metrics WHERE startsWith(org_id, 'f0f0f0f0') AND day >= toDate('2025-07-26') AND day <= toDate('2025-10-31')
         GROUP BY repo_id, day, author_email, commit_hash) AS k
   UNION ALL
   SELECT 'team_metrics_daily' AS table_name, sum(k.n) AS rows_in_range, count() AS keys_in_range,
-    sum(k.c_any) AS commit_rows_any_version, countIf(k.c_new = 1) AS commit_keys_newest, read_rows_cap AS read_rows_cap
+    sum(k.c_any) AS commit_rows_any_version, countIf(k.c_new = 1) AS commit_keys_newest
   FROM (SELECT team_id, repo_id, day, count() AS n, countIf(commits_count > 0 OR after_hours_commits_count > 0 OR weekend_commits_count > 0) AS c_any, argMax(toUInt8(commits_count > 0 OR after_hours_commits_count > 0 OR weekend_commits_count > 0), computed_at) AS c_new
         FROM team_metrics_daily WHERE startsWith(org_id, 'f0f0f0f0') AND day >= toDate('2025-07-26') AND day <= toDate('2025-10-31')
         GROUP BY team_id, repo_id, day) AS k
   UNION ALL
   SELECT 'file_metrics_daily' AS table_name, sum(k.n) AS rows_in_range, count() AS keys_in_range,
-    sum(k.c_any) AS commit_rows_any_version, countIf(k.c_new = 1) AS commit_keys_newest, read_rows_cap AS read_rows_cap
+    sum(k.c_any) AS commit_rows_any_version, countIf(k.c_new = 1) AS commit_keys_newest
   FROM (SELECT repo_id, day, path, count() AS n, countIf(churn > 0 OR commits_count > 0) AS c_any, argMax(toUInt8(churn > 0 OR commits_count > 0), computed_at) AS c_new
         FROM file_metrics_daily WHERE startsWith(org_id, 'f0f0f0f0') AND day >= toDate('2025-07-26') AND day <= toDate('2025-10-31')
         GROUP BY repo_id, day, path) AS k
   UNION ALL
   SELECT 'file_hotspot_daily' AS table_name, sum(k.n) AS rows_in_range, count() AS keys_in_range,
-    sum(k.c_any) AS commit_rows_any_version, countIf(k.c_new = 1) AS commit_keys_newest, read_rows_cap AS read_rows_cap
+    sum(k.c_any) AS commit_rows_any_version, countIf(k.c_new = 1) AS commit_keys_newest
   FROM (SELECT repo_id, day, file_path, count() AS n, countIf(churn_commits_30d > 0 OR churn_loc_30d > 0) AS c_any, argMax(toUInt8(churn_commits_30d > 0 OR churn_loc_30d > 0), computed_at) AS c_new
         FROM file_hotspot_daily WHERE startsWith(org_id, 'f0f0f0f0') AND day >= toDate('2025-07-26') AND day <= toDate('2025-10-31')
         GROUP BY repo_id, day, file_path) AS k
   UNION ALL
   SELECT 'ic_landscape_rolling_30d' AS table_name, sum(k.n) AS rows_in_range, count() AS keys_in_range,
-    sum(k.c_any) AS commit_rows_any_version, countIf(k.c_new = 1) AS commit_keys_newest, read_rows_cap AS read_rows_cap
+    sum(k.c_any) AS commit_rows_any_version, countIf(k.c_new = 1) AS commit_keys_newest
   FROM (SELECT repo_id, team_id, map_name, as_of_day, identity_id, count() AS n, countIf(churn_loc_30d > 0) AS c_any, argMax(toUInt8(churn_loc_30d > 0), computed_at) AS c_new
         FROM ic_landscape_rolling_30d WHERE startsWith(org_id, 'f0f0f0f0') AND as_of_day >= toDate('2025-07-26') AND as_of_day <= toDate('2025-10-31')
         GROUP BY repo_id, team_id, map_name, as_of_day, identity_id) AS k
   UNION ALL
   SELECT 'team_cognitive_load_daily' AS table_name, sum(k.n) AS rows_in_range, count() AS keys_in_range,
-    sum(k.c_any) AS commit_rows_any_version, countIf(k.c_new = 1) AS commit_keys_newest, read_rows_cap AS read_rows_cap
+    sum(k.c_any) AS commit_rows_any_version, countIf(k.c_new = 1) AS commit_keys_newest
   FROM (SELECT team_id, day, count() AS n, countIf(ifNull(after_hours_commit_ratio, 0) > 0 OR ifNull(weekend_commit_ratio, 0) > 0) AS c_any, argMax(toUInt8(ifNull(after_hours_commit_ratio, 0) > 0 OR ifNull(weekend_commit_ratio, 0) > 0), computed_at) AS c_new
         FROM team_cognitive_load_daily WHERE startsWith(org_id, 'f0f0f0f0') AND day >= toDate('2025-07-26') AND day <= toDate('2025-10-31')
         GROUP BY team_id, day) AS k
@@ -434,7 +434,7 @@ SELECT count() AS repos_with_commit_days,
   countIf(ifNull(r.present, 0) = 0) AS repos_commit_days_no_raw,
   min(s.sf) AS first_stored_commit_day,
   minIf(r.rf, ifNull(r.present, 0) = 1) AS first_raw_commit_day,
-  read_rows_cap AS read_rows_cap
+  read_rows_cap
 FROM (SELECT k.repo_id AS repo_id, min(k.day) AS sf
       FROM (SELECT repo_id, day, argMax(retracted, computed_at) AS rt, argMax(commits_count, computed_at) AS cc
             FROM repo_metrics_daily WHERE startsWith(org_id, 'f0f0f0f0') GROUP BY repo_id, day) AS k

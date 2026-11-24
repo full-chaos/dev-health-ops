@@ -1031,6 +1031,9 @@ func githubTestsLogArtifactSkipSummary(
 		if len(excludedSample) > 0 {
 			attrs = append(attrs, "excluded_sample", excludedSample)
 		}
+		if sources := githubTestsPrefixExclusionSources(excludedSample, githubTestsConfigExcludePrefixes(claim)); len(sources) > 0 {
+			attrs = append(attrs, "excluded_"+githubTestsExclusionReasonPrefix+"_source", sources)
+		}
 	}
 	attrs = append(attrs, githubTestsSkippedArtifactMarkerAttrs(skippedArtifacts, causeOverflow)...)
 	slog.Warn("provider artifacts skipped this unit; inventory continued", attrs...)

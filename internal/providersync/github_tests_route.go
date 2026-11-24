@@ -303,6 +303,48 @@ func githubTestsArtifactSelectionSeam(name string, configPrefixes []string) (sel
 	return true, ""
 }
 
+// The list a prefix exclusion came from, a closed set for the skip summary log only (never stored or served).
+const (
+	githubTestsPrefixExclusionSourceConfig = "config"
+	githubTestsPrefixExclusionSourceCode   = "code"
+)
+
+// githubTestsPrefixExclusionSource names the list that excludes name: the configuration's list is checked first, so a
+// prefix in both lists reports "config"; "" when neither matches.
+func githubTestsPrefixExclusionSource(name string, configPrefixes []string) string {
+	lower := strings.ToLower(name)
+	if artifactexclude.Matches(lower, configPrefixes) {
+		return githubTestsPrefixExclusionSourceConfig
+	}
+	if artifactexclude.Matches(lower, githubTestsNonReportArtifactPrefixes) {
+		return githubTestsPrefixExclusionSourceCode
+	}
+	return ""
+}
+
+// githubTestsPrefixExclusionSources is the sorted set of sources of the prefix exclusions in the unit's excluded sample
+// (cursor-wide, so every invocation of the unit counts). An entry is "<name> (<reason>)" with the name cut at
+// githubTestsMaxArtifactNameBytes; a configured prefix longer than the cut can leave its entry unnamed (omitted).
+func githubTestsPrefixExclusionSources(sample []string, configPrefixes []string) []string {
+	suffix := " (" + githubTestsExclusionReasonPrefix + ")"
+	seen := map[string]bool{}
+	for _, entry := range sample {
+		name, ok := strings.CutSuffix(entry, suffix)
+		if !ok {
+			continue
+		}
+		if source := githubTestsPrefixExclusionSource(strings.TrimSuffix(name, "…"), configPrefixes); source != "" {
+			seen[source] = true
+		}
+	}
+	sources := make([]string, 0, len(seen))
+	for source := range seen {
+		sources = append(sources, source)
+	}
+	slices.Sort(sources)
+	return sources
+}
+
 type githubTestsRequiredPayload struct {
 	Contexts []any `json:"contexts"`
 	Checks   []struct {

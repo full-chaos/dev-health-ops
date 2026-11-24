@@ -94,8 +94,13 @@ func (writer dailyPostSyncWriter) StartRunTx(
 }
 
 // FullOrganizationDays are the days StartRunTx above starts a run of every
-// repository for: the target day and the window behind it.
+// repository for: the target day and the window behind it. The testops window
+// lane has none: each of its keys belongs to a run of its own lane, the only
+// runs whose failure its drain can see and return.
 func (writer dailyPostSyncWriter) FullOrganizationDays(plan syncdispatchruntime.PostSyncPlan) []time.Time {
+	if writer.lane != (daily.TouchedLane{}) && writer.lane != daily.TouchedLaneDays {
+		return nil
+	}
 	return append([]time.Time{plan.TargetDay.UTC()}, postSyncDailyBackfillDays(plan)...)
 }
 
@@ -227,7 +232,7 @@ func (runs touchedDrainRuns) DaysWithOnlyFailedRuns(
 }
 
 func (runs touchedDrainRuns) RunsStateTx(ctx context.Context, tx pgx.Tx, organizationID string) (string, error) {
-	return runs.store.DailyRunsStateTx(ctx, tx, organizationID)
+	return runs.store.TouchedLaneDailyRunsStateTx(ctx, tx, runs.touchedLane(), organizationID)
 }
 
 func (runs touchedDrainRuns) InFlightTx(

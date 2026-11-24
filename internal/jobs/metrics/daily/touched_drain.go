@@ -128,14 +128,21 @@ WHERE org_id = $1::uuid
 // second read was committed at the first, so what the pass decided from the
 // runs is still true.
 func (store *PostgresStore) DailyRunsStateTx(ctx context.Context, tx pgx.Tx, organizationID string) (string, error) {
-	if !store.valid() || tx == nil || !validUUID(organizationID) {
+	return store.TouchedLaneDailyRunsStateTx(ctx, tx, TouchedLaneDays, organizationID)
+}
+
+// TouchedLaneDailyRunsStateTx is DailyRunsStateTx over the runs one lane reads: the testops window lane its own runs only, the
+// touched-day lane every other run. A run of one lane changes nothing the other lane decided, so it does not stop its start.
+func (store *PostgresStore) TouchedLaneDailyRunsStateTx(ctx context.Context, tx pgx.Tx, lane TouchedLane, organizationID string) (string, error) {
+	if !store.valid() || tx == nil || !lane.valid() || !validUUID(organizationID) {
 		return "", ErrInvalidState
 	}
+	pattern, ofLane := lane.runOfLanePattern()
 	var state string
 	if err := tx.QueryRow(ctx, `
 SELECT count(*)::text || '|' || COALESCE(max(created_at)::text, '')
 FROM public.daily_metrics_runs
-WHERE org_id = $1::uuid`, organizationID).Scan(&state); err != nil {
+WHERE org_id = $1::uuid AND (generation LIKE $2) = $3`, organizationID, pattern, ofLane).Scan(&state); err != nil {
 		return "", ErrUnavailable
 	}
 	return state, nil

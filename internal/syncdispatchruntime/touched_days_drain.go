@@ -3,6 +3,7 @@ package syncdispatchruntime
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -270,6 +271,9 @@ type touchedDrainPass struct {
 	// triggerChecked is true when the run whose end triggered the pass was
 	// among the runs whose mark the pass checked.
 	triggerChecked bool
+	// keysTaken and keysDeferred are, for a pass with a key cap, the keys it
+	// chose and the keys of its eligible days that a cap left pending.
+	keysTaken, keysDeferred int
 }
 
 // DrainTouchedDays runs one pass for the organization. passID names the
@@ -539,11 +543,18 @@ func (drain *TouchedDaysDrain) take(ctx context.Context, pass *touchedDrainPass)
 		candidates = append(candidates, day)
 	}
 	candidates = append(candidates, retries...)
+	if drain.testopsWindow {
+		// The window lane takes its eligible keys newest day first, a due
+		// retry by its day like any other: its cap is on keys, and the newest
+		// days are the ones the next recurrences read.
+		sort.Slice(candidates, func(left, right int) bool { return candidates[left].After(candidates[right]) })
+	}
 	limit := drain.runs.RepositoryLimit()
 	budget := drain.repoDayCap()
 	remaining := budget
 	spent := func() bool { return budget > 0 && remaining <= 0 }
-	for scanned := 0; scanned < len(candidates) && len(pass.starts) < TouchedDaysPerDrainPass && !spent(); {
+	scanned := 0
+	for scanned < len(candidates) && len(pass.starts) < TouchedDaysPerDrainPass && !spent() {
 		end := min(scanned+TouchedDaysPerDrainPass, len(candidates))
 		chunk := candidates[scanned:end]
 		repositories, err := drain.store.PendingRepositories(ctx, pass.organizationID, chunk, limit+1)
@@ -560,18 +571,26 @@ func (drain *TouchedDaysDrain) take(ctx context.Context, pass *touchedDrainPass)
 				// A fan-out dispatched the day between the two reads.
 				continue
 			}
+			key := day.UTC().Format("2006-01-02")
 			start := touchedDrainStart{day: day, repositories: identifiers}
-			start.retry = onlyFailed[day.UTC().Format("2006-01-02")]
-			if len(identifiers) > limit {
+			start.retry = onlyFailed[key]
+			if budget > 0 {
+				taken := min(len(identifiers), limit, remaining)
+				start.repositories, start.split = identifiers[:taken], taken < len(identifiers)
+				remaining -= taken
+				pass.keysTaken += taken
+				pass.keysDeferred += max(backlog.Keys[key]-taken, 0)
+			} else if len(identifiers) > limit {
 				start.repositories, start.split = identifiers[:limit], true
 			}
-			if budget > 0 {
-				if len(start.repositories) > remaining {
-					start.repositories, start.split = start.repositories[:remaining], true
-				}
-				remaining -= len(start.repositories)
-			}
 			pass.starts = append(pass.starts, start)
+		}
+	}
+	if budget > 0 {
+		// The eligible days the walk did not reach: every key of theirs is
+		// deferred by a cap. Skipped days are not eligible and not counted.
+		for _, day := range candidates[scanned:] {
+			pass.keysDeferred += backlog.Keys[day.UTC().Format("2006-01-02")]
 		}
 	}
 	return nil
@@ -715,6 +734,10 @@ func (drain *TouchedDaysDrain) report(ctx context.Context, pass *touchedDrainPas
 			continue
 		}
 		split++
+		if drain.testopsWindow {
+			// The window lane reports its cut once, counts only (above).
+			continue
+		}
 		// One line for each split day: its numbers are whole only after the
 		// passes that take the rest of its repositories.
 		drain.logger.Warn(ctx, synclog.MsgTouchedDaysDrainSplit, org, passAttr,
@@ -746,10 +769,18 @@ func (drain *TouchedDaysDrain) report(ctx context.Context, pass *touchedDrainPas
 		}
 	}
 	pendingLeft := len(pass.backlog.Days) - whole
-	if drain.testopsWindow && pendingLeft > 0 && len(pass.started) > 0 && drain.observer != nil {
-		// The keys the cap of the pass left: the next pass, which the end of
-		// these runs triggers, takes them.
-		_ = drain.observer.ObserveTouchedDaysDrain(jobruntime.TouchedDaysDrainTestopsWindowDaysCut, uint64(pendingLeft))
+	if drain.testopsWindow && pass.keysDeferred > 0 && len(pass.started) > 0 {
+		// After the runs committed, one line, counts only: the keys a cap of
+		// the pass left pending. The next pass, which the end of these runs
+		// triggers, takes them.
+		drain.logger.Warn(ctx, synclog.MsgTouchedDaysDrainTestopsWindowDeferred,
+			synclog.Count(synclog.KeyTestopsWindowRepoDaysTaken, pass.keysTaken),
+			synclog.Count(synclog.KeyTestopsWindowKeysDeferred, pass.keysDeferred),
+			synclog.Count(synclog.KeyTestopsWindowRepoDaysCap, drain.repoDayCap()),
+		)
+		if drain.observer != nil {
+			_ = drain.observer.ObserveTouchedDaysDrain(jobruntime.TouchedDaysDrainTestopsWindowKeysDeferred, uint64(pass.keysDeferred))
+		}
 	}
 	var age time.Duration
 	if pendingLeft > 0 && !pass.backlog.OldestTouchedAt.IsZero() {

@@ -523,7 +523,7 @@ func (store *ClickHouseTouchedDaysStore) PendingDays(
 		return TouchedDaysPending{}, err
 	}
 	rows, err := store.conn.Query(ctx, store.laneSQL(`
-SELECT day
+SELECT day, count()
 FROM (`+pendingTouchedKeysSQL+`
 )
 GROUP BY day
@@ -533,10 +533,13 @@ LIMIT ?`), organizationID, limit+1)
 		return TouchedDaysPending{}, ErrTouchedDaysUnavailable
 	}
 	defer rows.Close()
-	pending := TouchedDaysPending{TakenAt: takenAt}
+	pending := TouchedDaysPending{TakenAt: takenAt, Keys: map[string]int{}}
 	for rows.Next() {
-		var day time.Time
-		if err := rows.Scan(&day); err != nil {
+		var (
+			day  time.Time
+			keys uint64
+		)
+		if err := rows.Scan(&day, &keys); err != nil {
 			return TouchedDaysPending{}, ErrTouchedDaysUnavailable
 		}
 		if len(pending.Days) == limit {
@@ -544,6 +547,7 @@ LIMIT ?`), organizationID, limit+1)
 			break
 		}
 		pending.Days = append(pending.Days, utcDay(day))
+		pending.Keys[utcDay(day).Format("2006-01-02")] = int(keys)
 	}
 	if err := rows.Err(); err != nil {
 		return TouchedDaysPending{}, ErrTouchedDaysUnavailable
@@ -669,6 +673,8 @@ type TouchedDaysBacklog struct {
 	// Truncated is true when older pending days exist that the read did not
 	// return.
 	Truncated bool
+	// Keys are the pending keys of each day of Days (2006-01-02), at the read.
+	Keys map[string]int
 }
 
 // Backlog returns the pending days of the organization, newest first, at most
@@ -684,7 +690,7 @@ func (store *ClickHouseTouchedDaysStore) Backlog(
 		return TouchedDaysBacklog{}, err
 	}
 	rows, err := store.conn.Query(ctx, store.laneSQL(`
-SELECT day, toUnixTimestamp64Milli(min(touched_at))
+SELECT day, toUnixTimestamp64Milli(min(touched_at)), count()
 FROM (
     SELECT day, repo_id, maxIf(at, kind = {touched}) AS touched_at
     FROM daily_metrics_touched_days
@@ -699,13 +705,14 @@ LIMIT ?`), organizationID, limit+1)
 		return TouchedDaysBacklog{}, ErrTouchedDaysUnavailable
 	}
 	defer rows.Close()
-	backlog := TouchedDaysBacklog{TakenAt: takenAt}
+	backlog := TouchedDaysBacklog{TakenAt: takenAt, Keys: map[string]int{}}
 	for rows.Next() {
 		var (
 			day           time.Time
 			touchedMillis int64
+			keys          uint64
 		)
-		if err := rows.Scan(&day, &touchedMillis); err != nil {
+		if err := rows.Scan(&day, &touchedMillis, &keys); err != nil {
 			return TouchedDaysBacklog{}, ErrTouchedDaysUnavailable
 		}
 		if len(backlog.Days) == limit {
@@ -713,6 +720,7 @@ LIMIT ?`), organizationID, limit+1)
 			break
 		}
 		backlog.Days = append(backlog.Days, utcDay(day))
+		backlog.Keys[utcDay(day).Format("2006-01-02")] = int(keys)
 		touchedAt := time.UnixMilli(touchedMillis).UTC()
 		if backlog.OldestTouchedAt.IsZero() || touchedAt.Before(backlog.OldestTouchedAt) {
 			backlog.OldestTouchedAt = touchedAt

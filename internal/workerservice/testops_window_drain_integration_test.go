@@ -171,8 +171,8 @@ func TestTestopsWindowLane(t *testing.T) {
 		if left := rig.windowPendingCount(t, ctx, orgID); left != 24 {
 			t.Fatalf("pending window keys after the fan-out = %d, want 24", left)
 		}
-		if got := observer.counts[jobruntime.PostSyncTouchedDaysTestopsWindowDaysCut]; got == 0 {
-			t.Fatalf("testops_window_days_cut = 0, want the cut counted")
+		if got := observer.counts[jobruntime.PostSyncTouchedDaysTestopsWindowKeysDeferred]; got != 24 {
+			t.Fatalf("testops_window_keys_deferred = %d, want the 24 keys the cap left", got)
 		}
 		// The retraction row was written in the sync run: its record writes the 29 keys again.
 		if got := observer.counts[jobruntime.PostSyncTouchedDaysTestopsWindowKeysRecorded]; got != 29 {

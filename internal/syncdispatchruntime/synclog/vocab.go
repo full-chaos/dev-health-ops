@@ -70,6 +70,7 @@ var (
 	MsgPostSyncTestopsWindowDays                         = Msg{"post_sync_fanout.testops_window_days"}
 	MsgPostSyncTestopsWindowCut                          = Msg{"post_sync_fanout.testops_window_cut"}
 	MsgPostSyncTestopsWindowOverBound                    = Msg{"post_sync_fanout.testops_window_keys_over_bound"}
+	MsgTouchedDaysDrainTestopsWindowDeferred             = Msg{"touched_days_drain.testops_window_keys_deferred"}
 	MsgTouchedDaysDrainPass                              = Msg{"touched_days_drain.pass"}
 	MsgTouchedDaysDrainFailed                            = Msg{"touched_days_drain.failed"}
 	MsgTouchedDaysDrainSplit                             = Msg{"touched_days_drain.day_split"}
@@ -175,7 +176,7 @@ var (
 	KeyTestopsWindowKeysBound       = Key{"testops_window_keys_bound"}
 	KeyTestopsWindowRepoDaysTaken   = Key{"testops_window_repo_days_taken"}
 	KeyTestopsWindowRepoDaysCap     = Key{"testops_window_repo_days_cap"}
-	KeyTestopsWindowDaysCut         = Key{"testops_window_days_cut"}
+	KeyTestopsWindowKeysDeferred    = Key{"testops_window_keys_deferred"}
 	KeyDrainPass                    = Key{"drain_pass"}
 	KeyDrainDaysStarted             = Key{"drain_days_started"}
 	KeyDrainDaysPendingLeft         = Key{"drain_days_pending_left"}

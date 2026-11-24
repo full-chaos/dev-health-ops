@@ -865,19 +865,38 @@ in their history, so they are marked in a lane of their own.
   families only, and its finalize writes nothing (no stale-key retraction, no
   finalize family, no activity refresh). The benchmarking of the days it
   computes again is not computed again.
+- Ownership: every key of the lane is started by a run of the lane. The
+  window writer has no full-organization days, so an ordinary run of the
+  same day never marks a window key it could fail to compute.
 - Cap: a fan-out, and a pass of the drain, starts runs for at most 899
-  (31 x 29) keys of the lane, newest first. The keys over the cap stay
-  pending (`post_sync_fanout.testops_window_cut`, counter event
-  `testops_window_days_cut`).
+  (31 x 29) keys of the lane, newest day first. A day is split to fit the cap
+  and the repository limit of one run, never skipped whole; a due retry ranks
+  by its day. The keys of the eligible days a cap leaves stay pending. After
+  the runs commit, one warning with counts only
+  (`post_sync_fanout.testops_window_cut`,
+  `touched_days_drain.testops_window_keys_deferred`) and the counter event
+  `testops_window_keys_deferred` report them. A day skipped after failed runs
+  is not counted.
 - Drain: the drain of the lane runs after the drain of the touched days for
   the same trigger, with its own advisory locks (8848, 8849), its own skip of
-  failed days (it counts `tw-` runs only; the touched-day lane counts every
-  other run), the same chain stop on a missing mark and the same return of the
-  keys of a run that ended without a result. It sets no pending-age gauge.
+  failed days and its own state of the runs (it counts `tw-` runs only; the
+  touched-day lane counts every other run, so a run of one lane never stops a
+  pass of the other), the same chain stop on a missing mark and the same
+  return of the keys of a run that ended without a result. It sets no
+  pending-age gauge.
+- Limits: the record reads the retraction rows of the organization written
+  since the start of the sync run (less the clock margin), not the rows of
+  this sync only. A retraction of an earlier or a concurrent sync can be
+  marked again: one more correct recompute, bounded by the cap of each
+  fan-out. A tests unit that writes a retraction and then fails does not
+  advance its watermark, so the next sync of the source walks the run again,
+  writes the retraction rows again and records them. A nightly pass that
+  reads after a batch ended and before its mark landed can start that batch
+  again: one more correct recompute of at most one capped batch.
 
 Counters: `dev_health_post_sync_touched_days_total{event}` with
 `testops_window_keys_recorded`, `testops_window_days_dispatched`,
-`testops_window_days_cut`, `testops_window_over_bound`,
+`testops_window_keys_deferred`, `testops_window_over_bound`,
 `testops_window_take_failed`, `testops_window_mark_failed`;
 `dev_health_touched_days_drain_total{event}` with the `testops_window_` events
 of the drain. Log lines: `post_sync_fanout.testops_window_days` and the drain

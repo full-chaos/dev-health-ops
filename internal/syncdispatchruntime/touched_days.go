@@ -150,6 +150,8 @@ type TouchedDaysPending struct {
 	// Truncated is true when older pending days exist that the read did not
 	// return.
 	Truncated bool
+	// Keys are the pending keys of each day of Days (2006-01-02), at the read.
+	Keys map[string]int
 }
 
 // TouchedDaysStore is the record of the days that stored raw rows touched.
@@ -255,17 +257,21 @@ type touchedDaysTake struct {
 	recorded       uint64
 	// testopsWindow is what the record wrote to the testops window lane.
 	testopsWindow TestopsWindowReport
-	// budgetCut is the number of days a repository-day budget took in part:
-	// the rest of their keys stays pending.
-	budgetCut int
-	window    TouchedWindowReport
-	takenAt   time.Time
-	starts    []touchedDayStart
+	// keysTaken and keysDeferred are, for a take with a key budget, the keys
+	// the take started runs for and the keys of the eligible days it left
+	// pending (a cap: the budget, the runs of one fan-out, the repositories of
+	// one run).
+	keysTaken, keysDeferred int
+	window                  TouchedWindowReport
+	takenAt                 time.Time
+	starts                  []touchedDayStart
 	// windowPending are the pending days that DailyPostSyncWriter.StartRunTx
 	// computes for every repository.
 	windowPending []time.Time
 	carriedOver   int
 	truncated     bool
+	// pendingKeys are the pending keys of each day at the read (2006-01-02).
+	pendingKeys map[string]int
 	// overLimit are the days with more pending repositories than one run
 	// accepts. No run is started for them and they stay pending.
 	overLimit []time.Time
@@ -342,6 +348,7 @@ func (service *NativePostSyncService) takePendingDays(
 		return err
 	}
 	take.takenAt = pending.TakenAt
+	take.pendingKeys = pending.Keys
 	take.truncated = pending.Truncated
 	window := make(map[string]struct{})
 	for _, day := range writer.FullOrganizationDays(*plan) {
@@ -372,9 +379,12 @@ func (service *NativePostSyncService) takePendingDays(
 // scanned day is over the limit, no run starts and all of them are reported
 // once. Days the walk did not reach count as carried over.
 //
-// A budget above zero bounds the (day, repository) keys the walk takes: the day
-// that reaches it is taken in part (its first repositories), and the walk ends
-// there. The keys it leaves stay pending.
+// A budget above zero bounds the (day, repository) keys the walk takes, newest
+// day first: a day is taken in part when the budget or the repository limit of
+// one run cuts it (its first repositories), never skipped whole for the limit,
+// and the walk ends when the budget is spent. The keys it leaves stay pending
+// and are counted as deferred: the rest of every day taken in part and every
+// eligible day the walk did not reach.
 func chooseTouchedDayStarts(
 	ctx context.Context, store TouchedDaysStore, writer TouchedDayPostSyncWriter, budget int,
 	organizationID string, candidates []time.Time, take *touchedDaysTake,
@@ -400,21 +410,28 @@ func chooseTouchedDayStarts(
 				// Another fan-out dispatched the day between the two reads.
 				continue
 			}
+			key := day.UTC().Format("2006-01-02")
+			if budget > 0 {
+				identifiers = identifiers[:min(len(identifiers), limit, remaining)]
+				remaining -= len(identifiers)
+				take.keysTaken += len(identifiers)
+				take.keysDeferred += max(take.pendingKeys[key]-len(identifiers), 0)
+				take.starts = append(take.starts, touchedDayStart{day: day, repositories: identifiers})
+				continue
+			}
 			if len(identifiers) > limit {
 				take.overLimit = append(take.overLimit, day)
 				continue
-			}
-			if budget > 0 {
-				if len(identifiers) > remaining {
-					identifiers = identifiers[:remaining]
-					take.budgetCut++
-				}
-				remaining -= len(identifiers)
 			}
 			take.starts = append(take.starts, touchedDayStart{day: day, repositories: identifiers})
 		}
 	}
 	take.carriedOver = len(candidates) - scanned
+	if budget > 0 {
+		for _, day := range candidates[scanned:] {
+			take.keysDeferred += take.pendingKeys[day.UTC().Format("2006-01-02")]
+		}
+	}
 	return nil
 }
 
@@ -659,23 +676,27 @@ func (service *NativePostSyncService) finishTestopsWindowDays(
 	if budget < 1 {
 		budget = PostSyncTestopsWindowRepoDaysPerFanout
 	}
-	cut := take.carriedOver + take.budgetCut + len(take.overLimit)
-	if cut > 0 {
-		// One line for each fan-out: the keys left are pending, and the drain
-		// takes them, newest first.
-		service.logger.Warn(ctx, synclog.MsgPostSyncTestopsWindowCut, org, run,
+	// The keys the caps of the take left pending, once its runs committed.
+	deferred := 0
+	if result.dailyStarted {
+		deferred = take.keysDeferred
+	}
+	if deferred > 0 {
+		// One line for each fan-out, counts only: the keys left are pending,
+		// and the drain takes them, newest first.
+		service.logger.Warn(ctx, synclog.MsgPostSyncTestopsWindowCut,
 			synclog.Count(synclog.KeyTestopsWindowRepoDaysTaken, keysTaken),
-			synclog.Count(synclog.KeyTestopsWindowDaysCut, cut),
+			synclog.Count(synclog.KeyTestopsWindowKeysDeferred, deferred),
 			synclog.Count(synclog.KeyTestopsWindowRepoDaysCap, budget),
 		)
-		service.observeTouchedDays(jobruntime.PostSyncTouchedDaysTestopsWindowDaysCut, uint64(cut))
+		service.observeTouchedDays(jobruntime.PostSyncTouchedDaysTestopsWindowKeysDeferred, uint64(deferred))
 	}
-	if recorded.Keys > 0 || len(result.started) > 0 || cut > 0 || len(take.windowPending) > 0 {
+	if recorded.Keys > 0 || len(result.started) > 0 || deferred > 0 || len(take.windowPending) > 0 {
 		service.logger.Info(ctx, synclog.MsgPostSyncTestopsWindowDays, org, run,
 			synclog.Count(synclog.KeyTestopsWindowKeysRecorded, int64(recorded.Keys)),
 			synclog.Count(synclog.KeyTouchedDaysDispatched, len(result.started)),
 			synclog.Count(synclog.KeyTestopsWindowRepoDaysTaken, keysTaken),
-			synclog.Count(synclog.KeyTestopsWindowDaysCut, cut),
+			synclog.Count(synclog.KeyTestopsWindowKeysDeferred, deferred),
 			synclog.Count(synclog.KeyTouchedDaysAlreadyStarted, result.alreadyStarted),
 			synclog.Flag(synclog.KeyTouchedDaysReadTruncated, take.truncated),
 		)

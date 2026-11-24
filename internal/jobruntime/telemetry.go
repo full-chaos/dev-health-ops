@@ -211,10 +211,11 @@ const (
 	// PostSyncTouchedDaysTestopsWindowDaysDispatched counts the days of the
 	// testops window lane a fan-out started a run for.
 	PostSyncTouchedDaysTestopsWindowDaysDispatched PostSyncTouchedDaysEvent = "testops_window_days_dispatched"
-	// PostSyncTouchedDaysTestopsWindowDaysCut counts the days of the testops
-	// window lane whose keys a fan-out left pending, whole or in part, because
-	// of its cap. The drain takes them.
-	PostSyncTouchedDaysTestopsWindowDaysCut PostSyncTouchedDaysEvent = "testops_window_days_cut"
+	// PostSyncTouchedDaysTestopsWindowKeysDeferred counts the keys of the
+	// eligible days of the testops window lane that a fan-out left pending
+	// because of a cap (its key budget, its runs, the repositories of one run).
+	// The drain takes them.
+	PostSyncTouchedDaysTestopsWindowKeysDeferred PostSyncTouchedDaysEvent = "testops_window_keys_deferred"
 	// PostSyncTouchedDaysTestopsWindowOverBound counts the fan-outs whose
 	// record of the testops window lane was above its bound. Every key is still
 	// recorded.
@@ -298,7 +299,7 @@ const (
 	TouchedDaysDrainTestopsWindowChainStopped TouchedDaysDrainEvent = "testops_window_chain_stopped_mark_missing"
 	TouchedDaysDrainTestopsWindowPassFailed   TouchedDaysDrainEvent = "testops_window_pass_failed"
 	TouchedDaysDrainTestopsWindowMarkFailed   TouchedDaysDrainEvent = "testops_window_mark_failed"
-	TouchedDaysDrainTestopsWindowDaysCut      TouchedDaysDrainEvent = "testops_window_days_cut"
+	TouchedDaysDrainTestopsWindowKeysDeferred TouchedDaysDrainEvent = "testops_window_keys_deferred"
 )
 
 func touchedDaysDrainEvents() []TouchedDaysDrainEvent {
@@ -312,7 +313,7 @@ func touchedDaysDrainEvents() []TouchedDaysDrainEvent {
 		TouchedDaysDrainChecksUnwritten,
 		TouchedDaysDrainTestopsWindowPasses, TouchedDaysDrainTestopsWindowDaysStarted, TouchedDaysDrainTestopsWindowDaysReturned,
 		TouchedDaysDrainTestopsWindowDaysSkipped, TouchedDaysDrainTestopsWindowChainStopped, TouchedDaysDrainTestopsWindowPassFailed,
-		TouchedDaysDrainTestopsWindowMarkFailed, TouchedDaysDrainTestopsWindowDaysCut,
+		TouchedDaysDrainTestopsWindowMarkFailed, TouchedDaysDrainTestopsWindowKeysDeferred,
 	}
 }
 
@@ -324,7 +325,7 @@ func postSyncTouchedDaysEvents() []PostSyncTouchedDaysEvent {
 		PostSyncTouchedDaysMarkFailed, PostSyncTouchedDaysOverRepositoryLimit,
 		PostSyncTouchedDaysTakeTimeUnwritten, PostSyncTouchedDaysWindowOverBound,
 		PostSyncTouchedDaysTestopsWindowKeysRecorded, PostSyncTouchedDaysTestopsWindowDaysDispatched,
-		PostSyncTouchedDaysTestopsWindowDaysCut, PostSyncTouchedDaysTestopsWindowOverBound,
+		PostSyncTouchedDaysTestopsWindowKeysDeferred, PostSyncTouchedDaysTestopsWindowOverBound,
 		PostSyncTouchedDaysTestopsWindowTakeFailed, PostSyncTouchedDaysTestopsWindowMarkFailed,
 	}
 }

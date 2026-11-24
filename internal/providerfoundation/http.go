@@ -9,6 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"log/slog"
+	"math"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -927,7 +928,7 @@ func ClassifyHTTPWithMessage(provider string, status int, headers http.Header, m
 	if isRateLimitedForbidden(provider, status, headers, message) {
 		return &ProviderError{
 			Class: ErrorRateLimited, StatusCode: status,
-			RetryAfter: rateLimitRetryAfter(headers, retryAfter, now),
+			RetryAfter: rateLimitRetryAfter(provider, headers, retryAfter, now),
 		}
 	}
 	switch status {
@@ -942,7 +943,7 @@ func ClassifyHTTPWithMessage(provider string, status int, headers http.Header, m
 	case http.StatusTooManyRequests:
 		return &ProviderError{
 			Class: ErrorRateLimited, StatusCode: status,
-			RetryAfter: rateLimitRetryAfter(headers, retryAfter, now),
+			RetryAfter: rateLimitRetryAfter(provider, headers, retryAfter, now),
 		}
 	}
 	if status >= 500 && status <= 599 {
@@ -1008,21 +1009,46 @@ func ParseRateLimitReset(raw string, now time.Time) time.Duration {
 	if err != nil {
 		return 0
 	}
-	delay := time.Duration((seconds - float64(now.UnixNano())/float64(time.Second)) * float64(time.Second))
-	if delay < 0 {
+	// Out-of-range float to int64 conversions are implementation-defined (amd64 gives a
+	// negative value, arm64 saturates), so the range is checked before converting.
+	nanoseconds := (seconds - float64(now.UnixNano())/float64(time.Second)) * float64(time.Second)
+	if !(nanoseconds > 0 && nanoseconds < 9223372036854775808.0) {
 		return 0
 	}
-	return delay
+	return time.Duration(nanoseconds)
+}
+
+// maxLaunchDarklyReset bounds a plausible LaunchDarkly reset; a later one is ignored.
+const maxLaunchDarklyReset = 24 * time.Hour
+
+// parseRateLimitResetMillis reads LaunchDarkly's X-Ratelimit-Reset, an epoch in
+// milliseconds, in int64 arithmetic: a value that is not an integer, is in the past,
+// or is more than maxLaunchDarklyReset ahead is ignored.
+func parseRateLimitResetMillis(raw string, now time.Time) time.Duration {
+	reset, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || reset < 0 || reset > math.MaxInt64/2 {
+		return 0
+	}
+	ahead := reset - now.UnixMilli()
+	if ahead <= 0 || ahead > maxLaunchDarklyReset.Milliseconds() {
+		return 0
+	}
+	return time.Duration(ahead) * time.Millisecond
 }
 
 // rateLimitRetryAfter prefers an explicit Retry-After and falls back to the
 // provider's reset header, mirroring Python's resolution order.
-func rateLimitRetryAfter(headers http.Header, retryAfter time.Duration, now time.Time) time.Duration {
+func rateLimitRetryAfter(provider string, headers http.Header, retryAfter time.Duration, now time.Time) time.Duration {
 	if retryAfter > 0 {
 		return retryAfter
 	}
 	for _, header := range []string{"x-ratelimit-reset", "ratelimit-reset"} {
-		if delay := ParseRateLimitReset(headerValue(headers, header), now); delay > 0 {
+		raw := headerValue(headers, header)
+		delay := ParseRateLimitReset(raw, now)
+		if provider == "launchdarkly" && header == "x-ratelimit-reset" {
+			delay = parseRateLimitResetMillis(raw, now)
+		}
+		if delay > 0 {
 			return delay
 		}
 	}

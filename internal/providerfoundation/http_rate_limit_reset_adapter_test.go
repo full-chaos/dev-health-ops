@@ -6,6 +6,5 @@ import (
 )
 
 func resetDelay(provider string, headers http.Header, now time.Time) time.Duration {
-	_ = provider
-	return rateLimitRetryAfter(headers, 0, now)
+	return rateLimitRetryAfter(provider, headers, 0, now)
 }

@@ -305,6 +305,26 @@ func (w *storeWire) answer(c *wireConn, sql string) bool {
 		}
 		wireRows(c, []uint32{16, 16}, []string{committed, ours})
 		applyPending()
+	case strings.HasPrefix(sql, "WITH contention AS"):
+		// The budget-contention deferral: one UPDATE ... RETURNING the unit's own
+		// deferral count. Zero rows when the unit is not this owner's.
+		w.updates++
+		if code := w.fault("unit_update"); code != "" {
+			return wireFail(c, code)
+		}
+		if w.done || w.firstCommitState == "other" && w.updates > 1 {
+			wireRows(c, []uint32{23})
+			return true
+		}
+		c.wroteUnit = true
+		c.backend.Send(&pgproto3.RowDescription{Fields: []pgproto3.FieldDescription{
+			{Name: []byte("c0"), DataTypeOID: 23, DataTypeSize: -1, TypeModifier: -1},
+		}})
+		c.backend.Send(&pgproto3.DataRow{Values: [][]byte{[]byte("1")}})
+		if c.status == 'I' {
+			return w.commitPoint(c, "SELECT 1")
+		}
+		wireTag(c, "SELECT 1")
 	case strings.HasPrefix(sql, "UPDATE public.sync_run_units"):
 		w.updates++
 		if code := w.fault("unit_update"); code != "" {

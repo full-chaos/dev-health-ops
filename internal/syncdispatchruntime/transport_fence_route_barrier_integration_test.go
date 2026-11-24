@@ -259,9 +259,11 @@ func TestDispatchRefusesAfterARouteMutationThatHeldTheBarrierCommitsAPause(t *te
 	})
 }
 
-// assertPostSyncGateGivesUpOnAHeldBarrier: post_sync does not poll (one read, by design). While a route mutation holds
-// its barrier, the commit gate returns ErrPostSyncUnavailable at once, its text the fixed sentinel, and the fan-out
-// failure line names the stage commit_check and SQLSTATE 55P03 (its cause), never a busy reason of the polling kinds.
+// assertPostSyncGateGivesUpOnAHeldBarrier: post_sync polls a held route barrier within the fence's bound, like the
+// other kinds. While a route mutation holds its barrier, the commit gate reads 7 times and returns
+// ErrPostSyncUnavailable, its text the fixed sentinel, its cause SQLSTATE 55P03. The log is exactly two lines: the
+// give-up WARN for kind post_sync naming the barrier reason, then the fan-out failure ERROR naming commit_check and
+// 55P03; the counter is exactly {post_sync/barrier reason: 1}.
 func assertPostSyncGateGivesUpOnAHeldBarrier(t *testing.T, ctx context.Context, pool, other *pgxpool.Pool, transport TransportArgs) {
 	t.Helper()
 	holder, err := other.Begin(ctx)
@@ -272,8 +274,10 @@ func assertPostSyncGateGivesUpOnAHeldBarrier(t *testing.T, ctx context.Context, 
 	if _, err := holder.Exec(ctx, `LOCK TABLE public.sync_dispatch_outbox IN SHARE ROW EXCLUSIVE MODE`); err != nil {
 		t.Fatal(err)
 	}
+	reader := installBusyMeter(t)
+	installFakeSnapshotClock(t)
 	var logs bytes.Buffer
-	service := &NativePostSyncService{logger: synclog.New(slog.New(slog.NewTextHandler(&logs, nil)))}
+	service := &NativePostSyncService{logger: untimedLogger(&logs)}
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -284,9 +288,14 @@ func assertPostSyncGateGivesUpOnAHeldBarrier(t *testing.T, ctx context.Context, 
 		t.Fatalf("post_sync gate on a held barrier: allowed=%v err=%v, want ErrPostSyncUnavailable (sentinel text) caused by SQLSTATE 55P03", allowed, gateErr)
 	}
 	service.observeFanoutFailure(ctx, PostSyncArgs{transport}, gateErr, "", true)
-	line := strings.TrimSpace(logs.String())
-	if strings.Count(line, "\n") != 0 || !strings.Contains(line, "level=ERROR") || !strings.Contains(line, "msg=post_sync_fanout.failed") ||
-		!strings.Contains(line, "reason=commit_check") || !strings.Contains(line, "error.code=55P03") || strings.Contains(line, routeBarrierTestBusyReason) {
-		t.Fatalf("post_sync failure line = %q, want one ERROR post_sync_fanout.failed naming reason=commit_check and error.code=55P03", line)
+	want := busyWarnLine(transport.RunID, outboxKindPostSync, routeBarrierTestBusyReason, "*fmt.wrapErrors") +
+		"level=ERROR msg=post_sync_fanout.failed org_id=" + transport.OrgID + " sync_run_id=" + transport.RunID +
+		" reason=commit_check error.class=postgres error.type=*fmt.wrapErrors error.code=55P03\n"
+	if got := logs.String(); got != want {
+		t.Fatalf("post_sync gate log =\n%q\nwant exactly\n%q", got, want)
+	}
+	counted := busyCounts(t, reader)
+	if key := outboxKindPostSync + "/" + routeBarrierTestBusyReason; counted[key] != 1 || len(counted) != 1 {
+		t.Fatalf("%s = %v, want exactly {%s: 1}", FenceCommitSnapshotBusyCounter, counted, key)
 	}
 }

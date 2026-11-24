@@ -40,19 +40,12 @@ func TestTestopsRiskUnknownCoverageStoredAgainstRealClickHouse(t *testing.T) {
     commit_hash Nullable(String), branch Nullable(String), pr_number Nullable(UInt32),
     team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT ''
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id)`,
-		`CREATE TABLE test_case_results (
-    repo_id UUID, run_id String, suite_id String, case_id String, case_name String,
-    class_name Nullable(String), status LowCardinality(String), duration_seconds Nullable(Float64),
-    retry_attempt UInt32 DEFAULT 0, failure_message Nullable(String), failure_type Nullable(String),
-    stack_trace Nullable(String), is_quarantined UInt8 DEFAULT 0,
-    org_id LowCardinality(String) DEFAULT '', last_synced DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id, suite_id, case_id)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
 		}
 	}
-	chschema.CreateTables(ctx, t, conn, "test_suite_results", "coverage_snapshots", "testops_run_report_completeness", "testops_release_confidence", "testops_quality_drag", "testops_pipeline_stability")
+	chschema.CreateTables(ctx, t, conn, "test_case_results", "test_suite_results", "coverage_snapshots", "testops_run_report_completeness", "testops_release_confidence", "testops_quality_drag", "testops_pipeline_stability")
 	applyTestopsRepositoryOwnershipSchema(ctx, t, conn)
 
 	const orgID = "00000000-0000-4000-8000-000000000009"

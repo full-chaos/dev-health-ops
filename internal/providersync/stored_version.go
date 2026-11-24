@@ -448,7 +448,11 @@ func writeWorkItemsKeepingHeldColumns(
 			return err
 		}
 	}
-	return batch.Send()
+	if err := batch.Send(); err != nil {
+		return err
+	}
+	recordWorkItemsDoneWithoutCompletedAt(ctx, rows)
+	return nil
 }
 
 const (

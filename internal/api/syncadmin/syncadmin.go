@@ -317,8 +317,8 @@ func (h *handlers) listSyncConfigs(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "credential_ids", err)
 		return
 	}
-	if err := deriveShownTargets(ctx, h.store.enabledDatasetKeys, org, configs...); err != nil {
-		h.fail(w, r, "enabled_datasets", err)
+	if step, err := h.deriveShown(ctx, org, configs...); err != nil {
+		h.fail(w, r, step, err)
 		return
 	}
 	if err := h.deriveSkippedDatasets(ctx, org, configs...); err != nil {
@@ -398,8 +398,8 @@ func (h *handlers) getSyncConfig(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "credential_id", err)
 		return
 	}
-	if err := deriveShownTargets(r.Context(), h.store.enabledDatasetKeys, orgID(r), config); err != nil {
-		h.fail(w, r, "enabled_datasets", err)
+	if step, err := h.deriveShown(r.Context(), orgID(r), config); err != nil {
+		h.fail(w, r, step, err)
 		return
 	}
 	if err := h.deriveSkippedDatasets(r.Context(), orgID(r), config); err != nil {

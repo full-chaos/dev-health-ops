@@ -100,8 +100,13 @@ type NativePostSyncService struct {
 	teamRepoOwnershipDerivationObserver jobruntime.TeamRepoOwnershipDerivationObserver
 	touched                             TouchedDaysStore
 	touchedWriter                       TouchedDayPostSyncWriter
-	touchedObserver                     jobruntime.PostSyncTouchedDaysObserver
-	now                                 func() time.Time
+	testopsWindow                       TouchedDaysStore
+	testopsWindowWriter                 TouchedDayPostSyncWriter
+	// testopsWindowBudget replaces PostSyncTestopsWindowRepoDaysPerFanout when
+	// above zero (SetTestopsWindowRepoDayCap).
+	testopsWindowBudget int
+	touchedObserver     jobruntime.PostSyncTouchedDaysObserver
+	now                 func() time.Time
 }
 
 // SetFanoutObserver wires the optional CHAOS-4263 fanout-outcome telemetry
@@ -191,12 +196,20 @@ func (service *NativePostSyncService) fanout(ctx context.Context, args PostSyncA
 	var (
 		touchedTake   *touchedDaysTake
 		touchedResult touchedDaysResult
+		windowTake    *touchedDaysTake
+		windowResult  touchedDaysResult
 	)
 	if service.touched != nil {
 		touchedTake, err = service.takeTouchedDays(ctx, args, now)
 		if err != nil {
 			service.observeTouchedDaysFailure(ctx, args, "record", jobruntime.PostSyncTouchedDaysRecordFailed)
 			return err
+		}
+		// The keys of the testops window lane are recorded already: a failed
+		// read leaves them pending for the drain and does not fail the fan-out.
+		if windowTake, err = service.takeTestopsWindowDays(ctx, touchedTake); err != nil {
+			service.observeTouchedDaysFailure(ctx, args, "testops_window_take", jobruntime.PostSyncTouchedDaysTestopsWindowTakeFailed)
+			windowTake, err = nil, nil
 		}
 	}
 	state.step = stageBegin
@@ -309,7 +322,13 @@ func (service *NativePostSyncService) fanout(ctx context.Context, args PostSyncA
 		outcome = jobruntime.PostSyncFanoutOutcomePublished
 		if touchedTake != nil {
 			state.step = stageTouchedStart
-			if err = service.startTouchedDaysTx(ctx, tx, *plan, touchedTake, &touchedResult); err != nil {
+			if err = service.startTouchedDaysTx(ctx, tx, service.touchedWriter, *plan, touchedTake, &touchedResult); err != nil {
+				return err
+			}
+		}
+		if windowTake != nil {
+			state.step = stageTouchedStart
+			if err = service.startTouchedDaysTx(ctx, tx, service.testopsWindowWriter, *plan, windowTake, &windowResult); err != nil {
 				return err
 			}
 		}
@@ -377,6 +396,7 @@ func (service *NativePostSyncService) fanout(ctx context.Context, args PostSyncA
 	afterCommit.Run()
 	if touchedTake != nil {
 		service.finishTouchedDays(ctx, args, touchedTake, touchedResult)
+		service.finishTestopsWindowDays(ctx, args, touchedTake.testopsWindow, windowTake, windowResult)
 	}
 	return nil
 }
@@ -643,12 +663,16 @@ SELECT EXISTS (
 }
 
 // postSyncCommitAllowed is the pass's last statement before COMMIT: the shared commit snapshot of the post_sync row
-// (locked to the commit, NOWAIT) judged by decideCommit. A superseded delivery is refused with one line; a held row
-// (55P03) or a read error is ErrPostSyncUnavailable, so River retries the same delivery.
+// (locked to the commit, NOWAIT) judged by decideCommit. A superseded delivery is refused with one line. A held row or
+// route barrier (55P03) is read again within the fence's bound (lockCommitSnapshot, one savepoint per read); one still
+// held after it, or a read error, is ErrPostSyncUnavailable at commit_check over its cause, so River retries the same
+// delivery.
 func (service *NativePostSyncService) postSyncCommitAllowed(ctx context.Context, tx pgx.Tx, args PostSyncArgs) (bool, error) {
-	snapshot, err := readCommitSnapshot(ctx, tx, args, outboxKindPostSync)
+	fence := &transportFence{args: args, kind: outboxKindPostSync, unavailable: unavailable(stageCommitCheck, nil), logger: service.logger,
+		failure: func(cause error) error { return unavailable(stageCommitCheck, cause) }}
+	snapshot, err := fence.lockCommitSnapshot(ctx, tx)
 	if err != nil {
-		return false, unavailable(stageCommitCheck, err)
+		return false, err
 	}
 	allowed, reason := decideCommit(snapshot, args.RouteGeneration(), args.Attempt())
 	if !allowed {

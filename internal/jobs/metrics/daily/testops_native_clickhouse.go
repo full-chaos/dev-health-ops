@@ -139,6 +139,15 @@ var testopsSuiteResultsSource = testopspooled.SuiteWindowSource("repo_ids", "sta
 // whose counted suite moved to a later day by a re-run then leaves no case on this day, so the day gets no row instead of 0.
 var testopsKeptSuitesToday = testopsSuiteResultsSource + "\n  AND " + testopspooled.SuiteRowsNewestAttempt("", testopsRuleScope)
 
+// testopsCaseSuitesNotRetired and testopsHistorySuitesNotRetired keep the case reads' own-suite sets off a retired report slot
+// and its retraction rows (CHAOS-14259), at every attempt: a slot whose rows a later sync retracted holds no case of the run. The
+// today set is bound like the kept suites (a case counts only in a run of today's kept suites); the history set by its own
+// window [history_start, start), the window of the suites it tests.
+var (
+	testopsCaseSuitesNotRetired    = testopspooled.SuiteRowsNotRetired("", testopsRuleScope)
+	testopsHistorySuitesNotRetired = testopspooled.SuiteRowsNotRetired("", testopspooled.Scope{RepoIDsParam: "repo_ids", WindowStartParam: "history_start", WindowEndParam: "start"})
+)
+
 // testopsFailureStatuses is FAILURE_STATUSES (compute_testops.py:54), bound as {failure_statuses:Array(String)}.
 var testopsFailureStatuses = []string{"failure", "failed", "error", "errors", "timeout", "timed_out"}
 
@@ -151,6 +160,14 @@ func testopsCaseArgs(orgID string, repoID uuid.UUID, defaultBranch string, histo
 		args = append(args, clickhouse.Named("default_branch", defaultBranch))
 	}
 	return args
+}
+
+// testopsHistoryNameArgs binds the reference history read (loadHistoricalFailedCaseNames): the source parameters of its own
+// window [start, end), the end of the current day and the failure vocabulary.
+func testopsHistoryNameArgs(orgID string, repoID uuid.UUID, start, end, currentDayEnd time.Time) []any {
+	return append(testopsSourceArgs(orgID, []uuid.UUID{repoID}, start, end),
+		clickhouse.Named("current_day_end", remaining.DateTime64Argument(currentDayEnd, remaining.DateTime64MillisecondPrecision)),
+		clickhouse.Named("failure_statuses", testopsFailureStatuses))
 }
 
 func testopsSourceArgs(orgID string, repoIDs []uuid.UUID, start, end time.Time) []any {
@@ -325,7 +342,8 @@ func loadNativeTestopsCaseAggregate(
 	// runs with a suite in [historyStart, end), the only runs the sets can name.
 	//
 	// Today's run set takes the kept suites (testopsKeptSuitesToday), and so does the history arm through NOT run_in_today. The
-	// own-suite tests (in_today, and the history arm's suite set) keep every suite row: a re-run's attempt-1 case rows still join
+	// own-suite tests (in_today, and the history arm's suite set) keep the suite rows of every attempt, except a retired slot's
+	// (testopsCaseSuitesNotRetired, CHAOS-14259): a re-run's attempt-1 case rows still join
 	// on the newest attempt's day, so a test that failed on attempt 1 and passed on attempt 2 stays a flake there, and an
 	// attempt-1 failure stays history for a later day.
 	offDefaultCTE := ""
@@ -355,6 +373,7 @@ FROM (
       SELECT run_id, suite_id FROM test_suite_results FINAL
       WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
         AND coalesce(started_at, finished_at) < {end:DateTime64(3, 'UTC')}
+        AND `+testopsCaseSuitesNotRetired+`
     ) AS in_today,
     NOT run_in_today
       AND lower(trim(status)) IN {failure_statuses:Array(String)}
@@ -363,6 +382,7 @@ FROM (
         WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
           AND coalesce(started_at, finished_at) >= {history_start:DateTime64(3, 'UTC')}
           AND coalesce(started_at, finished_at) < {start:DateTime64(3, 'UTC')}`+offDefaultExclusion+`
+          AND `+testopsHistorySuitesNotRetired+`
       ) AS failed_in_history
   FROM test_case_results FINAL
   WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)} AND case_name != ''
@@ -453,6 +473,7 @@ SELECT count() FROM (
       SELECT run_id, suite_id FROM test_suite_results FINAL
       WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
         AND coalesce(started_at, finished_at) < {end:DateTime64(3, 'UTC')}
+        AND `+testopsCaseSuitesNotRetired+`
     )
     AND org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
   LIMIT 1

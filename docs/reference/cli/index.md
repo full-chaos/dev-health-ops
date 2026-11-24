@@ -747,6 +747,24 @@ dho admin org entitlements revoke --org-id <uuid> --feature-key reports
 
 Read and change the LLM settings of an organization (`get`, `set`, `delete`). Run `dho admin llm-settings <verb> --help` for the flags.
 
+### `admin sync-configs artifact-excludes`
+
+Set, clear and show the CI artifact name prefixes that the GitHub tests sync skips (`ci_artifact_exclude_prefixes`). The list applies to every sync config of this integration: it is stored once, in the integration's config, which every sync unit of the integration reads, and every sync configuration of the integration shows it in `sync_options` (GET, list and the PATCH answer). A write replaces the whole list (the last writer wins); `--clear` or an empty list removes it for every sync config of the integration. The verbs and `PATCH /api/v1/admin/sync-configs/{config_id}` validate and write with the same code (`internal/artifactexclude`); `PATCH /api/v1/admin/integrations/{integration_id}` keeps the list when its new config does not carry the key. A skipped artifact is never downloaded and takes no per-run artifact slot. The verbs read the database from `MIGRATION_DATABASE_URI`, else `POSTGRES_URI`.
+
+```bash
+dho admin sync-configs artifact-excludes set --config-id <uuid> --prefix ci-images- --prefix ci-timings- --reason "ci artifacts that hold no report"
+dho admin sync-configs artifact-excludes set --config-id <uuid> --prefix ci-images- --reason "check first" --dry-run
+dho admin sync-configs artifact-excludes set --config-id <uuid> --clear --reason "the CI no longer uploads them"
+dho admin sync-configs artifact-excludes show --config-id <uuid>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `set` | Replace the integration's list with the `--prefix` list (repeat the flag) or remove it (`--clear`); `--reason` is required and printed with the result. One JSON line: `action`, `config_id_prefix`, `org_id_prefix`, `integration_id_prefix` (8 characters each), `prefix_count`, `sync_options_changed`, `integration_config_changed`, `dry_run`, `reason`. `--dry-run` validates and reports, then rolls back |
+| `show` | One JSON line: the id prefixes, `integration_config_prefixes` (the list, or null) and `sync_options_prefixes` (a copy left in the configuration's own options by an earlier write, normally null) |
+
+Rules for the list (the API answers 422 with the field and the entry index; the verb prints `invalid_value`): a GitHub configuration only, 1 to 16 entries, each 1 to 100 characters from `A-Z a-z 0-9 . _ -`, no entry repeated (case-insensitive). A name matches an entry when it starts with it, case-insensitively. Unlike the PATCH, the verb does not refresh the GitHub work-item options from its environment: it changes only the list.
+
 ---
 
 ## Backfill Commands
@@ -1097,6 +1115,38 @@ SELECT dedupe_key, status, created_at FROM worker_job_outbox
 WHERE dedupe_key LIKE 'metrics.daily_partition:redrive:%'
 ORDER BY created_at DESC;
 ```
+
+#### `metrics testops-slot-recompute`
+
+The daily recurrence of a day X reads the 29 days before it. A later sync that retires
+a test report slot of a run on day D writes retraction rows, and the post-sync run
+computes only D. The days D+1 .. D+29 that were computed before keep the recurrence
+that counted the retired slot. This verb computes those days again.
+
+```bash
+kubectl exec -i <worker-pod> -- dho workers metrics testops-slot-recompute \
+  --org-stdin --from 2026-08-01 --to 2026-08-07 [--repo-id <uuid> ...] [--through 2026-09-05] \
+  --rerun-tag <tag> [--max-repo-days 200] [--apply --reason <code> --correlation-id <id>] < org-id-source
+```
+
+- The verb selects every repository-day of a run whose test suite key has a retraction
+  row as its newest version, with the retraction's day in `--from` .. `--to` (at most
+  31 days), and every day of such a run up to `--through`. No provider is named: every
+  provider that writes retraction rows is selected. It expands each day D to D .. D+29,
+  up to `--through`. D is in the set, so a lost post-sync run of D is repaired too. A
+  preview defaults `--through` to today (UTC); `--apply` needs it given, so a repeated
+  apply plans the same days.
+- Without `--apply` it only previews: it prints the days, the repository count of each
+  day and the first 8 characters of each repository id, and writes nothing.
+- `--apply` starts one tagged daily run per day for its repositories, through the
+  `metrics daily-start --rerun-tag` path, so a second call with the same plan and tag
+  starts nothing. It needs `--reason` and `--correlation-id`.
+- The plan is read and checked before the audited write: more repository-days than
+  `--max-repo-days` (default 200, at most 10,000) stops with `repo_day_cap`, and a day
+  of more repositories than one daily run admits (1,000) stops with `day_repo_cap`.
+  A stop prints its counts and writes nothing, not even an audit row.
+- Run it from a `go-scheduler` or `go-reconciler` pod: like every `dho workers` verb it
+  needs the coordinator DSN, and it reads ClickHouse through `CLICKHOUSE_URI`.
 
 #### `metrics daily-finalize`
 

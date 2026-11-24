@@ -34,6 +34,14 @@ type commitLockTracer struct {
 	onBusy              func()
 	rollbacks           int
 	onSavepointRollback func()
+	// aborted counts every statement on the traced pool that failed with SQLSTATE 25P02 (in failed transaction).
+	aborted int
+}
+
+func (tracer *commitLockTracer) abortedStatements() int {
+	tracer.mu.Lock()
+	defer tracer.mu.Unlock()
+	return tracer.aborted
 }
 
 func (tracer *commitLockTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
@@ -53,6 +61,11 @@ func (tracer *commitLockTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, 
 		return
 	}
 	var pgErr *pgconn.PgError
+	if errors.As(data.Err, &pgErr) && pgErr.Code == "25P02" {
+		tracer.mu.Lock()
+		tracer.aborted++
+		tracer.mu.Unlock()
+	}
 	if !isCommitCheck(sql) || !errors.As(data.Err, &pgErr) || pgErr.Code != "55P03" {
 		return
 	}

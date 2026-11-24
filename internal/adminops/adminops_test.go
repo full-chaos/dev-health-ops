@@ -20,7 +20,7 @@ func TestTheAdminGroupHoldsEveryVerb(t *testing.T) {
 			paths = append(paths, group.Name+" "+child.Name)
 		}
 	}
-	want := "users create,users list,users update,users delete,orgs create,orgs list,orgs delete,llm-settings get,llm-settings set,llm-settings delete,llm-budget stale,llm-budget void-reservation,licenses keygen,licenses create,bundles create,bundles list,bundles assign-plan,bundles assign-org,org entitlements,billing seed,billing list,billing pull-stripe,billing sync-stripe,features seed"
+	want := "users create,users list,users update,users delete,orgs create,orgs list,orgs delete,llm-settings get,llm-settings set,llm-settings delete,llm-budget stale,llm-budget void-reservation,licenses keygen,licenses create,bundles create,bundles list,bundles assign-plan,bundles assign-org,org entitlements,billing seed,billing list,billing pull-stripe,billing sync-stripe,sync-configs artifact-excludes,features seed"
 	if command.Name != "admin" || strings.Join(paths, ",") != want {
 		t.Fatalf("the verbs are %v, want %s", paths, want)
 	}
@@ -35,7 +35,17 @@ func TestTheAdminGroupHoldsEveryVerb(t *testing.T) {
 			}
 		}
 	}
-	if got := strings.Join(nested, ","); got != "org entitlements list,org entitlements grant,org entitlements revoke" {
+	for _, group := range command.Children {
+		if group.Name != "sync-configs" {
+			continue
+		}
+		for _, sub := range group.Children {
+			for _, verb := range sub.Children {
+				nested = append(nested, group.Name+" "+sub.Name+" "+verb.Name)
+			}
+		}
+	}
+	if got := strings.Join(nested, ","); got != "org entitlements list,org entitlements grant,org entitlements revoke,sync-configs artifact-excludes set,sync-configs artifact-excludes show" {
 		t.Fatalf("the nested verbs are %s", got)
 	}
 }

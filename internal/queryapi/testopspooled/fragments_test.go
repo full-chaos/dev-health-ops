@@ -12,23 +12,27 @@ var (
 
 func fragments() map[string]func(alias string, scope Scope) string {
 	return map[string]func(alias string, scope Scope) string{
-		"suite":    SuiteRowsNewestAttempt,
-		"coverage": CoverageRowsNewestAttempt,
+		"suite":      SuiteRowsNewestAttempt,
+		"notRetired": SuiteRowsNotRetired,
+		"coverage":   CoverageRowsNewestAttempt,
 	}
 }
 
 func uses(name string) int {
-	if name == "suite" {
+	switch name {
+	case "suite":
 		return SuiteScopeUses
+	case "notRetired":
+		return NotRetiredScopeUses
 	}
 	return CoverageScopeUses
 }
 
 func tableOf(name string) string {
-	if name == "suite" {
-		return "test_suite_results"
+	if name == "coverage" {
+		return "coverage_snapshots"
 	}
-	return "coverage_snapshots"
+	return "test_suite_results"
 }
 
 // The scope lands in EVERY inner select, and the exported use counts are exact.
@@ -41,7 +45,7 @@ func TestScopeLandsInEveryInnerSelect(t *testing.T) {
 			}
 			segments := strings.Split(sql, "FROM "+tableOf(name)+" FINAL")
 			want := uses(name)
-			if name == "suite" && label == "repo+window" {
+			if tableOf(name) == "test_suite_results" && label == "repo+window" {
 				want *= 2 // each window bound is itself a select over the suite table, bounded to the same repositories
 			}
 			if len(segments) != want+1 {
@@ -90,13 +94,17 @@ func TestEmptyScopeBindsOnlyTheOrganization(t *testing.T) {
 func TestAliasQualifiesTheOuterColumnsOnly(t *testing.T) {
 	for name, build := range fragments() {
 		sql := build("a", repoOnly)
-		for _, column := range []string{"a.report_slot", "a.repo_id", "a.run_id", "a.run_attempt"} {
+		required := []string{"a.report_slot", "a.repo_id", "a.run_id", "a.run_attempt"}
+		if name == "notRetired" {
+			required = []string{"a.report_slot", "a.repo_id", "a.run_id", "a.retracted", "a.suite_id"}
+		}
+		for _, column := range required {
 			if !strings.Contains(sql, column) {
 				t.Errorf("%s: %s is not qualified", name, column)
 			}
 		}
 		qualified := 0
-		for _, column := range []string{"a.report_slot", "a.repo_id", "a.run_id", "a.run_attempt", "a.suite_id", "a.snapshot_id"} {
+		for _, column := range []string{"a.report_slot", "a.repo_id", "a.run_id", "a.run_attempt", "a.suite_id", "a.snapshot_id", "a.retracted"} {
 			qualified += strings.Count(sql, column)
 		}
 		if strings.Count(sql, "a.") != qualified {
@@ -139,6 +147,7 @@ func TestHostileAliasAndScopeNamesPanic(t *testing.T) {
 	}
 	for _, alias := range []string{"a b", "a;b", "a.b", "1a", "a'"} {
 		mustPanic("alias "+alias, func() { SuiteRowsNewestAttempt(alias, Scope{}) })
+		mustPanic("not-retired alias "+alias, func() { SuiteRowsNotRetired(alias, Scope{}) })
 	}
 	for _, name := range []string{"repo ids", "repo_ids}; DROP", "Repo", "1repo", "repo'", "a.b", "repo-ids"} {
 		mustPanic("repo param "+name, func() { CoverageRowsNewestAttempt("", Scope{RepoIDsParam: name}) })
@@ -161,5 +170,48 @@ WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}
   AND coalesce(started_at, finished_at) < {end:DateTime64(3, 'UTC')}`
 	if got := SuiteWindowSource("repo_ids", "start", "end"); got != before {
 		t.Fatalf("the moved window source differs from the daily readers' text:\n%s\nwant\n%s", got, before)
+	}
+}
+
+// CHAOS-14259: the retired-slot rule. A slot is retired by its newest row of its newest attempt (argMax over (run_attempt,
+// last_synced), a retraction row winning a tie across keys); the newest-attempt choice itself reads every row, retraction rows
+// included, so a retracted newest attempt still hides its slot's older attempts and its listed legacy ids. Coverage has no rule.
+func TestRetiredSlotRuleIsAppliedAfterTheNewestAttempt(t *testing.T) {
+	const retired = "SELECT repo_id, run_id, report_slot FROM test_suite_results FINAL WHERE org_id = {org_id:String} AND report_slot != '' GROUP BY repo_id, run_id, report_slot HAVING argMax(retracted, (run_attempt, last_synced, retracted)) = 1"
+	suite := SuiteRowsNewestAttempt("s", Scope{})
+	if !strings.Contains(suite, "s.retracted = 0 AND (s.repo_id, s.run_id, s.report_slot) NOT IN ("+retired+")") {
+		t.Errorf("the slotted arm does not drop retracted rows and retired slots:\n%s", suite)
+	}
+	newest := "SELECT repo_id, run_id, report_slot, max(run_attempt) FROM test_suite_results FINAL WHERE org_id = {org_id:String} AND report_slot != '' GROUP BY repo_id, run_id, report_slot"
+	if strings.Count(suite, newest+")") != 2 {
+		t.Errorf("the newest-attempt select is not the unfiltered one in both arms:\n%s", suite)
+	}
+	retiredLegacy := "SELECT repo_id, run_id, arrayJoin(legacy_suite_ids) FROM test_suite_results FINAL WHERE org_id = {org_id:String} AND report_slot != '' AND (repo_id, run_id, report_slot) IN (" + retired + ")"
+	if got := SuiteRowsNotRetired("c", Scope{}); got != "(c.retracted = 0 AND ((c.report_slot = '' AND (c.repo_id, c.run_id, c.suite_id) NOT IN ("+retiredLegacy+
+		")) OR (c.report_slot != '' AND (c.repo_id, c.run_id, c.report_slot) NOT IN ("+retired+"))))" {
+		t.Errorf("SuiteRowsNotRetired is\n%s", got)
+	}
+	// A pre-slot copy of a retired slot is retired with it, whichever attempt of the slot lists its id.
+	if !strings.Contains(suite, "AND (s.repo_id, s.run_id, s.suite_id) NOT IN ("+retiredLegacy+"))") {
+		t.Errorf("the legacy arm keeps a pre-slot copy of a retired slot:\n%s", suite)
+	}
+	if strings.Contains(CoverageRowsNewestAttempt("", Scope{}), "retracted") {
+		t.Errorf("the coverage fragment reads a retracted column coverage_snapshots does not have")
+	}
+}
+
+// CHAOS-14555: the revived-slot count takes the slots that hold a retraction row and whose newest row is live, one select over
+// the suite table bounded like the others (the repository list and, with a window, the window's runs).
+func TestRevivedSlotsCountsTheSlotsLiveAgainAfterARetraction(t *testing.T) {
+	sql := RevivedSlots(repoWindow)
+	if !strings.HasPrefix(sql, "SELECT count() FROM (SELECT repo_id, run_id, report_slot FROM test_suite_results FINAL WHERE org_id = {org_id:String} AND repo_id IN {repo_ids:Array(UUID)}") ||
+		!strings.HasSuffix(sql, "GROUP BY repo_id, run_id, report_slot HAVING max(retracted) = 1 AND argMax(retracted, (run_attempt, last_synced, retracted)) = 0)") {
+		t.Errorf("RevivedSlots is\n%s", sql)
+	}
+	if got := strings.Count(sql, "FROM test_suite_results FINAL"); got != 2 {
+		t.Errorf("%d selects over the suite table, want the slot select and its window run set", got)
+	}
+	if strings.Count(RevivedSlots(Scope{}), "{") != 1 {
+		t.Errorf("an empty scope binds more than the organization:\n%s", RevivedSlots(Scope{}))
 	}
 }

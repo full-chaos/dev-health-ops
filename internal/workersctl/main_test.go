@@ -513,7 +513,16 @@ func commandRuntimeWithAuditor(t *testing.T, authorizer joboperator.Authorizer, 
 		service:          service,
 		queueControlMode: "direct",
 		principal:        joboperator.OperatorPrincipal,
+		retiredSlotPlan:  commandRetiredSlotPlan,
 	}
+}
+
+// commandRetiredSlotPlan is a one-day, one-repository testops-slot-recompute plan, so the verb reaches its write without
+// ClickHouse.
+func commandRetiredSlotPlan(_ context.Context, _ string, request daily.RetiredSlotPlanRequest) (daily.RetiredSlotPlan, error) {
+	return daily.RetiredSlotPlan{RetiredRepoDays: 1, Days: []daily.RetiredSlotRecomputeDay{
+		{Day: request.Through, RepoIDs: []daily.RepositoryID{"0b1f3b0a-6d0c-4f5e-9a55-1c2d3e4f5a6b"}},
+	}}, nil
 }
 
 func TestSessionSafeModeRejectsTransactionAndUnknownModes(t *testing.T) {

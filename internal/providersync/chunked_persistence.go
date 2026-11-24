@@ -614,34 +614,50 @@ func splitEmission(
 	// emit several normalized effects for one source item, so using only the
 	// effect cap would allow one source page to grow without limit.
 	maxRows := min(policy.MaxEffectRows, policy.MaxSourceItems)
+	// Rows of their own chunks (effectOwnChunkRows) are split apart from the other rows of their destination.
+	regular, own := make([][]json.RawMessage, len(ordered)), make([][]json.RawMessage, len(ordered))
+	for index, effect := range ordered {
+		regular[index], own[index] = effectOwnChunkRows(effect)
+	}
 	for maxRows >= 1 {
-		count := 1
-		for _, effect := range ordered {
-			if rows := (len(effect.Rows) + maxRows - 1) / maxRows; rows > count {
-				count = rows
+		shared, ownChunks := 1, 0
+		for index := range ordered {
+			if rows := (len(regular[index]) + maxRows - 1) / maxRows; rows > shared {
+				shared = rows
+			}
+			if len(own[index]) > ownChunks {
+				ownChunks = len(own[index])
 			}
 		}
+		count := shared + ownChunks
 		chunks := make([]PreparedProviderChunk, 0, count)
 		valid := true
 		var storeRefusal error
 		for ordinal := 0; ordinal < count; ordinal++ {
 			effects := make([]EffectBatch, 0, len(ordered))
-			for _, effect := range ordered {
+			for index, effect := range ordered {
+				rows, first, last, size := regular[index], 0, shared, maxRows
+				if ordinal >= shared {
+					// The own chunks come after every shared chunk and hold one row of their own each (and a trailing
+					// destination's rows, which fill the last chunks).
+					rows, first, last, size = own[index], shared, count, 1
+				}
 				// A trailing destination's rows fill the LAST sub-chunks of the emission, so they commit after every row
 				// of the other destinations (effectSplitsLast).
-				shift := 0
+				shift := first
 				if effectSplitsLast(effect.Destination) {
-					shift = count - (len(effect.Rows)+maxRows-1)/maxRows
+					rows, shift = effect.Rows, count-(len(effect.Rows)+maxRows-1)/maxRows
+					last, size = count, maxRows
 				}
-				start := (ordinal - shift) * maxRows
-				if ordinal < shift || start > len(effect.Rows) {
-					start = len(effect.Rows)
+				start := (ordinal - shift) * size
+				if ordinal < shift || ordinal >= last || start > len(rows) {
+					start = len(rows)
 				}
-				end := start + maxRows
-				if end > len(effect.Rows) {
-					end = len(effect.Rows)
+				end := start + size
+				if end > len(rows) {
+					end = len(rows)
 				}
-				part, err := BuildEffectBatch(effect.Destination, effect.Recovery, effect.Rows[start:end])
+				part, err := BuildEffectBatch(effect.Destination, effect.Recovery, rows[start:end])
 				if err != nil {
 					return nil, err
 				}
@@ -710,6 +726,27 @@ func splitEmission(
 		maxRows = nextSplitCap(maxRows, policy)
 	}
 	return nil, ErrChunkPolicyExceeded
+}
+
+// effectOwnChunkRows splits an effect's rows into the rows that share chunks with the other destinations' rows and the rows the
+// split puts in chunks of their own, one row per chunk, after every shared chunk. A GitHub minimal retraction row (CHAOS-14259, key "~retired-")
+// retires a report slot; alone it is a few KiB, so its chunk can never pass the prepared-chunk bound however large the run's
+// other rows are.
+func effectOwnChunkRows(effect EffectBatch) (shared, own []json.RawMessage) {
+	if effect.Destination != "test_suite_results" {
+		return effect.Rows, nil
+	}
+	for _, row := range effect.Rows {
+		if bytes.Contains(row, []byte(`"suite_id":"`+githubTestsRetiredSlotKeyPrefix)) {
+			own = append(own, row)
+			continue
+		}
+		shared = append(shared, row)
+	}
+	if len(own) == 0 {
+		return effect.Rows, nil
+	}
+	return shared, own
 }
 
 func preparedChunkDigest(chunk PreparedProviderChunk) string {

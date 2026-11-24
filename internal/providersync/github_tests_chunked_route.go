@@ -137,14 +137,15 @@ func (gate githubTestsFloorBackoffGate) Penalize(ctx context.Context, penalty ti
 // githubTestsMaxReportRowsPerRun (CHAOS-13794; before it, the same 500 also capped the report rows and dropped whole artifacts).
 const githubTestsMaxJobsPerRun = 500
 
-// githubTestsMaxReportRowsPerRun bounds the suites+cases+coverage rows admitted for ONE run, and
+// githubTestsMaxReportRowsPerRun bounds the suites+cases+coverage rows admitted for ONE run (githubTestsMaxArtifacts rows under
+// maxEffectRows: the room of one retraction row per dropped report, githubTestsMinimalRetractionRows), and
 // githubTestsMaxReportPayloadBytesPerDestination the JSON bytes of any one destination's rows (CHAOS-13794). They sit under the
 // effect contract that one run's rows go through as ONE batch per destination before the split into chunks (maxEffectRows,
 // maxEffectPayloadBytes): a run over either is a failing unit, not a truncated one, so the bound is the contract ceiling, not a
 // guess. Sized from prod: the largest run is 71,896 rows (7b9583ee), the web run with vitest is about 17,300. The payload bound
 // keeps the same 9/10 headroom as the blame route.
 const (
-	githubTestsMaxReportRowsPerRun                 = maxEffectRows
+	githubTestsMaxReportRowsPerRun                 = maxEffectRows - githubTestsMaxArtifacts
 	githubTestsMaxReportPayloadBytesPerDestination = 57 << 20
 )
 
@@ -1724,6 +1725,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	}
 	cursor = githubTestsRestorePagesEntered(cursor)
 	cursor.OpenSkipEvent = nil
+	configPrefixes, configPrefixesInvalid := githubTestsConfigExcludePrefixesChecked(claim)
+	if configPrefixesInvalid {
+		slog.Warn("sync configuration artifact exclude prefixes are not valid; only the built-in prefixes apply",
+			"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID)
+	}
 	// invocationBaseRequests is the running total every PRIOR chunk
 	// invocation already persisted onto the cursor. requests below counts
 	// only THIS invocation's physical wire attempts (via the counting Doer
@@ -1737,6 +1743,21 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	rateFloor := &githubTestsRateFloorGate{}
 	counted.Doer = githubTestsChunkCountingDoer{delegate: client.Doer, attempts: &requests, observed: &rateObserved, floor: rateFloor}
 	client = &counted
+	// chunkPrefixSources / chunkPrefixCount are the prefix exclusions of the chunk being built, in memory only: never on the
+	// cursor or the prepared chunk, so a chunk's source set is never carried to a resume (CHAOS-14559).
+	chunkPrefixSources, chunkPrefixCount := 0, 0
+	logChunkPrefixSources := func(cursor githubTestsChunkCursor) {
+		if chunkPrefixCount == 0 {
+			return
+		}
+		slog.Info("github tests chunk excluded artifacts by name prefix",
+			"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+			"repository", logging.ProviderText(cursor.Repo),
+			"excluded_"+githubTestsExclusionReasonPrefix, chunkPrefixCount,
+			"excluded_"+githubTestsExclusionReasonPrefix+"_source", githubTestsPrefixExclusionSourceNames(chunkPrefixSources),
+		)
+		chunkPrefixSources, chunkPrefixCount = 0, 0
+	}
 	emitFinalMetadata := func(cursor githubTestsChunkCursor) error {
 		cursor.Phase = "done"
 		// The totality gate runs here, not inline in the artifacts loop below,
@@ -1767,6 +1788,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		// internal/jobs/providerunit.Handler's post-Complete success branch,
 		// which fires this exactly once per unit, the same discipline
 		// observeTerminalWithCommittedRows/observeAllArtifactsUnreadable use.
+		logChunkPrefixSources(cursor)
 		return emitCursorPair(cursor, batch, emit)
 	}
 	if cursor.Phase == "done" {
@@ -1981,6 +2003,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		afterRaw, afterErr := encodeGitHubTestsChunkCursor(after)
 		if afterErr != nil {
 			return afterErr
+		}
+		// One source-bearing line per chunk: a coalescable emission may be merged into the next one, so its exclusions
+		// are logged with the chunk that is not.
+		if !coalescable {
+			logChunkPrefixSources(after)
 		}
 		if err := emit(ChunkRouteEmission{Batch: batch, CursorBefore: beforeRaw, CursorAfter: afterRaw, Final: final, Coalescable: coalescable}); err != nil {
 			return err
@@ -2690,6 +2717,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				suites := []testSuiteResultRow(nil)
 				cases := []testCaseResultRow(nil)
 				coverage := []coverageSnapshotRow(nil)
+				var retirement githubTestsRetirement
 				var completeness []testOpsRunReportCompletenessRow
 				if include && githubTestsRunReadable(run) && !githubTestsArtifactRunOutside(pipeline, claim, cursor.Relist == githubTestsRelistWalking) &&
 					githubTestsArtifactInterval(claim, cursor.Relist == githubTestsRelistWalking, lateLookback).admitsUnder(pipeline.QueuedAt, cursor.RangeHi) &&
@@ -2723,12 +2751,14 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						if artifact.ID == "" {
 							return providerfoundation.ErrNormalizationInvalid
 						}
-						if selected, reason := githubTestsArtifactSelectionSeam(artifact.Name); !selected {
+						if selected, reason, source := githubTestsArtifactSelection(artifact.Name, configPrefixes); !selected {
 							switch reason {
 							case githubTestsExclusionReasonSuffix:
 								cursor.ExcludedNonReportSuffix++
 							case githubTestsExclusionReasonPrefix:
 								cursor.ExcludedNonReportPrefix++
+								chunkPrefixSources |= githubTestsPrefixExclusionSourceBit(source)
+								chunkPrefixCount++
 							}
 							// Bounded the same way as GitHubTestsSkippedArtifact.Name
 							// (CHAOS-4588/CHAOS-4591, codex round 1, P1): a
@@ -3177,6 +3207,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						cases = append(cases, parsedReports[index].Cases...)
 						coverage = append(coverage, parsedReports[index].Coverage...)
 					}
+					retirement = githubTestsRetirement{parsed: parsedReports, dropped: plan.Dropped}
 					// One verdict row per run, after its last emission's rows are decided (CHAOS-13826).
 					lossAfter := githubTestsTakeRunLossCounts(cursor)
 					for _, cause := range replayedRunLosses {
@@ -3200,9 +3231,19 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				cursor.Cases += len(cases)
 				cursor.Coverage += len(coverage)
 				cursor.ExtraRecords += len(completeness)
-				effects, effectErr := testOpsEffects(nil, nil, nil, suites, cases, coverage, completeness...)
+				// The retraction rows join the run's suite batch (the batch sorts its rows by content, so they hold no position in it);
+				// they are not report rows of the walk's counters.
+				effects, limited, effectErr := githubTestsRunReportEffects(handler.retractionRoom, retirement, suites, cases, coverage, completeness)
 				if effectErr != nil {
 					return effectErr
+				}
+				if limited != "" {
+					client.Metrics.RecordReportRetractionLimited(claim.Provider, limited)
+					slog.Warn(
+						"dropped report retraction rows limited to fit the run's batch",
+						"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID, "reason", limited,
+						"repository", logging.ProviderText(cursor.Repo), logging.ProviderIDAttr("run", pipeline.RunID), "slots", len(retirement.dropped),
+					)
 				}
 				creditRecords(cutSecond, githubTestsWalkRecords(cursor)-githubTestsWalkRecords(before), false)
 				after := cursor

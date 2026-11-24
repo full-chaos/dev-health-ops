@@ -73,7 +73,9 @@ end on the row's day; review latency is the 90th percentile of the hours from
 creation to first review of the pull requests merged in those 30 days. Each row
 also stores the pull requests merged in the window, how many of them had a first
 review, and that share (no share when nothing merged). The share is stored, not
-scored.
+scored. A compounding risk request whose repository filter (`repoIds`) holds
+more than 500 entries as sent (a repeated id counts each time) is refused with a
+`BAD_USER_INPUT` error, never answered for part of the list.
 
 On the team breakout, the rows and the trend point of the selected day cover
 the same repositories. With no repository filter, or a filter that keeps every
@@ -919,7 +921,7 @@ A finished item (`done` or `canceled`) with no `completed_at` and no `closed_at`
 
 One work item (provider and id) can be stored under two repository ids. Example: a GitHub issue that the repository sync stores under its repository and that the Projects v2 board sync stores under no repository. Each stored row is a copy. The current copy is the copy with the newest `last_synced`; on a tie, the copy of the lower repository id.
 
-`work_item_cycle_times`, `work_item_metrics_daily`, `work_item_user_metrics_daily`, `work_item_state_durations_daily`, `work_item_blocked_durations_daily` and `estimate_coverage_metrics_daily` decide on the current copy. An item counts on a day only when its current copy belongs to that day: created before the day ends, and not done before the day starts. An older copy never makes the item count. So an item whose current copy is done with no completion time counts on no day, and an item completes once, on its current copy's completion day. The request-time read of the work items linked to a repository (Home and Quadrant under a repository filter) decides on the same current copy.
+`work_item_cycle_times`, `work_item_metrics_daily`, `work_item_user_metrics_daily`, `work_item_state_durations_daily`, `work_item_blocked_durations_daily` and `estimate_coverage_metrics_daily` decide on the current copy. An item counts on a day only when its current copy belongs to that day: created before the day ends, and not done before the day starts. An older copy never makes the item count. So an item whose current copy is done with no completion time counts on no day, and an item completes once, on its current copy's completion day. The request-time read of the work items linked to a repository (Home and Quadrant under a repository filter) decides on the same current copy. The provider sync work item writer counts each row it stores with status `done` and no `completed_at` in `dev_health_work_item_done_without_completed_at_total{provider}`, so the first such item is seen. Work items from external ingest are not counted.
 
 The scope view (`row_view = 'scope'`) applies the same rule inside each work scope: the current copy of the item in that scope. An item with copies in two scopes still counts in each scope (the sum over scopes can be more than the organization total). So the older copy's scope can count a completion that the organization view and `work_item_cycle_times` do not count.
 

@@ -284,6 +284,7 @@ type Metrics struct {
 	unitFailed                     map[string]uint64
 	treeWalkNearCeiling            map[string]uint64
 	cursorCutListDropped           map[string]uint64
+	reportRetractionLimited        map[string]uint64
 	cicdPartialSuccess             map[string]uint64
 	duplicateTestCase              map[string]uint64
 	duplicateTestSuite             map[string]uint64
@@ -297,6 +298,7 @@ type Metrics struct {
 	chunkContinuation              map[string]uint64
 	rateLimitEpisodeRestart        map[string]uint64
 	unitDeferred                   map[string]uint64
+	lookupUnavailable              map[string]uint64
 	gitlabTestsWindowStartFallback map[string]uint64
 	// jiraDevStatus counts CHAOS-4757's dev-status (GitHub-for-Jira panel)
 	// fetches, by outcome -- see RecordJiraDevStatus.
@@ -353,6 +355,7 @@ func NewMetrics() *Metrics {
 		unitFailed:                     map[string]uint64{},
 		treeWalkNearCeiling:            map[string]uint64{},
 		cursorCutListDropped:           map[string]uint64{},
+		reportRetractionLimited:        map[string]uint64{},
 		cicdPartialSuccess:             map[string]uint64{},
 		duplicateTestCase:              map[string]uint64{},
 		duplicateTestSuite:             map[string]uint64{},
@@ -364,6 +367,7 @@ func NewMetrics() *Metrics {
 		rateLimitEpisodeRestart:        map[string]uint64{},
 		gitlabTestsWindowStartFallback: map[string]uint64{},
 		unitDeferred:                   map[string]uint64{},
+		lookupUnavailable:              map[string]uint64{},
 		jiraDevStatus:                  map[string]uint64{},
 		gitlabClosingMR:                map[string]uint64{},
 		workItemDerivedLeftToDaily:     map[string]uint64{},
@@ -1118,6 +1122,32 @@ func MetricUnitDeferralReasonLabel(value string) string {
 	return lowered
 }
 
+var metricLookupUnavailableReasonVocabulary = map[string]struct{}{
+	"forbidden": {}, "bad_request": {}, "other_4xx": {},
+}
+
+// MetricLookupUnavailableReasonLabel bounds the reason label by allowlist.
+func MetricLookupUnavailableReasonLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricLookupUnavailableReasonVocabulary[lowered]; !known {
+		return "other_4xx"
+	}
+	return lowered
+}
+
+// RecordLookupUnavailable counts one core lookup whose 4xx answer was served as
+// an empty source without being a documented absence: a permission 403
+// (forbidden), a 400 or 422 (bad_request), or another 4xx (other_4xx).
+func (m *Metrics) RecordLookupUnavailable(provider, dataset, reason string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lookupUnavailable[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
+		":"+MetricLookupUnavailableReasonLabel(reason)]++
+}
+
 // RecordUnitDeferred counts one provider-unit attempt that ended in an
 // attempt-neutral deferral, by bounded provider, dataset and reason
 // (CHAOS-7434). A heavy `files` unit that cannot get the heavy request budget
@@ -1255,6 +1285,28 @@ func (m *Metrics) RecordCursorCutListDropped(list string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.cursorCutListDropped[list]++
+}
+
+// RecordReportRetractionLimited counts ONE run whose dropped reports' retraction rows did not all fit the run's batch
+// (CHAOS-14259, CHAOS-14555), by the fallback taken: "legacy_case_rows_skipped" writes the case rows without those at the pre-slot
+// keys (an old reader after a rollback still sees a stale pre-slot copy of a case); "suite_rows_only" writes the suite rows
+// without the case rows (an old reader after a rollback still sees the slot's stale cases); "one_row_per_slot" retires each
+// dropped report's slot with minimal rows in chunks of their own (an old reader after a rollback still counts the slot's other
+// stale suites and cases); "legacy_ids_capped" retires it with one minimal row listing the first suite's legacy ids only (the
+// new readers still count a pre-slot copy of its other suites). All retire the slots in the same walk. An unknown reason
+// collapses to "other".
+func (m *Metrics) RecordReportRetractionLimited(provider, reason string) {
+	if m == nil {
+		return
+	}
+	switch reason {
+	case "legacy_case_rows_skipped", "suite_rows_only", "one_row_per_slot", "legacy_ids_capped":
+	default:
+		reason = "other"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reportRetractionLimited[metricProvider(provider)+":"+reason]++
 }
 
 // RecordAllArtifactsUnreadable counts ONE provider unit that failed because
@@ -2061,6 +2113,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		return err
 	}
 	if err := writeProviderDatasetReasonCounter(
+		writer, "dev_health_provider_lookup_unavailable_total",
+		"Core lookups whose 4xx answer was served as an empty source without being a documented absence, by bounded provider, dataset, and reason (CHAOS-14552).",
+		"reason", m.lookupUnavailable,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetReasonCounter(
 		writer, "dev_health_provider_unit_deferred_total",
 		"Provider-unit attempts that ended in an attempt-neutral deferral (River snooze), by bounded provider, dataset, and reason (CHAOS-7434).",
 		"reason", m.unitDeferred,
@@ -2085,6 +2144,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_github_tests_cursor_cut_list_dropped_total",
 		"Chunk cursor emissions that dropped a cut list to fit the cursor byte budget, by the dropped list (CHAOS-14315).",
 		"list", m.cursorCutListDropped,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderLabeledCounter(
+		writer, "dev_health_provider_report_retraction_limited_total",
+		"Runs whose dropped reports' retraction rows did not all fit the run's batch, by bounded provider and fallback: legacy case rows skipped, suite rows only, minimal rows per slot, or legacy ids capped (CHAOS-14259, CHAOS-14555).",
+		"reason", m.reportRetractionLimited,
 	); err != nil {
 		return err
 	}

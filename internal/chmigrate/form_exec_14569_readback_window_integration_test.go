@@ -225,25 +225,30 @@ func TestFormExecChaos14569ReadBackWindow(t *testing.T) {
 		strings.Join([]string{
 			item(org, "linear:FX-C", "2026-11-01 12:00:00.000", "2026-11-02 00:00:00.000"),
 			item(org, "linear:FX-E", "2026-05-20 10:00:00.000", "2026-11-01 00:00:00.000"),
-			item(org, "linear:FX-E", "2026-05-20 10:00:00.000", "2026-10-01 00:00:00.000"),
 			item(other, "linear:FX-C", "2026-11-01 12:00:00.000", "2026-11-02 00:00:00.000"),
 		}, ", "))
+	exec(`INSERT INTO work_items (org_id, repo_id, work_item_id, provider, status, created_at, updated_at, last_synced) VALUES ` +
+		item(org, "linear:FX-E", "2026-05-20 10:00:00.000", "2026-10-01 00:00:00.000"))
 
 	forms := []struct {
-		name, file, swappedSHA, swappedBackSHA, wantIDs string
-		want                                            func(t *testing.T, r map[string]form14569Result)
+		name, swappedSHA, swappedBackSHA, wantIDs string
+		read                                      func() ([]byte, error)
+		want                                      func(t *testing.T, r map[string]form14569Result)
 	}{
-		{"FORM-14569-READBACK-1", "readback.sql", "44dd711e73703896db177cfca7537f120f3048aed658552f2d09c8755c15acea",
-			"548989e5d7de9ec41e2cb301e668b9c0a1139131bf66c9d7ae0cd47534d2ae00", "S0,S1,F0,F1,F2,F3,F4", wantForm14569Readback},
-		{"FORM-14569-GAP-1", "gap.sql", "c58dc0bfd6d3c88dd0153e43e0b78048784d0d1df26d799eb945c78c6efbe225",
-			"cb4e0a2c37a057f144e05133bf98a38e74b71edf4be3fa438f3f506c8e29d209", "S0,F0,F1,F2,F3", wantForm14569Gap},
-		{"FORM-14569-RESIDUAL-1", "residual.sql", "145317d99ec154b8b3f2c8582160ca480696800dae2545250feaa4af930b554f",
-			"dc0856e9132085e2fe3fa1eee2d4eb40406057c69baf1f6cbfc572daa888eca8", "S0,S1,S2,R1,R2,R3", wantForm14569Residual},
+		{"FORM-14569-READBACK-1", "44dd711e73703896db177cfca7537f120f3048aed658552f2d09c8755c15acea",
+			"548989e5d7de9ec41e2cb301e668b9c0a1139131bf66c9d7ae0cd47534d2ae00", "S0,S1,F0,F1,F2,F3,F4",
+			func() ([]byte, error) { return os.ReadFile("testdata/form14569/readback.sql") }, wantForm14569Readback},
+		{"FORM-14569-GAP-1", "c58dc0bfd6d3c88dd0153e43e0b78048784d0d1df26d799eb945c78c6efbe225",
+			"cb4e0a2c37a057f144e05133bf98a38e74b71edf4be3fa438f3f506c8e29d209", "S0,F0,F1,F2,F3",
+			func() ([]byte, error) { return os.ReadFile("testdata/form14569/gap.sql") }, wantForm14569Gap},
+		{"FORM-14569-RESIDUAL-1", "145317d99ec154b8b3f2c8582160ca480696800dae2545250feaa4af930b554f",
+			"dc0856e9132085e2fe3fa1eee2d4eb40406057c69baf1f6cbfc572daa888eca8", "S0,S1,S2,R1,R2,R3",
+			func() ([]byte, error) { return os.ReadFile("testdata/form14569/residual.sql") }, wantForm14569Residual},
 	}
 	capLiteral := regexp.MustCompile(`> (5000000|6000000|4294967296)`)
 	for _, form := range forms {
 		t.Run(form.name, func(t *testing.T) {
-			raw, err := os.ReadFile("testdata/form14569/" + form.file)
+			raw, err := form.read()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -369,7 +374,7 @@ func wantForm14569Readback(t *testing.T, r map[string]form14569Result) {
 	}
 	form14569Row(t, r["S0"], "S0", 0, map[string]string{"table_name": "work_item_reopen_events", "table_rows": "8", "active_parts": "1"})
 	form14569Row(t, r["S0"], "S0", 1, map[string]string{"table_name": "work_item_transitions", "table_rows": "20", "active_parts": "1"})
-	form14569Row(t, r["S0"], "S0", 2, map[string]string{"table_name": "work_items", "table_rows": "4", "active_parts": "1"})
+	form14569Row(t, r["S0"], "S0", 2, map[string]string{"table_name": "work_items", "table_rows": "4", "active_parts": "2"})
 	form14569Row(t, r["S1"], "S1", 0, map[string]string{
 		"table_name": "work_item_transitions", "sorting_key": "org_id, repo_id, work_item_id, occurred_at, tie_ordinal"})
 	wantForm14569Counts(t, r, "F1", "F2")
@@ -401,7 +406,7 @@ func wantForm14569Residual(t *testing.T, r map[string]form14569Result) {
 	form14569Row(t, r["S1"], "S1", 1, map[string]string{
 		"table_name": "work_item_transitions", "table_rows": "20", "active_parts": "1",
 		"sorting_key": "org_id, repo_id, work_item_id, occurred_at, tie_ordinal"})
-	form14569Row(t, r["S1"], "S1", 2, map[string]string{"table_name": "work_items", "table_rows": "4", "active_parts": "1"})
+	form14569Row(t, r["S1"], "S1", 2, map[string]string{"table_name": "work_items", "table_rows": "4", "active_parts": "2"})
 	if len(r["S2"].rows) != 1 {
 		t.Fatalf("S2: %d row(s), want 1", len(r["S2"].rows))
 	}

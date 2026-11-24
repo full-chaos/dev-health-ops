@@ -65,7 +65,7 @@ func init() {
 		name:    "jira/atlassian",
 		newDoer: func() HTTPDoerForSweep { return &jiraAtlassianDoer{t: sweepG4T()} },
 		collect: func(t *testing.T, ctx context.Context, doer HTTPDoerForSweep, wait time.Duration) (CompleteRouteBatch, error) {
-			return jiraAtlassianCompleteHandler(t).Collect(
+			return (JiraAtlassianRouteHandler{StatusMapping: sweepStatusMapping(t), Identity: jiraRouteIdentity}).Collect(
 				ctx, jiraAtlassianClaim(), providerfoundation.Credential{},
 				sweepClient(t, "jira", "https://acme.atlassian.net", doer, wait), sweepG4NormalizedAt,
 			)
@@ -83,7 +83,7 @@ func init() {
 				"sprint_field":   "customfield_10020",
 			}
 			return (JiraWorkItemsRouteHandler{
-				StatusMapping: loadRealStatusMapping(t), Identity: jiraRouteIdentity,
+				StatusMapping: sweepStatusMapping(t), Identity: jiraRouteIdentity,
 			}).Collect(
 				ctx, claim, providerfoundation.Credential{},
 				sweepClient(t, "jira", "https://acme.atlassian.net", doer, wait), sweepG4NormalizedAt,

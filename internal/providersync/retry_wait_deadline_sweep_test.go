@@ -30,6 +30,19 @@ type HTTPDoerForSweep = providerfoundation.HTTPDoer
 
 var retrySweepRoutes []retrySweepRoute
 
+// sweepStatusMapping loads the real status mapping once: t.Setenv inside
+// loadRealStatusMapping must not run from the concurrent rows.
+var (
+	sweepStatusMappingOnce  sync.Once
+	sweepStatusMappingValue *StatusMapping
+)
+
+func sweepStatusMapping(t *testing.T) *StatusMapping {
+	t.Helper()
+	sweepStatusMappingOnce.Do(func() { sweepStatusMappingValue = loadRealStatusMapping(t) })
+	return sweepStatusMappingValue
+}
+
 func registerRetrySweepRoute(route retrySweepRoute) {
 	retrySweepRoutes = append(retrySweepRoutes, route)
 }

@@ -268,7 +268,7 @@ func init() {
 		newDoer: func() HTTPDoerForSweep { return &gitLabWorkItemsDoer{responses: gitLabWorkItemResponses()} },
 		collect: func(t *testing.T, ctx context.Context, doer HTTPDoerForSweep, wait time.Duration) (CompleteRouteBatch, error) {
 			claim := nativeTestClaim("gitlab", "work-items")
-			return (GitLabWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t), PerPage: 2, MaxPages: 10, NestedMaxPages: 10}).Collect(
+			return (GitLabWorkItemsRouteHandler{StatusMapping: sweepStatusMapping(t), PerPage: 2, MaxPages: 10, NestedMaxPages: 10}).Collect(
 				ctx, claim, providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
 				sweepClient(t, "gitlab", "https://gitlab.example", doer, wait), sweepG3Now())
 		},

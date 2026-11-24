@@ -2981,6 +2981,10 @@ func checkFinalizeStrandSurveyProbes(t *testing.T, ctx context.Context, admin *p
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	// MUTANT (do not merge): the migration builds no finalize index.
+	if _, err := tx.Exec(ctx, "DROP INDEX public.ix_worker_job_outbox_finalize_domain_id"); err != nil {
+		t.Fatal(err)
+	}
 	explain := func() (string, explainNode) {
 		t.Helper()
 		var raw []byte

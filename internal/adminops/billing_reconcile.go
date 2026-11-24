@@ -68,11 +68,7 @@ func RunBillingReconcile(ctx context.Context, env cli.Env) int {
 	run := billing.Reconcile{Pool: op.Pool, Stripe: stripeclient.New(stripeOptions(key.Reveal())), Logger: slog.New(slog.DiscardHandler)}
 	report, err := run.Run(ctx, org, since)
 	if err != nil {
-		text := billing.ErrorText(err)
-		if key.Configured() {
-			text = secrets.RedactValues(text, key.Reveal())
-		}
-		fmt.Fprintf(env.Stderr, "reconcile failed: %s\n", accountRedactor(env)(fmt.Errorf("%s", text)).Error())
+		fmt.Fprintf(env.Stderr, "reconcile failed: %s\n", billingFailureText(env, key, err))
 		return cli.ExitFailure
 	}
 	line, err := pyjson.Dumps(report)

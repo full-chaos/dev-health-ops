@@ -131,9 +131,12 @@ func deleteConfigFrom(env cli.Env, analyticsDB string) (admin.DeleteOrgConfig, f
 	}
 	deleteConfig.Decryptor = decryptor
 	deleteConfig.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: clientID.Reveal(), ClientSecret: clientSecret.Reveal(), RedirectURI: redirect}
-	database := accountRedactor(env)
+	database, resolved := boundaryFor(env, accountDSN)
 	redact := func(err error) error {
-		return database(fmt.Errorf("%s", secrets.RedactValues(err.Error(), secretValues...)))
+		if !resolved {
+			return errors.New("redacted")
+		}
+		return secrets.Join(database, secrets.NewBoundaryWith("", secretValues...)).Redact(err)
 	}
 	return deleteConfig, redact, true
 }

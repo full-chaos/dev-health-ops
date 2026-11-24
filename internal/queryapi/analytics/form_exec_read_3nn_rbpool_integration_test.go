@@ -286,7 +286,7 @@ FROM numbers(%d)`, big, org, history))
 		if err != nil || len(got) != 1 {
 			t.Fatalf("%s: err %v rows %d", label, err, len(got))
 		}
-		if strings.Join(types, ",") != "String,UInt64,UInt64,Int64,UInt64,UInt64" {
+		if strings.Join(types, ",") != "String,UInt64,UInt64,UInt64,UInt64,UInt64" {
 			t.Errorf("%s: column types %v", label, types)
 		}
 		t.Logf("%s ROW %v", label, got[0])

@@ -322,9 +322,12 @@ type githubTestsChunkCursor struct {
 	// CHAOS-4591 admin view can see WHICH artifacts were excluded, not just
 	// how many -- kept deliberately small against the same maxChunkCursorBytes
 	// budget GitHubTestsSkippedArtifact's own doc comment describes.
-	ExcludedNonReportSuffix int      `json:"excluded_non_report_suffix,omitempty"`
-	ExcludedNonReportPrefix int      `json:"excluded_non_report_prefix,omitempty"`
-	ExcludedArtifactSample  []string `json:"excluded_artifact_sample,omitempty"`
+	ExcludedNonReportSuffix int `json:"excluded_non_report_suffix,omitempty"`
+	ExcludedNonReportPrefix int `json:"excluded_non_report_prefix,omitempty"`
+	// ExcludedNonReportPrefixSources is the set of lists (githubTestsPrefixExclusionSourceBit) whose prefix matched an
+	// ExcludedNonReportPrefix exclusion, for the skip summary log only: no result key carries it.
+	ExcludedNonReportPrefixSources int      `json:"excluded_non_report_prefix_sources,omitempty"`
+	ExcludedArtifactSample         []string `json:"excluded_artifact_sample,omitempty"`
 	// ArtifactsExcludedNotFound counts routine 404/410 download-time
 	// disappearances (see the notFound branch below), which -- like an
 	// oversized skip -- are excluded from the ArchivesSeen/ArchivesUnreadable
@@ -942,7 +945,7 @@ func recordGitHubTestsSkippedArtifact(
 func githubTestsLogArtifactSkipSummary(
 	claim Claim, repo string, incomplete []GitHubTestsIncomplete,
 	skippedArtifacts []GitHubTestsSkippedArtifact, causeOverflow map[string]bool,
-	excludedSuffix, excludedPrefix int, excludedSample []string,
+	excludedSuffix, excludedPrefix, prefixSources int, excludedSample []string,
 	notFoundExcluded int,
 ) {
 	// Gate on an actual artifact/member disposition, not on incomplete being
@@ -1031,7 +1034,7 @@ func githubTestsLogArtifactSkipSummary(
 		if len(excludedSample) > 0 {
 			attrs = append(attrs, "excluded_sample", excludedSample)
 		}
-		if sources := githubTestsPrefixExclusionSources(excludedSample, githubTestsConfigExcludePrefixes(claim)); len(sources) > 0 {
+		if sources := githubTestsPrefixExclusionSourceNames(prefixSources); len(sources) > 0 {
 			attrs = append(attrs, "excluded_"+githubTestsExclusionReasonPrefix+"_source", sources)
 		}
 	}
@@ -1625,7 +1628,7 @@ func githubTestsFinalMetadataBatch(claim Claim, cursor githubTestsChunkCursor) (
 	}
 	githubTestsLogArtifactSkipSummary(
 		claim, cursor.Repo, incomplete, skippedArtifacts, causeOverflow,
-		cursor.ExcludedNonReportSuffix, cursor.ExcludedNonReportPrefix, cursor.ExcludedArtifactSample,
+		cursor.ExcludedNonReportSuffix, cursor.ExcludedNonReportPrefix, cursor.ExcludedNonReportPrefixSources, cursor.ExcludedArtifactSample,
 		cursor.ArtifactsExcludedNotFound,
 	)
 	return CompleteRouteBatch{
@@ -2733,12 +2736,13 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						if artifact.ID == "" {
 							return providerfoundation.ErrNormalizationInvalid
 						}
-						if selected, reason := githubTestsArtifactSelectionSeam(artifact.Name, configPrefixes); !selected {
+						if selected, reason, source := githubTestsArtifactSelection(artifact.Name, configPrefixes); !selected {
 							switch reason {
 							case githubTestsExclusionReasonSuffix:
 								cursor.ExcludedNonReportSuffix++
 							case githubTestsExclusionReasonPrefix:
 								cursor.ExcludedNonReportPrefix++
+								cursor.ExcludedNonReportPrefixSources |= githubTestsPrefixExclusionSourceBit(source)
 							}
 							// Bounded the same way as GitHubTestsSkippedArtifact.Name
 							// (CHAOS-4588/CHAOS-4591, codex round 1, P1): a

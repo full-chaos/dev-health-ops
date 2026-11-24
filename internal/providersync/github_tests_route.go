@@ -291,16 +291,23 @@ const (
 // admin view would show next to each excluded artifact, never the prefix that
 // matched.
 func githubTestsArtifactSelectionSeam(name string, configPrefixes []string) (selected bool, reason string) {
+	selected, reason, _ = githubTestsArtifactSelection(name, configPrefixes)
+	return selected, reason
+}
+
+// githubTestsArtifactSelection is the seam plus, for a prefix exclusion, the list whose prefix matched, taken at match
+// time on the full name (githubTestsPrefixExclusionSource).
+func githubTestsArtifactSelection(name string, configPrefixes []string) (selected bool, reason, source string) {
 	lower := strings.ToLower(name)
 	for _, suffix := range githubTestsNonReportArtifactSuffixes {
 		if strings.HasSuffix(lower, suffix) {
-			return false, githubTestsExclusionReasonSuffix
+			return false, githubTestsExclusionReasonSuffix, ""
 		}
 	}
-	if artifactexclude.Matches(lower, githubTestsNonReportArtifactPrefixes) || artifactexclude.Matches(lower, configPrefixes) {
-		return false, githubTestsExclusionReasonPrefix
+	if source := githubTestsPrefixExclusionSource(name, configPrefixes); source != "" {
+		return false, githubTestsExclusionReasonPrefix, source
 	}
-	return true, ""
+	return true, "", ""
 }
 
 // The list a prefix exclusion came from, a closed set for the skip summary log only (never stored or served).
@@ -322,27 +329,26 @@ func githubTestsPrefixExclusionSource(name string, configPrefixes []string) stri
 	return ""
 }
 
-// githubTestsPrefixExclusionSources is the sorted set of sources of the prefix exclusions in the unit's excluded sample
-// (cursor-wide, so every invocation of the unit counts). An entry is "<name> (<reason>)" with the name cut at
-// githubTestsMaxArtifactNameBytes; a configured prefix longer than the cut can leave its entry unnamed (omitted).
-func githubTestsPrefixExclusionSources(sample []string, configPrefixes []string) []string {
-	suffix := " (" + githubTestsExclusionReasonPrefix + ")"
-	seen := map[string]bool{}
-	for _, entry := range sample {
-		name, ok := strings.CutSuffix(entry, suffix)
-		if !ok {
-			continue
-		}
-		if source := githubTestsPrefixExclusionSource(strings.TrimSuffix(name, "…"), configPrefixes); source != "" {
-			seen[source] = true
+// githubTestsPrefixExclusionSourceBit is the bit of a source in the chunk cursor's ExcludedNonReportPrefixSources set.
+func githubTestsPrefixExclusionSourceBit(source string) int {
+	switch source {
+	case githubTestsPrefixExclusionSourceConfig:
+		return 1
+	case githubTestsPrefixExclusionSourceCode:
+		return 2
+	}
+	return 0
+}
+
+// githubTestsPrefixExclusionSourceNames is the sorted list of the sources in the set: "code" before "config".
+func githubTestsPrefixExclusionSourceNames(sources int) []string {
+	var names []string
+	for _, source := range []string{githubTestsPrefixExclusionSourceCode, githubTestsPrefixExclusionSourceConfig} {
+		if sources&githubTestsPrefixExclusionSourceBit(source) != 0 {
+			names = append(names, source)
 		}
 	}
-	sources := make([]string, 0, len(seen))
-	for source := range seen {
-		sources = append(sources, source)
-	}
-	slices.Sort(sources)
-	return sources
+	return names
 }
 
 type githubTestsRequiredPayload struct {
@@ -772,7 +778,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	// counters -- it has no persisted, resumable cursor to hang them off
 	// (same divergence as skippedArtifacts above; see the oversized-artifact
 	// doc comment).
-	githubTestsLogArtifactSkipSummary(claim, repo.FullName, incomplete, skippedArtifacts, skippedCauseOverflow, 0, 0, nil, 0)
+	githubTestsLogArtifactSkipSummary(claim, repo.FullName, incomplete, skippedArtifacts, skippedCauseOverflow, 0, 0, 0, nil, 0)
 	result := map[string]any{
 		"pipeline_runs_synced": len(pipelines), "job_runs_synced": len(jobs), "acceptance_checks_synced": len(acceptance),
 		"test_suites_synced": len(suites), "test_cases_synced": len(cases), "coverage_snapshots_synced": len(coverage), "repo": repo.FullName,

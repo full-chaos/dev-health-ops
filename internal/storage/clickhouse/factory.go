@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"time"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
@@ -119,14 +120,22 @@ func OpenWith(ctx context.Context, config Config, wait func(context.Context, fun
 // else may call it (TestOpenRawCauseHasExactlyTheTwoSyncCLICallers).
 func OpenRawCause(ctx context.Context, config Config) (driver.Conn, error) {
 	return openWith(ctx, config, func(ctx context.Context, ping func(context.Context) error) error { return ping(ctx) },
-		func(err error, _ []string) error { return rawCauseError{cause: err} })
+		func(err error, resolved []string) error { return RawCauseError{cause: err, resolved: resolved} })
 }
 
-// rawCauseError is ErrUnavailable plus the driver's cause text as it came.
-type rawCauseError struct{ cause error }
+// RawCauseError is ErrUnavailable plus the driver's cause text as it came, and
+// the login and password the driver settled on (its own DSN parser accepts forms
+// net/url does not), so the caller's union can match them.
+type RawCauseError struct {
+	cause    error
+	resolved []string
+}
 
-func (e rawCauseError) Error() string { return ErrUnavailable.Error() + ": " + e.cause.Error() }
-func (e rawCauseError) Unwrap() error { return ErrUnavailable }
+func (e RawCauseError) Error() string { return ErrUnavailable.Error() + ": " + e.cause.Error() }
+func (e RawCauseError) Unwrap() error { return ErrUnavailable }
+
+// Resolved is the login and password the driver settled on.
+func (e RawCauseError) Resolved() []string { return slices.Clone(e.resolved) }
 
 func openWith(ctx context.Context, config Config, wait func(context.Context, func(context.Context) error) error, failure func(error, []string) error) (driver.Conn, error) {
 	if err := config.Validate(); err != nil {

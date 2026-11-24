@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
@@ -749,7 +750,7 @@ func runTarget(ctx context.Context, env cli.Env, target string, exec Executor, n
 		text := err.Error()
 		var done redactedError
 		if !errors.As(err, &done) || text != done.text {
-			text = redact(text)
+			text = secrets.Join(planBoundaryOf(plan), driverCredentials(err)).RedactText(text)
 		}
 		writeLine(env.Stderr, fmt.Sprintf("dho sync %s: %s", target, text))
 		if errors.Is(err, ErrNotAvailable) {
@@ -958,6 +959,17 @@ func planBoundaryOf(plan Plan) secrets.Boundary {
 		boundary = secrets.Join(boundary, pgstorage.Boundary(*plan.DB))
 	}
 	return boundary
+}
+
+// driverCredentials is the Boundary of the login and password the ClickHouse
+// driver settled on, which the store opener's error carries: the driver's DSN
+// parser takes forms the sink URI's net/url parse does not.
+func driverCredentials(err error) secrets.Boundary {
+	var raw clickhousestore.RawCauseError
+	if errors.As(err, &raw) {
+		return secrets.NewBoundaryWith("", raw.Resolved()...)
+	}
+	return secrets.Boundary{}
 }
 
 // redactedError is an error whose text a print path already redacted once with

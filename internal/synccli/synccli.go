@@ -247,7 +247,7 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 		return writeError(env.Stderr, cli.ExitRefused, "configuration", detail)
 	}
 	boundary := secrets.Join(secrets.NewBoundary(dsn.Reveal()), settings.boundary())
-	redact := func(err error) string { return boundary.Redact(err).Error() }
+	redact := func(err error) string { return secrets.Join(boundary, driverCredentials(err)).Redact(err).Error() }
 	// What the collector and the writer log (not only what they return) is
 	// redacted with the same boundary.
 	defer redactProcessLogger(boundary.RedactText)()

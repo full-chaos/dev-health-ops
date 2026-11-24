@@ -60,6 +60,10 @@ func TestOpenRawCauseKeepsTheErrorClassAndTheCauseText(t *testing.T) {
 	if !strings.HasPrefix(err.Error(), ErrUnavailable.Error()+": ") || !strings.Contains(err.Error(), "refused for zz9q and svc%3A7kZ2") {
 		t.Errorf("the raw cause text is not in the error: %q", err)
 	}
+	var raw RawCauseError
+	if !errors.As(err, &raw) || !slices.Equal(raw.Resolved(), []string{"svc:", "zz9q"}) {
+		t.Errorf("the login and password the driver resolved are not carried: %v", raw.Resolved())
+	}
 	_, err = Open(context.Background(), config)
 	if !errors.Is(err, ErrUnavailable) || strings.Contains(err.Error(), "zz9q") {
 		t.Errorf("Open must keep redacting the DSN password: %v", err)

@@ -79,6 +79,7 @@ var verbGates = map[string]verbGate{
 	"dispatchJobs:retry":   viaService("jobs", "retry", "--reason", "operator_test", "--correlation-id", "corr-1", "42"),
 
 	"dispatchMetrics:remaining":                                   viaDelegate(),
+	"dispatchMetrics:testops-slot-recompute":                      viaDirect("metrics testops-slot-recompute"),
 	"dispatchMetrics:daily-start":                                 viaDirect("metrics daily-start"),
 	"dispatchMetrics:daily-redrive":                               viaDirect("metrics daily-redrive"),
 	"dispatchMetrics:daily-finalize":                              viaDirect("metrics daily-finalize"),

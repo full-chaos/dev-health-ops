@@ -1116,6 +1116,38 @@ WHERE dedupe_key LIKE 'metrics.daily_partition:redrive:%'
 ORDER BY created_at DESC;
 ```
 
+#### `metrics testops-slot-recompute`
+
+The daily recurrence of a day X reads the 29 days before it. A later sync that retires
+a test report slot of a run on day D writes retraction rows, and the post-sync run
+computes only D. The days D+1 .. D+29 that were computed before keep the recurrence
+that counted the retired slot. This verb computes those days again.
+
+```bash
+kubectl exec -i <worker-pod> -- dho workers metrics testops-slot-recompute \
+  --org-stdin --from 2026-08-01 --to 2026-08-07 [--repo-id <uuid> ...] [--through 2026-09-05] \
+  --rerun-tag <tag> [--max-repo-days 200] [--apply --reason <code> --correlation-id <id>] < org-id-source
+```
+
+- The verb selects every repository-day of a run whose test suite key has a retraction
+  row as its newest version, with the retraction's day in `--from` .. `--to` (at most
+  31 days), and every day of such a run up to `--through`. No provider is named: every
+  provider that writes retraction rows is selected. It expands each day D to D .. D+29,
+  up to `--through`. D is in the set, so a lost post-sync run of D is repaired too. A
+  preview defaults `--through` to today (UTC); `--apply` needs it given, so a repeated
+  apply plans the same days.
+- Without `--apply` it only previews: it prints the days, the repository count of each
+  day and the first 8 characters of each repository id, and writes nothing.
+- `--apply` starts one tagged daily run per day for its repositories, through the
+  `metrics daily-start --rerun-tag` path, so a second call with the same plan and tag
+  starts nothing. It needs `--reason` and `--correlation-id`.
+- The plan is read and checked before the audited write: more repository-days than
+  `--max-repo-days` (default 200, at most 10,000) stops with `repo_day_cap`, and a day
+  of more repositories than one daily run admits (1,000) stops with `day_repo_cap`.
+  A stop prints its counts and writes nothing, not even an audit row.
+- Run it from a `go-scheduler` or `go-reconciler` pod: like every `dho workers` verb it
+  needs the coordinator DSN, and it reads ClickHouse through `CLICKHOUSE_URI`.
+
 #### `metrics daily-finalize`
 
 Repair a daily-metrics run stranded one step LATER than `daily-redrive`

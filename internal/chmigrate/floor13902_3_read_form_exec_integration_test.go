@@ -24,7 +24,7 @@ import (
 // (CHAOS-13902): not for merge. Each const is the form file with its org prefix (8 hex) replaced by the synthetic
 // "f0f0f0f0"; each sha256 is pinned. It reuses helpers of the FLOOR-13902-2 cell file (same package, same branch).
 const (
-	f3SHA256  = "955fd757df75187d9da02b485dbd3be9e7337e65f8675a52a488cdbf6dc0d51f"
+	f3SHA256  = "03c46b62558865a27d12815e1f9651e6efd22a9c106cef06751ca8ea3a563cd4"
 	q1v2SHA   = "87304f5372b93098aa70ea0f6385984f3325f2aef3a0e611ee1028a5db1bb379"
 	q3v2SHA   = "b8462fa34ff41210b14887d028a01b600577ea4f24977cbaa6f03b86abf348a3"
 	q4v2SHA   = "2fafb8650f20d4ca52ac95b5ff06a4a21ad8e0e87d20d9872a983f1d66c1fc98"
@@ -160,7 +160,13 @@ ORDER BY family, raw_table, scope_id;
 -- Stored: newest row per (repo_id, day) not retracted (cicd, testops pipeline/test/coverage, the 3 testops_risk tables,
 --   deploy); repo_change_failure_daily every stored row (no retracted column).
 -- Raw: ci_pipeline_runs FINAL .finished = toDate(finished_at) (finished, not deleted/running/queued) and .started =
---   toDate(started_at) (not deleted); test_suite_results FINAL toDate(coalesce(started_at, finished_at)); coverage_snapshots
+--   toDate(started_at) (not deleted); test_suite_results FINAL toDate(coalesce(started_at, finished_at)) of the KEPT rows
+--   only, one scan with window functions = the loader's rule at 3207ac6258c0 (testops_native_clickhouse.go:140
+--   testopsKeptSuitesToday = SuiteWindowSource + SuiteRowsNewestAttempt; queryapi/testopspooled/fragments.go:165-188
+--   rowsNewestAttempt: newest run_attempt of each report slot, retracted 0, slot not retired :113-115 (argMax(retracted,
+--   (run_attempt, last_synced, retracted)) = 1), a legacy row (report_slot '') only when no newest-attempt slotted row of the
+--   run lists its suite_id in legacy_suite_ids and no row of a retired slot lists it :119-122; CH 171 retracted column,
+--   CHAOS-14259; the window bound of the loader is whole runs, so a run's rows are judged together as here); coverage_snapshots
 --   FINAL joined to ci_pipeline_runs FINAL on (org_id, repo_id, run_id), day = toDate(started_at) of the run;
 --   deployments FINAL .deployed = toDate(deployed_at), .any = toDate(coalesce(deployed_at, finished_at, started_at)).
 -- Cost gate k ci_pipeline_runs 3, deployments 2, cicd_metrics_daily 2 (+ ORG-1), every other table 1; f 2; s 1.
@@ -251,8 +257,19 @@ FROM (
     SELECT 'ci_pipeline_runs.started' AS r_raw, toString(repo_id) AS r_scope, min(toDate(started_at)) AS f, toUInt8(1) AS present
     FROM ci_pipeline_runs FINAL WHERE startsWith(org_id, 'f0f0f0f0') AND lowerUTF8(trimBoth(ifNull(status, ''))) != 'deleted' GROUP BY repo_id
     UNION ALL
-    SELECT 'test_suite_results' AS r_raw, toString(repo_id) AS r_scope, min(toDate(assumeNotNull(coalesce(started_at, finished_at)))) AS f, toUInt8(1) AS present
-    FROM test_suite_results FINAL WHERE startsWith(org_id, 'f0f0f0f0') AND coalesce(started_at, finished_at) IS NOT NULL GROUP BY repo_id
+    SELECT 'test_suite_results' AS r_raw, toString(w.repo_id) AS r_scope, min(w.d) AS f, toUInt8(1) AS present
+    FROM (SELECT v.repo_id AS repo_id, v.d AS d, v.has_day AS has_day, v.report_slot AS report_slot, v.suite_id AS suite_id,
+            v.run_attempt AS run_attempt, v.retracted AS retracted, v.slot_max_attempt AS slot_max_attempt, v.slot_retired AS slot_retired,
+            groupUniqArrayArrayIf(v.legacy_suite_ids, v.report_slot != '' AND v.run_attempt = v.slot_max_attempt) OVER (PARTITION BY v.repo_id, v.run_id) AS listed_newest,
+            groupUniqArrayArrayIf(v.legacy_suite_ids, v.report_slot != '' AND v.slot_retired = 1) OVER (PARTITION BY v.repo_id, v.run_id) AS listed_retired
+          FROM (SELECT repo_id, run_id, report_slot, suite_id, run_attempt, retracted, legacy_suite_ids,
+                  toDate(assumeNotNull(coalesce(started_at, finished_at))) AS d, coalesce(started_at, finished_at) IS NOT NULL AS has_day,
+                  max(run_attempt) OVER (PARTITION BY repo_id, run_id, report_slot) AS slot_max_attempt,
+                  argMax(retracted, (run_attempt, last_synced, retracted)) OVER (PARTITION BY repo_id, run_id, report_slot) AS slot_retired
+                FROM test_suite_results FINAL WHERE startsWith(org_id, 'f0f0f0f0')) AS v) AS w
+    WHERE w.has_day AND ((w.report_slot != '' AND w.run_attempt = w.slot_max_attempt AND w.retracted = 0 AND w.slot_retired = 0)
+      OR (w.report_slot = '' AND NOT has(w.listed_newest, w.suite_id) AND NOT has(w.listed_retired, w.suite_id)))
+    GROUP BY w.repo_id
     UNION ALL
     SELECT 'coverage_snapshots' AS r_raw, toString(cs.c_repo) AS r_scope, min(toDate(pr.p_started)) AS f, toUInt8(1) AS present
     FROM (SELECT org_id AS c_org, repo_id AS c_repo, run_id AS c_run FROM coverage_snapshots FINAL WHERE startsWith(org_id, 'f0f0f0f0')) AS cs
@@ -767,6 +784,14 @@ func f3Fixture(synth string) string {
 ('`+bOrg+`', 't1', '`+q1+`', 'feature', '2026-10-23', 'human', '2026-10-24 01:00:00');`) +
 		b(`INSERT INTO test_suite_results (org_id, repo_id, run_id, suite_id, suite_name, started_at, finished_at, last_synced) VALUES
 ('`+bOrg+`', '`+q1+`', 'runB', 'sb', 'unit', '2024-01-03 10:00:00', '2024-01-03 10:10:00', '2024-01-03 11:00:00');`) +
+		b(`INSERT INTO test_suite_results (org_id, repo_id, run_id, suite_id, suite_name, started_at, finished_at, last_synced, report_slot, run_attempt, legacy_suite_ids, retracted) VALUES
+('`+fOrg+`', '`+q1+`', 'runA', 'sA-1', 'unit', '2026-01-20 10:00:00', '2026-01-20 10:10:00', '2026-01-20 11:00:00', 'slotA', 1, [], 0),
+('`+fOrg+`', '`+q1+`', 'runA', 'sA-2', 'unit', '2026-02-05 10:00:00', '2026-02-05 10:10:00', '2026-02-05 11:00:00', 'slotA', 2, [], 0),
+('`+fOrg+`', '`+q1+`', 'runR', 'sR-1', 'unit', '2026-01-15 10:00:00', '2026-01-15 10:10:00', '2026-01-15 11:00:00', 'slotR', 1, [], 0),
+('`+fOrg+`', '`+q1+`', 'runL', 'lg1', 'unit', '2026-01-10 10:00:00', '2026-01-10 10:10:00', '2026-01-10 11:00:00', '', 0, [], 0),
+('`+fOrg+`', '`+q1+`', 'runL', 'sL-1', 'unit', '2026-02-10 10:00:00', '2026-02-10 10:10:00', '2026-02-10 11:00:00', 'slotL', 1, ['lg1'], 0);`) +
+		b(`INSERT INTO test_suite_results (org_id, repo_id, run_id, suite_id, suite_name, started_at, finished_at, last_synced, report_slot, run_attempt, legacy_suite_ids, retracted) VALUES
+('`+fOrg+`', '`+q1+`', 'runR', 'sR-1', 'unit', '2026-01-15 10:00:00', NULL, '2026-03-01 11:00:00', 'slotR', 1, [], 1);`) +
 		b(`INSERT INTO coverage_snapshots (org_id, repo_id, run_id, snapshot_id, last_synced) VALUES
 ('`+bOrg+`', '`+q1+`', 'runB', 'cb', '2024-06-01 11:00:00');`) +
 		b(`INSERT INTO deployments (org_id, repo_id, deployment_id, deployed_at, finished_at, last_synced) VALUES
@@ -1217,6 +1242,15 @@ func TestFloor13902v3FormExecutesMutantsAndEveryStopFires(t *testing.T) {
 		{"stmt2", "RULE", " AND lowerUTF8(trimBoth(ifNull(status, ''))) NOT IN ('deleted', 'running', 'queued')", "", 1,
 			replaceRow(s2, "cicd_metrics_daily ci_pipeline_runs.finished "+c1+" 2026-02-01 2026-10-25 1",
 				"cicd_metrics_daily ci_pipeline_runs.finished "+c1+" 2025-12-01 2026-10-25 1")},
+		{"stmt2", "RULE-ATTEMPT", "w.run_attempt = w.slot_max_attempt AND ", "", 1,
+			replaceRow(s2, "testops_test_metrics_daily test_suite_results "+c1+" 2026-02-02 2026-10-26 1",
+				"testops_test_metrics_daily test_suite_results "+c1+" 2026-01-20 2026-10-26 1")},
+		{"stmt2", "RULE-RETRACTED", " AND w.retracted = 0 AND w.slot_retired = 0", "", 1,
+			replaceRow(s2, "testops_test_metrics_daily test_suite_results "+c1+" 2026-02-02 2026-10-26 1",
+				"testops_test_metrics_daily test_suite_results "+c1+" 2026-01-15 2026-10-26 1")},
+		{"stmt2", "RULE-LEGACY", "NOT has(w.listed_newest, w.suite_id) AND ", "", 1,
+			replaceRow(s2, "testops_test_metrics_daily test_suite_results "+c1+" 2026-02-02 2026-10-26 1",
+				"testops_test_metrics_daily test_suite_results "+c1+" 2026-01-10 2026-10-26 1")},
 		{"stmt3", "ORG", "'f0f0f0f0'", "'b0000000'", 31, nil},
 		{"stmt3", "RULE", " AND is_deleted = 0", "", 1,
 			replaceRow(replaceRow(s3, "incident_metrics_daily operational_incidents org 2026-01-05 2026-10-29 1",

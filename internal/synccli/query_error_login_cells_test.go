@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"atlassian/atlassian"
+
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
@@ -79,6 +81,29 @@ func TestQueryErrorKeepsTheClickHouseLoginHiddenOnSyncTargets(t *testing.T) {
 	for _, secret := range []string{queryLogin, queryPass} {
 		if strings.Contains(stdout+stderr+logs.String(), secret) {
 			t.Errorf("%q printed or logged:\nstderr %q\nlogs %q", secret, stderr, logs.String())
+		}
+	}
+}
+
+// oneTeamClient answers one team, so the run writes through the connection.
+type oneTeamClient struct{ emptyClient }
+
+func (oneTeamClient) SearchTeams(context.Context, string, string, string, int) ([]atlassian.AtlassianTeam, error) {
+	return []atlassian.AtlassianTeam{{ID: "ari:cloud:identity::team/ZZ9-1", DisplayName: "Platform", State: "ACTIVE"}}, nil
+}
+
+func TestQueryErrorKeepsTheClickHouseLoginHiddenOnAtlassianTeams(t *testing.T) {
+	env := validEnv()
+	env["CLICKHOUSE_URI"] = queryHostURI
+	d := stubDeps(&recorded{}, oneTeamClient{}, nil)
+	d.openStore = func(context.Context, string) (driver.Conn, error) { return queryFailsConn{}, nil }
+	code, stdout, stderr := run(t, env, d, "--provider", "jira", "--org", "o")
+	if code == 0 || !strings.Contains(stderr, "Not enough privileges") {
+		t.Fatalf("exit %d: the query error never reached the printing path (or lost the server's text): %q", code, stderr)
+	}
+	for _, secret := range []string{queryLogin, queryPass} {
+		if strings.Contains(stdout+stderr, secret) {
+			t.Errorf("%q printed: %q", secret, stderr)
 		}
 	}
 }

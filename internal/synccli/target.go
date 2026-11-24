@@ -954,11 +954,19 @@ func planBoundary(plan Plan) func(string) string {
 
 // planBoundaryOf is one Boundary over the sink URI and the PostgreSQL URI.
 func planBoundaryOf(plan Plan) secrets.Boundary {
-	boundary := secrets.NewBoundary(plan.SinkURI)
+	boundary := secrets.Join(secrets.NewBoundary(plan.SinkURI), sinkResolvedCredentials(plan.SinkURI))
 	if plan.DB != nil && strings.TrimSpace(*plan.DB) != "" {
 		boundary = secrets.Join(boundary, pgstorage.Boundary(*plan.DB))
 	}
 	return boundary
+}
+
+// sinkResolvedCredentials is the Boundary of the login and password the
+// ClickHouse driver settles on for the sink URI, for the whole run: the driver's
+// DSN parser takes forms the sink URI's net/url parse does not, and a statement
+// error after a good open can still name the login.
+func sinkResolvedCredentials(sinkURI string) secrets.Boundary {
+	return secrets.NewBoundaryWith("", clickhousestore.ResolvedCredentials(sinkURI)...)
 }
 
 // driverCredentials is the Boundary of the login and password the ClickHouse

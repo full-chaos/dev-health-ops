@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
@@ -58,9 +57,6 @@ type DomainReference struct {
 	// database lookup that resolves OrganizationID/SyncRunID (CHAOS-3996).
 	// Empty for a run planned before that column existed or with tracing off.
 	TraceParent string
-	// JobCreatedAt is the River job's CreatedAt, set by the team auto-import worker: the start of its rate-limit
-	// snooze episode (CHAOS-14581). Zero elsewhere.
-	JobCreatedAt time.Time
 }
 
 // TeamAutoimportJobArgs is the generic worker-outbox envelope for the

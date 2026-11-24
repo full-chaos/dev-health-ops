@@ -610,7 +610,7 @@ func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
 	if collectErr != nil {
 		// A classified rate limit snoozes the job to read the catalog again, inside the job's episode (CHAOS-14581);
 		// every other error keeps the nonfatal answer below.
-		if delay, snooze := teamCatalogRateLimitSnooze(collectErr, reference.JobCreatedAt, dispatcher.nowUTC()); snooze {
+		if delay, snooze := teamCatalogRateLimitSnooze(collectErr, syncdispatchruntime.JobCreatedAt(ctx), dispatcher.nowUTC()); snooze {
 			dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeRateLimitDeferred)
 			return river.JobSnooze(delay)
 		}

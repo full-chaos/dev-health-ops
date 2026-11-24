@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 
@@ -416,13 +417,29 @@ func (worker *teamAutoimportWorker) Work(ctx context.Context, job *river.Job[Tea
 	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.Payload.SyncRunID, "")
 	completed := false
 	defer finishCoordinatorWork(span, &err, &completed)
-	reference := DomainReference{OrganizationID: job.Args.OrgID, SyncRunID: job.Args.Payload.SyncRunID}
 	if job.JobRow != nil {
-		reference.JobCreatedAt = job.CreatedAt
+		ctx = WithJobCreatedAt(ctx, job.CreatedAt)
 	}
-	err = worker.bridge.TeamAutoImport(ctx, reference)
+	err = worker.bridge.TeamAutoImport(ctx, DomainReference{
+		OrganizationID: job.Args.OrgID,
+		SyncRunID:      job.Args.Payload.SyncRunID,
+	})
 	completed = true
 	return err
+}
+
+type jobCreatedAtKey struct{}
+
+// WithJobCreatedAt carries the River job's CreatedAt to the team auto-import: the start of its rate-limit snooze
+// episode (CHAOS-14581). A context value, not a DomainReference field, so no queue type changes.
+func WithJobCreatedAt(ctx context.Context, createdAt time.Time) context.Context {
+	return context.WithValue(ctx, jobCreatedAtKey{}, createdAt)
+}
+
+// JobCreatedAt is the River job's CreatedAt that WithJobCreatedAt carried; zero when none.
+func JobCreatedAt(ctx context.Context) time.Time {
+	createdAt, _ := ctx.Value(jobCreatedAtKey{}).(time.Time)
+	return createdAt
 }
 
 type teamRepoOwnershipDerivationWorker struct {

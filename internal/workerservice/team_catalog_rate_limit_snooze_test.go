@@ -33,11 +33,11 @@ func runTeamCatalogSnoozeCase(t *testing.T, collectErr error, createdAgo time.Du
 		observer:        observer,
 		now:             teamCatalogSnoozeNow,
 	}
-	reference := syncdispatchruntime.DomainReference{OrganizationID: testOrg, SyncRunID: testRun}
+	ctx := context.Background()
 	if !zeroCreatedAt {
-		reference.JobCreatedAt = teamCatalogSnoozeNow().Add(-createdAgo)
+		ctx = syncdispatchruntime.WithJobCreatedAt(ctx, teamCatalogSnoozeNow().Add(-createdAgo))
 	}
-	return dispatcher.TeamAutoImport(context.Background(), reference), observer
+	return dispatcher.TeamAutoImport(ctx, syncdispatchruntime.DomainReference{OrganizationID: testOrg, SyncRunID: testRun}), observer
 }
 
 // rateLimited is the client's answer since CHAOS-14546 for a 429 whose wait is past the deadline.

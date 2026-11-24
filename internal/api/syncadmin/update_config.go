@@ -151,6 +151,18 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 	if err != nil {
 		return nil, err
 	}
+	// The configuration's integration must be one of the org's own before any read, lock or write keyed by it: a plain
+	// read, no row lock, before the selection locks (the lock order below is unchanged).
+	if config.IntegrationID != nil {
+		var own bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM integrations WHERE id = $1 AND org_id = $2)`,
+			*config.IntegrationID, org).Scan(&own); err != nil {
+			return nil, fmt.Errorf("read the configuration's integration: %w", err)
+		}
+		if !own {
+			return nil, noIntegrationAnswer(in)
+		}
+	}
 	// Every save of a config that has an integration takes the selection
 	// locks first, then reads the config again: the stored list and the
 	// stored options the save merges into are the ones it changes. Lock
@@ -588,7 +600,7 @@ func updateServicesDatasetMappings(ctx context.Context, tx pgx.Tx, org string, i
 // exactly the stored list.
 func (h *handlers) cascadeToChildren(ctx context.Context, tx pgx.Tx, org string, parentID uuid.UUID, in syncConfigUpdate, parentStored []string,
 	options *pyjson.Object, cleared map[string]bool, optionsProvided bool, now time.Time) error {
-	rows, err := tx.Query(ctx, `SELECT `+syncConfigColumns+` FROM sync_configurations WHERE parent_id = $1 ORDER BY id`, parentID)
+	rows, err := tx.Query(ctx, `SELECT `+syncConfigColumns+` FROM sync_configurations WHERE org_id = $1 AND parent_id = $2 ORDER BY id`, org, parentID)
 	if err != nil {
 		return fmt.Errorf("read child configs: %w", err)
 	}

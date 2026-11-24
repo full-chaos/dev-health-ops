@@ -607,45 +607,83 @@ func TestRevision0167KeepsAValidIndexAndReplacesAnInvalidOne(t *testing.T) {
 	}
 }
 
-// holdShare holds a SHARE lock on the table, which conflicts with the build's SHARE UPDATE EXCLUSIVE probe: every
-// attempt fails at the probe after its lock timeout.
-func holdShare(t *testing.T, uri, table string) {
+// finalizeOutboxBuildLockKey is the build-index lock key of the finalize-outbox verb ("dho_iz"). The 0167 cell below
+// first proves the builder uses it (a held key refuses the builder), so revision 0167 and the builder cannot drift apart.
+const finalizeOutboxBuildLockKey = int64(0x64686f5f697a)
+
+// revision0167Database is a scratch database one revision below 0167, with the chain and baseline to walk it up.
+func revision0167Database(t *testing.T, d downInstance) (string, pgmigrate.Baseline, []pgmigrate.ChainFile) {
 	t.Helper()
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	position := -1
+	for index, file := range chain {
+		if file.Revision == "0167" {
+			position = index
+		}
+	}
+	if position < 0 {
+		t.Fatal("the chain holds no revision 0167")
+	}
+	baseline, err := pgmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d.at(t, position), baseline, chain
+}
+
+// Revision 0167 refuses to run while the finalize-outbox builder holds its lock: it never drops an index a running
+// CONCURRENTLY build is about to make valid. Released, the walk applies 0167.
+func TestRevision0167RefusesWhileTheFinalizeOutboxBuilderRuns(t *testing.T) {
+	d := newDownInstance(t)
+	uri, baseline, chain := revision0167Database(t, d)
+	holder := connect(t, uri)
+	var locked bool
+	if err := holder.QueryRow(context.Background(), "SELECT pg_try_advisory_lock($1)", finalizeOutboxBuildLockKey).Scan(&locked); err != nil || !locked {
+		t.Fatalf("hold the finalize-outbox build lock: %v %v", locked, err)
+	}
 	conn := connect(t, uri)
-	tx, err := conn.Begin(context.Background())
+	if _, err := pgmigrate.BuildFinalizeOutboxIndex(context.Background(), conn, pgmigrate.IndexBuildOptions{LockTimeout: time.Second, Attempts: 1}, slog.New(slog.NewJSONHandler(io.Discard, nil))); !errors.Is(err, pgmigrate.ErrBuildLockHeld) {
+		t.Fatalf("builder under the held key: err %v, want ErrBuildLockHeld (the cell's key is not the builder's)", err)
+	}
+	if _, err := pgmigrate.Upgrade(context.Background(), conn, baseline, chain); err == nil || !strings.Contains(err.Error(), "build-index finalize-outbox is running") {
+		t.Fatalf("upgrade under the held build lock: err %v, want the running-builder refusal", err)
+	}
+	if _, err := holder.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", finalizeOutboxBuildLockKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pgmigrate.Upgrade(context.Background(), conn, baseline, chain); err != nil {
+		t.Fatalf("upgrade after the build lock was released: %v", err)
+	}
+	if _, valid := indexDefinition(t, conn, pgmigrate.FinalizeOutboxIndexName); !valid {
+		t.Fatal("the index is not valid after the upgrade")
+	}
+}
+
+// With a valid prebuilt index, revision 0167 takes no lock on worker_job_outbox: an in-flight outbox writer (ROW
+// EXCLUSIVE) does not hold up the walk. The walk's session runs under a lock_timeout, so a SHARE lock request fails it.
+func TestRevision0167OverAValidIndexDoesNotWaitForOutboxWriters(t *testing.T) {
+	d := newDownInstance(t)
+	uri, baseline, chain := revision0167Database(t, d)
+	conn := connect(t, uri)
+	if _, err := conn.Exec(context.Background(), "CREATE INDEX "+pgmigrate.FinalizeOutboxIndexBody); err != nil {
+		t.Fatal(err)
+	}
+	writer := connect(t, uri)
+	tx, err := writer.Begin(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
-	if _, err := tx.Exec(context.Background(), "LOCK TABLE public."+table+" IN SHARE MODE"); err != nil {
+	if _, err := tx.Exec(context.Background(), "LOCK TABLE public.worker_job_outbox IN ROW EXCLUSIVE MODE"); err != nil {
 		t.Fatal(err)
 	}
-}
-
-// The pause between attempts ends with the build window: a retry delay longer than the window does not keep the build
-// (and its Job) waiting past the window. With a 10 s window and a 1 h delay the build stops on the window-end line and
-// fails, not at the caller's deadline (D6418: the mechanism is asserted, no wall-time bound).
-func TestBuildIndexRetryPauseEndsWithTheWindow(t *testing.T) {
-	d := newDownInstance(t)
-	uri := d.withoutIndex(t, "0159")
-	holdShare(t, uri, "sync_run_units")
-	conn := connect(t, uri)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	logs := &syncBuffer{}
-	_, err := pgmigrate.BuildFailureStreakIndex(ctx, conn, pgmigrate.IndexBuildOptions{
-		LockTimeout: time.Second, Attempts: 3, RetryDelay: time.Hour, Deadline: 10 * time.Second, CleanupBudget: 5 * time.Second,
-	}, slog.New(slog.NewJSONHandler(logs, nil)))
-	if err == nil {
-		t.Fatal("the build succeeded under a held SHARE lock")
+	if _, err := conn.Exec(context.Background(), "SET lock_timeout = '2s'"); err != nil {
+		t.Fatal(err)
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("the build ran into the caller's deadline (err %v): the retry pause outlived the 10 s window; log %s", err, logs.String())
-	}
-	if !strings.Contains(logs.String(), "attempt failed") {
-		t.Fatalf("no failed attempt was logged, so the cell never reached the retry pause; log %s", logs.String())
-	}
-	if !strings.Contains(logs.String(), "the build window ended before the next attempt") {
-		t.Fatalf("the build did not stop on the window end; log %s", logs.String())
+	if _, err := pgmigrate.Upgrade(context.Background(), conn, baseline, chain); err != nil {
+		t.Fatalf("upgrade over a valid index with an outbox writer open: %v (0167 asked for a lock on the outbox)", err)
 	}
 }

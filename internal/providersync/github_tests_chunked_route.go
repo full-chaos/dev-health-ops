@@ -1743,6 +1743,21 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	rateFloor := &githubTestsRateFloorGate{}
 	counted.Doer = githubTestsChunkCountingDoer{delegate: client.Doer, attempts: &requests, observed: &rateObserved, floor: rateFloor}
 	client = &counted
+	// chunkPrefixSources / chunkPrefixCount are the prefix exclusions of the chunk being built, in memory only: never on the
+	// cursor or the prepared chunk, so a chunk's source set is never carried to a resume (CHAOS-14559).
+	chunkPrefixSources, chunkPrefixCount := 0, 0
+	logChunkPrefixSources := func(cursor githubTestsChunkCursor) {
+		if chunkPrefixCount == 0 {
+			return
+		}
+		slog.Info("github tests chunk excluded artifacts by name prefix",
+			"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+			"repository", logging.ProviderText(cursor.Repo),
+			"excluded_"+githubTestsExclusionReasonPrefix, chunkPrefixCount,
+			"excluded_"+githubTestsExclusionReasonPrefix+"_source", githubTestsPrefixExclusionSourceNames(chunkPrefixSources),
+		)
+		chunkPrefixSources, chunkPrefixCount = 0, 0
+	}
 	emitFinalMetadata := func(cursor githubTestsChunkCursor) error {
 		cursor.Phase = "done"
 		// The totality gate runs here, not inline in the artifacts loop below,
@@ -1773,6 +1788,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		// internal/jobs/providerunit.Handler's post-Complete success branch,
 		// which fires this exactly once per unit, the same discipline
 		// observeTerminalWithCommittedRows/observeAllArtifactsUnreadable use.
+		logChunkPrefixSources(cursor)
 		return emitCursorPair(cursor, batch, emit)
 	}
 	if cursor.Phase == "done" {
@@ -1987,6 +2003,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		afterRaw, afterErr := encodeGitHubTestsChunkCursor(after)
 		if afterErr != nil {
 			return afterErr
+		}
+		// One source-bearing line per chunk: a coalescable emission may be merged into the next one, so its exclusions
+		// are logged with the chunk that is not.
+		if !coalescable {
+			logChunkPrefixSources(after)
 		}
 		if err := emit(ChunkRouteEmission{Batch: batch, CursorBefore: beforeRaw, CursorAfter: afterRaw, Final: final, Coalescable: coalescable}); err != nil {
 			return err
@@ -2730,12 +2751,14 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						if artifact.ID == "" {
 							return providerfoundation.ErrNormalizationInvalid
 						}
-						if selected, reason := githubTestsArtifactSelectionSeam(artifact.Name, configPrefixes); !selected {
+						if selected, reason, source := githubTestsArtifactSelection(artifact.Name, configPrefixes); !selected {
 							switch reason {
 							case githubTestsExclusionReasonSuffix:
 								cursor.ExcludedNonReportSuffix++
 							case githubTestsExclusionReasonPrefix:
 								cursor.ExcludedNonReportPrefix++
+								chunkPrefixSources |= githubTestsPrefixExclusionSourceBit(source)
+								chunkPrefixCount++
 							}
 							// Bounded the same way as GitHubTestsSkippedArtifact.Name
 							// (CHAOS-4588/CHAOS-4591, codex round 1, P1): a

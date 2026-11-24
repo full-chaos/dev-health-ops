@@ -20,11 +20,25 @@
   "path": "GET /repos/acme/api/commits/second",
   "watermark": false
  },
- "github/team_catalog|req07|429": {
-  "deadline": true,
-  "effects": 0,
-  "ok": false,
-  "path": "GET /orgs/acme/teams/data/members",
+ "github/team_catalog|req03|429": {
+  "deadline": false,
+  "effects": 6,
+  "ok": true,
+  "path": "GET /orgs/acme/teams/platform/members",
+  "watermark": false
+ },
+ "github/team_catalog|req04|429": {
+  "deadline": false,
+  "effects": 6,
+  "ok": true,
+  "path": "GET /users/octocat",
+  "watermark": false
+ },
+ "github/team_catalog|req05|429": {
+  "deadline": false,
+  "effects": 6,
+  "ok": true,
+  "path": "GET /users/monalisa",
   "watermark": false
  },
  "gitlab/work_items|req02|429": {

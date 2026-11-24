@@ -437,12 +437,15 @@ const (
 			AND outbox.args #>> '{domain,id}' = run.id::text
 			AND outbox.status IN ('pending', 'claimed')
 	))`
-	staleFinalizeStrandShapeSQL = `EXISTS (
-		SELECT 1 FROM public.worker_job_outbox AS outbox
+	// Uncorrelated like the River arms (one join per statement, the same IS
+	// NOT NULL guard): as a correlated EXISTS the planner could re-run a merge
+	// join of the outbox and river_job for every base run.
+	staleFinalizeStrandShapeSQL = `run.id::text IN (
+		SELECT outbox.args #>> '{domain,id}' FROM public.worker_job_outbox AS outbox
 		JOIN %[1]s AS job ON job.id = outbox.river_job_id
 		WHERE outbox.job_kind = 'metrics.daily_finalize'
 			AND outbox.status = 'delivered'
-			AND outbox.args #>> '{domain,id}' = run.id::text
+			AND outbox.args #>> '{domain,id}' IS NOT NULL
 	)`
 	// The River arm has the live-job arm's uncorrelated form (one read of
 	// river_job per statement, the same IS NOT NULL guard): correlated, the

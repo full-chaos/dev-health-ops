@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -1549,25 +1548,7 @@ func providerBudgetContentionDelay(unitID string, prior int) time.Duration {
 // claimed unit already carries (result.provider_budget_contention_deferrals,
 // written by DeferForBudgetContention). A missing or malformed value is 0.
 func budgetContentionDeferrals(claim providersync.Claim) int {
-	switch value := claim.Result["provider_budget_contention_deferrals"].(type) {
-	case float64:
-		if value >= 0 && value < 1e9 {
-			return int(value)
-		}
-	case int:
-		if value >= 0 {
-			return value
-		}
-	case int64:
-		if value >= 0 && value < 1e9 {
-			return int(value)
-		}
-	case json.Number:
-		if parsed, err := value.Int64(); err == nil && parsed >= 0 && parsed < 1e9 {
-			return int(parsed)
-		}
-	}
-	return 0
+	return providersync.BudgetContentionDeferrals(claim)
 }
 
 func cloneResult(input map[string]any) map[string]any {

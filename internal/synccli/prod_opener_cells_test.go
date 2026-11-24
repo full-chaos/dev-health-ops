@@ -2,7 +2,6 @@ package synccli
 
 import (
 	"encoding/binary"
-	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -16,6 +15,13 @@ import (
 // The cells use the real opener against a fake server that answers the native
 // handshake with an exception; every value is made up.
 func hostileClickHouse(t *testing.T) string {
+	t.Helper()
+	return hostileClickHouseSaying(t, "refused for svc%3A7kZ2 end", func(addr string) string { return "clickhouse://svc%3A:zz9q@" + addr + "/d" })
+}
+
+// hostileClickHouseSaying is the DSN of a fake native ClickHouse server whose
+// exception text is message; dsn builds the DSN from the server's address.
+func hostileClickHouseSaying(t *testing.T, message string, dsn func(addr string) string) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -35,14 +41,14 @@ func hostileClickHouse(t *testing.T) string {
 				packet := []byte{2}
 				packet = binary.LittleEndian.AppendUint32(packet, 516)
 				packet = append(packet, text("DB::Exception")...)
-				packet = append(packet, text("refused for svc%3A7kZ2 end")...)
+				packet = append(packet, text(message)...)
 				packet = append(packet, text("")...)
 				packet = append(packet, 0)
 				_, _ = conn.Write(packet)
 			}()
 		}
 	}()
-	return fmt.Sprintf("clickhouse://svc%%3A:zz9q@%s/d", listener.Addr().String())
+	return dsn(listener.Addr().String())
 }
 
 func TestProdOpenerErrorKeepsTheDatabasePasswordHiddenOnSyncTargets(t *testing.T) {
@@ -81,4 +87,40 @@ func TestProdOpenerErrorKeepsTheTokenHiddenOnSyncTeams(t *testing.T) {
 	if strings.Contains(stderr, residualLeakTail) {
 		t.Errorf("the token's tail printed: %q", stderr)
 	}
+}
+
+// The driver settles the login and password by its own parser, which accepts
+// hosts that net/url refuses (an IPv6 literal in a comma list). The CLI union
+// parses the sink URI with net/url and finds no component there; the login and
+// the password the driver resolved still must not print.
+func TestProdOpenerErrorKeepsTheResolvedDriverCredentialsHidden(t *testing.T) {
+	sink := hostileClickHouseSaying(t, "refused for svc: with zz9q end", func(addr string) string {
+		host, port, _ := net.SplitHostPort(addr)
+		return "clickhouse://svc%3A:zz9q@127.0.0.1:1,[::ffff:" + host + "]:" + port + "/d"
+	})
+	check := func(t *testing.T, code int, printed string) {
+		t.Helper()
+		if code == 0 || !strings.Contains(printed, "refused for") {
+			t.Fatalf("exit %d: the failure never reached the printing path (or lost the server's text): %q", code, printed)
+		}
+		for _, secret := range []string{"zz9q", "svc:"} {
+			if strings.Contains(printed, secret) {
+				t.Errorf("%q printed: %q", secret, printed)
+			}
+		}
+	}
+	t.Run("sync target", func(t *testing.T) {
+		env := map[string]string{"CLICKHOUSE_URI": sink, "POSTGRES_URI": residualDB, "ORG_ID": "org-1"}
+		githubArgs := []string{"--provider", "github", "--owner", "acme", "--repo", "api", "--auth", "ghp-test"}
+		code, stdout, stderr := runVerb(t, "prs", InlineExecutor(defaultInlineDeps()), githubArgs, env)
+		check(t, code, stdout+stderr)
+	})
+	t.Run("sync teams", func(t *testing.T) {
+		env := validEnv()
+		env["CLICKHOUSE_URI"] = sink
+		d := defaultDeps()
+		d.newClient = stubDeps(&recorded{}, failingClient{}, nil).newClient
+		code, stdout, stderr := run(t, env, d, "--provider", "jira", "--org", "o")
+		check(t, code, stdout+stderr)
+	})
 }

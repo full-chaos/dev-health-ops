@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/url"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -61,8 +63,9 @@ func CredentialComponents(dsn string) []string {
 		// "user=") and the password from the query, where they override the
 		// userinfo. The keys are the drivers' own, lower case: a differently
 		// cased key is ignored by the driver, so its value is not a credential.
-		// The values are the decoded ones the driver uses; the encoded spelling
-		// is covered by the DSN's own bytes.
+		// The values are the decoded ones the driver uses. The DSN's own bytes
+		// cover only the spelling the DSN had; a server that re-serializes the
+		// credential spells it again, which boundaryValues covers.
 		for key, values := range u.Query() {
 			if key == "user" || key == "username" || key == "password" {
 				for _, value := range values {
@@ -79,6 +82,72 @@ func CredentialComponents(dsn string) []string {
 	for _, m := range keywordUserPattern.FindAllStringSubmatch(dsn, -1) {
 		out = appendKeywordValue(out, m[1])
 	}
+	return out
+}
+
+// minDerivedLen is the shortest credential value that also gets its escaped
+// spellings redacted. A 1-2 character value ("a@") would turn its escaped form
+// ("a%40") into a pattern that matches ordinary text; the raw value is redacted
+// at any length, as before.
+const minDerivedLen = 3
+
+// credentialSpellings returns value and the other ways an error text can spell
+// it: URL query and path escapes, the userinfo escape, strconv.Quote and JSON
+// string escapes (and the JSON escape of the quoted form). Spellings equal to
+// one already listed are dropped. A value shorter than minDerivedLen has only
+// itself.
+func credentialSpellings(value string) []string {
+	if value == "" {
+		return nil
+	}
+	out := []string{value}
+	if len(value) < minDerivedLen {
+		return out
+	}
+	quoted := strconv.Quote(value)
+	quoted = quoted[1 : len(quoted)-1]
+	userinfo := (&url.URL{User: url.UserPassword("", value)}).String()
+	userinfo = strings.TrimSuffix(strings.TrimPrefix(userinfo, "//:"), "@")
+	for _, spelling := range []string{
+		url.QueryEscape(value),
+		url.PathEscape(value),
+		userinfo,
+		quoted,
+		jsonInner(value, true),
+		jsonInner(quoted, true),
+	} {
+		if spelling != "" && !hasSpelling(out, spelling) {
+			out = append(out, spelling)
+		}
+	}
+	return out
+}
+
+func hasSpelling(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+// boundaryValues is every string a Boundary redacts: the DSN's own bytes, and
+// each credential component and resolved value in all its spellings. Longer
+// values go first, so a spelling that holds a shorter one is replaced whole.
+func boundaryValues(dsn string, resolved ...string) []string {
+	var out []string
+	for i, value := range CredentialComponents(dsn) {
+		if i == 0 {
+			out = append(out, value)
+			continue
+		}
+		out = append(out, credentialSpellings(value)...)
+	}
+	for _, value := range resolved {
+		out = append(out, credentialSpellings(value)...)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return len(out[i]) > len(out[j]) })
 	return out
 }
 
@@ -114,13 +183,13 @@ type Boundary struct {
 // keeps the DSN-only redaction: it filters whole log streams, which must stay
 // readable.
 func NewUnparsableBoundary(dsn string) Boundary {
-	return Boundary{values: CredentialComponents(dsn), unparsable: true}
+	return Boundary{values: boundaryValues(dsn), unparsable: true}
 }
 
 // NewBoundary derives the substrings the returned Boundary redacts, from
 // the DSN this run actually resolved.
 func NewBoundary(dsn string) Boundary {
-	return Boundary{values: CredentialComponents(dsn)}
+	return Boundary{values: boundaryValues(dsn)}
 }
 
 // NewBoundaryWith is NewBoundary for a driver that resolves credentials from
@@ -129,13 +198,7 @@ func NewBoundary(dsn string) Boundary {
 // settled on, and they are redacted with the DSN's own components. A DSN alone
 // cannot name a credential the DSN does not carry.
 func NewBoundaryWith(dsn string, resolved ...string) Boundary {
-	values := CredentialComponents(dsn)
-	for _, value := range resolved {
-		if value != "" {
-			values = append(values, value)
-		}
-	}
-	return Boundary{values: values}
+	return Boundary{values: boundaryValues(dsn, resolved...)}
 }
 
 // Redact returns err with every occurrence of the boundary's values
@@ -199,7 +262,7 @@ func WithRedactedCauseAlso(sentinel error, dsn string, cause error, resolved ...
 	if cause == nil {
 		return sentinel
 	}
-	values := append(CredentialComponents(dsn), resolved...)
+	values := boundaryValues(dsn, resolved...)
 	return redactedCauseError{sentinel: sentinel, cause: RedactValues(cause.Error(), values...)}
 }
 

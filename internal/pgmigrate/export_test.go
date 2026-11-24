@@ -149,3 +149,6 @@ const BuildIndexLockKey = buildIndexLockKey
 
 // OpenUnitsBuildIndexLockKey is the advisory lock key one open-units build-index run holds.
 const OpenUnitsBuildIndexLockKey = openUnitsBuildIndexLockKey
+
+// ErrWindowExpired is the end of the build window that stops a build.
+var ErrWindowExpired = errWindowExpired

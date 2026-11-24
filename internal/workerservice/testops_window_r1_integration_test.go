@@ -184,9 +184,14 @@ func TestTestopsWindowLaneReviewOne(t *testing.T) {
 			t.Fatalf("the pass started %d keys, want %d", got, wantTaken)
 		}
 		warns := rig.logLines(windowDrainDeferredMsg)
-		if len(warns) != 1 || !strings.Contains(warns[0], `"level":"WARN"`) ||
-			!strings.Contains(warns[0], fmt.Sprintf(`"testops_window_keys_deferred":%d`, wantDeferred)) || strings.Contains(warns[0], "2026-") ||
-			strings.Contains(warns[0], orgID) {
+		var fields string
+		if len(warns) == 1 {
+			// The fields of the line, without the time of the record.
+			_, fields, _ = strings.Cut(warns[0], `"level"`)
+		}
+		if len(warns) != 1 || !strings.Contains(fields, `:"WARN"`) ||
+			!strings.Contains(fields, fmt.Sprintf(`"testops_window_keys_deferred":%d`, wantDeferred)) || strings.Contains(fields, "2026-") ||
+			strings.Contains(fields, orgID) {
 			t.Fatalf("deferred lines %v, want one WARN of %d keys, counts only", warns, wantDeferred)
 		}
 		if split := rig.logLines(windowDrainSplitDayMsg); len(split) != 0 {

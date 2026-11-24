@@ -748,7 +748,7 @@ func runTarget(ctx context.Context, env cli.Env, target string, exec Executor, n
 		// remember which of its errors can carry them.
 		text := err.Error()
 		var done redactedError
-		if !errors.As(err, &done) {
+		if !errors.As(err, &done) || text != done.text {
 			text = redact(text)
 		}
 		writeLine(env.Stderr, fmt.Sprintf("dho sync %s: %s", target, text))

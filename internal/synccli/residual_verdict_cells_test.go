@@ -3,6 +3,8 @@ package synccli
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"strings"
 	"testing"
 
@@ -119,6 +121,20 @@ func TestBatchListErrorIsNotRedactedASecondTime(t *testing.T) {
 	})
 	_, _, stderr := runVerb(t, "git", executor, githubBatchArgs, env)
 	if !strings.Contains(stderr, "list repositories: refused for [REDACTED] end") {
+		t.Errorf("got %q", stderr)
+	}
+}
+
+// Only a text that is wholly the already-redacted one skips the plan boundary:
+// a caller that wraps a redactedError with text of its own gets that text
+// redacted.
+func TestWrappedRedactedErrorGetsItsOuterTextRedacted(t *testing.T) {
+	env := map[string]string{"CLICKHOUSE_URI": residualSink, "POSTGRES_URI": residualDB, "ORG_ID": "org-1"}
+	executor := func(context.Context, Plan, cli.Env) error {
+		return fmt.Errorf("outer A7kZ2 text: %w", redactedError{"inner [REDACTED] text"})
+	}
+	_, _, stderr := runVerb(t, "git", executor, githubBatchArgs, env)
+	if !strings.Contains(stderr, "outer [REDACTED] text: inner [REDACTED] text") {
 		t.Errorf("got %q", stderr)
 	}
 }

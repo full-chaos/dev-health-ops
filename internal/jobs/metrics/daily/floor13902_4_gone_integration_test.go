@@ -599,12 +599,15 @@ func floor4Stmt(t *testing.T, marker string) string {
 	if i < 0 || strings.Count(floor4GoneForm, marker) != 1 {
 		t.Fatalf("marker %q not found once", marker)
 	}
-	rest := floor4GoneForm[i:]
-	end := strings.Index(rest, ";\n")
-	if end < 0 {
-		t.Fatalf("no end of %q", marker)
+	var kept []string
+	for _, line := range strings.Split(floor4GoneForm[i:], "\n") {
+		kept = append(kept, line)
+		if !strings.HasPrefix(strings.TrimSpace(line), "--") && strings.HasSuffix(strings.TrimSpace(line), ";") {
+			return strings.TrimSuffix(strings.Join(kept, "\n"), ";")
+		}
 	}
-	return rest[:end]
+	t.Fatalf("no end of %q", marker)
+	return ""
 }
 
 func TestFloor13902v4GoneCountsWhatTheRunOfTheWholeOrganizationZeroes(t *testing.T) {

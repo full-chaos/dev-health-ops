@@ -453,16 +453,14 @@ func writeConfigChanges(ctx context.Context, tx pgx.Tx, config *syncConfig, oldT
 // config and the dataset's options, each only when it changes.
 func (h *handlers) writeGitHubRuntimeOptions(ctx context.Context, tx pgx.Tx, org string, integrationID uuid.UUID,
 	current, bodyOptions *pyjson.Object, now time.Time) (*pyjson.Object, error) {
-	var integrationOrg string
 	var integrationConfigText *string
-	integrationFound := true
-	err := tx.QueryRow(ctx, `SELECT org_id, config::text FROM integrations WHERE id = $1 FOR NO KEY UPDATE`, integrationID).Scan(&integrationOrg, &integrationConfigText)
+	scoped := true
+	err := tx.QueryRow(ctx, `SELECT config::text FROM integrations WHERE id = $1 AND org_id = $2 FOR NO KEY UPDATE`, integrationID, org).Scan(&integrationConfigText)
 	if errors.Is(err, pgx.ErrNoRows) {
-		integrationFound = false
+		scoped = false
 	} else if err != nil {
 		return nil, fmt.Errorf("read integration: %w", err)
 	}
-	scoped := integrationFound && integrationOrg == org
 	integrationOptions := pyjson.NewObject()
 	var storedIntegrationConfig pyjson.Value
 	if scoped {

@@ -58,7 +58,9 @@ type InlineDeps struct {
 func defaultInlineDeps() InlineDeps {
 	return InlineDeps{
 		OpenStore: func(ctx context.Context, dsn string) (driver.Conn, error) {
-			return clickhousestore.OpenRawCause(ctx, clickhousestore.DefaultConfig(dsn))
+			config := clickhousestore.DefaultConfig(dsn)
+			config.RawCause = true
+			return clickhousestore.Open(ctx, config)
 		},
 		Run:  providersync.RunInProcess,
 		List: providersync.ListInProcess,

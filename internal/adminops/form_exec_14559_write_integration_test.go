@@ -326,7 +326,8 @@ func write14559Prepare(t *testing.T, name, text, sum string, ids *regexp.Regexp,
 		if slots, filters := strings.Count(sqlLines, "{{ORG_PREFIX}}"), len(orgFilter.FindAllString(sqlLines, -1)); slots != filters {
 			t.Errorf("%s %s: %d org slot(s), %d org filter(s)", name, piece.id, slots, filters)
 		}
-		upper := strings.ToUpper(sqlLines)
+		// The one allowed jsonb cast is the guarded one: pg_input_is_valid first, so no parse error can quote stored text.
+		upper := strings.ReplaceAll(strings.ToUpper(sqlLines), "CASE WHEN PG_INPUT_IS_VALID(I.CONFIG::TEXT, 'JSONB') THEN I.CONFIG::JSONB END", "")
 		for _, banned := range []string{"SET ", "INSERT ", "UPDATE ", "DELETE ", "EXPLAIN", "COPY ", "CREATE ", "DROP ", "ALTER ", "::JSONB"} {
 			if strings.Contains(upper, banned) {
 				t.Errorf("%s %s holds %q", name, piece.id, banned)

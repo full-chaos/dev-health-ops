@@ -722,6 +722,7 @@ jobs:
           path: go-junit-part/
           retention-days: 7
           if-no-files-found: ignore
+          overwrite: true
 
       - name: Upload per-test timing json
         continue-on-error: true
@@ -1034,6 +1035,7 @@ jobs:
           path: junit-merged/
           retention-days: 14
           if-no-files-found: warn
+          overwrite: true
 
   # Merge queue only. GitHub rebuilds the entries stacked on a red entry but leaves their old runs running; this job
   # cancels those stale runs (strict gh-readonly-queue branch chain from this entry's head_sha, POST .../cancel only).

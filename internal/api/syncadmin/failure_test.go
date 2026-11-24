@@ -80,6 +80,16 @@ func (f *faultReader) enabledDatasetKeys(_ context.Context, _ string, ids []uuid
 	}
 	return out, f.hit("enabledDatasetKeys")
 }
+
+// integrationExcludeLists: no asked integration holds a CI artifact exclude list.
+func (f *faultReader) integrationExcludeLists(_ context.Context, _ string, ids []uuid.UUID) (map[uuid.UUID]*string, error) {
+	out := map[uuid.UUID]*string{}
+	for _, id := range ids {
+		empty := `{}`
+		out[id] = &empty
+	}
+	return out, f.hit("integrationExcludeLists")
+}
 func (f *faultReader) sourcesForIntegration(context.Context, string, uuid.UUID, string) ([]plannerSource, error) {
 	return nil, f.hit("sourcesForIntegration")
 }
@@ -190,8 +200,8 @@ func TestEveryStoreFailureIsA500(t *testing.T) {
 		values  map[string]string
 		methods []string
 	}{
-		{"list", func(h *handlers) http.HandlerFunc { return h.listSyncConfigs }, nil, []string{"listConfigs", "childrenCounts", "credentialIDs", "enabledDatasetKeys"}},
-		{"get", func(h *handlers) http.HandlerFunc { return h.getSyncConfig }, config, []string{"configByID", "credentialIDs", "enabledDatasetKeys"}},
+		{"list", func(h *handlers) http.HandlerFunc { return h.listSyncConfigs }, nil, []string{"listConfigs", "childrenCounts", "credentialIDs", "enabledDatasetKeys", "integrationExcludeLists"}},
+		{"get", func(h *handlers) http.HandlerFunc { return h.getSyncConfig }, config, []string{"configByID", "credentialIDs", "enabledDatasetKeys", "integrationExcludeLists"}},
 		{"repositories", func(h *handlers) http.HandlerFunc { return h.getRepositories }, config, []string{"configByID", "sourcesForIntegration", "childOptions"}},
 		{"jobs", func(h *handlers) http.HandlerFunc { return h.listJobs }, config, []string{
 			"configByID", "scheduledSyncJobIDs", "jobRuns", "syncRunsByID", "unitStatusCounts", "unitRanges#1", "unitRanges#2", "unitWindowSplits"}},
@@ -259,6 +269,9 @@ func TestEmptyIDSetsSendNoQuery(t *testing.T) {
 	}
 	if runs, err := empty.syncRunsByID(ctx, "org", nil); err != nil || len(runs) != 0 {
 		t.Fatal(runs, err)
+	}
+	if lists, err := empty.integrationExcludeLists(ctx, "org", nil); err != nil || len(lists) != 0 {
+		t.Fatal(lists, err)
 	}
 }
 

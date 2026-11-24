@@ -275,10 +275,12 @@ dev_health_provider_deep_stop_total	dataset,listing,provider	code: internal/prov
 dev_health_provider_gitlab_tests_window_start_fallback_total	dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_incident_entitlement_refused_total	dataset,provider,seam	code: internal/providerfoundation/budget.go
 dev_health_provider_inventory_page_cap_total	dataset,provider	code: internal/providerfoundation/budget.go
+dev_health_provider_lookup_unavailable_total	dataset,provider,reason	code: internal/providerfoundation/budget.go
 dev_health_provider_open_run_skipped_total	dataset,provider,reason	code: internal/providerfoundation/budget.go
 dev_health_provider_per_run_truncation_total	cause,component,dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_prepared_snapshot_discarded_total	dataset,provider,reason	code: internal/providerfoundation/budget.go
 dev_health_provider_rate_limit_episode_restart_total	dataset,provider	code: internal/providerfoundation/budget.go
+dev_health_provider_report_retraction_limited_total	provider,reason	code: internal/providerfoundation/budget.go
 dev_health_provider_request_usage_dropped_requests_total		code: internal/providersync/request_usage.go
 dev_health_provider_request_usage_dropped_rows_total		code: internal/providersync/request_usage.go
 dev_health_provider_requests_total	class,provider	code: internal/providerfoundation/budget.go
@@ -328,6 +330,7 @@ dev_health_team_metrics_daily_repo_count		code: internal/jobruntime/telemetry.go
 dev_health_team_repo_ownership_derivation_resolution_arm_total	arm	code: internal/jobruntime/telemetry.go
 dev_health_team_repo_ownership_derivation_row_count		code: internal/jobruntime/telemetry.go
 dev_health_team_repo_ownership_derivation_total	outcome	code: internal/jobruntime/telemetry.go
+dev_health_testops_report_slots_revived_total		code: internal/jobs/metrics/daily/testops_revived_slots.go
 dev_health_touched_days_drain_total	event	code: internal/jobruntime/telemetry.go
 dev_health_touched_days_oldest_pending_age_seconds		code: internal/jobruntime/telemetry.go
 dev_health_work_item_derived_tables_left_to_daily_job_total	provider	code: internal/providerfoundation/budget.go

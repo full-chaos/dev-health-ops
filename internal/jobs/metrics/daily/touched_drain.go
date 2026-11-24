@@ -94,7 +94,14 @@ func (handler *FinalizeHandler) drainTouchedDaysAfterEnd(ctx context.Context, ru
 func (store *PostgresStore) TouchedDrainRunsInFlightTx(
 	ctx context.Context, tx pgx.Tx, organizationID string, since time.Time,
 ) (int, error) {
-	if !store.valid() || tx == nil || !validUUID(organizationID) || since.IsZero() {
+	return store.TouchedLaneDrainRunsInFlightTx(ctx, tx, TouchedLaneDays, organizationID, since)
+}
+
+// TouchedLaneDrainRunsInFlightTx is TouchedDrainRunsInFlightTx for the drain runs of one lane.
+func (store *PostgresStore) TouchedLaneDrainRunsInFlightTx(
+	ctx context.Context, tx pgx.Tx, lane TouchedLane, organizationID string, since time.Time,
+) (int, error) {
+	if !store.valid() || tx == nil || !lane.valid() || !validUUID(organizationID) || since.IsZero() {
 		return 0, ErrInvalidState
 	}
 	var count int
@@ -105,7 +112,7 @@ WHERE org_id = $1::uuid
   AND generation LIKE $2
   AND status IN ('pending', 'running')
   AND created_at >= $3`,
-		organizationID, escapeLikePrefix(TouchedDrainGenerationPrefix)+"%", since.UTC(),
+		organizationID, escapeLikePrefix(lane.drainPrefix)+"%", since.UTC(),
 	).Scan(&count); err != nil {
 		return 0, ErrUnavailable
 	}
@@ -121,14 +128,21 @@ WHERE org_id = $1::uuid
 // second read was committed at the first, so what the pass decided from the
 // runs is still true.
 func (store *PostgresStore) DailyRunsStateTx(ctx context.Context, tx pgx.Tx, organizationID string) (string, error) {
-	if !store.valid() || tx == nil || !validUUID(organizationID) {
+	return store.TouchedLaneDailyRunsStateTx(ctx, tx, TouchedLaneDays, organizationID)
+}
+
+// TouchedLaneDailyRunsStateTx is DailyRunsStateTx over the runs one lane reads: the testops window lane its own runs only, the
+// touched-day lane every other run. A run of one lane changes nothing the other lane decided, so it does not stop its start.
+func (store *PostgresStore) TouchedLaneDailyRunsStateTx(ctx context.Context, tx pgx.Tx, lane TouchedLane, organizationID string) (string, error) {
+	if !store.valid() || tx == nil || !lane.valid() || !validUUID(organizationID) {
 		return "", ErrInvalidState
 	}
+	pattern, ofLane := lane.runOfLanePattern()
 	var state string
 	if err := tx.QueryRow(ctx, `
 SELECT count(*)::text || '|' || COALESCE(max(created_at)::text, '')
 FROM public.daily_metrics_runs
-WHERE org_id = $1::uuid`, organizationID).Scan(&state); err != nil {
+WHERE org_id = $1::uuid AND (generation LIKE $2) = $3`, organizationID, pattern, ofLane).Scan(&state); err != nil {
 		return "", ErrUnavailable
 	}
 	return state, nil
@@ -189,7 +203,14 @@ type TouchedRunKeys struct {
 func (store *PostgresStore) OwnedKeysOfTouchedRunsWithoutResult(
 	ctx context.Context, organizationID string, notEndedAfter time.Duration, limit int,
 ) ([]TouchedRunKeys, bool, error) {
-	if !store.valid() || !validUUID(organizationID) || notEndedAfter <= 0 || limit < 1 {
+	return store.OwnedKeysOfTouchedLaneRunsWithoutResult(ctx, TouchedLaneDays, organizationID, notEndedAfter, limit)
+}
+
+// OwnedKeysOfTouchedLaneRunsWithoutResult is OwnedKeysOfTouchedRunsWithoutResult over the runs that mark the keys of one lane.
+func (store *PostgresStore) OwnedKeysOfTouchedLaneRunsWithoutResult(
+	ctx context.Context, lane TouchedLane, organizationID string, notEndedAfter time.Duration, limit int,
+) ([]TouchedRunKeys, bool, error) {
+	if !store.valid() || !lane.valid() || !validUUID(organizationID) || notEndedAfter <= 0 || limit < 1 {
 		return nil, false, ErrInvalidState
 	}
 	newer := `newer.org_id = bad.org_id AND newer.target_day = bad.target_day
@@ -239,8 +260,8 @@ WHERE full_org OR cardinality(repos) > 0
 ORDER BY created_at DESC, id DESC
 LIMIT $5`,
 		uuid.MustParse(organizationID).String(),
-		escapeLikePrefix(postSyncGenerationPrefix)+"%",
-		escapeLikePrefix(TouchedDrainGenerationPrefix)+"%",
+		escapeLikePrefix(lane.postSyncPrefix)+"%",
+		escapeLikePrefix(lane.drainPrefix)+"%",
 		notEndedAfter.Seconds(), limit+1,
 	)
 	if err != nil {
@@ -358,7 +379,14 @@ WHERE org_id = $1::uuid AND generation = $2 AND touched_take_at IS NULL`,
 func (store *PostgresStore) TouchedMarkingRunsToCheck(
 	ctx context.Context, organizationID, endedRunID string, window time.Duration, limit int,
 ) ([]TouchedRunKeys, bool, error) {
-	if !store.valid() || !validUUID(organizationID) || window <= 0 || limit < 1 ||
+	return store.TouchedLaneMarkingRunsToCheck(ctx, TouchedLaneDays, organizationID, endedRunID, window, limit)
+}
+
+// TouchedLaneMarkingRunsToCheck is TouchedMarkingRunsToCheck over the runs that mark the keys of one lane.
+func (store *PostgresStore) TouchedLaneMarkingRunsToCheck(
+	ctx context.Context, lane TouchedLane, organizationID, endedRunID string, window time.Duration, limit int,
+) ([]TouchedRunKeys, bool, error) {
+	if !store.valid() || !lane.valid() || !validUUID(organizationID) || window <= 0 || limit < 1 ||
 		(endedRunID != "" && !validUUID(endedRunID)) {
 		return nil, false, ErrInvalidState
 	}
@@ -368,14 +396,14 @@ func (store *PostgresStore) TouchedMarkingRunsToCheck(
 	if endedRunID != "" {
 		ended = uuid.MustParse(endedRunID).String()
 		// $5 is named only so that the statement uses every parameter it is given.
-		trigger, _, err := store.queryMarkingRuns(ctx, `
+		trigger, _, err := store.queryMarkingRuns(ctx, lane, `
   AND run.id = $4::uuid AND $5::float8 IS NOT NULL`, 1, org, ended)
 		if err != nil {
 			return nil, false, err
 		}
 		runs = trigger
 	}
-	newest, truncated, err := store.queryMarkingRuns(ctx, `
+	newest, truncated, err := store.queryMarkingRuns(ctx, lane, `
   AND run.status NOT IN ('pending', 'running')
   AND run.created_at >= clock_timestamp() - make_interval(secs => $5)
   AND (to_jsonb(run) ->> 'touched_take_at') IS NOT NULL
@@ -440,7 +468,7 @@ WHERE org_id = $1::uuid AND id = ANY($2::uuid[]) AND touched_checked_at IS NULL`
 // matched. $1 is the organization, $2 and $3 the generation patterns, $4 the
 // run that ended (NULL for none) and $5 the window in seconds.
 func (store *PostgresStore) queryMarkingRuns(
-	ctx context.Context, condition string, limit int, organizationID, endedRunID string, window ...float64,
+	ctx context.Context, lane TouchedLane, condition string, limit int, organizationID, endedRunID string, window ...float64,
 ) ([]TouchedRunKeys, bool, error) {
 	var ended any
 	if endedRunID != "" {
@@ -466,8 +494,8 @@ WHERE run.org_id = $1::uuid
 ORDER BY run.created_at DESC, run.id DESC
 LIMIT $6`,
 		organizationID,
-		escapeLikePrefix(postSyncGenerationPrefix)+"%",
-		escapeLikePrefix(TouchedDrainGenerationPrefix)+"%",
+		escapeLikePrefix(lane.postSyncPrefix)+"%",
+		escapeLikePrefix(lane.drainPrefix)+"%",
 		ended, seconds, limit+1,
 	)
 	if err != nil {
@@ -503,7 +531,7 @@ LIMIT $6`,
 }
 
 // TouchedDaysWithOnlyFailedRuns returns the days among days whose newest
-// `threshold` runs (of any generation) all ended without a result: failed,
+// `threshold` runs (of any generation but the testops window lane) all ended without a result: failed,
 // canceled, or not ended notEndedAfter after their creation. A day with fewer
 // runs is not returned. The map key is the day as 2006-01-02.
 //
@@ -514,7 +542,16 @@ LIMIT $6`,
 func (store *PostgresStore) TouchedDaysWithOnlyFailedRuns(
 	ctx context.Context, organizationID string, days []time.Time, threshold int, notEndedAfter, retryAfter time.Duration,
 ) (map[string]bool, error) {
-	if !store.valid() || !validUUID(organizationID) || threshold < 1 || notEndedAfter <= 0 || retryAfter <= 0 {
+	return store.TouchedLaneDaysWithOnlyFailedRuns(ctx, TouchedLaneDays, organizationID, days, threshold, notEndedAfter, retryAfter)
+}
+
+// TouchedLaneDaysWithOnlyFailedRuns is TouchedDaysWithOnlyFailedRuns over the runs one lane counts: the testops window lane its
+// own runs only, the touched-day lane every other run. A failed or new run of one lane neither skips a day of the other nor
+// restarts its retry clock.
+func (store *PostgresStore) TouchedLaneDaysWithOnlyFailedRuns(
+	ctx context.Context, lane TouchedLane, organizationID string, days []time.Time, threshold int, notEndedAfter, retryAfter time.Duration,
+) (map[string]bool, error) {
+	if !store.valid() || !lane.valid() || !validUUID(organizationID) || threshold < 1 || notEndedAfter <= 0 || retryAfter <= 0 {
 		return nil, ErrInvalidState
 	}
 	failed := map[string]bool{}
@@ -525,6 +562,7 @@ func (store *PostgresStore) TouchedDaysWithOnlyFailedRuns(
 	for _, day := range days {
 		values = append(values, day.UTC().Format("2006-01-02"))
 	}
+	pattern, ofLane := lane.runOfLanePattern()
 	rows, err := store.pool.Query(ctx, `
 SELECT target_day::text, bool_or(position = 1 AND retry_due)
 FROM (
@@ -533,11 +571,12 @@ FROM (
            row_number() OVER (PARTITION BY target_day ORDER BY created_at DESC, id DESC) AS position
     FROM public.daily_metrics_runs
     WHERE org_id = $1::uuid AND target_day = ANY($2::date[])
+      AND (generation LIKE $6) = $7
 ) AS ranked
 WHERE position <= $3
 GROUP BY target_day
 HAVING count(*) = $3 AND bool_and(without_result)`,
-		uuid.MustParse(organizationID).String(), values, threshold, notEndedAfter.Seconds(), retryAfter.Seconds())
+		uuid.MustParse(organizationID).String(), values, threshold, notEndedAfter.Seconds(), retryAfter.Seconds(), pattern, ofLane)
 	if err != nil {
 		return nil, ErrUnavailable
 	}

@@ -161,8 +161,9 @@ func matrixTotalsRead(t *testing.T, stack attemptsStack, client *dhclickhouse.Cl
 		}
 	}
 	var served matrixTotalsServed
-	must(conn.QueryRow(ctx, "SELECT count(), uniqExact(report_slot) FROM test_suite_results FINAL WHERE org_id = ?", org).Scan(&served.suites, &served.slots))
-	must(conn.QueryRow(ctx, "SELECT count() FROM test_case_results FINAL WHERE org_id = ?", org).Scan(&served.cases))
+	// Live rows only: a dropped report's zero-measure retraction rows (CHAOS-14259) are no suite of the run.
+	must(conn.QueryRow(ctx, "SELECT countIf(retracted = 0), uniqExactIf(report_slot, retracted = 0) FROM test_suite_results FINAL WHERE org_id = ?", org).Scan(&served.suites, &served.slots))
+	must(conn.QueryRow(ctx, "SELECT countIf(retracted = 0) FROM test_case_results FINAL WHERE org_id = ?", org).Scan(&served.cases))
 	var reasons []string
 	must(conn.QueryRow(ctx, `SELECT complete, reasons FROM testops_run_report_completeness FINAL WHERE org_id = ? AND run_id = ?`, org, runID).Scan(&served.complete, &reasons))
 	served.reasons = strings.Join(reasons, ",")
@@ -268,6 +269,15 @@ func TestTestopsMatrixLegExactTotalIsNotCountedTwice(t *testing.T) {
 		served.watermarkWithheld = watermark == nil
 		t.Logf("%s: %+v", arm.name, served)
 		arms[arm.name] = served
+		// K1 (CHAOS-14259): BOTH also writes one zero-measure retraction row per suite of the dropped total, and the served
+		// numbers above still equal WITHOUT's.
+		var retracted uint64
+		if err := conn.QueryRow(ctx, "SELECT countIf(retracted = 1) FROM test_suite_results FINAL WHERE org_id = ? AND report_slot = 'total-b'", org).Scan(&retracted); err != nil {
+			t.Fatal(err)
+		}
+		if want := map[string]uint64{"WITHOUT": 0, "BOTH": 2}[arm.name]; retracted != want {
+			t.Errorf("%s: %d retraction rows at total-b, want %d", arm.name, retracted, want)
+		}
 	}
 
 	got, want := arms["BOTH"], arms["WITHOUT"]

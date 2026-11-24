@@ -2,7 +2,7 @@ name: Build Docker images
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
   push:
     branches:
@@ -95,7 +95,7 @@ concurrency:
   # and so can never cancel or displace each other's image build.
   # A ready_for_review run gets its own group keyed by the head sha and is never cancelled: a synchronize run of the
   # same sha (a push right before the flip) cannot cancel it.
-  group: ${{ github.workflow }}${{ github.event.action == 'labeled' && github.event.label.name != 'hotfix-image' && '-other-label' || '' }}-${{ github.event.pull_request.number || github.event.inputs.ref || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}${{ github.event.action == 'ready_for_review' && '-ready-' || '' }}${{ github.event.action == 'ready_for_review' && github.event.pull_request.head.sha || '' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.inputs.ref || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}${{ github.event.action == 'ready_for_review' && '-ready-' || '' }}${{ github.event.action == 'ready_for_review' && github.event.pull_request.head.sha || '' }}
   cancel-in-progress: ${{ (github.event_name == 'pull_request' && github.event.action != 'ready_for_review') || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
@@ -103,9 +103,6 @@ permissions:
 
 jobs:
   changes:
-    # CHAOS-10923: the `labeled` trigger exists for `hotfix-image` only; any other label skips this whole workflow
-    # (every build job needs `changes`) and sits in its own concurrency group, so it never cancels a real PR run.
-    if: (github.event_name != 'pull_request' && github.event_name != 'merge_group') || github.event.action != 'labeled' || github.event.label.name == 'hotfix-image'
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
@@ -184,6 +181,7 @@ jobs:
               - '.github/workflows/docker-images.yml'
 
   # CHAOS-10923 (hotfix images). Two decisions, both made by ci/image_promote.sh, both fail closed:
+  #  - To use it: add the `hotfix-image` label, then reopen the PR or push (adding the label alone starts no run).
   #  - pull_request: a PR labelled `hotfix-image` (same-repo head, write access for the actor and the pusher) pushes its
   #    images as tree-<head tree> and attests their build provenance. No other tag, never latest.
   #  - push to main: when every family has a tree-<merge tree> image whose provenance proves a pull_request run of THIS
@@ -1706,13 +1704,12 @@ jobs:
 
   # REQUIRED status check (ruleset): the merge queue's verdict on the image builds. The builds are heavy: they run in
   # the merge queue, on the main push, and on a pull request only with ci:full (or a non-draft hotfix-image PR). In
-  # the merge queue every build must succeed unless the entry is docs-only. A run started by any other label skips
-  # `changes` and this gate with it (the run of the push it follows carries the verdict).
-  # A run started by another label skips this gate. A skipped job posts a passing check, so it must not carry the required
-  # name (it would hide a red verdict of the same head): GitHub names a job skipped by `if:` by the raw text of this expression.
+  # the merge queue every build must succeed unless the entry is docs-only. There is no `labeled` trigger (CHAOS-14567):
+  # a label run would be the newest run at the head and skip this gate under another name, so the required check
+  # would read "Expected". A label change applies at the next push, reopen or ready_for_review.
   image-queue-gate:
-    name: ${{ github.event.action == 'labeled' && github.event.label.name != 'hotfix-image' && 'image-queue-gate (other label, not run)' || 'image-queue-gate' }}
-    if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') && (github.event.action != 'labeled' || github.event.label.name == 'hotfix-image')
+    name: image-queue-gate
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
     needs: [changes, resolve, go-build, go-api-tools-build, go-build-dho-arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 5

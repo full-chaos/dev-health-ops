@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -23,6 +24,46 @@ var ErrTouchedDaysUnavailable = errors.New("touched-day record is unavailable")
 // newest 'touched' event is newer than its newest 'dispatched' event.
 type ClickHouseTouchedDaysStore struct {
 	conn driver.Conn
+	// lane is the pair of event kinds the pending, mark, return and check
+	// reads and writes use. The zero value is the touched-day lane.
+	lane touchedKinds
+}
+
+// touchedKinds is the pair of event kinds of one lane of the record.
+type touchedKinds struct{ touched, dispatched string }
+
+// The lanes of the record. The touched-day lane holds the days raw rows
+// touched (every family of the day is computed again); the testops window
+// lane holds the days after a retraction whose trailing window holds it
+// (only the families that read it are computed again).
+var (
+	touchedDaysKinds    = touchedKinds{touched: "touched", dispatched: "dispatched"}
+	testopsWindowKinds  = touchedKinds{touched: "touched_testops_window", dispatched: "dispatched_testops_window"}
+	touchedKindReplacer = func(kinds touchedKinds) *strings.Replacer {
+		return strings.NewReplacer("{touched}", "'"+kinds.touched+"'", "{dispatched}", "'"+kinds.dispatched+"'")
+	}
+)
+
+// TestopsWindowLane returns the store of the testops window lane: the same
+// table, the kinds 'touched_testops_window' and 'dispatched_testops_window'.
+func (store *ClickHouseTouchedDaysStore) TestopsWindowLane() *ClickHouseTouchedDaysStore {
+	if store == nil {
+		return nil
+	}
+	return &ClickHouseTouchedDaysStore{conn: store.conn, lane: testopsWindowKinds}
+}
+
+func (store *ClickHouseTouchedDaysStore) kinds() touchedKinds {
+	if store.lane == (touchedKinds{}) {
+		return touchedDaysKinds
+	}
+	return store.lane
+}
+
+// laneSQL writes the kinds of the store's lane into a statement: {touched}
+// and {dispatched} are the quoted constants of the lane, never input.
+func (store *ClickHouseTouchedDaysStore) laneSQL(query string) string {
+	return touchedKindReplacer(store.kinds()).Replace(query)
 }
 
 func NewClickHouseTouchedDaysStore(conn driver.Conn) (*ClickHouseTouchedDaysStore, error) {
@@ -325,17 +366,18 @@ func (store *ClickHouseTouchedDaysStore) RecordTouchedGit(
 	return store.recordedAt(ctx, organizationID, at)
 }
 
-// recordedAt counts the keys one record call appended at its clock at.
+// recordedAt counts the keys of the store's lane one record call appended at
+// its clock at.
 func (store *ClickHouseTouchedDaysStore) recordedAt(ctx context.Context, organizationID string, at time.Time) (uint64, error) {
 	var recorded uint64
-	if err := store.conn.QueryRow(ctx, `
+	if err := store.conn.QueryRow(ctx, store.laneSQL(`
 SELECT count()
 FROM (
     SELECT day, repo_id
     FROM daily_metrics_touched_days
-    WHERE org_id = ? AND kind = 'touched' AND at = fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+    WHERE org_id = ? AND kind = {touched} AND at = fromUnixTimestamp64Milli(toInt64(?), 'UTC')
     GROUP BY day, repo_id
-)`, organizationID, at.UnixMilli()).Scan(&recorded); err != nil {
+)`), organizationID, at.UnixMilli()).Scan(&recorded); err != nil {
 		return 0, ErrTouchedDaysUnavailable
 	}
 	return recorded, nil
@@ -364,9 +406,64 @@ FROM (
 )
 GROUP BY day, repo_id`
 
+// recordTouchedTestopsWindowSQL appends one 'touched_testops_window' event for
+// each of the 29 days after every suite day of each run (repo_id, run_id) that
+// had a retraction row (retracted = 1) written at or after the bound, up to the
+// day of the record. The recurrence of day X reads the history [X-29, X), so a
+// retired report slot on day D changes the days D+1..D+29 and no other: only
+// the repositories and runs the retraction rows name are marked. The base days
+// are every suite day of the run, not the day of the retraction row: a minimal
+// retraction row keeps the day of the slot's first suite only, and the readers
+// retire the whole slot. No FINAL, as in recordTouchedTestsSQL. A day after the
+// record has no stored row to correct: its own run reads the retracted rows.
+const recordTouchedTestopsWindowSQL = `
+INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
+SELECT ?, day, repo_id, 'touched_testops_window', fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+FROM (
+    SELECT repo_id, addDays(run_day, day_offset) AS day
+    FROM (
+        SELECT DISTINCT repo_id, toDate(coalesce(started_at, finished_at), 'UTC') AS run_day
+        FROM test_suite_results
+        WHERE org_id = ? AND coalesce(started_at, finished_at) IS NOT NULL
+          AND (repo_id, run_id) IN (
+              SELECT repo_id, run_id
+              FROM test_suite_results
+              WHERE org_id = ? AND retracted = 1 AND last_synced >= fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+          )
+    )
+    ARRAY JOIN range(1, 30) AS day_offset
+)
+WHERE day <= toDate(fromUnixTimestamp64Milli(toInt64(?), 'UTC'), 'UTC')
+GROUP BY day, repo_id`
+
+// TestopsWindowKeysBound is the number of testops window keys one record is
+// expected to stay within: the window of one base day for each of the
+// repositories one run can list. Above it every key is still recorded (a
+// dropped key is a stale day) and the fan-out logs a warning.
+const TestopsWindowKeysBound = 29 * 1000
+
+// TestopsWindowReport is what the record of one fan-out wrote to the testops
+// window lane.
+type TestopsWindowReport struct {
+	// Keys is the number of (day, repository) keys the record appended.
+	Keys uint64
+}
+
+// OverBound reports whether the record is above TestopsWindowKeysBound.
+func (report TestopsWindowReport) OverBound() bool { return report.Keys > TestopsWindowKeysBound }
+
+type testopsWindowSinkKey struct{}
+
+// WithTestopsWindowSink returns a context that makes RecordTouchedTests store
+// what it wrote to the testops window lane in sink.
+func WithTestopsWindowSink(ctx context.Context, sink *TestopsWindowReport) context.Context {
+	return context.WithValue(ctx, testopsWindowSinkKey{}, sink)
+}
+
 // RecordTouchedTests appends the 'touched' events of the test suite days of
-// the runs written at or after since. It returns the number of keys it
-// appended.
+// the runs written at or after since, and the testops window events of the
+// runs a retraction row was written for (recordTouchedTestopsWindowSQL). It
+// returns the number of 'touched' keys it appended.
 func (store *ClickHouseTouchedDaysStore) RecordTouchedTests(
 	ctx context.Context, organizationID string, since time.Time,
 ) (uint64, error) {
@@ -385,6 +482,21 @@ func (store *ClickHouseTouchedDaysStore) RecordTouchedTests(
 	); err != nil {
 		return 0, ErrTouchedDaysUnavailable
 	}
+	if err := store.conn.Exec(ctx, recordTouchedTestopsWindowSQL,
+		organizationID, at.UnixMilli(),
+		organizationID,
+		organizationID, sinceMillis,
+		at.UnixMilli(),
+	); err != nil {
+		return 0, ErrTouchedDaysUnavailable
+	}
+	if sink, ok := ctx.Value(testopsWindowSinkKey{}).(*TestopsWindowReport); ok && sink != nil {
+		window, err := store.TestopsWindowLane().recordedAt(ctx, organizationID, at)
+		if err != nil {
+			return 0, err
+		}
+		*sink = TestopsWindowReport{Keys: window}
+	}
 	return store.recordedAt(ctx, organizationID, at)
 }
 
@@ -393,9 +505,9 @@ func (store *ClickHouseTouchedDaysStore) RecordTouchedTests(
 const pendingTouchedKeysSQL = `
     SELECT day, repo_id
     FROM daily_metrics_touched_days
-    WHERE org_id = ?
+    WHERE org_id = ? AND kind IN ({touched}, {dispatched})
     GROUP BY day, repo_id
-    HAVING maxIf(at, kind = 'touched') > maxIf(at, kind = 'dispatched')`
+    HAVING maxIf(at, kind = {touched}) > maxIf(at, kind = {dispatched})`
 
 // PendingDays returns the pending days of the organization, newest first, and
 // the ClickHouse time read before them. It reads at most limit days; Truncated
@@ -410,21 +522,24 @@ func (store *ClickHouseTouchedDaysStore) PendingDays(
 	if err != nil {
 		return TouchedDaysPending{}, err
 	}
-	rows, err := store.conn.Query(ctx, `
-SELECT day
+	rows, err := store.conn.Query(ctx, store.laneSQL(`
+SELECT day, count()
 FROM (`+pendingTouchedKeysSQL+`
 )
 GROUP BY day
 ORDER BY day DESC
-LIMIT ?`, organizationID, limit+1)
+LIMIT ?`), organizationID, limit+1)
 	if err != nil {
 		return TouchedDaysPending{}, ErrTouchedDaysUnavailable
 	}
 	defer rows.Close()
-	pending := TouchedDaysPending{TakenAt: takenAt}
+	pending := TouchedDaysPending{TakenAt: takenAt, Keys: map[string]int{}}
 	for rows.Next() {
-		var day time.Time
-		if err := rows.Scan(&day); err != nil {
+		var (
+			day  time.Time
+			keys uint64
+		)
+		if err := rows.Scan(&day, &keys); err != nil {
 			return TouchedDaysPending{}, ErrTouchedDaysUnavailable
 		}
 		if len(pending.Days) == limit {
@@ -432,6 +547,7 @@ LIMIT ?`, organizationID, limit+1)
 			break
 		}
 		pending.Days = append(pending.Days, utcDay(day))
+		pending.Keys[utcDay(day).Format("2006-01-02")] = int(keys)
 	}
 	if err := rows.Err(); err != nil {
 		return TouchedDaysPending{}, ErrTouchedDaysUnavailable
@@ -452,12 +568,12 @@ func (store *ClickHouseTouchedDaysStore) PendingRepositories(
 	if len(days) == 0 {
 		return repositories, nil
 	}
-	rows, err := store.conn.Query(ctx, `
+	rows, err := store.conn.Query(ctx, store.laneSQL(`
 SELECT toString(day), arraySort(groupUniqArray(?)(toString(repo_id)))
 FROM (`+pendingTouchedKeysSQL+`
 )
 WHERE has(?, toString(day))
-GROUP BY day`, limitPerDay, organizationID, touchedDayStrings(days))
+GROUP BY day`), limitPerDay, organizationID, touchedDayStrings(days))
 	if err != nil {
 		return nil, ErrTouchedDaysUnavailable
 	}
@@ -506,13 +622,13 @@ func (store *ClickHouseTouchedDaysStore) MarkDispatched(
 	// is one more recompute of a key touched in that millisecond.
 	at = at.Add(-time.Millisecond)
 	if len(fullDays) > 0 {
-		if err := store.conn.Exec(ctx, `
+		if err := store.conn.Exec(ctx, store.laneSQL(`
 INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
-SELECT org_id, day, repo_id, 'dispatched', fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+SELECT org_id, day, repo_id, {dispatched}, fromUnixTimestamp64Milli(toInt64(?), 'UTC')
 FROM daily_metrics_touched_days
-WHERE org_id = ? AND kind = 'touched' AND has(?, toString(day))
+WHERE org_id = ? AND kind = {touched} AND has(?, toString(day))
   AND at <= fromUnixTimestamp64Milli(toInt64(?), 'UTC')
-GROUP BY org_id, day, repo_id`,
+GROUP BY org_id, day, repo_id`),
 			at.UnixMilli(), organizationID, touchedDayStrings(fullDays), at.UnixMilli()); err != nil {
 			return ErrTouchedDaysUnavailable
 		}
@@ -531,7 +647,7 @@ GROUP BY org_id, day, repo_id`,
 		if parseErr != nil {
 			return ErrTouchedDaysUnavailable
 		}
-		if err := batch.Append(organizationID, utcDay(key.Day), repositoryID, "dispatched", at.UTC()); err != nil {
+		if err := batch.Append(organizationID, utcDay(key.Day), repositoryID, store.kinds().dispatched, at.UTC()); err != nil {
 			return ErrTouchedDaysUnavailable
 		}
 	}
@@ -557,6 +673,8 @@ type TouchedDaysBacklog struct {
 	// Truncated is true when older pending days exist that the read did not
 	// return.
 	Truncated bool
+	// Keys are the pending keys of each day of Days (2006-01-02), at the read.
+	Keys map[string]int
 }
 
 // Backlog returns the pending days of the organization, newest first, at most
@@ -571,29 +689,30 @@ func (store *ClickHouseTouchedDaysStore) Backlog(
 	if err != nil {
 		return TouchedDaysBacklog{}, err
 	}
-	rows, err := store.conn.Query(ctx, `
-SELECT day, toUnixTimestamp64Milli(min(touched_at))
+	rows, err := store.conn.Query(ctx, store.laneSQL(`
+SELECT day, toUnixTimestamp64Milli(min(touched_at)), count()
 FROM (
-    SELECT day, repo_id, maxIf(at, kind = 'touched') AS touched_at
+    SELECT day, repo_id, maxIf(at, kind = {touched}) AS touched_at
     FROM daily_metrics_touched_days
-    WHERE org_id = ?
+    WHERE org_id = ? AND kind IN ({touched}, {dispatched})
     GROUP BY day, repo_id
-    HAVING touched_at > maxIf(at, kind = 'dispatched')
+    HAVING touched_at > maxIf(at, kind = {dispatched})
 )
 GROUP BY day
 ORDER BY day DESC
-LIMIT ?`, organizationID, limit+1)
+LIMIT ?`), organizationID, limit+1)
 	if err != nil {
 		return TouchedDaysBacklog{}, ErrTouchedDaysUnavailable
 	}
 	defer rows.Close()
-	backlog := TouchedDaysBacklog{TakenAt: takenAt}
+	backlog := TouchedDaysBacklog{TakenAt: takenAt, Keys: map[string]int{}}
 	for rows.Next() {
 		var (
 			day           time.Time
 			touchedMillis int64
+			keys          uint64
 		)
-		if err := rows.Scan(&day, &touchedMillis); err != nil {
+		if err := rows.Scan(&day, &touchedMillis, &keys); err != nil {
 			return TouchedDaysBacklog{}, ErrTouchedDaysUnavailable
 		}
 		if len(backlog.Days) == limit {
@@ -601,6 +720,7 @@ LIMIT ?`, organizationID, limit+1)
 			break
 		}
 		backlog.Days = append(backlog.Days, utcDay(day))
+		backlog.Keys[utcDay(day).Format("2006-01-02")] = int(keys)
 		touchedAt := time.UnixMilli(touchedMillis).UTC()
 		if backlog.OldestTouchedAt.IsZero() || touchedAt.Before(backlog.OldestTouchedAt) {
 			backlog.OldestTouchedAt = touchedAt
@@ -640,14 +760,18 @@ const touchedReturnKeysPerStatement = 10000
 // pending now (a run was started for them), among the given days. %s is one
 // more condition on the key. Its arguments are the organization, the days
 // (2006-01-02) and the arguments of the condition.
+//
+// A key with no touch of the lane is never selected (touched_at > 0): a key
+// of another lane only is no key of this one, and with no event of the lane
+// both times read as zero.
 const touchedMarkedKeysSQL = `
     SELECT org_id, day, repo_id,
-           maxIf(at, kind = 'touched') AS touched_at,
-           maxIf(at, kind = 'dispatched') AS dispatched_at
+           maxIf(at, kind = {touched}) AS touched_at,
+           maxIf(at, kind = {dispatched}) AS dispatched_at
     FROM daily_metrics_touched_days
-    WHERE org_id = ? AND has(?, toString(day))
+    WHERE org_id = ? AND kind IN ({touched}, {dispatched}) AND has(?, toString(day))
     GROUP BY org_id, day, repo_id
-    HAVING dispatched_at >= touched_at AND %s`
+    HAVING touched_at > toDateTime64(0, 3, 'UTC') AND dispatched_at >= touched_at AND %s`
 
 // ReturnToPending makes the given keys pending again that are not pending
 // now, and returns the number of days it did that for. The drain calls it with
@@ -733,7 +857,7 @@ func (store *ClickHouseTouchedDaysStore) returnMarkedKeys(
 	ctx context.Context, organizationID string, days []string, condition string, argument []string,
 	returned map[string]struct{},
 ) error {
-	marked := fmt.Sprintf(touchedMarkedKeysSQL, condition)
+	marked := store.laneSQL(fmt.Sprintf(touchedMarkedKeysSQL, condition))
 	rows, err := store.conn.Query(ctx, `SELECT DISTINCT toString(day) FROM (`+marked+`)`,
 		organizationID, days, argument)
 	if err != nil {
@@ -754,11 +878,11 @@ func (store *ClickHouseTouchedDaysStore) returnMarkedKeys(
 	if len(found) == 0 {
 		return nil
 	}
-	if err := store.conn.Exec(ctx, `
+	if err := store.conn.Exec(ctx, store.laneSQL(`
 INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
-SELECT org_id, day, repo_id, 'touched',
+SELECT org_id, day, repo_id, {touched},
        greatest(now64(3, 'UTC'), addMilliseconds(dispatched_at, 1))
-FROM (`+marked+`)`, organizationID, days, argument); err != nil {
+FROM (`)+marked+`)`, organizationID, days, argument); err != nil {
 		return ErrTouchedDaysUnavailable
 	}
 	for _, day := range found {
@@ -824,16 +948,16 @@ func (store *ClickHouseTouchedDaysStore) DaysPendingSinceBeforeTake(
 	}
 	found := map[string]struct{}{}
 	if len(fullDays) > 0 {
-		rows, err := store.conn.Query(ctx, `
+		rows, err := store.conn.Query(ctx, store.laneSQL(`
 SELECT toString(day), toUnixTimestamp64Milli(min(touched_at))
 FROM (
-    SELECT day, repo_id, maxIf(at, kind = 'touched') AS touched_at
+    SELECT day, repo_id, maxIf(at, kind = {touched}) AS touched_at
     FROM daily_metrics_touched_days
-    WHERE org_id = ? AND has(?, toString(day))
+    WHERE org_id = ? AND kind IN ({touched}, {dispatched}) AND has(?, toString(day))
     GROUP BY day, repo_id
-    HAVING touched_at > maxIf(at, kind = 'dispatched')
+    HAVING touched_at > maxIf(at, kind = {dispatched})
 )
-GROUP BY day`, organizationID, fullDays)
+GROUP BY day`), organizationID, fullDays)
 		if err != nil {
 			return nil, ErrTouchedDaysUnavailable
 		}
@@ -855,16 +979,16 @@ GROUP BY day`, organizationID, fullDays)
 		}
 	}
 	if len(listedKeys) > 0 {
-		rows, err := store.conn.Query(ctx, `
+		rows, err := store.conn.Query(ctx, store.laneSQL(`
 SELECT toString(day), toString(repo_id), toUnixTimestamp64Milli(touched_at)
 FROM (
-    SELECT day, repo_id, maxIf(at, kind = 'touched') AS touched_at
+    SELECT day, repo_id, maxIf(at, kind = {touched}) AS touched_at
     FROM daily_metrics_touched_days
-    WHERE org_id = ? AND has(?, toString(day))
+    WHERE org_id = ? AND kind IN ({touched}, {dispatched}) AND has(?, toString(day))
       AND has(?, concat(toString(day), '|', toString(repo_id)))
     GROUP BY day, repo_id
-    HAVING touched_at > maxIf(at, kind = 'dispatched')
-)`, organizationID, listedDays, listedKeys)
+    HAVING touched_at > maxIf(at, kind = {dispatched})
+)`), organizationID, listedDays, listedKeys)
 		if err != nil {
 			return nil, ErrTouchedDaysUnavailable
 		}

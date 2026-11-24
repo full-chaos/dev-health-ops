@@ -581,7 +581,7 @@ func TestGitHubTestsReportRowsStayWithinTheDocumentedBound(t *testing.T) {
 }
 
 // The discriminating case for the row bound: artifacts that each fit under it but not two together. Appending an artifact before
-// measuring it lands 120,000 rows against a 100,000 bound here; admitting whole-or-not keeps exactly one.
+// measuring it lands 120,000 rows against the 99,975-row run bound here; admitting whole-or-not keeps exactly one.
 func TestGitHubTestsReportRowsDoNotCreepPastTheCapAcrossArtifacts(t *testing.T) {
 	suitesPer := githubTestsMaxReportRowsPerRun * 3 / 10 // 60,000 rows per artifact, three artifacts
 	doer := &githubTestsOversizedRunDoer{

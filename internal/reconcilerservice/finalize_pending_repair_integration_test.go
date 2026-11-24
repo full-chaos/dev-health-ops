@@ -397,13 +397,23 @@ func TestReconcilerRedrivesAFinalizePendingRunWithNoJobAndNoOutboxRow(t *testing
 		t.Fatalf("fixture: %d outbox rows and %d River jobs, want none", outboxRows, riverJobs)
 	}
 
-	if _, err := venue.relay.Step(ctx, now, 10); err != nil {
+	stepStart := time.Now()
+	result, err := venue.relay.Step(ctx, now, 10)
+	stepTook := time.Since(stepStart)
+	if err != nil {
 		t.Fatalf("reconciler Step: %v", err)
 	}
 
+	// The stage is fail-open: a deadline is a counted failure, not a Step error, so name it on a miss.
 	if outboxRows, _ := venue.finalizeTrace(t, ctx, runID); outboxRows != 1 {
+		var levels joboutbox.StaleFinalizeLevels
+		if result.StaleFinalizeLevels != nil {
+			levels = *result.StaleFinalizeLevels
+		}
 		t.Fatalf("after one reconciler Step the shape-D run has %d finalize outbox rows, want 1: "+
-			"no stage redrove the stranded finalize", outboxRows)
+			"no stage redrove the stranded finalize (stage redriven %v, failures %+v, deferred %d, levels read %t %+v; Step took %s)",
+			outboxRows, result.StaleFinalizeRedriven, result.StaleFinalizeFailures, result.StaleFinalizeDeferred,
+			result.StaleFinalizeLevels != nil, levels, stepTook)
 	}
 	// The redrive is stamped with the publisher's own clock, after the Step's
 	// now, so the relay delivers it on the next tick. That tick must deliver it

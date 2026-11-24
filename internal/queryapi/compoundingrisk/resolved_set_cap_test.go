@@ -151,36 +151,21 @@ func (r *sweepRecorder) Query(ctx context.Context, st string, b []clickhouse.Bin
 	return r.sweepStore.Query(ctx, st, b)
 }
 
-// A request list stays cut at maxRows on the TEAM breakout too: with no team
-// named, the 501 repoIds tokens are bound as the first 500.
-func TestTeamBreakoutWithNoTeamNamedCutsRepoIdsTokensAt500(t *testing.T) {
+// A request list over maxRows is refused on the TEAM breakout too: with no
+// team named, 501 repoIds tokens bind nothing.
+func TestTeamBreakoutWithNoTeamNamedRefuses501RepoIdsTokens(t *testing.T) {
 	now := sweepNow()
 	var tokens []string
 	for i := 0; i <= maxRows; i++ {
 		tokens = append(tokens, bigRepoID(i))
 	}
 	rec := &sweepRecorder{sweepStore: &sweepStore{world: bigTeamWorld(now, false)}}
-	if _, err := Resolve(context.Background(), rec, sweepOrg, &model.CompoundingRiskFilterInput{
+	got, err := Resolve(context.Background(), rec, sweepOrg, &model.CompoundingRiskFilterInput{
 		Breakout: model.CompoundingRiskScopeTeam, RepoIds: tokens, TrendDays: 30,
-	}, now); err != nil {
-		t.Fatal(err)
-	}
-	for _, st := range rec.unknown {
-		t.Fatalf("a statement the model does not know:\n%s", st)
-	}
-	var lens []int
-	for _, b := range rec.bindings {
-		if v, ok := sweepBinding(b, "repo_ids"); ok {
-			lens = append(lens, len(v.([]string)))
-		}
-	}
-	if len(lens) != 3 {
-		t.Fatalf("repo_ids bound %d times %v; want 3 (repository day pick, repository rows, trend)", len(lens), lens)
-	}
-	for _, n := range lens {
-		if n != maxRows {
-			t.Fatalf("repo_ids lengths %v; want every one %d (a request list is cut at maxRows)", lens, maxRows)
-		}
+	}, now)
+	wantRepoIdsRefused(t, got, err, maxRows+1)
+	if len(rec.statements) != 0 {
+		t.Fatalf("%d statements ran; want 0 (refused before any read)", len(rec.statements))
 	}
 }
 
@@ -225,10 +210,10 @@ func sweepAnswer(t *testing.T, world sweepWorld, filter *model.CompoundingRiskFi
 	return strings.Join(sweepServed(got, err), "\n")
 }
 
-// repoIds is cut at maxRows before the team scope resolves it: its entry 501
-// selects nothing. teamIds is not cut: every named team answers its row, as on
-// main. An explicit empty repoIds keeps its answer of main.
-func TestARepoIdsListOver500IsCutBeforeTheTeamScopeResolvesIt(t *testing.T) {
+// repoIds over maxRows is refused before the team scope resolves it; 500
+// entries are served. teamIds is not limited: every named team answers its
+// row, as on main. An explicit empty repoIds keeps its answer of main.
+func TestARepoIdsListOver500IsRefusedBeforeTheTeamScopeResolvesIt(t *testing.T) {
 	now := sweepNow()
 	d := time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC)
 	team := func(teamIDs, repoIDs []string) *model.CompoundingRiskFilterInput {
@@ -245,8 +230,9 @@ func TestARepoIdsListOver500IsCutBeforeTheTeamScopeResolvesIt(t *testing.T) {
 		}
 		full := sweepAnswer(t, world, team([]string{"big"}, append(repoIDs, bigRepoID(maxRows))))
 		first := sweepAnswer(t, world, team([]string{"big"}, repoIDs))
-		if full != first || !strings.HasPrefix(full, "  served ") || strings.Contains(full, "row ") {
-			t.Errorf("served with big-500 as entry 501:\n%s\nwith the first 500 entries:\n%s\nwant both equal, a served answer, with no row", full, first)
+		refused := repoIdsRefusal(maxRows + 1)
+		if !strings.HasPrefix(full, "  error: ") || !strings.HasSuffix(full, refused) || !strings.HasPrefix(first, "  served ") || strings.Contains(first, "row ") {
+			t.Errorf("with big-500 as entry 501:\n%s\nwith the first 500 entries:\n%s\nwant the refusal %q, and a served answer with no row for 500", full, first, refused)
 		}
 	})
 	t.Run("b-teamIds-entry-501", func(t *testing.T) {
@@ -282,10 +268,10 @@ func TestARepoIdsListOver500IsCutBeforeTheTeamScopeResolvesIt(t *testing.T) {
 	})
 }
 
-// 501 named teams and 501 repoIds tokens: every named team answers its row
-// (tm-500 owns rp-000 too) and repoIds entry 501 (x-tail, owned by tm-000) has
-// no effect.
-func TestFiveHundredOneNamedTeamsAnswerEveryRowWhileRepoIdsIsCutAt500(t *testing.T) {
+// 501 named teams: with 500 repoIds tokens every named team answers its row
+// (tm-500 owns rp-000 too); with 501 tokens (x-tail, owned by tm-000) the
+// request is refused.
+func TestFiveHundredOneNamedTeamsAnswerEveryRowWhileRepoIdsOver500IsRefused(t *testing.T) {
 	now := sweepNow()
 	d := time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC)
 	world := sweepWorld{}
@@ -314,9 +300,10 @@ func TestFiveHundredOneNamedTeamsAnswerEveryRowWhileRepoIdsIsCutAt500(t *testing
 	}
 	full := sweepAnswer(t, world, filter(append(repoIDs, "x-tail")))
 	first := sweepAnswer(t, world, filter(repoIDs))
-	if !strings.HasPrefix(full, fmt.Sprintf(`  served breakout="TEAM" rows=%d trend=1`, maxRows+1)) || strings.Contains(full, "score=0.75") || full != first {
-		t.Errorf("served with x-tail as repoIds entry 501:\n%.400s\nwith the first 500 entries:\n%.400s\nwant both equal, %d rows (one per named team), no tm-000 row mixed with x-tail (0.75)",
-			full, first, maxRows+1)
+	refused := repoIdsRefusal(maxRows + 1)
+	if !strings.HasPrefix(full, "  error: ") || !strings.HasSuffix(full, refused) || !strings.HasPrefix(first, fmt.Sprintf(`  served breakout="TEAM" rows=%d trend=1`, maxRows+1)) || strings.Contains(first, "score=0.75") {
+		t.Errorf("with x-tail as repoIds entry 501:\n%.400s\nwith the first 500 entries:\n%.400s\nwant the refusal %q, and %d rows (one per named team) for 500, no tm-000 row mixed with x-tail (0.75)",
+			full, first, refused, maxRows+1)
 	}
 }
 

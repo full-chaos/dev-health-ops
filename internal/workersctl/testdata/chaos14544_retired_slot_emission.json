@@ -1,0 +1,730 @@
+[
+ {
+  "name": "R1",
+  "effects": [
+   {
+    "destination": "ci_pipeline_runs",
+    "rows": [
+     {
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "pipeline_name": "Go",
+      "provider": "github_actions",
+      "status": "success",
+      "queued_at": "2026-07-01T10:01:00Z",
+      "started_at": "2026-07-01T10:01:00Z",
+      "finished_at": "2026-07-01T10:30:00Z",
+      "duration_seconds": 1740,
+      "queue_seconds": 0,
+      "retry_count": 0,
+      "cancel_reason": null,
+      "trigger_source": "push",
+      "commit_hash": "abc",
+      "branch": "main",
+      "pr_number": null,
+      "team_id": null,
+      "service_id": null,
+      "last_synced": "2026-07-01T11:05:00Z"
+     }
+    ]
+   },
+   {
+    "destination": "ci_job_runs",
+    "rows": [
+     {
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "job_id": "11",
+      "job_name": "go",
+      "stage": null,
+      "status": "success",
+      "started_at": "2026-07-01T10:01:00Z",
+      "finished_at": "2026-07-01T10:30:00Z",
+      "duration_seconds": 1740,
+      "runner_type": "hosted",
+      "retry_attempt": 0,
+      "last_synced": "2026-07-01T11:05:00Z"
+     }
+    ]
+   },
+   {
+    "destination": "ci_acceptance_checks",
+    "rows": [
+     {
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "check_key": "github_actions:56628b355fb505494cee813b",
+      "check_name": "go",
+      "provider": "github_actions",
+      "requirement": "unknown",
+      "result": "passed",
+      "rule_version": "ci-acceptance.v1",
+      "provenance": "github.branch_protection.target_branch_unavailable",
+      "observed_at": "2026-07-01T10:30:00Z",
+      "target_branch": null,
+      "pr_number": null,
+      "source_url": "https://github.com/acme/api/actions/runs/43600014544",
+      "last_synced": "2026-07-01T11:05:00Z"
+     }
+    ]
+   },
+   {
+    "destination": "test_suite_results",
+    "rows": [
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "suite_id": "89a993e1e90c7da1ad04e87fee5735d99911d41ad556f44e9c3f02a8f4cbc8f2",
+      "suite_name": "right",
+      "framework": "junit",
+      "environment": null,
+      "total_count": 1,
+      "passed_count": 1,
+      "failed_count": 0,
+      "skipped_count": 0,
+      "error_count": 0,
+      "quarantined_count": 0,
+      "retried_count": 0,
+      "duration_seconds": 3,
+      "started_at": "2026-07-01T10:01:00Z",
+      "finished_at": "2026-07-01T10:30:00Z",
+      "team_id": null,
+      "service_id": null,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-01T11:05:00Z",
+      "report_slot": "total-b",
+      "run_attempt": 1,
+      "legacy_suite_ids": [
+       "3aa5ac400aec4ecf6a043155088c17e4fa2602a09fd8ea82e83068883dbdc32c"
+      ]
+     },
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "suite_id": "bdfb40cbec269aefa60f0fda81e40ca0c1edecc2fd22d8fbe3c9d3a46f91cff8",
+      "suite_name": "left",
+      "framework": "junit",
+      "environment": null,
+      "total_count": 1,
+      "passed_count": 0,
+      "failed_count": 1,
+      "skipped_count": 0,
+      "error_count": 0,
+      "quarantined_count": 0,
+      "retried_count": 0,
+      "duration_seconds": 3,
+      "started_at": "2026-07-01T10:01:00Z",
+      "finished_at": "2026-07-01T10:30:00Z",
+      "team_id": null,
+      "service_id": null,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-01T11:05:00Z",
+      "report_slot": "total-b",
+      "run_attempt": 1,
+      "legacy_suite_ids": [
+       "44300af2fbca6aab7592104d8f05c6bc4c7b3512e614224bebdd3e57926037bc"
+      ]
+     }
+    ]
+   },
+   {
+    "destination": "test_case_results",
+    "rows": [
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "suite_id": "89a993e1e90c7da1ad04e87fee5735d99911d41ad556f44e9c3f02a8f4cbc8f2",
+      "case_id": "2a69175b4756b56755c89e4c32e7931a98775815750aee19f5dd632389dc1fbb",
+      "case_name": "b",
+      "class_name": "pkg",
+      "status": "passed",
+      "duration_seconds": 0.25,
+      "retry_attempt": 0,
+      "failure_message": null,
+      "failure_type": null,
+      "stack_trace": null,
+      "is_quarantined": false,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-01T11:05:00Z"
+     },
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "suite_id": "bdfb40cbec269aefa60f0fda81e40ca0c1edecc2fd22d8fbe3c9d3a46f91cff8",
+      "case_id": "b3915112902976897db62ae1b102079dee530f4dfe6affbbf9930757568fdeb5",
+      "case_name": "a",
+      "class_name": "pkg",
+      "status": "failed",
+      "duration_seconds": 0.25,
+      "retry_attempt": 0,
+      "failure_message": "boom",
+      "failure_type": null,
+      "stack_trace": null,
+      "is_quarantined": false,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-01T11:05:00Z"
+     }
+    ]
+   },
+   {
+    "destination": "testops_run_report_completeness",
+    "rows": [
+     {
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "run_attempt": 1,
+      "provider": "github_actions",
+      "complete": true,
+      "reasons": [],
+      "reports_expected": 1,
+      "reports_admitted": 1,
+      "last_synced": "2026-07-01T11:05:00Z",
+      "verdict_version": 6180950411104
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "name": "R2",
+  "effects": [
+   {
+    "destination": "ci_pipeline_runs",
+    "rows": [
+     {
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "pipeline_name": "Go",
+      "provider": "github_actions",
+      "status": "success",
+      "queued_at": "2026-07-01T10:01:00Z",
+      "started_at": "2026-07-01T11:10:00Z",
+      "finished_at": "2026-07-01T11:40:00Z",
+      "duration_seconds": 1800,
+      "queue_seconds": 4140,
+      "retry_count": 1,
+      "cancel_reason": null,
+      "trigger_source": "push",
+      "commit_hash": "abc",
+      "branch": "main",
+      "pr_number": null,
+      "team_id": null,
+      "service_id": null,
+      "last_synced": "2026-07-01T12:05:00Z"
+     }
+    ]
+   },
+   {
+    "destination": "ci_job_runs",
+    "rows": [
+     {
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "job_id": "11",
+      "job_name": "go",
+      "stage": null,
+      "status": "success",
+      "started_at": "2026-07-01T11:10:00Z",
+      "finished_at": "2026-07-01T11:40:00Z",
+      "duration_seconds": 1800,
+      "runner_type": "hosted",
+      "retry_attempt": 1,
+      "last_synced": "2026-07-01T12:05:00Z"
+     }
+    ]
+   },
+   {
+    "destination": "ci_acceptance_checks",
+    "rows": [
+     {
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "check_key": "github_actions:56628b355fb505494cee813b",
+      "check_name": "go",
+      "provider": "github_actions",
+      "requirement": "unknown",
+      "result": "passed",
+      "rule_version": "ci-acceptance.v1",
+      "provenance": "github.branch_protection.target_branch_unavailable",
+      "observed_at": "2026-07-01T11:40:00Z",
+      "target_branch": null,
+      "pr_number": null,
+      "source_url": "https://github.com/acme/api/actions/runs/43600014544",
+      "last_synced": "2026-07-01T12:05:00Z"
+     }
+    ]
+   },
+   {
+    "destination": "test_suite_results",
+    "rows": [
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "suite_id": "3b07a8bf38cffb91000f578c47e4ee1027b1345229ea56bf5f447ccca396441c",
+      "suite_name": "right",
+      "framework": "junit",
+      "environment": null,
+      "total_count": 0,
+      "passed_count": 0,
+      "failed_count": 0,
+      "skipped_count": 0,
+      "error_count": 0,
+      "quarantined_count": 0,
+      "retried_count": 0,
+      "duration_seconds": null,
+      "started_at": "2026-07-01T11:10:00Z",
+      "finished_at": "2026-07-01T11:40:00Z",
+      "team_id": null,
+      "service_id": null,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-01T12:05:00Z",
+      "report_slot": "total-b",
+      "run_attempt": 2,
+      "legacy_suite_ids": [
+       "5d3b162f810c18c90009bea4431fde0a71bd2eb03249c16f95253003f439eae7",
+       "3aa5ac400aec4ecf6a043155088c17e4fa2602a09fd8ea82e83068883dbdc32c"
+      ],
+      "retracted": true
+     },
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "suite_id": "c6e2176a0a8e177f9a6faaf4f5894ac78d0bf4a64299122349dff4e7c1372363",
+      "suite_name": "left",
+      "framework": "junit",
+      "environment": null,
+      "total_count": 0,
+      "passed_count": 0,
+      "failed_count": 0,
+      "skipped_count": 0,
+      "error_count": 0,
+      "quarantined_count": 0,
+      "retried_count": 0,
+      "duration_seconds": null,
+      "started_at": "2026-07-01T11:10:00Z",
+      "finished_at": "2026-07-01T11:40:00Z",
+      "team_id": null,
+      "service_id": null,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-01T12:05:00Z",
+      "report_slot": "total-b",
+      "run_attempt": 2,
+      "legacy_suite_ids": [
+       "ecf0c06009f139228db72d059db1aa3ca26f490561936903737b8b1fd1934621",
+       "44300af2fbca6aab7592104d8f05c6bc4c7b3512e614224bebdd3e57926037bc"
+      ],
+      "retracted": true
+     },
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "suite_id": "ce9345ee1859a47c1633ccb5f1cb488b1e5136eeca1d3e7b6a99dcaba281974c",
+      "suite_name": "left",
+      "framework": "junit",
+      "environment": null,
+      "total_count": 1,
+      "passed_count": 1,
+      "failed_count": 0,
+      "skipped_count": 0,
+      "error_count": 0,
+      "quarantined_count": 0,
+      "retried_count": 0,
+      "duration_seconds": 3,
+      "started_at": "2026-07-01T11:10:00Z",
+      "finished_at": "2026-07-01T11:40:00Z",
+      "team_id": null,
+      "service_id": null,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-01T12:05:00Z",
+      "report_slot": "leg-b-left",
+      "run_attempt": 2,
+      "legacy_suite_ids": [
+       "b2236825b9aebb088f4b11e5eff4ca7fea09088d243b2d517a6a460566d3cf22"
+      ]
+     },
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "suite_id": "d922c8fa331d646f5c06cd82396cf1e2f96dd3c5858b8fca0c0ce330469ccb17",
+      "suite_name": "right",
+      "framework": "junit",
+      "environment": null,
+      "total_count": 1,
+      "passed_count": 1,
+      "failed_count": 0,
+      "skipped_count": 0,
+      "error_count": 0,
+      "quarantined_count": 0,
+      "retried_count": 0,
+      "duration_seconds": 3,
+      "started_at": "2026-07-01T11:10:00Z",
+      "finished_at": "2026-07-01T11:40:00Z",
+      "team_id": null,
+      "service_id": null,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-01T12:05:00Z",
+      "report_slot": "leg-b-right",
+      "run_attempt": 2,
+      "legacy_suite_ids": [
+       "6dfd31592f62fd52237ef35410fabd8fb0f2a656e89fb59fa4904b46e5534c96"
+      ]
+     }
+    ]
+   },
+   {
+    "destination": "test_case_results",
+    "rows": [
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "suite_id": "3aa5ac400aec4ecf6a043155088c17e4fa2602a09fd8ea82e83068883dbdc32c",
+      "case_id": "ff654977407ee6c8dbc227405217e214df271b349c8df207d2b50e1a14a1d6ea",
+      "case_name": "",
+      "class_name": null,
+      "status": "",
+      "duration_seconds": null,
+      "retry_attempt": 0,
+      "failure_message": null,
+      "failure_type": null,
+      "stack_trace": null,
+      "is_quarantined": false,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-01T12:05:00Z",
+      "retracted": true
+     },
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "suite_id": "3b07a8bf38cffb91000f578c47e4ee1027b1345229ea56bf5f447ccca396441c",
+      "case_id": "508da56722f4eb8e14a1cd3028a671aab0c9c6a4c3cb857b4215fd8d3e3e3e14",
+      "case_name": "",
+      "class_name": null,
+      "status": "",
+      "duration_seconds": null,
+      "retry_attempt": 0,
+      "failure_message": null,
+      "failure_type": null,
+      "stack_trace": null,
+      "is_quarantined": false,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-01T12:05:00Z",
+      "retracted": true
+     },
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "suite_id": "44300af2fbca6aab7592104d8f05c6bc4c7b3512e614224bebdd3e57926037bc",
+      "case_id": "0a8748913cc0ffd3047728acf7f35796cf38abd5396f5f04cf7451e6b53eec91",
+      "case_name": "",
+      "class_name": null,
+      "status": "",
+      "duration_seconds": null,
+      "retry_attempt": 0,
+      "failure_message": null,
+      "failure_type": null,
+      "stack_trace": null,
+      "is_quarantined": false,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-01T12:05:00Z",
+      "retracted": true
+     },
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "suite_id": "5d3b162f810c18c90009bea4431fde0a71bd2eb03249c16f95253003f439eae7",
+      "case_id": "cb071510e8fcaac72fcb4533ea76770c112a114610b1e96a0a758d0ab89d67c6",
+      "case_name": "",
+      "class_name": null,
+      "status": "",
+      "duration_seconds": null,
+      "retry_attempt": 0,
+      "failure_message": null,
+      "failure_type": null,
+      "stack_trace": null,
+      "is_quarantined": false,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-01T12:05:00Z",
+      "retracted": true
+     },
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "suite_id": "89a993e1e90c7da1ad04e87fee5735d99911d41ad556f44e9c3f02a8f4cbc8f2",
+      "case_id": "2a69175b4756b56755c89e4c32e7931a98775815750aee19f5dd632389dc1fbb",
+      "case_name": "",
+      "class_name": null,
+      "status": "",
+      "duration_seconds": null,
+      "retry_attempt": 0,
+      "failure_message": null,
+      "failure_type": null,
+      "stack_trace": null,
+      "is_quarantined": false,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-01T12:05:00Z",
+      "retracted": true
+     },
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "suite_id": "bdfb40cbec269aefa60f0fda81e40ca0c1edecc2fd22d8fbe3c9d3a46f91cff8",
+      "case_id": "b3915112902976897db62ae1b102079dee530f4dfe6affbbf9930757568fdeb5",
+      "case_name": "",
+      "class_name": null,
+      "status": "",
+      "duration_seconds": null,
+      "retry_attempt": 0,
+      "failure_message": null,
+      "failure_type": null,
+      "stack_trace": null,
+      "is_quarantined": false,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-01T12:05:00Z",
+      "retracted": true
+     },
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "suite_id": "c6e2176a0a8e177f9a6faaf4f5894ac78d0bf4a64299122349dff4e7c1372363",
+      "case_id": "f17358ad35679bb710da1143d1fb4ec06129f2a4fa049b2f9970a46257049403",
+      "case_name": "",
+      "class_name": null,
+      "status": "",
+      "duration_seconds": null,
+      "retry_attempt": 0,
+      "failure_message": null,
+      "failure_type": null,
+      "stack_trace": null,
+      "is_quarantined": false,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-01T12:05:00Z",
+      "retracted": true
+     },
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "suite_id": "ce9345ee1859a47c1633ccb5f1cb488b1e5136eeca1d3e7b6a99dcaba281974c",
+      "case_id": "8e9fc3674320370b689254aa6ef77c5fa9383461f6169a206147207b4797bcd2",
+      "case_name": "a",
+      "class_name": "pkg",
+      "status": "passed",
+      "duration_seconds": 0.25,
+      "retry_attempt": 0,
+      "failure_message": null,
+      "failure_type": null,
+      "stack_trace": null,
+      "is_quarantined": false,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-01T12:05:00Z"
+     },
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "suite_id": "d922c8fa331d646f5c06cd82396cf1e2f96dd3c5858b8fca0c0ce330469ccb17",
+      "case_id": "eebacea252206e3bee101e158b9c9baade2a3aa86c7839307b79c8299013877a",
+      "case_name": "b",
+      "class_name": "pkg",
+      "status": "passed",
+      "duration_seconds": 0.25,
+      "retry_attempt": 0,
+      "failure_message": null,
+      "failure_type": null,
+      "stack_trace": null,
+      "is_quarantined": false,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-01T12:05:00Z"
+     },
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "suite_id": "ecf0c06009f139228db72d059db1aa3ca26f490561936903737b8b1fd1934621",
+      "case_id": "466569e374a0325aa310a8694776bb9422883829b02e81b30ef378f9a660350f",
+      "case_name": "",
+      "class_name": null,
+      "status": "",
+      "duration_seconds": null,
+      "retry_attempt": 0,
+      "failure_message": null,
+      "failure_type": null,
+      "stack_trace": null,
+      "is_quarantined": false,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-01T12:05:00Z",
+      "retracted": true
+     }
+    ]
+   },
+   {
+    "destination": "testops_run_report_completeness",
+    "rows": [
+     {
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014544",
+      "run_attempt": 2,
+      "provider": "github_actions",
+      "complete": true,
+      "reasons": [],
+      "reports_expected": 3,
+      "reports_admitted": 2,
+      "last_synced": "2026-07-01T12:05:00Z",
+      "verdict_version": 6180954011104
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "name": "S",
+  "effects": [
+   {
+    "destination": "ci_pipeline_runs",
+    "rows": [
+     {
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014545",
+      "pipeline_name": "Go",
+      "provider": "github_actions",
+      "status": "success",
+      "queued_at": "2026-07-02T10:01:00Z",
+      "started_at": "2026-07-02T10:01:00Z",
+      "finished_at": "2026-07-02T10:30:00Z",
+      "duration_seconds": 1740,
+      "queue_seconds": 0,
+      "retry_count": 0,
+      "cancel_reason": null,
+      "trigger_source": "push",
+      "commit_hash": "abc",
+      "branch": "main",
+      "pr_number": null,
+      "team_id": null,
+      "service_id": null,
+      "last_synced": "2026-07-02T11:05:00Z"
+     }
+    ]
+   },
+   {
+    "destination": "ci_job_runs",
+    "rows": [
+     {
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014545",
+      "job_id": "11",
+      "job_name": "go",
+      "stage": null,
+      "status": "success",
+      "started_at": "2026-07-02T10:01:00Z",
+      "finished_at": "2026-07-02T10:30:00Z",
+      "duration_seconds": 1740,
+      "runner_type": "hosted",
+      "retry_attempt": 0,
+      "last_synced": "2026-07-02T11:05:00Z"
+     }
+    ]
+   },
+   {
+    "destination": "ci_acceptance_checks",
+    "rows": [
+     {
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014545",
+      "check_key": "github_actions:56628b355fb505494cee813b",
+      "check_name": "go",
+      "provider": "github_actions",
+      "requirement": "unknown",
+      "result": "passed",
+      "rule_version": "ci-acceptance.v1",
+      "provenance": "github.branch_protection.target_branch_unavailable",
+      "observed_at": "2026-07-02T10:30:00Z",
+      "target_branch": null,
+      "pr_number": null,
+      "source_url": "https://github.com/acme/api/actions/runs/43600014545",
+      "last_synced": "2026-07-02T11:05:00Z"
+     }
+    ]
+   },
+   {
+    "destination": "test_suite_results",
+    "rows": [
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014545",
+      "suite_id": "36da9135c21b4699dbf7fb90c80fe2d1346b28d2c3ec42ae36f773f0ff6c85bc",
+      "suite_name": "t",
+      "framework": "junit",
+      "environment": null,
+      "total_count": 1,
+      "passed_count": 0,
+      "failed_count": 1,
+      "skipped_count": 0,
+      "error_count": 0,
+      "quarantined_count": 0,
+      "retried_count": 0,
+      "duration_seconds": 1,
+      "started_at": "2026-07-02T10:01:00Z",
+      "finished_at": "2026-07-02T10:30:00Z",
+      "team_id": null,
+      "service_id": null,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-02T11:05:00Z",
+      "report_slot": "later",
+      "run_attempt": 1,
+      "legacy_suite_ids": [
+       "330b3506984d0a848c30e8c3f82bc405d77016c16eb26c1f42b64ec16f97a080"
+      ]
+     }
+    ]
+   },
+   {
+    "destination": "test_case_results",
+    "rows": [
+     {
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014545",
+      "suite_id": "36da9135c21b4699dbf7fb90c80fe2d1346b28d2c3ec42ae36f773f0ff6c85bc",
+      "case_id": "9ce991c4eb5cdda31d70ae50bab8044140e3b34bf33745fe733946f8e6e31f2f",
+      "case_name": "a",
+      "class_name": "pkg",
+      "status": "failed",
+      "duration_seconds": 0.5,
+      "retry_attempt": 0,
+      "failure_message": "boom",
+      "failure_type": null,
+      "stack_trace": null,
+      "is_quarantined": false,
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "last_synced": "2026-07-02T11:05:00Z"
+     }
+    ]
+   },
+   {
+    "destination": "testops_run_report_completeness",
+    "rows": [
+     {
+      "org_id": "00000000-0000-4000-8000-000000014544",
+      "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79",
+      "run_id": "43600014545",
+      "run_attempt": 1,
+      "provider": "github_actions",
+      "complete": true,
+      "reasons": [],
+      "reports_expected": 1,
+      "reports_admitted": 1,
+      "last_synced": "2026-07-02T11:05:00Z",
+      "verdict_version": 6181036811104
+     }
+    ]
+   }
+  ]
+ }
+]

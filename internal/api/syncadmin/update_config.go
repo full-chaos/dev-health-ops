@@ -246,6 +246,12 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 		}
 	}
 	optionsProvided := in.syncOptions != nil || in.provided["schedule_cron"] || in.provided["timezone"] || in.provided["initial_sync_depth"]
+	// ci_artifact_exclude_prefixes is written by artifactexclude.WriteTx below (the writer of the dho verb too), into
+	// the integration only (it applies to every sync config of this integration); the merge and the cascade skip it.
+	excludeChange, err := takeArtifactExclude(config.Provider, options)
+	if err != nil {
+		return nil, err
+	}
 
 	if cron, _ := options.Get("schedule_cron"); pyjson.Truthy(cron) {
 		orgUUID, err := pythonparity.ParseUUID(org)
@@ -304,7 +310,7 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 	}
 
 	lower := pythonparity.Lower(config.Provider)
-	if lower == "github" && config.IntegrationID != nil {
+	if lower == "github" && config.IntegrationID != nil && !listOnlyPatch(in) {
 		current, err := plainDict(newOptions)
 		if err != nil {
 			return nil, err
@@ -333,6 +339,9 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 	if err := writeConfigChanges(ctx, tx, config, storedTargetsValue, newTargets, storedOptionsValue, newOptions, newActive, now); err != nil {
 		return nil, err
 	}
+	if err := writeArtifactExclude(ctx, tx, org, config, excludeChange, now); err != nil {
+		return nil, err
+	}
 	discover := config.IntegrationID != nil && jiraKeyNorm(config.Provider) == "jira" &&
 		(optionsProvided || (wasInactive && config.IsActive))
 
@@ -354,6 +363,11 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 	}
 	if err := deriveShownTargets(ctx, func(ctx context.Context, org string, ids []uuid.UUID) (map[uuid.UUID][]string, error) {
 		return enabledDatasetKeysByIntegration(ctx, tx, org, ids)
+	}, org, config); err != nil {
+		return nil, err
+	}
+	if err := deriveArtifactExclude(ctx, func(ctx context.Context, org string, ids []uuid.UUID) (map[uuid.UUID]*string, error) {
+		return integrationExcludeLists(ctx, tx, org, ids)
 	}, org, config); err != nil {
 		return nil, err
 	}
@@ -442,7 +456,7 @@ func (h *handlers) writeGitHubRuntimeOptions(ctx context.Context, tx pgx.Tx, org
 	var integrationOrg string
 	var integrationConfigText *string
 	integrationFound := true
-	err := tx.QueryRow(ctx, `SELECT org_id, config::text FROM integrations WHERE id = $1`, integrationID).Scan(&integrationOrg, &integrationConfigText)
+	err := tx.QueryRow(ctx, `SELECT org_id, config::text FROM integrations WHERE id = $1 FOR NO KEY UPDATE`, integrationID).Scan(&integrationOrg, &integrationConfigText)
 	if errors.Is(err, pgx.ErrNoRows) {
 		integrationFound = false
 	} else if err != nil {

@@ -83,7 +83,7 @@ func junitReportViolations(t *testing.T, root string) []string {
 		}
 		bestEffort("the JUnit part upload", up)
 		with := asMap(up["with"])
-		if f.testRun != "" && with["overwrite"] != true {
+		if with["overwrite"] != true {
 			out = append(out, f.file+": the JUnit part upload of "+f.partJob+" must set overwrite: true (a re-run of a failed leg uploads the same name; without it the upload is refused and the report keeps attempt 1)")
 		}
 		if !pinnedUpload.MatchString(asString(up["uses"])) || asString(with["name"]) != f.partName || strings.TrimSuffix(asString(with["path"]), "/") != "go-junit-part" {
@@ -100,8 +100,11 @@ func junitReportViolations(t *testing.T, root string) []string {
 				seen[1] = true
 				bestEffort("the merge", s)
 			case strings.HasPrefix(asString(s["uses"]), "actions/upload-artifact@") && strings.Contains(asString(asMap(s["with"])["path"]), "junit-merged"):
-				seen[2] = asString(asMap(s["with"])["name"]) == f.mergedName && pinnedUpload.MatchString(asString(s["uses"])) && (f.testRun == "" || asMap(s["with"])["overwrite"] == true)
+				seen[2] = asString(asMap(s["with"])["name"]) == f.mergedName && pinnedUpload.MatchString(asString(s["uses"]))
 				bestEffort("the merged upload", s)
+				if asMap(s["with"])["overwrite"] != true {
+					out = append(out, f.file+": the merged upload of "+f.fanInJob+" must set overwrite: true (a re-run of the fan-in job uploads the same name; without it the upload is refused and the report keeps attempt 1)")
+				}
 			}
 		}
 		if seen != [3]bool{true, true, true} {
@@ -136,7 +139,11 @@ func TestJUnitReportGuardPlantedDefectsAreCaught(t *testing.T) {
 		{"an auth leg writes no go test -json", mutation{ga, "        env:\n          GO_TEST_LEG_JSON_DIR: ${{ runner.temp }}/go-test-leg-json\n        run: bash ci/check_go.sh auth race-leg", "        run: bash ci/check_go.sh auth race-leg"}, "GO_TEST_LEG_JSON_DIR"},
 		{"an auth part reads another directory", mutation{ga, "          LEG_JSON_DIR: ${{ runner.temp }}/go-test-leg-json\n        run: bash ci/go_junit_part.sh go-junit-part \"${LEG_JSON_DIR}\"\n      - name: Upload the leg's JUnit part\n        continue-on-error: true\n        if: always()\n        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7\n        with:\n          name: go-junit-part-auth-race-integration", "          LEG_JSON_DIR: ${{ runner.temp }}/elsewhere\n        run: bash ci/go_junit_part.sh go-junit-part \"${LEG_JSON_DIR}\"\n      - name: Upload the leg's JUnit part\n        continue-on-error: true\n        if: always()\n        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7\n        with:\n          name: go-junit-part-auth-race-integration"}, "LEG_JSON_DIR"},
 		{"the auth part upload without overwrite", mutation{ga, "          retention-days: 7\n          if-no-files-found: ignore\n          overwrite: true\n", "          retention-days: 7\n          if-no-files-found: ignore\n"}, "must set overwrite: true"},
-		{"the auth merged upload without overwrite", mutation{ga, "          if-no-files-found: warn\n          overwrite: true\n", "          if-no-files-found: warn\n"}, "must download go-junit-part-auth-*"},
+		{"the auth merged upload without overwrite", mutation{ga, "          if-no-files-found: warn\n          overwrite: true\n", "          if-no-files-found: warn\n"}, "the merged upload of auth-junit must set overwrite: true"},
+		{"a go.yml part upload without overwrite", mutation{gy, "          path: go-junit-part/\n          retention-days: 7\n          if-no-files-found: ignore\n          overwrite: true\n", "          path: go-junit-part/\n          retention-days: 7\n          if-no-files-found: ignore\n"}, "go.yml: the JUnit part upload of go-storage-integration-shard must set overwrite: true"},
+		{"a go.yml merged upload without overwrite", mutation{gy, "          name: go-test-junit-integration\n          path: junit-merged/\n          retention-days: 14\n          if-no-files-found: warn\n          overwrite: true\n", "          name: go-test-junit-integration\n          path: junit-merged/\n          retention-days: 14\n          if-no-files-found: warn\n"}, "go.yml: the merged upload of go-storage-integration must set overwrite: true"},
+		{"a go-quality.yml part upload without overwrite", mutation{gq, "          name: go-junit-part-${{ matrix.name }}\n          path: go-junit-part/\n          retention-days: 7\n          if-no-files-found: ignore\n          overwrite: true\n", "          name: go-junit-part-${{ matrix.name }}\n          path: go-junit-part/\n          retention-days: 7\n          if-no-files-found: ignore\n"}, "go-quality.yml: the JUnit part upload of go-quality-leg must set overwrite: true"},
+		{"a go-quality.yml merged upload without overwrite", mutation{gq, "          name: go-test-junit-quality\n          path: junit-merged/\n          retention-days: 14\n          if-no-files-found: warn\n          overwrite: true\n", "          name: go-test-junit-quality\n          path: junit-merged/\n          retention-days: 14\n          if-no-files-found: warn\n"}, "go-quality.yml: the merged upload of go-quality must set overwrite: true"},
 		{"the auth merged report under a part name", mutation{ga, "name: go-test-junit-auth", "name: go-junit-part-auth-merged"}, "must download go-junit-part-auth-*"},
 		{"the auth download misses the parts", mutation{ga, "pattern: go-junit-part-auth-*", "pattern: go-test-timings-*"}, "must download go-junit-part-auth-*"},
 		{"the download misses the parts", mutation{gq, "pattern: go-junit-part-*", "pattern: go-test-timings-*"}, "must download go-junit-part-*"},

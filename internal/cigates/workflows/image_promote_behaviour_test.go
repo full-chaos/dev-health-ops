@@ -341,23 +341,21 @@ func TestPromoteChecksEveryProvenanceCertificate(t *testing.T) {
 	})
 }
 
-func TestLabeledTriggerIsGatedToHotfixImage(t *testing.T) {
+// CHAOS-14567: a label event starts a newer run of the workflow at the head; its jobs skip, so the required
+// image-queue-gate would read "Expected". The workflow has no `labeled` trigger and no other-label arms.
+func TestNoLabeledTriggerNoOtherLabelArms(t *testing.T) {
 	text := readFile(t, filepath.Join(repoRoot(t), publishWorkflow))
 	doc := loadWf(t, repoRoot(t), "docker-images.yml")
 	on := asMap(doc["on"])
-	types := asList(asMap(on["pull_request"])["types"])
-	hasLabeled := false
-	for _, x := range types {
-		hasLabeled = hasLabeled || asString(x) == "labeled"
+	for _, x := range asList(asMap(on["pull_request"])["types"]) {
+		if asString(x) == "labeled" || asString(x) == "unlabeled" {
+			t.Errorf("pull_request types list %s: a label run is the newest run at the head and hides the required image-queue-gate", asString(x))
+		}
 	}
-	if !hasLabeled {
-		t.Error("pull_request types lack labeled: adding the label to an open PR would not build the hotfix images")
-	}
-	if !strings.Contains(asString(asMap(jobsOf(doc)["changes"])["if"]), "github.event.label.name == 'hotfix-image'") {
-		t.Error("changes job does not skip a labeled event of another label: every label would rebuild every image")
-	}
-	if !strings.Contains(text, "github.event.label.name != 'hotfix-image' && '-other-label'") {
-		t.Error("another label's run shares the PR concurrency group and would cancel the real run")
+	for _, arm := range []string{"github.event.action == 'labeled'", "github.event.action != 'labeled'", "github.event.label.name", "other-label", "other label"} {
+		if strings.Contains(text, arm) {
+			t.Errorf("docker-images.yml still has the label arm %q: with no labeled trigger it is dead and hides a regression", arm)
+		}
 	}
 }
 

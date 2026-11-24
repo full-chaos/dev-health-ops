@@ -204,6 +204,29 @@ const (
 	// committed without a take time because the column is absent (a build that
 	// runs before its migration). The drain cannot check the mark of such runs.
 	PostSyncTouchedDaysTakeTimeUnwritten PostSyncTouchedDaysEvent = "take_time_unwritten"
+	// PostSyncTouchedDaysTestopsWindowKeysRecorded counts the (day, repository)
+	// keys of the testops window lane a fan-out recorded: the 29 days after the
+	// days of the runs a retraction row was written for.
+	PostSyncTouchedDaysTestopsWindowKeysRecorded PostSyncTouchedDaysEvent = "testops_window_keys_recorded"
+	// PostSyncTouchedDaysTestopsWindowDaysDispatched counts the days of the
+	// testops window lane a fan-out started a run for.
+	PostSyncTouchedDaysTestopsWindowDaysDispatched PostSyncTouchedDaysEvent = "testops_window_days_dispatched"
+	// PostSyncTouchedDaysTestopsWindowKeysDeferred counts the keys of the
+	// eligible days of the testops window lane that a fan-out left pending
+	// because of a cap (its key budget, its runs, the repositories of one run).
+	// The drain takes them.
+	PostSyncTouchedDaysTestopsWindowKeysDeferred PostSyncTouchedDaysEvent = "testops_window_keys_deferred"
+	// PostSyncTouchedDaysTestopsWindowOverBound counts the fan-outs whose
+	// record of the testops window lane was above its bound. Every key is still
+	// recorded.
+	PostSyncTouchedDaysTestopsWindowOverBound PostSyncTouchedDaysEvent = "testops_window_over_bound"
+	// PostSyncTouchedDaysTestopsWindowTakeFailed counts the fan-outs that
+	// could not read the pending keys of the testops window lane. The keys stay
+	// pending for the drain.
+	PostSyncTouchedDaysTestopsWindowTakeFailed PostSyncTouchedDaysEvent = "testops_window_take_failed"
+	// PostSyncTouchedDaysTestopsWindowMarkFailed counts the fan-outs whose
+	// started testops window keys stay pending: each is computed once more.
+	PostSyncTouchedDaysTestopsWindowMarkFailed PostSyncTouchedDaysEvent = "testops_window_mark_failed"
 )
 
 // TouchedDaysDrainEvent is the bounded label of the counter of the drain of
@@ -267,6 +290,16 @@ const (
 	// could not record it because the column is absent: those runs are read
 	// again by the next pass.
 	TouchedDaysDrainChecksUnwritten TouchedDaysDrainEvent = "checked_column_absent"
+	// The events of the drain of the testops window lane: the same meaning as
+	// the event of the touched-day lane they are named after.
+	TouchedDaysDrainTestopsWindowPasses       TouchedDaysDrainEvent = "testops_window_passes"
+	TouchedDaysDrainTestopsWindowDaysStarted  TouchedDaysDrainEvent = "testops_window_days_started"
+	TouchedDaysDrainTestopsWindowDaysReturned TouchedDaysDrainEvent = "testops_window_days_returned_to_pending"
+	TouchedDaysDrainTestopsWindowDaysSkipped  TouchedDaysDrainEvent = "testops_window_days_skipped_after_failed_runs"
+	TouchedDaysDrainTestopsWindowChainStopped TouchedDaysDrainEvent = "testops_window_chain_stopped_mark_missing"
+	TouchedDaysDrainTestopsWindowPassFailed   TouchedDaysDrainEvent = "testops_window_pass_failed"
+	TouchedDaysDrainTestopsWindowMarkFailed   TouchedDaysDrainEvent = "testops_window_mark_failed"
+	TouchedDaysDrainTestopsWindowKeysDeferred TouchedDaysDrainEvent = "testops_window_keys_deferred"
 )
 
 func touchedDaysDrainEvents() []TouchedDaysDrainEvent {
@@ -278,6 +311,9 @@ func touchedDaysDrainEvents() []TouchedDaysDrainEvent {
 		TouchedDaysDrainDaysRetried, TouchedDaysDrainChainStopped, TouchedDaysDrainReturnReadTruncated,
 		TouchedDaysDrainTakeTimeAbsent, TouchedDaysDrainTakeTimeUnwritten, TouchedDaysDrainStopCheckTruncated,
 		TouchedDaysDrainChecksUnwritten,
+		TouchedDaysDrainTestopsWindowPasses, TouchedDaysDrainTestopsWindowDaysStarted, TouchedDaysDrainTestopsWindowDaysReturned,
+		TouchedDaysDrainTestopsWindowDaysSkipped, TouchedDaysDrainTestopsWindowChainStopped, TouchedDaysDrainTestopsWindowPassFailed,
+		TouchedDaysDrainTestopsWindowMarkFailed, TouchedDaysDrainTestopsWindowKeysDeferred,
 	}
 }
 
@@ -288,6 +324,9 @@ func postSyncTouchedDaysEvents() []PostSyncTouchedDaysEvent {
 		PostSyncTouchedDaysReadTruncated, PostSyncTouchedDaysRecordFailed,
 		PostSyncTouchedDaysMarkFailed, PostSyncTouchedDaysOverRepositoryLimit,
 		PostSyncTouchedDaysTakeTimeUnwritten, PostSyncTouchedDaysWindowOverBound,
+		PostSyncTouchedDaysTestopsWindowKeysRecorded, PostSyncTouchedDaysTestopsWindowDaysDispatched,
+		PostSyncTouchedDaysTestopsWindowKeysDeferred, PostSyncTouchedDaysTestopsWindowOverBound,
+		PostSyncTouchedDaysTestopsWindowTakeFailed, PostSyncTouchedDaysTestopsWindowMarkFailed,
 	}
 }
 

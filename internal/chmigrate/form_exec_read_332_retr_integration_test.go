@@ -19,7 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-// DO NOT MERGE. Throwaway exec proof of a prod read form (FORM-332-RETR-1). retr332Form is the form file with ONE swap
+// DO NOT MERGE. Throwaway exec proof of a prod read form (FORM-332-RETR-2). retr332Form is the form file with ONE swap
 // (the app org prefix c6a38355 -> the synthetic f0f0f0f0, public repo); its sha256 is pinned. The {{KP}} placeholder is
 // filled with retr332KP as pm's one sed does. Synthetic rows only.
 const (
@@ -30,10 +30,11 @@ const (
 	retr332Other    = "b0000000-0000-4000-8000-000000000000"
 )
 
-const retr332FormSHA256 = "1159bd474fa460ae051986282d1bacdf987c5a07f5ecc17c9ce13df223c0c5ff"
+const retr332FormSHA256 = "337a41ac8cfd2e6909e793aefa8e4db2429fae4e90aef869894cec6f806c9f00"
 
-const retr332Form = `-- FORM-332-RETR-1 (ClickHouse, prod, read-only). acp-train34, 2026-11-24. STEP 332 READBACK R-RETR (acp Q4 named limit scope).
--- Form: lane-scratch/pm-guard/FORM-TEMPLATE-3.md 6b9e73a3c45a (CH shape, one statement per call, self-gating). Replaces FORM-332-RETR-draft-1.sql 90fc4ca6c2d2.
+const retr332Form = `-- FORM-332-RETR-2 (ClickHouse, prod, read-only). acp-train34, 2026-11-24. STEP 332 READBACK R-RETR (acp Q4 named limit scope).
+-- -2 = FORM-332-RETR-1 5efe006b403f with acp F1: stmt1 / stmt2 print days (toDate of min / max last_synced), no ms times.
+-- Form: lane-scratch/pm-guard/FORM-TEMPLATE-3.md 6b9e73a3c45a (CH shape, one statement per call, self-gating). Replaces FORM-332-RETR-1.sql 5efe006b403f.
 -- What: the retraction rows (retracted = 1, CH 171 column) that the 332 workers wrote after STEP-KIT-PASS (KP), per table.
 --   Each one is a report slot that query-api 155276ecf30e (no #6906 / #6938 reader) shows as an EMPTY suite until STEP 333.
 --   Writer: ops #6906 d4b4c5a38ab2 / #6938 e46d7611fd3a internal/providersync/github_tests_effects_clickhouse.go:158 / :195 (the two INSERTs; a retraction row has retracted = 1). Cites at the DRY pin 6f901840.
@@ -41,14 +42,14 @@ const retr332Form = `-- FORM-332-RETR-1 (ClickHouse, prod, read-only). acp-train
 --   ORDER BY (repo_id, run_id, suite_id[, case_id]), no PARTITION BY, org_id LowCardinality(String), last_synced DateTime64(3, 'UTC'),
 --   retracted UInt8 DEFAULT 0 (171).
 -- Placeholder: {{KP}} = the RUNLOG STEP-KIT-PASS time, UTC, 'YYYY-MM-DD hh:mm:ss'. pm makes the run copy with ONE sed:
---   sed "s/{{KP}}/<KP>/g" FORM-332-RETR-1.sql > FORM-332-RETR-1-run.sql ; WANT grep -c '{{' FORM-332-RETR-1-run.sql = 0.
+--   sed "s/{{KP}}/<KP>/g" FORM-332-RETR-2.sql > FORM-332-RETR-2-run.sql ; WANT grep -c '{{' FORM-332-RETR-2-run.sql = 0.
 --   The file sha12 acp names is of THIS file (with {{KP}}).
 -- WORK MATH (fill from S0 before the run): stmt0, stmt1, stmt3 each read test_suite_results x 1 = R_s rows; stmt2 reads
 --   test_case_results x 1 = R_c rows. No FINAL, no CTE, no self-join, no scalar subquery on data. Each cap = 20,000,000 rows
 --   / 4,000,000,000 bytes on that statement's table. The gate itself reads system.parts twice (2P) + system.one (1).
 --   If S0 shows R_s or R_c over 20,000,000, that statement STOPs (code 395) by design: report, acp rules a narrower form.
 -- Counts are raw rows (no FINAL): a re-sync that writes the same key again counts again. INFO for the limit scope.
--- Output: counts and times only. No ids, no payload text.
+-- Output: counts and days (UTC) only. No ids, no times, no payload text.
 
 -- S0 (system.parts only). WANT 2 rows (test_case_results, test_suite_results), each rows > 0 and active_parts > 0 (a missing row = wrong name: STOP).
 SELECT table AS t, sum(rows) AS rows, sum(bytes_on_disk) AS bytes, count() AS active_parts
@@ -64,23 +65,23 @@ SELECT uniqExact(org_id) AS orgs, count() AS org_rows
 FROM test_suite_results
 WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0;
 
--- stmt1 suite retraction rows written at or after KP. WANT a count (0 = NOT EXERCISED, allowed); first / last = INFO.
+-- stmt1 suite retraction rows written at or after KP. WANT a count (0 = NOT EXERCISED, allowed); first_day / last_day = INFO.
 WITH (SELECT throwIf(
   (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('test_suite_results')) > 20000000
   OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('test_suite_results')) > 4000000000,
   'STOP-COST-GATE')) AS cost_gate
-SELECT count() AS retracted_suite_rows, uniqExact(repo_id) AS repos, min(last_synced) AS first_at, max(last_synced) AS last_at
+SELECT count() AS retracted_suite_rows, uniqExact(repo_id) AS repos, toDate(min(last_synced)) AS first_day, toDate(max(last_synced)) AS last_day
 FROM test_suite_results
 WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0
   AND retracted = 1
   AND last_synced >= toDateTime64('{{KP}}', 3, 'UTC');
 
--- stmt2 case retraction rows written at or after KP. WANT a count (0 = NOT EXERCISED, allowed); first / last = INFO.
+-- stmt2 case retraction rows written at or after KP. WANT a count (0 = NOT EXERCISED, allowed); first_day / last_day = INFO.
 WITH (SELECT throwIf(
   (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('test_case_results')) > 20000000
   OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('test_case_results')) > 4000000000,
   'STOP-COST-GATE')) AS cost_gate
-SELECT count() AS retracted_case_rows, uniqExact(repo_id) AS repos, min(last_synced) AS first_at, max(last_synced) AS last_at
+SELECT count() AS retracted_case_rows, uniqExact(repo_id) AS repos, toDate(min(last_synced)) AS first_day, toDate(max(last_synced)) AS last_day
 FROM test_case_results
 WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0
   AND retracted = 1
@@ -354,8 +355,8 @@ func TestForm332RetrExecutesAtTheChainHead(t *testing.T) {
 
 	cleanWant := map[string]map[string]string{
 		"stmt0": {"orgs": "1", "org_rows": "2010"},
-		"stmt1": {"retracted_suite_rows": "3", "repos": "2", "first_at": "2026-11-24 10:00:00.000", "last_at": "2026-11-24 12:30:00.000"},
-		"stmt2": {"retracted_case_rows": "5", "repos": "3", "first_at": "2026-11-24 10:00:00.000", "last_at": "2026-11-24 14:00:00.000"},
+		"stmt1": {"retracted_suite_rows": "3", "repos": "2", "first_day": "2026-11-24", "last_day": "2026-11-24"},
+		"stmt2": {"retracted_case_rows": "5", "repos": "3", "first_day": "2026-11-24", "last_day": "2026-11-24"},
 		"stmt3": {"plain_suite_rows": "4"},
 	}
 	passComments := map[string]string{}
@@ -367,6 +368,21 @@ func TestForm332RetrExecutesAtTheChainHead(t *testing.T) {
 		}
 		t.Logf("PASS %s ROW %v", label, got[0])
 		expect("PASS", label, got[0], cleanWant[label])
+	}
+	// Output cell (acp F1): every output column of stmt0-stmt3 is a count or a Date; no DateTime / String column.
+	for _, label := range []string{"stmt0", "stmt1", "stmt2", "stmt3"} {
+		rows, err := conn.Query(ctx, byLabel[label])
+		if err != nil {
+			t.Fatalf("OUTPUT %s: %v", label, err)
+		}
+		for i, ct := range rows.ColumnTypes() {
+			typ := ct.DatabaseTypeName()
+			if typ != "UInt64" && typ != "Date" {
+				t.Errorf("OUTPUT %s: column %s type %s, want UInt64 or Date", label, rows.Columns()[i], typ)
+			}
+		}
+		t.Logf("OUTPUT %s columns %v ok", label, rows.Columns())
+		rows.Close()
 	}
 	// Control: stmt3 > 0 on the clean fixture.
 	if cleanWant["stmt3"]["plain_suite_rows"] == "0" {

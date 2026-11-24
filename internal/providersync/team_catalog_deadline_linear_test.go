@@ -216,6 +216,8 @@ func tcdlLNLabel(body string) string {
 		return "cycles-OPS"
 	case strings.Contains(body, "LinearReferenceCatalogProjectTeams"):
 		return "project-teams-p2"
+	case strings.Contains(body, "LinearReferenceCatalogProjects") && strings.Contains(body, "pg1"):
+		return "projects-p2"
 	case strings.Contains(body, "LinearReferenceCatalogProjects"):
 		return "projects"
 	case strings.Contains(body, `teams(filter: {key: {eq: \"GONE\"}}`):
@@ -244,7 +246,11 @@ func tcdlLNAnswer(label string) string {
 		return `{"data":{"cycles":{"nodes":[],` + tcdlLNEnd + `}}}`
 	case "projects":
 		return `{"data":{"projects":{"nodes":[{"id":"other","name":"P","description":"","status":{"id":"s","name":"Active","type":"started"},"trashed":false,"targetDate":"","archivedAt":null,"url":"","lead":null,` +
-			`"teams":{"nodes":[{"id":"team-qa","key":"QA"}],"pageInfo":{"hasNextPage":true,"endCursor":"pt1"}}}],` + tcdlLNEnd + `}}}`
+			`"teams":{"nodes":[{"id":"team-qa","key":"QA"}],"pageInfo":{"hasNextPage":true,"endCursor":"pt1"}}},` +
+			`{"id":"other2","name":"P2","description":"","status":{"id":"s","name":"Active","type":"started"},"trashed":false,"targetDate":"","archivedAt":null,"url":"","lead":null,` +
+			`"teams":{"nodes":[{"id":"team-qa","key":"QA"}],` + tcdlLNEnd + `}}],"pageInfo":{"hasNextPage":true,"endCursor":"pg1"}}}}`
+	case "projects-p2":
+		return `{"data":{"projects":{"nodes":[],` + tcdlLNEnd + `}}}`
 	case "project-teams-p2":
 		return `{"data":{"project":{"teams":{"nodes":[{"id":"team-ops","key":"OPS"}],` + tcdlLNEnd + `}}}}`
 	case "lookup-team-GONE", "lookup-team-OLD":
@@ -356,7 +362,7 @@ var tcdlLNCloseNeeds = map[string][]string{
 	"membership linear:QA/linear:u-bob":    {"teams", "members-QA-p2"},
 	"membership linear:GONE/linear:u-dave": {"teams", "members-QA-p2", "lookup-team-GONE"},
 	"ownership linear:OLD/":                {"teams", "lookup-team-OLD"},
-	"ownership linear:QA/keep":             {"teams", "projects", "project-teams-p2", "lookup-project-keep"},
+	"ownership linear:QA/keep":             {"teams", "projects", "project-teams-p2", "projects-p2", "lookup-project-keep"},
 }
 
 func tcdlLNNeeds(close string) []string {
@@ -474,7 +480,7 @@ func tcdlLNSweep(t *testing.T) {
 			}
 			if run.err == nil {
 				switch run.failed {
-				case "projects", "project-teams-p2":
+				case "projects", "projects-p2", "project-teams-p2":
 					if !run.result.OwnershipSnapshotIncomplete {
 						t.Errorf("strict=%v k=%d: projects read failed, OwnershipSnapshotIncomplete not set", strict, k)
 					}

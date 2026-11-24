@@ -354,6 +354,27 @@ func TestProgressRefundsStopAtTheRunAgeCap(t *testing.T) {
 	}
 }
 
+// A run older than 24 h gets no refund: the RED walk's five sparse progress
+// failures each count, and the unit is exhausted at River attempt 5, as before
+// the refund.
+func TestProgressFailuresOfARunOlderThan24HoursCountAndExhaustAtFive(t *testing.T) {
+	walk := driveFlakyWalk(t, flakyWalk{
+		pages: exhaustReproRedPages, runAge: progressRefundRunAgeCap + time.Hour,
+		tries: map[int]int{2: exhaustReproHTTPTries, 100: exhaustReproHTTPTries, 200: exhaustReproHTTPTries,
+			300: exhaustReproHTTPTries, 400: exhaustReproHTTPTries},
+	})
+	if !walk.terminal || walk.repository.lastFailCategory != "provider_unit_exhausted" || walk.attempt != 5 {
+		t.Fatalf("unit ended %q category=%q at attempt %d, want failed provider_unit_exhausted at River attempt 5",
+			walk.repository.status, walk.repository.lastFailCategory, walk.attempt)
+	}
+	if walk.refunds != 0 || walk.failures != 5 {
+		t.Fatalf("refunds=%d failures=%d, want no refund and 5 ordinary failures", walk.refunds, walk.failures)
+	}
+	if len(walk.accounting) != 0 {
+		t.Fatalf("attempts arithmetic: %v", walk.accounting)
+	}
+}
+
 // lostAdvanceStore drops the checkpoint advance of one ordinal once: the chunk
 // was fetched, prepared and written to the sink, and the attempt counted it,
 // but the durable checkpoint never moved past it.

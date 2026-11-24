@@ -332,7 +332,7 @@ type settings struct {
 // rejected request.
 func (s settings) boundary() secrets.Boundary {
 	// The token and the email (CHAOS-7132): the gateway can echo either into its error text.
-	return secrets.NewBoundaryWith(s.token, s.email)
+	return secrets.NewBoundaryWith("", s.token, s.email)
 }
 
 // envOverrides is what the ATLASSIAN_* environment carries for one run. Every

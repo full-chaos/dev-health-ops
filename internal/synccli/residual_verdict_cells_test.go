@@ -105,3 +105,20 @@ func TestResidualRunCatalogTeamsRedactsTheSinkAndTheDatabaseAsOneUnion(t *testin
 		t.Errorf("the database password's tail printed: %q", stderr)
 	}
 }
+
+// The text a batch print path already redacted with its whole union is not
+// redacted a second time: a database password that spells part of the marker
+// ("RED") would otherwise rewrite the marker it just got.
+func TestBatchListErrorIsNotRedactedASecondTime(t *testing.T) {
+	env := map[string]string{"CLICKHOUSE_URI": residualSink, "POSTGRES_URI": "postgres://acct:RED@pg.example:5432/db", "ORG_ID": "org-1"}
+	executor := InlineExecutor(InlineDeps{
+		OpenStore: func(context.Context, string) (driver.Conn, error) { return fakeStore{}, nil },
+		List: func(context.Context, providersync.InProcessRun, providersync.InProcessListing) ([]providersync.ListedRepository, error) {
+			return nil, errors.New("refused for svc%3A end")
+		},
+	})
+	_, _, stderr := runVerb(t, "git", executor, githubBatchArgs, env)
+	if !strings.Contains(stderr, "list repositories: refused for [REDACTED] end") {
+		t.Errorf("got %q", stderr)
+	}
+}

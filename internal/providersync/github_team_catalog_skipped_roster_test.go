@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
 
@@ -51,4 +53,37 @@ func TestGitHubTeamCatalogSkippedRosterClosesNoMembershipOfThatTeam(t *testing.T
 			t.Fatalf("membership of the skipped team was written: %+v", membership)
 		}
 	}
+}
+
+// With the production gate armed, a 429 whose wait is longer than the time left
+// skips that roster (the route's non-fatal arm) and arms the gate; the next
+// required request is refused by the gate, so the run ends in a rate_limited
+// error and returns no rows: nothing is observed, written or closed.
+func TestGitHubTeamCatalogDeadlineShortenedRosterWithTheGateClosesNothing(t *testing.T) {
+	t.Parallel()
+	client := sweepClient(t, "github", "https://api.github.com", skippedRosterRetryAfterDoer{}, 25*time.Second)
+	client.Gate = &retryDeadlineGate{}
+	collector := GitHubTeamCatalogRouteHandler{
+		Client: client, OrgName: "acme", Now: func() time.Time { return time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC) },
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	rows, _, err := collector.Collect(ctx, "org-1", true, true)
+	var providerErr *providerfoundation.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited {
+		t.Fatalf("err=%v, want the rate_limited error", err)
+	}
+	if len(rows.ObservedMembershipTeamIDs) != 0 || len(rows.Memberships) != 0 || len(rows.Teams) != 0 {
+		t.Fatalf("observed=%v memberships=%d teams=%d, want no rows from a run that ended in error", rows.ObservedMembershipTeamIDs, len(rows.Memberships), len(rows.Teams))
+	}
+}
+
+type skippedRosterRetryAfterDoer struct{ skippedRosterDoer }
+
+func (d skippedRosterRetryAfterDoer) Do(request *http.Request) (*http.Response, error) {
+	response, err := d.skippedRosterDoer.Do(request)
+	if err == nil && response.StatusCode == http.StatusTooManyRequests {
+		response.Header.Set("Retry-After", "25")
+	}
+	return response, err
 }

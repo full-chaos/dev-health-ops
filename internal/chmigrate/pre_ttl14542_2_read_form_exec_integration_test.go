@@ -17,14 +17,15 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// Throwaway exec proof of the prod read form PRE-TTL-14542-2 (CHAOS-14542): not for merge. preTTL14542s2Form is the
+// Throwaway exec proof of the prod read form PRE-TTL-14542-2-r2 (CHAOS-14542): not for merge. preTTL14542s2Form is the
 // form file byte for byte; its sha256 is pinned.
-const preTTL14542s2FormSHA256 = "5442558a55c5691f43f67d046d707c859195e18e6fcb91d78e5554f7666b68dc"
+const preTTL14542s2FormSHA256 = "7ca49ba13641e5268a99414d934420795523663bb93b05d5bb222ba49484a3e9"
 
-const preTTL14542s2Form = `-- PRE-TTL-14542-2 (fcdev lane l14542, 2026-11-24): NO-THROW read of the active parts of the local SigNoz trace table, after
+const preTTL14542s2Form = `-- PRE-TTL-14542-2-r2 (fcdev lane l14542, 2026-11-24): NO-THROW read of the active parts of the local SigNoz trace table, after
 -- PRE-TTL-14542-1 (fe48b20a1f06) threw STOP-MIN-TIME-UNFILLED on prod. Reads system.parts only (part metadata, no data).
--- Output: ONE row of counts, days, and the partition ids and levels of the parts with min_time < 2020. No row data.
--- WANT active_parts > 0 (control; 0 = case (a), no active part = STOP). Other columns: read per PRE-TTL-14542-2.md.
+-- r2 = PRE-TTL-14542-2 (5442558a55c5) + 2 columns at the end: unfilled_empty_parts, unfilled_parts_rows (rows per unfilled part).
+-- Output: ONE row of counts, days, and the partition ids, levels and row counts of the parts with min_time < 2020. No row data.
+-- WANT active_parts > 0 (control; 0 = case (a), no active part = STOP). Other columns: read per PRE-TTL-14542-2-r2.md.
 -- No SET, no SETTINGS, no throwIf, no write.
 SELECT
     count() AS active_parts,
@@ -34,7 +35,9 @@ SELECT
     if(countIf(min_time >= toDateTime('2020-01-01')) = 0, 'none', toString(toDate(minIf(min_time, min_time >= toDateTime('2020-01-01'))))) AS filled_min_day,
     if(countIf(min_time >= toDateTime('2020-01-01')) = 0, -1, dateDiff('day', minIf(min_time, min_time >= toDateTime('2020-01-01')), now())) AS oldest_days,
     arrayStringConcat(arraySort(groupUniqArrayIf(50)(partition_id, min_time < toDateTime('2020-01-01'))), ',') AS unfilled_partition_ids,
-    arrayStringConcat(arrayMap(x -> toString(x), arraySort(groupUniqArrayIf(50)(level, min_time < toDateTime('2020-01-01')))), ',') AS unfilled_levels
+    arrayStringConcat(arrayMap(x -> toString(x), arraySort(groupUniqArrayIf(50)(level, min_time < toDateTime('2020-01-01')))), ',') AS unfilled_levels,
+    countIf(min_time < toDateTime('2020-01-01') AND rows = 0) AS unfilled_empty_parts,
+    arrayStringConcat(arraySort(groupArrayIf(50)(concat(partition_id, ':', toString(level), ':', toString(rows)), min_time < toDateTime('2020-01-01'))), ',') AS unfilled_parts_rows
 FROM system.parts
 WHERE database = 'signoz_traces' AND table = 'signoz_index_v3' AND active
 `
@@ -65,9 +68,9 @@ func TestPreTTL14542s2ReadFormNoThrowEveryColumnAndMutants(t *testing.T) {
 
 	sum := sha256.Sum256([]byte(preTTL14542s2Form))
 	if got := hex.EncodeToString(sum[:]); got != preTTL14542s2FormSHA256 {
-		t.Fatalf("PRE-TTL-14542-2 sha256 = %s, want %s", got, preTTL14542s2FormSHA256)
+		t.Fatalf("PRE-TTL-14542-2-r2 sha256 = %s, want %s", got, preTTL14542s2FormSHA256)
 	}
-	t.Logf("PRE-TTL-14542-2 sha256 %s (sha12 %s)", preTTL14542s2FormSHA256, preTTL14542s2FormSHA256[:12])
+	t.Logf("PRE-TTL-14542-2-r2 sha256 %s (sha12 %s)", preTTL14542s2FormSHA256, preTTL14542s2FormSHA256[:12])
 	var code []string
 	for _, line := range strings.Split(preTTL14542s2Form, "\n") {
 		if !strings.HasPrefix(line, "--") {
@@ -148,7 +151,7 @@ func TestPreTTL14542s2ReadFormNoThrowEveryColumnAndMutants(t *testing.T) {
 		}
 	}
 	columns := []string{"active_parts", "parts_min_time_lt_2020", "rows_in_those_parts", "unfilled_max_day",
-		"filled_min_day", "oldest_days", "unfilled_partition_ids", "unfilled_levels"}
+		"filled_min_day", "oldest_days", "unfilled_partition_ids", "unfilled_levels", "unfilled_empty_parts", "unfilled_parts_rows"}
 	// run executes the form text unchanged, as pm does: one statement, one row. A throw fails the cell (NO-THROW form).
 	run := func(phase string) map[string]string {
 		t.Helper()
@@ -248,7 +251,7 @@ func TestPreTTL14542s2ReadFormNoThrowEveryColumnAndMutants(t *testing.T) {
 	empty := run("empty")
 	emptyWant := map[string]string{"active_parts": "0", "parts_min_time_lt_2020": "0", "rows_in_those_parts": "0",
 		"unfilled_max_day": "none", "filled_min_day": "none", "oldest_days": "-1", "unfilled_partition_ids": "",
-		"unfilled_levels": ""}
+		"unfilled_levels": "", "unfilled_empty_parts": "0", "unfilled_parts_rows": ""}
 	check("empty", empty, emptyWant)
 
 	// Base: 1 normal part (1 row at today - 3 d, 12:00) + 1 unfilled part (1 row at 1970-01-02 12:00:00 UTC).
@@ -259,7 +262,7 @@ func TestPreTTL14542s2ReadFormNoThrowEveryColumnAndMutants(t *testing.T) {
 	base := run("base")
 	baseWant := map[string]string{"active_parts": "2", "parts_min_time_lt_2020": "1", "rows_in_those_parts": "1",
 		"unfilled_max_day": "1970-01-02", "filled_min_day": day3, "oldest_days": "3", "unfilled_partition_ids": "19700102",
-		"unfilled_levels": "0"}
+		"unfilled_levels": "0", "unfilled_empty_parts": "0", "unfilled_parts_rows": "19700102:0:1"}
 	check("base", base, baseWant)
 
 	// M1 (unfilled input): a second unfilled part, 2 rows, 1970-01-05 12:00 UTC.
@@ -267,8 +270,10 @@ func TestPreTTL14542s2ReadFormNoThrowEveryColumnAndMutants(t *testing.T) {
 	logParts("M1")
 	m1 := run("M1")
 	check("M1", m1, clone(baseWant, "active_parts", "3", "parts_min_time_lt_2020", "2", "rows_in_those_parts", "3",
-		"unfilled_max_day", "1970-01-05", "unfilled_partition_ids", "19700102,19700105"))
-	delta("M1", base, m1, "active_parts", "parts_min_time_lt_2020", "rows_in_those_parts", "unfilled_max_day", "unfilled_partition_ids")
+		"unfilled_max_day", "1970-01-05", "unfilled_partition_ids", "19700102,19700105",
+		"unfilled_parts_rows", "19700102:0:1,19700105:0:2"))
+	delta("M1", base, m1, "active_parts", "parts_min_time_lt_2020", "rows_in_those_parts", "unfilled_max_day",
+		"unfilled_partition_ids", "unfilled_parts_rows")
 
 	// M2 (level input): merge the 1970-01-05 part into a level 1 part. Part and row counts stay.
 	exec("SYSTEM START MERGES signoz_traces.signoz_index_v3")
@@ -276,8 +281,8 @@ func TestPreTTL14542s2ReadFormNoThrowEveryColumnAndMutants(t *testing.T) {
 	exec("SYSTEM STOP MERGES signoz_traces.signoz_index_v3")
 	logParts("M2")
 	m2 := run("M2")
-	check("M2", m2, clone(m1, "unfilled_levels", "0,1"))
-	delta("M2", m1, m2, "unfilled_levels")
+	check("M2", m2, clone(m1, "unfilled_levels", "0,1", "unfilled_parts_rows", "19700102:0:1,19700105:1:2"))
+	delta("M2", m1, m2, "unfilled_levels", "unfilled_parts_rows")
 
 	// M3 (filled input): an older normal part, today - 5 d.
 	insert("normal-old", "toDateTime(today() - 5) + toIntervalHour(12)", 1)
@@ -293,16 +298,35 @@ func TestPreTTL14542s2ReadFormNoThrowEveryColumnAndMutants(t *testing.T) {
 	logParts("M4")
 	m4 := run("M4")
 	check("M4", m4, clone(m3, "active_parts", "2", "parts_min_time_lt_2020", "0", "rows_in_those_parts", "0",
-		"unfilled_max_day", "none", "unfilled_partition_ids", "", "unfilled_levels", ""))
+		"unfilled_max_day", "none", "unfilled_partition_ids", "", "unfilled_levels", "", "unfilled_parts_rows", ""))
 	delta("M4", m3, m4, "active_parts", "parts_min_time_lt_2020", "rows_in_those_parts", "unfilled_max_day",
-		"unfilled_partition_ids", "unfilled_levels")
+		"unfilled_partition_ids", "unfilled_levels", "unfilled_parts_rows")
 
-	// INFO: an ALTER DELETE that removes every row of a part. Logged only (how an empty part shows in system.parts).
+	// M5 (empty part): an ALTER DELETE removes every row of the today - 5 d part. remove_empty_parts = 0 keeps the empty
+	// result part ACTIVE (prod default 1 drops it within about 1 s), so the cell sees it every run. Its min_time is 1970.
+	exec("ALTER TABLE signoz_traces.signoz_index_v3 MODIFY SETTING remove_empty_parts = 0")
 	exec("SYSTEM START MERGES signoz_traces.signoz_index_v3")
 	if err := conn.Exec(clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"mutations_sync": 2})),
 		"ALTER TABLE signoz_traces.signoz_index_v3 DELETE WHERE name = 'normal-old'"); err != nil {
-		t.Logf("INFO delete-all-rows mutation: %v", err)
+		t.Fatal(err)
 	}
-	logParts("INFO-after-delete")
-	t.Logf("INFO-after-delete form row: %v", run("INFO-after-delete"))
+	exec("SYSTEM STOP MERGES signoz_traces.signoz_index_v3")
+	logParts("M5")
+	day5Partition := scalar("SELECT toString(toYYYYMMDD(today() - 5))")
+	m5 := run("M5")
+	check("M5", m5, clone(m4, "parts_min_time_lt_2020", "1", "unfilled_max_day", "1970-01-01", "filled_min_day", day3,
+		"oldest_days", "3", "unfilled_partition_ids", day5Partition, "unfilled_levels", "0", "unfilled_empty_parts", "1",
+		"unfilled_parts_rows", day5Partition+":0:0"))
+	delta("M5", m4, m5, "parts_min_time_lt_2020", "unfilled_max_day", "filled_min_day", "oldest_days",
+		"unfilled_partition_ids", "unfilled_levels", "unfilled_empty_parts", "unfilled_parts_rows")
+
+	// M6 (mixed): + a part of real rows with an old timestamp (1970-01-03 12:00 UTC). Rows per part tell the two apart.
+	insert("unfilled-3", "toDateTime('1970-01-03 12:00:00', 'UTC')", 1)
+	logParts("M6")
+	m6 := run("M6")
+	check("M6", m6, clone(m5, "active_parts", "3", "parts_min_time_lt_2020", "2", "rows_in_those_parts", "1",
+		"unfilled_max_day", "1970-01-03", "unfilled_partition_ids", "19700103,"+day5Partition,
+		"unfilled_parts_rows", "19700103:0:1,"+day5Partition+":0:0"))
+	delta("M6", m5, m6, "active_parts", "parts_min_time_lt_2020", "rows_in_those_parts", "unfilled_max_day",
+		"unfilled_partition_ids", "unfilled_parts_rows")
 }

@@ -416,10 +416,11 @@ func (worker *teamAutoimportWorker) Work(ctx context.Context, job *river.Job[Tea
 	ctx, span := spanForCoordinatorJob(ctx, job.Args.Kind(), job.Args.Payload.SyncRunID, "")
 	completed := false
 	defer finishCoordinatorWork(span, &err, &completed)
-	err = worker.bridge.TeamAutoImport(ctx, DomainReference{
-		OrganizationID: job.Args.OrgID,
-		SyncRunID:      job.Args.Payload.SyncRunID,
-	})
+	reference := DomainReference{OrganizationID: job.Args.OrgID, SyncRunID: job.Args.Payload.SyncRunID}
+	if job.JobRow != nil {
+		reference.JobCreatedAt = job.CreatedAt
+	}
+	err = worker.bridge.TeamAutoImport(ctx, reference)
 	completed = true
 	return err
 }

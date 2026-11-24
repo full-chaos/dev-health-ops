@@ -678,13 +678,16 @@ const (
 	// (a genuine fall-through to a live Python path) -- there is no such
 	// path left for either seam to fall through to.
 	TeamCatalogOutcomeNotImportCapable TeamCatalogOutcome = "not_import_capable"
+	// TeamCatalogOutcomeRateLimitDeferred: the post-sync collection was rate limited (a classified rate_limited
+	// provider answer) and the job is snoozed to read the catalog again, inside its episode (CHAOS-14581).
+	TeamCatalogOutcomeRateLimitDeferred TeamCatalogOutcome = "rate_limit_deferred"
 )
 
 func teamCatalogOutcomes() []TeamCatalogOutcome {
 	return []TeamCatalogOutcome{
 		TeamCatalogOutcomeNative, TeamCatalogOutcomeBridge, TeamCatalogOutcomeSkipped,
 		TeamCatalogOutcomeNativeFailedNonfatal, TeamCatalogOutcomeRosterPreservationFailed,
-		TeamCatalogOutcomeCollectorSkipped, TeamCatalogOutcomeNotImportCapable,
+		TeamCatalogOutcomeCollectorSkipped, TeamCatalogOutcomeNotImportCapable, TeamCatalogOutcomeRateLimitDeferred,
 	}
 }
 

@@ -115,6 +115,13 @@ func TestProdOpenerErrorKeepsTheResolvedDriverCredentialsHidden(t *testing.T) {
 		code, stdout, stderr := runVerb(t, "prs", InlineExecutor(defaultInlineDeps()), githubArgs, env)
 		check(t, code, stdout+stderr)
 	})
+	t.Run("sync teams catalog", func(t *testing.T) {
+		env := validEnv()
+		env["CLICKHOUSE_URI"] = sink
+		env["POSTGRES_URI"] = residualDB
+		code, stdout, stderr := run(t, env, defaultDeps(), "--provider", "github", "--owner", "acme", "--org", "o", "--auth", "ghp-test", "--structure")
+		check(t, code, stdout+stderr)
+	})
 	t.Run("sync teams", func(t *testing.T) {
 		env := validEnv()
 		env["CLICKHOUSE_URI"] = sink

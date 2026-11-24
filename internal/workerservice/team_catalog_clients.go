@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
 )
 
 // resolveTeamCatalogProvider ports the SAME sync_runs-JOIN-integrations
@@ -505,6 +506,31 @@ func (dispatcher *nativeTeamAutoimportDispatcher) warnDropped(ctx context.Contex
 		"org_id", orgID, "sync_run_id", runID, "provider", provider, "stage", stage, "error", syncdispatchruntime.SanitizeErrorText(err.Error()))
 }
 
+const (
+	// teamCatalogRateLimitEpisode bounds the snoozes of one post-sync team auto-import job, measured from its
+	// CreatedAt: the same 2 h as a provider unit's rate-limit deferrals (jobs/providerunit/rate_limit_defer.go,
+	// rateLimitMaxTotalWait). Past it the job ends nonfatal, as before.
+	teamCatalogRateLimitEpisode = 2 * time.Hour
+	// teamCatalogRateLimitFloor is the shortest snooze: a rate limit without a usable RetryAfter waits as long as a
+	// provider unit does (rateLimitDefaultDelay, 60 s), so the job does not spin against the limit.
+	teamCatalogRateLimitFloor = 60 * time.Second
+)
+
+// teamCatalogRateLimitSnooze is how long to snooze a post-sync team auto-import whose collection failed with a
+// classified rate_limited provider answer: max(RetryAfter, the floor), never past the end of the job's episode.
+// false (keep the nonfatal answer) for any other error, a job with no CreatedAt, or at or past the episode end.
+func teamCatalogRateLimitSnooze(err error, jobCreatedAt, now time.Time) (time.Duration, bool) {
+	var providerErr *providerfoundation.ProviderError
+	if jobCreatedAt.IsZero() || !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited {
+		return 0, false
+	}
+	left := jobCreatedAt.Add(teamCatalogRateLimitEpisode).Sub(now)
+	if left <= 0 {
+		return 0, false
+	}
+	return min(max(providerErr.RetryAfter, teamCatalogRateLimitFloor), left), true
+}
+
 func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
 	ctx context.Context, reference syncdispatchruntime.DomainReference,
 ) error {
@@ -582,6 +608,12 @@ func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
 		_ = dispatcher.observer.ObserveTeamCatalogRowsWritten(provider, jobruntime.TeamCatalogTableProjectAsTeamRetired, result.ProjectAsTeamRetired)
 	}
 	if collectErr != nil {
+		// A classified rate limit snoozes the job to read the catalog again, inside the job's episode (CHAOS-14581);
+		// every other error keeps the nonfatal answer below.
+		if delay, snooze := teamCatalogRateLimitSnooze(collectErr, syncdispatchruntime.JobCreatedAt(ctx), dispatcher.nowUTC()); snooze {
+			dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeRateLimitDeferred)
+			return river.JobSnooze(delay)
+		}
 		// The failure is still visible via the dedicated nonfatal outcome,
 		// not silently dropped; the log line carries the cause (CHAOS-7132).
 		dispatcher.warnDropped(ctx, orgID, runID, provider, "collect", collectErr)

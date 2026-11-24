@@ -41,6 +41,9 @@ func TestObserveTeamCatalogDispatchExposesCounter(t *testing.T) {
 	if err := collector.ObserveTeamCatalogDispatch("gitlab", TeamCatalogEntryPointPostSync, TeamCatalogOutcomeCollectorSkipped); err != nil {
 		t.Fatal(err)
 	}
+	if err := collector.ObserveTeamCatalogDispatch("github", TeamCatalogEntryPointPostSync, TeamCatalogOutcomeRateLimitDeferred); err != nil {
+		t.Fatal(err)
+	}
 	// An unrecognized provider clamps to "unknown" -- same cardinality
 	// discipline as zeroUnitFinalizationProvider.
 	if err := collector.ObserveTeamCatalogDispatch("bogus-provider", TeamCatalogEntryPointPostSync, TeamCatalogOutcomeBridge); err != nil {
@@ -59,6 +62,7 @@ func TestObserveTeamCatalogDispatchExposesCounter(t *testing.T) {
 		`dev_health_team_catalog_dispatch_total{provider="linear",entry_point="post_sync",outcome="native_failed_nonfatal"} 1`,
 		`dev_health_team_catalog_dispatch_total{provider="linear",entry_point="post_sync",outcome="roster_preservation_failed"} 1`,
 		`dev_health_team_catalog_dispatch_total{provider="gitlab",entry_point="post_sync",outcome="collector_skipped"} 1`,
+		`dev_health_team_catalog_dispatch_total{provider="github",entry_point="post_sync",outcome="rate_limit_deferred"} 1`,
 	} {
 		if !strings.Contains(text, want+"\n") {
 			t.Fatalf("missing exposition line %q:\n%s", want, text)

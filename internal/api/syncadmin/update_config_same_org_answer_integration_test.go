@@ -5,7 +5,6 @@ package syncadmin
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"regexp"

@@ -52,8 +52,8 @@ func TestTestopsSlotRecomputeRefusesAMalformedRequestBeforeAnyRead(t *testing.T)
 	}
 }
 
-// r1 F6: --max-repo-days is bounded (10,000); a larger cap, up to the largest UInt32, is a usage error, never a wrapped LIMIT.
-// r1 F3: --apply needs an explicit --through, so a replay on a later clock day cannot plan a new day.
+// --max-repo-days is bounded (10,000); a larger cap, up to the largest UInt32, is a usage error, never a wrapped LIMIT.
+// --apply needs an explicit --through, so a replay on a later clock day cannot plan a new day.
 func TestTestopsSlotRecomputeBoundsTheCapAndAnApplyNamesItsThrough(t *testing.T) {
 	org := auditTestOrg
 	base := []string{"metrics", "testops-slot-recompute", "--org", org, "--from", "2026-07-01", "--to", "2026-07-02", "--rerun-tag", "fix-1"}

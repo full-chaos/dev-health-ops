@@ -101,3 +101,77 @@ func TestLinearDuplicateMarkingRelationNodeHasItsCloseInTheTransitions(t *testin
 		})
 	}
 }
+
+// The implied close sits at the last relation-change node before the move out of Duplicate; without one it takes the
+// instant of that move (closed span 0 s) and still sorts before the reopen. A history that opens in Duplicate has no
+// earlier state to close from.
+func TestLinearImpliedDuplicateCloseTimeAndShape14568(t *testing.T) {
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	claim := nativeTestClaim("linear", "work-items")
+	start := `{"id":"h1","createdAt":"2026-09-20T10:00:00.000Z","fromState":{"name":"Todo","type":"unstarted"},"toState":{"name":"In Progress","type":"started"}}`
+	out := `{"id":"h9","createdAt":"2026-09-30T10:00:00.000Z","fromState":{"name":"Duplicate","type":"duplicate"},"toState":{"name":"In Progress","type":"started"}}`
+	relation := func(id, at string) string {
+		return `{"id":"` + id + `","createdAt":"` + at + `","fromState":null,"toState":null,"actor":{"name":"Ann","email":"ann@example.test"},"relationChanges":[{"identifier":"ENG-900","type":"ad"}]}`
+	}
+	cases := []struct {
+		name, history string
+		wantAt        time.Time
+		wantRows      int
+		wantActor     bool
+	}{
+		{"last relation node wins", "[" + start + "," + relation("h2", "2026-09-25T10:00:00.000Z") + "," + relation("h3", "2026-09-27T10:00:00.000Z") + "," + out + "]",
+			time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC), 3, true},
+		{"no relation node falls back to the move out", "[" + start + "," + out + "]",
+			time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC), 3, false},
+		{"relation node before an earlier state entry is not reused", "[" + relation("h0", "2026-09-10T10:00:00.000Z") + "," + start + "," + out + "]",
+			time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC), 3, false},
+		{"history opening in Duplicate has nothing to close", "[" + out + "]", time.Time{}, 1, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := linearCloseReproPayload14568(t, "ENG-7", "In Progress", "started", tc.history)
+			_, transitions, err := normalizeLinearWorkItem(claim, payload, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(transitions) != tc.wantRows {
+				t.Fatalf("transitions=%d, want %d: %+v", len(transitions), tc.wantRows, transitions)
+			}
+			if tc.wantRows == 1 {
+				return
+			}
+			implied := transitions[1]
+			if !implied.OccurredAt.Equal(tc.wantAt) || implied.ToStatus != "canceled" || implied.FromStatus != "in_progress" ||
+				implied.ToStatusRaw == nil || *implied.ToStatusRaw != "Duplicate" || implied.FromStatusRaw == nil || *implied.FromStatusRaw != "In Progress" {
+				t.Fatalf("implied row=%+v, want In Progress -> Duplicate at %v", implied, tc.wantAt)
+			}
+			if (implied.Actor != nil) != tc.wantActor {
+				t.Fatalf("implied actor=%v, want set=%v", implied.Actor, tc.wantActor)
+			}
+			rows := rankTransitionTies(projectRows(transitions, projectLinearTransition))
+			if sortKeyOf := transitionSortingKey(rows[1]); sortKeyOf == transitionSortingKey(rows[2]) {
+				t.Fatalf("implied close and reopen share a key %q", sortKeyOf)
+			}
+			if rows[1].ToStatusRaw != "Duplicate" || rows[1].TieOrdinal >= rows[2].TieOrdinal && transitionInstantKey(rows[1]) == transitionInstantKey(rows[2]) {
+				t.Fatalf("close must rank before the reopen: %+v / %+v", rows[1], rows[2])
+			}
+		})
+	}
+}
+
+// Only a move out of a duplicate-type state implies a close; a gap before any other state is left alone.
+func TestLinearNoImpliedCloseOutsideDuplicate14568(t *testing.T) {
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	claim := nativeTestClaim("linear", "work-items")
+	payload := linearCloseReproPayload14568(t, "ENG-7", "In Progress", "started", `[
+		{"id":"h1","createdAt":"2026-09-20T10:00:00.000Z","fromState":{"name":"Todo","type":"unstarted"},"toState":{"name":"In Progress","type":"started"}},
+		{"id":"h2","createdAt":"2026-09-25T10:00:00.000Z","fromState":null,"toState":null,"relationChanges":[{"identifier":"ENG-900","type":"ar"}]},
+		{"id":"h3","createdAt":"2026-09-30T10:00:00.000Z","fromState":{"name":"Done","type":"completed"},"toState":{"name":"In Progress","type":"started"}}]`)
+	_, transitions, err := normalizeLinearWorkItem(claim, payload, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transitions) != 2 {
+		t.Fatalf("transitions=%d, want 2 (no implied row for a gap before a non-duplicate state): %+v", len(transitions), transitions)
+	}
+}

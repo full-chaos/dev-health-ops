@@ -45,3 +45,19 @@ func TestFinishSyncRedactsTheStripeKeyAndTheAccountPasswordAsOneUnion(t *testing
 		t.Errorf("got %q", got)
 	}
 }
+
+// billingFailureText serves both billing verbs that print a Stripe failure
+// (reconcile and the sync verbs): the same union for the same text.
+func TestBillingFailureTextIsOneUnionOfTheKeyAndTheAccountDatabase(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	env := accountEnv(t, map[string]string{"API_DATABASE_URI": "postgres://acct:abQ9@db.example/app"}, &stdout, &stderr)
+	if got := billingFailureText(env, secrets.NewValue("abab"), errors.New("e abababQ9 f")); got != "e [REDACTED] f" {
+		t.Errorf("got %q", got)
+	}
+	if got := billingFailureText(env, secrets.Value{}, errors.New("e abQ9 f")); got != "e [REDACTED] f" {
+		t.Errorf("no key configured: got %q", got)
+	}
+	if got := billingFailureText(cli.Env{Lookup: func(string) (string, bool) { return "", false }, Stderr: &stderr}, secrets.NewValue("abab"), errors.New("e abab f")); got != "redacted" {
+		t.Errorf("no account database: got %q", got)
+	}
+}

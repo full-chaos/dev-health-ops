@@ -2,6 +2,7 @@ package adminops
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -57,12 +58,22 @@ func planSync(env cli.Env, pool *pgxpool.Pool) (billing.PlanSync, secrets.Value,
 // finishSync prints a failure of the sync as Python does ("Error: <text>" on
 // stdout, exit 1), with the Stripe key and the database credentials removed.
 func finishSync(env cli.Env, key secrets.Value, err error) int {
-	text := billing.ErrorText(err)
-	if key.Configured() {
-		text = secrets.RedactValues(text, key.Reveal())
-	}
-	fmt.Fprintf(env.Stdout, "Error: %s\n", accountRedactor(env)(fmt.Errorf("%s", text)).Error())
+	fmt.Fprintf(env.Stdout, "Error: %s\n", billingFailureText(env, key, err))
 	return cli.ExitFailure
+}
+
+// billingFailureText is the text of a failed Stripe call with the Stripe key and
+// the account database's credentials removed in one redaction.
+func billingFailureText(env cli.Env, key secrets.Value, err error) string {
+	database, ok := boundaryFor(env, accountDSN)
+	if !ok {
+		return "redacted"
+	}
+	var values []string
+	if key.Configured() {
+		values = append(values, key.Reveal())
+	}
+	return secrets.Join(database, secrets.NewBoundaryWith("", values...)).Redact(errors.New(billing.ErrorText(err))).Error()
 }
 
 func runBillingPullStripe(ctx context.Context, env cli.Env) int {

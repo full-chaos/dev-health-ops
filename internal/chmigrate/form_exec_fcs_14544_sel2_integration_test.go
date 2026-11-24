@@ -712,16 +712,31 @@ func TestFormExecFcs14544Sel2(t *testing.T) {
 		t.Logf("fixture phase1 %s parts=%d rows=%d", table, count, rows)
 	}
 	_ = partRows.Close()
+	// The work-math bound of each statement on this fixture (FORM-14544-SEL-2.md): test_suite_results R 12 rows in P 3
+	// parts, daily_metrics_touched_days 9 / 1, testops_test_metrics_daily 9 / 2, testops_release_confidence 5 / 1, repos 5 / 1;
+	// a FINAL read 2R + 2P + 1, a plain read R, the gate 2 x (parts of its tables) + 1. Run 45395917070 read S1 35, S2 24,
+	// S5 132 rows.
+	bounds := map[string]uint64{
+		"S1": (3*12 + 2*3 + 1) + (2*3 + 1),
+		"S2": (2*12 + 2*3 + 1) + (2*3 + 1),
+		"S3": (3*12 + 2*3 + 1) + 2*9 + 9 + (2*6 + 1),
+		"S4": (3*12 + 2*3 + 1) + 2*9 + 5 + (2*5 + 1),
+		"S5": 5*(2*12+2*3+1) + 6*(2*5+2*1+1) + (2*4 + 1),
+	}
 	for _, gate := range gates {
 		types, read := formExecSel14544QueryLog(ctx, t, conn, "PASS "+gate.id, passComments[gate.id])
 		if len(types) != 1 || types[0] != "QueryFinish" {
 			t.Errorf("PASS %s: query_log types %v, want [QueryFinish]", gate.id, types)
 		}
-		t.Logf("PASS %s read_rows=%d", gate.id, read)
+		if read == 0 || read > bounds[gate.id] {
+			t.Errorf("PASS %s: query_log read_rows %d, want 1 .. %d (the work math on this fixture)", gate.id, read, bounds[gate.id])
+		}
+		t.Logf("PASS %s read_rows=%d bound=%d", gate.id, read, bounds[gate.id])
 	}
 
 	// The gates fire: each cap literal lowered to 0 in a test copy only. WANT code 395 STOP-COST-GATE and query_log
 	// type ExceptionBeforeStart.
+	gateReadMax := map[string]uint64{"S1": 2*3 + 1, "S2": 2*3 + 1, "S3": 2*6 + 1, "S4": 2*5 + 1, "S5": 2*4 + 1}
 	type fired struct{ id, cap, comment string }
 	var fires []fired
 	for _, gate := range gates {
@@ -745,6 +760,9 @@ func TestFormExecFcs14544Sel2(t *testing.T) {
 		types, read := formExecSel14544QueryLog(ctx, t, conn, "GATE "+f.id+" "+f.cap, f.comment)
 		if len(types) != 1 || types[0] != "ExceptionBeforeStart" {
 			t.Errorf("GATE %s %s: query_log types %v, want [ExceptionBeforeStart]", f.id, f.cap, types)
+		}
+		if read > gateReadMax[f.id] {
+			t.Errorf("GATE %s %s: query_log read_rows %d over 2 x P + 1 = %d", f.id, f.cap, read, gateReadMax[f.id])
 		}
 		t.Logf("GATE %s %s read_rows=%d", f.id, f.cap, read)
 	}

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1719,6 +1720,7 @@ func normalizeLinearTransitions(
 	transitions := make([]linearWorkItemTransitionRow, 0, len(history))
 	var previousTo *linearStatePayload
 	var lastRelation *linearHistoryEntry
+	history = linearHistoryAscending(history)
 	for index := range history {
 		entry := history[index]
 		if entry.FromState == nil && entry.ToState == nil {
@@ -1760,6 +1762,29 @@ func normalizeLinearTransitions(
 		}
 	}
 	return transitions
+}
+
+// linearHistoryAscending returns a copy ordered by createdAt; ties and unparseable stamps (placed last) keep served order.
+func linearHistoryAscending(history []linearHistoryEntry) []linearHistoryEntry {
+	type stamped struct {
+		entry linearHistoryEntry
+		at    *time.Time
+	}
+	rows := make([]stamped, len(history))
+	for index, entry := range history {
+		rows[index] = stamped{entry: entry, at: parseLinearTime(entry.CreatedAt)}
+	}
+	sort.SliceStable(rows, func(left, right int) bool {
+		if rows[left].at == nil || rows[right].at == nil {
+			return rows[left].at != nil && rows[right].at == nil
+		}
+		return rows[left].at.Before(*rows[right].at)
+	})
+	ordered := make([]linearHistoryEntry, len(rows))
+	for index, row := range rows {
+		ordered[index] = row.entry
+	}
+	return ordered
 }
 
 func linearIsDuplicateState(state *linearStatePayload) bool {

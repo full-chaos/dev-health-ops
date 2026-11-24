@@ -3,6 +3,8 @@ package providersync
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -173,5 +175,97 @@ func TestLinearNoImpliedCloseOutsideDuplicate14568(t *testing.T) {
 	}
 	if len(transitions) != 2 {
 		t.Fatalf("transitions=%d, want 2 (no implied row for a gap before a non-duplicate state): %+v", len(transitions), transitions)
+	}
+}
+
+func linearHistoryNodes14568(t *testing.T, history string) []string {
+	t.Helper()
+	var nodes []json.RawMessage
+	if err := json.Unmarshal([]byte(history), &nodes); err != nil {
+		t.Fatal(err)
+	}
+	out := make([]string, len(nodes))
+	for index, node := range nodes {
+		out[index] = string(node)
+	}
+	return out
+}
+
+func linearTransitionSet14568(rows []linearWorkItemTransitionRow) []string {
+	set := make([]string, 0, len(rows))
+	for _, row := range rows {
+		actor, from, to := "", "", ""
+		if row.Actor != nil {
+			actor = *row.Actor
+		}
+		if row.FromStatusRaw != nil {
+			from = *row.FromStatusRaw
+		}
+		if row.ToStatusRaw != nil {
+			to = *row.ToStatusRaw
+		}
+		set = append(set, fmt.Sprintf("%s|%s|%s|%s|%s|%s", row.OccurredAt.Format(time.RFC3339Nano), from, to, row.FromStatus, row.ToStatus, actor))
+	}
+	sort.Strings(set)
+	return set
+}
+
+// The walk must not depend on the served order of the history.
+func TestLinearImpliedDuplicateCloseIgnoresServedOrder14568(t *testing.T) {
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	claim := nativeTestClaim("linear", "work-items")
+	start := `{"id":"h1","createdAt":"2026-09-20T10:00:00.000Z","fromState":{"name":"Todo","type":"unstarted"},"toState":{"name":"In Progress","type":"started"}}`
+	relation := func(id, at string) string {
+		return `{"id":"` + id + `","createdAt":"` + at + `","fromState":null,"toState":null,"actor":{"name":"Ann","email":"ann@example.test"},"relationChanges":[{"identifier":"ENG-900","type":"ad"}]}`
+	}
+	out := `{"id":"h3","createdAt":"2026-09-30T10:00:00.000Z","fromState":{"name":"Duplicate","type":"duplicate"},"toState":{"name":"In Progress","type":"started"}}`
+	served := `{"id":"h2b","createdAt":"2026-09-25T10:00:00.300Z","fromState":{"name":"In Progress","type":"started"},"toState":{"name":"Duplicate","type":"duplicate"}}`
+	cases := []struct{ name, history string }{
+		{"ad", "[" + start + "," + relation("h2", "2026-09-25T10:00:00.000Z") + "," + out + "]"},
+		{"ar-ad-twice", "[" + start + "," + relation("h2", "2026-09-25T10:00:00.000Z") +
+			`,{"id":"h2c","createdAt":"2026-09-26T10:00:00.000Z","fromState":{"name":"Duplicate","type":"duplicate"},"toState":{"name":"In Progress","type":"started"}},` +
+			relation("h4", "2026-09-28T10:00:00.000Z") + "," + out + "]"},
+		{"control-served-node", "[" + start + "," + relation("h2", "2026-09-25T10:00:00.000Z") + "," + served + "," + out + "]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			nodes := linearHistoryNodes14568(t, tc.history)
+			want := func(history string) []string {
+				payload := linearCloseReproPayload14568(t, "ENG-7", "In Progress", "started", history)
+				_, transitions, err := normalizeLinearWorkItem(claim, payload, now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return linearTransitionSet14568(transitions)
+			}
+			ascending := want(tc.history)
+			reversed := make([]string, len(nodes))
+			for index, node := range nodes {
+				reversed[len(nodes)-1-index] = node
+			}
+			if got := want("[" + strings.Join(reversed, ",") + "]"); !slices.Equal(got, ascending) {
+				t.Fatalf("reversed order gives %v, want %v", got, ascending)
+			}
+			// the relation node served after the move out of Duplicate
+			if tc.name == "ad" {
+				interleaved := "[" + nodes[0] + "," + nodes[2] + "," + nodes[1] + "]"
+				if got := want(interleaved); !slices.Equal(got, ascending) {
+					t.Fatalf("interleaved order gives %v, want %v", got, ascending)
+				}
+				if !strings.Contains(strings.Join(ascending, "\n"), "2026-09-25T10:00:00Z|In Progress|Duplicate") {
+					t.Fatalf("implied close not at the relation node time: %v", ascending)
+				}
+			}
+		})
+	}
+}
+
+// An entry whose createdAt does not parse sorts after every stamped entry.
+func TestLinearHistoryAscendingPlacesUnparseableLast14568(t *testing.T) {
+	history := []linearHistoryEntry{{ID: "c", CreatedAt: "bad"}, {ID: "b", CreatedAt: "2026-02-01T00:00:00Z"}, {ID: "a", CreatedAt: "2026-01-01T00:00:00Z"}, {ID: "b2", CreatedAt: "2026-02-01T00:00:00Z"}}
+	got := linearHistoryAscending(history)
+	ids := []string{got[0].ID, got[1].ID, got[2].ID, got[3].ID}
+	if !slices.Equal(ids, []string{"a", "b", "b2", "c"}) || history[0].ID != "c" {
+		t.Fatalf("order=%v (input head %q), want a b b2 c and an untouched input", ids, history[0].ID)
 	}
 }

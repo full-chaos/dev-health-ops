@@ -68,10 +68,18 @@ func (e *StoreTransientError) Is(target error) bool { return target == ErrStoreT
 
 // IsTransientStoreError classifies err by type and code only, never by text.
 func IsTransientStoreError(err error) bool {
-	if IsDeadlockDetected(err) || isSerializationFailure(err) {
+	if IsDeadlockDetected(err) || isSerializationFailure(err) || isCrashShutdown(err) {
 		return true
 	}
 	return dialclass.IsTransient(err)
+}
+
+// isCrashShutdown is SQLSTATE 57P02 (crash_shutdown): the server lost its
+// connections because another backend crashed, a lost connection like the 57P01
+// and 57P03 that dialclass already accepts.
+func isCrashShutdown(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "57P02"
 }
 
 func isSerializationFailure(err error) bool {

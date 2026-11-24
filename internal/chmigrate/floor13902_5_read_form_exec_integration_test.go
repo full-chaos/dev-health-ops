@@ -1757,7 +1757,8 @@ INSERT INTO commit_metrics (org_id, repo_id, commit_hash, day, author_email, tot
 	if len(del) != 1 || del[0]["delete_mutations"] != "1" {
 		t.Errorf("CANFAIL qz1 stmt2 (ALTER DELETE): %v, want delete_mutations 1", del)
 	}
-	if err := conn.Exec(ctx, "DELETE FROM git_commits WHERE org_id = 'nobody'"); err != nil {
+	// async: this test stopped merges on git_commits, so a synchronous lightweight delete would wait for its mutation forever
+	if err := conn.Exec(ctx, "DELETE FROM git_commits WHERE org_id = 'nobody' SETTINGS lightweight_deletes_sync = 0"); err != nil {
 		t.Fatalf("lightweight delete: %v", err)
 	}
 	var cmds []string

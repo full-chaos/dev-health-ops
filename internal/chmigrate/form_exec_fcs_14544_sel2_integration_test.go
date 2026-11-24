@@ -26,7 +26,7 @@ import (
 // no retraction (the prod state at the card's writing), retractions with fresh, pending and unmarked keys, the marks and
 // recomputes that cover them, and a slot retracted on the new image. It checks each WANT per phase, logs the pass-path
 // read_rows of each data statement, and fires each cost gate cap once (pm-guard FORM-TEMPLATE-4).
-const formExecSel14544SHA256 = "e4089d21be134e3ef17f7cab1a96679c3bb0aaa29fd6db449d73db18bbd5fb65"
+const formExecSel14544SHA256 = "28c679ebf8a2bf3c2e76c09d720de40baff07de1d1aaac88898d5e2fc375c609"
 
 const formExecSel14544SQL = `-- FORM-14544-SEL-2 (lane fcs-14544card, 2026-11-24, ops pin 3207ac6258c0). ClickHouse prod, SELECT only. Card CARD-14544-14562-1.
 -- Shape: pm-guard/FORM-TEMPLATE-4.md (4f9c5f10ec18). WANT text and work math: FORM-14544-SEL-2.md.
@@ -36,7 +36,8 @@ const formExecSel14544SQL = `-- FORM-14544-SEL-2 (lane fcs-14544card, 2026-11-24
 -- Run each statement once, in order. A SQL error (STOP-COST-GATE included) = STOP and report.
 -- Named parameters (one number each; an answer changes only the number): T332 = 2026-11-24 11:01:20 UTC (STEP 332 roll
 -- START, the lower bound of every retraction row); MARGIN = 300 s (the post-sync record's clock margin, touched_days.go:49);
--- LAG_DAYS = 1 (the cut of a run that has no post-sync record: its retraction stamp day + 1).
+-- LAG_DAYS = 1 (the cut of a run that has no post-sync record: its retraction stamp day + 1); SKEW = 0 s (worker clock minus
+-- ClickHouse clock, toIntervalSecond(0) in S3 and S4: one host clock assumed, card notes Q-G).
 
 -- S0 INFO cost inputs, metadata only (system.one + system.parts). WANT 5 rows, table_rows > 0 in each (a wrong table
 -- name gives a row with 0).
@@ -100,8 +101,9 @@ WHERE cost_gate = 0;
 -- S3 COVERAGE GATE on testops_test_metrics_daily. Every run with a newest-retracted suite key; its expected repo-days X =
 -- D .. min(D+29, cut) for each suite day D of the run, cut = the day of the run's post-sync 'touched' record (the record's own
 -- cut, touched_days_clickhouse.go:436), or the stamp day + LAG_DAYS when the run has no such record. Per key: mark = the
--- first 'touched' or 'touched_testops_window' event at or after stamp - MARGIN; last_compute = the newest computed_at.
--- FRESH = a mark and last_compute >= mark; PENDING = a mark and no compute after it; UNMARKED = no mark.
+-- LAST 'touched' or 'touched_testops_window' event at or after stamp - MARGIN (ClickHouse clock); last_compute = the newest
+-- computed_at (worker clock, stamped before the compute reads). FRESH = a mark and last_compute >= mark + SKEW; PENDING = a
+-- mark and no such compute; UNMARKED = no mark.
 -- WANT pending = 0 and unmarked = 0 (0 expected keys is a PASS). W = pending + unmarked; w_* print the verb args.
 WITH (SELECT throwIf(
     (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('daily_metrics_touched_days', 'test_suite_results', 'testops_test_metrics_daily')) > 6000000
@@ -121,9 +123,9 @@ SELECT count()                                                  AS expected_keys
 FROM (
 SELECT k.repo_id AS repo_id, k.day AS day, k.rday_min AS rday_min, k.rday_max AS rday_max, c.last_compute AS last_compute,
        arrayFilter(a -> a >= k.landed - toIntervalSecond(300), m.mats) AS mf,
-       if(empty(mf), toDateTime64(0, 3, 'UTC'), arrayMin(mf)) AS mark_at,
+       if(empty(mf), toDateTime64(0, 3, 'UTC'), arrayMax(mf)) AS mark_at,
        multiIf(mark_at = toDateTime64(0, 3, 'UTC'), 'unmarked',
-               toDateTime64(last_compute, 3, 'UTC') >= mark_at, 'fresh', 'pending') AS cls
+               toDateTime64(last_compute, 3, 'UTC') >= mark_at + toIntervalSecond(0), 'fresh', 'pending') AS cls
 FROM (
     SELECT repo_id, addDays(base_day, o) AS day, max(landed) AS landed, min(rday_min) AS rday_min, max(rday_max) AS rday_max
     FROM (
@@ -203,9 +205,9 @@ SELECT count()                                                  AS expected_keys
 FROM (
 SELECT k.repo_id AS repo_id, k.day AS day, k.rday_min AS rday_min, k.rday_max AS rday_max, c.last_compute AS last_compute,
        arrayFilter(a -> a >= k.landed - toIntervalSecond(300), m.mats) AS mf,
-       if(empty(mf), toDateTime64(0, 3, 'UTC'), arrayMin(mf)) AS mark_at,
+       if(empty(mf), toDateTime64(0, 3, 'UTC'), arrayMax(mf)) AS mark_at,
        multiIf(mark_at = toDateTime64(0, 3, 'UTC'), 'unmarked',
-               toDateTime64(last_compute, 3, 'UTC') >= mark_at, 'fresh', 'pending') AS cls
+               toDateTime64(last_compute, 3, 'UTC') >= mark_at + toIntervalSecond(0), 'fresh', 'pending') AS cls
 FROM (
     SELECT repo_id, addDays(base_day, o) AS day, max(landed) AS landed, min(rday_min) AS rday_min, max(rday_max) AS rday_max
     FROM (
@@ -459,8 +461,9 @@ func formExecSel14544QueryLog(ctx context.Context, t *testing.T, conn driver.Con
 //	phase0: one live suite of repo A (run a0, day 11-20, slot p1); no retraction, no mark (the prod state at 12:14Z).
 //	phase1: run aR of A: key kA1 (day 11-20, slot agg) live then retracted (stamp 11-24 11:40), key kA2 (day 11-21, slot
 //	        p1) live. Its post-sync record: 'touched' 12:00 on 11-20 and 11-21, 'touched_testops_window' 12:00 on
-//	        11-21 .. 11-24, and an older 'touched' 09:00 on 11-24 (before stamp - MARGIN: must not count). Metrics of A
-//	        computed 12:10 on 11-20 .. 11-23 and 11:50 on 11-24 (before its mark: PENDING).
+//	        11-21 .. 11-24, an older 'touched' 09:00 on 11-24 (before stamp - MARGIN: must not count), and a later
+//	        'touched' 12:15 on 11-22 (another sync: the LAST mark rules, so 11-22 is PENDING until a compute after it).
+//	        Metrics of A computed 12:10 on 11-20 .. 11-23 and 11:50 on 11-24 (before its mark: PENDING).
 //	        run bR of B: key kB1 (day 11-22, slot agg) retracted only, stamp 11-24 10:50 (a walk whose first attempt
 //	        predates T332), no record at all (UNMARKED 11-22 .. 11-25); metrics of B computed 11-23 on 11-22, 11-23.
 //	        run cR of C: key kC1 retracted, then live again (revived): not selected.
@@ -654,6 +657,7 @@ func TestFormExecFcs14544Sel2(t *testing.T) {
 		mark(org, repoA, "2026-11-23", "touched_testops_window", "2026-11-24 12:00:00.000"),
 		mark(org, repoA, "2026-11-24", "touched_testops_window", "2026-11-24 12:00:00.000"),
 		mark(org, repoA, "2026-11-24", "touched", "2026-11-24 09:00:00.000"),
+		mark(org, repoA, "2026-11-22", "touched", "2026-11-24 12:15:00.000"),
 		mark(other, repoE, "2026-11-20", "touched", "2026-11-24 12:00:00.000"),
 	}, ", "))
 	exec(tmd + strings.Join([]string{
@@ -675,11 +679,11 @@ func TestFormExecFcs14544Sel2(t *testing.T) {
 		"newest_keys": "9", "retracted_keys": "2", "stamped_before_t332_keys": "1", "retracted_runs": "2", "retracted_repos": "2",
 		"first_retracted_day": "2026-11-20", "last_retracted_day": "2026-11-22", "first_stamp_day": "2026-11-24", "last_stamp_day": "2026-11-24"})
 	formExecSel14544Row(t, results["S3"], "phase1 S3", 0, map[string]string{
-		"expected_keys": "9", "repos": "2", "fresh": "4", "pending": "1", "unmarked": "4", "w_no_row": "2", "w_repos": "2",
+		"expected_keys": "9", "repos": "2", "fresh": "3", "pending": "2", "unmarked": "4", "w_no_row": "2", "w_repos": "2",
 		"w_from": "2026-11-20", "w_to": "2026-11-22", "w_through": "2026-11-25", "w_repo_cuts": "[11111111 22222222]"})
 	formExecSel14544Row(t, results["S4"], "phase1 S4", 0, map[string]string{
-		"expected_keys": "9", "repos": "2", "fresh": "5", "pending": "0", "unmarked": "4", "w_no_row": "4", "w_repos": "1",
-		"w_from": "2026-11-22", "w_to": "2026-11-22", "w_through": "2026-11-25", "w_repo_cuts": "[22222222]"})
+		"expected_keys": "9", "repos": "2", "fresh": "4", "pending": "1", "unmarked": "4", "w_no_row": "4", "w_repos": "2",
+		"w_from": "2026-11-20", "w_to": "2026-11-22", "w_through": "2026-11-25", "w_repo_cuts": "[11111111 22222222]"})
 	for _, id := range []string{"S3", "S4"} {
 		if gatePass(results, "phase1", id) {
 			t.Errorf("phase1 %s: the coverage WANT held with pending/unmarked keys, want it to fail", id)
@@ -756,7 +760,7 @@ func TestFormExecFcs14544Sel2(t *testing.T) {
 		mark(org, repoB, "2026-11-25", "touched_testops_window", "2026-11-24 12:20:00.000"),
 	}, ", "))
 	exec(tmd + strings.Join([]string{
-		metric(org, repoA, "2026-11-24", "2026-11-24 12:30:00"),
+		metric(org, repoA, "2026-11-24", "2026-11-24 12:30:00"), metric(org, repoA, "2026-11-22", "2026-11-24 12:30:00"),
 		metric(org, repoB, "2026-11-22", "2026-11-24 12:30:00"), metric(org, repoB, "2026-11-23", "2026-11-24 12:30:00"),
 		metric(org, repoB, "2026-11-24", "2026-11-24 12:30:00"), metric(org, repoB, "2026-11-25", "2026-11-24 12:30:00"),
 	}, ", "))
@@ -767,7 +771,7 @@ func TestFormExecFcs14544Sel2(t *testing.T) {
 		t.Errorf("phase2 S3: the coverage WANT failed with every key covered, want PASS")
 	}
 	formExecSel14544Row(t, results["S4"], "phase2 S4", 0, map[string]string{
-		"expected_keys": "8", "fresh": "5", "pending": "3", "unmarked": "0", "w_no_row": "3", "w_repo_cuts": "[22222222]"})
+		"expected_keys": "8", "fresh": "4", "pending": "4", "unmarked": "0", "w_no_row": "3", "w_repo_cuts": "[11111111 22222222]"})
 
 	// Phase 3: the agg slot of run aS retracted on the new image.
 	exec(suites + strings.Join([]string{

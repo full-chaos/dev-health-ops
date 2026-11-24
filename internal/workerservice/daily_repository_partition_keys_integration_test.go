@@ -209,6 +209,29 @@ func TestDailyJobWritesOneRowOfAWorkScopeOverAllItsRepositories(t *testing.T) {
 	}
 }
 
+// computed_at has one-second resolution; a listed run never shares the first run's second.
+func waitForTheNextSecond() {
+	time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second)))
+}
+
+func requireALaterListedStamp(t *testing.T, ctx context.Context, conn driver.Conn, orgID string, day time.Time, listed uuid.UUID) {
+	t.Helper()
+	key := listed.String()
+	if listed == uuid.Nil {
+		key = ""
+	}
+	var oldest, newest time.Time
+	var stamps uint64
+	if err := conn.QueryRow(ctx, `SELECT min(computed_at), max(computed_at), uniqExact(computed_at) FROM issue_type_metrics_daily
+		WHERE org_id = ? AND day = ? AND ifNull(toString(repo_id), '') = ?`, orgID, day, key).Scan(&oldest, &newest, &stamps); err != nil {
+		t.Fatal(err)
+	}
+	if stamps < 2 || !newest.After(oldest) {
+		t.Fatalf("issue_type_metrics_daily of the listed repository %q: stamps %d, oldest %s, newest %s; want the listed run's stamp after the first run's",
+			key, stamps, oldest, newest)
+	}
+}
+
 // A run of listed repositories (the touched-day run of the post-sync fan-out)
 // must leave a work scope that a listed repository shares with an unlisted one
 // as a run of every repository leaves it.
@@ -234,11 +257,13 @@ func TestDailyRunOfListedRepositoriesComputesASharedWorkScopeOverEveryRepository
 				partitionKeyItem{repo: uuid.Nil, id: "gh:none#1", scope: "scope-shared"},
 				partitionKeyItem{repo: repoB, id: "gh:acme/web#2", scope: "scope-web-only"})
 			rig.fullRecompute(t, ctx, orgID, day)
+			waitForTheNextSecond()
 
 			listed := shape.listed(repoA, repoB)
 			insertPartitionKeyItems(t, ctx, rig.conn, orgID, day,
 				partitionKeyItem{repo: listed, id: "gh:new#1", scope: "scope-shared"})
 			rig.listedRecompute(t, ctx, orgID, day, listed)
+			requireALaterListedStamp(t, ctx, rig.conn, orgID, day, listed)
 			afterListed := derivedDaySnapshot(t, ctx, rig.conn, orgID, day)
 			if got, want := readWorkScopeRow(t, ctx, rig.conn, orgID, "scope-shared", day), (workScopeRow{4, 3, 12, 4, 4, 0}); got != want {
 				t.Errorf("shared work scope after the run of the listed repository = %+v, want %+v", got, want)

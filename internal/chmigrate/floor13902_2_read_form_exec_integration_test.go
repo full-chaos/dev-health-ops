@@ -1120,7 +1120,8 @@ func TestFloor13902FormsExecuteMutantsAndEveryStopFires(t *testing.T) {
 	sort.Strings(g4r)
 	want("MUTANT-RULE", "qz4", g4r, replaceRow(qz4Base, "team_metrics_daily 0 0 0 0", "team_metrics_daily 1 1 0 0"))
 
-	// Cost gate fires by fixture only (no SQL text change): rows of another org (e0e0e0e0) grow the live marks.
+	// Cost gate fires by fixture only (no SQL text change): rows of another org (e0e0e0e0) grow the live marks. Each fire row has
+	// its own key: optimize_on_insert collapses equal ReplacingMergeTree keys inside one insert block.
 	gate := func(phase string, fires map[string]bool) {
 		live := floor2LiveParts(t, ctx, conn)
 		for _, label := range []string{"stmt1", "stmt2", "stmt3", "qz4", "qz3"} {
@@ -1158,10 +1159,10 @@ SELECT '` + eOrg + `', toUUID('00000000-0000-4000-8000-000000000009'), concat('f
   toDateTime64('2026-01-01 00:00:00', 3, 'UTC'), toDateTime64('2026-01-01 00:00:00', 3, 'UTC') FROM numbers(2800000)`)
 	gate("FIRE-A", map[string]bool{"stmt2": true})
 	insert(`INSERT INTO repo_metrics_daily (org_id, repo_id, day, computed_at)
-SELECT '` + eOrg + `', toUUID('00000000-0000-4000-8000-000000000009'), toDate('2026-01-01') + (number % 300), toDateTime('2026-01-02 00:00:00', 'UTC') FROM numbers(8200000)`)
+SELECT '` + eOrg + `', generateUUIDv4(number), toDate('2026-01-01') + (number % 300), toDateTime('2026-01-02 00:00:00', 'UTC') FROM numbers(8200000)`)
 	gate("FIRE-B", map[string]bool{"stmt1": true, "stmt2": true, "stmt3": true, "qz3": true})
 	insert(`INSERT INTO repo_metrics_daily (org_id, repo_id, day, computed_at)
-SELECT '` + eOrg + `', toUUID('00000000-0000-4000-8000-000000000009'), toDate('2026-01-01') + (number % 300), toDateTime('2026-01-02 00:00:00', 'UTC') FROM numbers(8200000, 8100000)`)
+SELECT '` + eOrg + `', generateUUIDv4(number), toDate('2026-01-01') + (number % 300), toDateTime('2026-01-02 00:00:00', 'UTC') FROM numbers(8200000, 8100000)`)
 	gate("FIRE-C", map[string]bool{"stmt1": true, "stmt2": true, "stmt3": true, "qz3": true, "qz4": true})
 
 	if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {

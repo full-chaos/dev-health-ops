@@ -437,7 +437,6 @@ const (
 		SELECT outbox.args #>> '{domain,id}' FROM public.worker_job_outbox AS outbox
 		WHERE outbox.job_kind = 'metrics.daily_finalize'
 			AND outbox.status IN ('pending', 'claimed')
-			AND outbox.args #>> '{domain,id}' IS NOT NULL
 	))`
 	// Uncorrelated like the River arms (one join per statement, the same IS
 	// NOT NULL guard): as a correlated EXISTS the planner could re-run a merge

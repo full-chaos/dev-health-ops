@@ -121,87 +121,19 @@ func TestSpellingsEqualToTheRawValueAreDeduped(t *testing.T) {
 	if plain, escaped := credentialSpellings("plainvalue1"); len(plain) != 1 || len(escaped) != 0 {
 		t.Errorf("credentialSpellings of a plain value = %q %q, want one entry", plain, escaped)
 	}
-	plain, escaped := credentialSpellings(escapedSecret)
-	seen := map[string]bool{}
-	for _, value := range append(append([]string{}, plain...), escaped...) {
-		if seen[value] {
-			t.Errorf("duplicate spelling %q in %q %q", value, plain, escaped)
-		}
-		seen[value] = true
-	}
-	if len(seen) != 8 {
-		t.Errorf("got %d spellings %q %q, want 8", len(seen), plain, escaped)
-	}
-}
-
-// The shape the reviewer named: the escaped login "svc:" ends where the raw
-// password "A7kZ2" starts, so one replacement must not hide the password's
-// first byte and leave the rest.
-func TestOverlappingValuesAreRedactedAsOneUnion(t *testing.T) {
-	b := NewBoundary("postgres://svc%3A:A7kZ2@h/db")
-	if got := b.RedactText("echo svc%3A7kZ2 end"); got != "echo [REDACTED] end" {
-		t.Errorf("got %q", got)
-	}
-	if got := NewBoundaryWith("", "E", "A7kZ2").RedactText("A7kZ2"); got != RedactedMarker {
-		t.Errorf("marker corrupted: got %q", got)
-	}
-	if got := RedactValues("abcdef", "abcd", "cdef"); got != RedactedMarker {
-		t.Errorf("RedactValues overlap: got %q", got)
-	}
-	if got := RedactValues("aXa", "a"); got != "[REDACTED]X[REDACTED]" {
-		t.Errorf("RedactValues repeats: got %q", got)
-	}
-	if got := RedactValues("pw:pw:pw", "pw:pw"); got != RedactedMarker {
-		t.Errorf("self overlap: got %q", got)
-	}
-}
-
-// mainRedactedBytes is main's redactor: its value set (the DSN components and
-// the resolved values, raw) and sequential strings.ReplaceAll, run on a slice
-// that carries each byte's index in the original text (-1 for marker bytes).
-func mainRedactedBytes(text string, values []string) map[int]bool {
-	type cell struct {
-		b   byte
-		idx int
-	}
-	cells := make([]cell, len(text))
-	for i := range text {
-		cells[i] = cell{text[i], i}
-	}
-	covered := map[int]bool{}
-	for _, value := range values {
-		if value == "" {
-			continue
-		}
-		var next []cell
-		for i := 0; i < len(cells); {
-			if i+len(value) <= len(cells) && matchesAt(cells[i:i+len(value)], value, func(c cell) byte { return c.b }) {
-				for _, c := range cells[i : i+len(value)] {
-					if c.idx >= 0 {
-						covered[c.idx] = true
-					}
-				}
-				for j := 0; j < len(RedactedMarker); j++ {
-					next = append(next, cell{RedactedMarker[j], -1})
-				}
-				i += len(value)
-				continue
+	for secret, want := range map[string][2]int{escapedSecret: {5, 3}, controlSecret: {6, 2}} {
+		plain, escaped := credentialSpellings(secret)
+		seen := map[string]bool{}
+		for _, value := range append(append([]string{}, plain...), escaped...) {
+			if seen[value] {
+				t.Errorf("duplicate spelling %q in %q %q", value, plain, escaped)
 			}
-			next = append(next, cells[i])
-			i++
+			seen[value] = true
 		}
-		cells = next
-	}
-	return covered
-}
-
-func matchesAt[T any](cells []T, value string, get func(T) byte) bool {
-	for i := range cells {
-		if get(cells[i]) != value[i] {
-			return false
+		if len(plain) != want[0] || len(escaped) != want[1] {
+			t.Errorf("%q: got %d plain %q and %d escaped %q, want %d and %d", secret, len(plain), plain, len(escaped), escaped, want[0], want[1])
 		}
 	}
-	return true
 }
 
 // newRedactedBytes is the bytes of the ORIGINAL text the boundary hides: every

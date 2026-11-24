@@ -991,6 +991,10 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 				return plan.String()
 			}
 			const outboxScan = "Seq Scan on worker_job_outbox"
+			// A keyed plan reads one or two rows per node here (one strand delivery per shape). A walk reads the finalize
+			// index (cleanedOutboxRows/finalizeEvery + 1 = 1601 entries) or river_job (liveRiverJobs = 5000 rows). The
+			// bound sits an order of magnitude from both.
+			const finalizeStrandWorkBound = 100
 			bindingPattern := regexp.MustCompile(`\n\t\tAND job\.args @> jsonb_build_object\('domain', jsonb_build_object\('id', \w+\.id::text\)\)`)
 			// One subtest per shape, so a failure names the survey it belongs to
 			// and the other shapes are still checked.
@@ -1005,6 +1009,10 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 							t.Fatalf("the %s survey does not reach the outbox through its dedupe-key index:\n%s",
 								shape.name, plan)
 						}
+						return
+					}
+					if shape.name == "finalize" {
+						checkFinalizeStrandSurveyProbes(t, ctx, admin, shape.survey, now, finalizeStrandWorkBound)
 						return
 					}
 					// "No Seq Scan" alone is not the claim: a full walk of the
@@ -2949,11 +2957,92 @@ func partitionsRunProbe(nodeType, indexCond string) bool {
 
 // explainNode is one node of EXPLAIN (ANALYZE, FORMAT JSON).
 type explainNode struct {
-	NodeType     string        `json:"Node Type"`
-	RelationName string        `json:"Relation Name"`
-	IndexCond    string        `json:"Index Cond"`
-	ActualLoops  float64       `json:"Actual Loops"`
-	Plans        []explainNode `json:"Plans"`
+	NodeType         string        `json:"Node Type"`
+	RelationName     string        `json:"Relation Name"`
+	IndexName        string        `json:"Index Name"`
+	IndexCond        string        `json:"Index Cond"`
+	RecheckCond      string        `json:"Recheck Cond"`
+	ActualRows       float64       `json:"Actual Rows"`
+	ActualLoops      float64       `json:"Actual Loops"`
+	RemovedByFilter  float64       `json:"Rows Removed by Filter"`
+	RemovedByRecheck float64       `json:"Rows Removed by Index Recheck"`
+	Plans            []explainNode `json:"Plans"`
+}
+
+// checkFinalizeStrandSurveyProbes holds the finalize strand survey to keyed probes (pm ruling 2026-11-23, #6850): run
+// with real values, every node on worker_job_outbox or river_job carries a key condition and reads at most workBound
+// rows (rows + rows removed, times loops); the outbox is reached through ix_worker_job_outbox_finalize_domain_id. The
+// control plans it again with that index dropped in a rolled-back transaction: it must then lose the index and go back
+// to the River route (a river_job_id probe) or scan the outbox, so the index is what the plan rides on.
+func checkFinalizeStrandSurveyProbes(t *testing.T, ctx context.Context, admin *pgxpool.Pool, survey string, now time.Time, workBound float64) {
+	t.Helper()
+	tx, err := admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	explain := func() (string, explainNode) {
+		t.Helper()
+		var raw []byte
+		if err := tx.QueryRow(ctx, "EXPLAIN (ANALYZE, FORMAT JSON) "+survey, now.UTC(), 100).Scan(&raw); err != nil {
+			t.Fatalf("EXPLAIN the finalize survey: %v", err)
+		}
+		var plans []struct {
+			Plan explainNode `json:"Plan"`
+		}
+		if err := json.Unmarshal(raw, &plans); err != nil || len(plans) != 1 {
+			t.Fatalf("EXPLAIN the finalize survey: %v", err)
+		}
+		return string(raw), plans[0].Plan
+	}
+	raw, root := explain()
+	nodes := 0
+	var walk func(node explainNode)
+	walk = func(node explainNode) {
+		if node.RelationName == "worker_job_outbox" || node.RelationName == "river_job" {
+			nodes++
+			keyed := (node.NodeType == "Index Scan" || node.NodeType == "Index Only Scan") && node.IndexCond != "" ||
+				node.NodeType == "Bitmap Heap Scan" && node.RecheckCond != ""
+			if !keyed {
+				t.Fatalf("the finalize survey reads %s through an unkeyed %s:\n%s", node.RelationName, node.NodeType, raw)
+			}
+			read := (node.ActualRows + node.RemovedByFilter + node.RemovedByRecheck) * node.ActualLoops
+			t.Logf("INFO finalize survey %s %s: %.0f rows read over %.0f loops", node.NodeType, node.RelationName, read, node.ActualLoops)
+			if read > workBound {
+				t.Fatalf("the finalize survey reads %.0f rows of %s through %s, bound %.0f:\n%s", read, node.RelationName, node.NodeType, workBound, raw)
+			}
+		}
+		for _, child := range node.Plans {
+			walk(child)
+		}
+	}
+	walk(root)
+	if nodes < 2 {
+		t.Fatalf("the finalize survey has %d outbox/river_job nodes, want both tables read:\n%s", nodes, raw)
+	}
+	if !strings.Contains(raw, "ix_worker_job_outbox_finalize_domain_id") {
+		t.Fatalf("the finalize survey does not reach the outbox through ix_worker_job_outbox_finalize_domain_id:\n%s", raw)
+	}
+	if _, err := tx.Exec(ctx, "DROP INDEX public.ix_worker_job_outbox_finalize_domain_id"); err != nil {
+		t.Fatal(err)
+	}
+	control, controlRoot := explain()
+	riverRoute, outboxScan := false, false
+	var walkControl func(node explainNode)
+	walkControl = func(node explainNode) {
+		if node.RelationName == "worker_job_outbox" {
+			riverRoute = riverRoute || strings.Contains(node.IndexCond, "river_job_id = job.id")
+			outboxScan = outboxScan || node.NodeType == "Seq Scan"
+		}
+		for _, child := range node.Plans {
+			walkControl(child)
+		}
+	}
+	walkControl(controlRoot)
+	if strings.Contains(control, "ix_worker_job_outbox_finalize_domain_id") || !(riverRoute || outboxScan) {
+		t.Fatalf("CONTROL: with the finalize index dropped the survey does not go back to the River route or an "+
+			"outbox scan, so this cell cannot tell the index from the plan:\n%s", control)
+	}
 }
 
 // Recent-arm ruling (a): the River arm of the recent fragment, now an uncorrelated IN, answers as the old correlated

@@ -600,7 +600,7 @@ func updateServicesDatasetMappings(ctx context.Context, tx pgx.Tx, org string, i
 // exactly the stored list.
 func (h *handlers) cascadeToChildren(ctx context.Context, tx pgx.Tx, org string, parentID uuid.UUID, in syncConfigUpdate, parentStored []string,
 	options *pyjson.Object, cleared map[string]bool, optionsProvided bool, now time.Time) error {
-	rows, err := tx.Query(ctx, `SELECT `+syncConfigColumns+` FROM sync_configurations WHERE org_id = $1 AND parent_id = $2 ORDER BY id`, org, parentID)
+	rows, err := tx.Query(ctx, `SELECT `+syncConfigColumns+` FROM sync_configurations WHERE parent_id = $1 ORDER BY id`, parentID)
 	if err != nil {
 		return fmt.Errorf("read child configs: %w", err)
 	}

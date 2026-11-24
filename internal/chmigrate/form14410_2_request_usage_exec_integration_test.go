@@ -284,7 +284,7 @@ func TestForm14410s2RequestUsageReadEveryColumnCoverageMutantsAndGate(t *testing
 		window_started_at, recorded_at)
 		SELECT '%s', 'github', 'cicd', '%s', 'unit', concat('exec-b-', toString(number)), 'rest', 0, 1, 1, 15000, 10000, 5000, 'core',
 		       start + toIntervalHour(number) - toIntervalMinute(1), start + toIntervalHour(number)
-		FROM numbers(24)
+		FROM numbers(24) AS n
 		CROSS JOIN (SELECT %s AS start) AS s
 		WHERE number != 9`, form14410Org, form14410IntegB,
 		//ttlclock:allow fixed FORM-14410-2 window data (a throwaway exec cell), the row lives until 2027-12-23

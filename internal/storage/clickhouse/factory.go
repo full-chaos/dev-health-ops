@@ -105,6 +105,30 @@ func Open(ctx context.Context, config Config) (driver.Conn, error) {
 // ping more than once (a bounded first-connect wait). On failure it returns
 // the same redacted ErrUnavailable error Open returns.
 func OpenWith(ctx context.Context, config Config, wait func(context.Context, func(context.Context) error) error) (driver.Conn, error) {
+	return openWith(ctx, config, wait, func(err error, resolved []string) error {
+		return secrets.WithRedactedCauseAlso(ErrUnavailable, config.DSN, err, resolved...)
+	})
+}
+
+// OpenRawCause is Open for the two dho sync CLI openers (internal/synccli), which
+// redact the original error text once, with one union of every credential on
+// their print path (the ClickHouse DSN, the database, the provider credentials):
+// the DSN-only redaction of Open would remove bytes that union still has to
+// match. On failure the error is ErrUnavailable with the driver's cause text
+// unredacted; the caller must redact it before it is printed or logged. Nothing
+// else may call it (TestOpenRawCauseHasExactlyTheTwoSyncCLICallers).
+func OpenRawCause(ctx context.Context, config Config) (driver.Conn, error) {
+	return openWith(ctx, config, func(ctx context.Context, ping func(context.Context) error) error { return ping(ctx) },
+		func(err error, _ []string) error { return rawCauseError{cause: err} })
+}
+
+// rawCauseError is ErrUnavailable plus the driver's cause text as it came.
+type rawCauseError struct{ cause error }
+
+func (e rawCauseError) Error() string { return ErrUnavailable.Error() + ": " + e.cause.Error() }
+func (e rawCauseError) Unwrap() error { return ErrUnavailable }
+
+func openWith(ctx context.Context, config Config, wait func(context.Context, func(context.Context) error) error, failure func(error, []string) error) (driver.Conn, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
@@ -119,11 +143,11 @@ func OpenWith(ctx context.Context, config Config, wait func(context.Context, fun
 	resolved := []string{options.Auth.Username, options.Auth.Password}
 	connection, err := clickhouse.Open(options)
 	if err != nil {
-		return nil, secrets.WithRedactedCauseAlso(ErrUnavailable, config.DSN, err, resolved...)
+		return nil, failure(err, resolved)
 	}
 	if err := wait(ctx, connection.Ping); err != nil {
 		_ = connection.Close()
-		return nil, secrets.WithRedactedCauseAlso(ErrUnavailable, config.DSN, err, resolved...)
+		return nil, failure(err, resolved)
 	}
 	if config.MaxIdleConns > 1 {
 		WarmPool(ctx, connection.Ping, config.MaxIdleConns)

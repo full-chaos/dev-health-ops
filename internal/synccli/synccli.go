@@ -155,7 +155,7 @@ func defaultDeps() deps {
 			}
 		},
 		openStore: func(ctx context.Context, dsn string) (driver.Conn, error) {
-			return clickhousestore.Open(ctx, clickhousestore.DefaultConfig(dsn))
+			return clickhousestore.OpenRawCause(ctx, clickhousestore.DefaultConfig(dsn))
 		},
 		now:          time.Now,
 		doer:         productionDoer(),

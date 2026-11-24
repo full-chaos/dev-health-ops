@@ -93,12 +93,12 @@ func deleteConfigFrom(env cli.Env, analyticsDB string) (admin.DeleteOrgConfig, f
 	}
 	if analyticsDB != "" {
 		deleteConfig.ClickHouseDSN = analyticsDB
-		clickHouse = append(clickHouse, secrets.NewBoundary(analyticsDB))
+		clickHouse = append(clickHouse, secrets.NewBoundary(analyticsDB), secrets.NewBoundaryWith("", analyticsDB))
 	} else if dsn, configured, err := config.ResolveDSN(env.Lookup, "CLICKHOUSE_URI", config.ClickHouseSpec); err != nil {
 		return fail(err)
 	} else if configured {
 		deleteConfig.ClickHouseDSN = dsn.Reveal()
-		clickHouse = append(clickHouse, secrets.NewBoundary(dsn.Reveal()))
+		clickHouse = append(clickHouse, secrets.NewBoundary(dsn.Reveal()), secrets.NewBoundaryWith("", dsn.Reveal()))
 	}
 	decryptor, salted, err := settingsDecryptor(env)
 	if err != nil {

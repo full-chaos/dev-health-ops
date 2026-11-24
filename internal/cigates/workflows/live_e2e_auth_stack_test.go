@@ -287,7 +287,7 @@ func liveE2EUpFakes(t *testing.T, state string) string {
 	fake := t.TempDir()
 	write := func(name, body string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(fake, name), []byte(body), 0o755); err != nil {
+		if err := writeExecFile(filepath.Join(fake, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -434,7 +434,7 @@ func stopStartFixture(t *testing.T, fake, state string, extraEnv ...string) (run
 
 func writeExec(t *testing.T, path, body string, mode os.FileMode) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte(body), mode); err != nil {
+	if err := writeExecFile(path, []byte(body), mode); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -569,7 +569,7 @@ func TestLiveE2EAssertAuditCells(t *testing.T) {
 		"no_issue) echo '0 0 0' ;;\n" +
 		"two_valid_issues) echo '2 2 0' ;;\n" +
 		"*) exit 2 ;;\nesac\n"
-	if err := os.WriteFile(filepath.Join(fake, "psql"), []byte(shim), 0o755); err != nil {
+	if err := writeExecFile(filepath.Join(fake, "psql"), []byte(shim), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for cell, wantOK := range map[string]bool{
@@ -605,7 +605,7 @@ func liveE2ESetupVerb(t *testing.T, verb, email, stackCase string) (string, stri
 		"case \"$STACK_CASE\" in\n" +
 		"  verified) echo t; echo '1 1' ;;\n  verified_none) echo t; echo '0 0' ;;\n  verified_auth_only) echo t; echo '1 0' ;;\n" +
 		"  granted) echo 1 ;;\n  granted_none|write_fails) echo 0 ;;\n  granted_two) echo 2 ;;\n  *) exit 2 ;;\nesac\n"
-	if err := os.WriteFile(filepath.Join(fake, "psql"), []byte(shim), 0o755); err != nil {
+	if err := writeExecFile(filepath.Join(fake, "psql"), []byte(shim), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer

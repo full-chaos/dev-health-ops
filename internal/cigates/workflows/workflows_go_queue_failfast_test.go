@@ -377,7 +377,7 @@ const ghStubBroken = "#!/usr/bin/env bash\necho 'gh: boom' >&2\nexit 4\n"
 func runNaming(t *testing.T, script, stub string) (int, string, string) {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(stub), 0o755); err != nil {
+	if err := writeExecFile(filepath.Join(dir, "gh"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	summary := filepath.Join(dir, "summary.md")

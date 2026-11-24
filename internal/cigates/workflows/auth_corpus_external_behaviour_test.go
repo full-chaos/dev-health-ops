@@ -129,7 +129,7 @@ fi
 exec /bin/chmod "$@"
 `
 	for name, body := range map[string]string{"docker": docker, "go": goShim, "chmod": chmodShim} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+		if err := writeExecFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -352,7 +352,7 @@ if [[ " $* " == *" -X OPTIONS "* ]]; then
 fi
 printf '%s\n' "${FAKE_METRICS:-}"
 `
-	if err := os.WriteFile(filepath.Join(f.dir, "curl"), []byte(curl), 0o755); err != nil {
+	if err := writeExecFile(filepath.Join(f.dir, "curl"), []byte(curl), 0o755); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -3,7 +3,6 @@ package workflows_test
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -44,7 +43,7 @@ func wireParityRun(t *testing.T, script string, env ...string) []string {
 	}
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "pnpm.log")
-	if err := os.WriteFile(filepath.Join(dir, "pnpm"), []byte("#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > \"$PNPM_LOG\"\n"), 0o755); err != nil {
+	if err := writeExecFile(filepath.Join(dir, "pnpm"), []byte("#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > \"$PNPM_LOG\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", "-e", "-c", script)

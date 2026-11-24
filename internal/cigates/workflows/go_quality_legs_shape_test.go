@@ -118,7 +118,7 @@ func runQualityHelperNames(t *testing.T, jobs, namesFile string) bool {
 	t.Helper()
 	dir := t.TempDir()
 	write := func(name, content string) {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o755); err != nil {
+		if err := writeExecFile(filepath.Join(dir, name), []byte(content), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}

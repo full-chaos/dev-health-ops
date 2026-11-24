@@ -20,7 +20,7 @@ func TestMain(m *testing.M) {
 	}
 	for _, name := range []string{"python", "python3", "uv", "pip", "pip3"} {
 		body := "#!/bin/sh\necho 'python-forbidden-in-ci-tests: '\"$0\" >&2\nexit 127\n"
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+		if err := writeExecFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
 			panic(err)
 		}
 	}

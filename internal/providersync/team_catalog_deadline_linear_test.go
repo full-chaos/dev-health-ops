@@ -316,6 +316,10 @@ type tcdlLNRun struct {
 	reasons []string
 }
 
+// tcdlLNGateless runs the sweep without the shared gate, as the catalog path
+// does in production (workerservice/team_catalog_clients.go:298-310).
+var tcdlLNGateless bool
+
 func tcdlLNCollect(t *testing.T, strict bool, failAt int, wait, deadline time.Duration) tcdlLNRun {
 	t.Helper()
 	claim := nativeTestClaim("linear", "work-items")
@@ -324,7 +328,9 @@ func tcdlLNCollect(t *testing.T, strict bool, failAt int, wait, deadline time.Du
 	conn := tcdlLNStore(t, claim.OrgID)
 	doer := &tcdlLNDoer{failAt: failAt}
 	client := sweepClient(t, "linear", "https://api.linear.app", doer, wait)
-	client.Gate = &retryDeadlineGate{}
+	if !tcdlLNGateless {
+		client.Gate = &retryDeadlineGate{}
+	}
 	collector := LinearTeamCatalogCollector{
 		ScopeCensus: staticScopeCensus{},
 		Handler:     LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10},
@@ -381,6 +387,19 @@ func tcdlLNErrClass(err error) string {
 // request index k of the happy run, strict and non-strict, failing request k
 // with a 429 whose wait does not fit the deadline, with the shared gate armed.
 func TestLinearTeamCatalogRateLimitPastTheDeadlineClosesNothingUnread(t *testing.T) {
+	tcdlLNSweep(t)
+}
+
+// Gateless variant: later requests are answered, so the "no request after k"
+// and "no close needing a later answer" checks are dropped; every other
+// violation check stays.
+func TestLinearTeamCatalogRateLimitPastTheDeadlineGatelessClosesNothingUnread(t *testing.T) {
+	tcdlLNGateless = true
+	defer func() { tcdlLNGateless = false }()
+	tcdlLNSweep(t)
+}
+
+func tcdlLNSweep(t *testing.T) {
 	for _, strict := range []bool{true, false} {
 		happy := tcdlLNCollect(t, strict, -1, time.Millisecond, 10*time.Second)
 		if happy.err != nil {
@@ -406,7 +425,7 @@ func TestLinearTeamCatalogRateLimitPastTheDeadlineClosesNothingUnread(t *testing
 				t.Errorf("strict=%v k=%d: no request was failed", strict, k)
 				continue
 			}
-			if len(run.labels) > k {
+			if !tcdlLNGateless && len(run.labels) > k {
 				t.Errorf("strict=%v k=%d: %d request(s) reached the provider after the 429 armed the gate: %v",
 					strict, k, len(run.labels)-k, run.labels[k:])
 			}
@@ -425,7 +444,7 @@ func TestLinearTeamCatalogRateLimitPastTheDeadlineClosesNothingUnread(t *testing
 			for _, close := range run.closes {
 				for _, need := range tcdlLNNeeds(close) {
 					for index, label := range happy.labels {
-						if label == need && index+1 > k {
+						if !tcdlLNGateless && label == need && index+1 > k {
 							t.Errorf("P1 strict=%v k=%d: %q closed though %q (request %d) came after the gate closed", strict, k, close, need, index+1)
 						}
 					}

@@ -244,6 +244,10 @@ type jiraDeadlineOutcome struct {
 	ownWrite int
 }
 
+// jiraDeadlineGateless runs the sweep without the shared gate, as the catalog
+// path does in production (workerservice/team_catalog_clients.go:298-310).
+var jiraDeadlineGateless bool
+
 func runJiraDeadlineCatalog(t *testing.T, failAt int, strict bool) jiraDeadlineOutcome {
 	t.Helper()
 	doer := &jiraDeadlineDoer{failAt: failAt}
@@ -260,7 +264,9 @@ func runJiraDeadlineCatalog(t *testing.T, failAt int, strict bool) jiraDeadlineO
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.Gate = &retryDeadlineGate{}
+	if !jiraDeadlineGateless {
+		client.Gate = &retryDeadlineGate{}
+	}
 	conn := newJiraDeadlineConn()
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
 	collector := JiraTeamCatalogCollector{
@@ -328,6 +334,16 @@ func jiraDeadlineClass(err error) string {
 // project search did not answer in full marks the ownership snapshot
 // incomplete; no retire statement is executed.
 func TestJiraTeamCatalogRateLimitPastTheDeadlineClosesNothingUnread(t *testing.T) {
+	jiraDeadlineSweep(t)
+}
+
+func TestJiraTeamCatalogRateLimitPastTheDeadlineGatelessClosesNothingUnread(t *testing.T) {
+	jiraDeadlineGateless = true
+	defer func() { jiraDeadlineGateless = false }()
+	jiraDeadlineSweep(t)
+}
+
+func jiraDeadlineSweep(t *testing.T) {
 	happy := runJiraDeadlineCatalog(t, -1, false)
 	if happy.err != nil || len(happy.doer.unexpected) > 0 {
 		t.Fatalf("happy run: err=%v unexpected=%v", happy.err, happy.doer.unexpected)

@@ -372,6 +372,13 @@ type tcdlGLRun struct {
 	unknownWr []string
 }
 
+// tcdlGLGateless runs the sweep without the shared gate: the team-catalog
+// clients are built without one (workerservice/team_catalog_clients.go:298-310).
+var tcdlGLGateless bool
+
+// tcdlGLStrict runs the sweep as the strict discovery path (Ref.Strict).
+var tcdlGLStrict bool
+
 func tcdlGLCollect(t *testing.T, selections TeamCatalogSelections, failAt int) tcdlGLRun {
 	t.Helper()
 	at := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
@@ -386,11 +393,15 @@ func tcdlGLCollect(t *testing.T, selections TeamCatalogSelections, failAt int) t
 		Sink:        GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })},
 		ScopeCensus: tcdlGLCensus{},
 	}
-	ref := TeamCatalogReference{OrgID: tcdlGLOrg, SyncRunID: "run-1", IntegrationID: "integration-1"}
+	ref := TeamCatalogReference{OrgID: tcdlGLOrg, SyncRunID: "run-1", IntegrationID: "integration-1", Strict: tcdlGLStrict}
 	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	client := retryDeadlineGitLabClient(t, doer, &retryDeadlineGate{}, 5*time.Millisecond)
+	var gate providerfoundation.BackoffGate
+	if !tcdlGLGateless {
+		gate = &retryDeadlineGate{}
+	}
+	client := retryDeadlineGitLabClient(t, doer, gate, 5*time.Millisecond)
 	result, err := collector.CollectTeamCatalog(ctx, ref, credential, client, selections, at)
 	run := tcdlGLRun{calls: doer.snapshot(), result: result, err: err, conn: conn, log: logs, targets: map[string]string{}}
 	targetState := projectsInsertPositions["target_state"]
@@ -529,6 +540,26 @@ func tcdlGLViolations(run tcdlGLRun, selections TeamCatalogSelections) []string 
 // row and states both targets), then each request index k answered 429 past
 // the deadline with the shared gate.
 func TestGitLabTeamCatalogRateLimitPastDeadlineUnderGateClosesNothingUnread(t *testing.T) {
+	tcdlGLSweep(t)
+}
+
+// The same sweep without a gate, as the catalog path runs in production: every
+// later request is answered.
+func TestGitLabTeamCatalogRateLimitPastDeadlineGatelessClosesNothingUnread(t *testing.T) {
+	tcdlGLGateless = true
+	defer func() { tcdlGLGateless = false }()
+	tcdlGLSweep(t)
+}
+
+// Strict (the reference-discovery path): a failed read returns the error and the
+// sink is never called, so a run that errors writes nothing.
+func TestGitLabTeamCatalogRateLimitPastDeadlineStrictGatelessClosesNothingUnread(t *testing.T) {
+	tcdlGLGateless, tcdlGLStrict = true, true
+	defer func() { tcdlGLGateless, tcdlGLStrict = false, false }()
+	tcdlGLSweep(t)
+}
+
+func tcdlGLSweep(t *testing.T) {
 	var sets []TeamCatalogSelections
 	for mask := 1; mask < 8; mask++ {
 		sets = append(sets, TeamCatalogSelections{Teams: mask&1 != 0, Projects: mask&2 != 0, Members: mask&4 != 0})

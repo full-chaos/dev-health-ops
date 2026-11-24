@@ -82,7 +82,7 @@ exit 0
 `
 	sleep := "#!/bin/sh\necho \"$1\" >> \"" + b.sleeps + "\"\nexit 0\n"
 	for name, body := range map[string]string{"docker": docker, "sleep": sleep} {
-		if err := os.WriteFile(filepath.Join(b.bin, name), []byte(body), 0o755); err != nil {
+		if err := writeExecFile(filepath.Join(b.bin, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}

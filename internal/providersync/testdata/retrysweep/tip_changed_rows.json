@@ -1,0 +1,58 @@
+{
+ "github/blame|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /graphql",
+  "watermark": false
+ },
+ "github/commit-stats|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/commits/first",
+  "watermark": false
+ },
+ "github/commit-stats|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/commits/second",
+  "watermark": false
+ },
+ "github/team_catalog|req03|429": {
+  "deadline": false,
+  "effects": 6,
+  "ok": true,
+  "path": "GET /orgs/acme/teams/platform/members",
+  "watermark": false
+ },
+ "github/team_catalog|req04|429": {
+  "deadline": false,
+  "effects": 6,
+  "ok": true,
+  "path": "GET /users/octocat",
+  "watermark": false
+ },
+ "github/team_catalog|req05|429": {
+  "deadline": false,
+  "effects": 6,
+  "ok": true,
+  "path": "GET /users/monalisa",
+  "watermark": false
+ },
+ "gitlab/work_items|req02|429": {
+  "deadline": false,
+  "effects": 7,
+  "ok": true,
+  "path": "GET /api/v4/version",
+  "watermark": true
+ },
+ "jira/atlassian|req07|429": {
+  "deadline": false,
+  "effects": 10,
+  "ok": true,
+  "path": "GET /rest/api/3/issue/OPS-201/comment",
+  "watermark": false
+ }
+}

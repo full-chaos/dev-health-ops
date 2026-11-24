@@ -114,7 +114,7 @@ func runPromote(t *testing.T, f promFix, mode string, env ...string) promResult 
 	}
 	for name, src := range map[string]string{"gh": "promote_gh_shim.sh", "docker": "promote_docker_shim.sh"} {
 		body := readFile(t, filepath.Join(root, "internal", "cigates", "workflows", "testdata", src))
-		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+		if err := writeExecFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}

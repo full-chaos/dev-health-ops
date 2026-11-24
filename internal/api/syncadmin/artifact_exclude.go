@@ -45,6 +45,19 @@ func artifactExcludeAnswer(err error) error {
 	return refuse(http.StatusUnprocessableEntity, detail)
 }
 
+// noIntegrationAnswer refuses a whole PATCH of a configuration whose integration is not one of the org's own: the
+// key's refusal when the body carries ci_artifact_exclude_prefixes, else the same 422 without the field.
+func noIntegrationAnswer(in syncConfigUpdate) error {
+	if in.syncOptions != nil {
+		if _, present := in.syncOptions.Get(artifactexclude.Key); present {
+			return artifactExcludeAnswer(artifactexclude.NoIntegrationRefusal())
+		}
+	}
+	detail := pyjson.NewObject()
+	detail.Set("message", artifactexclude.NoIntegrationMessage)
+	return refuse(http.StatusUnprocessableEntity, detail)
+}
+
 // takeArtifactExclude validates the key of a create's or a PATCH's options and takes it out of them: the list is the
 // integration's (it applies to every sync config of this integration), written by writeArtifactExclude once the
 // configuration and its integration exist, never into sync_options. nil when the options do not carry the key.

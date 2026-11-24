@@ -146,7 +146,7 @@ func TestQueueTestedShaAnswersOnlyForAGreenMergeGroupRunWithGreenShards(t *testi
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			write := func(name, content string) {
-				if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o755); err != nil {
+				if err := writeExecFile(filepath.Join(dir, name), []byte(content), 0o755); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -195,7 +195,7 @@ func TestQueueTestedShaStaysRedWhenAFailedShardComesFirstInALongAnswer(t *testin
 		"runs.json":    queueRunsJSON(sha, [2]string{"11", "success"}),
 		"jobs-11.json": queueJobsJSON(conclusions...),
 	} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o755); err != nil {
+		if err := writeExecFile(filepath.Join(dir, name), []byte(content), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}

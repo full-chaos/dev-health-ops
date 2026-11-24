@@ -41,11 +41,11 @@ case "$*" in
 esac
 exec "` + filepath.Join(fake.dir, "docker") + `" "$@"
 `
-	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(body), 0o755); err != nil {
+	if err := writeExecFile(filepath.Join(dir, "docker"), []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	// The registry class waits 10 s then 30 s between tries; no wall time is spent or asserted.
-	if err := os.WriteFile(filepath.Join(dir, "sleep"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := writeExecFile(filepath.Join(dir, "sleep"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -219,7 +219,7 @@ func TestFakeCorpusTestWaitForTheFlippedFileIgnoresThePathSleep(t *testing.T) {
 	}
 	count := filepath.Join(dir, "sleeps")
 	front := t.TempDir()
-	if err := os.WriteFile(filepath.Join(front, "sleep"), []byte("#!/bin/sh\necho x >> \""+count+"\"\nexit 0\n"), 0o755); err != nil {
+	if err := writeExecFile(filepath.Join(front, "sleep"), []byte("#!/bin/sh\necho x >> \""+count+"\"\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(bin)

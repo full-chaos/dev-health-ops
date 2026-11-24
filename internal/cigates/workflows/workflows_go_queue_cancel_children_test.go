@@ -326,7 +326,7 @@ func runCancelScriptWith(t *testing.T, scriptRoot string, files map[string]strin
 		if name == "gh" {
 			mode = 0o755
 		}
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), mode); err != nil {
+		if err := writeExecFile(filepath.Join(dir, name), []byte(body), mode); err != nil {
 			t.Fatal(err)
 		}
 	}

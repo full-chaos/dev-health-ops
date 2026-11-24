@@ -2,11 +2,15 @@
 
 package daily
 
-// CHAOS-14259: the raw arm of testopspooled.SuiteRunsSource reads only the runs of the repository-days without stored samples.
-// The rule groups by run, so the source must serve exactly the rows it served when every select read the organization: the
-// cell builds runs through the production route and sink (a retired slot over two attempts with a flaky kept slot, a slot
-// retired at the same attempt, a revived slot, a pre-slot copy of a retired slot, a plain run, runs on two days), stores both
-// days without samples, and compares every row of the source with the text before the change (ops ef4d8699, verbatim below).
+// CHAOS-14591: the raw arm of testopspooled.SuiteRunsSource computes the newest-attempt rule with window functions over ONE
+// read of its repositories. It must serve exactly the rows of the text before the change, whose every rule select read the
+// organization (ops ef4d8699, verbatim below), and the same P95 and median (the AI report's expressions over the same source,
+// internal/jobs/report/pooled.go). The cell builds runs through the production route and sink (a retired slot over two
+// attempts with a flaky kept slot, a slot retired at the same attempt, a revived slot, a pre-slot copy of a retired slot, a
+// plain run, runs on two days) with merges stopped (every older row version stays in its own part, plus an explicit older
+// version of a kept key) and compares: every day stored, a mixed window (one day stored by the writer, one day without
+// samples), every day without samples. A second organization holds the SAME repository and run ids with a day without
+// samples: the first organization's rows and read are unchanged by it.
 
 import (
 	"context"
@@ -14,6 +18,7 @@ import (
 	"encoding/hex"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -79,7 +84,10 @@ func TestTestopsPooledSuiteSourceServesTheRowsOfTheOrganizationWideRead(t *testi
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	stack := startRetiredStack(t, ctx).stack
-	org := "org-chaos14259-pooled-" + uuid.NewString()[:8]
+	if err := stack.conn.Exec(ctx, "SYSTEM STOP MERGES test_suite_results"); err != nil {
+		t.Fatal(err)
+	}
+	org, other := "org-chaos14591-pooled-"+uuid.NewString()[:8], "org-chaos14591-other-"+uuid.NewString()[:8]
 	both, withoutLegB, _ := retiredArtifacts(t)
 	dayD, dayBefore := retiredDay(), retiredDay().AddDate(0, 0, -1)
 
@@ -96,47 +104,112 @@ func TestTestopsPooledSuiteSourceServesTheRowsOfTheOrganizationWideRead(t *testi
 		{21, "plain", "2026-07-22T10:20:00Z", false, retiredArchive(t, "2026-07-22T10:02:00", matrixTotalsSuite{"p", "2.0", []matrixTotalsCase{{"z", "", "0.5"}}})},
 	}))
 	repo := stack.repoID(t, org)
+	// An OLDER version of a kept key with another duration, in a part of its own: FINAL drops it, a non-FINAL read would see it.
+	if err := stack.conn.Exec(ctx, `INSERT INTO test_suite_results SELECT * REPLACE (toFloat64(999) AS duration_seconds, last_synced - INTERVAL 1 DAY AS last_synced)
+FROM test_suite_results FINAL WHERE org_id = ? AND run_id = '43600014605' LIMIT 1`, org); err != nil {
+		t.Fatal(err)
+	}
+	// The other organization: the same repository and run ids (a copy of every row).
+	if err := stack.conn.Exec(ctx, `INSERT INTO test_suite_results SELECT * REPLACE (? AS org_id) FROM test_suite_results WHERE org_id = ?`, other, org); err != nil {
+		t.Fatal(err)
+	}
 
-	rows := func(label, source string) []string {
+	type served struct {
+		rows     []string
+		p95, p50 string // the expressions' text; "NULL" for a group with no sample
+		readRows uint64
+	}
+	serve := func(label, of, source string) served {
 		t.Helper()
-		result, err := stack.conn.Query(ctx, "SELECT toString(tuple(org_id, toString(repo_id), service_id, day, duration_sample)) FROM "+source,
-			clickhouse.Named("org_id", org), clickhouse.Named("start_date", dayBefore.Format(time.DateOnly)),
-			clickhouse.Named("end_date", dayD.AddDate(0, 0, 1).Format(time.DateOnly)))
+		args := []any{clickhouse.Named("org_id", of), clickhouse.Named("start_date", dayBefore.Format(time.DateOnly)),
+			clickhouse.Named("end_date", dayD.AddDate(0, 0, 1).Format(time.DateOnly))}
+		id := "c14591-" + uuid.NewString()
+		result, err := stack.conn.Query(clickhouse.Context(ctx, clickhouse.WithQueryID(id)),
+			"SELECT toString(tuple(org_id, toString(repo_id), service_id, day, duration_sample)) FROM "+source, args...)
 		if err != nil {
 			t.Fatalf("%s: %v", label, err)
 		}
-		defer result.Close()
-		var out []string
+		var out served
 		for result.Next() {
 			var row string
 			if err := result.Scan(&row); err != nil {
 				t.Fatal(err)
 			}
-			out = append(out, row)
+			out.rows = append(out.rows, row)
 		}
 		if err := result.Err(); err != nil {
 			t.Fatal(err)
 		}
-		slices.Sort(out)
+		result.Close()
+		slices.Sort(out.rows)
+		var p95, p50 *float64
+		if err := stack.conn.QueryRow(ctx, "SELECT "+testopspooled.P95+", "+testopspooled.Median+" FROM "+source, args...).
+			Scan(&p95, &p50); err != nil {
+			t.Fatalf("%s expressions: %v", label, err)
+		}
+		out.p95, out.p50 = nullableText(p95), nullableText(p50)
+		if err := stack.conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
+			t.Fatal(err)
+		}
+		if err := stack.conn.QueryRow(ctx, `SELECT read_rows FROM system.query_log WHERE query_id = ? AND type = 'QueryFinish'`, id).Scan(&out.readRows); err != nil {
+			t.Fatalf("%s query_log: %v", label, err)
+		}
 		return out
 	}
-
-	for _, phase := range []string{"stored days", "days without samples"} {
-		if phase == "days without samples" {
-			for _, day := range []time.Time{dayBefore, dayD} {
-				if err := stack.conn.Exec(ctx, `INSERT INTO testops_test_metrics_daily (repo_id, day, org_id, computed_at) VALUES (?, ?, ?, now())`,
-					repo, day, org); err != nil {
-					t.Fatal(err)
-				}
-			}
+	compare := func(phase string) served {
+		t.Helper()
+		before, after := serve(phase+" before", org, suiteRunsSourceBefore), serve(phase+" after", org, testopspooled.SuiteRunsSource)
+		t.Logf("CELL14591 %s: %d rows before, %d after; p95 %s / %s, median %s / %s; read_rows %d after", phase, len(before.rows), len(after.rows),
+			before.p95, after.p95, before.p50, after.p50, after.readRows)
+		if !reflect.DeepEqual(after.rows, before.rows) || after.p95 != before.p95 || after.p50 != before.p50 {
+			t.Errorf("%s: the source serves\n%s\n(p95 %s, median %s)\nwant the organization-wide read's\n%s\n(p95 %s, median %s)", phase,
+				strings.Join(after.rows, "\n"), after.p95, after.p50, strings.Join(before.rows, "\n"), before.p95, before.p50)
 		}
-		before, after := rows(phase+" before", suiteRunsSourceBefore), rows(phase+" after", testopspooled.SuiteRunsSource)
-		t.Logf("CELL14259 %s: %d rows before, %d after", phase, len(before), len(after))
-		if phase == "days without samples" && len(before) == 0 {
-			t.Fatalf("control: the organization-wide read serves no raw suite, so the cell compares nothing")
-		}
-		if !reflect.DeepEqual(after, before) {
-			t.Errorf("%s: the source serves\n%s\nwant the organization-wide read's\n%s", phase, strings.Join(after, "\n"), strings.Join(before, "\n"))
+		return after
+	}
+	noSamples := func(of string, day time.Time) {
+		t.Helper()
+		if err := stack.conn.Exec(ctx, `INSERT INTO testops_test_metrics_daily (repo_id, day, org_id, computed_at) VALUES (?, ?, ?, now() + INTERVAL 1 HOUR)`,
+			repo, day, of); err != nil {
+			t.Fatal(err)
 		}
 	}
+
+	compare("every day stored")
+	// Mixed: the writer stores the day before with its samples; day D has a newest row without samples.
+	tests, err := NewTestopsTestExecutor(stack.conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := Run{ID: "run-" + org, OrganizationID: org, TargetDay: dayBefore}
+	if _, err := tests.ComputeFamily(ctx, run, Partition{ID: "part-" + org, RunID: run.ID, RepoIDs: []RepositoryID{RepositoryID(repo.String())}}); err != nil {
+		t.Fatal(err)
+	}
+	noSamples(org, dayD)
+	mixed := compare("mixed window")
+	if len(mixed.rows) == 0 {
+		t.Fatalf("control: the mixed window serves no row, so the cell compares nothing")
+	}
+	noSamples(org, dayBefore)
+	whole := compare("every day without samples")
+	if len(whole.rows) == 0 {
+		t.Fatalf("control: every day without samples serves no row")
+	}
+	// The other organization's day without samples changes neither the first organization's rows nor its read.
+	noSamples(other, dayD)
+	if again := compare("after the other organization's day"); !reflect.DeepEqual(again.rows, whole.rows) || again.readRows != whole.readRows {
+		t.Errorf("the other organization's day changed the first's answer or read: %d rows / read %d, want %d rows / read %d",
+			len(again.rows), again.readRows, len(whole.rows), whole.readRows)
+	}
+	if otherRows := serve("other organization", other, testopspooled.SuiteRunsSource); len(otherRows.rows) == 0 {
+		t.Errorf("control: the other organization serves no raw suite on its day without samples")
+	}
+}
+
+// nullableText is a value of a Nullable(Float64) expression as text, "NULL" for none.
+func nullableText(value *float64) string {
+	if value == nil {
+		return "NULL"
+	}
+	return strconv.FormatFloat(*value, 'g', -1, 64)
 }

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -182,19 +183,26 @@ func chainFile(t *testing.T, dir, revision string) string {
 }
 
 // The Job's finalize-outbox definition and revision 0167's statement are one, so a database the Job built and a
-// database revision 0167 built hold the same index. Before it, 0167 drops an INVALID index of that name only.
+// database revision 0167 built hold the same index. 0167 takes the builder's lock first (0x64686f5f697a = 110399707900282,
+// "dho_iz"), drops an INVALID index of that name only, and creates the index only when none exists.
 func TestFinalizeOutboxIndexDefinitionMatchesRevision0167(t *testing.T) {
+	const builderKey = int64(0x64686f5f697a)
 	want := squash(`DO $$
 BEGIN
+    IF NOT pg_catalog.pg_try_advisory_xact_lock(` + strconv.FormatInt(builderKey, 10) + `) THEN
+        RAISE EXCEPTION 'build-index finalize-outbox is running (its build lock is held); upgrade again after it ends';
+    END IF;
     IF EXISTS (
         SELECT 1 FROM pg_catalog.pg_index AS i
         WHERE i.indexrelid = to_regclass('public.` + pgmigrate.FinalizeOutboxIndexName + `') AND NOT i.indisvalid
     ) THEN
         DROP INDEX public.` + pgmigrate.FinalizeOutboxIndexName + `;
     END IF;
+    IF to_regclass('public.` + pgmigrate.FinalizeOutboxIndexName + `') IS NULL THEN
+        CREATE INDEX ` + pgmigrate.FinalizeOutboxIndexBody + `;
+    END IF;
 END
-$$;
-CREATE INDEX IF NOT EXISTS ` + pgmigrate.FinalizeOutboxIndexBody + ";")
+$$;`)
 	if got := squash(chainFile(t, "sql/", "0167")); got != want {
 		t.Fatalf("revision 0167 =\n%s\nwant\n%s", got, want)
 	}

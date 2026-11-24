@@ -18,15 +18,15 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-// Throwaway exec proof of the prod read form FORM-14410-1 (CHAOS-14410): not for merge. form14410s1Form is the form file
-// with its org prefix (8 hex) replaced by the synthetic "f0f0f0f0" in all 3 places; its sha256 is pinned. The form file
-// itself (real prefix) has sha256 3a0e0b16699257f65ec34f80b201f16b1ccbd92eb5401eecf3cc3cad1704eeb6.
-const form14410s1FormSHA256 = "563309e7d0e727b079e7b88a22ac78cfcb5d5f505cc57cd5b7e79a629babe9e9"
+// Throwaway exec proof of the prod read form FORM-14410-2 (CHAOS-14410): not for merge. form14410s1Form is the form file
+// with its org prefix (8 hex) replaced by the synthetic "f0f0f0f0" in all 4 places; its sha256 is pinned. The form file
+// itself (real prefix) has sha256 d42cbf869d90a27fa18d67a343bde8877d523e8a1d84581e87da558b001aa6c3.
+const form14410s1FormSHA256 = "a5abd6ed6ebb7d06f8e38a2b8e9e69ffc9fa39a71f993aece27356bf91df8365"
 
-//ttlclock:allow fixed FORM-14410-1 window data (a throwaway exec cell), the row lives until 2027-12-17
-const form14410s1Form = `-- FORM-14410-1 (fcdev lane l14542, 2026-11-24): the GitHub installation's real primary rate limit and its peak use, from the
+//ttlclock:allow fixed FORM-14410-2 window data (a throwaway exec cell), the row lives until 2027-12-17
+const form14410s1Form = `-- FORM-14410-2 (fcdev lane l14542, 2026-11-24; = FORM-14410-1 3a0e0b166992 + stmt3 hour coverage, pm option A): the GitHub installation's real primary rate limit and its peak use, from the
 -- STORED response headers in provider_request_usage (app ClickHouse). CHAOS-14410; merge gate 2 of PLAN-14542-3.
--- Four statements, ONE call each, in order: a block runs from its "-- stmtN" line to its ";". Read-only.
+-- Five statements, ONE call each, in order: a block runs from its "-- stmtN" line to its ";". Read-only.
 -- No SET, no SETTINGS, no FINAL, no EXPLAIN. A throw or a WANT miss = STOP, no further read.
 -- Decision window (24 h): recorded_at in [2026-11-23 06:00:00, 2026-11-24 06:00:00) UTC. INFO window (7 d): from 2026-11-17 06:00:00.
 -- stmt0: table + columns at the LIVE prod schema. WANT cols = 9 (0 = no table: STOP, fall back to the log line).
@@ -78,7 +78,30 @@ WHERE startsWith(org_id, 'f0f0f0f0') AND provider = 'github'
 GROUP BY integration8, resource
 ORDER BY integration8, resource
 LIMIT 100;
--- stmt3: INFO, 7 d. The same text as stmt2 with the 7 d start.
+-- stmt3: DECISION, hour coverage of the 24 h window. One row per integration id 8-char cut: the core rows with a limit per
+-- clock hour (24 values, hour 0 = 06:00 UTC) and the count of hours with 0 such rows. WANT zero_row_hours = 0 for every
+-- integration row of stmt1 (a 0-row hour = gate NOT MET). Only complete-route executions write provider_request_usage rows;
+-- the chunked GitHub tests/cicd route writes none, so an hour with only chunked calls has no row.
+WITH (SELECT sum(rows) + 2 * count() + 1 FROM system.parts WHERE active AND database = currentDatabase()
+      AND table = 'provider_request_usage' AND partition_id >= '202611') AS read_rows_cap,
+  (SELECT throwIf(read_rows_cap >= 20000000, 'STOP-COST-GATE')) AS cost_gate
+SELECT integration8,
+       arrayStringConcat(arrayMap(h -> toString(countEqual(hour_index, h)), range(24)), ',') AS core_rows_per_hour,
+       arrayCount(h -> countEqual(hour_index, h) = 0, range(24)) AS zero_row_hours,
+       read_rows_cap
+FROM (
+    SELECT substring(integration_id, 1, 8) AS integration8,
+           groupArray(toUInt8(dateDiff('hour', toDateTime64('2026-11-23 06:00:00', 3, 'UTC'), recorded_at))) AS hour_index
+    FROM provider_request_usage
+    WHERE startsWith(org_id, 'f0f0f0f0') AND provider = 'github' AND rate_limit_resource = 'core' AND rate_limit_limit > 0
+      AND window_started_at >= toDateTime64('2026-11-23 05:00:00', 3, 'UTC') AND window_started_at < toDateTime64('2026-11-24 06:00:00', 3, 'UTC')
+      AND recorded_at >= toDateTime64('2026-11-23 06:00:00', 3, 'UTC') AND recorded_at < toDateTime64('2026-11-24 06:00:00', 3, 'UTC')
+      AND cost_gate = 0
+    GROUP BY integration8
+)
+ORDER BY integration8
+LIMIT 100;
+-- stmt4: INFO, 7 d. The same text as stmt2 with the 7 d start.
 WITH (SELECT sum(rows) + 2 * count() + 1 FROM system.parts WHERE active AND database = currentDatabase()
       AND table = 'provider_request_usage' AND partition_id >= '202611') AS read_rows_cap,
   (SELECT throwIf(read_rows_cap >= 20000000, 'STOP-COST-GATE')) AS cost_gate
@@ -133,8 +156,8 @@ func form14410s1Blocks(t *testing.T) []string {
 			current, in = nil, false
 		}
 	}
-	if len(blocks) != 4 || in {
-		t.Fatalf("%d statement blocks, want 4", len(blocks))
+	if len(blocks) != 5 || in {
+		t.Fatalf("%d statement blocks, want 5", len(blocks))
 	}
 	return blocks
 }
@@ -150,17 +173,17 @@ func form14410s1Cell(v any) string {
 	return fmt.Sprint(value.Interface())
 }
 
-func TestForm14410s1RequestUsageReadEveryColumnMutantsAndGate(t *testing.T) {
+func TestForm14410s2RequestUsageReadEveryColumnCoverageMutantsAndGate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 
 	sum := sha256.Sum256([]byte(form14410s1Form))
 	if got := hex.EncodeToString(sum[:]); got != form14410s1FormSHA256 {
-		t.Fatalf("FORM-14410-1 (prefix swapped) sha256 = %s, want %s", got, form14410s1FormSHA256)
+		t.Fatalf("FORM-14410-2 (prefix swapped) sha256 = %s, want %s", got, form14410s1FormSHA256)
 	}
-	t.Logf("FORM-14410-1 prefix-swapped sha256 %s (sha12 %s)", form14410s1FormSHA256, form14410s1FormSHA256[:12])
-	if n := strings.Count(form14410s1Form, "startsWith(org_id, 'f0f0f0f0')"); n != 3 {
-		t.Fatalf("%d org filters, want 3 (stmt1-3)", n)
+	t.Logf("FORM-14410-2 prefix-swapped sha256 %s (sha12 %s)", form14410s1FormSHA256, form14410s1FormSHA256[:12])
+	if n := strings.Count(form14410s1Form, "startsWith(org_id, 'f0f0f0f0')"); n != 4 {
+		t.Fatalf("%d org filters, want 4 (stmt1-4)", n)
 	}
 	blocks := form14410s1Blocks(t)
 	for i, block := range blocks {
@@ -235,27 +258,39 @@ func TestForm14410s1RequestUsageReadEveryColumnMutantsAndGate(t *testing.T) {
 			SELECT '%s', '%s', 'cicd', '%s', 'unit', 'exec-%d', 'rest', 0, 1, 1, %s, '%s', %s, %s`,
 			org, provider, integration, id, limits, resource, windowStarted, recorded))
 	}
-	//ttlclock:allow fixed FORM-14410-1 window data (a throwaway exec cell), the row lives until 2027-12-23
+	//ttlclock:allow fixed FORM-14410-2 window data (a throwaway exec cell), the row lives until 2027-12-23
 	row(1, form14410Org, "github", form14410IntegA, "core", "5000, 3000, 2000", "2026-11-23 11:59:00|2026-11-23 12:00:00")
-	//ttlclock:allow fixed FORM-14410-1 window data (a throwaway exec cell), the row lives until 2027-12-23
+	//ttlclock:allow fixed FORM-14410-2 window data (a throwaway exec cell), the row lives until 2027-12-23
 	row(2, form14410Org, "github", form14410IntegA, "core", "5000, 2500, 2500", "2026-11-23 13:29:00|2026-11-23 13:30:00")
-	//ttlclock:allow fixed FORM-14410-1 window data (a throwaway exec cell), the row lives until 2027-12-23
+	//ttlclock:allow fixed FORM-14410-2 window data (a throwaway exec cell), the row lives until 2027-12-23
 	row(3, form14410Org, "github", form14410IntegA, "graphql", "5000, 4900, 100", "2026-11-23 13:59:00|2026-11-23 14:00:00")
-	//ttlclock:allow fixed FORM-14410-1 window data (a throwaway exec cell), the row lives until 2027-12-23
+	//ttlclock:allow fixed FORM-14410-2 window data (a throwaway exec cell), the row lives until 2027-12-23
 	row(4, form14410Org, "github", form14410IntegA, "", "NULL, NULL, NULL", "2026-11-23 14:29:00|2026-11-23 14:30:00")
-	//ttlclock:allow fixed FORM-14410-1 window data (a throwaway exec cell), the row lives until 2027-12-20
+	//ttlclock:allow fixed FORM-14410-2 window data (a throwaway exec cell), the row lives until 2027-12-20
 	row(5, form14410Org, "github", form14410IntegA, "core", "5000, 1000, 4000", "2026-11-20 09:59:00|2026-11-20 10:00:00")
 	row(6, form14410Org, "github", form14410IntegA, "core", "5000, 100, 4900", "toStartOfHour(now64(3, 'UTC')) - toIntervalMinute(1)|toStartOfHour(now64(3, 'UTC'))")
-	//ttlclock:allow fixed FORM-14410-1 window data (a throwaway exec cell), the row lives until 2027-12-23
+	//ttlclock:allow fixed FORM-14410-2 window data (a throwaway exec cell), the row lives until 2027-12-23
 	row(7, form14410OtherOrg, "github", form14410IntegA, "core", "5000, 0, 5000", "2026-11-23 15:59:00|2026-11-23 16:00:00")
-	//ttlclock:allow fixed FORM-14410-1 window data (a throwaway exec cell), the row lives until 2027-12-23
+	//ttlclock:allow fixed FORM-14410-2 window data (a throwaway exec cell), the row lives until 2027-12-23
 	row(8, form14410Org, "gitlab", form14410IntegA, "core", "5000, 0, 5000", "2026-11-23 16:29:00|2026-11-23 16:30:00")
-	//ttlclock:allow fixed FORM-14410-1 window data (a throwaway exec cell), the row lives until 2027-12-10
+	//ttlclock:allow fixed FORM-14410-2 window data (a throwaway exec cell), the row lives until 2027-12-10
 	row(9, form14410Org, "github", form14410IntegA, "core", "5000, 0, 5000", "2026-11-10 09:59:00|2026-11-10 10:00:00")
-	//ttlclock:allow fixed FORM-14410-1 window data (a throwaway exec cell), the row lives until 2027-12-23
+	//ttlclock:allow fixed FORM-14410-2 window data (a throwaway exec cell), the row lives until 2027-12-23
 	row(10, form14410Org, "github", form14410IntegB, "core", "15000, 9000, 6000", "2026-11-23 14:59:00|2026-11-23 15:00:00")
-	if got := scalar("SELECT toString(count()) FROM provider_request_usage"); got != "10" {
-		t.Fatalf("fixture rows %s, want 10", got)
+	// Integration B covers every clock hour of the 24 h window with one core row (hour 9 is row 10 above): the full
+	// coverage PASS case. 15000 / 10000 / 5000 keeps B's min remaining share at row 10's 0.6.
+	exec(fmt.Sprintf(`INSERT INTO provider_request_usage (org_id, provider, dataset, integration_id, unit_id, execution_id,
+		transport, flush_seq, requests, responses, rate_limit_limit, rate_limit_remaining, rate_limit_used, rate_limit_resource,
+		window_started_at, recorded_at)
+		SELECT '%s', 'github', 'cicd', '%s', 'unit', concat('exec-b-', toString(number)), 'rest', 0, 1, 1, 15000, 10000, 5000, 'core',
+		       start + toIntervalHour(number) - toIntervalMinute(1), start + toIntervalHour(number)
+		FROM numbers(24)
+		CROSS JOIN (SELECT %s AS start) AS s
+		WHERE number != 9`, form14410Org, form14410IntegB,
+		//ttlclock:allow fixed FORM-14410-2 window data (a throwaway exec cell), the row lives until 2027-12-23
+		"toDateTime64('2026-11-23 06:30:00', 3, 'UTC')"))
+	if got := scalar("SELECT toString(count()) FROM provider_request_usage"); got != "33" {
+		t.Fatalf("fixture rows %s, want 33", got)
 	}
 	capWant := scalar(`SELECT toString(sum(rows) + 2 * count() + 1) FROM system.parts WHERE active AND database = currentDatabase()
 		AND table = 'provider_request_usage' AND partition_id >= '202611'`)
@@ -292,7 +327,7 @@ func TestForm14410s1RequestUsageReadEveryColumnMutantsAndGate(t *testing.T) {
 		readRows := scalar(fmt.Sprintf(`SELECT toString(read_rows) FROM system.query_log
 			WHERE log_comment = '%s' AND type = 'QueryFinish' AND is_initial_query`, comment))
 		t.Logf("%s: read_rows %s", label, readRows)
-		if label == "stmt1" || label == "stmt2" || label == "stmt3" {
+		if label == "stmt1" || label == "stmt2" || label == "stmt3" || label == "stmt4" {
 			var rr, capRows uint64
 			if _, err := fmt.Sscan(readRows, &rr); err != nil {
 				t.Fatal(err)
@@ -331,7 +366,7 @@ func TestForm14410s1RequestUsageReadEveryColumnMutantsAndGate(t *testing.T) {
 	}
 
 	// Base values, every column.
-	base := make([][]string, 4)
+	base := make([][]string, 5)
 	base[0] = must("stmt0", blocks[0])
 	equal("stmt0", base[0], []string{"cols=9"})
 
@@ -341,7 +376,7 @@ func TestForm14410s1RequestUsageReadEveryColumnMutantsAndGate(t *testing.T) {
 	stmt1Want := func(ageA, ageB string) []string {
 		return []string{
 			"integration8=aaaaaaaa rows_from_7d_start=6 rows_24h=4 last_flush_age_h=" + ageA + " read_rows_cap=" + capWant,
-			"integration8=bbbbbbbb rows_from_7d_start=1 rows_24h=1 last_flush_age_h=" + ageB + " read_rows_cap=" + capWant,
+			"integration8=bbbbbbbb rows_from_7d_start=24 rows_24h=24 last_flush_age_h=" + ageB + " read_rows_cap=" + capWant,
 		}
 	}
 	if strings.Join(base[1], "\n") != strings.Join(stmt1Want(beforeA, beforeB), "\n") {
@@ -362,15 +397,33 @@ func TestForm14410s1RequestUsageReadEveryColumnMutantsAndGate(t *testing.T) {
 	}
 	nullCols := cols("1", "0", "NULL", "NULL", "NULL", "NULL", "NULL", "NULL", "0", "0", "1")
 	graphql := "integration8=aaaaaaaa resource=graphql " + cols("1", "1", "5000", "5000", "4900", "100", "0.98", "0.02", "0", "0", "1")
-	coreB := "integration8=bbbbbbbb resource=core " + cols("1", "1", "15000", "15000", "9000", "6000", "0.6", "0.4", "0", "0", "1")
+	coreB := "integration8=bbbbbbbb resource=core " + cols("24", "24", "15000", "15000", "9000", "6000", "0.6", "0.4", "0", "0", "24")
 	base[2] = must("stmt2", blocks[2])
 	equal("stmt2", base[2], []string{
 		"integration8=aaaaaaaa resource= " + nullCols,
 		"integration8=aaaaaaaa resource=core " + cols("2", "2", "5000", "5000", "2500", "2500", "0.5", "0.5", "0", "0", "2"),
 		graphql, coreB,
 	})
+	hours := func(set map[int]string) string {
+		cells := make([]string, 24)
+		for h := range cells {
+			cells[h] = "0"
+			if v, ok := set[h]; ok {
+				cells[h] = v
+			}
+		}
+		return strings.Join(cells, ",")
+	}
+	allOnes := map[int]string{}
+	for h := 0; h < 24; h++ {
+		allOnes[h] = "1"
+	}
+	coverageA := "integration8=aaaaaaaa core_rows_per_hour=" + hours(map[int]string{6: "1", 7: "1"}) + " zero_row_hours=22 read_rows_cap=" + capWant
+	coverageB := "integration8=bbbbbbbb core_rows_per_hour=" + hours(allOnes) + " zero_row_hours=0 read_rows_cap=" + capWant
 	base[3] = must("stmt3", blocks[3])
-	equal("stmt3", base[3], []string{
+	equal("stmt3 (B = full coverage PASS; A = 22 zero-row hours NOT MET)", base[3], []string{coverageA, coverageB})
+	base[4] = must("stmt4", blocks[4])
+	equal("stmt4", base[4], []string{
 		"integration8=aaaaaaaa resource= " + nullCols,
 		"integration8=aaaaaaaa resource=core " + cols("3", "3", "5000", "5000", "1000", "4000", "0.2", "0.8", "1", "1", "3"),
 		graphql, coreB,
@@ -389,26 +442,28 @@ func TestForm14410s1RequestUsageReadEveryColumnMutantsAndGate(t *testing.T) {
 		return got
 	}
 	mutate(0, "rule-column", "'recorded_at');", "'nope');")
-	for i := 1; i <= 3; i++ {
+	for i := 1; i <= 4; i++ {
 		mutate(i, "org", "startsWith(org_id, 'f0f0f0f0')", "startsWith(org_id, '')")
 		mutate(i, "rule-provider", "provider = 'github'", "provider != ''")
 	}
 	mutate(1, "rule-24h-start",
-		"recorded_at >= toDateTime64('2026-11-23 06:00:00', 3, 'UTC')", //ttlclock:allow fixed FORM-14410-1 window data (a throwaway exec cell), the row lives until 2027-12-23
-		"recorded_at >= toDateTime64('2026-11-17 06:00:00', 3, 'UTC')") //ttlclock:allow fixed FORM-14410-1 window data (a throwaway exec cell), the row lives until 2027-12-17
-	for i := 2; i <= 3; i++ {
+		"recorded_at >= toDateTime64('2026-11-23 06:00:00', 3, 'UTC')", //ttlclock:allow fixed FORM-14410-2 window data (a throwaway exec cell), the row lives until 2027-12-23
+		"recorded_at >= toDateTime64('2026-11-17 06:00:00', 3, 'UTC')") //ttlclock:allow fixed FORM-14410-2 window data (a throwaway exec cell), the row lives until 2027-12-17
+	mutate(3, "rule-resource", "rate_limit_resource = 'core'", "rate_limit_resource != ''")
+	mutate(3, "rule-limit-filter", "rate_limit_limit > 0", "rate_limit_limit > 9999")
+	for _, i := range []int{2, 4} {
 		mutate(i, "rule-threshold", "0.45 * rate_limit_limit", "0.55 * rate_limit_limit")
 		mutate(i, "rule-limit-filter", "rate_limit_limit > 0)", "rate_limit_limit > 9999)")
 	}
 	window := strings.ReplaceAll(strings.ReplaceAll(blocks[2],
-		"toDateTime64('2026-11-23 05:00:00', 3, 'UTC')",  //ttlclock:allow fixed FORM-14410-1 window data (a throwaway exec cell), the row lives until 2027-12-23
-		"toDateTime64('2026-11-17 05:00:00', 3, 'UTC')"), //ttlclock:allow fixed FORM-14410-1 window data (a throwaway exec cell), the row lives until 2027-12-17
-		"recorded_at >= toDateTime64('2026-11-23 06:00:00', 3, 'UTC')", //ttlclock:allow fixed FORM-14410-1 window data (a throwaway exec cell), the row lives until 2027-12-23
-		"recorded_at >= toDateTime64('2026-11-17 06:00:00', 3, 'UTC')") //ttlclock:allow fixed FORM-14410-1 window data (a throwaway exec cell), the row lives until 2027-12-17
-	equal("stmt2-rule-window (= stmt3)", must("stmt2-rule-window", window), base[3])
+		"toDateTime64('2026-11-23 05:00:00', 3, 'UTC')",  //ttlclock:allow fixed FORM-14410-2 window data (a throwaway exec cell), the row lives until 2027-12-23
+		"toDateTime64('2026-11-17 05:00:00', 3, 'UTC')"), //ttlclock:allow fixed FORM-14410-2 window data (a throwaway exec cell), the row lives until 2027-12-17
+		"recorded_at >= toDateTime64('2026-11-23 06:00:00', 3, 'UTC')", //ttlclock:allow fixed FORM-14410-2 window data (a throwaway exec cell), the row lives until 2027-12-23
+		"recorded_at >= toDateTime64('2026-11-17 06:00:00', 3, 'UTC')") //ttlclock:allow fixed FORM-14410-2 window data (a throwaway exec cell), the row lives until 2027-12-17
+	equal("stmt2-rule-window (= stmt4)", must("stmt2-rule-window", window), base[4])
 
 	// Cost gate: a cap of 1 row fires the scalar throwIf inside each statement.
-	for i := 1; i <= 3; i++ {
+	for i := 1; i <= 4; i++ {
 		_, err := run(fmt.Sprintf("stmt%d-gate", i), strings.Replace(blocks[i], "read_rows_cap >= 20000000", "read_rows_cap >= 1", 1))
 		var exception *clickhouse.Exception
 		if !errors.As(err, &exception) || exception.Code != 395 || !strings.HasPrefix(exception.Message, "STOP-COST-GATE") {
@@ -418,9 +473,30 @@ func TestForm14410s1RequestUsageReadEveryColumnMutantsAndGate(t *testing.T) {
 	}
 
 	// Rows with no rate headers stay out of the shares; the empty table returns no group (stmt1-3) and cols 9 (stmt0).
+	// Coverage data mutant: B loses its hour-5 row. A 0-row hour = gate NOT MET, though every other hour of B passes.
+	// A mutation needs the merge pool: start merges for it, stop them again after.
+	exec("SYSTEM START MERGES provider_request_usage")
+	if err := conn.Exec(clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"mutations_sync": 2})),
+		fmt.Sprintf("ALTER TABLE provider_request_usage DELETE WHERE integration_id = '%s' AND execution_id = 'exec-b-5'", form14410IntegB)); err != nil {
+		t.Fatal(err)
+	}
+	exec("SYSTEM STOP MERGES provider_request_usage")
+	oneGap := map[int]string{}
+	for h := 0; h < 24; h++ {
+		oneGap[h] = "1"
+	}
+	oneGap[5] = "0"
+	capGap := scalar(`SELECT toString(sum(rows) + 2 * count() + 1) FROM system.parts WHERE active AND database = currentDatabase()
+		AND table = 'provider_request_usage' AND partition_id >= '202611'`)
+	gap := must("stmt3-hour-gap", blocks[3])
+	equal("stmt3-hour-gap (B NOT MET by one 0-row hour)", gap, []string{
+		"integration8=aaaaaaaa core_rows_per_hour=" + hours(map[int]string{6: "1", 7: "1"}) + " zero_row_hours=22 read_rows_cap=" + capGap,
+		"integration8=bbbbbbbb core_rows_per_hour=" + hours(oneGap) + " zero_row_hours=1 read_rows_cap=" + capGap,
+	})
+
 	exec("TRUNCATE TABLE provider_request_usage")
 	equal("stmt0-empty", must("stmt0-empty", blocks[0]), []string{"cols=9"})
-	for i := 1; i <= 3; i++ {
+	for i := 1; i <= 4; i++ {
 		if got := must(fmt.Sprintf("stmt%d-empty", i), blocks[i]); len(got) != 0 {
 			t.Fatalf("stmt%d on an empty table: %v, want no row", i, got)
 		}

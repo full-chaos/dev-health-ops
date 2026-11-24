@@ -573,7 +573,13 @@ func TestFormExecFcs14544Sel3(t *testing.T) {
 			}
 		}
 	}
-	if strings.Contains(statements["S0"], "throwIf") {
+	var s0SQL strings.Builder
+	for _, line := range strings.Split(statements["S0"], "\n") {
+		if !strings.HasPrefix(line, "--") {
+			s0SQL.WriteString(line + "\n")
+		}
+	}
+	if strings.Contains(s0SQL.String(), "throwIf") || strings.Contains(s0SQL.String(), "FROM test_suite_results") {
 		t.Errorf("S0 must read metadata only")
 	}
 	s4 := strings.ReplaceAll(statements["S4"], "testops_release_confidence", "testops_test_metrics_daily")

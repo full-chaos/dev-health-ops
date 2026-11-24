@@ -529,6 +529,17 @@ func (c *HTTPClient) doRequest(ctx context.Context, probe *requestProbe, method,
 		if !classification.Retryable() || attempt == c.Retry.MaxAttempts {
 			return nil, classification
 		}
+		// Only a rate limit ends early: it is the provider scheduling the retry, and
+		// the unit defers it without using an attempt. Any other class keeps the
+		// slept-out wait and its context error, so no caller's fallback changes.
+		if classification.Class == ErrorRateLimited && deadlineWithin(ctx, retryDelay) {
+			if classification.RetryAfter <= 0 {
+				classification.RetryAfter = retryDelay
+			}
+			// The wait does not fit: end as a deadline error, as the slept-out wait
+			// did, that still carries the class and RetryAfter for errors.As.
+			return nil, errors.Join(context.DeadlineExceeded, classification)
+		}
 		if err := c.wait(ctx, retryDelay); err != nil {
 			return nil, err
 		}
@@ -812,6 +823,17 @@ func (c *HTTPClient) awaitGate(ctx context.Context, probe *requestProbe) error {
 			return err
 		}
 	}
+}
+
+// deadlineWithin reports whether the context deadline falls inside the wait: the
+// same comparison awaitGate makes.
+func deadlineWithin(ctx context.Context, wait time.Duration) bool {
+	return deadlineWithinAt(ctx, time.Now(), wait)
+}
+
+func deadlineWithinAt(ctx context.Context, now time.Time, wait time.Duration) bool {
+	deadline, ok := ctx.Deadline()
+	return ok && deadline.Sub(now) <= wait
 }
 
 func (c *HTTPClient) wait(ctx context.Context, wait time.Duration) error {

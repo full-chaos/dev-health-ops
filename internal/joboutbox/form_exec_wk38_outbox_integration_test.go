@@ -138,8 +138,10 @@ func TestFormWk38OutboxExecutes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	riverBase := 4242
 	seed := func(kind, status string, n int) {
 		t.Helper()
+		riverBase += n // river_job_id is unique (uq_worker_job_outbox_river_job_id): each seed call gets its own range
 		exec(`INSERT INTO public.worker_job_outbox
     (id, dedupe_key, job_kind, contract_version, args, payload_hash, queue, priority, max_attempts, scheduled_at, status,
      claim_token, claimed_at, claim_expires_at, attempt_count, next_attempt_at, river_job_id, delivered_at, created_at, updated_at)
@@ -148,8 +150,8 @@ SELECT gen_random_uuid(), 'formwk38:' || $1::text || ':' || $2::text || ':' || g
        'sha256:' || repeat('0', 64), 'metrics', 2, 4, now(), $2::varchar,
        CASE WHEN $2::text = 'claimed' THEN gen_random_uuid() END, CASE WHEN $2::text = 'claimed' THEN now() END,
        CASE WHEN $2::text = 'claimed' THEN now() + interval '5 minutes' END, 0, now(),
-       CASE WHEN $2::text = 'delivered' THEN 4242 + g END, CASE WHEN $2::text = 'delivered' THEN now() END, now(), now()
-FROM generate_series(1, $3::int) AS g`, kind, status, n)
+       CASE WHEN $2::text = 'delivered' THEN $4::int + g END, CASE WHEN $2::text = 'delivered' THEN now() END, now(), now()
+FROM generate_series(1, $3::int) AS g`, kind, status, n, riverBase)
 	}
 	const fin, other = "metrics.daily_finalize", "metrics.daily_partition"
 	seed(fin, "pending", 3)

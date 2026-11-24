@@ -23,7 +23,58 @@ import (
 // (repositoryIdentity).
 const formExecSrc1x14544SHA256 = "d1f5c4fd0255db220fa0899e84077a3cfdb8a1d2e45f07ca5cc0961d38a64272"
 
-const formExecSrc1x14544SQL = ``
+const formExecSrc1x14544SQL = `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+-- FORM-14544-SRC-1 (lane fcs-14544sel5, 2026-11-24, ops pin 3207ac6258c0). Postgres prod, read only, one transaction.
+-- acp option (P): sync source efb5436f -> its minted repo cut. Shape: pm-guard/FORM-TEMPLATE-5.md (7fb32b16d35d).
+-- WANT text and bound math: FORM-14544-SRC-1.md. No SET of any kind, no write. Outputs = counts, bytes, one 8-char cut.
+-- G0 catalog gate: reads no data table row. Sizes = pg_relation_size of the heap + its TOAST (file sizes, not stats).
+-- WANT cost_gate_ok = 0, orgs = 1. Else the named cast error STOP-G0 aborts the transaction (ON_ERROR_STOP).
+WITH orgs AS (SELECT count(*) AS n FROM public.organizations o WHERE starts_with(o.id::text, 'f0f0f0f0')),
+rel AS (SELECT c.relname, c.reltuples::bigint AS reltuples,
+               pg_catalog.pg_relation_size(c.oid) AS heap_bytes,
+               CASE WHEN c.reltoastrelid = 0 THEN 0 ELSE pg_catalog.pg_relation_size(c.reltoastrelid) END AS toast_bytes
+        FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind = 'r'
+          AND c.relname IN ('integration_sources', 'organizations'))
+SELECT CASE WHEN (SELECT n FROM orgs) = 1
+             AND (SELECT count(*) FROM rel) = 2
+             AND (SELECT heap_bytes + toast_bytes FROM rel WHERE relname = 'integration_sources') <= 268435456
+             AND (SELECT heap_bytes + toast_bytes FROM rel WHERE relname = 'organizations') <= 67108864
+            THEN 0
+            ELSE ('STOP-G0 orgs=' || (SELECT n FROM orgs)
+                  || ' tables=' || (SELECT count(*) FROM rel)
+                  || ' bytes=' || COALESCE((SELECT string_agg(relname || ':' || heap_bytes || '+' || toast_bytes, ',' ORDER BY relname) FROM rel), 'none')
+                  || ' reltuples=' || COALESCE((SELECT string_agg(relname || ':' || reltuples, ',' ORDER BY relname) FROM rel), 'none'))::int
+       END AS cost_gate_ok,
+       (SELECT n FROM orgs) AS orgs,
+       (SELECT heap_bytes FROM rel WHERE relname = 'integration_sources') AS sources_heap_bytes,
+       (SELECT toast_bytes FROM rel WHERE relname = 'integration_sources') AS sources_toast_bytes,
+       (SELECT heap_bytes + toast_bytes FROM rel WHERE relname = 'organizations') AS organizations_bytes;
+-- stmt0 ORG-1. WANT orgs = 1. One scan of organizations (bounded by G0).
+SELECT count(*) AS orgs
+FROM public.organizations o
+WHERE starts_with(o.id::text, 'f0f0f0f0');
+-- stmt1 the source and its minted repo cut. WANT n_sources = 1, github_repository_sources = 1, name_is_external_id = 1,
+-- repo_cut = 8 hex chars. repo_cut = the first 8 hex of sha256(lower(btrim(full_name))) = the first 8 chars of the
+-- repos.id the GitHub routes mint from that path (github_repository_route.go:287-306). Printed only when exactly one
+-- source matches (else empty). Never full_name, never an id. One scan of integration_sources (bounded by G0).
+SELECT count(*) AS n_sources,
+       count(*) FILTER (WHERE s.provider = 'github' AND s.source_type = 'repository') AS github_repository_sources,
+       count(*) FILTER (WHERE lower(btrim(s.full_name)) = lower(btrim(s.external_id))) AS name_is_external_id,
+       CASE WHEN count(*) = 1
+            THEN min(substr(encode(sha256(convert_to(lower(btrim(s.full_name)), 'UTF8')), 'hex'), 1, 8))
+       END AS repo_cut
+FROM public.integration_sources s
+WHERE starts_with(s.org_id, 'f0f0f0f0') AND s.id::text LIKE 'efb5436f%';
+-- stmt2 control. WANT github_sources > 0 (the read sees the org's GitHub sources). github_repository_sources is INFO.
+-- One scan of integration_sources (bounded by G0).
+SELECT count(*) AS github_sources,
+       count(*) FILTER (WHERE s.source_type = 'repository') AS github_repository_sources
+FROM public.integration_sources s
+WHERE starts_with(s.org_id, 'f0f0f0f0') AND s.provider = 'github';
+ROLLBACK;
+`
 
 const (
 	formExecSrc1x14544Org      = "f0f0f0f0-1454-4000-8000-000000000001"

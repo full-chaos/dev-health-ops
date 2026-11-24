@@ -27,6 +27,7 @@ type ownersEnv struct {
 	ctx    context.Context
 	admin  stdclickhouse.Conn
 	client QueryClient
+	uri    string
 }
 
 func startOwnersEnv(t *testing.T) *ownersEnv {
@@ -53,7 +54,7 @@ func startOwnersEnv(t *testing.T) *ownersEnv {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	return &ownersEnv{t: t, ctx: ctx, admin: admin, client: client}
+	return &ownersEnv{t: t, ctx: ctx, admin: admin, client: client, uri: ch.URI}
 }
 
 func (e *ownersEnv) exec(q string, args ...any) {

@@ -16,8 +16,10 @@ import (
 	"testing"
 
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
+	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/chclient"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopspooled"
 )
@@ -114,9 +116,16 @@ FROM numbers(%d)`, repo, org, history))
 			phase, label, rows, float64(rows)/float64(suiteRows), suiteRows, p95, samples)
 		return rows
 	}
+	// The served path runs on the production query client (chclient.Options: no byte bound, CHAOS-4651), so only the pooled
+	// row bound can refuse the read.
+	prod, err := dhclickhouse.NewClickHouseQueryClientWithOptions(chclient.Options(e.uri))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = prod.Close() })
 	served := func(phase string) error {
 		t.Helper()
-		_, err := resolveOneTimeseries(e.ctx, e.client, org, tsInput(model.DimensionInputTeam, model.MeasureInputTestSuiteDurationP95), false, nil, true)
+		_, err := resolveOneTimeseries(e.ctx, prod, org, tsInput(model.DimensionInputTeam, model.MeasureInputTestSuiteDurationP95), false, nil, true)
 		var refused *PooledReadBoundError
 		if errors.As(err, &refused) {
 			t.Logf("CELL14259 %s served TEST_SUITE_DURATION_P95 under the %d-row bound: refused, code %d (%v)", phase, TestopsPooledMaxRowsToRead, refused.Code, err)

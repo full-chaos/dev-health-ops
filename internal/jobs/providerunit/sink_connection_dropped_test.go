@@ -232,6 +232,18 @@ func driveDroppedWriteWalk(t *testing.T, pages int, failOn map[int]bool, writeEr
 		sink:       &droppingSink{failOn: failOn, err: writeErr},
 		attempt:    1,
 	}
+	// The progress refund reads the durable checkpoint, here the in-process
+	// ledger, so these walks prove the refund stays provider_transient only.
+	walk.repository.chunkNextOrdinal = func(at time.Time) (int, bool) {
+		if walk.ledger == nil {
+			return 0, false
+		}
+		checkpoint, err := walk.ledger.LoadChunkCheckpoint(context.Background(), walk.ledgerClaim, at)
+		if err != nil {
+			return 0, false
+		}
+		return checkpoint.NextOrdinal, true
+	}
 	handler := &Handler{
 		Repository:    dropWalkRepository{walk.repository},
 		LeaseDuration: time.Minute,

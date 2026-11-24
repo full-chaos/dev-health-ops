@@ -530,7 +530,6 @@ func (c *HTTPClient) doRequest(ctx context.Context, probe *requestProbe, method,
 			return nil, classification
 		}
 		if deadlineWithin(ctx, retryDelay) {
-			slog.InfoContext(ctx, "provider_retry_wait_deferred", "provider", c.Provider, "class", string(classification.Class), "wait_ms", retryDelay.Milliseconds())
 			if classification.Class == ErrorRateLimited && classification.RetryAfter <= 0 {
 				classification.RetryAfter = retryDelay
 			}

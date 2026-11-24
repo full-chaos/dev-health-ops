@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,7 +64,11 @@ func copyRepositoryVersion(t *testing.T, ctx context.Context, conn driver.Conn, 
 		t.Fatalf("%s: read version: %v", table, err)
 	}
 	columns := source.ColumnTypes()
-	batch, err := conn.PrepareBatch(ctx, `INSERT INTO `+table)
+	names := make([]string, len(columns))
+	for index, column := range columns {
+		names[index] = column.Name()
+	}
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO `+table+` (`+strings.Join(names, ", ")+`)`)
 	if err != nil {
 		t.Fatalf("%s: prepare copy: %v", table, err)
 	}

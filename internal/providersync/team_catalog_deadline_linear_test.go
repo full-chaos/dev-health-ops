@@ -425,6 +425,21 @@ func tcdlLNSweep(t *testing.T) {
 				t.Errorf("strict=%v k=%d: no request was failed", strict, k)
 				continue
 			}
+			// Bound (named limit, no gate): after the 429 the run sends no more
+			// than the planned requests and never repeats a request beyond what
+			// the happy run does.
+			if len(run.labels) > len(happy.labels) {
+				t.Errorf("strict=%v k=%d: %d requests, the happy run plans %d", strict, k, len(run.labels), len(happy.labels))
+			}
+			happyCount, runCount := map[string]int{}, map[string]int{}
+			for _, label := range happy.labels {
+				happyCount[label]++
+			}
+			for _, label := range run.labels {
+				if runCount[label]++; runCount[label] > happyCount[label] {
+					t.Errorf("strict=%v k=%d: %s requested %d times, the happy run %d: a retry loop", strict, k, label, runCount[label], happyCount[label])
+				}
+			}
 			if !tcdlLNGateless && len(run.labels) > k {
 				t.Errorf("strict=%v k=%d: %d request(s) reached the provider after the 429 armed the gate: %v",
 					strict, k, len(run.labels)-k, run.labels[k:])

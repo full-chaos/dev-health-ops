@@ -596,6 +596,22 @@ func tcdlGLSweep(t *testing.T) {
 		t.Logf("%s happy: %d requests, closes=%d", name, len(happy.calls), len(happy.closes))
 		for k := 1; k <= len(happy.calls); k++ {
 			run := tcdlGLCollect(t, selections, k)
+			// Bound (named limit, no gate): after the 429 the run sends no more
+			// than the planned requests and never repeats a request beyond what
+			// the happy run does.
+			if len(run.calls) > len(happy.calls) {
+				t.Errorf("%s k=%d: %d requests, the happy run plans %d", name, k, len(run.calls), len(happy.calls))
+			}
+			happyCount, runCount := map[string]int{}, map[string]int{}
+			key := func(call tcdlGLCall) string { return fmt.Sprint(call.path, "|", call.lookup, "|", call.all) }
+			for _, call := range happy.calls {
+				happyCount[key(call)]++
+			}
+			for _, call := range run.calls {
+				if runCount[key(call)]++; runCount[key(call)] > happyCount[key(call)] {
+					t.Errorf("%s k=%d: %s requested %d times, the happy run %d: a retry loop", name, k, key(call), runCount[key(call)], happyCount[key(call)])
+				}
+			}
 			failed := "?"
 			if k <= len(run.calls) {
 				call := run.calls[k-1]

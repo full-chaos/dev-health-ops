@@ -371,6 +371,21 @@ func jiraDeadlineSweep(t *testing.T) {
 			if len(d.unexpected) > 0 {
 				t.Errorf("k=%d strict=%v: unexpected requests %v", k, strict, d.unexpected)
 			}
+			// Bound (named limit, no gate): after the 429 the run sends no more
+			// than the planned requests and never repeats a URL beyond what the
+			// happy run does.
+			if len(d.order) > len(happy.doer.order) {
+				t.Errorf("k=%d strict=%v: %d requests, the happy run plans %d", k, strict, len(d.order), len(happy.doer.order))
+			}
+			happyCount, runCount := map[string]int{}, map[string]int{}
+			for _, uri := range happy.doer.order {
+				happyCount[uri]++
+			}
+			for _, uri := range d.order {
+				if runCount[uri]++; runCount[uri] > happyCount[uri] {
+					t.Errorf("k=%d strict=%v: %s requested %d times, the happy run %d: a retry loop", k, strict, uri, runCount[uri], happyCount[uri])
+				}
+			}
 			// Every read the walk answered in full, by URI (the live search is
 			// read twice: both reads must answer).
 			full := func(uri string) bool {

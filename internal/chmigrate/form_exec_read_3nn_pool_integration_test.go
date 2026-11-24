@@ -513,14 +513,21 @@ func TestForm3nnPoolExecutesAtTheChainHead(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var values []string
-	for _, d := range daily {
-		values = append(values, fmt.Sprintf("(toUUID('%s'), toDate('%s'), '%s', toDateTime('%s 10:00:00', 'UTC') + %d, %d)",
-			d.repo, day(d.off), d.org, day(0), 3600*d.laterHours, d.stored))
-	}
-	if err := conn.Exec(ctx, "INSERT INTO testops_test_metrics_daily (repo_id, day, org_id, computed_at, pooled_samples_stored) VALUES "+
-		strings.Join(values, ", ")); err != nil {
-		t.Fatalf("daily fixture: %v", err)
+	// Two INSERTs: a ReplacingMergeTree collapses same-key rows inside one inserted block, so the newer row of a repo-day goes in
+	// its own part (merges are stopped), as a later writer run does.
+	for _, later := range []bool{false, true} {
+		var values []string
+		for _, d := range daily {
+			if (d.laterHours > 0) != later {
+				continue
+			}
+			values = append(values, fmt.Sprintf("(toUUID('%s'), toDate('%s'), '%s', toDateTime('%s 10:00:00', 'UTC') + %d, %d)",
+				d.repo, day(d.off), d.org, day(0), 3600*d.laterHours, d.stored))
+		}
+		if err := conn.Exec(ctx, "INSERT INTO testops_test_metrics_daily (repo_id, day, org_id, computed_at, pooled_samples_stored) VALUES "+
+			strings.Join(values, ", ")); err != nil {
+			t.Fatalf("daily fixture (later %v): %v", later, err)
+		}
 	}
 	perDay := pool3nnRuns * pool3nnSuite
 	for _, b := range blocks {

@@ -269,3 +269,127 @@ func TestLinearHistoryAscendingPlacesUnparseableLast14568(t *testing.T) {
 		t.Fatalf("order=%v (input head %q), want a b b2 c and an untouched input", ids, history[0].ID)
 	}
 }
+
+func linearRows14568(t *testing.T, history string) []linearWorkItemTransitionRow {
+	t.Helper()
+	payload := linearCloseReproPayload14568(t, "ENG-7", "In Progress", "started", history)
+	_, transitions, err := normalizeLinearWorkItem(nativeTestClaim("linear", "work-items"), payload, time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return transitions
+}
+
+const (
+	linearStart14568 = `{"id":"h1","createdAt":"2026-09-20T10:00:00.000Z","fromState":{"name":"Todo","type":"unstarted"},"toState":{"name":"In Progress","type":"started"}}`
+	linearRel14568   = `{"id":"hr","createdAt":"2026-09-30T10:00:00.000Z","fromState":null,"toState":null,"relationChanges":[{"identifier":"ENG-900","type":"ad"}]}`
+)
+
+func linearExit14568(at, toName, toType string) string {
+	return `{"id":"hx","createdAt":"` + at + `","fromState":{"name":"Duplicate","type":"duplicate"},"toState":{"name":"` + toName + `","type":"` + toType + `"}}`
+}
+
+func linearEnter14568(id, at, fromName, fromType, toName, toType string) string {
+	return `{"id":"` + id + `","createdAt":"` + at + `","fromState":{"name":"` + fromName + `","type":"` + fromType + `"},"toState":{"name":"` + toName + `","type":"` + toType + `"}}`
+}
+
+// O1(a): a previous state that already maps to canceled gets no implied canceled -> canceled row; a previous Done keeps its
+// done -> canceled row.
+func TestLinearImpliedCloseSkipsOnlyCanceledToCanceled14568(t *testing.T) {
+	for _, tc := range []struct{ name, exitName, exitType string }{
+		{"canceled to backlog", "Backlog", "backlog"},
+		{"canceled to triage", "Triage", "triage"},
+		{"canceled to in progress", "In Progress", "started"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := linearRows14568(t, "["+linearStart14568+","+linearEnter14568("h2", "2026-09-25T10:00:00.000Z", "In Progress", "started", "Canceled", "canceled")+","+
+				linearExit14568("2026-09-30T10:00:00.000Z", tc.exitName, tc.exitType)+"]")
+			if len(rows) != 3 {
+				t.Fatalf("rows=%d, want 3 (no implied canceled -> canceled row): %+v", len(rows), rows)
+			}
+		})
+	}
+	t.Run("done keeps its implied row (control)", func(t *testing.T) {
+		rows := linearRows14568(t, "["+linearStart14568+","+linearEnter14568("h2", "2026-09-25T10:00:00.000Z", "In Progress", "started", "Done", "completed")+","+
+			linearExit14568("2026-09-30T10:00:00.000Z", "Backlog", "backlog")+"]")
+		if len(rows) != 4 || rows[2].FromStatus != "done" || rows[2].ToStatus != "canceled" {
+			t.Fatalf("rows=%+v, want an implied done -> canceled row", rows)
+		}
+	})
+}
+
+// O1(b): without a relation entry the close is stamped 1 ms before the exit (occurred_at is DateTime64(3),
+// internal/chmigrate/history/009_raw_work_items.sql:33), clamped to stay strictly after the entry into the previous state;
+// when no such millisecond exists the close takes the exit instant (the tie order may then rank it after the reopen: named limit).
+func TestLinearFallbackCloseIsOneMillisecondBeforeExit14568(t *testing.T) {
+	exitAt := "2026-09-30T10:00:00.000Z"
+	for _, tc := range []struct {
+		name, previousAt string
+		want             time.Time
+	}{
+		{"previous far before", "2026-09-25T10:00:00.000Z", time.Date(2026, 9, 30, 9, 59, 59, 999_000_000, time.UTC)},
+		{"previous 2 ms before", "2026-09-30T09:59:59.998Z", time.Date(2026, 9, 30, 9, 59, 59, 999_000_000, time.UTC)},
+		{"previous 1 ms before: no free millisecond (control)", "2026-09-30T09:59:59.999Z", time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC)},
+		{"previous at the exit instant (control)", exitAt, time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := linearRows14568(t, "["+linearEnter14568("h1", tc.previousAt, "Todo", "unstarted", "In Progress", "started")+","+linearExit14568(exitAt, "Backlog", "backlog")+"]")
+			if len(rows) != 3 || !rows[1].OccurredAt.Equal(tc.want) || rows[1].ToStatus != "canceled" {
+				t.Fatalf("rows=%+v, want the implied close at %v", rows, tc.want)
+			}
+		})
+	}
+}
+
+// C3: any relationChanges entry counts, whatever its type: the rule does not read Linear's undocumented change-type codes.
+// WANT: the close takes the instant of the last relation entry in between, even a non-duplicate one.
+func TestLinearCloseTakesAnyRelationEntryInBetween14568(t *testing.T) {
+	other := `{"id":"hr2","createdAt":"2026-09-27T10:00:00.000Z","fromState":null,"toState":null,"relationChanges":[{"identifier":"ENG-901","type":"related"}]}`
+	rel := strings.Replace(linearRel14568, "2026-09-30T10:00:00.000Z", "2026-09-25T10:00:00.000Z", 1)
+	rows := linearRows14568(t, "["+linearStart14568+","+rel+","+other+","+linearExit14568("2026-09-30T10:00:00.000Z", "In Progress", "started")+"]")
+	want := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	if len(rows) != 3 || !rows[1].OccurredAt.Equal(want) {
+		t.Fatalf("rows=%+v, want the close at %v", rows, want)
+	}
+}
+
+// O2 + C4: at one instant a relation entry sorts before a state entry whatever the served order; state-state ties keep served order.
+func TestLinearRelationStateTieIgnoresServedOrder14568(t *testing.T) {
+	exit := linearExit14568("2026-09-30T10:00:00.000Z", "Backlog", "backlog")
+	intoPrevious := linearEnter14568("h1b", "2026-09-25T10:00:00.000Z", "In Progress", "started", "In Review", "started")
+	relAtPrevious := strings.Replace(linearRel14568, "2026-09-30T10:00:00.000Z", "2026-09-25T10:00:00.000Z", 1)
+	withActor := strings.Replace(linearRel14568, `"fromState":null`, `"actor":{"name":"Ann","email":"ann@example.test"},"fromState":null`, 1)
+	for _, tc := range []struct {
+		name         string
+		a, b         string
+		withExit     bool
+		wantCloseAt  time.Time
+		wantActorSet bool
+	}{
+		{"relation and exit", withActor, exit, false, time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC), true},
+		{"relation and the entry into the previous state", relAtPrevious, intoPrevious, true, time.Date(2026, 9, 30, 9, 59, 59, 999_000_000, time.UTC), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			build := func(first, second string) []linearWorkItemTransitionRow {
+				history := "[" + linearStart14568 + "," + first + "," + second
+				if tc.withExit {
+					history += "," + exit
+				}
+				return linearRows14568(t, history+"]")
+			}
+			ab, ba := build(tc.a, tc.b), build(tc.b, tc.a)
+			if !slices.Equal(linearTransitionSet14568(ab), linearTransitionSet14568(ba)) {
+				t.Fatalf("served order changes the rows:\n%v\n%v", linearTransitionSet14568(ab), linearTransitionSet14568(ba))
+			}
+			var implied *linearWorkItemTransitionRow
+			for index := range ab {
+				if ab[index].ToStatusRaw != nil && *ab[index].ToStatusRaw == "Duplicate" {
+					implied = &ab[index]
+				}
+			}
+			if implied == nil || !implied.OccurredAt.Equal(tc.wantCloseAt) || (implied.Actor != nil) != tc.wantActorSet {
+				t.Fatalf("implied=%+v, want the close at %v with actor set=%v", implied, tc.wantCloseAt, tc.wantActorSet)
+			}
+		})
+	}
+}

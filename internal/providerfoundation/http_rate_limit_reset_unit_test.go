@@ -176,3 +176,17 @@ func TestTheAppTokenExchangeKeepsReadingTheResetInSeconds(t *testing.T) {
 		t.Fatalf("token exchange 429 classification = %+v, want rate_limited with about 1h", got)
 	}
 }
+
+func TestTheAppTokenExchangeHonoursAResetMoreThanADayAhead(t *testing.T) {
+	t.Parallel()
+	raw := strconv.FormatInt(time.Now().Add(48*time.Hour).Unix(), 10)
+	response := &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     http.Header{"X-Ratelimit-Reset": {raw}},
+		Body:       io.NopCloser(strings.NewReader(`{}`)),
+	}
+	got := classifyResponseWithBody("github", "/app/installations/1/access_tokens", response)
+	if got == nil || got.Class != ErrorRateLimited || got.RetryAfter < 48*time.Hour-2*time.Second || got.RetryAfter > 48*time.Hour+2*time.Second {
+		t.Fatalf("token exchange 429 with a reset 48h ahead = %+v, want rate_limited with about 48h, as main", got)
+	}
+}

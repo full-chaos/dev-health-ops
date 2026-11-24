@@ -33,3 +33,12 @@ func TestRetryAfterIgnoresAnOverflowingReset(t *testing.T) {
 		}
 	}
 }
+
+func TestRetryAfterHonoursAResetMoreThanADayAhead(t *testing.T) {
+	t.Parallel()
+	reset := strconv.FormatInt(time.Now().Add(48*time.Hour).Unix(), 10)
+	got := retryAfter(restcore.Response{Status: 429, Header: http.Header{"Ratelimit-Reset": {reset}}})
+	if got < 48*time.Hour-2*time.Second || got > 48*time.Hour+2*time.Second {
+		t.Fatalf("RateLimit-Reset %s (epoch seconds, now+48h) gave %s, want about 48h, as main", reset, got)
+	}
+}

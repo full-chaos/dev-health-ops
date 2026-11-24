@@ -23,22 +23,22 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// Throwaway exec proof of the prod read form FORM-QZ2-13902-3 (CHAOS-13902, Q-z2): not for merge. qz2Form is the form
+// Throwaway exec proof of the prod read form FORM-QZ2-13902-4 (CHAOS-13902, Q-z2): not for merge. qz2Form is the form
 // file with its org prefix (8 hex) replaced by the synthetic "f0f0f0f0"; its sha256 is pinned. The cell runs the text the
 // way pm does (psql -X -A -F'|' -v ON_ERROR_STOP=1 -f -, the form on stdin, PGOPTIONS statement_timeout=30000) against a
 // scratch database at the repo chain head, with a synthetic org f0 and a foreign org b0 in every table the form reads.
-const qz2SHA256 = "3f9cc04490e847e8cd0476504eb3784167bd84086ff199cc4dd678fa56dfcb84"
+const qz2SHA256 = "ffc0c5b097507ec86edc5a103f31cc3401d670c916823a8e57a87ee6b2c9a0e1"
 
-const qz2Form = `-- FORM-QZ2-13902-3: Q-z2 of CARD-13902-recompute-15 (z): which sync window set the raw floor 2025-11-01 of git_commits.
+const qz2Form = `-- FORM-QZ2-13902-4: Q-z2 of CARD-13902-recompute-16 (z) (= -3 17dfe2a896ba + '-- stmtN' marker lines, acp add 2026-11-24; SQL unchanged): which sync window set the raw floor 2025-11-01 of git_commits.
 -- Postgres, database devhealth, READ ONLY. Lane l13902 (lead fcdev), 2026-11-24. Prod: NOT EXECUTED. CI exec: OPEN
 --   (EXEC-PROOF-QZ2-13902-3.md; cell internal/pgmigrate/qz2exec/qz2_13902_read_form_exec_integration_test.go). acp FORM
---   read: OPEN. md: FORM-QZ2-13902-3.md.
+--   read: OPEN. md: FORM-QZ2-13902-4.md.
 -- -3 = FORM-QZ2-13902-2 (310d738cb457) + the acp fixes of READ-CARD-13902-14-1 (ea1ec94bf5ba): Q2-P2-4 G0 caps the real
 --   file size (pg_relation_size of heap + TOAST), not the stats (relpages); row caps dropped; reltuples -1 still STOPs.
 --   Q2-P2-5 the run line is the FORM-TEMPLATE-4 PG_REMOTE_TMPL line, in the md. Data statements and ROLLBACK as in -2.
 -- Shape: FORM-TEMPLATE-5 (b): one transaction REPEATABLE READ READ ONLY, G0 catalog gate first, ends ROLLBACK; no SET
 --   (statement_timeout comes from PGOPTIONS); no write. Output = counts, text keys, UTC days, UTC times cut to the second.
--- Run: pm only, the FORM-TEMPLATE-4 PG_REMOTE_TMPL line in FORM-QZ2-13902-3.md (psql -X -A -F"|" -v ON_ERROR_STOP=1
+-- Run: pm only, the FORM-TEMPLATE-4 PG_REMOTE_TMPL line in FORM-QZ2-13902-4.md (psql -X -A -F"|" -v ON_ERROR_STOP=1
 --   -f -, this file on stdin). No placeholder.
 -- Org scope: the org prefix is in 4 places, each a starts_with: G0 (organizations), UNITS, BACKFILL, FIRST-RUN.
 -- Tables + columns: internal/pgmigrate/baseline/head.json at 3207ac6258c0 (chain 0163..0166 alter none of them):
@@ -49,13 +49,16 @@ const qz2Form = `-- FORM-QZ2-13902-3: Q-z2 of CARD-13902-recompute-15 (z): which
 --   pagerduty). Modes: planner.go:19-21 ('incremental', 'full_resync', 'backfill'). A unit's window start = since_at
 --   (providersync/inprocess.go:431; github_commits_route.go:104-105 uses it as the since parameter).
 -- Question: which unit (dataset, mode, created second) first fetched with a window start at or before 2025-11-01 00:00 UTC,
---   and whether any window started earlier. WANTs + reading: FORM-QZ2-13902-3.md.
+--   and whether any window started earlier. WANTs + reading: FORM-QZ2-13902-4.md.
 -- Cost: starts_with uses no index: UNITS, BACKFILL, FIRST-RUN each read their one table at most once. G0 (catalog, file
 --   sizes, the organizations count) caps every table before any data statement; a STOP text names every size. Work math:
 --   the md.
 
+-- The file runs WHOLE on psql stdin (one transaction, the md's run line): no cut. The '-- stmtN' lines mark the statements for
+--   the reader (stmtN = from its marker to the first line after it that does NOT start with '--' and ends in ';').
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
 
+-- stmt1 G0
 -- G0 catalog gate. WANT cost_gate_ok 0. Else the cast error 'STOP-G0 ...' aborts the transaction and ON_ERROR_STOP ends
 -- the file: STOP (no later statement runs). STOP when: orgs != 1, a table missing, never analyzed (reltuples -1), or a
 -- table over its byte cap. Bytes = pg_relation_size of the heap + of the TOAST table (the real file sizes; no row is
@@ -91,6 +94,7 @@ FROM (SELECT (SELECT count(*) FROM public.organizations AS o WHERE starts_with(o
             WHERE n.nspname = 'public' AND c.relkind = 'r'
               AND c.relname IN ('organizations', 'sync_run_units', 'sync_runs', 'backfill_jobs')) AS rel) AS g;
 
+-- stmt2 S0
 -- S0 (INFO, catalog + file sizes only): one row per table: est_rows = reltuples (stats, INFO), heap_bytes =
 -- pg_relation_size(heap), toast_bytes = pg_relation_size(TOAST) (0 if none), total_bytes = heap + TOAST (the value G0
 -- caps). The md's work math reads these on the first run.
@@ -104,6 +108,7 @@ WHERE n.nspname = 'public' AND c.relkind = 'r'
   AND c.relname IN ('backfill_jobs', 'organizations', 'sync_runs', 'sync_run_units')
 ORDER BY c.relname COLLATE "C";
 
+-- stmt3 UNITS
 -- UNITS: per (dataset_key, mode) of the org's raw-feeding datasets, plus one '<all>' row (control: WANT org_units > 0).
 -- Times are UTC, cut to the second (to_char, no rounding).
 SELECT 'UNITS' AS stmt,
@@ -123,6 +128,7 @@ WHERE starts_with(u.org_id, 'f0f0f0f0')
 GROUP BY GROUPING SETS ((), (u.dataset_key, u.mode))
 ORDER BY GROUPING(u.dataset_key) DESC, u.dataset_key COLLATE "C", u.mode COLLATE "C";
 
+-- stmt4 BACKFILL
 -- BACKFILL: the org's backfill jobs as aggregates (no ids, no row list): one '<all>' row, then one row per status.
 -- Days are YYYY-MM-DD; first_created_day is UTC.
 SELECT 'BACKFILL' AS stmt,
@@ -139,6 +145,7 @@ WHERE starts_with(b.org_id, 'f0f0f0f0')
 GROUP BY GROUPING SETS ((), (b.status))
 ORDER BY GROUPING(b.status) DESC, b.status COLLATE "C";
 
+-- stmt5 FIRST-RUN
 -- FIRST-RUN: the org's sync runs (count) and the first one (UTC, cut to the second).
 SELECT 'FIRST-RUN' AS stmt, count(*) AS org_runs,
        to_char(min(r.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS first_run_created

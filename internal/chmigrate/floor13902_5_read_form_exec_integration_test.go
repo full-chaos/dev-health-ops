@@ -20,14 +20,14 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-// Throwaway exec proof of the prod read forms FLOOR-13902-5, FORM-QZ1-13902-3, FORM-QZ3-13902-2 and FORM-QZ4-13902-2
+// Throwaway exec proof of the prod read forms FLOOR-13902-5, FORM-QZ1-13902-3, FORM-QZ3-13902-2 and FORM-QZ4-13902-3
 // (CHAOS-13902): not for merge. Each const is the form file with its org prefix (8 hex) replaced by the synthetic
 // "f0f0f0f0"; each sha256 is pinned. It reuses helpers of the FLOOR-13902-2 cell file (same package, same branch).
 const (
 	f3SHA256  = "cb6c39b6ad28b79352666782bd6626257d6c45ff1a142bad330026968f7cb7f7"
 	q1v2SHA   = "eac3883da4b8cf2ccd350ac1ef6742b6a3020d3e3f8d416ec806f59f06ce5d41"
 	q3v2SHA   = "b8462fa34ff41210b14887d028a01b600577ea4f24977cbaa6f03b86abf348a3"
-	q4v2SHA   = "2fafb8650f20d4ca52ac95b5ff06a4a21ad8e0e87d20d9872a983f1d66c1fc98"
+	q4v2SHA   = "b11083eaafb172487043c5c199cd34c1058aae34115e177bd6748fd36a24cedd"
 	f3FillID  = "a1b2c3d4e5f6"
 	f3RunDay1 = "2026-10-23"
 	f3RunDayN = "2026-11-22"
@@ -684,7 +684,8 @@ LEFT JOIN (SELECT repo_id, min(toDate(committer_when)) AS rf, toUInt8(1) AS pres
 WHERE cost_gate = 0;
 `
 
-const q4v2Form = `-- FORM-QZ4-13902-2: Q-z4 of CARD-13902-recompute-13 (z) (= -1 fa3a6e583362 + acp Q4-P2-1 ORG-1, Q4-P2-2 bound): data loss or
+const q4v2Form = `-- FORM-QZ4-13902-3: Q-z4 of CARD-13902-recompute-16 (z) (= -2 f17a253ed395 + the '-- stmt1' marker line, acp add 2026-11-24: every
+--   FORM marks each statement; the SQL text is unchanged; -2 = -1 fa3a6e583362 + acp Q4-P2-1 ORG-1, Q4-P2-2 bound): data loss or
 --   not before the raw floor 2025-11-01. pm ask (binding):
 --   per stored daily table, the count of stored rows dated before 2025-11-01 (no lower bound: Q4-P2-2) with ANY
 --   commit-derived column > 0.
@@ -721,6 +722,7 @@ const q4v2Form = `-- FORM-QZ4-13902-2: Q-z4 of CARD-13902-recompute-13 (z) (= -1
 -- Cost gate (SIZING-14285-6 D1-D3 shape): k repo_metrics_daily 2 (+ the ORG-1 scalar), every other table 1, f 1 (no FINAL),
 --   s 1: read_rows_cap = ceil(1.25 x (sum(marks x k) x 8192 + P)) + 2 x (2P + 1); throwIf(read_rows_cap >= 20000000). pm
 --   WANT read_rows <= read_rows_cap. No SET, no SETTINGS.
+-- stmt1 (the ONE statement: from this line to the first line after it that does NOT start with '--' and ends in ';').
 WITH (SELECT 1 * intDiv(5 * (sum(marks * multiIf(table = 'repo_metrics_daily', 2, 1)) * 8192 + count()) + 3, 4) + 2 * (2 * count() + 1) FROM system.parts WHERE active AND database = currentDatabase()
       AND table IN ('commit_metrics', 'file_hotspot_daily', 'file_metrics_daily', 'ic_landscape_rolling_30d', 'repo_metrics_daily', 'team_cognitive_load_daily', 'team_metrics_daily', 'user_metrics_daily')) AS read_rows_cap,
   (SELECT throwIf(read_rows_cap >= 20000000, 'STOP-COST-GATE')) AS cost_gate
@@ -1613,7 +1615,7 @@ func TestQZ13902v2FormsExecuteMutantsAndEveryGateFires(t *testing.T) {
 	defer cancel()
 	f3Pin(t, "FORM-QZ1-13902-3", q1v2Form, q1v2SHA)
 	f3Pin(t, "FORM-QZ3-13902-2", q3v2Form, q3v2SHA)
-	f3Pin(t, "FORM-QZ4-13902-2", q4v2Form, q4v2SHA)
+	f3Pin(t, "FORM-QZ4-13902-3", q4v2Form, q4v2SHA)
 	q4Tables := []string{"commit_metrics", "file_hotspot_daily", "file_metrics_daily", "ic_landscape_rolling_30d", "repo_metrics_daily",
 		"team_cognitive_load_daily", "team_metrics_daily", "user_metrics_daily"}
 	q4Reads := map[string]uint64{}

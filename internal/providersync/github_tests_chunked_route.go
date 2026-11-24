@@ -1725,6 +1725,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	}
 	cursor = githubTestsRestorePagesEntered(cursor)
 	cursor.OpenSkipEvent = nil
+	configPrefixes, configPrefixesInvalid := githubTestsConfigExcludePrefixesChecked(claim)
+	if configPrefixesInvalid {
+		slog.Warn("sync configuration artifact exclude prefixes are not valid; only the built-in prefixes apply",
+			"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID)
+	}
 	// invocationBaseRequests is the running total every PRIOR chunk
 	// invocation already persisted onto the cursor. requests below counts
 	// only THIS invocation's physical wire attempts (via the counting Doer
@@ -2725,7 +2730,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						if artifact.ID == "" {
 							return providerfoundation.ErrNormalizationInvalid
 						}
-						if selected, reason := githubTestsArtifactSelectionSeam(artifact.Name); !selected {
+						if selected, reason := githubTestsArtifactSelectionSeam(artifact.Name, configPrefixes); !selected {
 							switch reason {
 							case githubTestsExclusionReasonSuffix:
 								cursor.ExcludedNonReportSuffix++

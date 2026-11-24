@@ -275,6 +275,7 @@ dev_health_provider_deep_stop_total	dataset,listing,provider	code: internal/prov
 dev_health_provider_gitlab_tests_window_start_fallback_total	dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_incident_entitlement_refused_total	dataset,provider,seam	code: internal/providerfoundation/budget.go
 dev_health_provider_inventory_page_cap_total	dataset,provider	code: internal/providerfoundation/budget.go
+dev_health_provider_lookup_unavailable_total	dataset,provider,reason	code: internal/providerfoundation/budget.go
 dev_health_provider_open_run_skipped_total	dataset,provider,reason	code: internal/providerfoundation/budget.go
 dev_health_provider_per_run_truncation_total	cause,component,dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_prepared_snapshot_discarded_total	dataset,provider,reason	code: internal/providerfoundation/budget.go

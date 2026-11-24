@@ -382,6 +382,18 @@ WHERE org_id = ? AND run_id = ? AND report_slot = ?`, org, runID, slot).Scan(&li
 // unit is a kept slot whose case c fails at attempt 1 and passes at attempt 2 (a flake). day is the run's day.
 func retiredTwoAttemptRun(t *testing.T, stack attemptsStack, org, runID string, day time.Time, withUnit bool) {
 	t.Helper()
+	first, second := retiredTwoAttemptStates(t, day, withUnit)
+	stack.pass(t, org, runID, day.Add(10*time.Hour), first)
+	stack.pass(t, org, runID, day.Add(11*time.Hour), second)
+	if live, retracted := retiredRows(t, stack, org, runID, "total-b"); live != 2 || retracted != 2 {
+		t.Fatalf("run %s slot total-b: %d live (attempt 1) and %d retracted (attempt 2) rows, want 2 and 2", runID, live, retracted)
+	}
+}
+
+// retiredTwoAttemptStates are the two passes of retiredTwoAttemptRun: attempt 1 (total-b kept) over [10:00, 11:00) and attempt 2
+// (total-b dropped and retired) over [11:00, 12:00) of day.
+func retiredTwoAttemptStates(t *testing.T, day time.Time, withUnit bool) (first, second attemptsRunState) {
+	t.Helper()
 	date := day.Format(time.DateOnly)
 	stamp := func(clock string) string { return date + "T" + clock + "Z" }
 	ts1, ts2 := date+"T10:02:00", date+"T11:12:00"
@@ -399,12 +411,10 @@ func retiredTwoAttemptRun(t *testing.T, stack attemptsStack, org, runID string, 
 		attempt2 = append(attempt2, attemptsArtifact{17, "unit", stamp("11:30:00"), false,
 			retiredArchive(t, ts2, matrixTotalsSuite{"u", "1.0", []matrixTotalsCase{{"c", "", "0.5"}}})})
 	}
-	stack.pass(t, org, runID, day.Add(10*time.Hour), attemptsRunState{attempt: 1, started: stamp("10:01:00"), updated: stamp("10:30:00"), artifacts: attempt1})
-	stack.pass(t, org, runID, day.Add(11*time.Hour), attemptsRunState{created: stamp("10:01:00"), attempt: 2, started: stamp("11:10:00"),
-		updated: stamp("11:40:00"), artifacts: append(slices.Clone(attempt1), attempt2...)})
-	if live, retracted := retiredRows(t, stack, org, runID, "total-b"); live != 2 || retracted != 2 {
-		t.Fatalf("run %s slot total-b: %d live (attempt 1) and %d retracted (attempt 2) rows, want 2 and 2", runID, live, retracted)
-	}
+	first = attemptsRunState{attempt: 1, started: stamp("10:01:00"), updated: stamp("10:30:00"), artifacts: attempt1}
+	second = attemptsRunState{created: stamp("10:01:00"), attempt: 2, started: stamp("11:10:00"),
+		updated: stamp("11:40:00"), artifacts: append(slices.Clone(attempt1), attempt2...)}
+	return first, second
 }
 
 func TestTestopsRetiredSlotKeepCells(t *testing.T) {

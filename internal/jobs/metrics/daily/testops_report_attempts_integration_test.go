@@ -169,6 +169,12 @@ type attemptsStack struct {
 func (stack attemptsStack) pass(t *testing.T, org, runID string, since time.Time, state attemptsRunState) *attemptsDoer {
 	t.Helper()
 	before := since.Add(time.Hour)
+	return stack.passWith(t, org, runID, "incremental", since, before, before.Add(5*time.Minute), state)
+}
+
+// passWith is pass with the unit's mode, window and sync clock given.
+func (stack attemptsStack) passWith(t *testing.T, org, runID, mode string, since, before, now time.Time, state attemptsRunState) *attemptsDoer {
+	t.Helper()
 	capability, _ := providersync.Capability("github", "tests")
 	claim := providersync.Claim{
 		Unit: providersync.Unit{
@@ -176,7 +182,7 @@ func (stack attemptsStack) pass(t *testing.T, org, runID string, since time.Time
 			IntegrationID: uuid.NewString(), SourceID: uuid.NewString(),
 			SourceExternalID: "acme/api", SourceName: "acme/api",
 			Provider: "github", Dataset: "tests", CostClass: capability.CostClass,
-			Mode: "incremental", SinceAt: &since, BeforeAt: &before,
+			Mode: mode, SinceAt: &since, BeforeAt: &before,
 			CredentialID: uuid.NewString(), AuthSource: "integration_credential",
 		},
 		Owner: uuid.NewString(), Attempt: 1, LeaseExpiresAt: before.Add(time.Hour),
@@ -190,7 +196,7 @@ func (stack attemptsStack) pass(t *testing.T, org, runID string, since time.Time
 		t.Fatal(err)
 	}
 	sink := providersync.TestOpsClickHouseEffects{Conn: stack.conn, Lease: lease}
-	err = providersync.GitHubTestsRouteHandler{}.CollectChunks(stack.ctx, claim, providerfoundation.Credential{}, client, before.Add(5*time.Minute), "",
+	err = providersync.GitHubTestsRouteHandler{}.CollectChunks(stack.ctx, claim, providerfoundation.Credential{}, client, now, "",
 		func(emission providersync.ChunkRouteEmission) error {
 			for _, effect := range emission.Batch.Effects {
 				if len(effect.Rows) == 0 {

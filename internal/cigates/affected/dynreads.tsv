@@ -740,6 +740,7 @@ internal/websmoke	smoke_test.go
 internal/workersctl	compact_ownership_intervals_integration_test.go
 internal/workersctl	main_test.go
 internal/workersctl	run_marker_open_test.go
+internal/workersctl	testops_slot_recompute_integration_test.go
 internal/workerservice	clickhouse_schema_gate_test.go
 internal/workerservice	daily_native_family_registration_test.go
 internal/workerservice	daily_no_repository_partition_integration_test.go

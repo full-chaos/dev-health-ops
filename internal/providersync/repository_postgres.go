@@ -758,11 +758,7 @@ func (repository *PostgresRepository) DeferChunkContinuation(
 		availableAt.Sub(now) > 15*time.Minute {
 		return ErrInvalidConfiguration
 	}
-	command, err := repository.Pool.Exec(
-		ctx, deferForChunkContinuationSQL, claim.ID, claim.Owner,
-		now.UTC(), availableAt.UTC(), nil, "",
-	)
-	if err != nil || command.RowsAffected() != 1 {
+	if written, err := repository.deferChunkContinuation(ctx, claim, availableAt, now, nil, ""); err != nil || !written {
 		return ErrLeaseLost
 	}
 	return nil
@@ -787,14 +783,68 @@ func (repository *PostgresRepository) RefundChunkProgress(
 		availableAt.Sub(now) > 15*time.Minute {
 		return false, ErrInvalidConfiguration
 	}
-	command, err := repository.Pool.Exec(
+	return repository.deferChunkContinuation(ctx, claim, availableAt, now, startOrdinal, claim.GenerationKey())
+}
+
+// storeWriteChunkDefer labels the continuation write in StoreTransientError.
+const storeWriteChunkDefer = "chunk_defer"
+
+// errChunkDeferNoRow is the statement's answer when no row matched: no lease,
+// no progress, or the run age cap.
+var errChunkDeferNoRow = errors.New("chunk continuation statement matched no row")
+
+// errChunkDeferWrite is a database error of the write that is not transient.
+var errChunkDeferWrite = errors.New("chunk continuation statement failed")
+
+// deferChunkContinuation runs deferForChunkContinuationSQL in a transaction of
+// its own under retryUnitWrite, so a reply lost at COMMIT is read back like the
+// release's: the statement stamps status dispatching, a NULL lease and
+// updated_at = last_heartbeat_at = now. It reports true when the write is
+// committed, false with a nil error when no row matched.
+func (repository *PostgresRepository) deferChunkContinuation(
+	ctx context.Context, claim Claim, availableAt, now time.Time, startOrdinal any, generation string,
+) (bool, error) {
+	err := repository.retryUnitWrite(ctx, claim, "dispatching", now, func() (func(bool), error) {
+		return repository.deferChunkContinuationTx(ctx, claim, availableAt, now, startOrdinal, generation)
+	})
+	if errors.Is(err, errChunkDeferNoRow) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// deferChunkContinuationTx is one attempt of deferChunkContinuation.
+func (repository *PostgresRepository) deferChunkContinuationTx(
+	ctx context.Context, claim Claim, availableAt, now time.Time, startOrdinal any, generation string,
+) (func(bool), error) {
+	const write = storeWriteChunkDefer
+	tx, err := repository.Pool.Begin(ctx)
+	if err != nil {
+		return nil, storeErr(write, storeStepBegin, err, errChunkDeferWrite)
+	}
+	// After a COMMIT attempt pgx has already closed the transaction.
+	committing := false
+	defer func() {
+		if !committing {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	command, err := tx.Exec(
 		ctx, deferForChunkContinuationSQL, claim.ID, claim.Owner,
-		now.UTC(), availableAt.UTC(), startOrdinal, claim.GenerationKey(),
+		now.UTC(), availableAt.UTC(), startOrdinal, generation,
 	)
 	if err != nil {
-		return false, err
+		return nil, storeErr(write, storeStepUnitUpdate, err, errChunkDeferWrite)
 	}
-	return command.RowsAffected() == 1, nil
+	if command.RowsAffected() != 1 {
+		return nil, errChunkDeferNoRow
+	}
+	afterCommit := func(bool) {}
+	committing = true
+	if err := repository.commit(ctx, tx); err != nil {
+		return afterCommit, storeErr(write, storeStepCommit, err, errChunkDeferWrite)
+	}
+	return afterCommit, nil
 }
 
 // Fail terminalizes an exhausted unit and arms run finalization.

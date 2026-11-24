@@ -5,6 +5,7 @@ package workerservice
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -55,9 +56,38 @@ func copyRepositoryVersion(t *testing.T, ctx context.Context, conn driver.Conn, 
 		return rows
 	}
 	copied, before := rowsAt(from), rowsAt(to)
-	if err := conn.Exec(ctx, `INSERT INTO `+table+` SELECT * REPLACE (toDateTime(?, 'UTC') AS computed_at) FROM `+table+`
+	source, err := conn.Query(ctx, `SELECT * REPLACE (toDateTime(?, 'UTC') AS computed_at) FROM `+table+`
 		WHERE org_id = ? AND day = ? AND toString(repo_id) = ? AND computed_at = toDateTime(?, 'UTC')`,
-		to.UTC().Format(tiedVersionStamp), orgID, day, repo.String(), from.UTC().Format(tiedVersionStamp)); err != nil {
+		to.UTC().Format(tiedVersionStamp), orgID, day, repo.String(), from.UTC().Format(tiedVersionStamp))
+	if err != nil {
+		t.Fatalf("%s: read version: %v", table, err)
+	}
+	columns := source.ColumnTypes()
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO `+table)
+	if err != nil {
+		t.Fatalf("%s: prepare copy: %v", table, err)
+	}
+	for source.Next() {
+		pointers := make([]any, len(columns))
+		for index, column := range columns {
+			pointers[index] = reflect.New(column.ScanType()).Interface()
+		}
+		if err := source.Scan(pointers...); err != nil {
+			t.Fatalf("%s: scan version: %v", table, err)
+		}
+		values := make([]any, len(pointers))
+		for index, pointer := range pointers {
+			values[index] = reflect.ValueOf(pointer).Elem().Interface()
+		}
+		if err := batch.Append(values...); err != nil {
+			t.Fatalf("%s: append copy: %v", table, err)
+		}
+	}
+	if err := source.Err(); err != nil {
+		t.Fatalf("%s: read version: %v", table, err)
+	}
+	source.Close()
+	if err := batch.Send(); err != nil {
 		t.Fatalf("%s: copy version: %v", table, err)
 	}
 	for polls := 0; rowsAt(to) < before+copied; polls++ {

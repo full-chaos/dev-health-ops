@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -65,5 +66,21 @@ func TestResidualOrgDeleteRedactsTheClickHousePasswordAndLoginAlone(t *testing.T
 		if got := redact(errors.New("auth failed for " + secret + " end")).Error(); strings.Contains(got, secret) {
 			t.Errorf("%q printed: %q", secret, got)
 		}
+	}
+}
+
+// The whole ClickHouse DSN, escaped as a URL query value, is hidden whole: main
+// redacted it as a raw value with its escaped spellings.
+func TestOrgDeleteRedactsTheEscapedWholeClickHouseDSN(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	env := accountEnv(t, nil, &stdout, &stderr)
+	const dsn = "clickhouse://ch%40svc:pw%2Ftail@ch.example:9000/d"
+	_, redact, ok := deleteConfigFrom(env, dsn)
+	if !ok {
+		t.Fatalf("deleteConfigFrom refused: %q", stderr.String())
+	}
+	escaped := url.QueryEscape(dsn)
+	if got := redact(errors.New("u=" + escaped + " end")).Error(); got != "u=[REDACTED] end" {
+		t.Errorf("got %q", got)
 	}
 }

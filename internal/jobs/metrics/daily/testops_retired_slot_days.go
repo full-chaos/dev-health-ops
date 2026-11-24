@@ -164,11 +164,5 @@ func PlanRetiredSlotRecompute(ctx context.Context, conn driver.Conn, organizatio
 	if count := RetiredSlotRepoDayCount(days); len(pairs) > request.MaxRepoDays || count > request.MaxRepoDays {
 		return RetiredSlotPlan{}, RetiredSlotPlanStop{Code: "repo_day_cap", RetiredRepoDays: len(pairs), RepoDays: count, MaxRepoDays: request.MaxRepoDays}
 	}
-	for _, day := range days {
-		if len(day.RepoIDs) > MaxRepositoriesPerRun {
-			return RetiredSlotPlan{}, RetiredSlotPlanStop{Code: "day_repo_cap", RetiredRepoDays: len(pairs), RepoDays: RetiredSlotRepoDayCount(days),
-				MaxRepoDays: request.MaxRepoDays, Day: day.Day.Format(time.DateOnly), DayRepos: len(day.RepoIDs)}
-		}
-	}
 	return RetiredSlotPlan{RetiredRepoDays: len(pairs), Days: days}, nil
 }

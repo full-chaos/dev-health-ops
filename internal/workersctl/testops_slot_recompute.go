@@ -76,18 +76,22 @@ func dispatchMetricsTestopsSlotRecompute(ctx context.Context, runtime *operatorR
 	for _, id := range repositoryIDs {
 		repos = append(repos, string(id))
 	}
-	plan, code := planTestopsSlotRecompute(ctx, runtime, stderr, canonicalOrg, daily.RetiredSlotPlanRequest{
-		From: fromDay, To: toDay, Through: throughDay, RepoIDs: repos, MaxRepoDays: *maxRepoDays,
-	})
-	if code != 0 {
-		return code
-	}
-	printed := testopsSlotRecomputePlan(*rerunTag, fromDay, toDay, throughDay, plan.Days)
+	request := daily.RetiredSlotPlanRequest{From: fromDay, To: toDay, Through: throughDay, RepoIDs: repos, MaxRepoDays: *maxRepoDays}
 	if !*apply {
+		plan, code := planTestopsSlotRecompute(ctx, runtime, stderr, canonicalOrg, request)
+		if code != 0 {
+			return code
+		}
+		printed := testopsSlotRecomputePlan(*rerunTag, fromDay, toDay, throughDay, plan.Days)
 		printed["preview"] = true
 		return writeResult(stdout, stderr, map[string]any{"testops_slot_recompute": printed})
 	}
 	perform := func(ctx context.Context) int {
+		plan, code := planTestopsSlotRecompute(ctx, runtime, stderr, canonicalOrg, request)
+		if code != 0 {
+			return code
+		}
+		printed := testopsSlotRecomputePlan(*rerunTag, fromDay, toDay, throughDay, plan.Days)
 		if runtime.pools == nil || runtime.registry == nil {
 			return writeError(stderr, "operator_backend_unavailable")
 		}

@@ -1444,10 +1444,11 @@ INSERT INTO commit_metrics (org_id, repo_id, commit_hash, day, author_email, tot
 		t.Errorf("MUTANT-RULE qz1 stmt1: %d rows, want 10", len(ruleT))
 	}
 	for i, st := range q1s {
-		if strings.Count(st.text, "> 100000") != 1 {
-			t.Fatalf("qz1 stmt%d: the cap literal '> 100000' is not exactly once", i+1)
+		const capLit = "> 100000, 'STOP-COST-GATE'"
+		if strings.Count(st.text, capLit) != 1 || strings.Count(chmigrate.StripLineComments(st.text), "> 100000") != 1 {
+			t.Fatalf("qz1 stmt%d: the cap literal '> 100000' is not exactly once in the SQL", i+1)
 		}
-		low := strings.Replace(st.text, "> 100000", "> -1", 1)
+		low := strings.Replace(st.text, capLit, "> -1, 'STOP-COST-GATE'", 1)
 		comment := fmt.Sprintf("qz1-fire-%d-%d", i, time.Now().UnixNano())
 		frows, ferr := conn.Query(clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"log_comment": comment})), low)
 		if ferr == nil {

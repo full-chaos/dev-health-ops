@@ -623,8 +623,8 @@ func holdShare(t *testing.T, uri, table string) {
 }
 
 // The pause between attempts ends with the build window: a retry delay longer than the window does not keep the build
-// (and its Job) waiting past the window. With a 10 s window and a 1 h delay the build fails within the window and the
-// cleanup budget, not after the delay or the caller's deadline.
+// (and its Job) waiting past the window. With a 10 s window and a 1 h delay the build stops on the window-end line and
+// fails, not at the caller's deadline (D6418: the mechanism is asserted, no wall-time bound).
 func TestBuildIndexRetryPauseEndsWithTheWindow(t *testing.T) {
 	d := newDownInstance(t)
 	uri := d.withoutIndex(t, "0159")
@@ -633,18 +633,19 @@ func TestBuildIndexRetryPauseEndsWithTheWindow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	logs := &syncBuffer{}
-	start := time.Now()
 	_, err := pgmigrate.BuildFailureStreakIndex(ctx, conn, pgmigrate.IndexBuildOptions{
 		LockTimeout: time.Second, Attempts: 3, RetryDelay: time.Hour, Deadline: 10 * time.Second, CleanupBudget: 5 * time.Second,
 	}, slog.New(slog.NewJSONHandler(logs, nil)))
-	took := time.Since(start)
 	if err == nil {
 		t.Fatal("the build succeeded under a held SHARE lock")
 	}
-	if errors.Is(err, context.DeadlineExceeded) || took > 45*time.Second {
-		t.Fatalf("the build returned after %s (err %v): the retry pause outlived the 10 s window; log %s", took, err, logs.String())
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the build ran into the caller's deadline (err %v): the retry pause outlived the 10 s window; log %s", err, logs.String())
 	}
 	if !strings.Contains(logs.String(), "attempt failed") {
 		t.Fatalf("no failed attempt was logged, so the cell never reached the retry pause; log %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), "the build window ended before the next attempt") {
+		t.Fatalf("the build did not stop on the window end; log %s", logs.String())
 	}
 }

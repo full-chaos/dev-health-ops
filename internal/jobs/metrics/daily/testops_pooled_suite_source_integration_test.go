@@ -128,8 +128,10 @@ func TestTestopsPooledSuiteSourceServesTheRowsOfTheOrganizationWideRead(t *testi
 	}
 	// The other organization: the same repository and run ids (a copy of every row version).
 	copySuiteRows(t, ctx, stack.conn, "WHERE org_id = ?", []any{org}, func(row map[string]any) { row["org_id"] = other })
-	if copied, source := countOf(other, false), countOf(org, false); copied == 0 || copied != source {
-		t.Fatalf("control: the other organization holds %d suite rows, want the first organization's %d", copied, source)
+	rawA, finalA, rawB, finalB := countOf(org, false), countOf(org, true), countOf(other, false), countOf(other, true)
+	t.Logf("CELL14595 suite rows: first organization raw %d FINAL %d; other organization raw %d FINAL %d", rawA, finalA, rawB, finalB)
+	if rawB == 0 || rawB != rawA || finalB != finalA {
+		t.Fatalf("control: the other organization holds %d suite rows (FINAL %d), want the first organization's %d (FINAL %d)", rawB, finalB, rawA, finalA)
 	}
 
 	type served struct {
@@ -235,7 +237,7 @@ func nullableText(value *float64) string {
 func ptrFloat(value float64) *float64 { return &value }
 
 // copySuiteRows reads the test_suite_results rows selected by where (every stored column, by name), lets edit change them, and
-// writes them back as new rows in one batch.
+// writes them back as new rows in one batch, every version kept.
 func copySuiteRows(t *testing.T, ctx context.Context, conn driver.Conn, where string, args []any, edit func(map[string]any)) {
 	t.Helper()
 	var columns []string
@@ -283,7 +285,10 @@ func copySuiteRows(t *testing.T, ctx context.Context, conn driver.Conn, where st
 	if len(copies) == 0 {
 		t.Fatalf("copySuiteRows: no row %s %v", where, args)
 	}
-	batch, err := conn.PrepareBatch(ctx, "INSERT INTO test_suite_results ("+strings.Join(columns, ", ")+")")
+	// optimize_on_insert = 0: the table is a ReplacingMergeTree, which by default keeps one row per key of an inserted block;
+	// the copies keep every version.
+	insert := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"optimize_on_insert": 0}))
+	batch, err := conn.PrepareBatch(insert, "INSERT INTO test_suite_results ("+strings.Join(columns, ", ")+")")
 	if err != nil {
 		t.Fatal(err)
 	}

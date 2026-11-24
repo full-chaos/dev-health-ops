@@ -107,9 +107,12 @@ func TestOwnWakeForDeliveryClauseMutantsAreKilled(t *testing.T) {
 			return err == nil && tag.RowsAffected() > 0, err
 		}
 	}
-	noAttempt := func(ctx context.Context, pool *pgxpool.Pool, at time.Time, _ int64) (bool, error) {
-		tag, err := pool.Exec(ctx, syncrunrollup.WakeDispatchSQL, uuid.New(), discoveryTestRun, at)
-		return err == nil && tag.RowsAffected() > 0, err
+	// A mutant without the attempt clause has no $4.
+	noAttempt := func(statement string) ownWakeExec {
+		return func(ctx context.Context, pool *pgxpool.Pool, at time.Time, _ int64) (bool, error) {
+			tag, err := pool.Exec(ctx, statement, uuid.New(), discoveryTestRun, at)
+			return err == nil && tag.RowsAffected() > 0, err
+		}
 	}
 	for _, mutant := range []struct {
 		name   string
@@ -117,8 +120,8 @@ func TestOwnWakeForDeliveryClauseMutantsAreKilled(t *testing.T) {
 		killer string
 	}{
 		{"drop_status_clause", withAttempt(syncrunrollup.WakeDispatchSQL + "\nWHERE NOT (" + attemptClause + ")"), "pending_row_at_another_attempt"},
-		{"drop_attempt_clause", withAttempt(syncrunrollup.WakeDispatchSQL + "\nWHERE NOT (" + statusClause + ")"), "own_dispatched_row"},
-		{"drop_where", noAttempt, "newer_delivery_owns_the_row"},
+		{"drop_attempt_clause", noAttempt(syncrunrollup.WakeDispatchSQL + "\nWHERE NOT (" + statusClause + ")"), "own_dispatched_row"},
+		{"drop_where", noAttempt(syncrunrollup.WakeDispatchSQL), "newer_delivery_owns_the_row"},
 	} {
 		t.Run(mutant.name, func(t *testing.T) {
 			for _, c := range ownWakeCases {

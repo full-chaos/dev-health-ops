@@ -30,8 +30,8 @@ func TestRetryWaitLongerThanTheDeadlineEndsAsRateLimitedNotTimeLimit(t *testing.
 			elapsed := time.Since(started)
 
 			var providerErr *ProviderError
-			if !errors.As(err, &providerErr) || providerErr.Class != ErrorRateLimited || providerErr.RetryAfter != 2*time.Second {
-				t.Fatalf("status %d, Retry-After 2s, deadline in 300ms: err = %v after %s, want rate_limited carrying RetryAfter 2s (not a deadline error)", status, err, elapsed)
+			if !errors.As(err, &providerErr) || providerErr.Class != ErrorRateLimited || providerErr.RetryAfter != 2*time.Second || !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("status %d, Retry-After 2s, deadline in 300ms: err = %v after %s, want rate_limited carrying RetryAfter 2s that is also a deadline error", status, err, elapsed)
 			}
 		})
 	}
@@ -117,15 +117,15 @@ func TestRetryWaitDeadlineBackoffOnlyRateLimitCarriesTheBackoff(t *testing.T) {
 func TestRetryWaitDeadlineTransientKeepsItsOwnClass(t *testing.T) {
 	t.Parallel()
 	var requests int
-	policy := RetryPolicy{MaxAttempts: 3, InitialWait: time.Millisecond, MaxWait: 5 * time.Millisecond}
-	client := retryDeadlineClient(t, http.StatusServiceUnavailable, http.Header{"Retry-After": {"2"}}, &requests, policy)
+	policy := RetryPolicy{MaxAttempts: 3, InitialWait: 5 * time.Second, MaxWait: 5 * time.Second}
+	client := retryDeadlineClient(t, http.StatusServiceUnavailable, nil, &requests, policy)
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
 	_, err := client.Do(ctx, http.MethodGet, "/items", nil)
 	var providerErr *ProviderError
-	if !errors.As(err, &providerErr) || providerErr.Class != ErrorTransient || errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("err = %v, want the transient class, not rate_limited and not a deadline error", err)
+	if !errors.As(err, &providerErr) || providerErr.Class != ErrorTransient || !errors.Is(err, context.DeadlineExceeded) || requests != 1 {
+		t.Fatalf("err = %v after %d request(s), want the transient class that is also a deadline error, not rate_limited", err, requests)
 	}
 }
 

@@ -533,7 +533,9 @@ func (c *HTTPClient) doRequest(ctx context.Context, probe *requestProbe, method,
 			if classification.Class == ErrorRateLimited && classification.RetryAfter <= 0 {
 				classification.RetryAfter = retryDelay
 			}
-			return nil, classification
+			// The wait does not fit: end as a deadline error, as the slept-out wait
+			// did, that still carries the class and RetryAfter for errors.As.
+			return nil, errors.Join(context.DeadlineExceeded, classification)
 		}
 		if err := c.wait(ctx, retryDelay); err != nil {
 			return nil, err

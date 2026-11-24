@@ -662,17 +662,53 @@ func (repository *PostgresRepository) DeferForRateLimit(
 		}
 		mark = string(encoded)
 	}
-	tx, err := repository.Pool.Begin(ctx)
-	if err != nil {
+	err := repository.retryUnitWrite(ctx, claim, "dispatching", now, func() (func(bool), error) {
+		return repository.deferForRateLimitTx(ctx, claim, availableAt, now, observation, step.Restart, mark)
+	})
+	var transient *StoreTransientError
+	if errors.As(err, &transient) && transient.Step != storeStepObservation {
 		return ErrLeaseLost
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	return err
+}
+
+// storeWriteRateLimitDefer and storeWriteBudgetDefer label the two deferral writes
+// in StoreTransientError.
+const (
+	storeWriteRateLimitDefer = "rate_limit_defer"
+	storeWriteBudgetDefer    = "budget_defer"
+	storeStepObservation     = "observation"
+)
+
+// deferForRateLimitTx is one attempt of DeferForRateLimit. The unit stamp and the
+// observation row commit together, so a commit confirmed by the read-back of the
+// stamp implies the row. Every database error that is not transient answers
+// ErrLeaseLost, as the write always did, except the observation insert's own.
+func (repository *PostgresRepository) deferForRateLimitTx(
+	ctx context.Context, claim Claim, availableAt, now time.Time,
+	observation RateLimitObservation, restart bool, mark any,
+) (func(bool), error) {
+	const write = storeWriteRateLimitDefer
+	tx, err := repository.Pool.Begin(ctx)
+	if err != nil {
+		return nil, storeErr(write, storeStepBegin, err, ErrLeaseLost)
+	}
+	// After a COMMIT attempt pgx has already closed the transaction.
+	committing := false
+	defer func() {
+		if !committing {
+			_ = tx.Rollback(context.WithoutCancel(ctx))
+		}
+	}()
 	command, err := tx.Exec(
 		ctx, deferForRateLimitSQL,
-		claim.ID, claim.Owner, now.UTC(), availableAt.UTC(), step.Restart, mark,
+		claim.ID, claim.Owner, now.UTC(), availableAt.UTC(), restart, mark,
 	)
-	if err != nil || command.RowsAffected() != 1 {
-		return ErrLeaseLost
+	if err != nil {
+		return nil, storeErr(write, storeStepUnitUpdate, err, ErrLeaseLost)
+	}
+	if command.RowsAffected() != 1 {
+		return nil, ErrLeaseLost
 	}
 	// A row with no dimension gates nothing (the cooldown reader skips an
 	// ambiguous row without one), so a limit that carries none, such as a
@@ -684,19 +720,22 @@ func (repository *PostgresRepository) DeferForRateLimit(
 			uuid.NewString(), claim.OrgID, claim.Provider, claim.IntegrationID, claim.SyncRunID, claim.ID,
 			attribution, observation.Dimension, observation.retryAfterSeconds(), rateLimitObservationReason, now.UTC(),
 		); err != nil {
-			return err
+			return nil, storeErr(write, storeStepObservation, err, err)
 		}
 	} else {
 		slog.DebugContext(ctx, "sync_rate_limit_observation_skipped", "unit_id", claim.ID, "provider", claim.Provider, "reason", "no_dimension")
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return ErrLeaseLost
+	afterCommit := func(bool) {
+		if observation.Dimension != "" {
+			slog.InfoContext(ctx, "sync_rate_limit_observation_written",
+				"unit_id", claim.ID, "provider", claim.Provider, "dimension", observation.Dimension)
+		}
 	}
-	if observation.Dimension != "" {
-		slog.InfoContext(ctx, "sync_rate_limit_observation_written",
-			"unit_id", claim.ID, "provider", claim.Provider, "dimension", observation.Dimension)
+	committing = true
+	if err := repository.commit(ctx, tx); err != nil {
+		return afterCommit, storeErr(write, storeStepCommit, err, ErrLeaseLost)
 	}
-	return nil
+	return afterCommit, nil
 }
 
 // retryAfterSeconds is the provider's delay, finite, never negative, capped at
@@ -731,16 +770,79 @@ func (repository *PostgresRepository) DeferForBudgetContention(
 	}
 	// The statement returns the unit's own contention-deferral count after this
 	// deferral (CHAOS-7434), so the caller can log how many times this unit has
-	// lost the request reservation without a second read.
+	// lost the request reservation without a second read. When the commit's reply
+	// is lost and only the read-back confirms it, the count is the claim's own
+	// plus one: the statement reads the same stored value, which only the lease
+	// holder writes.
 	var deferrals int
-	err := repository.Pool.QueryRow(
-		ctx, deferForBudgetContentionSQL,
-		claim.ID, claim.Owner, now.UTC(), availableAt.UTC(),
-	).Scan(&deferrals)
+	err := repository.retryUnitWrite(ctx, claim, "dispatching", now, func() (func(bool), error) {
+		return repository.deferForBudgetContentionTx(ctx, claim, availableAt, now, &deferrals)
+	})
 	if err != nil {
 		return 0, ErrLeaseLost
 	}
 	return deferrals, nil
+}
+
+// deferForBudgetContentionTx is one attempt of DeferForBudgetContention.
+func (repository *PostgresRepository) deferForBudgetContentionTx(
+	ctx context.Context, claim Claim, availableAt, now time.Time, deferrals *int,
+) (func(bool), error) {
+	const write = storeWriteBudgetDefer
+	tx, err := repository.Pool.Begin(ctx)
+	if err != nil {
+		return nil, storeErr(write, storeStepBegin, err, ErrLeaseLost)
+	}
+	// After a COMMIT attempt pgx has already closed the transaction.
+	committing := false
+	defer func() {
+		if !committing {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	var returned int
+	if err := tx.QueryRow(
+		ctx, deferForBudgetContentionSQL,
+		claim.ID, claim.Owner, now.UTC(), availableAt.UTC(),
+	).Scan(&returned); err != nil {
+		return nil, storeErr(write, storeStepUnitUpdate, err, ErrLeaseLost)
+	}
+	*deferrals = returned
+	afterCommit := func(rollupKnown bool) {
+		if !rollupKnown {
+			*deferrals = BudgetContentionDeferrals(claim) + 1
+		}
+	}
+	committing = true
+	if err := repository.commit(ctx, tx); err != nil {
+		return afterCommit, storeErr(write, storeStepCommit, err, ErrLeaseLost)
+	}
+	return afterCommit, nil
+}
+
+// BudgetContentionDeferrals reads how many budget-contention deferrals the
+// claimed unit already carries (result.provider_budget_contention_deferrals,
+// written by DeferForBudgetContention). A missing or malformed value is 0.
+func BudgetContentionDeferrals(claim Claim) int {
+	switch value := claim.Result["provider_budget_contention_deferrals"].(type) {
+	case float64:
+		if value >= 0 && value < 1e9 {
+			return int(value)
+		}
+	case int:
+		if value >= 0 {
+			return value
+		}
+	case int64:
+		if value >= 0 && value < 1e9 {
+			return int(value)
+		}
+	case json.Number:
+		if parsed, err := value.Int64(); err == nil && parsed >= 0 && parsed < 1e9 {
+			return int(parsed)
+		}
+	}
+	return 0
 }
 
 // DeferChunkContinuation keeps a prepared chunk unit claimable for the same

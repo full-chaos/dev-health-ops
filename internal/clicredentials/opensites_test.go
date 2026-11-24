@@ -34,7 +34,7 @@ var classifiedOpenSites = map[string]struct {
 	"metricscli/validateflags.go":                 {1, "verb `dho metrics validate-flags`: through secrets.Boundary (verbs_integration_test.go)"},
 	"auth/usersbackfill/repoidentity_command.go":  {1, "verb `dho auth repo-identities-sync`: through secrets.Boundary (verbs_integration_test.go)"},
 	"operationalbackfill/command.go":              {1, "verb `dho backfill operational`: through secrets.Boundary (verbs_integration_test.go)"},
-	"synccli/synccli.go":                          {1, "verb `dho sync teams` (Atlassian): the store open returns the raw cause (Config.RawCause); redact() on every returned text (with the driver-resolved login and password) and the process logger wrapped for the run (synccli TestSyncTeamsLogsNeitherClickHouseLoginNorPassword)"},
+	"synccli/synccli.go":                          {1, "verb `dho sync teams` (Atlassian): the store open (shared with the catalog providers) returns the raw cause (Config.RawCause); the Atlassian redact() and the catalog redact() both join the driver-resolved login and password and the process logger wrapped for the run (synccli TestSyncTeamsLogsNeitherClickHouseLoginNorPassword)"},
 	"synccli/inline.go":                           {1, "verbs `dho sync <target>`: the store open returns the raw cause (Config.RawCause) and runTarget redacts the original text once with the sink, the database and the driver-resolved login and password (synccli credential_redaction_test.go)"},
 	"workersctl/main.go":                          {4, "verb `dho workers ...` (providersync cleanup, run marker, compact-ownership-intervals, drain-removed-dependencies): prints a constant message or a fixed error code, never the error text"},
 	"workersctl/testops_slot_recompute.go":        {1, "verb `dho workers metrics testops-slot-recompute`: prints a fixed error code (operator_backend_unavailable, operator_request_failed), never the error text"},
@@ -72,10 +72,12 @@ func TestEveryClickHouseOpenSiteIsClassified(t *testing.T) {
 				return nil
 			}
 			relative, _ := filepath.Rel(root, path)
-			if top == "internal" && strings.HasPrefix(filepath.ToSlash(relative), "storage/clickhouse/") ||
-				top == "internal" && strings.HasPrefix(filepath.ToSlash(relative), "testsupport/") {
-				return nil
-			}
+			// The open sites are the places outside the storage package and the test
+			// support; Config.RawCause is counted in every non-test file but the
+			// storage package's factory.go, which defines it.
+			skipOpens := top == "internal" && (strings.HasPrefix(filepath.ToSlash(relative), "storage/clickhouse/") ||
+				strings.HasPrefix(filepath.ToSlash(relative), "testsupport/"))
+			countRawCause := !(top == "internal" && filepath.ToSlash(relative) == "storage/clickhouse/factory.go")
 			parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 			if err != nil {
 				return err
@@ -91,22 +93,21 @@ func TestEveryClickHouseOpenSiteIsClassified(t *testing.T) {
 					aliases[name] = true
 				}
 			}
-			if len(aliases) == 0 {
-				return nil
-			}
 			ast.Inspect(parsed, func(node ast.Node) bool {
-				switch typed := node.(type) {
-				case *ast.KeyValueExpr:
-					if key, ok := typed.Key.(*ast.Ident); ok && key.Name == "RawCause" {
-						rawCause[filepath.ToSlash(top+"/"+filepath.ToSlash(relative))]++
-					}
-				case *ast.SelectorExpr:
-					if typed.Sel.Name == "RawCause" {
-						rawCause[filepath.ToSlash(top+"/"+filepath.ToSlash(relative))]++
+				if countRawCause {
+					switch typed := node.(type) {
+					case *ast.KeyValueExpr:
+						if key, ok := typed.Key.(*ast.Ident); ok && key.Name == "RawCause" {
+							rawCause[filepath.ToSlash(top+"/"+filepath.ToSlash(relative))]++
+						}
+					case *ast.SelectorExpr:
+						if typed.Sel.Name == "RawCause" {
+							rawCause[filepath.ToSlash(top+"/"+filepath.ToSlash(relative))]++
+						}
 					}
 				}
 				call, ok := node.(*ast.CallExpr)
-				if !ok {
+				if !ok || skipOpens || len(aliases) == 0 {
 					return true
 				}
 				selector, ok := call.Fun.(*ast.SelectorExpr)

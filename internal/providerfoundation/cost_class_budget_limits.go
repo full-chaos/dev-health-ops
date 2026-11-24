@@ -7,10 +7,15 @@ package providerfoundation
 // admit eight heavy units while the worker budget served one, so seven of
 // them looped in 1-2 s budget-contention snoozes for hours: both consumers
 // read this table instead.
+//
+// "medium-prefetch" is no unit class: it is the own sub-budget of the GitHub tests/cicd artifact prefetch of a medium
+// unit (CHAOS-14542). The prefetch downloads a run's next artifact under one slot of it while the unit keeps at most
+// one slot of its medium key, so a sibling medium unit of the bucket keeps its slot. No dispatcher bucket reads it.
 var costClassBudgetLimits = map[string]int{
-	"light":  4,
-	"medium": 2,
-	"heavy":  1,
+	"light":           4,
+	"medium":          2,
+	"heavy":           1,
+	"medium-prefetch": 1,
 }
 
 // CostClassBudgetLimitSource names where every limit of the table comes from, for the start lines that print them: the

@@ -1741,8 +1741,14 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	counted := *client
 	var rateObserved githubTestsRateObserver
 	rateFloor := &githubTestsRateFloorGate{}
+	// baseClient keeps the client under the counting doer: the artifact prefetch counts on a doer of its own over it.
+	baseClient := client
 	counted.Doer = githubTestsChunkCountingDoer{delegate: client.Doer, attempts: &requests, observed: &rateObserved, floor: rateFloor}
 	client = &counted
+	// runPrefetch is the current run's artifact prefetch (CHAOS-14542). A run that ends early leaves it to this defer,
+	// which cancels it, waits for it and counts the requests it sent.
+	var runPrefetch *githubTestsArtifactPrefetcher
+	defer func() { requests += runPrefetch.close() }()
 	// chunkPrefixSources / chunkPrefixCount are the prefix exclusions of the chunk being built, in memory only: never on the
 	// cursor or the prepared chunk, so a chunk's source set is never carried to a resume (CHAOS-14559).
 	chunkPrefixSources, chunkPrefixCount := 0, 0
@@ -2867,11 +2873,27 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							},
 						)
 					}
-					for _, artifact := range artifactItems {
+					// The next artifact of this run downloads while the walk works on the current one; results are still
+					// applied here, one by one, in the sorted order (CHAOS-14542).
+					runPrefetch = newGitHubTestsArtifactPrefetcher(ctx, client, baseClient, &rateObserved, root, maxArtifactBytes, artifactItems)
+					for index, artifact := range artifactItems {
 						if artifact.Expired {
 							continue // unreachable: expired artifacts are split out before the cap (CHAOS-13980)
 						}
-						archive, _, notFound, downloadErr := downloadGitHubTestsListedArtifact(ctx, client, root, string(artifact.ID), maxArtifactBytes, artifact.listedSize())
+						archive, notFound, downloadErr, prefetchRequests, prefetchObserved, prefetched := runPrefetch.take(index)
+						if prefetched {
+							requests += prefetchRequests
+							if prefetchObserved.seen {
+								rateObserved = prefetchObserved
+							}
+						}
+						if !prefetched {
+							// The walk downloads this artifact itself: the next one downloads beside it. A prefetched
+							// artifact starts no prefetch, so the walk downloads the one after it, and two downloads
+							// overlap at most, the walk's and the prefetch's.
+							runPrefetch.startNext(index)
+							archive, _, notFound, downloadErr = downloadGitHubTestsListedArtifact(ctx, client, root, string(artifact.ID), maxArtifactBytes, artifact.listedSize())
+						}
 						cursor.Requests = invocationBaseRequests + requests
 						if downloadErr != nil {
 							// An artifact whose bytes could never be
@@ -3154,6 +3176,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						heldRows += held.rows()
 						parsedReports = append(parsedReports, held)
 					}
+					requests += runPrefetch.close()
+					runPrefetch = nil
 					plan, planErr := githubTestsPlanRunReports(parsedReports)
 					if planErr != nil {
 						return fmt.Errorf("%w: sizing report rows: %v", ErrGitHubTestsIncomplete, planErr)

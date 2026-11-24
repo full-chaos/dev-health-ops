@@ -183,11 +183,11 @@ func RedactValues(s string, values ...string) string {
 // value, all found in the original s: a match that overlaps another (two values
 // that share bytes) becomes one marker, so no replacement can hide part of a
 // value and leave the rest. plain values match byte for byte; escaped values
-// match s with the hex digits of each %XX read as upper case.
+// match byte for byte except the hex digits of each %XX of the spelling.
 func redactSpans(s string, plain, escaped []string) string {
 	spans := matchSpans(nil, s, plain)
 	if len(escaped) > 0 {
-		spans = matchSpans(spans, foldPercentHex(s), escaped)
+		spans = matchEscapedSpans(spans, s, escaped)
 	}
 	if len(spans) == 0 {
 		return s
@@ -237,19 +237,38 @@ func matchSpans(spans [][2]int, s string, values []string) [][2]int {
 	return spans
 }
 
-func foldPercentHex(s string) string {
-	b := []byte(s)
-	isHex := func(c byte) bool { return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F' }
-	for i := 0; i+2 < len(b); i++ {
-		if b[i] == '%' && isHex(b[i+1]) && isHex(b[i+2]) {
-			for _, j := range []int{i + 1, i + 2} {
-				if b[j] >= 'a' && b[j] <= 'f' {
-					b[j] -= 'a' - 'A'
-				}
+// matchEscapedSpans adds the span of every match of each escaped spelling in s.
+// A spelling matches byte for byte except the two hex digits after each '%' of
+// the spelling, which match in either case. s itself is never changed.
+func matchEscapedSpans(spans [][2]int, s string, values []string) [][2]int {
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		for from := 0; from+len(value) <= len(s); from++ {
+			if escapedMatchAt(s, from, value) {
+				spans = append(spans, [2]int{from, from + len(value)})
 			}
 		}
 	}
-	return string(b)
+	return spans
+}
+
+func escapedMatchAt(s string, at int, value string) bool {
+	for k := 0; k < len(value); k++ {
+		if s[at+k] == value[k] {
+			continue
+		}
+		afterPercent := k >= 1 && value[k-1] == '%' || k >= 2 && value[k-2] == '%'
+		if !afterPercent || !isHexDigit(value[k]) || !strings.EqualFold(s[at+k:at+k+1], value[k:k+1]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isHexDigit(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 }
 
 // Boundary is the LAST place a resolved DSN's bytes can still reach

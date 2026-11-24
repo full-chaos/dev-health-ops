@@ -143,7 +143,7 @@ func TestSpellingsEqualToTheRawValueAreDeduped(t *testing.T) {
 func newRedactedBytes(t *testing.T, b Boundary, text string) map[int]bool {
 	t.Helper()
 	spans := matchSpans(nil, text, b.values)
-	spans = matchSpans(spans, foldPercentHex(text), b.escaped)
+	spans = matchEscapedSpans(spans, text, b.escaped)
 	covered := map[int]bool{}
 	for _, span := range spans {
 		for i := span[0]; i < span[1]; i++ {

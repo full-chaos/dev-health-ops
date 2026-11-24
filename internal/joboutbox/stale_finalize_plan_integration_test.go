@@ -230,28 +230,15 @@ FROM generate_series(1, $2::int) AS n`, old, riverRows)
 		}
 		checkSubplanReads(t, ctx, admin, name, query, args, float64(k*base), finalizeEntries)
 	}
-	// The GENERIC plans too (the plan a prepared statement can settle on): no per-run read of the partitions or of
-	// river_job in statement 0, A or B, but the two keyed probes. strandRows = the delivered finalize rows with a River
-	// id of the base runs: the most rows the strand arm can probe river_job for (a per-row walk of a larger set fails).
-	var strandRows float64
-	if err := admin.QueryRow(ctx, `
-SELECT count(*) FROM public.worker_job_outbox AS outbox
-JOIN public.daily_metrics_runs AS run ON run.id::text = outbox.args #>> '{domain,id}'
-WHERE outbox.job_kind = 'metrics.daily_finalize' AND outbox.status = 'delivered' AND outbox.river_job_id IS NOT NULL
-	AND run.status = 'running' AND run.finalization_status = 'pending' AND run.updated_at <= $1`, cutoff).Scan(&strandRows); err != nil {
-		t.Fatal(err)
-	}
-	if strandRows == 0 || strandRows > float64(k*base) {
-		t.Fatalf("%.0f delivered finalize rows of the base runs, want 1..%d", strandRows, k*base)
-	}
-	t.Logf("INFO strand-arm river_job probe bound: %.0f delivered finalize rows of the base runs", strandRows)
+	// The GENERIC plans too (the plan a prepared statement can settle on): no per-run read of the partitions (but the
+	// no-partitions arm's keyed probe) or of river_job in statement 0, A or B.
 	literalCutoff := "'" + cutoff.Format(time.RFC3339Nano) + "'::timestamptz"
 	for _, statement := range []struct{ name, query, types, args string }{
 		{"statement 0", baseSQL, "timestamptz", literalCutoff},
 		{"statement A", candidatesSQL, "timestamptz, int, timestamptz, uuid, timestamptz", literalCutoff + ", " + fmt.Sprint(base) + ", NULL, NULL, NULL"},
 		{"statement B", levelsSQL, "timestamptz, int", literalCutoff + ", " + fmt.Sprint(staleFinalizeLevelCap+1)},
 	} {
-		checkGenericPlanReadsOnce(t, ctx, admin, statement.name, statement.query, statement.types, statement.args, strandRows)
+		checkGenericPlanReadsOnce(t, ctx, admin, statement.name, statement.query, statement.types, statement.args)
 	}
 	var candidates int
 	if err := admin.QueryRow(ctx, "SELECT count(*) FROM ("+candidatesSQL+") AS a", cutoff, base, nil, nil, nil).Scan(&candidates); err != nil {
@@ -300,15 +287,6 @@ type planNode struct {
 	Plans            []planNode `json:"Plans"`
 }
 
-// riverJobStrandProbe is the strand-shape arm's river_job read: a primary-key probe keyed on the outbox row's River id
-// (the arm JOINs river_job per delivered finalize row), run at most strandRows times.
-var riverJobStrandProbeCond = regexp.MustCompile(`^\(id = outbox(_\d+)?\.river_job_id\)$`)
-
-func riverJobStrandProbe(node planNode, strandRows float64) bool {
-	return (node.NodeType == "Index Scan" || node.NodeType == "Index Only Scan") && node.IndexName == "river_job_pkey" &&
-		riverJobStrandProbeCond.MatchString(node.IndexCond) && node.ActualLoops <= strandRows
-}
-
 // checkSubplanReads walks the analyzed plan of the statement. Every node on worker_job_outbox or river_job must have
 // run (loops > 0). An outbox node probed per base run (loops > 1) reads at most perProbeBound rows in all (k rows per
 // base run); an outbox node run once (a hashed subplan, allowed) reads at most the partial index's entries. A Seq Scan
@@ -344,6 +322,11 @@ func checkSubplanReads(t *testing.T, ctx context.Context, admin *pgxpool.Pool, n
 		}
 		if node.RelationName == "river_job" {
 			riverNodes++
+			// Every River arm (live, recent, strand shape) is an uncorrelated set: read once per statement, whatever
+			// rows the ANALYZE sample makes the planner expect.
+			if node.ActualLoops > 1 {
+				t.Fatalf("%s: the %s node on river_job ran %.0f times, want once (an uncorrelated set)", name, node.NodeType, node.ActualLoops)
+			}
 		}
 		if node.RelationName == "worker_job_outbox" {
 			outboxNodes++
@@ -455,9 +438,8 @@ FROM job`, at)
 
 // checkGenericPlanReadsOnce runs the statement as a prepared statement forced onto its generic plan (JIT off, as the
 // survey runs) and fails on any node on daily_metrics_partitions or river_job that runs more than once, except the
-// no-partitions arm's keyed probe (partitionsRunProbe) and the strand-shape arm's river_job_pkey probe
-// (riverJobStrandProbe), which runs once per delivered finalize row it reaches: at most strandRows times.
-func checkGenericPlanReadsOnce(t *testing.T, ctx context.Context, admin *pgxpool.Pool, name, query, types, args string, strandRows float64) {
+// no-partitions arm's keyed probe (partitionsRunProbe).
+func checkGenericPlanReadsOnce(t *testing.T, ctx context.Context, admin *pgxpool.Pool, name, query, types, args string) {
 	t.Helper()
 	conn, err := admin.Acquire(ctx)
 	if err != nil {
@@ -489,7 +471,7 @@ func checkGenericPlanReadsOnce(t *testing.T, ctx context.Context, admin *pgxpool
 	var walk func(node planNode)
 	walk = func(node planNode) {
 		perRun := node.ActualLoops > 1 &&
-			(node.RelationName == "river_job" && !riverJobStrandProbe(node, strandRows) ||
+			(node.RelationName == "river_job" ||
 				node.RelationName == "daily_metrics_partitions" && !partitionsRunProbe(node.NodeType, node.IndexCond))
 		if perRun {
 			t.Fatalf("%s (generic plan) reads %s %.0f times through %s:\n%s", name, node.RelationName, node.ActualLoops, node.NodeType, raw)

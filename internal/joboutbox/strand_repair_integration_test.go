@@ -2886,8 +2886,8 @@ FROM run WHERE run.target_day <= DATE '2020-01-01' + 500`, old); err != nil {
 		hashed      int
 	}{
 		{"statement 0", staleFinalizeBaseExistsSQL, []any{cutoff}, 1},
-		{"statement A", fmt.Sprintf(staleFinalizeCandidatesSQLTemplate, jobTable), []any{cutoff, 100, nil, nil, nil}, 3},
-		{"statement B", fmt.Sprintf(staleFinalizeLevelsSQLTemplate, jobTable), []any{cutoff, staleFinalizeLevelCap + 1}, 3},
+		{"statement A", fmt.Sprintf(staleFinalizeCandidatesSQLTemplate, jobTable), []any{cutoff, 100, nil, nil, nil}, 4},
+		{"statement B", fmt.Sprintf(staleFinalizeLevelsSQLTemplate, jobTable), []any{cutoff, staleFinalizeLevelCap + 1}, 4},
 	} {
 		tx, err := admin.Begin(ctx)
 		if err != nil {
@@ -3131,6 +3131,120 @@ VALUES ($1::jsonb, 1, $2, $2, 'metrics.daily_partition', 4, '{}'::jsonb, 2, 'met
 	}
 	if survey.levels == nil || *survey.levels != (StaleFinalizeLevels{Recent: 1}) {
 		t.Fatalf("statement B levels %+v, want Recent 1 and nothing else", survey.levels)
+	}
+}
+
+// Strand-shape ruling (a), pm 2026-11-24: the strand-shape fragment, now an uncorrelated IN over the delivered finalize
+// rows whose River job still exists, answers as the old correlated EXISTS did for every run of a matrix -- a delivered
+// finalize row with its River job; one whose River job is gone; a pending finalize row; a delivered row of another kind
+// with a River job; no outbox row -- and never answers NULL, though the outbox also holds delivered finalize rows with a
+// River job and no domain id or a JSON-null one. Then both use sites: A's candidates and B's levels.
+func TestStaleFinalizeStrandShapeArmAnswersAsTheCorrelatedCheck(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	admin := startStaleFinalizeAdmin(t, ctx, "sfstrand")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	old := now.Add(-72 * time.Hour)
+	cutoff := now.Add(-StaleFinalizeHorizon)
+	const (
+		strand       = "00000000-0000-4000-8000-0000000f0001"
+		riverGone    = "00000000-0000-4000-8000-0000000f0002"
+		notDelivered = "00000000-0000-4000-8000-0000000f0003"
+		otherKind    = "00000000-0000-4000-8000-0000000f0004"
+		noOutbox     = "00000000-0000-4000-8000-0000000f0005"
+	)
+	seedStaleFinalizeRuns(t, ctx, admin, old, strand, riverGone, notDelivered, otherKind, noOutbox)
+	job := func(args string) int64 {
+		t.Helper()
+		var id int64
+		if err := admin.QueryRow(ctx, `
+INSERT INTO river.river_job (args, attempt, created_at, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at)
+VALUES ($1::jsonb, 1, $2, $2, 'metrics.daily_finalize', 4, '{}'::jsonb, 2, 'metrics', 'completed', $2) RETURNING id`, args, old).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	outbox := func(key, kind, args, status string, riverJobID *int64) {
+		t.Helper()
+		var deliveredAt *time.Time
+		if status == "delivered" {
+			deliveredAt = &old
+		}
+		if _, err := admin.Exec(ctx, `
+INSERT INTO public.worker_job_outbox
+    (id, dedupe_key, job_kind, contract_version, args, payload_hash, queue, priority, max_attempts, scheduled_at,
+     status, attempt_count, next_attempt_at, river_job_id, delivered_at, created_at, updated_at)
+VALUES (gen_random_uuid(), $1, $2, 1, $3::json, 'sha256:' || repeat('0', 64), 'metrics', 2, 4, $4, $5, 1, $4, $6, $7, $4, $4)`,
+			key, kind, args, old, status, riverJobID, deliveredAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	domain := func(id string) string {
+		return `{"contract_version": 1, "domain": {"type": "daily_metrics_run", "id": "` + id + `"}}`
+	}
+	strandJob, otherJob := job(domain(strand)), job(`{"domain": {"type": "daily_metrics_run"}}`)
+	gone := int64(987654321)
+	outbox("strand-arm:strand", "metrics.daily_finalize", domain(strand), "delivered", &strandJob)
+	outbox("strand-arm:gone", "metrics.daily_finalize", domain(riverGone), "delivered", &gone)
+	outbox("strand-arm:pending", "metrics.daily_finalize", domain(notDelivered), "pending", nil)
+	outbox("strand-arm:other-kind", "metrics.daily_partition", domain(otherKind), "delivered", &otherJob)
+	noID, nullID := job(`{"domain": {"type": "daily_metrics_run"}}`), job(`{"domain": {"type": "daily_metrics_run"}}`)
+	outbox("strand-arm:no-id", "metrics.daily_finalize", `{"contract_version": 1, "domain": {"type": "daily_metrics_run"}}`, "delivered", &noID)
+	outbox("strand-arm:null-id", "metrics.daily_finalize", `{"contract_version": 1, "domain": {"type": "daily_metrics_run", "id": null}}`, "delivered", &nullID)
+
+	const oldArm = `EXISTS (
+		SELECT 1 FROM public.worker_job_outbox AS outbox
+		JOIN river.river_job AS job ON job.id = outbox.river_job_id
+		WHERE outbox.job_kind = 'metrics.daily_finalize'
+			AND outbox.status = 'delivered'
+			AND outbox.args #>> '{domain,id}' = run.id::text
+	)`
+	newArm := fmt.Sprintf(staleFinalizeStrandShapeSQL, `"river"."river_job"`)
+	if !strings.HasPrefix(newArm, "run.id::text IN (") {
+		t.Fatalf("the strand-shape fragment is not the uncorrelated set this cell compares: %q", newArm)
+	}
+	rows, err := admin.Query(ctx, `SELECT run.id::text, (`+oldArm+`), (`+newArm+`) FROM public.daily_metrics_runs AS run ORDER BY run.id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A Fatalf inside the loop must not leave the connection busy: the pool's Close in the cleanup would wait forever.
+	defer rows.Close()
+	seen := 0
+	for rows.Next() {
+		var runID string
+		var oldAnswer, newAnswer *bool
+		if err := rows.Scan(&runID, &oldAnswer, &newAnswer); err != nil {
+			t.Fatal(err)
+		}
+		seen++
+		if oldAnswer == nil || newAnswer == nil {
+			t.Fatalf("run %s: old %v new %v, want two non-NULL answers", runID, oldAnswer, newAnswer)
+		}
+		if want := runID == strand; *oldAnswer != *newAnswer || *newAnswer != want {
+			t.Fatalf("run %s: old %v new %v, want both %v", runID, *oldAnswer, *newAnswer, want)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil || seen != 5 {
+		t.Fatalf("compared %d runs (err %v), want 5", seen, err)
+	}
+
+	jobTable := `"river"."river_job"`
+	survey := surveyStaleFinalize(ctx, admin.Begin, staleFinalizeBaseExistsSQL,
+		fmt.Sprintf(staleFinalizeCandidatesSQLTemplate, jobTable), fmt.Sprintf(staleFinalizeLevelsSQLTemplate, jobTable),
+		cutoff, 20, nil)
+	if len(survey.failures) != 0 {
+		t.Fatalf("survey failures %+v", survey.failures)
+	}
+	got := map[string]bool{}
+	for _, candidate := range survey.candidates {
+		got[candidate.runID] = true
+	}
+	if want := map[string]bool{riverGone: true, otherKind: true, noOutbox: true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("statement A candidates %v, want %v (the strand run and the run with an unrelayed row are refused)", got, want)
+	}
+	if survey.levels == nil || *survey.levels != (StaleFinalizeLevels{Live: 1, StrandShape: 1}) {
+		t.Fatalf("statement B levels %+v, want Live 1 and StrandShape 1 and nothing else", survey.levels)
 	}
 }
 

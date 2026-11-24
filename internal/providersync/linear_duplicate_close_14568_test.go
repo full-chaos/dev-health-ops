@@ -344,12 +344,21 @@ func TestLinearFallbackCloseIsOneMillisecondBeforeExit14568(t *testing.T) {
 // C3: any relationChanges entry counts, whatever its type: the rule does not read Linear's undocumented change-type codes.
 // WANT: the close takes the instant of the last relation entry in between, even a non-duplicate one.
 func TestLinearCloseTakesAnyRelationEntryInBetween14568(t *testing.T) {
-	other := `{"id":"hr2","createdAt":"2026-09-27T10:00:00.000Z","fromState":null,"toState":null,"relationChanges":[{"identifier":"ENG-901","type":"related"}]}`
+	other := `{"id":"hr2","createdAt":"2026-09-27T10:00:00.000Z","actor":{"name":"Bob","email":"bob@example.test"},"fromState":null,"toState":null,"relationChanges":[{"identifier":"ENG-901","type":"related"}]}`
 	rel := strings.Replace(linearRel14568, "2026-09-30T10:00:00.000Z", "2026-09-25T10:00:00.000Z", 1)
-	rows := linearRows14568(t, "["+linearStart14568+","+rel+","+other+","+linearExit14568("2026-09-30T10:00:00.000Z", "In Progress", "started")+"]")
+	exit := linearExit14568("2026-09-30T10:00:00.000Z", "In Progress", "started")
+	without := linearRows14568(t, "["+linearStart14568+","+rel+","+exit+"]")
+	rows := linearRows14568(t, "["+linearStart14568+","+rel+","+other+","+exit+"]")
 	want := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
-	if len(rows) != 3 || !rows[1].OccurredAt.Equal(want) {
-		t.Fatalf("rows=%+v, want the close at %v", rows, want)
+	if len(rows) != 3 || len(rows) != len(without) || !rows[1].OccurredAt.Equal(want) || rows[1].Actor == nil {
+		t.Fatalf("rows=%+v, want three rows and the close at %v with the in-between relation's actor", rows, want)
+	}
+	// only the instant and actor move, inside (entry into the previous state, exit)
+	if !rows[1].OccurredAt.After(rows[0].OccurredAt) || !rows[1].OccurredAt.Before(rows[2].OccurredAt) {
+		t.Fatalf("close at %v is not strictly between the entry %v and the exit %v", rows[1].OccurredAt, rows[0].OccurredAt, rows[2].OccurredAt)
+	}
+	if without[1].FromStatus != rows[1].FromStatus || without[1].ToStatus != rows[1].ToStatus || !without[1].OccurredAt.Before(rows[1].OccurredAt) {
+		t.Fatalf("without=%+v with=%+v: only the instant and actor may differ", without[1], rows[1])
 	}
 }
 

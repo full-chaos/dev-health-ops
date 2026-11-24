@@ -12,6 +12,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 )
 
 const dailyTargetDayLayout = "2006-01-02"
@@ -489,19 +491,6 @@ func (store *PostgresStore) RedriveStaleFinalize(
 	return store.redriveOneStrandedFinalize(ctx, publisher, runID, nonce, store.now().UTC(), false, &outboxRecentSince)
 }
 
-// staleFinalizeOutboxRecheckSQL is the survey's own outbox refusal (the
-// unrelayed arm of its live-job fragment and the outbox arm of its recent
-// fragment, internal/joboutbox/stale_finalize_repair.go), on the same
-// predicate, so one partial index on that predicate can serve both (the
-// index is not part of this change).
-const staleFinalizeOutboxRecheckSQL = `
-SELECT EXISTS (
-	SELECT 1 FROM public.worker_job_outbox AS outbox
-	WHERE outbox.job_kind = 'metrics.daily_finalize'
-		AND outbox.args #>> '{domain,id}' = $1
-		AND (outbox.status IN ('pending', 'claimed') OR outbox.created_at > $2)
-)`
-
 // redriveOneStrandedFinalize re-verifies and, if still eligible, redrives
 // exactly one run's finalize inside its own transaction, so one run's
 // dedupe/policy rejection cannot roll back an otherwise-successful batch.
@@ -574,7 +563,7 @@ FOR UPDATE OF run`, runID).Scan(
 			return false, ErrUnavailable
 		}
 		var held bool
-		if err := tx.QueryRow(ctx, staleFinalizeOutboxRecheckSQL, run.ID, *outboxRecentSince).Scan(&held); err != nil {
+		if err := tx.QueryRow(ctx, joboutbox.StaleFinalizeOutboxRecheckSQL, run.ID, *outboxRecentSince).Scan(&held); err != nil {
 			return false, ErrUnavailable
 		}
 		if held {

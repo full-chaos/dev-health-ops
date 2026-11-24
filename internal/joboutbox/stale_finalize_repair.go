@@ -406,38 +406,48 @@ func readStaleFinalizeLevels(ctx context.Context, tx pgx.Tx, levelsSQL string, c
 // candidate: no live job, not the strand shape (that shape JOINs the River
 // row), not recent. Nothing else can deliver that finalize again.
 const (
+	// The partition check is an uncorrelated set, read once per statement (a
+	// hashed subplan): as a correlated NOT EXISTS the planner could scan the
+	// partitions once per base run. partitions.run_id, status and updated_at
+	// are NOT NULL, so NOT IN equals the NOT EXISTS; the IS NOT NULL guard
+	// keeps it so if that ever changes.
 	staleFinalizeBaseSQL = `run.status = 'running'
 	AND run.finalization_status = 'pending'
 	AND run.updated_at <= $1
-	AND NOT EXISTS (
-		SELECT 1 FROM public.daily_metrics_partitions AS partition
-		WHERE partition.run_id = run.id
-			AND (partition.status <> 'succeeded' OR partition.updated_at > $1)
+	AND run.id NOT IN (
+		SELECT partition.run_id FROM public.daily_metrics_partitions AS partition
+		WHERE (partition.status <> 'succeeded' OR partition.updated_at > $1)
+			AND partition.run_id IS NOT NULL
 	)`
-	// The River arm is an uncorrelated IN, so it reads river_job once per
-	// statement (a hashed subplan), not once per base run: as a correlated
-	// EXISTS the planner priced an early match and scanned river_job for every
-	// run. The domain id is always a JSON string (jobcontract.DomainLink.ID),
-	// so #>> equals the old @> containment; the IS NOT NULL keeps a job with no
-	// domain id from putting a NULL into the set, which would turn
-	// "run.id IN (...)" into NULL instead of false.
+	// Both arms are uncorrelated INs, read once per statement (hashed
+	// subplans), not once per base run. As a correlated EXISTS the planner
+	// priced an early match and scanned river_job for every run; the outbox
+	// arm, correlated, was planned on some ANALYZE samples as a walk of
+	// ix_worker_job_outbox_due per base run. The domain id is always a JSON
+	// string (jobcontract.DomainLink.ID), so #>> equals the old @>
+	// containment; the IS NOT NULL keeps a job or row with no domain id from
+	// putting a NULL into a set, which would turn "run.id IN (...)" into NULL
+	// instead of false.
 	staleFinalizeLiveJobSQL = `(run.id::text IN (
 		SELECT job.args #>> '{domain,id}' FROM %[1]s AS job
 		WHERE job.kind = 'metrics.daily_finalize'
 			AND job.state::text NOT IN ('completed', 'discarded', 'cancelled')
 			AND job.args #>> '{domain,id}' IS NOT NULL
-	) OR EXISTS (
-		SELECT 1 FROM public.worker_job_outbox AS outbox
+	) OR run.id::text IN (
+		SELECT outbox.args #>> '{domain,id}' FROM public.worker_job_outbox AS outbox
 		WHERE outbox.job_kind = 'metrics.daily_finalize'
-			AND outbox.args #>> '{domain,id}' = run.id::text
 			AND outbox.status IN ('pending', 'claimed')
+			AND outbox.args #>> '{domain,id}' IS NOT NULL
 	))`
-	staleFinalizeStrandShapeSQL = `EXISTS (
-		SELECT 1 FROM public.worker_job_outbox AS outbox
+	// Uncorrelated like the River arms (one join per statement, the same IS
+	// NOT NULL guard): as a correlated EXISTS the planner could re-run a merge
+	// join of the outbox and river_job for every base run.
+	staleFinalizeStrandShapeSQL = `run.id::text IN (
+		SELECT outbox.args #>> '{domain,id}' FROM public.worker_job_outbox AS outbox
 		JOIN %[1]s AS job ON job.id = outbox.river_job_id
 		WHERE outbox.job_kind = 'metrics.daily_finalize'
 			AND outbox.status = 'delivered'
-			AND outbox.args #>> '{domain,id}' = run.id::text
+			AND outbox.args #>> '{domain,id}' IS NOT NULL
 	)`
 	// The River arm has the live-job arm's uncorrelated form (one read of
 	// river_job per statement, the same IS NOT NULL guard): correlated, the
@@ -457,6 +467,18 @@ const (
 		SELECT 1 FROM public.daily_metrics_partitions AS partition
 		WHERE partition.run_id = run.id
 	)`
+	// StaleFinalizeOutboxRecheckSQL is the redrive's re-check under the run
+	// lock (daily.PostgresStore.RedriveStaleFinalize): the outbox arms of the
+	// live-job and recent refusals, on the same predicate, so the partial index
+	// ix_worker_job_outbox_finalize_domain_id serves it. $1 is the run id, $2
+	// the survey's cutoff.
+	StaleFinalizeOutboxRecheckSQL = `
+SELECT EXISTS (
+	SELECT 1 FROM public.worker_job_outbox AS outbox
+	WHERE outbox.job_kind = 'metrics.daily_finalize'
+		AND outbox.args #>> '{domain,id}' = $1
+		AND (outbox.status IN ('pending', 'claimed') OR outbox.created_at > $2)
+)`
 	// Statement 0: the base alone, the same fragment A and B use. It reads
 	// daily_metrics_runs and daily_metrics_partitions only.
 	staleFinalizeBaseExistsSQL = `

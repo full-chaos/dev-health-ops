@@ -1,0 +1,152 @@
+package devhealth_test
+
+import (
+	"bytes"
+	"context"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/cli"
+)
+
+// renderedFinalizeOutboxIndexArgs is the args of the finalize-outbox-index hook container, rendered with the flag on.
+func renderedFinalizeOutboxIndexArgs(t *testing.T, sets ...string) (args []string, env map[string]string) {
+	t.Helper()
+	jobs, secrets, refusal := renderJobs(t, append([]string{"web.enabled=false", "migrations.hook.finalizeOutboxIndex.enabled=true"}, sets...)...)
+	if refusal != "" {
+		t.Fatalf("render refused: %s", refusal)
+	}
+	job := jobs["t-dev-health-finalize-outbox-index"]
+	if job == nil {
+		t.Fatal("the hook did not render")
+	}
+	c := container(t, job, "finalize-outbox-index")
+	return stringsOf(c["args"]), podEnvironment(t, c, secrets)
+}
+
+// The finalize-outbox index Job is OFF by default and, ON, runs the build-index verb for finalize-outbox as a weight -2 pre-hook, so
+// a failed build fails the release before the migrate Job runs revision 0167.
+func TestFinalizeOutboxIndexJobIsOffByDefaultAndOrderedBeforeTheMigrateJob(t *testing.T) {
+	t.Parallel()
+
+	base := []string{"web.enabled=false"}
+	jobs, _, refusal := renderJobs(t, base...)
+	if refusal != "" {
+		t.Fatalf("render refused: %s", refusal)
+	}
+	if _, ok := jobs["t-dev-health-finalize-outbox-index"]; ok {
+		t.Fatal("the finalize-outbox index Job renders with the flag off")
+	}
+	jobs, _, refusal = renderJobs(t, append(base, "migrations.hook.finalizeOutboxIndex.enabled=true")...)
+	if refusal != "" {
+		t.Fatalf("render refused: %s", refusal)
+	}
+	job, ok := jobs["t-dev-health-finalize-outbox-index"]
+	if !ok {
+		t.Fatal("no finalize-outbox index Job with the flag on")
+	}
+	annotations := job["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if annotations["helm.sh/hook"] != "pre-install,pre-upgrade" || annotations["helm.sh/hook-weight"] != "-2" {
+		t.Fatalf("hook annotations = %v, want pre-install,pre-upgrade at weight -2", annotations)
+	}
+	c := container(t, job, "finalize-outbox-index")
+	want := []string{"migrate", "postgres", "build-index", "--lock-timeout=5s", "--deadline=240s", "--attempts=3", "--retry-delay=15s", "finalize-outbox"}
+	if args := stringsOf(c["args"]); !reflect.DeepEqual(args, want) {
+		t.Fatalf("args = %v, want %v", args, want)
+	}
+	if migrate := container(t, jobs["t-dev-health-migrate"], "migrate"); c["image"] != migrate["image"] {
+		t.Fatalf("image = %v, the migrate Job runs %v", c["image"], migrate["image"])
+	}
+}
+
+func TestFinalizeOutboxIndexJobRefusesBadBounds(t *testing.T) {
+	t.Parallel()
+
+	for name, sets := range map[string][]string{
+		"lock timeout over a minute": {"web.enabled=false", "migrations.hook.finalizeOutboxIndex.enabled=true", "migrations.hook.finalizeOutboxIndex.lockTimeoutSeconds=61"},
+		"null enabled":               {"web.enabled=false", "migrations.hook.finalizeOutboxIndex=null"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, _, refusal := renderJobs(t, sets...)
+			if refusal == "" {
+				t.Fatal("the render was not refused")
+			}
+			if !strings.Contains(refusal, "finalizeOutboxIndex") {
+				t.Fatalf("the refusal does not name finalizeOutboxIndex: %.300s", refusal)
+			}
+		})
+	}
+}
+
+// The rendered hook's arguments are accepted by the verb's own parser.
+func TestRenderedFinalizeOutboxIndexHookArgumentsPassTheVerbParser(t *testing.T) {
+	args, _ := renderedFinalizeOutboxIndexArgs(t)
+	var stdout, stderr bytes.Buffer
+	code := runDho(context.Background(), args, func(string) (string, bool) { return "", false }, &stdout, &stderr)
+	if code == cli.ExitUsage || strings.Contains(stderr.String(), "argument error") {
+		t.Fatalf("the rendered args %v were refused: exit %d: %s", args, code, stderr.String())
+	}
+}
+
+func TestFinalizeOutboxIndexJobWithBundledPostgresIsPreUpgradeOnly(t *testing.T) {
+	t.Parallel()
+
+	bundled := []string{"web.enabled=false", "migrations.hook.localBundledPostgres=true",
+		"migrations.hook.events={post-install,pre-upgrade}", "postgresql.enabled=true"}
+	jobs, _, refusal := renderJobs(t, bundled...)
+	if refusal != "" {
+		t.Fatalf("render refused: %s", refusal)
+	}
+	if _, ok := jobs["t-dev-health-finalize-outbox-index"]; ok {
+		t.Fatal("the finalize-outbox index Job renders with the flag off")
+	}
+	jobs, _, refusal = renderJobs(t, append(bundled, "migrations.hook.finalizeOutboxIndex.enabled=true")...)
+	if refusal != "" {
+		t.Fatalf("render refused: %s", refusal)
+	}
+	job, ok := jobs["t-dev-health-finalize-outbox-index"]
+	if !ok {
+		t.Fatal("no finalize-outbox index Job with the flag on")
+	}
+	annotations := job["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if annotations["helm.sh/hook"] != "pre-upgrade" || annotations["helm.sh/hook-weight"] != "-2" {
+		t.Fatalf("hook annotations = %v, want pre-upgrade at weight -2", annotations)
+	}
+	wait := func(j map[string]any) map[string]any {
+		inits := j["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["initContainers"].([]any)
+		if len(inits) != 1 {
+			t.Fatalf("initContainers = %d, want 1", len(inits))
+		}
+		return inits[0].(map[string]any)
+	}
+	got, want := wait(job), wait(jobs["t-dev-health-migrate"])
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("wait-for-postgresql differs from the migrate Job's:\n%v\n%v", got, want)
+	}
+	if args := stringsOf(container(t, job, "finalize-outbox-index")["args"]); args[len(args)-1] != "finalize-outbox" {
+		t.Fatalf("args = %v", args)
+	}
+}
+
+// The hook Job reads no Kubernetes API, so it mounts no service account token, as the migrate and streak Jobs do.
+func TestFinalizeOutboxIndexJobDoesNotMountTheServiceAccountToken(t *testing.T) {
+	t.Parallel()
+
+	jobs, _, refusal := renderJobs(t, "web.enabled=false", "migrations.hook.finalizeOutboxIndex.enabled=true", "migrations.hook.streakIndex.enabled=true")
+	if refusal != "" {
+		t.Fatalf("render refused: %s", refusal)
+	}
+	for _, name := range []string{"t-dev-health-migrate", "t-dev-health-streak-index", "t-dev-health-finalize-outbox-index"} {
+		job, ok := jobs[name]
+		if !ok {
+			t.Fatalf("no %s Job in the render", name)
+		}
+		pod := job["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+		if v, ok := pod["automountServiceAccountToken"].(bool); !ok || v {
+			t.Errorf("%s does not set automountServiceAccountToken: false (got %v)", name, pod["automountServiceAccountToken"])
+		}
+	}
+}

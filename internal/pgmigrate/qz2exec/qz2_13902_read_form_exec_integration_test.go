@@ -1,6 +1,6 @@
 //go:build integration
 
-package pgmigrate_test
+package qz2exec_test
 
 import (
 	"bytes"
@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"reflect"
@@ -16,7 +17,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
 // Throwaway exec proof of the prod read form FORM-QZ2-13902-2 (CHAOS-13902, Q-z2): not for merge. qz2Form is the form
@@ -363,6 +367,40 @@ func qz2WantStop(t *testing.T, name string, got qz2Result, fragments ...string) 
 	}
 }
 
+// qz2Database is a new database on its own Postgres container at the repo chain head (baseline + every chain file), built
+// by pgmigrate.Upgrade (the repo's migrate path). The cell lives outside internal/pgmigrate so that dir's frozen-golden pin
+// guard (internal/cigates/frozengoldens PinnedDirs) does not list this throwaway form pin.
+func qz2Database(t *testing.T, ctx context.Context, baseline pgmigrate.Baseline, chain []pgmigrate.ChainFile) string {
+	t.Helper()
+	instance, err := containers.StartPostgresIsolated(ctx)
+	if err != nil {
+		t.Fatalf("start postgres: %v", err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	admin, err := pgx.Connect(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = admin.Close(context.Background()) })
+	if _, err := admin.Exec(ctx, "CREATE DATABASE qz2_13902"); err != nil {
+		t.Fatalf("create database: %v", err)
+	}
+	parsed, err := url.Parse(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed.Path = "/qz2_13902"
+	db, err := pgx.Connect(ctx, parsed.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close(ctx)
+	if _, err := pgmigrate.Upgrade(ctx, db, baseline, chain); err != nil {
+		t.Fatalf("upgrade to the chain head: %v", err)
+	}
+	return parsed.String()
+}
+
 func TestQZ213902ReadFormExec(t *testing.T) {
 	if sum := qz2Sum(qz2Form); sum != qz2SHA256 {
 		t.Fatalf("qz2Form sha256 = %s, want %s (the pinned swapped text)", sum, qz2SHA256)
@@ -386,10 +424,13 @@ func TestQZ213902ReadFormExec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := newDownInstance(t)
-	uri := d.at(t, len(chain))
-	conn := connect(t, uri)
 	ctx := context.Background()
+	uri := qz2Database(t, ctx, baseline, chain)
+	conn, err := pgx.Connect(ctx, uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
 	t.Logf("schema: baseline heads %v + %d chain files, head revision %s (%s)", baseline.Heads, len(chain),
 		chain[len(chain)-1].Revision, chain[len(chain)-1].Name)
 	var server string

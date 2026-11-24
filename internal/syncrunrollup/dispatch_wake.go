@@ -156,6 +156,13 @@ WHERE run.id = $2::uuid
   )
 ` + OutboxWakeupOnConflictSQL
 
+// WakeDispatchForDeliverySQL is WakeDispatchSQL for a dispatch pass that wakes its OWN run after its commit: it
+// leaves a row that is 'dispatched' at another attempt ($4 is the pass's delivery attempt). Only the relay's claim
+// moves attempts, so that row is a newer delivery made after the pass committed; its pass starts after that commit
+// and sees every write of this one, and moving the row to 'pending' would refuse it at its start fence.
+const WakeDispatchForDeliverySQL = WakeDispatchSQL + `
+WHERE NOT (public.sync_dispatch_outbox.status = 'dispatched' AND public.sync_dispatch_outbox.attempts <> $4::bigint)`
+
 // Execer is the one method WakeDispatch needs: *pgxpool.Pool and pgx.Tx both
 // satisfy it.
 type Execer interface {
@@ -198,9 +205,19 @@ const (
 // countdown already covers. For the same reason it returns no error: a failed
 // wake is logged and counted, and the caller's commit stands.
 func WakeDispatch(ctx context.Context, db Execer, syncRunID string, now time.Time, path string) bool {
+	return wakeDispatch(ctx, db, syncRunID, now, path, WakeDispatchSQL)
+}
+
+// WakeDispatchForDelivery is WakeDispatch for a dispatch pass's own run, at the pass's delivery attempt
+// (WakeDispatchForDeliverySQL). A row it leaves counts as not_waiting.
+func WakeDispatchForDelivery(ctx context.Context, db Execer, syncRunID string, now time.Time, path string, deliveryAttempt int64) bool {
+	return wakeDispatch(ctx, db, syncRunID, now, path, WakeDispatchForDeliverySQL, deliveryAttempt)
+}
+
+func wakeDispatch(ctx context.Context, db Execer, syncRunID string, now time.Time, path, statement string, extra ...any) bool {
 	wakeCtx, cancel := context.WithTimeout(ctx, DispatchWakeTimeout)
 	defer cancel()
-	command, err := db.Exec(wakeCtx, WakeDispatchSQL, uuid.New(), syncRunID, now.UTC())
+	command, err := db.Exec(wakeCtx, statement, append([]any{uuid.New(), syncRunID, now.UTC()}, extra...)...)
 	if err != nil {
 		dispatchWakeCounts.record(path, DispatchWakeOutcomeFailed)
 		synclog.Default().Warn(ctx, synclog.MsgDispatchSyncRunUnitCompletionWakeFailed,

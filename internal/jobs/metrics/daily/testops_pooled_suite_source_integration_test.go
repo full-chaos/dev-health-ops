@@ -110,8 +110,20 @@ FROM test_suite_results FINAL WHERE org_id = ? AND run_id = '43600014605' LIMIT 
 		t.Fatal(err)
 	}
 	// The other organization: the same repository and run ids (a copy of every row).
-	if err := stack.conn.Exec(ctx, `INSERT INTO test_suite_results SELECT * REPLACE (? AS org_id) FROM test_suite_results WHERE org_id = ?`, other, org); err != nil {
+	if err := stack.conn.Exec(ctx, `INSERT INTO test_suite_results SELECT * REPLACE ({other_org:String} AS org_id) FROM test_suite_results
+WHERE org_id = {org_id:String}`, clickhouse.Named("other_org", other), clickhouse.Named("org_id", org)); err != nil {
 		t.Fatal(err)
+	}
+	countOf := func(of string) uint64 {
+		t.Helper()
+		var n uint64
+		if err := stack.conn.QueryRow(ctx, `SELECT count() FROM test_suite_results WHERE org_id = ?`, of).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if copied, source := countOf(other), countOf(org); copied == 0 || copied != source {
+		t.Fatalf("control: the other organization holds %d suite rows, want the first organization's %d", copied, source)
 	}
 
 	type served struct {

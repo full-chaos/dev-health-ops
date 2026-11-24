@@ -241,13 +241,14 @@ func buildUnderLock(ctx context.Context, session lockedSession, index unitsIndex
 				return ctx.Err()
 			case <-time.After(min(options.RetryDelay, time.Until(windowEnd))):
 			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if !time.Now().Before(windowEnd) {
-				logger.Warn("build-index: the build window ended; no further attempt", "attempts", result.Attempts)
-				lastErr = fmt.Errorf("%w before attempt %d: %w", errWindowExpired, attempt, lastErr)
+				lastErr = stopAtWindowEnd(logger, attempt, result.Attempts, lastErr)
 				break
 			}
 		}
-		result.Attempts = attempt
 		if info, err = readIndexInfo(ctx, conn, index.name); err != nil {
 			return err
 		}
@@ -258,6 +259,11 @@ func buildUnderLock(ctx context.Context, session lockedSession, index unitsIndex
 			lastErr = nil
 			break
 		}
+		if attempt > 1 && !time.Now().Before(windowEnd) {
+			lastErr = stopAtWindowEnd(logger, attempt, result.Attempts, lastErr)
+			break
+		}
+		result.Attempts = attempt
 		stage, err := runBuildAttempt(ctx, session, index, result, windowEnd, options.LockTimeout)
 		if err == nil {
 			lastErr = nil
@@ -294,6 +300,12 @@ func buildUnderLock(ctx context.Context, session lockedSession, index unitsIndex
 	}
 	result.Valid = true
 	return nil
+}
+
+// stopAtWindowEnd ends the retries of a build whose window is spent; the error wraps the window end and the last attempt's error.
+func stopAtWindowEnd(logger *slog.Logger, attempt, attemptsRun int, lastErr error) error {
+	logger.Warn("build-index: the build window ended; no further attempt", "attempts", attemptsRun)
+	return fmt.Errorf("%w before attempt %d: %w", errWindowExpired, attempt, lastErr)
 }
 
 // runBuildAttempt runs one attempt: probe the table lock, read the state, drop an INVALID leftover, build. stage names

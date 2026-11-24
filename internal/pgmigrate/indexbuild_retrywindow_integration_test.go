@@ -37,13 +37,14 @@ func holdShareLock(t *testing.T, uri string) (release func()) {
 
 type retryWindowVerb struct {
 	revision string
+	body     string
 	build    func(context.Context, *pgx.Conn, pgmigrate.IndexBuildOptions, *slog.Logger) (pgmigrate.IndexBuildResult, error)
 }
 
 func retryWindowVerbs() map[string]retryWindowVerb {
 	return map[string]retryWindowVerb{
-		"failure-streak": {revision: "0159", build: pgmigrate.BuildFailureStreakIndex},
-		"open-units":     {revision: "0161", build: pgmigrate.BuildOpenUnitsIndex},
+		"failure-streak": {revision: "0159", body: pgmigrate.FailureStreakIndexBody, build: pgmigrate.BuildFailureStreakIndex},
+		"open-units":     {revision: "0161", body: pgmigrate.OpenUnitsIndexBody, build: pgmigrate.BuildOpenUnitsIndex},
 	}
 }
 
@@ -167,6 +168,49 @@ func TestBuildIndexZeroRetryDelayBuildsOnTheNextAttempt(t *testing.T) {
 				})
 			if err != nil || !result.Valid || result.Attempts != 2 {
 				t.Fatalf("result %+v err %v, want a valid index on attempt 2; log %s", result, err, logs.String())
+			}
+		})
+	}
+}
+
+// An index another builder makes valid during the pause is found by the retry read: the run ends valid and counts only the
+// attempt that ran.
+func TestBuildIndexCountsOnlyTheAttemptsThatRan(t *testing.T) {
+	for name, verb := range retryWindowVerbs() {
+		t.Run(name, func(t *testing.T) {
+			d := newDownInstance(t)
+			uri := d.withoutIndex(t, verb.revision)
+			release := holdShareLock(t, uri)
+			conn := connect(t, uri)
+			other := connect(t, uri)
+			logs := &syncBuffer{}
+			built := make(chan error, 1)
+			go func() {
+				for !strings.Contains(logs.String(), "build-index: attempt failed") {
+					time.Sleep(10 * time.Millisecond)
+				}
+				release()
+				_, err := other.Exec(context.Background(), "CREATE INDEX "+verb.body)
+				built <- err
+			}()
+			result, err := runBuildGuarded(t, 90*time.Second, "the retry read must find the index the other builder made", release,
+				func(ctx context.Context) (pgmigrate.IndexBuildResult, error) {
+					return verb.build(ctx, conn, pgmigrate.IndexBuildOptions{
+						LockTimeout: time.Second, Attempts: 3, RetryDelay: 10 * time.Second, Deadline: time.Minute, CleanupBudget: 3 * time.Second,
+					}, slog.New(slog.NewJSONHandler(logs, nil)))
+				})
+			if berr := <-built; berr != nil {
+				t.Fatalf("the other builder: %v", berr)
+			}
+			if err != nil || !result.Valid || result.Attempts != 1 {
+				t.Fatalf("result %+v err %v, want a valid index and 1 attempt run; log %s", result, err, logs.String())
+			}
+			lines := logLines(t, logs.String())
+			if n := len(linesWith(lines, "build-index: attempt failed")); n != 1 {
+				t.Fatalf("%d failed attempts, want 1; log %s", n, logs.String())
+			}
+			if retries := retryLines(lines); len(retries) != 1 || retries[0]["state"] != "valid" {
+				t.Fatalf("retry lines %v, want one that reads the valid index; log %s", retries, logs.String())
 			}
 		})
 	}

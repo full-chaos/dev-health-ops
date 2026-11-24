@@ -40,16 +40,21 @@ func orgFrom(env cli.Env, typed optString) (string, bool) {
 	return value, true
 }
 
-// llmSettingsConfig builds the decryptor and the redactor of an error text.
-func llmSettingsConfig(env cli.Env) (admin.LLMSettingsConfig, func(error) error, bool) {
+// llmSettingsConfig builds the decryptor and the redactor of an error text. The
+// redactor takes the credentials typed on the command line too, and removes them
+// with the database's and the settings keys in one redaction.
+func llmSettingsConfig(env cli.Env) (admin.LLMSettingsConfig, func(error, ...string) error, bool) {
 	decryptor, values, err := settingsDecryptor(env)
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "configuration error: %v\n", err)
 		return admin.LLMSettingsConfig{}, nil, false
 	}
-	database := redactor(env)
-	redact := func(err error) error {
-		return database(fmt.Errorf("%s", secrets.RedactValues(err.Error(), values...)))
+	database, resolved := boundaryFor(env, migrationDSN)
+	redact := func(err error, typed ...string) error {
+		if !resolved {
+			return errors.New("redacted")
+		}
+		return secrets.Join(database, secrets.NewBoundaryWith("", append(append([]string{}, values...), typed...)...)).Redact(err)
 	}
 	return admin.LLMSettingsConfig{Decryptor: decryptor}, redact, true
 }
@@ -62,7 +67,7 @@ func llmSettingsConfig(env cli.Env) (admin.LLMSettingsConfig, func(error) error,
 // API key, the credentials of the base URL): a refusal's text can echo part of
 // what was typed (an unparsable port), so they are removed from it. Python
 // printed such text as it was; this is a named difference.
-func finishLLM(env cli.Env, redact func(error) error, err error, secretValues ...string) int {
+func finishLLM(env cli.Env, redact func(error, ...string) error, err error, secretValues ...string) int {
 	var refusal *admin.OperatorError
 	if errors.As(err, &refusal) {
 		fmt.Fprintf(env.Stdout, "Error: %s\n", secrets.RedactValues(refusal.Message, secretValues...))
@@ -72,11 +77,11 @@ func finishLLM(env cli.Env, redact func(error) error, err error, secretValues ..
 	if errors.As(err, &fixed) {
 		fmt.Fprintf(env.Stdout, "Error: %s\n", fixed.FixedText())
 		if cause := errors.Unwrap(err); cause != nil {
-			fmt.Fprintf(env.Stderr, "cause: %s\n", secrets.RedactValues(redact(cause).Error(), secretValues...))
+			fmt.Fprintf(env.Stderr, "cause: %s\n", redact(cause, secretValues...).Error())
 		}
 		return cli.ExitFailure
 	}
-	return writeError(env.Stderr, "admin_failed", secrets.RedactValues(redact(err).Error(), secretValues...))
+	return writeError(env.Stderr, "admin_failed", redact(err, secretValues...).Error())
 }
 
 func printDocument(env cli.Env, document any) int {

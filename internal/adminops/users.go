@@ -311,12 +311,20 @@ func accountRedactor(env cli.Env) func(error) error {
 }
 
 func redactorFor(env cli.Env, resolve dsnResolver) func(error) error {
-	dsn, ok := resolve(env.Lookup, io.Discard)
+	boundary, ok := boundaryFor(env, resolve)
 	if !ok {
 		return func(err error) error { return errors.New("redacted") }
 	}
-	boundary := pgstorage.Boundary(dsn.Reveal())
 	return boundary.Redact
+}
+
+// boundaryFor is the Boundary of the DSN resolve names; false when none resolves.
+func boundaryFor(env cli.Env, resolve dsnResolver) (secrets.Boundary, bool) {
+	dsn, ok := resolve(env.Lookup, io.Discard)
+	if !ok {
+		return secrets.Boundary{}, false
+	}
+	return pgstorage.Boundary(dsn.Reveal()), true
 }
 
 func runUsersCreate(ctx context.Context, env cli.Env) int {

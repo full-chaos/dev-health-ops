@@ -246,8 +246,8 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 		}
 		return writeError(env.Stderr, cli.ExitRefused, "configuration", detail)
 	}
-	boundary := secrets.NewBoundary(dsn.Reveal())
-	redact := func(err error) string { return boundary.Redact(settings.redact(err)).Error() }
+	boundary := secrets.Join(secrets.NewBoundary(dsn.Reveal()), settings.boundary())
+	redact := func(err error) string { return boundary.Redact(err).Error() }
 	// What the collector and the writer log (not only what they return) is
 	// redacted with the same boundary.
 	defer redactProcessLogger(boundary.RedactText)()
@@ -328,11 +328,11 @@ type settings struct {
 	gatewayURL     string
 }
 
-// redact removes the credential from an error text: the gateway can echo a
+// boundary redacts the credential from an error text: the gateway can echo a
 // rejected request.
-func (s settings) redact(err error) error {
+func (s settings) boundary() secrets.Boundary {
 	// The token and the email (CHAOS-7132): the gateway can echo either into its error text.
-	return secrets.NewBoundaryWith(s.token, s.email).Redact(err)
+	return secrets.NewBoundaryWith(s.token, s.email)
 }
 
 // envOverrides is what the ATLASSIAN_* environment carries for one run. Every

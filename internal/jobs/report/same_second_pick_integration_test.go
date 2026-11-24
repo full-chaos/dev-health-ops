@@ -27,6 +27,8 @@ type samePickTable struct {
 	insert   string
 	versionA []any
 	versionB []any
+	valueA   string
+	valueB   string
 	value    string
 	keyWhere string
 	hash     string
@@ -42,6 +44,8 @@ func samePickTables() []samePickTable {
 				VALUES (?, '2026-08-21', 'github', 'team-a', 'issue', ?, ?, ?, 0.5, 0.5, ?, toDateTime(?, 'UTC'), ?)`,
 			versionA: []any{samePickRepo, uint32(1), uint32(1), uint32(1), 2.5, samePickAt, samePickOrg},
 			versionB: []any{samePickRepo, uint32(2), uint32(2), uint32(2), nil, samePickAt, samePickOrg},
+			valueA:   "1",
+			valueB:   "2",
 			value:    "completed_count",
 			keyWhere: "toString(repo_id) = '" + samePickRepo + "' AND day = '2026-08-21' AND provider = 'github' AND team_id = 'team-a' AND issue_type_norm = 'issue'",
 			hash:     "cityHash64(tuple(*))",
@@ -53,6 +57,8 @@ func samePickTables() []samePickTable {
 				VALUES (?, ?, '2026-08-21', 'team-a', ?, ?, 0, ?, 0.5, toDateTime(?, 'UTC'))`,
 			versionA: []any{samePickOrg, samePickRepo, uint32(3), uint32(3), uint64(10), samePickAt},
 			versionB: []any{samePickOrg, samePickRepo, uint32(4), uint32(4), nil, samePickAt},
+			valueA:   "3",
+			valueB:   "4",
 			value:    "work_items_completed",
 			keyWhere: "toString(repo_id) = '" + samePickRepo + "' AND day = '2026-08-21' AND team_id = 'team-a'",
 			hash:     "cityHash64(tuple(*))",
@@ -65,6 +71,8 @@ func samePickTables() []samePickTable {
 				VALUES ('2026-08-21', 'jira', 'scope-a', 'team-a', 'Team A', 0, ?, 0, 0, 0, 0, ?, 0, 0, toDateTime(?, 'UTC'), ?, 'org')`,
 			versionA: []any{uint32(3), 4.0, samePickAt, samePickOrg},
 			versionB: []any{uint32(5), nil, samePickAt, samePickOrg},
+			valueA:   "3",
+			valueB:   "5",
 			value:    "items_completed",
 			keyWhere: "day = '2026-08-21' AND provider = 'jira' AND work_scope_id = 'scope-a' AND team_id = 'team-a' AND row_view = 'org'",
 			hash:     "tupleElement(" + rowview.WorkItemMetricsNewestOrder + ", 2)",
@@ -188,25 +196,29 @@ func TestReportSourcePicksOneVersionOfAKeyTiedInOneSecond(t *testing.T) {
 			}
 			check("A then B, 2 parts, 20 reads", samePickReads(t, ctx, conn, table, 20), want)
 
-			if err := conn.Exec(ctx, "OPTIMIZE TABLE "+table.name+" FINAL"); err != nil {
-				t.Fatal(err)
-			}
-			afterMerge := samePickReads(t, ctx, conn, table, 20)
-			if table.replaces {
-				// ReplacingMergeTree(computed_at) keeps the last inserted version of a tie (ops #6798 RISK-NOTES).
-				t.Logf("ENGINE-MERGE-PICK %s: after OPTIMIZE FINAL served %v; stored %v", table.name, afterMerge, samePickHashes(t, ctx, conn, table))
-				if len(afterMerge) != 1 {
-					t.Errorf("%s after the merge: served %v, want one value on every read", table.name, afterMerge)
+			merged := func(order string, last string) {
+				t.Helper()
+				if err := conn.Exec(ctx, "OPTIMIZE TABLE "+table.name+" FINAL"); err != nil {
+					t.Fatal(err)
 				}
-			} else {
-				check("A then B, after OPTIMIZE FINAL, 20 reads", afterMerge, want)
+				served := samePickReads(t, ctx, conn, table, 20)
+				if !table.replaces {
+					check(order+", after OPTIMIZE FINAL, 20 reads", served, want)
+					return
+				}
+				// ReplacingMergeTree(computed_at) keeps the last inserted version of a tie (ops #6798 RISK-NOTES).
+				t.Logf("SERVED-FLIP %s %s: before the merge the higher order hash serves %s; after OPTIMIZE FINAL the last inserted serves %s (stored %v)",
+					table.name, order, want, last, samePickHashes(t, ctx, conn, table))
+				check(order+", after OPTIMIZE FINAL (last inserted kept), 20 reads", served, last)
 			}
+			merged("A then B", table.valueB)
 
 			samePickInsert(t, ctx, conn, table, table.versionB, table.versionA)
 			if again := samePickHashes(t, ctx, conn, table); again[want] != wantHash {
 				t.Errorf("%s: the hash of version %s moved with the insert order: %v then %v", table.name, want, hashes, again)
 			}
 			check("B then A, 2 parts, 20 reads", samePickReads(t, ctx, conn, table, 20), want)
+			merged("B then A", table.valueA)
 		})
 	}
 }

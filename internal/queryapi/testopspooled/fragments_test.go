@@ -215,3 +215,28 @@ func TestRevivedSlotsCountsTheSlotsLiveAgainAfterARetraction(t *testing.T) {
 		t.Errorf("an empty scope binds more than the organization:\n%s", RevivedSlots(Scope{}))
 	}
 }
+
+// A run-set scope lands in every inner select of the suite rule, and it takes no repository list or window.
+func TestRunSetScopeLandsInEveryInnerSelect(t *testing.T) {
+	const runs = "SELECT repo_id, run_id FROM runs_of_the_test"
+	sql := SuiteRowsNewestAttempt("s", Scope{runs: runs})
+	if got := strings.Count(sql, "(repo_id, run_id) IN ("+runs+")"); got != SuiteScopeUses {
+		t.Fatalf("the run-set bound occurs %d times, want %d (one per inner select):\n%s", got, SuiteScopeUses, sql)
+	}
+	if got := strings.Count(sql, "FROM test_suite_results FINAL"); got != SuiteScopeUses {
+		t.Fatalf("%d inner selects, want %d", got, SuiteScopeUses)
+	}
+	if got := strings.Count(SuiteRunsSource, "(repo_id, run_id) IN ("+legacySuiteRuns+")"); got != 1+SuiteScopeUses {
+		t.Fatalf("SuiteRunsSource bounds %d selects by the legacy suite runs, want %d (the raw read and every inner select)", got, 1+SuiteScopeUses)
+	}
+	for _, scope := range []Scope{{runs: runs, RepoIDsParam: "repo_ids"}, {runs: runs, RepoIDsParam: "repo_ids", WindowStartParam: "start", WindowEndParam: "end"}} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("scope %+v: no panic, want a refusal of a run set with a repository list", scope)
+				}
+			}()
+			SuiteRowsNewestAttempt("s", scope)
+		}()
+	}
+}

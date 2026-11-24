@@ -111,7 +111,10 @@ var PipelineRunsSource = `(
 // SuiteRunsSource reads, for a repository-day without stored samples, the suite rows the readers count: the newest
 // attempt of each report slot, a legacy row only when no kept slotted row lists its id (SuiteRowsNewestAttempt). A var:
 // the fragment is built, not written. Both arms read only the keys whose NEWEST row is live (package liverow): a retired
-// repository-day (newest row retracted = 1, a row that holds no samples) admits no stored sample and no raw suite.
+// repository-day (newest row retracted = 1, a row that holds no samples) admits no stored sample and no raw suite. The
+// raw read and the rule's inner selects read only the runs with a suite row on such a repository-day (legacySuiteRuns, one
+// read of those repositories' rows): the table has no day key, so an organization-wide select reads the organization's whole
+// history once per select.
 var SuiteRunsSource = `(
     SELECT org_id, repo_id, service_id, day, duration_sample
     FROM (
@@ -132,13 +135,18 @@ var SuiteRunsSource = `(
             toDate(coalesce(started_at, finished_at)) AS day,
             if(duration_seconds >= 0, duration_seconds, NULL) AS duration_sample
         FROM test_suite_results FINAL
-        WHERE org_id = {org_id:String}
+        WHERE org_id = {org_id:String} AND (repo_id, run_id) IN (` + legacySuiteRuns + `)
           AND toDate(coalesce(started_at, finished_at)) >= {start_date:Date} AND toDate(coalesce(started_at, finished_at)) < {end_date:Date}
-          AND ` + SuiteRowsNewestAttempt("", Scope{}) + `
+          AND ` + SuiteRowsNewestAttempt("", Scope{runs: legacySuiteRuns}) + `
           AND (repo_id, toDate(coalesce(started_at, finished_at))) IN (` + LegacyRepoDays("testops_test_metrics_daily") + `)
     )
     WHERE ` + LiveRepoDays("testops_test_metrics_daily") + `
 ) AS testops_suite_runs`
+
+// legacySuiteRuns are the runs with a suite row (any version) on a repository-day without stored samples: the runs the raw
+// arm of SuiteRunsSource can count. The repository is the second key column, so the read is the rows of those repositories.
+var legacySuiteRuns = `SELECT repo_id, run_id FROM test_suite_results WHERE org_id = {org_id:String}
+          AND (repo_id, toDate(coalesce(started_at, finished_at))) IN (` + LegacyRepoDays("testops_test_metrics_daily") + `)`
 
 // P95 is the 95th percentile of a group's duration samples, NULL for a group with none.
 const P95 = "if(count(" + DurationSample + ") = 0, NULL, quantileExactInclusive(0.95)(" + DurationSample + "))"

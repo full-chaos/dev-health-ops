@@ -756,6 +756,12 @@ type memoryUnitRepository struct {
 	checkpointProgress       func() *providersync.RateLimitProgressMark
 	rateLimitProgressMark    *providersync.RateLimitProgressMark
 	rateLimitEpisodeRestarts int
+	// chunkNextOrdinal is the durable chunk checkpoint's next_ordinal the
+	// progress refund reads (false: no checkpoint); runCreatedAt is the run's
+	// created_at its 24 h cap reads (zero: a young run).
+	chunkNextOrdinal func(now time.Time) (int, bool)
+	runCreatedAt     time.Time
+	progressRefunds  int
 }
 
 func newMemoryUnitRepository(unit providersync.Unit) *memoryUnitRepository {
@@ -929,10 +935,49 @@ func (repository *memoryUnitRepository) DeferChunkContinuation(
 		return providersync.ErrLeaseLost
 	}
 	repository.chunkContinuationDeferrals++
+	if repository.attempt > 0 {
+		repository.attempt--
+	}
 	repository.availableAt = availableAt
 	repository.status = "dispatching"
 	return nil
 }
+
+// RefundChunkProgress models deferForChunkContinuationSQL with a start mark:
+// the continuation's write, only with checkpoint progress past startOrdinal and
+// a run younger than progressRefundRunAgeCap.
+func (repository *memoryUnitRepository) RefundChunkProgress(
+	_ context.Context,
+	claim providersync.Claim,
+	startOrdinal int,
+	availableAt time.Time,
+	now time.Time,
+) (bool, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	if repository.status != "running" || repository.lastClaim.Owner != claim.Owner {
+		return false, nil
+	}
+	if !repository.runCreatedAt.IsZero() && !repository.runCreatedAt.After(now.Add(-progressRefundRunAgeCap)) {
+		return false, nil
+	}
+	if repository.chunkNextOrdinal == nil {
+		return false, nil
+	}
+	if next, present := repository.chunkNextOrdinal(now); !present || next <= startOrdinal {
+		return false, nil
+	}
+	repository.progressRefunds++
+	if repository.attempt > 0 {
+		repository.attempt--
+	}
+	repository.availableAt = availableAt
+	repository.status = "dispatching"
+	return true, nil
+}
+
+// progressRefundRunAgeCap is the refund statement's run age cap.
+const progressRefundRunAgeCap = 24 * time.Hour
 
 func (repository *memoryUnitRepository) Fail(
 	_ context.Context,

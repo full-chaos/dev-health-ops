@@ -1105,12 +1105,13 @@ func (m *Metrics) RecordGitLabTestsWindowStartFallback(dataset string) {
 }
 
 // metricUnitDeferralReasonVocabulary is the closed set of reasons a provider
-// unit attempt ended in an attempt-neutral deferral (a River snooze). The three
+// unit attempt ended in an attempt-neutral deferral (a River snooze). The four
 // producers are internal/jobs/providerunit/providerunit.go's chunk-continuation,
-// rate-limit and budget-contention branches. Anything else collapses to
-// "other" so a caller cannot open an unbounded label dimension (CHAOS-7434).
+// progress-refund, rate-limit and budget-contention branches. Anything else
+// collapses to "other" so a caller cannot open an unbounded label dimension
+// (CHAOS-7434).
 var metricUnitDeferralReasonVocabulary = map[string]struct{}{
-	"budget_contention": {}, "rate_limited": {}, "chunk_continuation": {},
+	"budget_contention": {}, "rate_limited": {}, "chunk_continuation": {}, "progress_refund": {},
 }
 
 // MetricUnitDeferralReasonLabel bounds the deferral reason label.

@@ -26,7 +26,7 @@ import (
 // no retraction (the prod state at the card's writing), retractions with fresh, pending and unmarked keys, the marks and
 // recomputes that cover them, and a slot retracted on the new image. It checks each WANT per phase, logs the pass-path
 // read_rows of each data statement, and fires each cost gate cap once (pm-guard FORM-TEMPLATE-4).
-const formExecSel3x14544SHA256 = "419c0aebf968dee502a169a9b357dfc395490fb7cdcb64e3888dd51349a60d1e"
+const formExecSel3x14544SHA256 = "35e24c2d52be146c5f657dabb353527f157f124ea3280f3a4e45001a7914dceb"
 
 const formExecSel3x14544SQL = `-- FORM-14544-SEL-3 (lane fcs-14544card, 2026-11-24, ops pin 3207ac6258c0). ClickHouse prod, SELECT only. Card CARD-14544-14562-2.
 -- = FORM-14544-SEL-2 (99c1742d7c75, frozen) with S3/S4 per fcdev's rule: FRESH needs computed_at >= mark + SKEW_BOUND, no MARGIN,
@@ -100,12 +100,12 @@ FROM (
 )
 WHERE cost_gate = 0;
 
--- S3 COVERAGE GATE on testops_test_metrics_daily. Every run with a newest-retracted suite key (stamp = its newest last_synced);
+-- S3 COVERAGE GATE on testops_test_metrics_daily. Every run with a newest-retracted suite key (stamp = its newest last_synced),
 -- its expected repo-days X = D .. min(D+29, cut) for each suite day D of the run, cut = the day of the run's first post-sync
 -- 'touched' record at or after the stamp (the record's own cut, touched_days_clickhouse.go:436), or the stamp day + LAG_DAYS
 -- when there is none. Per key: mark = the LAST 'touched' or 'touched_testops_window' event (ClickHouse clock); last_compute =
 -- the newest computed_at (worker clock, stamped before the compute reads). UNMARKED = no mark; MISSING-MARK = every mark is
--- older than the stamp (rows written after the last mark: the record failed); FRESH = last_compute >= mark + SKEW_BOUND;
+-- older than the stamp (rows written after the last mark: the record failed). FRESH = last_compute >= mark + SKEW_BOUND.
 -- PENDING = anything else. WANT pending = 0, unmarked = 0 and missing_mark = 0 (0 expected keys is a PASS). W = every key that
 -- is not FRESH; w_* print the verb args.
 WITH (SELECT throwIf(

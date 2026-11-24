@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -69,6 +70,7 @@ query LinearWorkItems($first: Int!, $after: String, $filter: IssueFilter) {
           createdAt
           fromState { name type }
           toState { name type }
+          relationChanges { identifier type }
           fromProjectId
           toProjectId
           actor { name email }
@@ -186,6 +188,7 @@ query LinearWorkItemsHistory($first: Int!, $after: String, $issueId: String!) {
         createdAt
         fromState { name type }
         toState { name type }
+        relationChanges { identifier type }
         fromProjectId
         toProjectId
         actor { name email }
@@ -353,14 +356,20 @@ type linearRelationsPayload struct {
 	PageInfo linearPageInfoPayload   `json:"pageInfo"`
 }
 
+type linearRelationChangePayload struct {
+	Identifier string `json:"identifier"`
+	Type       string `json:"type"`
+}
+
 type linearHistoryEntry struct {
-	ID            string                 `json:"id"`
-	CreatedAt     string                 `json:"createdAt"`
-	FromState     *linearStatePayload    `json:"fromState"`
-	ToState       *linearStatePayload    `json:"toState"`
-	FromProjectID *string                `json:"fromProjectId"`
-	ToProjectID   *string                `json:"toProjectId"`
-	Actor         *linearIdentityPayload `json:"actor"`
+	ID              string                        `json:"id"`
+	CreatedAt       string                        `json:"createdAt"`
+	FromState       *linearStatePayload           `json:"fromState"`
+	ToState         *linearStatePayload           `json:"toState"`
+	RelationChanges []linearRelationChangePayload `json:"relationChanges"`
+	FromProjectID   *string                       `json:"fromProjectId"`
+	ToProjectID     *string                       `json:"toProjectId"`
+	Actor           *linearIdentityPayload        `json:"actor"`
 }
 
 // linearWorkItemRow is the complete normalized WorkItem field set plus the
@@ -1709,8 +1718,16 @@ func normalizeLinearTransitions(
 	normalizedAt time.Time,
 ) []linearWorkItemTransitionRow {
 	transitions := make([]linearWorkItemTransitionRow, 0, len(history))
-	for _, entry := range history {
+	var previousTo *linearStatePayload
+	var previousAt time.Time
+	var lastRelation *linearHistoryEntry
+	history = linearHistoryAscending(history)
+	for index := range history {
+		entry := history[index]
 		if entry.FromState == nil && entry.ToState == nil {
+			if len(entry.RelationChanges) > 0 {
+				lastRelation = &history[index]
+			}
 			continue
 		}
 		if entry.ToState == nil || entry.ToState.Name == "" {
@@ -1721,29 +1738,95 @@ func normalizeLinearTransitions(
 			fallback := normalizedAt
 			occurredAt = &fallback
 		}
-		fromRaw, fromStatus := (*string)(nil), "unknown"
-		if entry.FromState != nil {
-			fromRaw = nullableLinearString(entry.FromState.Name)
-			fromStatus = linearStatus(entry.FromState.Type)
-		}
-		toRaw := nullableLinearString(entry.ToState.Name)
-		actor := (*string)(nil)
-		if entry.Actor != nil {
-			if identity := linearIdentity(*entry.Actor); identity != "unknown" {
-				actor = &identity
+		// Linear serves "mark as duplicate" as a stateless relation entry and no entry into Duplicate; the next
+		// entry leaves Duplicate. Write the move in, so the close is not lost.
+		if entry.FromState != nil && previousTo != nil && linearIsDuplicateState(entry.FromState) &&
+			!linearIsDuplicateState(previousTo) &&
+			linearStatus(previousTo.Type) != linearStatus(entry.FromState.Type) {
+			closedAt, actor := *occurredAt, (*linearIdentityPayload)(nil)
+			relationAt := (*time.Time)(nil)
+			if lastRelation != nil {
+				relationAt = parseLinearTime(lastRelation.CreatedAt)
+			}
+			if relationAt != nil {
+				closedAt, actor = *relationAt, lastRelation.Actor
+			} else if before := occurredAt.Add(-time.Millisecond); before.After(previousAt) {
+				// occurred_at is DateTime64(3): one millisecond before the exit, so the close sorts before the reopen.
+				// When no millisecond lies strictly between the entry into the previous state and the exit, the close
+				// takes the exit instant and the tie order decides (named limit).
+				closedAt = before
+			}
+			implied := linearTransitionRow(claim, workItemID, previousTo, entry.FromState, actor, closedAt, normalizedAt)
+			if implied.validate(claim) == nil {
+				transitions = append(transitions, implied)
 			}
 		}
-		row := linearWorkItemTransitionRow{
-			WorkItemID: workItemID, Provider: "linear", OccurredAt: occurredAt.UTC(),
-			FromStatusRaw: fromRaw, ToStatusRaw: toRaw, FromStatus: fromStatus,
-			ToStatus: linearStatus(entry.ToState.Type), Actor: actor,
-			OrgID: claim.OrgID, LastSynced: normalizedAt.UTC(),
-		}
+		lastRelation = nil
+		previousTo, previousAt = entry.ToState, *occurredAt
+		row := linearTransitionRow(claim, workItemID, entry.FromState, entry.ToState, entry.Actor, *occurredAt, normalizedAt)
 		if row.validate(claim) == nil {
 			transitions = append(transitions, row)
 		}
 	}
 	return transitions
+}
+
+// linearHistoryAscending returns a copy ordered by createdAt; ties and unparseable stamps (placed last) keep served order.
+func linearHistoryAscending(history []linearHistoryEntry) []linearHistoryEntry {
+	type stamped struct {
+		entry linearHistoryEntry
+		at    *time.Time
+	}
+	rows := make([]stamped, len(history))
+	for index, entry := range history {
+		rows[index] = stamped{entry: entry, at: parseLinearTime(entry.CreatedAt)}
+	}
+	sort.SliceStable(rows, func(left, right int) bool {
+		if rows[left].at == nil || rows[right].at == nil {
+			return rows[left].at != nil && rows[right].at == nil
+		}
+		if !rows[left].at.Equal(*rows[right].at) {
+			return rows[left].at.Before(*rows[right].at)
+		}
+		// at one instant a relation entry sorts before a state entry; state entries keep served order (named limit)
+		return rows[left].entry.FromState == nil && rows[left].entry.ToState == nil &&
+			(rows[right].entry.FromState != nil || rows[right].entry.ToState != nil)
+	})
+	ordered := make([]linearHistoryEntry, len(rows))
+	for index, row := range rows {
+		ordered[index] = row.entry
+	}
+	return ordered
+}
+
+func linearIsDuplicateState(state *linearStatePayload) bool {
+	return strings.ToLower(strings.TrimSpace(state.Type)) == "duplicate"
+}
+
+func linearTransitionRow(
+	claim Claim,
+	workItemID string,
+	from, to *linearStatePayload,
+	actorPayload *linearIdentityPayload,
+	occurredAt, normalizedAt time.Time,
+) linearWorkItemTransitionRow {
+	fromRaw, fromStatus := (*string)(nil), "unknown"
+	if from != nil {
+		fromRaw = nullableLinearString(from.Name)
+		fromStatus = linearStatus(from.Type)
+	}
+	actor := (*string)(nil)
+	if actorPayload != nil {
+		if identity := linearIdentity(*actorPayload); identity != "unknown" {
+			actor = &identity
+		}
+	}
+	return linearWorkItemTransitionRow{
+		WorkItemID: workItemID, Provider: "linear", OccurredAt: occurredAt.UTC(),
+		FromStatusRaw: fromRaw, ToStatusRaw: nullableLinearString(to.Name), FromStatus: fromStatus,
+		ToStatus: linearStatus(to.Type), Actor: actor,
+		OrgID: claim.OrgID, LastSynced: normalizedAt.UTC(),
+	}
 }
 
 // mergeLinearProjectCatalogNames coalesces catalog rows for the same

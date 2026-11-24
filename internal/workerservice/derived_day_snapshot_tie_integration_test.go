@@ -56,20 +56,32 @@ func copyRepositoryVersion(t *testing.T, ctx context.Context, conn driver.Conn, 
 		return rows
 	}
 	copied, before := rowsAt(from), rowsAt(to)
-	probe, err := conn.Query(ctx, `SELECT * FROM `+table+` LIMIT 0`)
+	columns, err := conn.Query(ctx, `SELECT name FROM system.columns
+		WHERE database = currentDatabase() AND table = ? AND default_kind NOT IN ('MATERIALIZED', 'ALIAS', 'EPHEMERAL')
+		ORDER BY position`, table)
 	if err != nil {
 		t.Fatalf("%s: %v", table, err)
 	}
 	var names, selected []string
-	for _, column := range probe.ColumnTypes() {
-		names = append(names, column.Name())
-		if column.Name() == "computed_at" {
+	for columns.Next() {
+		var name string
+		if err := columns.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, name)
+		if name == "computed_at" {
 			selected = append(selected, "toDateTime(?, 'UTC')")
 			continue
 		}
-		selected = append(selected, column.Name())
+		selected = append(selected, name)
 	}
-	probe.Close()
+	if err := columns.Err(); err != nil {
+		t.Fatal(err)
+	}
+	columns.Close()
+	if len(names) == 0 {
+		t.Fatalf("%s: system.columns gave no column", table)
+	}
 	// The same shape as the forced cell of the repeat leg, the one copy form
 	// seen stored in CI: named columns, and older rows by computed_at < to.
 	stamp := "computed_at < toDateTime(?, 'UTC')"

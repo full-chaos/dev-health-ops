@@ -46,7 +46,7 @@ func runGoContainersScript(t *testing.T, env []string, args ...string) (string, 
 	t.Helper()
 	bin := t.TempDir()
 	log := filepath.Join(bin, "docker.log")
-	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(imageReuseStubDocker), 0o755); err != nil {
+	if err := writeExecFile(filepath.Join(bin, "docker"), []byte(imageReuseStubDocker), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "ci", "check_go_containers.sh")}, args...)...)

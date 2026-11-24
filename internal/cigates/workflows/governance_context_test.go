@@ -47,7 +47,7 @@ func governanceViolations(t *testing.T, root string) []string {
 		`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}}}]`
 	argsFile, outFile := filepath.Join(dir, "gh-args.txt"), filepath.Join(dir, "github-output.txt")
 	fake := "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > \"$GH_ARGS_FILE\"\nprintf '%s\\n' '" + pages + "'\n"
-	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(fake), 0o755); err != nil {
+	if err := writeExecFile(filepath.Join(dir, "gh"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", "-euo", "pipefail", "-c", script)

@@ -382,7 +382,7 @@ func TestAuthFuzzGroupRunsEveryTargetAndStillFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	stub := "#!/bin/bash\ncase \"$3\" in FuzzRed*) echo \"stub-red $3\" >&2; exit 1;; esac\necho \"auth-fuzz-proof: $3\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "ci/check_go.sh"), []byte(stub), 0o755); err != nil {
+	if err := writeExecFile(filepath.Join(dir, "ci/check_go.sh"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	run := func(targets string) (string, error) {

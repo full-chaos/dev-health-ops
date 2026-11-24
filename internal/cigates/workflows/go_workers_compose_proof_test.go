@@ -229,7 +229,7 @@ func runScriptFunction(t *testing.T, in goWorkersProofInputs, function, inspectJ
 	if err := os.WriteFile(filepath.Join(dir, "inspect.json"), []byte(inspectJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/usr/bin/env bash\ncat \"$(dirname \"$0\")/inspect.json\"\n"), 0o755); err != nil {
+	if err := writeExecFile(filepath.Join(dir, "docker"), []byte("#!/usr/bin/env bash\ncat \"$(dirname \"$0\")/inspect.json\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	program := bashFunction(t, in.script, function) + "\n" + function + ` "$@"` + "\n"

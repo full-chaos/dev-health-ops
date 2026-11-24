@@ -366,7 +366,7 @@ func TestComposeWorkloadVolumeOneShotIsIdempotent(t *testing.T) {
 		"chown": "#!/bin/sh\necho chown >> " + calls + "\necho 65532:700 > " + state + "\n",
 	}
 	for name, body := range fakes {
-		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+		if err := writeExecFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}

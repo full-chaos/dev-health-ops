@@ -62,11 +62,11 @@ func runFaninStep(t *testing.T, scenario string, o faninOpts) faninResult {
 	}
 	for name, src := range map[string]string{"docker": "fanin_docker_shim.sh", "git": "fanin_git_shim.sh"} {
 		body := readFile(t, filepath.Join(root, "internal", "cigates", "workflows", "testdata", src))
-		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+		if err := writeExecFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(bin, "sleep"), []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
+	if err := writeExecFile(filepath.Join(bin, "sleep"), []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	script := filepath.Join(dir, "fanin.sh")

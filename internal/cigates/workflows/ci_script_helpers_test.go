@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 )
 
@@ -72,7 +73,7 @@ func mutatedCopy(t *testing.T, src, old, repl string) string {
 		t.Fatalf("planted-defect anchor %q occurs %d times in %s, want exactly 1: the script changed, re-derive the plant", old, n, src)
 	}
 	dst := filepath.Join(t.TempDir(), filepath.Base(src))
-	if err := os.WriteFile(dst, []byte(strings.Replace(string(raw), old, repl, 1)), 0o755); err != nil {
+	if err := writeExecFile(dst, []byte(strings.Replace(string(raw), old, repl, 1)), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return dst
@@ -144,11 +145,11 @@ func assertPlantsCaught(t *testing.T, script string, scenarios []scenario, plant
 				if n := strings.Count(original, p.old); n != 1 {
 					t.Fatalf("planted-defect anchor %q occurs %d times in %s, want exactly 1", p.old, n, rel)
 				}
-				if err := os.WriteFile(target, []byte(strings.Replace(original, p.old, p.repl, 1)), 0o755); err != nil {
+				if err := writeExecFile(target, []byte(strings.Replace(original, p.old, p.repl, 1)), 0o755); err != nil {
 					t.Fatal(err)
 				}
 				defer func() {
-					if err := os.WriteFile(target, []byte(original), 0o755); err != nil {
+					if err := writeExecFile(target, []byte(original), 0o755); err != nil {
 						t.Fatal(err)
 					}
 					if after := sha256.Sum256([]byte(readText(t, target))); after != before {
@@ -273,7 +274,7 @@ func cloneRepo(t *testing.T) string {
 		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(out, raw, info.Mode().Perm()); err != nil {
+		if err := writeExecFile(out, raw, info.Mode().Perm()); err != nil {
 			t.Fatal(err)
 		}
 		copied++
@@ -375,4 +376,13 @@ func withNoPythonShims(env []string) []string {
 		out = append(out, "PATH="+dir+string(os.PathListSeparator)+"/usr/bin:/bin")
 	}
 	return out
+}
+
+// writeExecFile is os.WriteFile for a file a test may exec. It holds syscall.ForkLock for reading while the write fd is
+// open: forkExec takes the write lock, so no concurrent fork can inherit that fd and a later exec of the file never
+// fails with ETXTBSY (golang/go#22315).
+func writeExecFile(path string, data []byte, mode os.FileMode) error {
+	syscall.ForkLock.RLock()
+	defer syscall.ForkLock.RUnlock()
+	return os.WriteFile(path, data, mode)
 }

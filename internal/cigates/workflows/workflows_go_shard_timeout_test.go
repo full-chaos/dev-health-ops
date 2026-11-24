@@ -49,7 +49,7 @@ case "$*" in
 esac
 exit 1
 `, dir)
-	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(stub), 0o755); err != nil {
+	if err := writeExecFile(filepath.Join(dir, "gh"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	summary := filepath.Join(dir, "summary.md")

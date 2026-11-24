@@ -154,7 +154,7 @@ func TestAuthComposeProofRefusesAProjectThatAlreadyHasResources(t *testing.T) {
 				stub += "case \"$*\" in " + c.match + ") echo deadbeef;; esac\n"
 			}
 			stub += "exit 0\n"
-			if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(stub), 0o755); err != nil {
+			if err := writeExecFile(filepath.Join(bin, "docker"), []byte(stub), 0o755); err != nil {
 				t.Fatal(err)
 			}
 			cmd := exec.Command("bash", filepath.Join(root, "ci", "check_auth_compose.sh"))
@@ -192,7 +192,7 @@ func TestAuthComposeProofIgnoresContainersOfOtherHostUsers(t *testing.T) {
 		"  \"ps -aq --no-trunc\") n=$(cat " + count + " 2>/dev/null || echo 0); n=$((n+1)); echo $n >" + count + "; echo \"foreign$n\";;\n" +
 		"  \"inspect --format {{.Name}} foreign\"*) echo /great_turing;;\n" +
 		"esac\nexit 0\n"
-	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(stub), 0o755); err != nil {
+	if err := writeExecFile(filepath.Join(bin, "docker"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", filepath.Join(root, "ci", "check_auth_compose.sh"))
@@ -211,7 +211,7 @@ func TestAuthComposeProofDefaultProjectNameIsUnguessable(t *testing.T) {
 	bin := t.TempDir()
 	log := filepath.Join(bin, "docker.log")
 	stub := "#!/bin/sh\necho \"$@\" >>\"" + log + "\"\nexit 0\n"
-	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(stub), 0o755); err != nil {
+	if err := writeExecFile(filepath.Join(bin, "docker"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", filepath.Join(root, "ci", "check_auth_compose.sh"))

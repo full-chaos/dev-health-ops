@@ -61,3 +61,36 @@ func TestIndexInfoState(t *testing.T) {
 		}
 	}
 }
+
+// The two sync_run_units indexes send the statements they sent before the table list existed, byte for byte (the texts
+// below are copied from the code before the list), and the outbox index sends the same shape on its own table only.
+func TestSyncRunUnitsIndexStatementsAreUnchanged(t *testing.T) {
+	want := indexTable{
+		name:      "sync_run_units",
+		existsSQL: "SELECT pg_catalog.to_regclass('public.sync_run_units') IS NOT NULL",
+		lockSQL:   "LOCK TABLE public.sync_run_units IN SHARE UPDATE EXCLUSIVE MODE",
+		infoSQL: `
+SELECT i.indisvalid, i.indisready
+FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_index i ON i.indexrelid = c.oid
+WHERE c.relnamespace = 'public'::regnamespace AND c.relname = $1 AND i.indrelid = 'public.sync_run_units'::regclass`,
+	}
+	tables := map[string]indexTable{}
+	for _, index := range unitsIndexes {
+		tables[index.verb] = index.table
+	}
+	for _, verb := range []string{"failure-streak", "open-units"} {
+		if tables[verb] != want {
+			t.Fatalf("%s statements changed:\n got %#v\nwant %#v", verb, tables[verb], want)
+		}
+	}
+	outbox := tables["finalize-outbox"]
+	for _, statement := range []string{outbox.existsSQL, outbox.lockSQL, outbox.infoSQL} {
+		if strings.Contains(statement, "sync_run_units") || !strings.Contains(statement, "public.worker_job_outbox") {
+			t.Fatalf("finalize-outbox statement not on public.worker_job_outbox alone: %q", statement)
+		}
+	}
+	if len(unitsIndexes) != 3 || len(tables) != 3 {
+		t.Fatalf("indexes %d (verbs %d), want the closed list of 3", len(unitsIndexes), len(tables))
+	}
+}

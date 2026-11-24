@@ -1916,7 +1916,7 @@ The 8 groups of a lower-case IPv6 address as a JSON list of numbers, "::" expand
 
 {{/*
 The ops schema owner pin (migrations.hook.ownerRole -> MIGRATION_OWNER_ROLE) for the migrate, open-units-index,
-streak-index and river-migrate Jobs, or "". Empty renders nothing. Set, it must be a plain role name that differs from
+finalize-outbox-index, streak-index and river-migrate Jobs, or "". Empty renders nothing. Set, it must be a plain role name that differs from
 every runtime login; and while auth-service owns sessions, query-api's session read must come from auth-grants
 (authService.migrate.sessionReaders.queryApi = the query-api login), because the pinned login cannot grant in the auth
 schema and the River step then leaves that read out.

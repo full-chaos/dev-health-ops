@@ -12,8 +12,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/pgident"
 )
 
-// EnvOwnerRole pins the role the ops migrators (migrate, open-units-index, streak-index, river-migrate) run as and
-// that owns the database, schema river and every object of public and river. Unset or empty turns the pin off.
+// EnvOwnerRole pins the role the ops migrators (migrate, open-units-index, finalize-outbox-index, streak-index,
+// river-migrate) run as and that owns the database, schema river and every object of public and river. Unset or empty turns the pin off.
 const EnvOwnerRole = "MIGRATION_OWNER_ROLE"
 
 // PinVerifiedMessage is the log line of a pin that holds.

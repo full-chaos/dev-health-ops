@@ -151,6 +151,18 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 	if err != nil {
 		return nil, err
 	}
+	// The configuration's integration must be one of the org's own before any read, lock or write keyed by it: a plain
+	// read, no row lock, before the selection locks (the lock order below is unchanged).
+	if config.IntegrationID != nil {
+		var own bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM integrations WHERE id = $1 AND org_id = $2)`,
+			*config.IntegrationID, org).Scan(&own); err != nil {
+			return nil, fmt.Errorf("read the configuration's integration: %w", err)
+		}
+		if !own {
+			return nil, noIntegrationAnswer(in)
+		}
+	}
 	// Every save of a config that has an integration takes the selection
 	// locks first, then reads the config again: the stored list and the
 	// stored options the save merges into are the ones it changes. Lock
@@ -578,9 +590,10 @@ func updateServicesDatasetMappings(ctx context.Context, tx pgx.Tx, org string, i
 }
 
 // cascadeToChildren is update_sync_config's legacy child cascade: every
-// config whose parent is this one (by parent_id alone, as Python selects
-// them) takes the body's targets and activity, and the schedule keys the
-// body set or cleared; then each child's sync job is upserted.
+// config of the org whose parent is this one (Python selects by parent_id
+// alone; a child of another org is never written) takes the body's targets
+// and activity, and the schedule keys the body set or cleared; then each
+// child's sync job is upserted.
 //
 // The targets a child takes are the list the save stored on the parent
 // (parentStored), never the submitted list: a child's list is its own
@@ -588,7 +601,7 @@ func updateServicesDatasetMappings(ctx context.Context, tx pgx.Tx, org string, i
 // exactly the stored list.
 func (h *handlers) cascadeToChildren(ctx context.Context, tx pgx.Tx, org string, parentID uuid.UUID, in syncConfigUpdate, parentStored []string,
 	options *pyjson.Object, cleared map[string]bool, optionsProvided bool, now time.Time) error {
-	rows, err := tx.Query(ctx, `SELECT `+syncConfigColumns+` FROM sync_configurations WHERE parent_id = $1 ORDER BY id`, parentID)
+	rows, err := tx.Query(ctx, `SELECT `+syncConfigColumns+` FROM sync_configurations WHERE org_id = $1 AND parent_id = $2 ORDER BY id`, org, parentID)
 	if err != nil {
 		return fmt.Errorf("read child configs: %w", err)
 	}
@@ -675,7 +688,7 @@ func (h *handlers) discoverIntegrationSources(ctx context.Context, org string, i
 	var provider string
 	var credentialID *uuid.UUID
 	var integrationConfig *string
-	if err := h.pool.QueryRow(ctx, `SELECT provider, credential_id, config::text FROM integrations WHERE id = $1`, integrationID).
+	if err := h.pool.QueryRow(ctx, `SELECT provider, credential_id, config::text FROM integrations WHERE id = $1 AND org_id = $2`, integrationID, org).
 		Scan(&provider, &credentialID, &integrationConfig); err != nil {
 		fail(err)
 		return
@@ -683,7 +696,7 @@ func (h *handlers) discoverIntegrationSources(ctx context.Context, org string, i
 	var configID string
 	var plannerOptions *string
 	err := h.pool.QueryRow(ctx, `SELECT id::text, sync_options::text FROM sync_configurations
-WHERE integration_id = $1 AND planner_managed IS true AND parent_id IS NULL`, integrationID).Scan(&configID, &plannerOptions)
+WHERE org_id = $2 AND integration_id = $1 AND planner_managed IS true AND parent_id IS NULL`, integrationID, org).Scan(&configID, &plannerOptions)
 	plannerFound := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		fail(err)

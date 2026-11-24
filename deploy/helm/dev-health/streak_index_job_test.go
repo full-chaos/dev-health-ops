@@ -34,11 +34,11 @@ func TestStreakIndexJobIsOffByDefaultAndOrderedBeforeTheMigrateJob(t *testing.T)
 		t.Fatalf("hook annotations = %v, want pre-install,pre-upgrade at weight -2", annotations)
 	}
 	spec := job["spec"].(map[string]any)
-	if spec["backoffLimit"] != 0 || spec["activeDeadlineSeconds"] != 2400 {
-		t.Fatalf("backoffLimit/activeDeadlineSeconds = %v/%v, want 0/2400", spec["backoffLimit"], spec["activeDeadlineSeconds"])
+	if spec["backoffLimit"] != 0 || spec["activeDeadlineSeconds"] != 1700 {
+		t.Fatalf("backoffLimit/activeDeadlineSeconds = %v/%v, want 0/1700", spec["backoffLimit"], spec["activeDeadlineSeconds"])
 	}
 	c := container(t, job, "streak-index")
-	want := []string{"migrate", "postgres", "build-index", "--lock-timeout=5s", "--deadline=1800s", "--attempts=3", "--retry-delay=15s", "failure-streak"}
+	want := []string{"migrate", "postgres", "build-index", "--lock-timeout=5s", "--deadline=1270s", "--attempts=3", "--retry-delay=15s", "failure-streak"}
 	if args := stringsOf(c["args"]); !reflect.DeepEqual(args, want) {
 		t.Fatalf("args = %v, want %v", args, want)
 	}
@@ -155,13 +155,15 @@ func TestAllIndexHooksAndMigrateJobFitTheHelmTimeout(t *testing.T) {
 
 	const helmTimeoutSeconds, rolloutMarginSeconds = 5400, 500
 	// open-units-index adds the 70 s first-connect wait (CHAOS-12666) to the 360 s startup and cleanup.
-	startupAndCleanup := map[string]int{"t-dev-health-streak-index": 360, "t-dev-health-open-units-index": 430}
-	jobs, _, refusal := renderJobs(t, "web.enabled=false", "migrations.hook.streakIndex.enabled=true", "migrations.hook.openUnitsIndex.enabled=true")
+	startupAndCleanup := map[string]int{"t-dev-health-streak-index": 360, "t-dev-health-open-units-index": 430, "t-dev-health-finalize-outbox-index": 430}
+	jobs, _, refusal := renderJobs(t, "web.enabled=false", "migrations.hook.streakIndex.enabled=true", "migrations.hook.openUnitsIndex.enabled=true",
+		"migrations.hook.finalizeOutboxIndex.enabled=true")
 	if refusal != "" {
 		t.Fatalf("render refused: %s", refusal)
 	}
 	total := jobs["t-dev-health-migrate"]["spec"].(map[string]any)["activeDeadlineSeconds"].(int) + rolloutMarginSeconds
-	for name, containerName := range map[string]string{"t-dev-health-streak-index": "streak-index", "t-dev-health-open-units-index": "open-units-index"} {
+	for name, containerName := range map[string]string{"t-dev-health-streak-index": "streak-index", "t-dev-health-open-units-index": "open-units-index",
+		"t-dev-health-finalize-outbox-index": "finalize-outbox-index"} {
 		job, ok := jobs[name]
 		if !ok {
 			t.Fatalf("no %s Job with the flag on", name)

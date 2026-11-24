@@ -245,6 +245,7 @@ func censusRenders() map[string][]string {
 		"--set", "migrations.hook.riverMigrate.image="+pinnedOperatorImage,
 		"--set", "migrations.hook.routeActivate.image="+pinnedOperatorImage,
 		"--set", "migrations.hook.openUnitsIndex.enabled=true",
+		"--set", "migrations.hook.finalizeOutboxIndex.enabled=true",
 		"--set", "migrations.hook.streakIndex.enabled=true",
 		"--set", "secrets.create=true",
 	)

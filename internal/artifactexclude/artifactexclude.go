@@ -45,6 +45,12 @@ type Refusal struct {
 
 func (r *Refusal) Error() string { return r.Message }
 
+// NoIntegrationMessage is the refusal of a configuration with no integration of its org.
+const NoIntegrationMessage = "the sync configuration has no integration"
+
+// NoIntegrationRefusal is the refusal of the key on a configuration with no integration of its org.
+func NoIntegrationRefusal() *Refusal { return refusal(-1, NoIntegrationMessage) }
+
 func refusal(index int, format string, args ...any) *Refusal {
 	return &Refusal{Message: Key + ": " + fmt.Sprintf(format, args...), Index: index}
 }
@@ -177,7 +183,7 @@ func WriteTx(ctx context.Context, tx pgx.Tx, lock SelectionLock, org string, con
 		return Result{}, refusal(-1, "only a github sync configuration reads this field")
 	}
 	if integrationID == nil {
-		return Result{}, refusal(-1, "the sync configuration has no integration")
+		return Result{}, NoIntegrationRefusal()
 	}
 	if err := lock(ctx, tx, org, *integrationID); err != nil {
 		return Result{}, err
@@ -187,7 +193,7 @@ func WriteTx(ctx context.Context, tx pgx.Tx, lock SelectionLock, org string, con
 		org, *integrationID).Scan(&configText)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// An integration_id into another org (a data anomaly no API path makes) reads as no integration of this org.
-		return Result{}, refusal(-1, "the sync configuration has no integration")
+		return Result{}, NoIntegrationRefusal()
 	}
 	if err != nil {
 		return Result{}, fmt.Errorf("read integration: %w", err)

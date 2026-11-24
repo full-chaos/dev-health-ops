@@ -308,11 +308,11 @@ func TestARowRefusalNamesItsOwnLine(t *testing.T) {
 	}
 }
 
-// The chart's hook Jobs (deploy/helm/dev-health/templates). Seven are kit
+// The chart's hook Jobs (deploy/helm/dev-health/templates). Eight are kit
 // forms on any row; route-activate rides an app roll, as in the kit.
 func TestEveryChartHookJobIsClassified(t *testing.T) {
 	img := ".spec.template.spec.containers[0].image"
-	for _, name := range []string{"river-migrate", "provision-roles", "migrate", "streak-index", "open-units-index", "auth-migrate", "auth-grants"} {
+	for _, name := range []string{"river-migrate", "provision-roles", "migrate", "streak-index", "open-units-index", "finalize-outbox-index", "auth-migrate", "auth-grants"} {
 		for _, r := range []string{
 			row("Job/dev-health-ops-"+name, img, oldDig, newDig),
 			row("Job/dev-health-ops-"+name, ".spec.template.spec.initContainers[0].image", oldDig, newDig),
@@ -401,7 +401,7 @@ func TestDigestRefusalsPointAtTheirRow(t *testing.T) {
 }
 
 // ACP-WORD-11788-4 (b): route-activate is an app-roll row (the kit s41-a form)
-// under the same one-pair image check as every .image row, while the seven
+// under the same one-pair image check as every .image row, while the eight
 // migrate, data and grant hook names stay kit forms on any kind.
 func TestRouteActivateIsAnAppRollRowUnderTheOnePairCheck(t *testing.T) {
 	img := ".spec.template.spec.containers[0].image"
@@ -422,7 +422,7 @@ func TestRouteActivateIsAnAppRollRowUnderTheOnePairCheck(t *testing.T) {
 	} {
 		mustRefuse(t, goodDev+r, false, "is not the one digest pair of the step")
 	}
-	for _, name := range []string{"river-migrate", "provision-roles", "migrate", "streak-index", "open-units-index", "auth-migrate", "auth-grants"} {
+	for _, name := range []string{"river-migrate", "provision-roles", "migrate", "streak-index", "open-units-index", "finalize-outbox-index", "auth-migrate", "auth-grants"} {
 		for _, kind := range []string{"Job", "NetworkPolicy", "ServiceAccount"} {
 			mustRefuse(t, goodDev+row(kind+"/dev-health-ops-"+name, ".metadata.labels.x", "a", "b"), true, "an IMGROW row on a")
 		}
@@ -457,11 +457,11 @@ func TestByteRefusalsNameTheLineOfTheFirstBadByte(t *testing.T) {
 func TestHookNamesMatchBySuffixOnAnyPrefix(t *testing.T) {
 	img := ".spec.template.spec.containers[0].image"
 	for _, prefix := range []string{"", "dev-health-", "dev-health-ops-", "acme-dev-health-"} {
-		for _, h := range []string{"river-migrate", "provision-roles", "migrate", "streak-index", "open-units-index", "auth-migrate", "auth-grants"} {
+		for _, h := range []string{"river-migrate", "provision-roles", "migrate", "streak-index", "open-units-index", "finalize-outbox-index", "auth-migrate", "auth-grants"} {
 			mustRefuse(t, goodDev+row("Job/"+prefix+h, img, oldDig, newDig), true, "migrate, data or grant hook")
 		}
 	}
-	for _, name := range []string{"dev-health-ops-xmigrate", "dev-health-ops-migrate-docs", "dev-health-ops-provision-rolesx", "dev-health-ops-streak-indexer", "dev-health-ops-open-units-indexes", "dev-health-migratex"} {
+	for _, name := range []string{"dev-health-ops-xmigrate", "dev-health-ops-migrate-docs", "dev-health-ops-provision-rolesx", "dev-health-ops-streak-indexer", "dev-health-ops-open-units-indexes", "dev-health-ops-finalize-outbox-indexer", "dev-health-migratex"} {
 		if _, err := Parse([]byte(goodDev + row("Deployment/"+name, img, oldDig, newDig))); err != nil {
 			t.Fatalf("%s is not a hook doc: %v", name, err)
 		}

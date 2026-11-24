@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -158,5 +159,54 @@ func TestBuildIndexAcceptsFlagsBeforeAndAfterTheIndexName(t *testing.T) {
 				t.Fatalf("args %v: exit %d resolved=%v (%s)", args, code, resolved, stderr.String())
 			}
 		})
+	}
+}
+
+// chainFile is a live chain revision's SQL (dir sql/ or sql/down/; a down file has its up file's name).
+func chainFile(t *testing.T, dir, revision string) string {
+	t.Helper()
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range chain {
+		if file.Revision == revision {
+			data, err := os.ReadFile(dir + file.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(data)
+		}
+	}
+	t.Fatalf("the chain holds no revision %s", revision)
+	return ""
+}
+
+// The Job's finalize-outbox definition and revision 0167's statement are one, so a database the Job built and a
+// database revision 0167 built hold the same index. 0167 takes the builder's lock first (0x64686f5f697a = 110399707900282,
+// "dho_iz"), drops an INVALID index of that name only, and creates the index only when none exists.
+func TestFinalizeOutboxIndexDefinitionMatchesRevision0167(t *testing.T) {
+	const builderKey = int64(0x64686f5f697a)
+	want := squash(`DO $$
+BEGIN
+    IF NOT pg_catalog.pg_try_advisory_xact_lock(` + strconv.FormatInt(builderKey, 10) + `) THEN
+        RAISE EXCEPTION 'build-index finalize-outbox is running (its build lock is held); upgrade again after it ends';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM pg_catalog.pg_index AS i
+        WHERE i.indexrelid = to_regclass('public.` + pgmigrate.FinalizeOutboxIndexName + `') AND NOT i.indisvalid
+    ) THEN
+        DROP INDEX public.` + pgmigrate.FinalizeOutboxIndexName + `;
+    END IF;
+    IF to_regclass('public.` + pgmigrate.FinalizeOutboxIndexName + `') IS NULL THEN
+        CREATE INDEX ` + pgmigrate.FinalizeOutboxIndexBody + `;
+    END IF;
+END
+$$;`)
+	if got := squash(chainFile(t, "sql/", "0167")); got != want {
+		t.Fatalf("revision 0167 =\n%s\nwant\n%s", got, want)
+	}
+	if down := squash(chainFile(t, "sql/down/", "0167")); down != "DROP INDEX IF EXISTS public."+pgmigrate.FinalizeOutboxIndexName+";" {
+		t.Fatalf("down 0167 = %q", down)
 	}
 }

@@ -590,9 +590,10 @@ func updateServicesDatasetMappings(ctx context.Context, tx pgx.Tx, org string, i
 }
 
 // cascadeToChildren is update_sync_config's legacy child cascade: every
-// config whose parent is this one (by parent_id alone, as Python selects
-// them) takes the body's targets and activity, and the schedule keys the
-// body set or cleared; then each child's sync job is upserted.
+// config of the org whose parent is this one (Python selects by parent_id
+// alone; a child of another org is never written) takes the body's targets
+// and activity, and the schedule keys the body set or cleared; then each
+// child's sync job is upserted.
 //
 // The targets a child takes are the list the save stored on the parent
 // (parentStored), never the submitted list: a child's list is its own
@@ -687,7 +688,7 @@ func (h *handlers) discoverIntegrationSources(ctx context.Context, org string, i
 	var provider string
 	var credentialID *uuid.UUID
 	var integrationConfig *string
-	if err := h.pool.QueryRow(ctx, `SELECT provider, credential_id, config::text FROM integrations WHERE id = $1`, integrationID).
+	if err := h.pool.QueryRow(ctx, `SELECT provider, credential_id, config::text FROM integrations WHERE id = $1 AND org_id = $2`, integrationID, org).
 		Scan(&provider, &credentialID, &integrationConfig); err != nil {
 		fail(err)
 		return
@@ -695,7 +696,7 @@ func (h *handlers) discoverIntegrationSources(ctx context.Context, org string, i
 	var configID string
 	var plannerOptions *string
 	err := h.pool.QueryRow(ctx, `SELECT id::text, sync_options::text FROM sync_configurations
-WHERE integration_id = $1 AND planner_managed IS true AND parent_id IS NULL`, integrationID).Scan(&configID, &plannerOptions)
+WHERE org_id = $2 AND integration_id = $1 AND planner_managed IS true AND parent_id IS NULL`, integrationID, org).Scan(&configID, &plannerOptions)
 	plannerFound := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		fail(err)

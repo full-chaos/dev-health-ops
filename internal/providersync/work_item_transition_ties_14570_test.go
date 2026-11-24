@@ -1,0 +1,745 @@
+package providersync
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"reflect"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+)
+
+func linearCloseReproPayload14570(t *testing.T, identifier, state, stateType, history string) linearWorkItemPayload {
+	t.Helper()
+	var payload linearWorkItemPayload
+	if err := json.Unmarshal([]byte(`{"id":"id-`+identifier+`","identifier":"`+identifier+`","title":"T",
+		"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-11-01T00:00:00Z",
+		"state":{"name":"`+state+`","type":"`+stateType+`"},
+		"history":{"nodes":`+history+`,"pageInfo":{"hasNextPage":false,"endCursor":""}}}`), &payload); err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+// A close and its reopen at one instant (the same millisecond) are two rows of one sorting key prefix, told apart by
+// tie_ordinal. The executors split each destination of an emission into sub-chunks of DefaultChunkPolicy rows, and the
+// Linear sink ranks the ties of each sub-chunk it is handed (WriteLinearWorkItemEffect -> rankTransitionTies): when the
+// two rows land in two sub-chunks, both take ordinal 0, share one sorting key, and the table keeps one of them. The pair
+// sits at rows 99 and 100 of the destination, across the plain 100-row cut: the split must keep it in one sub-chunk.
+func TestLinearSameInstantCloseAndReopenKeepTwoKeysAcrossEffectChunks(t *testing.T) {
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	claim := nativeTestClaim("linear", "work-items")
+	start := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	var filler []string
+	for index := 0; index < 98; index++ {
+		from, to := `{"name":"Todo","type":"unstarted"}`, `{"name":"In Progress","type":"started"}`
+		if index%2 == 1 {
+			from, to = to, from
+		}
+		filler = append(filler, fmt.Sprintf(`{"id":"f%d","createdAt":"%s","fromState":%s,"toState":%s}`,
+			index, start.Add(time.Duration(index)*time.Minute).Format(time.RFC3339Nano), from, to))
+	}
+	payloads := []linearWorkItemPayload{
+		linearCloseReproPayload14570(t, "AAA-1", "Todo", "unstarted", "["+strings.Join(filler, ",")+"]"),
+		linearCloseReproPayload14570(t, "ZZZ-5", "Todo", "unstarted", `[
+			{"id":"z1","createdAt":"2026-10-01T10:00:00.000Z","fromState":{"name":"Todo","type":"unstarted"},"toState":{"name":"Backlog","type":"backlog"}},
+			{"id":"z2","createdAt":"2026-10-15T10:00:00.050Z","fromState":{"name":"Backlog","type":"backlog"},"toState":{"name":"Canceled","type":"canceled"}},
+			{"id":"z3","createdAt":"2026-10-15T10:00:00.050Z","fromState":{"name":"Canceled","type":"canceled"},"toState":{"name":"Todo","type":"unstarted"}}]`),
+	}
+	rows := linearWorkItemRows{}
+	for _, payload := range payloads {
+		item, transitions, err := normalizeLinearWorkItem(claim, payload, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows.WorkItems = append(rows.WorkItems, item)
+		rows.StatusTransitions = append(rows.StatusTransitions, transitions...)
+	}
+	effects, err := buildLinearWorkItemEffectsFromRows(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instant := time.Date(2026, 10, 15, 10, 0, 0, 50_000_000, time.UTC)
+	if positions := transitionTiePositions14570(t, effects, "linear:ZZZ-5", instant); fmt.Sprint(positions) != "[99 100]" {
+		t.Fatalf("setup: the pair sits at rows %v of work_item_transitions, want [99 100] (across the plain 100-row cut)", positions)
+	}
+	chunks, err := SplitCompleteRouteBatch(CompleteRouteBatch{Effects: effects}, DefaultChunkPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairChunks := map[int]bool{}
+	keys := map[string][]string{}
+	for index, chunk := range chunks {
+		for _, effect := range chunk.Effects {
+			if effect.Destination != "work_item_transitions" || len(effect.Rows) == 0 {
+				continue
+			}
+			decoded, err := decodeEffectRows[linearWorkItemTransitionRow](effect)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, row := range rankTransitionTies(projectRows(decoded, projectLinearTransition)) {
+				if row.WorkItemID == "linear:ZZZ-5" && row.OccurredAt.Equal(instant) {
+					pairChunks[index] = true
+				}
+				key := transitionSortingKey(row)
+				keys[key] = append(keys[key], row.FromStatus+"->"+row.ToStatus)
+			}
+		}
+	}
+	if len(pairChunks) != 1 {
+		t.Errorf("the close and the reopen of linear:ZZZ-5 sit in chunks %v of %d, want one chunk", pairChunks, len(chunks))
+	}
+	for key, members := range keys {
+		if len(members) > 1 {
+			t.Errorf("sorting key %q holds %d rows %v: the table keeps one of them", key, len(members), members)
+		}
+	}
+}
+
+// transitionTiePositions14570 returns the positions of an item's rows at one instant in the unsplit work_item_transitions
+// effect (canonical row order, the order the split cuts).
+func transitionTiePositions14570(t *testing.T, effects []EffectBatch, workItemID string, instant time.Time) []int {
+	t.Helper()
+	var positions []int
+	for _, effect := range effects {
+		if effect.Destination != "work_item_transitions" {
+			continue
+		}
+		for index, raw := range effect.Rows {
+			var row struct {
+				WorkItemID string    `json:"work_item_id"`
+				OccurredAt time.Time `json:"occurred_at"`
+			}
+			if err := json.Unmarshal(raw, &row); err != nil {
+				t.Fatal(err)
+			}
+			if row.WorkItemID == workItemID && clickHouseMillis(row.OccurredAt).Equal(instant) {
+				positions = append(positions, index)
+			}
+		}
+	}
+	return positions
+}
+
+type transitionTieSpec14570 struct {
+	item     string
+	at       time.Time
+	from, to string
+}
+
+// transitionTieSpecs14570 is fillers rows of item AAA-1 a minute apart, then item ZZZ-5: a move to Backlog, and a close to
+// Canceled and its reopen to Todo in one millisecond (the reopen 0.4 ms later in the source, one stored millisecond).
+func transitionTieSpecs14570(fillers int) []transitionTieSpec14570 {
+	start := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	var specs []transitionTieSpec14570
+	for index := 0; index < fillers; index++ {
+		from, to := "Todo", "In Progress"
+		if index%2 == 1 {
+			from, to = to, from
+		}
+		specs = append(specs, transitionTieSpec14570{"AAA-1", start.Add(time.Duration(index) * time.Minute), from, to})
+	}
+	return append(specs,
+		transitionTieSpec14570{"ZZZ-5", time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC), "Todo", "Backlog"},
+		transitionTieSpec14570{"ZZZ-5", time.Date(2026, 10, 15, 10, 0, 0, 50_000_000, time.UTC), "Backlog", "Canceled"},
+		transitionTieSpec14570{"ZZZ-5", time.Date(2026, 10, 15, 10, 0, 0, 50_400_000, time.UTC), "Canceled", "Todo"},
+	)
+}
+
+func transitionTieStatus14570(raw string) string {
+	switch raw {
+	case "Todo", "Backlog":
+		return "todo"
+	case "Canceled":
+		return "canceled"
+	default:
+		return "in_progress"
+	}
+}
+
+func githubTransitionRows14570(provider, prefix string, specs []transitionTieSpec14570) []githubWorkItemTransitionRow {
+	synced := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	rows := make([]githubWorkItemTransitionRow, 0, len(specs))
+	for _, spec := range specs {
+		from, to, actor := spec.from, spec.to, "dev"
+		rows = append(rows, githubWorkItemTransitionRow{
+			WorkItemID: prefix + spec.item, Provider: provider, OccurredAt: spec.at,
+			FromStatusRaw: &from, ToStatusRaw: &to, FromStatus: transitionTieStatus14570(from),
+			ToStatus: transitionTieStatus14570(to), Actor: &actor, OrgID: "org-acme", LastSynced: synced,
+		})
+	}
+	return rows
+}
+
+// transitionTieProvider14570 builds a provider's effects with its own route builder and reads one transitions sub-chunk
+// the way its sink ranks it (GitLab and Jira write through the GitHub transitions sink).
+type transitionTieProvider14570 struct {
+	name   string
+	prefix string
+	build  func(t *testing.T, specs []transitionTieSpec14570) []EffectBatch
+	rank   func(t *testing.T, effect EffectBatch) []workItemTransitionStoredRow
+}
+
+func rankGitHubTransitionEffect14570(t *testing.T, effect EffectBatch) []workItemTransitionStoredRow {
+	t.Helper()
+	decoded, err := decodeEffectRows[githubWorkItemTransitionRow](effect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rankTransitionTies(projectRows(decoded, projectWorkItemTransition))
+}
+
+func transitionTieProviders14570() []transitionTieProvider14570 {
+	return []transitionTieProvider14570{
+		{name: "github", prefix: "gh:acme/app#", rank: rankGitHubTransitionEffect14570,
+			build: func(t *testing.T, specs []transitionTieSpec14570) []EffectBatch {
+				t.Helper()
+				var raw []json.RawMessage
+				for _, row := range githubTransitionRows14570("github", "gh:acme/app#", specs) {
+					encoded, err := json.Marshal(row)
+					if err != nil {
+						t.Fatal(err)
+					}
+					raw = append(raw, encoded)
+				}
+				effects, err := BuildGitHubWorkItemEffects(GitHubWorkItemEffectRows{WorkItemTransitions: raw})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return effects
+			}},
+		{name: "gitlab", prefix: "gitlab:acme/app#", rank: rankGitHubTransitionEffect14570,
+			build: func(t *testing.T, specs []transitionTieSpec14570) []EffectBatch {
+				t.Helper()
+				effects, err := buildGitLabWorkItemEffectsFromRows(gitlabWorkItemRows{
+					StatusTransitions: githubTransitionRows14570("gitlab", "gitlab:acme/app#", specs),
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return effects
+			}},
+		{name: "jira", prefix: "jira:", rank: rankGitHubTransitionEffect14570,
+			build: func(t *testing.T, specs []transitionTieSpec14570) []EffectBatch {
+				t.Helper()
+				effects, err := BuildJiraWorkItemEffects(jiraWorkItemRows{
+					Transitions: githubTransitionRows14570("jira", "jira:", specs),
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return effects
+			}},
+		{name: "linear", prefix: "linear:",
+			build: func(t *testing.T, specs []transitionTieSpec14570) []EffectBatch {
+				t.Helper()
+				var rows linearWorkItemRows
+				for _, row := range githubTransitionRows14570("linear", "linear:", specs) {
+					rows.StatusTransitions = append(rows.StatusTransitions, linearWorkItemTransitionRow{
+						WorkItemID: row.WorkItemID, Provider: row.Provider, OccurredAt: row.OccurredAt,
+						FromStatusRaw: row.FromStatusRaw, ToStatusRaw: row.ToStatusRaw, FromStatus: row.FromStatus,
+						ToStatus: row.ToStatus, Actor: row.Actor, OrgID: row.OrgID, LastSynced: row.LastSynced,
+					})
+				}
+				effects, err := buildLinearWorkItemEffectsFromRows(rows)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return effects
+			},
+			rank: func(t *testing.T, effect EffectBatch) []workItemTransitionStoredRow {
+				t.Helper()
+				decoded, err := decodeEffectRows[linearWorkItemTransitionRow](effect)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return rankTransitionTies(projectRows(decoded, projectLinearTransition))
+			}},
+	}
+}
+
+// splitTransitionKeys14570 splits the effects and returns, per sorting key the sinks write, the rows that hold it, and the
+// sub-chunks that hold rows of the item at the instant.
+func splitTransitionKeys14570(
+	t *testing.T, provider transitionTieProvider14570, effects []EffectBatch, policy ChunkPolicy, workItemID string, instant time.Time,
+) (keys map[string][]string, itemChunks map[int]int, chunkCount int) {
+	t.Helper()
+	chunks, err := SplitCompleteRouteBatch(CompleteRouteBatch{Effects: effects}, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, itemChunks = map[string][]string{}, map[int]int{}
+	for index, chunk := range chunks {
+		for _, effect := range chunk.Effects {
+			if effect.Destination != "work_item_transitions" || len(effect.Rows) == 0 {
+				continue
+			}
+			for _, row := range provider.rank(t, effect) {
+				if row.WorkItemID == workItemID && row.OccurredAt.Equal(instant) {
+					itemChunks[index]++
+				}
+				key := transitionSortingKey(row)
+				keys[key] = append(keys[key], row.FromStatusRaw+"->"+row.ToStatusRaw)
+			}
+		}
+	}
+	return keys, itemChunks, len(chunks)
+}
+
+var transitionTieInstant14570 = time.Date(2026, 10, 15, 10, 0, 0, 50_000_000, time.UTC)
+
+// Per provider: the close and the reopen of one item in one millisecond sit at rows 99 and 100 of work_item_transitions,
+// across the plain 100-row cut. The split keeps them in one sub-chunk, so the sink ranks them 0 and 1: two keys, two rows.
+func TestTransitionTiesAtTheSubChunkCutKeepDistinctKeysPerProvider14570(t *testing.T) {
+	for _, provider := range transitionTieProviders14570() {
+		t.Run(provider.name, func(t *testing.T) {
+			item := provider.prefix + "ZZZ-5"
+			effects := provider.build(t, transitionTieSpecs14570(98))
+			if positions := transitionTiePositions14570(t, effects, item, transitionTieInstant14570); fmt.Sprint(positions) != "[99 100]" {
+				t.Fatalf("setup: the pair sits at rows %v of work_item_transitions, want [99 100]", positions)
+			}
+			keys, itemChunks, count := splitTransitionKeys14570(t, provider, effects, DefaultChunkPolicy(), item, transitionTieInstant14570)
+			if len(itemChunks) != 1 || count != 2 {
+				t.Errorf("the pair sits in chunks %v of %d, want one chunk of 2", itemChunks, count)
+			}
+			if len(keys) != 101 {
+				t.Errorf("the sinks write %d keys, want 101 (one per row)", len(keys))
+			}
+			for key, members := range keys {
+				if len(members) > 1 {
+					t.Errorf("sorting key %q holds %d rows %v: the table keeps one of them", key, len(members), members)
+				}
+			}
+		})
+	}
+}
+
+// Per provider: the item's rows read in another unit (alone, or after other items' rows that move the cut onto the pair)
+// and read again take the same keys with the same rows, so a re-sync replaces each row and adds none.
+func TestTransitionTieOrdinalsStableAcrossUnitsAndRereads14570(t *testing.T) {
+	for _, provider := range transitionTieProviders14570() {
+		t.Run(provider.name, func(t *testing.T) {
+			item := provider.prefix + "ZZZ-5"
+			itemKeys := func(fillers int) string {
+				keys, _, _ := splitTransitionKeys14570(
+					t, provider, provider.build(t, transitionTieSpecs14570(fillers)), DefaultChunkPolicy(), item, transitionTieInstant14570,
+				)
+				var owned []string
+				for key, members := range keys {
+					if strings.Contains(key, item+workItemKeySeparator) {
+						owned = append(owned, fmt.Sprintf("%q=%v", key, members))
+					}
+				}
+				sort.Strings(owned)
+				return fmt.Sprint(owned)
+			}
+			alone, atTheCut, reread := itemKeys(0), itemKeys(98), itemKeys(98)
+			if !strings.Contains(alone, `\x1f1"=[Canceled->Todo]`) || !strings.Contains(alone, `\x1f0"=[Backlog->Canceled]`) {
+				t.Fatalf("setup: alone the pair takes keys %s, want ordinals 0 and 1", alone)
+			}
+			if atTheCut != alone || reread != alone {
+				t.Errorf("the item's keys move between units: alone %s, at the cut %s, re-read %s", alone, atTheCut, reread)
+			}
+		})
+	}
+}
+
+// A split halved to one row per sub-chunk still keeps a tie group whole: the pair takes one sub-chunk of 2 rows, every other
+// row one of its own.
+func TestTransitionTieGroupLargerThanTheRowCapKeepsOneSubChunk14570(t *testing.T) {
+	provider := transitionTieProviders14570()[3]
+	item := provider.prefix + "ZZZ-5"
+	policy := DefaultChunkPolicy()
+	policy.MaxSourceItems, policy.MaxEffectRows = 1, 1
+	keys, itemChunks, count := splitTransitionKeys14570(t, provider, provider.build(t, transitionTieSpecs14570(3)), policy, item, transitionTieInstant14570)
+	if len(itemChunks) != 1 || count != 5 {
+		t.Errorf("the pair sits in chunks %v of %d, want one chunk of 5", itemChunks, count)
+	}
+	for _, rows := range itemChunks {
+		if rows != 2 {
+			t.Errorf("the pair's chunk holds %d of its rows, want 2", rows)
+		}
+	}
+	if len(keys) != 6 {
+		t.Errorf("the sinks write %d keys, want 6 (one per row)", len(keys))
+	}
+	pair := provider.build(t, transitionTieSpecs14570(0)[1:])
+	if _, itemChunks, count := splitTransitionKeys14570(t, provider, pair, policy, item, transitionTieInstant14570); count != 1 || len(itemChunks) != 1 {
+		t.Errorf("the pair alone sits in chunks %v of %d, want one chunk of 1", itemChunks, count)
+	}
+}
+
+// With no two rows of one item at one millisecond, the transitions split cuts as plain slicing: the sub-chunks hold the
+// canonical rows [0, 100) and [100, 150), byte for byte, as before the tie groups.
+func TestTransitionSplitWithoutTiesCutsAsPlainSlicing14570(t *testing.T) {
+	provider := transitionTieProviders14570()[0]
+	specs := transitionTieSpecs14570(150)[:150]
+	effects := provider.build(t, specs)
+	var canonical []json.RawMessage
+	for _, effect := range effects {
+		if effect.Destination == "work_item_transitions" {
+			canonical = effect.Rows
+		}
+	}
+	chunks, err := SplitCompleteRouteBatch(CompleteRouteBatch{Effects: effects}, DefaultChunkPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) != 2 || len(canonical) != 150 {
+		t.Fatalf("setup: %d chunks of %d rows, want 2 of 150", len(chunks), len(canonical))
+	}
+	for index, chunk := range chunks {
+		want := canonical[index*100 : min((index+1)*100, len(canonical))]
+		for _, effect := range chunk.Effects {
+			if effect.Destination != "work_item_transitions" {
+				continue
+			}
+			if fmt.Sprintf("%s", effect.Rows) != fmt.Sprintf("%s", want) {
+				t.Errorf("chunk %d holds rows other than canonical [%d, %d)", index, index*100, index*100+len(want))
+			}
+		}
+	}
+}
+
+// No production path splits work_item_transitions today: every work-items route is a prepared-manifest route, not a chunked one,
+// and the executor refuses a descriptor that is both (complete_route.go:262). The control is the same unit on the registered
+// descriptor: it reaches the handler. The chunked run gets a chunk store, so only that refusal stops it.
+func TestWorkItemsRoutesAreNotChunkedAndAChunkedPreparedDescriptorIsRefused14570(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	for _, provider := range []string{"github", "gitlab", "jira", "linear"} {
+		t.Run(provider, func(t *testing.T) {
+			descriptor, ok := Descriptor(provider, "work-items")
+			if !ok || descriptor.Chunked || !descriptor.PreparedManifestRecovery {
+				t.Fatalf("descriptor ok=%v chunked=%v prepared=%v, want a prepared-manifest route, not chunked",
+					ok, descriptor.Chunked, descriptor.PreparedManifestRecovery)
+			}
+			execute := func(descriptor CompleteRouteDescriptor) (*staticCompleteRouteHandler, *memoryEffectSink, error) {
+				claim, session := preparedWorkItemsSession(t, now, provider, "work-items")
+				handler, sink := &staticCompleteRouteHandler{}, &memoryEffectSink{}
+				var ledger EffectLedger = &memoryEffectLedger{}
+				if descriptor.Chunked {
+					ledger = NewInProcessChunkLedger(claim)
+				}
+				executor := preparedGitHubExecutor(now, handler, ledger, sink)
+				executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: provider}
+				executor.Credentials.Decryptor = credentialDecryptor14570{}
+				executor.BudgetLimits = map[CostClass]int{claim.CostClass: 1}
+				_, err := executor.Execute(context.Background(), session, descriptor)
+				return handler, sink, err
+			}
+			if handler, _, err := execute(descriptor); handler.normalizedAt.IsZero() {
+				t.Fatalf("control: the registered descriptor never reached the handler (err=%v)", err)
+			}
+			descriptor.Chunked = true
+			handler, sink, err := execute(descriptor)
+			if !errors.Is(err, ErrInvalidConfiguration) || !handler.normalizedAt.IsZero() || len(sink.destinations) != 0 {
+				t.Errorf("chunked + prepared: err=%v handler reached=%v writes=%v, want ErrInvalidConfiguration before any I/O",
+					err, !handler.normalizedAt.IsZero(), sink.destinations)
+			}
+		})
+	}
+}
+
+type credentialDecryptor14570 struct{}
+
+func (credentialDecryptor14570) Decrypt(secrets.Value) ([]byte, error) {
+	return []byte(`{"token":"fixture-token","api_key":"fixture-key","email":"dev@example.invalid","base_url":"https://example.invalid"}`), nil
+}
+
+// mainSplitEmission14570 is splitEmission of main at ede68fe0f (before the tie groups), copied verbatim and renamed: the oracle the
+// tie-group split is measured against.
+func mainSplitEmission14570(
+	batch CompleteRouteBatch,
+	comparison ShadowComparison,
+	stamps *chunkStamps,
+	policy ChunkPolicy,
+) ([]PreparedProviderChunk, error) {
+	if policy.Validate() != nil || len(batch.Effects) == 0 {
+		return nil, ErrInvalidConfiguration
+	}
+	ordered := append([]EffectBatch(nil), batch.Effects...)
+	sortEffectBatches(ordered)
+	// A prepared chunk is bounded by both the provider-page budget and the
+	// sink effect-row budget. The smaller bound is intentional: a provider can
+	// emit several normalized effects for one source item, so using only the
+	// effect cap would allow one source page to grow without limit.
+	maxRows := min(policy.MaxEffectRows, policy.MaxSourceItems)
+	// Rows of their own chunks (effectOwnChunkRows) are split apart from the other rows of their destination.
+	regular, own := make([][]json.RawMessage, len(ordered)), make([][]json.RawMessage, len(ordered))
+	for index, effect := range ordered {
+		regular[index], own[index] = effectOwnChunkRows(effect)
+	}
+	for maxRows >= 1 {
+		shared, ownChunks := 1, 0
+		for index := range ordered {
+			if rows := (len(regular[index]) + maxRows - 1) / maxRows; rows > shared {
+				shared = rows
+			}
+			if len(own[index]) > ownChunks {
+				ownChunks = len(own[index])
+			}
+		}
+		count := shared + ownChunks
+		chunks := make([]PreparedProviderChunk, 0, count)
+		valid := true
+		var storeRefusal error
+		for ordinal := 0; ordinal < count; ordinal++ {
+			effects := make([]EffectBatch, 0, len(ordered))
+			for index, effect := range ordered {
+				rows, first, last, size := regular[index], 0, shared, maxRows
+				if ordinal >= shared {
+					// The own chunks come after every shared chunk and hold one row of their own each (and a trailing
+					// destination's rows, which fill the last chunks).
+					rows, first, last, size = own[index], shared, count, 1
+				}
+				// A trailing destination's rows fill the LAST sub-chunks of the emission, so they commit after every row
+				// of the other destinations (effectSplitsLast).
+				shift := first
+				if effectSplitsLast(effect.Destination) {
+					rows, shift = effect.Rows, count-(len(effect.Rows)+maxRows-1)/maxRows
+					last, size = count, maxRows
+				}
+				start := (ordinal - shift) * size
+				if ordinal < shift || ordinal >= last || start > len(rows) {
+					start = len(rows)
+				}
+				end := start + size
+				if end > len(rows) {
+					end = len(rows)
+				}
+				part, err := BuildEffectBatch(effect.Destination, effect.Recovery, rows[start:end])
+				if err != nil {
+					return nil, err
+				}
+				effects = append(effects, part)
+			}
+			payloadBytes := 0
+			for _, effect := range effects {
+				payloadBytes += effect.PayloadBytes
+			}
+			if payloadBytes > policy.MaxPreparedBytes {
+				valid = false
+				break
+			}
+			if stamps != nil {
+				chunk, stampErr := stampEmissionChunk(effects, ordinal, count, *stamps)
+				if stampErr != nil {
+					return nil, stampErr
+				}
+				if chunk.PayloadBytes > policy.MaxPreparedBytes {
+					valid = false
+					break
+				}
+				if kind, refusal := preparedChunkStoreRefusal(stamps.Claim, chunk, stamps.StampAt); refusal != nil {
+					if kind != chunkRefusalSize {
+						return nil, refusal
+					}
+					storeRefusal, valid = refusal, false
+					break
+				}
+				chunks = append(chunks, chunk)
+				continue
+			}
+			chunk := PreparedProviderChunk{
+				SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion,
+				Ordinal: ordinal, TotalChunks: count, Effects: effects,
+				InventoryComplete: ordinal == count-1, PayloadBytes: payloadBytes,
+			}
+			if chunk.InventoryComplete {
+				chunk.Result = cloneChunkResult(batch.Result)
+				chunk.Watermark = batch.Watermark
+				chunk.Evidence = batch.Evidence
+				chunk.Comparison = comparison
+				chunk.WorklogObservations = append([]JiraWorklogFetchObservation(nil), batch.WorklogObservations...)
+			}
+			encoded, encodeErr := encodedPreparedChunkPayload(chunk)
+			if encodeErr != nil {
+				return nil, encodeErr
+			}
+			chunk.PayloadBytes = len(encoded)
+			if chunk.PayloadBytes > policy.MaxPreparedBytes {
+				valid = false
+				break
+			}
+			chunk.ManifestDigest = preparedChunkDigest(chunk)
+			chunks = append(chunks, chunk)
+		}
+		if valid {
+			return chunks, nil
+		}
+		if maxRows == 1 {
+			if storeRefusal != nil {
+				return nil, storeRefusal
+			}
+			break
+		}
+		maxRows = nextSplitCap(maxRows, policy)
+	}
+	return nil, ErrChunkPolicyExceeded
+}
+
+// The round's case: one work item with a 1,000-character description and a close and reopen in one millisecond, at a row cap of one
+// and a byte cap equal to the larger of the two sidecars main splits it into. Main stores it (work item + close, then the reopen); the
+// tie group must not make the split refuse it: the intact pair takes a sidecar of its own, under the same byte and store checks.
+func TestTransitionTieGroupMovesToItsOwnSidecarWhenSharingExceedsTheByteCap14570(t *testing.T) {
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	claim := nativeTestClaim("linear", "work-items")
+	payload := linearCloseReproPayload14570(t, "ZZZ-5", "Todo", "unstarted", `[
+		{"id":"z2","createdAt":"2026-10-15T10:00:00.050Z","fromState":{"name":"Backlog","type":"backlog"},"toState":{"name":"Canceled","type":"canceled"}},
+		{"id":"z3","createdAt":"2026-10-15T10:00:00.050Z","fromState":{"name":"Canceled","type":"canceled"},"toState":{"name":"Todo","type":"unstarted"}}]`)
+	description := strings.Repeat("d", 1000)
+	payload.Description, payload.DescriptionStated = &description, true
+	item, transitions, err := normalizeLinearWorkItem(claim, payload, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effects, err := buildLinearWorkItemEffectsFromRows(linearWorkItemRows{WorkItems: []linearWorkItemRow{item}, StatusTransitions: transitions})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := CompleteRouteBatch{Effects: effects}
+	policy := DefaultChunkPolicy()
+	policy.MaxSourceItems, policy.MaxEffectRows = 1, 1
+	stamps := chunkStamps{Claim: claim, CursorBefore: "page-1", CursorAfter: "page-2", StampAt: now}
+	for _, leg := range []struct {
+		name   string
+		stamps *chunkStamps
+		split  func(ChunkPolicy) ([]PreparedProviderChunk, error)
+	}{
+		{"direct", nil, func(policy ChunkPolicy) ([]PreparedProviderChunk, error) {
+			return SplitCompleteRouteBatch(batch, policy)
+		}},
+		{"stamped non-final", &stamps, func(policy ChunkPolicy) ([]PreparedProviderChunk, error) {
+			return splitStampedEmission(batch, stamps, policy)
+		}},
+	} {
+		t.Run(leg.name, func(t *testing.T) {
+			mainChunks, err := mainSplitEmission14570(batch, ShadowComparison{}, leg.stamps, policy)
+			if err != nil || len(mainChunks) != 2 {
+				t.Fatalf("setup: main gives %d sidecars, err=%v; want 2", len(mainChunks), err)
+			}
+			capped := policy
+			capped.MaxPreparedBytes = max(mainChunks[0].PayloadBytes, mainChunks[1].PayloadBytes)
+			if again, err := mainSplitEmission14570(batch, ShadowComparison{}, leg.stamps, capped); err != nil || len(again) != 2 {
+				t.Fatalf("setup: at %d bytes main gives %d sidecars, err=%v; want 2", capped.MaxPreparedBytes, len(again), err)
+			}
+			chunks, err := leg.split(capped)
+			if err != nil {
+				t.Fatalf("at %d bytes (main stores 2 sidecars) the split refuses (ErrChunkPolicyExceeded=%v): %v",
+					capped.MaxPreparedBytes, errors.Is(err, ErrChunkPolicyExceeded), err)
+			}
+			pairChunks, rows := map[int]int{}, 0
+			for index, chunk := range chunks {
+				if chunk.PayloadBytes > capped.MaxPreparedBytes {
+					t.Errorf("sidecar %d is %d bytes, over the %d-byte cap", index, chunk.PayloadBytes, capped.MaxPreparedBytes)
+				}
+				for _, effect := range chunk.Effects {
+					if effect.Destination == "work_item_transitions" && len(effect.Rows) > 0 {
+						pairChunks[index] += len(effect.Rows)
+						rows += len(effect.Rows)
+					}
+				}
+			}
+			if len(pairChunks) != 1 || rows != 2 {
+				t.Errorf("the pair sits in sidecars %v (%d rows), want both rows in one sidecar", pairChunks, rows)
+			}
+		})
+	}
+}
+
+func syntheticRows14570(count, pad int, row func(index int) string) []json.RawMessage {
+	rows := make([]json.RawMessage, 0, count)
+	for index := 0; index < count; index++ {
+		rows = append(rows, json.RawMessage(fmt.Sprintf(`{%s,"pad":"%s"}`, row(index), strings.Repeat("p", pad))))
+	}
+	return rows
+}
+
+// The chunked routes (github files, github and gitlab cicd and tests) and an emission whose transitions hold no tie cut exactly as
+// main's split does: same sub-chunks, same bytes, same refusal, unstamped and stamped (final and not), at the routes' own policies and
+// at byte caps that force the halving loop.
+func TestChunkedRoutesCutAsMainBesideTheTieGroups14570(t *testing.T) {
+	build := func(destination string, rows []json.RawMessage) EffectBatch {
+		effect, err := BuildEffectBatch(destination, EffectReadbackRequired, rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return effect
+	}
+	keyed := func(prefix string) func(int) string {
+		return func(index int) string { return fmt.Sprintf(`"id":"%s-%05d"`, prefix, index) }
+	}
+	suites := syntheticRows14570(260, 40, func(index int) string {
+		if index%100 == 7 {
+			return fmt.Sprintf(`"suite_id":"%sslot-%03d"`, githubTestsRetiredSlotKeyPrefix, index)
+		}
+		return fmt.Sprintf(`"suite_id":"suite-%05d"`, index)
+	})
+	transitions := syntheticRows14570(230, 20, func(index int) string {
+		return fmt.Sprintf(`"work_item_id":"gh:acme/app#%d","occurred_at":"2026-10-01T10:%02d:%02dZ","org_id":"org-acme"`, index/3, index%60, index/60)
+	})
+	testsEffects := []EffectBatch{
+		build("ci_pipeline_runs", syntheticRows14570(3, 200, keyed("run"))),
+		build("ci_job_runs", syntheticRows14570(40, 200, keyed("job"))),
+		build("test_suite_results", suites),
+		build("test_case_results", syntheticRows14570(1300, 120, keyed("case"))),
+		build("coverage_snapshots", syntheticRows14570(2, 50, keyed("cov"))),
+		build(testOpsRunReportCompletenessDestination, syntheticRows14570(1, 50, keyed("done"))),
+	}
+	cases := []struct {
+		name              string
+		provider, dataset string
+		policy            ChunkPolicy
+		effects           []EffectBatch
+	}{
+		{"github tests", "github", "tests", TestOpsRouteChunkPolicy(), testsEffects},
+		{"gitlab cicd", "gitlab", "cicd", TestOpsRouteChunkPolicy(), []EffectBatch{
+			build("ci_pipeline_runs", syntheticRows14570(120, 300, keyed("run"))),
+			build("ci_job_runs", syntheticRows14570(900, 300, keyed("job"))),
+		}},
+		{"github files", "github", "files", GitHubFilesChunkPolicy(), []EffectBatch{
+			build("git_files", syntheticRows14570(1200, 3000, keyed("file"))),
+		}},
+		{"transitions without a tie beside other rows", "github", "work-items", DefaultChunkPolicy(), []EffectBatch{
+			build("work_item_transitions", transitions),
+			build("work_items", syntheticRows14570(150, 400, keyed("item"))),
+			build("work_item_dependencies", syntheticRows14570(12, 100, keyed("dep"))),
+		}},
+	}
+	for _, tc := range cases {
+		claim := nativeTestClaim(tc.provider, tc.dataset)
+		for _, maxBytes := range []int{tc.policy.MaxPreparedBytes, 256 << 10, 48 << 10} {
+			policy := tc.policy
+			policy.MaxPreparedBytes = maxBytes
+			for _, leg := range []struct {
+				name   string
+				stamps *chunkStamps
+			}{
+				{"unstamped", nil},
+				{"stamped final", &chunkStamps{Claim: claim, CursorBefore: "page-1", CursorAfter: "page-2", Final: true, StampAt: time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)}},
+				{"stamped non-final", &chunkStamps{Claim: claim, CursorBefore: "page-1", CursorAfter: "page-2", StampAt: time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)}},
+			} {
+				t.Run(fmt.Sprintf("%s/%d bytes/%s", tc.name, maxBytes, leg.name), func(t *testing.T) {
+					batch := CompleteRouteBatch{Effects: tc.effects}
+					want, wantErr := mainSplitEmission14570(batch, ShadowComparison{}, leg.stamps, policy)
+					got, gotErr := splitEmission(batch, ShadowComparison{}, leg.stamps, policy)
+					if wantErr != nil || len(want) < 2 {
+						t.Fatalf("setup: main gives %d sub-chunks, err=%v; want a stored split of 2 or more", len(want), wantErr)
+					}
+					if fmt.Sprint(gotErr) != fmt.Sprint(wantErr) {
+						t.Fatalf("err %v, main %v", gotErr, wantErr)
+					}
+					if !reflect.DeepEqual(got, want) {
+						t.Fatalf("%d sub-chunks differ from main's %d", len(got), len(want))
+					}
+				})
+			}
+		}
+	}
+}

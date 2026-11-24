@@ -26,7 +26,7 @@ import (
 // no retraction (the prod state at the card's writing), retractions with fresh, pending and unmarked keys, the marks and
 // recomputes that cover them, and a slot retracted on the new image. It checks each WANT per phase, logs the pass-path
 // read_rows of each data statement, and fires each cost gate cap once (pm-guard FORM-TEMPLATE-4).
-const formExecSel14544SHA256 = "28c679ebf8a2bf3c2e76c09d720de40baff07de1d1aaac88898d5e2fc375c609"
+const formExecSel14544SHA256 = "a659248e90e87cc7212bf78a9c66efe518beb48351d1c10cf13b99b2cad17575"
 
 const formExecSel14544SQL = `-- FORM-14544-SEL-2 (lane fcs-14544card, 2026-11-24, ops pin 3207ac6258c0). ClickHouse prod, SELECT only. Card CARD-14544-14562-1.
 -- Shape: pm-guard/FORM-TEMPLATE-4.md (4f9c5f10ec18). WANT text and work math: FORM-14544-SEL-2.md.
@@ -127,9 +127,9 @@ SELECT k.repo_id AS repo_id, k.day AS day, k.rday_min AS rday_min, k.rday_max AS
        multiIf(mark_at = toDateTime64(0, 3, 'UTC'), 'unmarked',
                toDateTime64(last_compute, 3, 'UTC') >= mark_at + toIntervalSecond(0), 'fresh', 'pending') AS cls
 FROM (
-    SELECT repo_id, addDays(base_day, o) AS day, max(landed) AS landed, min(rday_min) AS rday_min, max(rday_max) AS rday_max
+    SELECT repo_id, addDays(base_day, o) AS day, max(run_landed) AS landed, min(run_rday_min) AS rday_min, max(run_rday_max) AS rday_max
     FROM (
-        SELECT repo_id, groupArray(base_day) AS days, any(landed) AS landed, any(rday_min) AS rday_min, any(rday_max) AS rday_max,
+        SELECT repo_id, groupArray(base_day) AS days, any(landed) AS run_landed, any(rday_min) AS run_rday_min, any(rday_max) AS run_rday_max,
                if(minIf(rec_at, rec_at > toDateTime64(0, 3, 'UTC')) > toDateTime64(0, 3, 'UTC'),
                   toDate(minIf(rec_at, rec_at > toDateTime64(0, 3, 'UTC')), 'UTC'),
                   addDays(toDate(any(landed), 'UTC'), 1)) AS cut_day
@@ -209,9 +209,9 @@ SELECT k.repo_id AS repo_id, k.day AS day, k.rday_min AS rday_min, k.rday_max AS
        multiIf(mark_at = toDateTime64(0, 3, 'UTC'), 'unmarked',
                toDateTime64(last_compute, 3, 'UTC') >= mark_at + toIntervalSecond(0), 'fresh', 'pending') AS cls
 FROM (
-    SELECT repo_id, addDays(base_day, o) AS day, max(landed) AS landed, min(rday_min) AS rday_min, max(rday_max) AS rday_max
+    SELECT repo_id, addDays(base_day, o) AS day, max(run_landed) AS landed, min(run_rday_min) AS rday_min, max(run_rday_max) AS rday_max
     FROM (
-        SELECT repo_id, groupArray(base_day) AS days, any(landed) AS landed, any(rday_min) AS rday_min, any(rday_max) AS rday_max,
+        SELECT repo_id, groupArray(base_day) AS days, any(landed) AS run_landed, any(rday_min) AS run_rday_min, any(rday_max) AS run_rday_max,
                if(minIf(rec_at, rec_at > toDateTime64(0, 3, 'UTC')) > toDateTime64(0, 3, 'UTC'),
                   toDate(minIf(rec_at, rec_at > toDateTime64(0, 3, 'UTC')), 'UTC'),
                   addDays(toDate(any(landed), 'UTC'), 1)) AS cut_day

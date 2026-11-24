@@ -92,11 +92,31 @@ func copyRepositoryVersion(t *testing.T, ctx context.Context, conn driver.Conn, 
 	}
 	for polls := 0; rowsAt(to) < before+copied; polls++ {
 		if polls == 40 {
-			t.Fatalf("%s: the copied version is not readable after %d polls", table, polls)
+			t.Fatalf("%s: the copied version is not readable after %d polls: from %s to %s, copied %d, before %d; rows of the org: %v",
+				table, polls, from.UTC().Format(tiedVersionStamp), to.UTC().Format(tiedVersionStamp), copied, before,
+				tiedVersionRowsOfOrg(t, ctx, conn, table, orgID))
 		}
 		time.Sleep(250 * time.Millisecond)
 		t.Logf("%s: copied version not readable yet (poll %d)", table, polls+1)
 	}
+}
+
+func tiedVersionRowsOfOrg(t *testing.T, ctx context.Context, conn driver.Conn, table, orgID string) []string {
+	t.Helper()
+	rows, err := conn.Query(ctx, `SELECT toString(tuple(*)) FROM `+table+` WHERE org_id = ? ORDER BY computed_at`, orgID)
+	if err != nil {
+		t.Fatalf("%s: %v", table, err)
+	}
+	defer rows.Close()
+	var all []string
+	for rows.Next() {
+		var row string
+		if err := rows.Scan(&row); err != nil {
+			t.Fatal(err)
+		}
+		all = append(all, row)
+	}
+	return all
 }
 
 func TestDerivedDaySnapshotReadsOneVersionOfAKeyTiedOnComputedAt(t *testing.T) {

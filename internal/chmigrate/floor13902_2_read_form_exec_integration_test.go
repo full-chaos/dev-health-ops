@@ -532,9 +532,9 @@ INSERT INTO deploy_metrics_daily (org_id, repo_id, day, computed_at, retracted) 
 ('` + fOrg + `', '` + r1 + `', '2026-10-28', '2026-10-29 01:00:00', 0);
 INSERT INTO repo_change_failure_daily (org_id, repo_id, day, computed_at) VALUES
 ('` + fOrg + `', '` + r1 + `', '2026-10-28', '2026-10-29 01:00:00');
-INSERT INTO operational_incidents (org_id, provider, id, started_at, is_deleted, observed_at) VALUES
-('` + fOrg + `', 'pagerduty', 'inc1', '2026-01-05 10:00:00', 0, '2026-01-05 10:00:00'),
-('` + fOrg + `', 'pagerduty', 'inc0', '2025-12-20 10:00:00', 1, '2025-12-20 10:00:00');
+INSERT INTO operational_incidents (org_id, provider, id, started_at, is_deleted, observed_at, ordering_contract) VALUES
+('` + fOrg + `', 'pagerduty', 'inc1', '2026-01-05 10:00:00', 0, '2026-01-05 10:00:00', 2),
+('` + fOrg + `', 'pagerduty', 'inc0', '2025-12-20 10:00:00', 1, '2025-12-20 10:00:00', 2);
 INSERT INTO work_items (org_id, repo_id, work_item_id, provider, status, created_at, last_synced) VALUES
 ('` + fOrg + `', '` + r1 + `', 'wi1', 'jira', 'todo', '2026-01-03 10:00:00', '2026-01-03 11:00:00'),
 ('` + bOrg + `', '` + r1 + `', 'wiB', 'jira', 'todo', '2025-05-05 10:00:00', '2025-05-05 11:00:00');

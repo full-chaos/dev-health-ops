@@ -2965,7 +2965,8 @@ func partitionsRunProbe(nodeType, indexCond string) bool {
 // outboxRunProbe is the recent arm's outbox lookup: a probe of ix_worker_job_outbox_finalize_domain_id keyed on the
 // base run's id (an Index Scan with that Index Cond, or a Bitmap Heap Scan over that index with it as Recheck Cond). It
 // reads the run's own finalize rows only. A walk of another outbox index filtered by the run id is not it.
-var outboxRunProbeCond = regexp.MustCompile(`\((\w+\.)?args #>> '\{domain,id\}'::text\[\]\) = \(run\.id\)::text`)
+// Either side order: a parameterized qual can print as "(run.id)::text = (args #>> ...)".
+var outboxRunProbeCond = regexp.MustCompile(`\((\w+\.)?args #>> '\{domain,id\}'::text\[\]\) = \(run\.id\)::text|\(run\.id\)::text = \((\w+\.)?args #>> '\{domain,id\}'::text\[\]\)`)
 
 func outboxRunProbe(nodeType, indexName, indexCond, recheckCond, childIndex string) bool {
 	keyed := outboxRunProbeCond.MatchString

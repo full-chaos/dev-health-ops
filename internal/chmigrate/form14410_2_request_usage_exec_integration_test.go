@@ -20,8 +20,8 @@ import (
 
 // Throwaway exec proof of the prod read form FORM-14410-2 (CHAOS-14410): not for merge. form14410s1Form is the form file
 // with its org prefix (8 hex) replaced by the synthetic "f0f0f0f0" in all 4 places; its sha256 is pinned. The form file
-// itself (real prefix) has sha256 d42cbf869d90a27fa18d67a343bde8877d523e8a1d84581e87da558b001aa6c3.
-const form14410s1FormSHA256 = "a5abd6ed6ebb7d06f8e38a2b8e9e69ffc9fa39a71f993aece27356bf91df8365"
+// itself (real prefix) has sha256 76d7a168e8814d692cc7604e47fac9a82fa627979664dd1d1225019f4d486595.
+const form14410s1FormSHA256 = "0db0dec744575f39364bfa3f66de1875280397022d2bcfbfd9b5f84eb570fb09"
 
 //ttlclock:allow fixed FORM-14410-2 window data (a throwaway exec cell), the row lives until 2027-12-17
 const form14410s1Form = `-- FORM-14410-2 (fcdev lane l14542, 2026-11-24; = FORM-14410-1 3a0e0b166992 + stmt3 hour coverage, pm option A): the GitHub installation's real primary rate limit and its peak use, from the
@@ -80,8 +80,8 @@ ORDER BY integration8, resource
 LIMIT 100;
 -- stmt3: DECISION, hour coverage of the 24 h window. One row per integration id 8-char cut: the core rows with a limit per
 -- clock hour (24 values, hour 0 = 06:00 UTC) and the count of hours with 0 such rows. WANT zero_row_hours = 0 for every
--- integration row of stmt1 (a 0-row hour = gate NOT MET). Only complete-route executions write provider_request_usage rows;
--- the chunked GitHub tests/cicd route writes none, so an hour with only chunked calls has no row.
+-- integration row of stmt1 (a 0-row hour = gate NOT MET).
+-- LIMIT: only complete-route executions write provider_request_usage rows; the chunked GitHub tests/cicd route writes none, so an hour with only chunked calls has no row.
 WITH (SELECT sum(rows) + 2 * count() + 1 FROM system.parts WHERE active AND database = currentDatabase()
       AND table = 'provider_request_usage' AND partition_id >= '202611') AS read_rows_cap,
   (SELECT throwIf(read_rows_cap >= 20000000, 'STOP-COST-GATE')) AS cost_gate
@@ -184,6 +184,12 @@ func TestForm14410s2RequestUsageReadEveryColumnCoverageMutantsAndGate(t *testing
 	t.Logf("FORM-14410-2 prefix-swapped sha256 %s (sha12 %s)", form14410s1FormSHA256, form14410s1FormSHA256[:12])
 	if n := strings.Count(form14410s1Form, "startsWith(org_id, 'f0f0f0f0')"); n != 4 {
 		t.Fatalf("%d org filters, want 4 (stmt1-4)", n)
+	}
+	// pm runs a block from its "-- stmtN:" line to the first line that ends in ";": no comment line may end in ";".
+	for _, line := range strings.Split(form14410s1Form, "\n") {
+		if strings.HasPrefix(line, "--") && strings.HasSuffix(strings.TrimSpace(line), ";") {
+			t.Fatalf("a comment line ends in \";\" and would cut a block: %q", line)
+		}
 	}
 	blocks := form14410s1Blocks(t)
 	for i, block := range blocks {

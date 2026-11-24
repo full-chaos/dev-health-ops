@@ -234,14 +234,20 @@ func buildUnderLock(ctx context.Context, session lockedSession, index unitsIndex
 	result.Action = "built"
 	var lastErr error
 	for attempt := 1; attempt <= options.Attempts; attempt++ {
-		result.Attempts = attempt
 		if attempt > 1 {
+			// The pause ends with the build window at the latest; a window spent by then ends the run with no further read.
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(options.RetryDelay):
+			case <-time.After(min(options.RetryDelay, time.Until(windowEnd))):
+			}
+			if !time.Now().Before(windowEnd) {
+				logger.Warn("build-index: the build window ended; no further attempt", "attempts", result.Attempts)
+				lastErr = fmt.Errorf("%w before attempt %d: %w", errWindowExpired, attempt, lastErr)
+				break
 			}
 		}
+		result.Attempts = attempt
 		if info, err = readIndexInfo(ctx, conn, index.name); err != nil {
 			return err
 		}

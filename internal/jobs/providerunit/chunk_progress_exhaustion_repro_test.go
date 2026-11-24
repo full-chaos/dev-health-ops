@@ -90,20 +90,21 @@ func (doer *flakyPageDoer) Do(request *http.Request) (*http.Response, error) {
 const exhaustReproHTTPTries = 3
 
 type exhaustWalk struct {
-	repository     *exhaustReproRepository
-	ledger         *providersync.InProcessChunkLedger
-	ledgerClaim    providersync.Claim
-	attempt        int // River job.Attempt as the adapter passes it
-	snoozes        int
-	refunds        int
-	failures       int
-	runAgeAtRefund []time.Duration
-	runAgeAtFail   []time.Duration
-	ordinalAtFail  []int
-	classAtFail    []string
-	accounting     []string // violations of the attempts arithmetic
-	terminal       bool
-	lastReturnPerm bool
+	repository      *exhaustReproRepository
+	ledger          *providersync.InProcessChunkLedger
+	ledgerClaim     providersync.Claim
+	attempt         int // River job.Attempt as the adapter passes it
+	snoozes         int
+	refunds         int
+	failures        int
+	runAgeAtRefund  []time.Duration
+	attemptAtRefund []int
+	runAgeAtFail    []time.Duration
+	ordinalAtFail   []int
+	classAtFail     []string
+	accounting      []string // violations of the attempts arithmetic
+	terminal        bool
+	lastReturnPerm  bool
 }
 
 func driveTransientPageWalk(t *testing.T, pages int, flakyPages ...int) exhaustWalk {
@@ -223,6 +224,7 @@ func driveFlakyWalk(t *testing.T, shape flakyWalk) exhaustWalk {
 			if walk.repository.progressRefunds != refundsBefore {
 				walk.refunds++
 				walk.runAgeAtRefund = append(walk.runAgeAtRefund, now.Sub(walk.repository.runCreatedAt))
+				walk.attemptAtRefund = append(walk.attemptAtRefund, walk.attempt)
 			}
 			if got := walk.repository.attempt; got != before {
 				walk.accounting = append(walk.accounting, "continuation: attempts "+strconv.Itoa(before)+" -> "+strconv.Itoa(got)+", want net 0 over claim + continuation")
@@ -372,6 +374,67 @@ func TestProgressFailuresOfARunOlderThan24HoursCountAndExhaustAtFive(t *testing.
 	}
 	if len(walk.accounting) != 0 {
 		t.Fatalf("attempts arithmetic: %v", walk.accounting)
+	}
+}
+
+// Four zero-progress failures (every attempt starts and fails at checkpoint 64)
+// bring the unit to River attempt 5; the 5th attempt commits chunks 64-69 and
+// fails provider_transient on page 70. That failure has progress, so it is
+// refunded at attempt 5 instead of exhausting the unit, and the walk finishes.
+func TestProgressFailureAtTheLastAttemptIsRefundedNotExhausted(t *testing.T) {
+	walk := driveFlakyWalk(t, flakyWalk{
+		pages: exhaustReproPages,
+		tries: map[int]int{64: 4 * exhaustReproHTTPTries, 70: exhaustReproHTTPTries},
+	})
+	if walk.terminal || walk.repository.status != "success" {
+		t.Fatalf("unit ended %q category=%q cause_class=%q at River attempt %d after %d failures, want success",
+			walk.repository.status, walk.repository.lastFailCategory, walk.repository.causeClass, walk.attempt, walk.failures)
+	}
+	if walk.failures != 4 || walk.refunds != 1 || len(walk.attemptAtRefund) != 1 || walk.attemptAtRefund[0] != 5 {
+		t.Fatalf("failures=%d refunds=%d refund at River attempts %v, want 4 zero-progress failures and 1 refund at attempt 5",
+			walk.failures, walk.refunds, walk.attemptAtRefund)
+	}
+	for index, ordinal := range walk.ordinalAtFail {
+		if ordinal != 64 {
+			t.Fatalf("checkpoint at each failure %v, want 64 at every counted failure (failure %d)", walk.ordinalAtFail, index+1)
+		}
+	}
+	if len(walk.accounting) != 0 {
+		t.Fatalf("attempts arithmetic: %v", walk.accounting)
+	}
+}
+
+// A provider_conflict (409, cap 2) and a provider_permanent (422, cap 1)
+// failure of an attempt that committed chunks are NOT refunded: the class cap
+// holds and the unit ends exhausted under its class at the cap.
+func TestCappedProviderClassFailuresWithProgressAreNotRefunded(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		status      map[int]int
+		tries       map[int]int
+		wantClass   string
+		wantAttempt int
+	}{
+		{"conflict", map[int]int{2: http.StatusConflict, 10: http.StatusConflict}, map[int]int{2: 1, 10: 1}, "provider_conflict", 2},
+		{"permanent", map[int]int{2: http.StatusUnprocessableEntity}, map[int]int{2: 1}, "provider_permanent", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			walk := driveFlakyWalk(t, flakyWalk{pages: exhaustReproPages, status: tc.status, tries: tc.tries})
+			if !walk.terminal || walk.repository.lastFailCategory != "provider_unit_exhausted" ||
+				walk.repository.causeClass != tc.wantClass || walk.attempt != tc.wantAttempt {
+				t.Fatalf("unit ended %q category=%q cause_class=%q at River attempt %d, want failed provider_unit_exhausted %s at %d",
+					walk.repository.status, walk.repository.lastFailCategory, walk.repository.causeClass, walk.attempt,
+					tc.wantClass, tc.wantAttempt)
+			}
+			if walk.refunds != 0 || walk.failures != tc.wantAttempt {
+				t.Fatalf("refunds=%d failures=%d, want no refund and %d counted failures", walk.refunds, walk.failures, tc.wantAttempt)
+			}
+			for index, ordinal := range walk.ordinalAtFail {
+				if ordinal <= 0 {
+					t.Fatalf("checkpoint at failure %d = %d, want progress before every failure (%v)", index+1, ordinal, walk.ordinalAtFail)
+				}
+			}
+		})
 	}
 }
 

@@ -536,3 +536,115 @@ func TestBuildFinalizeOutboxIndexHasItsOwnBuildLock(t *testing.T) {
 		t.Fatalf("finalize-outbox under a held open-units lock: exit %d result %v stderr %s, want built", code, result, stderr)
 	}
 }
+
+// Revision 0167 on a database one revision below it: a VALID prebuilt index (the hook's) is kept, the same object; an
+// INVALID one (a failed CONCURRENTLY build the hook did not clean up) is replaced, so the walk never records 0167 over an
+// index the planner cannot use.
+func TestRevision0167KeepsAValidIndexAndReplacesAnInvalidOne(t *testing.T) {
+	d := newDownInstance(t)
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	position := -1
+	for index, file := range chain {
+		if file.Revision == "0167" {
+			position = index
+		}
+	}
+	if position < 0 {
+		t.Fatal("the chain holds no revision 0167")
+	}
+	baseline, err := pgmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDefinition, valid := indexDefinition(t, connect(t, d.at(t, len(chain))), pgmigrate.FinalizeOutboxIndexName)
+	if !valid {
+		t.Fatalf("the walk's index %q is not valid", wantDefinition)
+	}
+	indexOID := func(t *testing.T, conn *pgx.Conn) uint32 {
+		t.Helper()
+		var oid uint32
+		if err := conn.QueryRow(context.Background(), "SELECT 'public."+pgmigrate.FinalizeOutboxIndexName+"'::regclass::oid").Scan(&oid); err != nil {
+			t.Fatal(err)
+		}
+		return oid
+	}
+	for _, step := range []struct {
+		name, damage string
+		keepsObject  bool
+	}{
+		{"valid prebuilt index", "", true},
+		{"invalid leftover", "UPDATE pg_index SET indisvalid = false WHERE indexrelid = 'public." + pgmigrate.FinalizeOutboxIndexName + "'::regclass", false},
+	} {
+		t.Run(step.name, func(t *testing.T) {
+			conn := connect(t, d.at(t, position))
+			if _, err := conn.Exec(context.Background(), "CREATE INDEX "+pgmigrate.FinalizeOutboxIndexBody); err != nil {
+				t.Fatal(err)
+			}
+			if step.damage != "" {
+				if _, err := conn.Exec(context.Background(), step.damage); err != nil {
+					t.Fatal(err)
+				}
+				if _, valid := indexDefinition(t, conn, pgmigrate.FinalizeOutboxIndexName); valid {
+					t.Fatal("the planted index is still valid: the cell would prove nothing")
+				}
+			}
+			before := indexOID(t, conn)
+			applied, err := pgmigrate.Upgrade(context.Background(), conn, baseline, chain)
+			if err != nil {
+				t.Fatalf("upgrade to the head: %v", err)
+			}
+			got, valid := indexDefinition(t, conn, pgmigrate.FinalizeOutboxIndexName)
+			if !valid || got != wantDefinition {
+				t.Fatalf("after the upgrade (%+v): index %q valid=%v, want the walk's %q valid", applied, got, valid, wantDefinition)
+			}
+			if after := indexOID(t, conn); (after == before) != step.keepsObject {
+				t.Fatalf("index oid %d -> %d, want kept=%v", before, after, step.keepsObject)
+			}
+		})
+	}
+}
+
+// holdShare holds a SHARE lock on the table, which conflicts with the build's SHARE UPDATE EXCLUSIVE probe: every
+// attempt fails at the probe after its lock timeout.
+func holdShare(t *testing.T, uri, table string) {
+	t.Helper()
+	conn := connect(t, uri)
+	tx, err := conn.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
+	if _, err := tx.Exec(context.Background(), "LOCK TABLE public."+table+" IN SHARE MODE"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The pause between attempts ends with the build window: a retry delay longer than the window does not keep the build
+// (and its Job) waiting past the window. With a 10 s window and a 1 h delay the build fails within the window and the
+// cleanup budget, not after the delay or the caller's deadline.
+func TestBuildIndexRetryPauseEndsWithTheWindow(t *testing.T) {
+	d := newDownInstance(t)
+	uri := d.withoutIndex(t, "0159")
+	holdShare(t, uri, "sync_run_units")
+	conn := connect(t, uri)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	logs := &syncBuffer{}
+	start := time.Now()
+	_, err := pgmigrate.BuildFailureStreakIndex(ctx, conn, pgmigrate.IndexBuildOptions{
+		LockTimeout: time.Second, Attempts: 3, RetryDelay: time.Hour, Deadline: 10 * time.Second, CleanupBudget: 5 * time.Second,
+	}, slog.New(slog.NewJSONHandler(logs, nil)))
+	took := time.Since(start)
+	if err == nil {
+		t.Fatal("the build succeeded under a held SHARE lock")
+	}
+	if errors.Is(err, context.DeadlineExceeded) || took > 45*time.Second {
+		t.Fatalf("the build returned after %s (err %v): the retry pause outlived the 10 s window; log %s", took, err, logs.String())
+	}
+	if !strings.Contains(logs.String(), "attempt failed") {
+		t.Fatalf("no failed attempt was logged, so the cell never reached the retry pause; log %s", logs.String())
+	}
+}

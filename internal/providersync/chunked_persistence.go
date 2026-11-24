@@ -621,16 +621,22 @@ func splitEmission(
 		regular[index], own[index] = effectOwnChunkRows(effect)
 		groups[index] = effectTieGroups(effect.Destination, regular[index])
 	}
+	// isolate moves each tie group larger than the row cap to a sub-chunk of its own, after the shared ones: taken only when the
+	// one-row split with the groups sharing ordinals does not fit, so a group that fits alone is stored, not refused.
+	isolate := false
 	for maxRows >= 1 {
 		shared, ownChunks := 1, 0
-		parts := make([][][]json.RawMessage, len(ordered))
+		parts, solo := make([][][]json.RawMessage, len(ordered)), make([][][]json.RawMessage, len(ordered))
 		for index := range ordered {
-			parts[index] = packEffectRows(regular[index], groups[index], maxRows)
+			parts[index], solo[index] = packEffectRows(regular[index], groups[index], maxRows, isolate)
 			if len(parts[index]) > shared {
 				shared = len(parts[index])
 			}
 			if len(own[index]) > ownChunks {
 				ownChunks = len(own[index])
+			}
+			if len(solo[index]) > ownChunks {
+				ownChunks = len(solo[index])
 			}
 		}
 		count := shared + ownChunks
@@ -666,6 +672,11 @@ func splitEmission(
 					rows = nil
 					if ordinal < len(parts[index]) {
 						rows = parts[index][ordinal]
+					}
+				} else if solo[index] != nil && !effectSplitsLast(effect.Destination) {
+					rows = nil
+					if ordinal-shared < len(solo[index]) {
+						rows = solo[index][ordinal-shared]
 					}
 				}
 				part, err := BuildEffectBatch(effect.Destination, effect.Recovery, rows)
@@ -729,6 +740,10 @@ func splitEmission(
 			return chunks, nil
 		}
 		if maxRows == 1 {
+			if !isolate && hasTieGroup(groups) {
+				isolate = true
+				continue
+			}
 			if storeRefusal != nil {
 				return nil, storeRefusal
 			}
@@ -737,6 +752,17 @@ func splitEmission(
 		maxRows = nextSplitCap(maxRows, policy)
 	}
 	return nil, ErrChunkPolicyExceeded
+}
+
+func hasTieGroup(groups [][][]json.RawMessage) bool {
+	for _, destination := range groups {
+		for _, group := range destination {
+			if len(group) > 1 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // effectTieGroups groups the work_item_transitions rows of one item at one stored millisecond, in the order of each group's first
@@ -771,17 +797,22 @@ func effectTieGroups(destination string, rows []json.RawMessage) [][]json.RawMes
 }
 
 // packEffectRows cuts a destination's shared rows into sub-chunks of at most maxRows rows. With groups, a sub-chunk takes whole
-// groups only (a group larger than maxRows takes a sub-chunk of its own); with no group larger than one row it cuts as plain slicing.
-func packEffectRows(rows []json.RawMessage, groups [][]json.RawMessage, maxRows int) [][]json.RawMessage {
-	parts := make([][]json.RawMessage, 0, (len(rows)+maxRows-1)/maxRows)
+// groups only (a group larger than maxRows takes a sub-chunk of its own; with isolate it goes to solo, the sub-chunks after the shared
+// ones); with no group larger than one row it cuts as plain slicing.
+func packEffectRows(rows []json.RawMessage, groups [][]json.RawMessage, maxRows int, isolate bool) (parts, solo [][]json.RawMessage) {
+	parts = make([][]json.RawMessage, 0, (len(rows)+maxRows-1)/maxRows)
 	if groups == nil {
 		for start := 0; start < len(rows); start += maxRows {
 			parts = append(parts, rows[start:min(start+maxRows, len(rows))])
 		}
-		return parts
+		return parts, nil
 	}
 	var current []json.RawMessage
 	for _, group := range groups {
+		if isolate && len(group) > maxRows {
+			solo = append(solo, group)
+			continue
+		}
 		if len(current) > 0 && len(current)+len(group) > maxRows {
 			parts = append(parts, current)
 			current = nil
@@ -791,7 +822,7 @@ func packEffectRows(rows []json.RawMessage, groups [][]json.RawMessage, maxRows 
 	if len(current) > 0 {
 		parts = append(parts, current)
 	}
-	return parts
+	return parts, solo
 }
 
 // effectOwnChunkRows splits an effect's rows into the rows that share chunks with the other destinations' rows and the rows the

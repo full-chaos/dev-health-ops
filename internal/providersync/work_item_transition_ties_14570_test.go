@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -649,5 +650,96 @@ func TestTransitionTieGroupMovesToItsOwnSidecarWhenSharingExceedsTheByteCap14570
 				t.Errorf("the pair sits in sidecars %v (%d rows), want both rows in one sidecar", pairChunks, rows)
 			}
 		})
+	}
+}
+
+func syntheticRows14570(count, pad int, row func(index int) string) []json.RawMessage {
+	rows := make([]json.RawMessage, 0, count)
+	for index := 0; index < count; index++ {
+		rows = append(rows, json.RawMessage(fmt.Sprintf(`{%s,"pad":"%s"}`, row(index), strings.Repeat("p", pad))))
+	}
+	return rows
+}
+
+// The chunked routes (github files, github and gitlab cicd and tests) and an emission whose transitions hold no tie cut exactly as
+// main's split does: same sub-chunks, same bytes, same refusal, unstamped and stamped (final and not), at the routes' own policies and
+// at byte caps that force the halving loop.
+func TestChunkedRoutesCutAsMainBesideTheTieGroups14570(t *testing.T) {
+	build := func(destination string, rows []json.RawMessage) EffectBatch {
+		effect, err := BuildEffectBatch(destination, EffectReadbackRequired, rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return effect
+	}
+	keyed := func(prefix string) func(int) string {
+		return func(index int) string { return fmt.Sprintf(`"id":"%s-%05d"`, prefix, index) }
+	}
+	suites := syntheticRows14570(260, 40, func(index int) string {
+		if index%100 == 7 {
+			return fmt.Sprintf(`"suite_id":"%sslot-%03d"`, githubTestsRetiredSlotKeyPrefix, index)
+		}
+		return fmt.Sprintf(`"suite_id":"suite-%05d"`, index)
+	})
+	transitions := syntheticRows14570(230, 20, func(index int) string {
+		return fmt.Sprintf(`"work_item_id":"gh:acme/app#%d","occurred_at":"2026-10-01T10:%02d:%02dZ","org_id":"org-acme"`, index/3, index%60, index/60)
+	})
+	testsEffects := []EffectBatch{
+		build("ci_pipeline_runs", syntheticRows14570(3, 200, keyed("run"))),
+		build("ci_job_runs", syntheticRows14570(40, 200, keyed("job"))),
+		build("test_suite_results", suites),
+		build("test_case_results", syntheticRows14570(1300, 120, keyed("case"))),
+		build("coverage_snapshots", syntheticRows14570(2, 50, keyed("cov"))),
+		build(testOpsRunReportCompletenessDestination, syntheticRows14570(1, 50, keyed("done"))),
+	}
+	cases := []struct {
+		name              string
+		provider, dataset string
+		policy            ChunkPolicy
+		effects           []EffectBatch
+	}{
+		{"github tests", "github", "tests", TestOpsRouteChunkPolicy(), testsEffects},
+		{"gitlab cicd", "gitlab", "cicd", TestOpsRouteChunkPolicy(), []EffectBatch{
+			build("ci_pipeline_runs", syntheticRows14570(120, 300, keyed("run"))),
+			build("ci_job_runs", syntheticRows14570(900, 300, keyed("job"))),
+		}},
+		{"github files", "github", "files", GitHubFilesChunkPolicy(), []EffectBatch{
+			build("git_files", syntheticRows14570(1200, 3000, keyed("file"))),
+		}},
+		{"transitions without a tie beside other rows", "github", "work-items", DefaultChunkPolicy(), []EffectBatch{
+			build("work_item_transitions", transitions),
+			build("work_items", syntheticRows14570(150, 400, keyed("item"))),
+			build("work_item_dependencies", syntheticRows14570(12, 100, keyed("dep"))),
+		}},
+	}
+	for _, tc := range cases {
+		claim := nativeTestClaim(tc.provider, tc.dataset)
+		for _, maxBytes := range []int{tc.policy.MaxPreparedBytes, 256 << 10, 48 << 10} {
+			policy := tc.policy
+			policy.MaxPreparedBytes = maxBytes
+			for _, leg := range []struct {
+				name   string
+				stamps *chunkStamps
+			}{
+				{"unstamped", nil},
+				{"stamped final", &chunkStamps{Claim: claim, CursorBefore: "page-1", CursorAfter: "page-2", Final: true, StampAt: time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)}},
+				{"stamped non-final", &chunkStamps{Claim: claim, CursorBefore: "page-1", CursorAfter: "page-2", StampAt: time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)}},
+			} {
+				t.Run(fmt.Sprintf("%s/%d bytes/%s", tc.name, maxBytes, leg.name), func(t *testing.T) {
+					batch := CompleteRouteBatch{Effects: tc.effects}
+					want, wantErr := mainSplitEmission14570(batch, ShadowComparison{}, leg.stamps, policy)
+					got, gotErr := splitEmission(batch, ShadowComparison{}, leg.stamps, policy)
+					if wantErr != nil || len(want) < 2 {
+						t.Fatalf("setup: main gives %d sub-chunks, err=%v; want a stored split of 2 or more", len(want), wantErr)
+					}
+					if fmt.Sprint(gotErr) != fmt.Sprint(wantErr) {
+						t.Fatalf("err %v, main %v", gotErr, wantErr)
+					}
+					if !reflect.DeepEqual(got, want) {
+						t.Fatalf("%d sub-chunks differ from main's %d", len(got), len(want))
+					}
+				})
+			}
+		}
 	}
 }

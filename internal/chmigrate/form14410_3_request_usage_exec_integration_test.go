@@ -490,7 +490,7 @@ func TestForm14410s3RequestUsageReadEveryColumnOrgCoverageMutantsAndGate(t *test
 		mutate(i, "rule-threshold", "0.45 * rate_limit_limit", "0.55 * rate_limit_limit")
 		mutate(i, "rule-limit-filter", "rate_limit_limit > 0)", "rate_limit_limit > 9999)")
 		mutate(i, "rule-max-requests", "max(requests) AS", "min(requests) AS")
-		mutate(i, "rule-reset-passed", "<= toUnixTimestamp(recorded_at)", "> toUnixTimestamp(recorded_at)")
+		mutate(i, "rule-reset-passed", "AND toInt64OrZero(rate_limit_reset) <= toUnixTimestamp(recorded_at)", "")
 	}
 	mutate(3, "rule-window-start",
 		"recorded_at >= toDateTime64('2026-11-23 06:00:00', 3, 'UTC')", //ttlclock:allow fixed FORM-14410-3 window data (a throwaway exec cell), the row lives until 2027-12-23

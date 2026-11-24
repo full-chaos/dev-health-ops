@@ -25,9 +25,9 @@ import (
 // WANT at base 0: statement 0 is false, so the survey reads no outbox and no river_job (pinned by the reconciler cell
 // TestStaleFinalizeBaseZeroReadsNoOutboxAndNoRiver). WANT at base 7 x perClass (seedBaseClasses: every class, k = 2
 // finalize outbox rows per run): statements A and B read the outbox through ix_worker_job_outbox_finalize_domain_id
-// (revision 0167) and never with a Seq Scan; every outbox and river_job node runs; an outbox node probed per base run
-// reads at most k x base rows, one run once (a hashed subplan) at most the index's entries; A returns the perClass
-// candidates and the survey counts each class.
+// (revision 0167) and never with a Seq Scan; every outbox and river_job node runs, once, except the recent arm's keyed
+// finalize-index probe, which reads at most k x base rows; a node run once (a hashed subplan) reads at most the index's
+// entries; A returns the perClass candidates and the survey counts each class.
 // Timings are logged as INFO only (D6418: no wall-time assertion).
 func TestStaleFinalizeSurveyPlanAtProdSizes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -280,6 +280,7 @@ type planNode struct {
 	RelationName     string     `json:"Relation Name"`
 	IndexName        string     `json:"Index Name"`
 	IndexCond        string     `json:"Index Cond"`
+	RecheckCond      string     `json:"Recheck Cond"`
 	ActualRows       float64    `json:"Actual Rows"`
 	ActualLoops      float64    `json:"Actual Loops"`
 	RemovedByFilter  float64    `json:"Rows Removed by Filter"`
@@ -288,9 +289,11 @@ type planNode struct {
 }
 
 // checkSubplanReads walks the analyzed plan of the statement. Every node on worker_job_outbox or river_job must have
-// run (loops > 0). An outbox node probed per base run (loops > 1) reads at most perProbeBound rows in all (k rows per
-// base run); an outbox node run once (a hashed subplan, allowed) reads at most the partial index's entries. A Seq Scan
-// on the outbox is refused by the caller's plan-text WANT.
+// run (loops > 0) and run ONCE, refused on the loop count (not on a row count that moves with the ANALYZE sample): the
+// River arms and the live, strand-shape outbox arms are uncorrelated sets. The one per-run outbox node allowed is the
+// recent arm's keyed probe of ix_worker_job_outbox_finalize_domain_id on the run id (outboxRunProbe), which reads at
+// most perProbeBound rows in all (k rows per base run). A node run once reads at most the partial index's entries. A
+// Seq Scan on the outbox is refused by the caller's plan-text WANT.
 func checkSubplanReads(t *testing.T, ctx context.Context, admin *pgxpool.Pool, name, query string, args []any, perProbeBound, indexEntries float64) {
 	t.Helper()
 	var raw []byte
@@ -331,9 +334,12 @@ func checkSubplanReads(t *testing.T, ctx context.Context, admin *pgxpool.Pool, n
 		if node.RelationName == "worker_job_outbox" {
 			outboxNodes++
 			read := (node.ActualRows + node.RemovedByFilter + node.RemovedByRecheck) * node.ActualLoops
-			form, bound := "per-probe", perProbeBound
-			if node.ActualLoops == 1 {
-				form, bound = "once", indexEntries
+			form, bound := "once", indexEntries
+			if node.ActualLoops > 1 {
+				form, bound = "keyed probe", perProbeBound
+				if !outboxRunProbe(node.NodeType, node.IndexName, node.IndexCond, node.RecheckCond, firstChildIndex(node.Plans)) {
+					t.Fatalf("%s: the %s outbox node (%s) ran %.0f times and is not the keyed finalize-index probe on the run id", name, node.NodeType, node.IndexName, node.ActualLoops)
+				}
 			}
 			t.Logf("INFO %s: outbox %s (%s) loops %.0f read %.0f, bound %.0f (%s)", name, node.NodeType, node.IndexName, node.ActualLoops, read, bound, form)
 			if read > bound {
@@ -437,8 +443,17 @@ FROM job`, at)
 }
 
 // checkGenericPlanReadsOnce runs the statement as a prepared statement forced onto its generic plan (JIT off, as the
-// survey runs) and fails on any node on daily_metrics_partitions or river_job that runs more than once, except the
-// no-partitions arm's keyed probe (partitionsRunProbe).
+// survey runs) and fails on any node on daily_metrics_partitions, river_job or worker_job_outbox that runs more than
+// once, except the no-partitions arm's keyed probe (partitionsRunProbe) and the recent arm's keyed outbox probe
+// (outboxRunProbe).
+// firstChildIndex is the index a Bitmap Heap Scan reads through (its Bitmap Index Scan child), else "".
+func firstChildIndex(children []planNode) string {
+	if len(children) == 1 {
+		return children[0].IndexName
+	}
+	return ""
+}
+
 func checkGenericPlanReadsOnce(t *testing.T, ctx context.Context, admin *pgxpool.Pool, name, query, types, args string) {
 	t.Helper()
 	conn, err := admin.Acquire(ctx)
@@ -472,6 +487,7 @@ func checkGenericPlanReadsOnce(t *testing.T, ctx context.Context, admin *pgxpool
 	walk = func(node planNode) {
 		perRun := node.ActualLoops > 1 &&
 			(node.RelationName == "river_job" ||
+				node.RelationName == "worker_job_outbox" && !outboxRunProbe(node.NodeType, node.IndexName, node.IndexCond, node.RecheckCond, firstChildIndex(node.Plans)) ||
 				node.RelationName == "daily_metrics_partitions" && !partitionsRunProbe(node.NodeType, node.IndexCond))
 		if perRun {
 			t.Fatalf("%s (generic plan) reads %s %.0f times through %s:\n%s", name, node.RelationName, node.ActualLoops, node.NodeType, raw)
@@ -481,5 +497,5 @@ func checkGenericPlanReadsOnce(t *testing.T, ctx context.Context, admin *pgxpool
 		}
 	}
 	walk(plans[0].Plan)
-	t.Logf("INFO generic plan of %s: no per-run partitions or river_job read but the keyed no-partitions probe", name)
+	t.Logf("INFO generic plan of %s: no per-run partitions, river_job or outbox read but the keyed probes", name)
 }

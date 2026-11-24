@@ -198,6 +198,12 @@ type CompleteRouteExecutionResult struct {
 	// loop committed nothing before the page budget refused them. Zero for
 	// non-chunked routes, which have no checkpoint.
 	CommittedRows int64
+	// AttemptStartOrdinal is the chunk checkpoint next_ordinal this attempt read
+	// before it committed anything (0 with no checkpoint yet), reported on the
+	// failure path too; AttemptStartRead says it was read. The provider unit's
+	// progress refund compares the durable checkpoint to it (CHAOS-14574).
+	AttemptStartOrdinal int
+	AttemptStartRead    bool
 	// RequestUsage is this execution's provider HTTP spend, on every exit.
 	RequestUsage RequestUsageTotals
 	// RequestLedger is the requests this execution made, per route family and

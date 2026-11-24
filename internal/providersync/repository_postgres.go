@@ -760,12 +760,41 @@ func (repository *PostgresRepository) DeferChunkContinuation(
 	}
 	command, err := repository.Pool.Exec(
 		ctx, deferForChunkContinuationSQL, claim.ID, claim.Owner,
-		now.UTC(), availableAt.UTC(),
+		now.UTC(), availableAt.UTC(), nil, "",
 	)
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
 	return nil
+}
+
+// RefundChunkProgress is DeferChunkContinuation for a failed attempt that
+// moved the durable chunk checkpoint (CHAOS-14574): the same statement, so the
+// same attempts -1 and not-before fence, written only when the checkpoint's
+// next_ordinal is past startOrdinal (the value this attempt read when it
+// started) and the run is younger than 24 h. Both are read in the statement
+// itself. false with a nil error is "no refund": no progress, the cap, or a
+// lost lease; the caller then fails the attempt as before.
+func (repository *PostgresRepository) RefundChunkProgress(
+	ctx context.Context,
+	claim Claim,
+	startOrdinal int,
+	availableAt time.Time,
+	now time.Time,
+) (bool, error) {
+	if repository == nil || repository.Pool == nil || ctx == nil ||
+		claim.Validate() != nil || startOrdinal < 0 || now.IsZero() || !availableAt.After(now) ||
+		availableAt.Sub(now) > 15*time.Minute {
+		return false, ErrInvalidConfiguration
+	}
+	command, err := repository.Pool.Exec(
+		ctx, deferForChunkContinuationSQL, claim.ID, claim.Owner,
+		now.UTC(), availableAt.UTC(), startOrdinal, claim.GenerationKey(),
+	)
+	if err != nil {
+		return false, err
+	}
+	return command.RowsAffected() == 1, nil
 }
 
 // Fail terminalizes an exhausted unit and arms run finalization.
@@ -1409,7 +1438,22 @@ WHERE unit.id = $1::uuid
   AND unit.status = 'running'
   AND unit.lease_owner = $2
   AND unit.lease_expires_at IS NOT NULL
-  AND unit.lease_expires_at > $3`
+  AND unit.lease_expires_at > $3
+  AND (
+    $5::integer IS NULL
+    OR (
+      EXISTS (
+        SELECT 1 FROM public.sync_runs AS run
+        WHERE run.id = unit.sync_run_id AND run.org_id = unit.org_id
+          AND run.created_at > $3::timestamptz - interval '24 hours'
+      )
+      AND EXISTS (
+        SELECT 1 FROM public.sync_run_unit_chunk_checkpoints AS checkpoint
+        WHERE checkpoint.org_id = unit.org_id AND checkpoint.sync_run_unit_id = unit.id
+          AND checkpoint.generation = $6::text AND checkpoint.next_ordinal > $5::integer
+      )
+    )
+  )`
 
 // failUnitSQL carries forward EXACTLY ONE key and drops the rest.
 //

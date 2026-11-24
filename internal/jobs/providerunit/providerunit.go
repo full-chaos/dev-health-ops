@@ -203,6 +203,8 @@ const (
 	causeClassSinkConnectionDropped = "sink_connection_dropped"
 	// "provider_" + providerfoundation.ErrorClass for the rest.
 	causeClassProviderPrefix = "provider_"
+	// The one class a progress refund applies to (CHAOS-14574).
+	causeClassProviderTransient = causeClassProviderPrefix + string(providerfoundation.ErrorTransient)
 )
 
 var providerErrorClasses = map[providerfoundation.ErrorClass]struct{}{
@@ -524,6 +526,12 @@ type RateLimitDeferralRepository interface {
 // PostgresRepository implements it for the opt-in chunk route.
 type ChunkContinuationRepository interface {
 	DeferChunkContinuation(context.Context, providersync.Claim, time.Time, time.Time) error
+}
+
+// ChunkProgressRefundRepository is optional for the same reason. Production's
+// PostgresRepository implements it with the chunk continuation's statement.
+type ChunkProgressRefundRepository interface {
+	RefundChunkProgress(context.Context, providersync.Claim, int, time.Time, time.Time) (bool, error)
 }
 
 type Handler struct {
@@ -1376,6 +1384,9 @@ func (handler *Handler) Work(
 		return jobruntime.Permanent(jobruntime.WithSafeCauseText(err,
 			safeCause(category, session.Claim, execution, err)))
 	}
+	if delay, refunded := handler.refundProgressFailure(ctx, execution, session.Claim, result, err, completedAt); refunded {
+		return jobruntime.RetryableAfter(err, delay)
+	}
 	maxAttempts := execution.Definition.MaxAttempts
 	if limit := retryMaxAttempts(err); limit > 0 && limit < maxAttempts {
 		maxAttempts = limit
@@ -1425,6 +1436,53 @@ func (handler *Handler) Work(
 		safeCause(retryCauseExecution, session.Claim, execution, err)))
 }
 
+// refundProgressFailure refunds an ordinary provider_transient failure of a
+// chunked attempt that moved the durable checkpoint (CHAOS-14574): sparse 5xx
+// answers over a long walk must not exhaust a unit that keeps committing
+// chunks. The refund is the chunk continuation's own write (attempts -1, an
+// attempt-neutral snooze) after the delay the ordinary retry of this attempt
+// would wait. The statement itself checks that the checkpoint moved past this
+// attempt's start and that the run is younger than 24 h; with no row written
+// the failure counts as before.
+func (handler *Handler) refundProgressFailure(
+	ctx context.Context,
+	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
+	claim providersync.Claim,
+	result providersync.CompleteRouteExecutionResult,
+	err error,
+	completedAt time.Time,
+) (time.Duration, bool) {
+	if !result.AttemptStartRead || causeClass(err, false) != causeClassProviderTransient {
+		return 0, false
+	}
+	refunder, supported := handler.Repository.(ChunkProgressRefundRepository)
+	if !supported {
+		return 0, false
+	}
+	delay := progressRefundDelay(execution)
+	refunded, refundErr := refunder.RefundChunkProgress(
+		context.WithoutCancel(ctx), claim, result.AttemptStartOrdinal, completedAt.Add(delay), completedAt,
+	)
+	if refundErr != nil || !refunded {
+		return 0, false
+	}
+	handler.ProviderMetrics.RecordUnitDeferred(claim.Provider, claim.Dataset, deferralReasonProgressRefund)
+	handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultRetrying)
+	handler.logLifecycleWith(ctx, execution, claim, "sync_provider_unit_finished", "continued", nil,
+		"deferral_reason", deferralReasonProgressRefund, "cause_class", causeClassProviderTransient,
+		"start_ordinal", result.AttemptStartOrdinal, "delay_ms", delay.Milliseconds())
+	return delay, true
+}
+
+// progressRefundDelay is the River retry delay of this attempt, at least 1 s.
+func progressRefundDelay(execution *jobruntime.Execution[jobruntime.ProviderUnitArgs]) time.Duration {
+	delay := jobruntime.RetryBackoff(execution.Definition, execution.JobID, execution.Attempt)
+	if delay < time.Second {
+		delay = time.Second
+	}
+	return delay
+}
+
 // rateLimitObservation is the budget dimension and the provider's delay of the
 // rate limit that deferred the unit, for the durable observation row.
 func rateLimitObservation(err error) providersync.RateLimitObservation {
@@ -1455,6 +1513,7 @@ const (
 	deferralReasonBudgetContention  = "budget_contention"
 	deferralReasonRateLimited       = "rate_limited"
 	deferralReasonChunkContinuation = "chunk_continuation"
+	deferralReasonProgressRefund    = "progress_refund"
 )
 
 // budgetContentionMaxBackoff caps the contention delay's growth (CHAOS-7434).

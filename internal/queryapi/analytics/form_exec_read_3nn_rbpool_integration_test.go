@@ -152,7 +152,7 @@ func TestForm3nnRbpoolExecutesOnTheServedStatements(t *testing.T) {
 		t.Fatalf("form statements = %v", labels)
 	}
 	marker := ", max_rows_to_read = 5000000, read_overflow_mode = ''throw''"
-	caps := []string{"> 200000000", "> 100000000000", "> 20000000"}
+	caps := []string{"> 200000000\n", "> 100000000000\n", "> 20000000,"}
 	for lit, n := range map[string]int{caps[0]: 1, caps[1]: 1, caps[2]: 1, "'STOP-COST-GATE'": 1, "cost_gate = 0": 1, marker: 1,
 		"') AS testops_suite_runs'": 1, "FROM system.query_log": 2} {
 		if got := strings.Count(byLabel["stmt0"], lit); got != n {
@@ -339,13 +339,13 @@ FROM numbers(%d)`, big, org, history))
 	// Gate fires: each cap lowered to 0 in a test copy. WANT code 395 STOP-COST-GATE.
 	fires := 0
 	for _, c := range caps {
-		_, _, err := rbpoolRows(e.ctx, e.admin, strings.Replace(byLabel["stmt0"], c, "> 0", 1))
+		_, _, err := rbpoolRows(e.ctx, e.admin, strings.Replace(byLabel["stmt0"], c, "> 0"+c[len(c)-1:], 1))
 		var ex *stdclickhouse.Exception
 		if err == nil || !errors.As(err, &ex) || ex.Code != 395 || !strings.Contains(ex.Message, "STOP-COST-GATE") {
-			t.Errorf("GATE %s lowered to 0: err = %v, want code 395 STOP-COST-GATE", c, err)
+			t.Errorf("GATE %q lowered to 0: err = %v, want code 395 STOP-COST-GATE", c, err)
 			continue
 		}
-		t.Logf("GATE %s lowered to 0: fired code=%d", c, ex.Code)
+		t.Logf("GATE %q lowered to 0: fired code=%d", c, ex.Code)
 		fires++
 	}
 	if fires != 3 {

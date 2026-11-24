@@ -114,7 +114,7 @@ func TestRetryWaitDeadlineBackoffOnlyRateLimitCarriesTheBackoff(t *testing.T) {
 	}
 }
 
-func TestRetryWaitDeadlineTransientKeepsItsOwnClass(t *testing.T) {
+func TestRetryWaitDeadlineTransientStillSleepsToTheDeadline(t *testing.T) {
 	t.Parallel()
 	var requests int
 	policy := RetryPolicy{MaxAttempts: 3, InitialWait: 5 * time.Second, MaxWait: 5 * time.Second}
@@ -122,10 +122,11 @@ func TestRetryWaitDeadlineTransientKeepsItsOwnClass(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
+	started := time.Now()
 	_, err := client.Do(ctx, http.MethodGet, "/items", nil)
 	var providerErr *ProviderError
-	if !errors.As(err, &providerErr) || providerErr.Class != ErrorTransient || !errors.Is(err, context.DeadlineExceeded) || requests != 1 {
-		t.Fatalf("err = %v after %d request(s), want the transient class that is also a deadline error, not rate_limited", err, requests)
+	if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &providerErr) || requests != 1 || time.Since(started) < 250*time.Millisecond {
+		t.Fatalf("err = %v after %d request(s) in %s, want the base behaviour for a transient answer: the wait slept out to the deadline and a plain deadline error", err, requests, time.Since(started))
 	}
 }
 

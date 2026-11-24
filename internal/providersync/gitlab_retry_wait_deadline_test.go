@@ -45,24 +45,36 @@ func retryDeadlineGitLabClient(t *testing.T, doer providerfoundation.HTTPDoer, g
 	return client
 }
 
-// A 503 whose retry wait is longer than the time left must stop the security
-// route as the slept-out deadline did: an error and no watermark, never the
-// empty successful batch the route gives an ordinary provider failure.
+// A 429 whose retry wait is longer than the time left stops the security route
+// with the rate_limited class and no watermark; a 503 keeps the base behaviour
+// (the wait slept out, a plain deadline error). Neither may become the empty
+// successful batch the route gives an ordinary provider failure.
 func TestGitLabSecurityRetryWaitPastTheDeadlineIsAnErrorWithoutWatermark(t *testing.T) {
-	doer := &gitLabSecurityRouteDoer{responses: gitLabSecurityRouteFixtures()}
-	doer.responses["/api/v4/projects/123/vulnerability_findings"] = gitLabSecurityHTTPResponse{
-		status: http.StatusServiceUnavailable, body: `{"message":"down"}`,
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	batch, err := (GitLabSecurityRouteHandler{}).Collect(
-		ctx, nativeTestClaim("gitlab", "security"), providerfoundation.Credential{},
-		retryDeadlineGitLabClient(t, doer, nil, 25*time.Second), time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
-	)
-	var providerErr *providerfoundation.ProviderError
-	if !errors.Is(err, context.DeadlineExceeded) || !errors.As(err, &providerErr) ||
-		providerErr.Class != providerfoundation.ErrorTransient || batch.Watermark != nil || len(batch.Effects) != 0 {
-		t.Fatalf("err=%v watermark=%v effects=%d, want a transient deadline error, no watermark, no effects", err, batch.Watermark, len(batch.Effects))
+	for _, test := range []struct {
+		status int
+		class  providerfoundation.ErrorClass
+	}{
+		{http.StatusTooManyRequests, providerfoundation.ErrorRateLimited},
+		{http.StatusServiceUnavailable, ""},
+	} {
+		doer := &gitLabSecurityRouteDoer{responses: gitLabSecurityRouteFixtures()}
+		doer.responses["/api/v4/projects/123/vulnerability_findings"] = gitLabSecurityHTTPResponse{
+			status: test.status, body: `{"message":"limited"}`,
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		batch, err := (GitLabSecurityRouteHandler{}).Collect(
+			ctx, nativeTestClaim("gitlab", "security"), providerfoundation.Credential{},
+			retryDeadlineGitLabClient(t, doer, nil, 25*time.Second), time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
+		)
+		cancel()
+		var providerErr *providerfoundation.ProviderError
+		hasClass := errors.As(err, &providerErr) && providerErr.Class == test.class
+		if test.class == "" {
+			hasClass = !errors.As(err, &providerErr)
+		}
+		if !errors.Is(err, context.DeadlineExceeded) || !hasClass || batch.Watermark != nil || len(batch.Effects) != 0 {
+			t.Fatalf("status %d: err=%v watermark=%v effects=%d, want a deadline error (class %q), no watermark, no effects", test.status, err, batch.Watermark, len(batch.Effects), test.class)
+		}
 	}
 }
 

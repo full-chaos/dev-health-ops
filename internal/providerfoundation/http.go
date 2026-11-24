@@ -529,8 +529,11 @@ func (c *HTTPClient) doRequest(ctx context.Context, probe *requestProbe, method,
 		if !classification.Retryable() || attempt == c.Retry.MaxAttempts {
 			return nil, classification
 		}
-		if deadlineWithin(ctx, retryDelay) {
-			if classification.Class == ErrorRateLimited && classification.RetryAfter <= 0 {
+		// Only a rate limit ends early: it is the provider scheduling the retry, and
+		// the unit defers it without using an attempt. Any other class keeps the
+		// slept-out wait and its context error, so no caller's fallback changes.
+		if classification.Class == ErrorRateLimited && deadlineWithin(ctx, retryDelay) {
+			if classification.RetryAfter <= 0 {
 				classification.RetryAfter = retryDelay
 			}
 			// The wait does not fit: end as a deadline error, as the slept-out wait

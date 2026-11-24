@@ -1,0 +1,3404 @@
+{
+ "github/blame|happy|0": {
+  "deadline": false,
+  "effects": 2,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "github/blame|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/blame|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/blame|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/commits",
+  "watermark": false
+ },
+ "github/blame|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/commits",
+  "watermark": false
+ },
+ "github/blame|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/git/trees/tree-sha",
+  "watermark": false
+ },
+ "github/blame|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/git/trees/tree-sha",
+  "watermark": false
+ },
+ "github/blame|req04|429": {
+  "deadline": false,
+  "effects": 2,
+  "ok": true,
+  "path": "POST /graphql",
+  "watermark": true
+ },
+ "github/blame|req04|503": {
+  "deadline": false,
+  "effects": 2,
+  "ok": true,
+  "path": "POST /graphql",
+  "watermark": true
+ },
+ "github/blame|req05|429": {
+  "deadline": false,
+  "effects": 2,
+  "ok": true,
+  "path": "",
+  "watermark": true
+ },
+ "github/blame|req05|503": {
+  "deadline": false,
+  "effects": 2,
+  "ok": true,
+  "path": "",
+  "watermark": true
+ },
+ "github/blame|req06|429": {
+  "deadline": false,
+  "effects": 2,
+  "ok": true,
+  "path": "",
+  "watermark": true
+ },
+ "github/blame|req06|503": {
+  "deadline": false,
+  "effects": 2,
+  "ok": true,
+  "path": "",
+  "watermark": true
+ },
+ "github/cicd|happy|0": {
+  "deadline": false,
+  "effects": 7,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "github/cicd|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/cicd|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/cicd|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/cicd|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/cicd|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/cicd|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/cicd|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/cicd|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/cicd|req05|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/cicd|req05|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/cicd|req06|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs/9001/jobs",
+  "watermark": false
+ },
+ "github/cicd|req06|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs/9001/jobs",
+  "watermark": false
+ },
+ "github/cicd|req07|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs/9001/artifacts",
+  "watermark": false
+ },
+ "github/cicd|req07|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs/9001/artifacts",
+  "watermark": false
+ },
+ "github/cicd|req08|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/artifacts/77/zip",
+  "watermark": false
+ },
+ "github/cicd|req08|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/artifacts/77/zip",
+  "watermark": false
+ },
+ "github/cicd|req09|429": {
+  "deadline": false,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /report.zip",
+  "watermark": false
+ },
+ "github/cicd|req09|503": {
+  "deadline": false,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /report.zip",
+  "watermark": false
+ },
+ "github/commit-stats|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "github/commit-stats|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/commit-stats|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/commit-stats|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/commits",
+  "watermark": false
+ },
+ "github/commit-stats|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/commits",
+  "watermark": false
+ },
+ "github/commit-stats|req03|429": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "GET /repos/acme/api/commits/first",
+  "watermark": true
+ },
+ "github/commit-stats|req03|503": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "GET /repos/acme/api/commits/first",
+  "watermark": true
+ },
+ "github/commit-stats|req04|429": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "GET /repos/acme/api/commits/second",
+  "watermark": true
+ },
+ "github/commit-stats|req04|503": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "GET /repos/acme/api/commits/second",
+  "watermark": true
+ },
+ "github/commits|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "github/commits|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/commits|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/commits|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/commits",
+  "watermark": false
+ },
+ "github/commits|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/commits",
+  "watermark": false
+ },
+ "github/deployments|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "github/deployments|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/deployments|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/deployments|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/releases",
+  "watermark": false
+ },
+ "github/deployments|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/releases",
+  "watermark": false
+ },
+ "github/deployments|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/deployments",
+  "watermark": false
+ },
+ "github/deployments|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/deployments",
+  "watermark": false
+ },
+ "github/deployments|req04|429": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "GET /repos/acme/api/commits/abc/pulls",
+  "watermark": true
+ },
+ "github/deployments|req04|503": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "GET /repos/acme/api/commits/abc/pulls",
+  "watermark": true
+ },
+ "github/deployments|req05|429": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "GET /repos/acme/api/deployments/101/statuses",
+  "watermark": true
+ },
+ "github/deployments|req05|503": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "GET /repos/acme/api/deployments/101/statuses",
+  "watermark": true
+ },
+ "github/files|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "github/files|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/files|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/files|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/commits",
+  "watermark": false
+ },
+ "github/files|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/commits",
+  "watermark": false
+ },
+ "github/files|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/git/trees/tree-sha",
+  "watermark": false
+ },
+ "github/files|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/git/trees/tree-sha",
+  "watermark": false
+ },
+ "github/files|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /graphql",
+  "watermark": false
+ },
+ "github/files|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /graphql",
+  "watermark": false
+ },
+ "github/pr-reviews|happy|0": {
+  "deadline": false,
+  "effects": 3,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "github/pr-reviews|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/pr-reviews|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/pr-reviews|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/pulls",
+  "watermark": false
+ },
+ "github/pr-reviews|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/pulls",
+  "watermark": false
+ },
+ "github/pr-reviews|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/pulls/42",
+  "watermark": false
+ },
+ "github/pr-reviews|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/pulls/42",
+  "watermark": false
+ },
+ "github/pr-reviews|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /graphql",
+  "watermark": false
+ },
+ "github/pr-reviews|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /graphql",
+  "watermark": false
+ },
+ "github/prs|happy|0": {
+  "deadline": false,
+  "effects": 2,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "github/prs|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/prs|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/prs|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/pulls",
+  "watermark": false
+ },
+ "github/prs|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/pulls",
+  "watermark": false
+ },
+ "github/prs|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/pulls/42",
+  "watermark": false
+ },
+ "github/prs|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/pulls/42",
+  "watermark": false
+ },
+ "github/repo-metadata|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": false
+ },
+ "github/repo-metadata|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/repo-metadata|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/security|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "github/security|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/security|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/security|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/dependabot/alerts",
+  "watermark": false
+ },
+ "github/security|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/dependabot/alerts",
+  "watermark": false
+ },
+ "github/security|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/code-scanning/alerts",
+  "watermark": false
+ },
+ "github/security|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/code-scanning/alerts",
+  "watermark": false
+ },
+ "github/security|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/security-advisories",
+  "watermark": false
+ },
+ "github/security|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/security-advisories",
+  "watermark": false
+ },
+ "github/team_catalog/strict|happy|0": {
+  "deadline": false,
+  "effects": 8,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": false
+ },
+ "github/team_catalog/strict|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /orgs/acme/teams",
+  "watermark": false
+ },
+ "github/team_catalog/strict|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /orgs/acme/teams",
+  "watermark": false
+ },
+ "github/team_catalog/strict|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /orgs/acme/teams/platform/repos",
+  "watermark": false
+ },
+ "github/team_catalog/strict|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /orgs/acme/teams/platform/repos",
+  "watermark": false
+ },
+ "github/team_catalog/strict|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /orgs/acme/teams/platform/members",
+  "watermark": false
+ },
+ "github/team_catalog/strict|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /orgs/acme/teams/platform/members",
+  "watermark": false
+ },
+ "github/team_catalog/strict|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /users/octocat",
+  "watermark": false
+ },
+ "github/team_catalog/strict|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /users/octocat",
+  "watermark": false
+ },
+ "github/team_catalog/strict|req05|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /users/monalisa",
+  "watermark": false
+ },
+ "github/team_catalog/strict|req05|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /users/monalisa",
+  "watermark": false
+ },
+ "github/team_catalog/strict|req06|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /orgs/acme/teams/data/repos",
+  "watermark": false
+ },
+ "github/team_catalog/strict|req06|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /orgs/acme/teams/data/repos",
+  "watermark": false
+ },
+ "github/team_catalog/strict|req07|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /orgs/acme/teams/data/members",
+  "watermark": false
+ },
+ "github/team_catalog/strict|req07|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /orgs/acme/teams/data/members",
+  "watermark": false
+ },
+ "github/team_catalog|happy|0": {
+  "deadline": false,
+  "effects": 8,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": false
+ },
+ "github/team_catalog|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /orgs/acme/teams",
+  "watermark": false
+ },
+ "github/team_catalog|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /orgs/acme/teams",
+  "watermark": false
+ },
+ "github/team_catalog|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /orgs/acme/teams/platform/repos",
+  "watermark": false
+ },
+ "github/team_catalog|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /orgs/acme/teams/platform/repos",
+  "watermark": false
+ },
+ "github/team_catalog|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /orgs/acme/teams/platform/members",
+  "watermark": false
+ },
+ "github/team_catalog|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /orgs/acme/teams/platform/members",
+  "watermark": false
+ },
+ "github/team_catalog|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /users/octocat",
+  "watermark": false
+ },
+ "github/team_catalog|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /users/octocat",
+  "watermark": false
+ },
+ "github/team_catalog|req05|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /users/monalisa",
+  "watermark": false
+ },
+ "github/team_catalog|req05|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /users/monalisa",
+  "watermark": false
+ },
+ "github/team_catalog|req06|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /orgs/acme/teams/data/repos",
+  "watermark": false
+ },
+ "github/team_catalog|req06|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /orgs/acme/teams/data/repos",
+  "watermark": false
+ },
+ "github/team_catalog|req07|429": {
+  "deadline": false,
+  "effects": 7,
+  "ok": true,
+  "path": "GET /orgs/acme/teams/data/members",
+  "watermark": false
+ },
+ "github/team_catalog|req07|503": {
+  "deadline": false,
+  "effects": 7,
+  "ok": true,
+  "path": "GET /orgs/acme/teams/data/members",
+  "watermark": false
+ },
+ "github/tests/chunked|happy|0": {
+  "deadline": false,
+  "effects": 35,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "github/tests/chunked|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/tests/chunked|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/tests/chunked|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/tests/chunked|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/tests/chunked|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs/9001/jobs",
+  "watermark": false
+ },
+ "github/tests/chunked|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs/9001/jobs",
+  "watermark": false
+ },
+ "github/tests/chunked|req04|429": {
+  "deadline": true,
+  "effects": 7,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/tests/chunked|req04|503": {
+  "deadline": true,
+  "effects": 7,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/tests/chunked|req05|429": {
+  "deadline": true,
+  "effects": 14,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/tests/chunked|req05|503": {
+  "deadline": true,
+  "effects": 14,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/tests/chunked|req06|429": {
+  "deadline": true,
+  "effects": 14,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs/9001/artifacts",
+  "watermark": false
+ },
+ "github/tests/chunked|req06|503": {
+  "deadline": true,
+  "effects": 14,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs/9001/artifacts",
+  "watermark": false
+ },
+ "github/tests/chunked|req07|429": {
+  "deadline": true,
+  "effects": 14,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/artifacts/77/zip",
+  "watermark": false
+ },
+ "github/tests/chunked|req07|503": {
+  "deadline": true,
+  "effects": 14,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/artifacts/77/zip",
+  "watermark": false
+ },
+ "github/tests/chunked|req08|429": {
+  "deadline": false,
+  "effects": 14,
+  "ok": false,
+  "path": "GET /report.zip",
+  "watermark": false
+ },
+ "github/tests/chunked|req08|503": {
+  "deadline": false,
+  "effects": 14,
+  "ok": false,
+  "path": "GET /report.zip",
+  "watermark": false
+ },
+ "github/tests/chunked|req09|429": {
+  "deadline": true,
+  "effects": 21,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/tests/chunked|req09|503": {
+  "deadline": true,
+  "effects": 21,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/tests|happy|0": {
+  "deadline": false,
+  "effects": 7,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "github/tests|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/tests|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/tests|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/tests|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/tests|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/tests|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/tests|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/tests|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/tests|req05|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/tests|req05|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs",
+  "watermark": false
+ },
+ "github/tests|req06|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs/9001/jobs",
+  "watermark": false
+ },
+ "github/tests|req06|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs/9001/jobs",
+  "watermark": false
+ },
+ "github/tests|req07|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs/9001/artifacts",
+  "watermark": false
+ },
+ "github/tests|req07|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/runs/9001/artifacts",
+  "watermark": false
+ },
+ "github/tests|req08|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/artifacts/77/zip",
+  "watermark": false
+ },
+ "github/tests|req08|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/actions/artifacts/77/zip",
+  "watermark": false
+ },
+ "github/tests|req09|429": {
+  "deadline": false,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /report.zip",
+  "watermark": false
+ },
+ "github/tests|req09|503": {
+  "deadline": false,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /report.zip",
+  "watermark": false
+ },
+ "github/work_items_rest|happy|0": {
+  "deadline": false,
+  "effects": 0,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": false
+ },
+ "github/work_items_rest|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/work_items_rest|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/work_items_rest|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/milestones",
+  "watermark": false
+ },
+ "github/work_items_rest|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/milestones",
+  "watermark": false
+ },
+ "github/work_items_rest|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/issues",
+  "watermark": false
+ },
+ "github/work_items_rest|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/issues",
+  "watermark": false
+ },
+ "github/work_items_rest|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/issues/42/events",
+  "watermark": false
+ },
+ "github/work_items_rest|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/issues/42/events",
+  "watermark": false
+ },
+ "github/work_items_rest|req05|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/issues/42/comments",
+  "watermark": false
+ },
+ "github/work_items_rest|req05|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/issues/42/comments",
+  "watermark": false
+ },
+ "github/work_items_rest|req06|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/pulls",
+  "watermark": false
+ },
+ "github/work_items_rest|req06|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/pulls",
+  "watermark": false
+ },
+ "github/work_items_rest|req07|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/pulls/52",
+  "watermark": false
+ },
+ "github/work_items_rest|req07|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/pulls/52",
+  "watermark": false
+ },
+ "github/work_items|happy|0": {
+  "deadline": false,
+  "effects": 9,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "github/work_items|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/work_items|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api",
+  "watermark": false
+ },
+ "github/work_items|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/issues",
+  "watermark": false
+ },
+ "github/work_items|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/issues",
+  "watermark": false
+ },
+ "github/work_items|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/issues/42/events",
+  "watermark": false
+ },
+ "github/work_items|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/issues/42/events",
+  "watermark": false
+ },
+ "github/work_items|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/issues/42/comments",
+  "watermark": false
+ },
+ "github/work_items|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/issues/42/comments",
+  "watermark": false
+ },
+ "github/work_items|req05|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/pulls",
+  "watermark": false
+ },
+ "github/work_items|req05|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/pulls",
+  "watermark": false
+ },
+ "github/work_items|req06|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/pulls/52",
+  "watermark": false
+ },
+ "github/work_items|req06|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /repos/acme/api/pulls/52",
+  "watermark": false
+ },
+ "github/work_items|req07|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /graphql",
+  "watermark": false
+ },
+ "github/work_items|req07|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /graphql",
+  "watermark": false
+ },
+ "gitlab/blame|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "gitlab/blame|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/blame|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/blame|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits",
+  "watermark": false
+ },
+ "gitlab/blame|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits",
+  "watermark": false
+ },
+ "gitlab/blame|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/tree",
+  "watermark": false
+ },
+ "gitlab/blame|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/tree",
+  "watermark": false
+ },
+ "gitlab/blame|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/files/src/file-000.go/blame",
+  "watermark": false
+ },
+ "gitlab/blame|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/files/src/file-000.go/blame",
+  "watermark": false
+ },
+ "gitlab/blame|req05|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/files/src/file-001.go/blame",
+  "watermark": false
+ },
+ "gitlab/blame|req05|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/files/src/file-001.go/blame",
+  "watermark": false
+ },
+ "gitlab/blame|req06|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/files/src/file-002.go/blame",
+  "watermark": false
+ },
+ "gitlab/blame|req06|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/files/src/file-002.go/blame",
+  "watermark": false
+ },
+ "gitlab/commit_stats|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "gitlab/commit_stats|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/commit_stats|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/commit_stats|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits",
+  "watermark": false
+ },
+ "gitlab/commit_stats|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits",
+  "watermark": false
+ },
+ "gitlab/commit_stats|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits",
+  "watermark": false
+ },
+ "gitlab/commit_stats|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits",
+  "watermark": false
+ },
+ "gitlab/commit_stats|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits/sha-1",
+  "watermark": false
+ },
+ "gitlab/commit_stats|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits/sha-1",
+  "watermark": false
+ },
+ "gitlab/commit_stats|req05|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits/sha-2",
+  "watermark": false
+ },
+ "gitlab/commit_stats|req05|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits/sha-2",
+  "watermark": false
+ },
+ "gitlab/commits|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "gitlab/commits|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/commits|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/commits|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits",
+  "watermark": false
+ },
+ "gitlab/commits|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits",
+  "watermark": false
+ },
+ "gitlab/commits|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits",
+  "watermark": false
+ },
+ "gitlab/commits|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits",
+  "watermark": false
+ },
+ "gitlab/commits|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits",
+  "watermark": false
+ },
+ "gitlab/commits|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits",
+  "watermark": false
+ },
+ "gitlab/deployments|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "gitlab/deployments|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/deployments|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/deployments|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/releases",
+  "watermark": false
+ },
+ "gitlab/deployments|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/releases",
+  "watermark": false
+ },
+ "gitlab/deployments|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/deployments",
+  "watermark": false
+ },
+ "gitlab/deployments|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/deployments",
+  "watermark": false
+ },
+ "gitlab/deployments|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits/future/merge_requests",
+  "watermark": false
+ },
+ "gitlab/deployments|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits/future/merge_requests",
+  "watermark": false
+ },
+ "gitlab/deployments|req05|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits/main/merge_requests",
+  "watermark": false
+ },
+ "gitlab/deployments|req05|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits/main/merge_requests",
+  "watermark": false
+ },
+ "gitlab/deployments|req06|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits/old/merge_requests",
+  "watermark": false
+ },
+ "gitlab/deployments|req06|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/commits/old/merge_requests",
+  "watermark": false
+ },
+ "gitlab/feature_flags|happy|0": {
+  "deadline": false,
+  "effects": 3,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "gitlab/feature_flags|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/group/project/feature_flags",
+  "watermark": false
+ },
+ "gitlab/feature_flags|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/group/project/feature_flags",
+  "watermark": false
+ },
+ "gitlab/feature_flags|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/group/project/feature_flags",
+  "watermark": false
+ },
+ "gitlab/feature_flags|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/group/project/feature_flags",
+  "watermark": false
+ },
+ "gitlab/feature_flags|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/group/project",
+  "watermark": false
+ },
+ "gitlab/feature_flags|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/group/project",
+  "watermark": false
+ },
+ "gitlab/files|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": false
+ },
+ "gitlab/files|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/files|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/files|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/tree",
+  "watermark": false
+ },
+ "gitlab/files|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/tree",
+  "watermark": false
+ },
+ "gitlab/files|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/tree",
+  "watermark": false
+ },
+ "gitlab/files|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/tree",
+  "watermark": false
+ },
+ "gitlab/files|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/tree",
+  "watermark": false
+ },
+ "gitlab/files|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/repository/tree",
+  "watermark": false
+ },
+ "gitlab/files|req05|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /api/graphql",
+  "watermark": false
+ },
+ "gitlab/files|req05|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /api/graphql",
+  "watermark": false
+ },
+ "gitlab/files|req06|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /api/graphql",
+  "watermark": false
+ },
+ "gitlab/files|req06|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /api/graphql",
+  "watermark": false
+ },
+ "gitlab/incidents|happy|0": {
+  "deadline": false,
+  "effects": 3,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "gitlab/incidents|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/incidents|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/incidents|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/issues",
+  "watermark": false
+ },
+ "gitlab/incidents|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/issues",
+  "watermark": false
+ },
+ "gitlab/prs|happy|0": {
+  "deadline": false,
+  "effects": 4,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "gitlab/prs|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/prs|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/prs|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests",
+  "watermark": false
+ },
+ "gitlab/prs|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests",
+  "watermark": false
+ },
+ "gitlab/prs|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests/7/approvals",
+  "watermark": false
+ },
+ "gitlab/prs|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests/7/approvals",
+  "watermark": false
+ },
+ "gitlab/prs|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests/7/notes",
+  "watermark": false
+ },
+ "gitlab/prs|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests/7/notes",
+  "watermark": false
+ },
+ "gitlab/prs|req05|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests/7/notes",
+  "watermark": false
+ },
+ "gitlab/prs|req05|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests/7/notes",
+  "watermark": false
+ },
+ "gitlab/prs|req06|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests/7/notes",
+  "watermark": false
+ },
+ "gitlab/prs|req06|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests/7/notes",
+  "watermark": false
+ },
+ "gitlab/prs|req07|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests/7/commits",
+  "watermark": false
+ },
+ "gitlab/prs|req07|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests/7/commits",
+  "watermark": false
+ },
+ "gitlab/prs|req08|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests/7/commits",
+  "watermark": false
+ },
+ "gitlab/prs|req08|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests/7/commits",
+  "watermark": false
+ },
+ "gitlab/prs|req09|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests",
+  "watermark": false
+ },
+ "gitlab/prs|req09|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests",
+  "watermark": false
+ },
+ "gitlab/prs|req10|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests/8/approvals",
+  "watermark": false
+ },
+ "gitlab/prs|req10|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests/8/approvals",
+  "watermark": false
+ },
+ "gitlab/prs|req11|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests/8/notes",
+  "watermark": false
+ },
+ "gitlab/prs|req11|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests/8/notes",
+  "watermark": false
+ },
+ "gitlab/prs|req12|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests/8/commits",
+  "watermark": false
+ },
+ "gitlab/prs|req12|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/merge_requests/8/commits",
+  "watermark": false
+ },
+ "gitlab/repository|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": false
+ },
+ "gitlab/repository|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/repository|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/security|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "gitlab/security|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/security|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/security|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/vulnerability_findings",
+  "watermark": false
+ },
+ "gitlab/security|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/vulnerability_findings",
+  "watermark": false
+ },
+ "gitlab/security|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/dependencies",
+  "watermark": false
+ },
+ "gitlab/security|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/dependencies",
+  "watermark": false
+ },
+ "gitlab/tests/chunked|happy|0": {
+  "deadline": false,
+  "effects": 7,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "gitlab/tests/chunked|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/tests/chunked|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/tests/chunked|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines",
+  "watermark": false
+ },
+ "gitlab/tests/chunked|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines",
+  "watermark": false
+ },
+ "gitlab/tests/chunked|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines/9001/jobs",
+  "watermark": false
+ },
+ "gitlab/tests/chunked|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines/9001/jobs",
+  "watermark": false
+ },
+ "gitlab/tests/chunked|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines",
+  "watermark": false
+ },
+ "gitlab/tests/chunked|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines",
+  "watermark": false
+ },
+ "gitlab/tests/chunked|req05|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines/9001/jobs",
+  "watermark": false
+ },
+ "gitlab/tests/chunked|req05|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines/9001/jobs",
+  "watermark": false
+ },
+ "gitlab/tests/chunked|req06|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines/9001/test_report",
+  "watermark": false
+ },
+ "gitlab/tests/chunked|req06|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines/9001/test_report",
+  "watermark": false
+ },
+ "gitlab/tests/chunked|req07|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/jobs/11/artifacts",
+  "watermark": false
+ },
+ "gitlab/tests/chunked|req07|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/jobs/11/artifacts",
+  "watermark": false
+ },
+ "gitlab/tests|happy|0": {
+  "deadline": false,
+  "effects": 7,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "gitlab/tests|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/tests|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/tests|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines",
+  "watermark": false
+ },
+ "gitlab/tests|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines",
+  "watermark": false
+ },
+ "gitlab/tests|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines/9001/jobs",
+  "watermark": false
+ },
+ "gitlab/tests|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines/9001/jobs",
+  "watermark": false
+ },
+ "gitlab/tests|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines",
+  "watermark": false
+ },
+ "gitlab/tests|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines",
+  "watermark": false
+ },
+ "gitlab/tests|req05|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines/9001/jobs",
+  "watermark": false
+ },
+ "gitlab/tests|req05|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines/9001/jobs",
+  "watermark": false
+ },
+ "gitlab/tests|req06|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines/9001/test_report",
+  "watermark": false
+ },
+ "gitlab/tests|req06|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/pipelines/9001/test_report",
+  "watermark": false
+ },
+ "gitlab/tests|req07|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/jobs/11/artifacts",
+  "watermark": false
+ },
+ "gitlab/tests|req07|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123/jobs/11/artifacts",
+  "watermark": false
+ },
+ "gitlab/work_items|happy|0": {
+  "deadline": false,
+  "effects": 7,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "gitlab/work_items|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/work_items|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/projects/123",
+  "watermark": false
+ },
+ "gitlab/work_items|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/version",
+  "watermark": false
+ },
+ "gitlab/work_items|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v4/version",
+  "watermark": false
+ },
+ "gitlab/work_items|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req05|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req05|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req06|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req06|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req07|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req07|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req08|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req08|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req09|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req09|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req10|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req10|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req11|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req11|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req12|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req12|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req13|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req13|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req14|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req14|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req15|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req15|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req16|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req16|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req17|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "gitlab/work_items|req17|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "",
+  "watermark": false
+ },
+ "jira/atlassian|happy|0": {
+  "deadline": false,
+  "effects": 10,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "jira/atlassian|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /rest/api/3/search/jql",
+  "watermark": false
+ },
+ "jira/atlassian|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /rest/api/3/search/jql",
+  "watermark": false
+ },
+ "jira/atlassian|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /rest/api/3/field",
+  "watermark": false
+ },
+ "jira/atlassian|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /rest/api/3/field",
+  "watermark": false
+ },
+ "jira/atlassian|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /rest/api/3/changelog/bulkfetch",
+  "watermark": false
+ },
+ "jira/atlassian|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /rest/api/3/changelog/bulkfetch",
+  "watermark": false
+ },
+ "jira/atlassian|req04|429": {
+  "deadline": false,
+  "effects": 10,
+  "ok": true,
+  "path": "GET /rest/api/3/issue/OPS-201/worklog",
+  "watermark": false
+ },
+ "jira/atlassian|req04|503": {
+  "deadline": false,
+  "effects": 10,
+  "ok": true,
+  "path": "GET /rest/api/3/issue/OPS-201/worklog",
+  "watermark": false
+ },
+ "jira/atlassian|req05|429": {
+  "deadline": false,
+  "effects": 10,
+  "ok": true,
+  "path": "GET /rest/agile/1.0/board",
+  "watermark": false
+ },
+ "jira/atlassian|req05|503": {
+  "deadline": false,
+  "effects": 10,
+  "ok": true,
+  "path": "GET /rest/agile/1.0/board",
+  "watermark": false
+ },
+ "jira/atlassian|req06|429": {
+  "deadline": false,
+  "effects": 10,
+  "ok": true,
+  "path": "GET /rest/agile/1.0/board/77/sprint",
+  "watermark": false
+ },
+ "jira/atlassian|req06|503": {
+  "deadline": false,
+  "effects": 10,
+  "ok": true,
+  "path": "GET /rest/agile/1.0/board/77/sprint",
+  "watermark": false
+ },
+ "jira/atlassian|req07|429": {
+  "deadline": false,
+  "effects": 10,
+  "ok": true,
+  "path": "GET /rest/api/3/issue/OPS-201/comment",
+  "watermark": true
+ },
+ "jira/atlassian|req07|503": {
+  "deadline": false,
+  "effects": 10,
+  "ok": true,
+  "path": "GET /rest/api/3/issue/OPS-201/comment",
+  "watermark": true
+ },
+ "jira/incidents|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "jira/incidents|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /_edge/tenant_info",
+  "watermark": false
+ },
+ "jira/incidents|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /_edge/tenant_info",
+  "watermark": false
+ },
+ "jira/incidents|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /rest/servicedeskapi/servicedesk",
+  "watermark": false
+ },
+ "jira/incidents|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /rest/servicedeskapi/servicedesk",
+  "watermark": false
+ },
+ "jira/incidents|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /rest/api/3/search/jql",
+  "watermark": false
+ },
+ "jira/incidents|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /rest/api/3/search/jql",
+  "watermark": false
+ },
+ "jira/incidents|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /jsm/incidents/cloudId/cloud-123/v1/incident/10001",
+  "watermark": false
+ },
+ "jira/incidents|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /jsm/incidents/cloudId/cloud-123/v1/incident/10001",
+  "watermark": false
+ },
+ "jira/incidents|req05|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /jsm/incidents/cloudId/cloud-123/v1/incident/10002",
+  "watermark": false
+ },
+ "jira/incidents|req05|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /jsm/incidents/cloudId/cloud-123/v1/incident/10002",
+  "watermark": false
+ },
+ "jira/work-items|happy|0": {
+  "deadline": false,
+  "effects": 8,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "jira/work-items|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /rest/api/3/search/jql",
+  "watermark": false
+ },
+ "jira/work-items|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /rest/api/3/search/jql",
+  "watermark": false
+ },
+ "jira/work-items|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /rest/api/3/field",
+  "watermark": false
+ },
+ "jira/work-items|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /rest/api/3/field",
+  "watermark": false
+ },
+ "jira/work-items|req03|429": {
+  "deadline": false,
+  "effects": 8,
+  "ok": true,
+  "path": "GET /rest/api/3/issue/OPS-101/comment",
+  "watermark": false
+ },
+ "jira/work-items|req03|503": {
+  "deadline": false,
+  "effects": 8,
+  "ok": true,
+  "path": "GET /rest/api/3/issue/OPS-101/comment",
+  "watermark": false
+ },
+ "jira/work-items|req04|429": {
+  "deadline": false,
+  "effects": 8,
+  "ok": true,
+  "path": "GET /rest/agile/1.0/sprint/9001",
+  "watermark": false
+ },
+ "jira/work-items|req04|503": {
+  "deadline": false,
+  "effects": 8,
+  "ok": true,
+  "path": "GET /rest/agile/1.0/sprint/9001",
+  "watermark": false
+ },
+ "launchdarkly/feature-flags|happy|0": {
+  "deadline": false,
+  "effects": 4,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "launchdarkly/feature-flags|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v2/flags/payments",
+  "watermark": false
+ },
+ "launchdarkly/feature-flags|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v2/flags/payments",
+  "watermark": false
+ },
+ "launchdarkly/feature-flags|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v2/auditlog",
+  "watermark": false
+ },
+ "launchdarkly/feature-flags|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v2/auditlog",
+  "watermark": false
+ },
+ "launchdarkly/feature-flags|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v2/code-refs/repositories",
+  "watermark": false
+ },
+ "launchdarkly/feature-flags|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /api/v2/code-refs/repositories",
+  "watermark": false
+ },
+ "linear/work-items-family|happy|0": {
+  "deadline": false,
+  "effects": 9,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "linear/work-items-family|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /graphql",
+  "watermark": false
+ },
+ "linear/work-items-family|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /graphql",
+  "watermark": false
+ },
+ "linear/work-items-family|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /graphql",
+  "watermark": false
+ },
+ "linear/work-items-family|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /graphql",
+  "watermark": false
+ },
+ "linear/work-items|happy|0": {
+  "deadline": false,
+  "effects": 8,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "linear/work-items|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /graphql",
+  "watermark": false
+ },
+ "linear/work-items|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /graphql",
+  "watermark": false
+ },
+ "linear/work-items|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /graphql",
+  "watermark": false
+ },
+ "linear/work-items|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "POST /graphql",
+  "watermark": false
+ },
+ "pagerduty/business-services|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": false
+ },
+ "pagerduty/business-services|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /business_services",
+  "watermark": false
+ },
+ "pagerduty/business-services|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /business_services",
+  "watermark": false
+ },
+ "pagerduty/business-services|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /business_services",
+  "watermark": false
+ },
+ "pagerduty/business-services|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /business_services",
+  "watermark": false
+ },
+ "pagerduty/escalation-policies|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": false
+ },
+ "pagerduty/escalation-policies|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /escalation_policies",
+  "watermark": false
+ },
+ "pagerduty/escalation-policies|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /escalation_policies",
+  "watermark": false
+ },
+ "pagerduty/escalation-policies|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /escalation_policies",
+  "watermark": false
+ },
+ "pagerduty/escalation-policies|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /escalation_policies",
+  "watermark": false
+ },
+ "pagerduty/incident-alerts|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "pagerduty/incident-alerts|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents",
+  "watermark": false
+ },
+ "pagerduty/incident-alerts|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents",
+  "watermark": false
+ },
+ "pagerduty/incident-alerts|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents",
+  "watermark": false
+ },
+ "pagerduty/incident-alerts|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents",
+  "watermark": false
+ },
+ "pagerduty/incident-alerts|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents/PI1/alerts",
+  "watermark": false
+ },
+ "pagerduty/incident-alerts|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents/PI1/alerts",
+  "watermark": false
+ },
+ "pagerduty/incident-alerts|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents/PI1/alerts",
+  "watermark": false
+ },
+ "pagerduty/incident-alerts|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents/PI1/alerts",
+  "watermark": false
+ },
+ "pagerduty/incident-alerts|req05|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents/PI2/alerts",
+  "watermark": false
+ },
+ "pagerduty/incident-alerts|req05|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents/PI2/alerts",
+  "watermark": false
+ },
+ "pagerduty/incident-log-entries|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "pagerduty/incident-log-entries|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents",
+  "watermark": false
+ },
+ "pagerduty/incident-log-entries|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents",
+  "watermark": false
+ },
+ "pagerduty/incident-log-entries|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents",
+  "watermark": false
+ },
+ "pagerduty/incident-log-entries|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents",
+  "watermark": false
+ },
+ "pagerduty/incident-log-entries|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents/PI1/log_entries",
+  "watermark": false
+ },
+ "pagerduty/incident-log-entries|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents/PI1/log_entries",
+  "watermark": false
+ },
+ "pagerduty/incident-log-entries|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents/PI1/log_entries",
+  "watermark": false
+ },
+ "pagerduty/incident-log-entries|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents/PI1/log_entries",
+  "watermark": false
+ },
+ "pagerduty/incident-log-entries|req05|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents/PI2/log_entries",
+  "watermark": false
+ },
+ "pagerduty/incident-log-entries|req05|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents/PI2/log_entries",
+  "watermark": false
+ },
+ "pagerduty/incident-notes|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "pagerduty/incident-notes|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents",
+  "watermark": false
+ },
+ "pagerduty/incident-notes|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents",
+  "watermark": false
+ },
+ "pagerduty/incident-notes|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents",
+  "watermark": false
+ },
+ "pagerduty/incident-notes|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents",
+  "watermark": false
+ },
+ "pagerduty/incident-notes|req03|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents/PI1/notes",
+  "watermark": false
+ },
+ "pagerduty/incident-notes|req03|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents/PI1/notes",
+  "watermark": false
+ },
+ "pagerduty/incident-notes|req04|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents/PI2/notes",
+  "watermark": false
+ },
+ "pagerduty/incident-notes|req04|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents/PI2/notes",
+  "watermark": false
+ },
+ "pagerduty/incidents|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": true
+ },
+ "pagerduty/incidents|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents",
+  "watermark": false
+ },
+ "pagerduty/incidents|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents",
+  "watermark": false
+ },
+ "pagerduty/incidents|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents",
+  "watermark": false
+ },
+ "pagerduty/incidents|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /incidents",
+  "watermark": false
+ },
+ "pagerduty/on-calls|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": false
+ },
+ "pagerduty/on-calls|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /oncalls",
+  "watermark": false
+ },
+ "pagerduty/on-calls|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /oncalls",
+  "watermark": false
+ },
+ "pagerduty/on-calls|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /oncalls",
+  "watermark": false
+ },
+ "pagerduty/on-calls|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /oncalls",
+  "watermark": false
+ },
+ "pagerduty/schedules|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": false
+ },
+ "pagerduty/schedules|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /schedules",
+  "watermark": false
+ },
+ "pagerduty/schedules|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /schedules",
+  "watermark": false
+ },
+ "pagerduty/schedules|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /schedules",
+  "watermark": false
+ },
+ "pagerduty/schedules|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /schedules",
+  "watermark": false
+ },
+ "pagerduty/services|happy|0": {
+  "deadline": false,
+  "effects": 2,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": false
+ },
+ "pagerduty/services|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /services",
+  "watermark": false
+ },
+ "pagerduty/services|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /services",
+  "watermark": false
+ },
+ "pagerduty/services|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /services",
+  "watermark": false
+ },
+ "pagerduty/services|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /services",
+  "watermark": false
+ },
+ "pagerduty/teams|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": false
+ },
+ "pagerduty/teams|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /teams",
+  "watermark": false
+ },
+ "pagerduty/teams|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /teams",
+  "watermark": false
+ },
+ "pagerduty/teams|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /teams",
+  "watermark": false
+ },
+ "pagerduty/teams|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /teams",
+  "watermark": false
+ },
+ "pagerduty/users|happy|0": {
+  "deadline": false,
+  "effects": 1,
+  "ok": true,
+  "path": "(no failure)",
+  "watermark": false
+ },
+ "pagerduty/users|req01|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /users",
+  "watermark": false
+ },
+ "pagerduty/users|req01|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /users",
+  "watermark": false
+ },
+ "pagerduty/users|req02|429": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /users",
+  "watermark": false
+ },
+ "pagerduty/users|req02|503": {
+  "deadline": true,
+  "effects": 0,
+  "ok": false,
+  "path": "GET /users",
+  "watermark": false
+ }
+}

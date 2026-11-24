@@ -11,6 +11,12 @@ import (
 // cancelled with the walk, so a cancelled run never keeps the sub-budget slot until the key's TTL.
 const githubTestsPrefetchReleaseTimeout = 5 * time.Second
 
+// githubTestsPrefetchMinRemainingShare is the least remaining/limit share of the walk's latest rate reading that lets a
+// prefetch start (CHAOS-14542): the same 0.45 as the rate gate the prefetch was measured against. Under it, or with no
+// reading yet, the walk stays serial. It is a brake, not a guarantee: the reading is this walk's latest answer and can
+// lag the installation's other users.
+const githubTestsPrefetchMinRemainingShare = 0.45
+
 // PrefetchBudgetCostClass names the own sub-budget class of a cost class's artifact prefetch, and whether the one
 // budget table (providerfoundation.CostClassBudgetLimit) holds a row for it. A class without a row never prefetches.
 func PrefetchBudgetCostClass(class CostClass) (CostClass, bool) {
@@ -35,6 +41,8 @@ type githubTestsArtifactPrefetcher struct {
 	items    []githubTestsArtifactPayload
 	key      providerfoundation.BudgetKey
 	pending  *githubTestsArtifactPrefetch
+	// observed is the walk's own rate observer: written and read on the walk goroutine only.
+	observed *githubTestsRateObserver
 }
 
 type githubTestsArtifactPrefetch struct {
@@ -65,10 +73,10 @@ func (githubTestsPrefetchHeldReservation) Release(context.Context) error { retur
 // own call), or when the class has no prefetch row in the budget table. client is the walk's client; base is the
 // client under the walk's counting doer.
 func newGitHubTestsArtifactPrefetcher(
-	ctx context.Context, client, base *providerfoundation.HTTPClient,
+	ctx context.Context, client, base *providerfoundation.HTTPClient, observed *githubTestsRateObserver,
 	root string, maxBytes int64, items []githubTestsArtifactPayload,
 ) *githubTestsArtifactPrefetcher {
-	if client == nil || client.Budget == nil || base == nil || len(items) < 2 {
+	if client == nil || client.Budget == nil || base == nil || observed == nil || len(items) < 2 {
 		return nil
 	}
 	if _, blocking := client.Budget.(*InProcessBudgetStore); blocking {
@@ -85,7 +93,7 @@ func newGitHubTestsArtifactPrefetcher(
 		return nil
 	}
 	return &githubTestsArtifactPrefetcher{
-		ctx: ctx, client: client, base: base, root: root, maxBytes: maxBytes, items: items, key: key,
+		ctx: ctx, client: client, base: base, observed: observed, root: root, maxBytes: maxBytes, items: items, key: key,
 	}
 }
 
@@ -109,7 +117,7 @@ func (prefetcher *githubTestsArtifactPrefetcher) startNext(current int) {
 	if nextSize < 0 || nextSize > prefetcher.maxBytes || currentSize+nextSize > prefetcher.maxBytes {
 		return
 	}
-	if prefetcher.ctx.Err() != nil {
+	if prefetcher.ctx.Err() != nil || !prefetcher.headroom() {
 		return
 	}
 	reservation, err := prefetcher.client.Budget.Acquire(prefetcher.ctx, prefetcher.key)
@@ -135,6 +143,16 @@ func (prefetcher *githubTestsArtifactPrefetcher) startNext(current int) {
 		prefetch.archive, _, prefetch.notFound, prefetch.err = downloadGitHubTestsListedArtifact(ctx, &helper, root, string(artifact.ID), maxBytes, artifact.listedSize())
 	}()
 	prefetcher.pending = prefetch
+}
+
+// headroom reports whether the walk's latest rate reading leaves at least githubTestsPrefetchMinRemainingShare of the
+// limit. No reading yet is no headroom: the walk stays serial until it has one.
+func (prefetcher *githubTestsArtifactPrefetcher) headroom() bool {
+	observed := prefetcher.observed
+	if !observed.seen || observed.limit <= 0 {
+		return false
+	}
+	return float64(observed.remaining) >= githubTestsPrefetchMinRemainingShare*float64(observed.limit)
 }
 
 // take hands the walk the prefetched download of items[index] when one is pending for it: it waits for the download,

@@ -45,11 +45,14 @@ type prefetchCellDoer struct {
 	// rangeArchive: the blob of the id is this (over-cap) zip, served whole with Accept-Ranges and by Range request,
 	// each Range answer after rangeLatency. holdZipUntilRange: the /zip of key waits until a Range request of value
 	// starts (2 s liveness guard).
-	rangeArchive      map[int][]byte
-	rangeLatency      time.Duration
-	holdZipUntilRange map[int]int
-	rangeStarted      map[int]chan struct{}
-	ranged            map[int]int
+	rangeArchive map[int][]byte
+	// rateLimit / rateRemaining: the X-RateLimit-Limit / -Remaining headers of every api.github.com answer (the walk's
+	// rate reading); rateLimit 0 sends none (no reading).
+	rateLimit, rateRemaining int64
+	rangeLatency             time.Duration
+	holdZipUntilRange        map[int]int
+	rangeStarted             map[int]chan struct{}
+	ranged                   map[int]int
 
 	mu          sync.Mutex
 	events      []string
@@ -75,6 +78,7 @@ func newPrefetchCellDoer(t *testing.T, runs, perRun int) *prefetchCellDoer {
 		zipTransportError: map[int]bool{}, zipFirst: map[int]prefetchCellAnswer{}, unsafeBounds: map[int]bool{},
 		holdBlob: map[int]int{}, startedAt: map[string]time.Time{}, zipStarted: map[int]chan struct{}{},
 		rangeArchive: map[int][]byte{}, holdZipUntilRange: map[int]int{}, rangeStarted: map[int]chan struct{}{}, ranged: map[int]int{},
+		rateLimit: 5000, rateRemaining: 5000,
 		firstServed: map[int]bool{}, active: map[int]int{}, overlaps: map[[2]int]bool{}, requests: map[string]int{},
 	}
 }
@@ -163,6 +167,18 @@ func (doer *prefetchCellDoer) artifactsFixture(run int) string {
 }
 
 func (doer *prefetchCellDoer) Do(request *http.Request) (*http.Response, error) {
+	response, err := doer.serve(request)
+	if response != nil && request.URL.Host == "api.github.com" && doer.rateLimit > 0 {
+		if response.Header == nil {
+			response.Header = http.Header{}
+		}
+		response.Header.Set("X-RateLimit-Limit", strconv.FormatInt(doer.rateLimit, 10))
+		response.Header.Set("X-RateLimit-Remaining", strconv.FormatInt(doer.rateRemaining, 10))
+	}
+	return response, err
+}
+
+func (doer *prefetchCellDoer) serve(request *http.Request) (*http.Response, error) {
 	header := http.Header{"Content-Type": {"application/json"}}
 	path := request.URL.Path
 	switch {
@@ -877,4 +893,50 @@ func TestGitHubTestsPrefetchIntoARangeRead(t *testing.T) {
 			t.Fatalf("extra wire %d, want 1..%d", extra, bound)
 		}
 	})
+}
+
+// pm ruling (b): a prefetch starts only while the walk's latest rate reading leaves at least 0.45 of the limit. A low
+// reading or no reading = serial. Every state walks the same requests as the serial walk (wire count) with the same
+// emissions; only the prefetch slot and the overlap change.
+func TestGitHubTestsPrefetchWaitsForRateHeadroom(t *testing.T) {
+	serialDoer := newPrefetchCellDoer(t, 1, 4)
+	serial, err := prefetchCellWalk(t, prefetchCellClient(t, serialDoer, nil, "medium", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name             string
+		limit, remaining int64
+		wantPrefetch     bool
+	}{
+		{"high reading 5000/5000: prefetch", 5000, 5000, true},
+		{"reading at the threshold 2250/5000 (0.45): prefetch", 5000, 2250, true},
+		{"low reading 2249/5000: serial", 5000, 2249, false},
+		{"no reading (no rate headers): serial", 0, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doer := newPrefetchCellDoer(t, 1, 4)
+			doer.rateLimit, doer.rateRemaining = tc.limit, tc.remaining
+			if tc.wantPrefetch {
+				doer.holdBlob[101] = 102 // makes the overlap certain; the 2 s guard only fires if it never comes
+			}
+			store := newPrefetchCellStore()
+			got, err := prefetchCellWalk(t, prefetchCellClient(t, doer, store, "medium", 1))
+			if err != nil {
+				t.Fatal(err)
+			}
+			prefetchCellEqual(t, tc.name, got, serial)
+			_, _, _, acquired := store.snapshot()
+			t.Logf("%s: wire %d (serial %d), prefetches %d, max in flight %d", tc.name, doer.wire(), serialDoer.wire(), acquired[prefetchCellPrefetchKey], doer.maxInFlight)
+			if doer.wire() != serialDoer.wire() {
+				t.Fatalf("wire %d, want the serial %d", doer.wire(), serialDoer.wire())
+			}
+			if prefetched := acquired[prefetchCellPrefetchKey] > 0; prefetched != tc.wantPrefetch {
+				t.Fatalf("prefetches %d, want prefetch = %v", acquired[prefetchCellPrefetchKey], tc.wantPrefetch)
+			}
+			if wantMax := map[bool]int{true: 2, false: 1}[tc.wantPrefetch]; doer.maxInFlight != wantMax {
+				t.Fatalf("max in flight %d, want %d", doer.maxInFlight, wantMax)
+			}
+		})
+	}
 }

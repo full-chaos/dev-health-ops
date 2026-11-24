@@ -2875,7 +2875,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					}
 					// The next artifact of this run downloads while the walk works on the current one; results are still
 					// applied here, one by one, in the sorted order (CHAOS-14542).
-					runPrefetch = newGitHubTestsArtifactPrefetcher(ctx, client, baseClient, root, maxArtifactBytes, artifactItems)
+					runPrefetch = newGitHubTestsArtifactPrefetcher(ctx, client, baseClient, &rateObserved, root, maxArtifactBytes, artifactItems)
 					for index, artifact := range artifactItems {
 						if artifact.Expired {
 							continue // unreachable: expired artifacts are split out before the cap (CHAOS-13980)

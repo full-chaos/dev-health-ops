@@ -5,7 +5,6 @@ package workerservice
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -57,42 +56,31 @@ func copyRepositoryVersion(t *testing.T, ctx context.Context, conn driver.Conn, 
 		return rows
 	}
 	copied, before := rowsAt(from), rowsAt(to)
-	source, err := conn.Query(ctx, `SELECT * REPLACE (toDateTime(?, 'UTC') AS computed_at) FROM `+table+`
-		WHERE org_id = ? AND day = ? AND toString(repo_id) = ? AND computed_at = toDateTime(?, 'UTC')`,
-		to.UTC().Format(tiedVersionStamp), orgID, day, repo.String(), from.UTC().Format(tiedVersionStamp))
+	probe, err := conn.Query(ctx, `SELECT * FROM `+table+` LIMIT 0`)
 	if err != nil {
-		t.Fatalf("%s: read version: %v", table, err)
+		t.Fatalf("%s: %v", table, err)
 	}
-	columns := source.ColumnTypes()
-	names := make([]string, len(columns))
-	for index, column := range columns {
-		names[index] = column.Name()
-	}
-	batch, err := conn.PrepareBatch(ctx, `INSERT INTO `+table+` (`+strings.Join(names, ", ")+`)`)
-	if err != nil {
-		t.Fatalf("%s: prepare copy: %v", table, err)
-	}
-	for source.Next() {
-		pointers := make([]any, len(columns))
-		for index, column := range columns {
-			pointers[index] = reflect.New(column.ScanType()).Interface()
+	var names, selected []string
+	for _, column := range probe.ColumnTypes() {
+		names = append(names, column.Name())
+		if column.Name() == "computed_at" {
+			selected = append(selected, "toDateTime(?, 'UTC')")
+			continue
 		}
-		if err := source.Scan(pointers...); err != nil {
-			t.Fatalf("%s: scan version: %v", table, err)
-		}
-		values := make([]any, len(pointers))
-		for index, pointer := range pointers {
-			values[index] = reflect.ValueOf(pointer).Elem().Interface()
-		}
-		if err := batch.Append(values...); err != nil {
-			t.Fatalf("%s: append copy: %v", table, err)
-		}
+		selected = append(selected, column.Name())
 	}
-	if err := source.Err(); err != nil {
-		t.Fatalf("%s: read version: %v", table, err)
+	probe.Close()
+	// The same shape as the forced cell of the repeat leg, the one copy form
+	// seen stored in CI: named columns, and older rows by computed_at < to.
+	stamp := "computed_at < toDateTime(?, 'UTC')"
+	source := to
+	if !from.Before(to) {
+		stamp, source = "computed_at = toDateTime(?, 'UTC')", from
 	}
-	source.Close()
-	if err := batch.Send(); err != nil {
+	if err := conn.Exec(ctx, `INSERT INTO `+table+` (`+strings.Join(names, ", ")+`)
+		SELECT `+strings.Join(selected, ", ")+` FROM `+table+`
+		WHERE org_id = ? AND day = ? AND toString(repo_id) = ? AND `+stamp,
+		to.UTC().Format(tiedVersionStamp), orgID, day, repo.String(), source.UTC().Format(tiedVersionStamp)); err != nil {
 		t.Fatalf("%s: copy version: %v", table, err)
 	}
 	for polls := 0; rowsAt(to) < before+copied; polls++ {

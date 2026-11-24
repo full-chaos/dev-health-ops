@@ -9,10 +9,8 @@ import (
 // connection loss: the read is retried and finds the commit. 57P02 must behave
 // like 57P01 here.
 func TestCompleteReadBackRetriesAConnectionLossRead(t *testing.T) {
-	t.Parallel()
 	for _, code := range []string{"57P02", "57P01"} {
 		t.Run(code, func(t *testing.T) {
-			t.Parallel()
 			w := &storeWire{faults: []*wireFault{
 				{step: "commit", code: "57P01", times: 1},
 				{step: "read_back", code: code, times: 1},

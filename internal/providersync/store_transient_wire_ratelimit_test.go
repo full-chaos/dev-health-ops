@@ -1,7 +1,6 @@
 package providersync
 
 import (
-	"bytes"
 	"context"
 	"log/slog"
 	"testing"
@@ -15,7 +14,6 @@ import (
 // connection). The deferral stamped the unit dispatching with a not-before
 // fence, so the right answer is success; the read-back is what finds it.
 func TestRateLimitDeferralWithALostReplyAfterTheCommitIsReadBack(t *testing.T) {
-	t.Parallel()
 	w := &storeWire{faults: []*wireFault{{step: "commit", code: "08006", times: 1}}}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -28,7 +26,7 @@ func TestRateLimitDeferralWithALostReplyAfterTheCommitIsReadBack(t *testing.T) {
 	defer repository.Close()
 	repository.storeRetrySleep = func(context.Context, int) error { return nil }
 	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	slog.SetDefault(slog.New(slog.NewTextHandler(&lockedLogBuffer{}, nil)))
 	defer slog.SetDefault(previous)
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	err = repository.DeferForRateLimit(ctx, claim, now.Add(time.Minute), now, RateLimitObservation{}, RateLimitEpisodeStep{})

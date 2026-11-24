@@ -26,7 +26,7 @@ import (
 // no retraction (the prod state at the card's writing), retractions with fresh, pending and unmarked keys, the marks and
 // recomputes that cover them, and a slot retracted on the new image. It checks each WANT per phase, logs the pass-path
 // read_rows of each data statement, and fires each cost gate cap once (pm-guard FORM-TEMPLATE-4).
-const formExecSel14544SHA256 = "4c55e4d7cb93b8d3da5f689e830f2afded71e0b59ed2b8946c1a9f6cb244a976"
+const formExecSel14544SHA256 = "e4089d21be134e3ef17f7cab1a96679c3bb0aaa29fd6db449d73db18bbd5fb65"
 
 const formExecSel14544SQL = `-- FORM-14544-SEL-2 (lane fcs-14544card, 2026-11-24, ops pin 3207ac6258c0). ClickHouse prod, SELECT only. Card CARD-14544-14562-1.
 -- Shape: pm-guard/FORM-TEMPLATE-4.md (4f9c5f10ec18). WANT text and work math: FORM-14544-SEL-2.md.
@@ -272,7 +272,7 @@ WHERE cost_gate = 0;
 -- SIZE-3 S1 read on 2026-11-23), slots = the org's newest slots (WANT > 0). repo_cuts = 8-char repo cuts; pm maps
 -- them to the sync source (W11-EFB-1118 walked source efb5436f only). No data gate inside: the parts gate bounds it.
 WITH (SELECT throwIf(
-    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('repos', 'test_suite_results')) > 1900000
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('repos', 'test_suite_results')) > 1600000
     OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('repos', 'test_suite_results')) > 4294967296,
     'STOP-COST-GATE')) AS cost_gate,
 gh AS (
@@ -547,7 +547,7 @@ func TestFormExecFcs14544Sel2(t *testing.T) {
 		{"S2", "> 6000000", "> 4294967296"},
 		{"S3", "> 6000000", "> 4294967296"},
 		{"S4", "> 6000000", "> 4294967296"},
-		{"S5", "> 1900000", "> 4294967296"},
+		{"S5", "> 1600000", "> 4294967296"},
 	}
 	for _, gate := range gates {
 		text := statements[gate.id]

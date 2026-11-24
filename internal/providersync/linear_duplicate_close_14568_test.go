@@ -123,10 +123,10 @@ func TestLinearImpliedDuplicateCloseTimeAndShape14568(t *testing.T) {
 	}{
 		{"last relation node wins", "[" + start + "," + relation("h2", "2026-09-25T10:00:00.000Z") + "," + relation("h3", "2026-09-27T10:00:00.000Z") + "," + out + "]",
 			time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC), 3, true},
-		{"no relation node falls back to the move out", "[" + start + "," + out + "]",
-			time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC), 3, false},
+		{"no relation node falls back to 1 ms before the move out", "[" + start + "," + out + "]",
+			time.Date(2026, 9, 30, 9, 59, 59, 999_000_000, time.UTC), 3, false},
 		{"relation node before an earlier state entry is not reused", "[" + relation("h0", "2026-09-10T10:00:00.000Z") + "," + start + "," + out + "]",
-			time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC), 3, false},
+			time.Date(2026, 9, 30, 9, 59, 59, 999_000_000, time.UTC), 3, false},
 		{"history opening in Duplicate has nothing to close", "[" + out + "]", time.Time{}, 1, false},
 	}
 	for _, tc := range cases {

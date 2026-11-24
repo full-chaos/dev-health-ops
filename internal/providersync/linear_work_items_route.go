@@ -1719,6 +1719,7 @@ func normalizeLinearTransitions(
 ) []linearWorkItemTransitionRow {
 	transitions := make([]linearWorkItemTransitionRow, 0, len(history))
 	var previousTo *linearStatePayload
+	var previousAt time.Time
 	var lastRelation *linearHistoryEntry
 	history = linearHistoryAscending(history)
 	for index := range history {
@@ -1740,22 +1741,28 @@ func normalizeLinearTransitions(
 		// Linear serves "mark as duplicate" as a stateless relation entry and no entry into Duplicate; the next
 		// entry leaves Duplicate. Write the move in, so the close is not lost.
 		if entry.FromState != nil && previousTo != nil && linearIsDuplicateState(entry.FromState) &&
-			!linearIsDuplicateState(previousTo) {
+			!linearIsDuplicateState(previousTo) &&
+			linearStatus(previousTo.Type) != linearStatus(entry.FromState.Type) {
 			closedAt, actor := *occurredAt, (*linearIdentityPayload)(nil)
+			relationAt := (*time.Time)(nil)
 			if lastRelation != nil {
-				if relationAt := parseLinearTime(lastRelation.CreatedAt); relationAt != nil {
-					closedAt, actor = *relationAt, lastRelation.Actor
-				}
+				relationAt = parseLinearTime(lastRelation.CreatedAt)
 			}
-			// Without a relation entry the close shares the instant of the move out of Duplicate; the tie order
-			// ranks it first, so the closed span reads 0 s.
+			if relationAt != nil {
+				closedAt, actor = *relationAt, lastRelation.Actor
+			} else if before := occurredAt.Add(-time.Millisecond); before.After(previousAt) {
+				// occurred_at is DateTime64(3): one millisecond before the exit, so the close sorts before the reopen.
+				// When no millisecond lies strictly between the entry into the previous state and the exit, the close
+				// takes the exit instant and the tie order decides (named limit).
+				closedAt = before
+			}
 			implied := linearTransitionRow(claim, workItemID, previousTo, entry.FromState, actor, closedAt, normalizedAt)
 			if implied.validate(claim) == nil {
 				transitions = append(transitions, implied)
 			}
 		}
 		lastRelation = nil
-		previousTo = entry.ToState
+		previousTo, previousAt = entry.ToState, *occurredAt
 		row := linearTransitionRow(claim, workItemID, entry.FromState, entry.ToState, entry.Actor, *occurredAt, normalizedAt)
 		if row.validate(claim) == nil {
 			transitions = append(transitions, row)
@@ -1778,7 +1785,12 @@ func linearHistoryAscending(history []linearHistoryEntry) []linearHistoryEntry {
 		if rows[left].at == nil || rows[right].at == nil {
 			return rows[left].at != nil && rows[right].at == nil
 		}
-		return rows[left].at.Before(*rows[right].at)
+		if !rows[left].at.Equal(*rows[right].at) {
+			return rows[left].at.Before(*rows[right].at)
+		}
+		// at one instant a relation entry sorts before a state entry; state entries keep served order (named limit)
+		return rows[left].entry.FromState == nil && rows[left].entry.ToState == nil &&
+			(rows[right].entry.FromState != nil || rows[right].entry.ToState != nil)
 	})
 	ordered := make([]linearHistoryEntry, len(rows))
 	for index, row := range rows {

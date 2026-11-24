@@ -473,7 +473,7 @@ func formExecSel4x14544Row(t *testing.T, result formExecSel4x14544Result, label 
 	}
 }
 
-func formExecSel4x14544QueryLog(ctx context.Context, t *testing.T, conn driver.Conn, label, comment string) ([]string, uint64) {
+func formExecSel4x14544QueryLog(ctx context.Context, t *testing.T, conn driver.Conn, label, comment string) ([]string, uint64, []string) {
 	t.Helper()
 	rows, err := conn.Query(ctx, `SELECT toString(type), read_rows, arrayStringConcat(tables, ',')
 		FROM system.query_log WHERE log_comment = ? AND type != 'QueryStart' ORDER BY event_time_microseconds`, comment)
@@ -481,7 +481,7 @@ func formExecSel4x14544QueryLog(ctx context.Context, t *testing.T, conn driver.C
 		t.Fatalf("%s: query log: %v", label, err)
 	}
 	defer func() { _ = rows.Close() }()
-	var types []string
+	var types, tableLists []string
 	var read uint64
 	for rows.Next() {
 		var typ, tables string
@@ -490,13 +490,14 @@ func formExecSel4x14544QueryLog(ctx context.Context, t *testing.T, conn driver.C
 			t.Fatalf("%s: query log scan: %v", label, err)
 		}
 		types = append(types, typ)
+		tableLists = append(tableLists, tables)
 		read += readRows
 		t.Logf("%s type=%s read_rows=%d tables=%s", label, typ, readRows, tables)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("%s: query log: %v", label, err)
 	}
-	return types, read
+	return types, read, tableLists
 }
 
 // The fixture. Org f0f0f0f0-...01 is the org the swapped FORM reads. Org e0e0e0e0-... holds a retraction, marks and
@@ -836,9 +837,7 @@ func TestFormExecFcs14544Sel4(t *testing.T) {
 	formExecSel4x14544Row(t, results["S6"], "phase1 S6", 1, map[string]string{
 		"kind": "day", "day": "2026-11-18", "runs": "1", "slots": "3", "slots_before_14045_commit": "3", "repo_cuts": "[11111111]"})
 
-	// PASS-path read_rows against the work math on this fixture (FORM-14544-SEL-4.md): test_suite_results R 16 rows in
-	// P 3 parts, daily_metrics_touched_days 22 / 1, testops_test_metrics_daily 31 / 2, testops_release_confidence 9 / 1,
-	// repos 5 / 1. A FINAL read 2R + 2P + 1, a plain read R, the gate 2 x (parts of its tables) + 1.
+	// The fixture sizes of the work math, as the gates see them in this database.
 	if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 		t.Fatalf("the query log is not readable by this user: %v", err)
 	}
@@ -856,28 +855,11 @@ func TestFormExecFcs14544Sel4(t *testing.T) {
 		t.Logf("fixture phase1 %s parts=%d rows=%d", table, count, rows)
 	}
 	_ = partRows.Close()
-	bounds := map[string]uint64{
-		"S1": 16 + (2*3 + 1),
-		"S2": (3*16 + 2*3 + 1) + (2*3 + 1),
-		"S3": (2*16 + 2*3 + 1) + (2*3 + 1),
-		"S4": (3*16 + 2*3 + 1) + 2*22 + 31 + (2*6 + 1),
-		"S5": (3*16 + 2*3 + 1) + 2*22 + 9 + (2*5 + 1),
-		"S6": 5*(2*16+2*3+1) + 6*(2*5+2*1+1) + (2*4 + 1),
-	}
-	for _, gate := range gates {
-		types, read := formExecSel4x14544QueryLog(ctx, t, conn, "PASS "+gate.id, passComments[gate.id])
-		if len(types) != 1 || types[0] != "QueryFinish" {
-			t.Errorf("PASS %s: query_log types %v, want [QueryFinish]", gate.id, types)
-		}
-		if read == 0 || read > bounds[gate.id] {
-			t.Errorf("PASS %s: query_log read_rows %d, want 1 .. %d (the work math on this fixture)", gate.id, read, bounds[gate.id])
-		}
-		t.Logf("PASS %s read_rows=%d bound=%d", gate.id, read, bounds[gate.id])
-	}
 
-	// The gates fire: each cap literal lowered to 0 in a test copy only. WANT code 395 STOP-COST-GATE, query_log
-	// ExceptionBeforeStart, read_rows <= 2 x P + 1.
-	gateReadMax := map[string]uint64{"S1": 2*3 + 1, "S2": 2*3 + 1, "S3": 2*3 + 1, "S4": 2*6 + 1, "S5": 2*5 + 1, "S6": 2*4 + 1}
+	// The gates fire: each cap literal lowered to 0 in a test copy only. WANT code 395 STOP-COST-GATE and query_log
+	// ExceptionBeforeStart.
+	// Each statement's own gate reads system.parts, which on a shared ClickHouse server can also scan parts of other test
+	// databases: the fire is judged by its type and by reading no data table; its read_rows is logged.
 	type fired struct{ id, cap, comment string }
 	var fires []fired
 	for _, gate := range gates {
@@ -896,17 +878,51 @@ func TestFormExecFcs14544Sel4(t *testing.T) {
 	if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 		t.Fatal(err)
 	}
+	gateRead := map[string]uint64{}
 	for _, f := range fires {
-		types, read := formExecSel4x14544QueryLog(ctx, t, conn, "GATE "+f.id+" "+f.cap, f.comment)
+		types, read, tableLists := formExecSel4x14544QueryLog(ctx, t, conn, "GATE "+f.id+" "+f.cap, f.comment)
 		if len(types) != 1 || types[0] != "ExceptionBeforeStart" {
 			t.Errorf("GATE %s %s: query_log types %v, want [ExceptionBeforeStart]", f.id, f.cap, types)
 		}
-		if read > gateReadMax[f.id] {
-			t.Errorf("GATE %s %s: query_log read_rows %d over 2 x P + 1 = %d", f.id, f.cap, read, gateReadMax[f.id])
+		for _, list := range tableLists {
+			for _, table := range strings.Split(list, ",") {
+				if table != "" && !strings.HasPrefix(table, "system.") {
+					t.Errorf("GATE %s %s: read table %s before the stop, want system tables only", f.id, f.cap, table)
+				}
+			}
 		}
+		if read > gateRead[f.id] {
+			gateRead[f.id] = read
+		}
+		t.Logf("GATE %s %s read_rows=%d (2P+1 on this database: S1 7, S2 7, S3 7, S4 13, S5 11, S6 9)", f.id, f.cap, read)
 	}
 	if len(fires) != 2*len(gates) {
 		t.Errorf("gates fired %d times, want %d", len(fires), 2*len(gates))
+	}
+
+	// PASS-path read_rows: the data work math on this fixture (FORM-14544-SEL-4.md: test_suite_results R 16 rows in P 3
+	// parts, daily_metrics_touched_days 22 / 1, testops_test_metrics_daily 31 / 2, testops_release_confidence 9 / 1,
+	// repos 5 / 1, a FINAL read 2R + 2P + 1, a plain read R) plus the statement's own gate read (the larger of its fires'
+	// read_rows and 2 x its parts + 1).
+	dataBounds := map[string]uint64{
+		"S1": 16,
+		"S2": 3*16 + 2*3 + 1,
+		"S3": 2*16 + 2*3 + 1,
+		"S4": (3*16 + 2*3 + 1) + 2*22 + 31,
+		"S5": (3*16 + 2*3 + 1) + 2*22 + 9,
+		"S6": 5*(2*16+2*3+1) + 6*(2*5+2*1+1),
+	}
+	localGate := map[string]uint64{"S1": 2*3 + 1, "S2": 2*3 + 1, "S3": 2*3 + 1, "S4": 2*6 + 1, "S5": 2*5 + 1, "S6": 2*4 + 1}
+	for _, gate := range gates {
+		types, read, _ := formExecSel4x14544QueryLog(ctx, t, conn, "PASS "+gate.id, passComments[gate.id])
+		if len(types) != 1 || types[0] != "QueryFinish" {
+			t.Errorf("PASS %s: query_log types %v, want [QueryFinish]", gate.id, types)
+		}
+		bound := dataBounds[gate.id] + max(gateRead[gate.id], localGate[gate.id])
+		if read == 0 || read > bound {
+			t.Errorf("PASS %s: query_log read_rows %d, want 1 .. %d (the work math on this fixture)", gate.id, read, bound)
+		}
+		t.Logf("PASS %s read_rows=%d bound=%d", gate.id, read, bound)
 	}
 
 	// Phase 2: every run gets its record or window events, and recomputes 300 s or more after them.

@@ -291,16 +291,64 @@ const (
 // admin view would show next to each excluded artifact, never the prefix that
 // matched.
 func githubTestsArtifactSelectionSeam(name string, configPrefixes []string) (selected bool, reason string) {
+	selected, reason, _ = githubTestsArtifactSelection(name, configPrefixes)
+	return selected, reason
+}
+
+// githubTestsArtifactSelection is the seam plus, for a prefix exclusion, the list whose prefix matched, taken at match
+// time on the full name (githubTestsPrefixExclusionSource).
+func githubTestsArtifactSelection(name string, configPrefixes []string) (selected bool, reason, source string) {
 	lower := strings.ToLower(name)
 	for _, suffix := range githubTestsNonReportArtifactSuffixes {
 		if strings.HasSuffix(lower, suffix) {
-			return false, githubTestsExclusionReasonSuffix
+			return false, githubTestsExclusionReasonSuffix, ""
 		}
 	}
-	if artifactexclude.Matches(lower, githubTestsNonReportArtifactPrefixes) || artifactexclude.Matches(lower, configPrefixes) {
-		return false, githubTestsExclusionReasonPrefix
+	if source := githubTestsPrefixExclusionSource(name, configPrefixes); source != "" {
+		return false, githubTestsExclusionReasonPrefix, source
 	}
-	return true, ""
+	return true, "", ""
+}
+
+// The list a prefix exclusion came from, a closed set for the per-chunk log line only (never stored or served).
+const (
+	githubTestsPrefixExclusionSourceConfig = "config"
+	githubTestsPrefixExclusionSourceCode   = "code"
+)
+
+// githubTestsPrefixExclusionSource names the list that excludes name: the configuration's list is checked first, so a
+// prefix in both lists reports "config"; "" when neither matches.
+func githubTestsPrefixExclusionSource(name string, configPrefixes []string) string {
+	lower := strings.ToLower(name)
+	if artifactexclude.Matches(lower, configPrefixes) {
+		return githubTestsPrefixExclusionSourceConfig
+	}
+	if artifactexclude.Matches(lower, githubTestsNonReportArtifactPrefixes) {
+		return githubTestsPrefixExclusionSourceCode
+	}
+	return ""
+}
+
+// githubTestsPrefixExclusionSourceBit is the bit of a source in a chunk's in-memory source set (never stored).
+func githubTestsPrefixExclusionSourceBit(source string) int {
+	switch source {
+	case githubTestsPrefixExclusionSourceConfig:
+		return 1
+	case githubTestsPrefixExclusionSourceCode:
+		return 2
+	}
+	return 0
+}
+
+// githubTestsPrefixExclusionSourceNames is the sorted list of the sources in the set: "code" before "config".
+func githubTestsPrefixExclusionSourceNames(sources int) []string {
+	var names []string
+	for _, source := range []string{githubTestsPrefixExclusionSourceCode, githubTestsPrefixExclusionSourceConfig} {
+		if sources&githubTestsPrefixExclusionSourceBit(source) != 0 {
+			names = append(names, source)
+		}
+	}
+	return names
 }
 
 type githubTestsRequiredPayload struct {

@@ -310,7 +310,7 @@ func githubTestsArtifactSelection(name string, configPrefixes []string) (selecte
 	return true, "", ""
 }
 
-// The list a prefix exclusion came from, a closed set for the skip summary log only (never stored or served).
+// The list a prefix exclusion came from, a closed set for the per-chunk log line only (never stored or served).
 const (
 	githubTestsPrefixExclusionSourceConfig = "config"
 	githubTestsPrefixExclusionSourceCode   = "code"
@@ -329,7 +329,7 @@ func githubTestsPrefixExclusionSource(name string, configPrefixes []string) stri
 	return ""
 }
 
-// githubTestsPrefixExclusionSourceBit is the bit of a source in the chunk cursor's ExcludedNonReportPrefixSources set.
+// githubTestsPrefixExclusionSourceBit is the bit of a source in a chunk's in-memory source set (never stored).
 func githubTestsPrefixExclusionSourceBit(source string) int {
 	switch source {
 	case githubTestsPrefixExclusionSourceConfig:
@@ -778,7 +778,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	// counters -- it has no persisted, resumable cursor to hang them off
 	// (same divergence as skippedArtifacts above; see the oversized-artifact
 	// doc comment).
-	githubTestsLogArtifactSkipSummary(claim, repo.FullName, incomplete, skippedArtifacts, skippedCauseOverflow, 0, 0, 0, nil, 0)
+	githubTestsLogArtifactSkipSummary(claim, repo.FullName, incomplete, skippedArtifacts, skippedCauseOverflow, 0, 0, nil, 0)
 	result := map[string]any{
 		"pipeline_runs_synced": len(pipelines), "job_runs_synced": len(jobs), "acceptance_checks_synced": len(acceptance),
 		"test_suites_synced": len(suites), "test_cases_synced": len(cases), "coverage_snapshots_synced": len(coverage), "repo": repo.FullName,

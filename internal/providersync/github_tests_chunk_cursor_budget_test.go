@@ -126,9 +126,6 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	cursor.ExtraRecords = githubTestsMaxWalkRecords
 	// A backfill walk's record counters reach 8 digits (boundsWidestBackfillCounters).
 	boundsWidestBackfillCounters(&cursor)
-	// And the prefix exclusion sources at their widest: both lists (CHAOS-14559; "xs":3 is 7 bytes).
-	cursor.ExcludedNonReportPrefixSources = githubTestsPrefixExclusionSourceBit(githubTestsPrefixExclusionSourceConfig) |
-		githubTestsPrefixExclusionSourceBit(githubTestsPrefixExclusionSourceCode)
 
 	encoded, err := encodeGitHubTestsChunkCursor(cursor)
 	if err != nil {
@@ -182,9 +179,6 @@ func TestGitHubTestsChunkCursorWorstCaseStaysWithinBudget(t *testing.T) {
 	//
 	// CHAOS-14487: the cell now carries the extra record count (rx, 14 bytes at the backfill bound): 177 bytes of headroom
 	// before it (CI log), about 163 after. The canary stays 150.
-	//
-	// CHAOS-14559: the cell now carries the prefix exclusion sources at both lists (xs, 7 bytes): about 156 left. The long key
-	// excluded_non_report_prefix_sources (40 bytes) would have left 123, under the canary. The canary stays 150.
 	const wantMargin = 150
 	if remaining := maxChunkCursorBytes - len(encoded); remaining < wantMargin {
 		t.Fatalf(

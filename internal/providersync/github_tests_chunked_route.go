@@ -322,13 +322,9 @@ type githubTestsChunkCursor struct {
 	// CHAOS-4591 admin view can see WHICH artifacts were excluded, not just
 	// how many -- kept deliberately small against the same maxChunkCursorBytes
 	// budget GitHubTestsSkippedArtifact's own doc comment describes.
-	ExcludedNonReportSuffix int `json:"excluded_non_report_suffix,omitempty"`
-	ExcludedNonReportPrefix int `json:"excluded_non_report_prefix,omitempty"`
-	// ExcludedNonReportPrefixSources is the set of lists (githubTestsPrefixExclusionSourceBit) whose prefix matched an
-	// ExcludedNonReportPrefix exclusion, for the skip summary log only: resume state, no result key carries it, and a
-	// cursor without it (a worker before this field) leaves those exclusions unsourced. A short key: 7 bytes at its widest.
-	ExcludedNonReportPrefixSources int      `json:"xs,omitempty"`
-	ExcludedArtifactSample         []string `json:"excluded_artifact_sample,omitempty"`
+	ExcludedNonReportSuffix int      `json:"excluded_non_report_suffix,omitempty"`
+	ExcludedNonReportPrefix int      `json:"excluded_non_report_prefix,omitempty"`
+	ExcludedArtifactSample  []string `json:"excluded_artifact_sample,omitempty"`
 	// ArtifactsExcludedNotFound counts routine 404/410 download-time
 	// disappearances (see the notFound branch below), which -- like an
 	// oversized skip -- are excluded from the ArchivesSeen/ArchivesUnreadable
@@ -946,7 +942,7 @@ func recordGitHubTestsSkippedArtifact(
 func githubTestsLogArtifactSkipSummary(
 	claim Claim, repo string, incomplete []GitHubTestsIncomplete,
 	skippedArtifacts []GitHubTestsSkippedArtifact, causeOverflow map[string]bool,
-	excludedSuffix, excludedPrefix, prefixSources int, excludedSample []string,
+	excludedSuffix, excludedPrefix int, excludedSample []string,
 	notFoundExcluded int,
 ) {
 	// Gate on an actual artifact/member disposition, not on incomplete being
@@ -1034,9 +1030,6 @@ func githubTestsLogArtifactSkipSummary(
 		)
 		if len(excludedSample) > 0 {
 			attrs = append(attrs, "excluded_sample", excludedSample)
-		}
-		if sources := githubTestsPrefixExclusionSourceNames(prefixSources); len(sources) > 0 {
-			attrs = append(attrs, "excluded_"+githubTestsExclusionReasonPrefix+"_source", sources)
 		}
 	}
 	attrs = append(attrs, githubTestsSkippedArtifactMarkerAttrs(skippedArtifacts, causeOverflow)...)
@@ -1629,7 +1622,7 @@ func githubTestsFinalMetadataBatch(claim Claim, cursor githubTestsChunkCursor) (
 	}
 	githubTestsLogArtifactSkipSummary(
 		claim, cursor.Repo, incomplete, skippedArtifacts, causeOverflow,
-		cursor.ExcludedNonReportSuffix, cursor.ExcludedNonReportPrefix, cursor.ExcludedNonReportPrefixSources, cursor.ExcludedArtifactSample,
+		cursor.ExcludedNonReportSuffix, cursor.ExcludedNonReportPrefix, cursor.ExcludedArtifactSample,
 		cursor.ArtifactsExcludedNotFound,
 	)
 	return CompleteRouteBatch{
@@ -1750,6 +1743,21 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	rateFloor := &githubTestsRateFloorGate{}
 	counted.Doer = githubTestsChunkCountingDoer{delegate: client.Doer, attempts: &requests, observed: &rateObserved, floor: rateFloor}
 	client = &counted
+	// chunkPrefixSources / chunkPrefixCount are the prefix exclusions of the chunk being built, in memory only: never on the
+	// cursor or the prepared chunk, so a chunk's source set is never carried to a resume (CHAOS-14559).
+	chunkPrefixSources, chunkPrefixCount := 0, 0
+	logChunkPrefixSources := func(cursor githubTestsChunkCursor) {
+		if chunkPrefixCount == 0 {
+			return
+		}
+		slog.Info("github tests chunk excluded artifacts by name prefix",
+			"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+			"repository", logging.ProviderText(cursor.Repo),
+			"excluded_"+githubTestsExclusionReasonPrefix, chunkPrefixCount,
+			"excluded_"+githubTestsExclusionReasonPrefix+"_source", githubTestsPrefixExclusionSourceNames(chunkPrefixSources),
+		)
+		chunkPrefixSources, chunkPrefixCount = 0, 0
+	}
 	emitFinalMetadata := func(cursor githubTestsChunkCursor) error {
 		cursor.Phase = "done"
 		// The totality gate runs here, not inline in the artifacts loop below,
@@ -1780,6 +1788,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		// internal/jobs/providerunit.Handler's post-Complete success branch,
 		// which fires this exactly once per unit, the same discipline
 		// observeTerminalWithCommittedRows/observeAllArtifactsUnreadable use.
+		logChunkPrefixSources(cursor)
 		return emitCursorPair(cursor, batch, emit)
 	}
 	if cursor.Phase == "done" {
@@ -1994,6 +2003,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		afterRaw, afterErr := encodeGitHubTestsChunkCursor(after)
 		if afterErr != nil {
 			return afterErr
+		}
+		// One source-bearing line per chunk: a coalescable emission may be merged into the next one, so its exclusions
+		// are logged with the chunk that is not.
+		if !coalescable {
+			logChunkPrefixSources(after)
 		}
 		if err := emit(ChunkRouteEmission{Batch: batch, CursorBefore: beforeRaw, CursorAfter: afterRaw, Final: final, Coalescable: coalescable}); err != nil {
 			return err
@@ -2743,7 +2757,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 								cursor.ExcludedNonReportSuffix++
 							case githubTestsExclusionReasonPrefix:
 								cursor.ExcludedNonReportPrefix++
-								cursor.ExcludedNonReportPrefixSources |= githubTestsPrefixExclusionSourceBit(source)
+								chunkPrefixSources |= githubTestsPrefixExclusionSourceBit(source)
+								chunkPrefixCount++
 							}
 							// Bounded the same way as GitHubTestsSkippedArtifact.Name
 							// (CHAOS-4588/CHAOS-4591, codex round 1, P1): a

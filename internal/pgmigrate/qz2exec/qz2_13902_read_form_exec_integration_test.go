@@ -32,13 +32,13 @@ const qz2SHA256 = "ffc0c5b097507ec86edc5a103f31cc3401d670c916823a8e57a87ee6b2c9a
 const qz2Form = `-- FORM-QZ2-13902-4: Q-z2 of CARD-13902-recompute-16 (z) (= -3 17dfe2a896ba + '-- stmtN' marker lines, acp add 2026-11-24; SQL unchanged): which sync window set the raw floor 2025-11-01 of git_commits.
 -- Postgres, database devhealth, READ ONLY. Lane l13902 (lead fcdev), 2026-11-24. Prod: NOT EXECUTED. CI exec: OPEN
 --   (EXEC-PROOF-QZ2-13902-3.md; cell internal/pgmigrate/qz2exec/qz2_13902_read_form_exec_integration_test.go). acp FORM
---   read: OPEN. md: FORM-QZ2-13902-4.md.
+--   read: OPEN. md: FORM-QZ2-13902-3.md.
 -- -3 = FORM-QZ2-13902-2 (310d738cb457) + the acp fixes of READ-CARD-13902-14-1 (ea1ec94bf5ba): Q2-P2-4 G0 caps the real
 --   file size (pg_relation_size of heap + TOAST), not the stats (relpages); row caps dropped; reltuples -1 still STOPs.
 --   Q2-P2-5 the run line is the FORM-TEMPLATE-4 PG_REMOTE_TMPL line, in the md. Data statements and ROLLBACK as in -2.
 -- Shape: FORM-TEMPLATE-5 (b): one transaction REPEATABLE READ READ ONLY, G0 catalog gate first, ends ROLLBACK; no SET
 --   (statement_timeout comes from PGOPTIONS); no write. Output = counts, text keys, UTC days, UTC times cut to the second.
--- Run: pm only, the FORM-TEMPLATE-4 PG_REMOTE_TMPL line in FORM-QZ2-13902-4.md (psql -X -A -F"|" -v ON_ERROR_STOP=1
+-- Run: pm only, the FORM-TEMPLATE-4 PG_REMOTE_TMPL line in FORM-QZ2-13902-3.md (psql -X -A -F"|" -v ON_ERROR_STOP=1
 --   -f -, this file on stdin). No placeholder.
 -- Org scope: the org prefix is in 4 places, each a starts_with: G0 (organizations), UNITS, BACKFILL, FIRST-RUN.
 -- Tables + columns: internal/pgmigrate/baseline/head.json at 3207ac6258c0 (chain 0163..0166 alter none of them):
@@ -49,7 +49,7 @@ const qz2Form = `-- FORM-QZ2-13902-4: Q-z2 of CARD-13902-recompute-16 (z) (= -3 
 --   pagerduty). Modes: planner.go:19-21 ('incremental', 'full_resync', 'backfill'). A unit's window start = since_at
 --   (providersync/inprocess.go:431; github_commits_route.go:104-105 uses it as the since parameter).
 -- Question: which unit (dataset, mode, created second) first fetched with a window start at or before 2025-11-01 00:00 UTC,
---   and whether any window started earlier. WANTs + reading: FORM-QZ2-13902-4.md.
+--   and whether any window started earlier. WANTs + reading: FORM-QZ2-13902-3.md.
 -- Cost: starts_with uses no index: UNITS, BACKFILL, FIRST-RUN each read their one table at most once. G0 (catalog, file
 --   sizes, the organizations count) caps every table before any data statement; a STOP text names every size. Work math:
 --   the md.

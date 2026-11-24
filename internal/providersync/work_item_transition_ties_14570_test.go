@@ -1,12 +1,16 @@
 package providersync
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 func linearCloseReproPayload14570(t *testing.T, identifier, state, stateType, history string) linearWorkItemPayload {
@@ -400,4 +404,49 @@ func TestTransitionSplitWithoutTiesCutsAsPlainSlicing14570(t *testing.T) {
 			}
 		}
 	}
+}
+
+// No production path splits work_item_transitions today: every work-items route is a prepared-manifest route, not a chunked one,
+// and the executor refuses a descriptor that is both (complete_route.go:262). The control is the same unit on the registered
+// descriptor: it reaches the handler. The chunked run gets a chunk store, so only that refusal stops it.
+func TestWorkItemsRoutesAreNotChunkedAndAChunkedPreparedDescriptorIsRefused14570(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	for _, provider := range []string{"github", "gitlab", "jira", "linear"} {
+		t.Run(provider, func(t *testing.T) {
+			descriptor, ok := Descriptor(provider, "work-items")
+			if !ok || descriptor.Chunked || !descriptor.PreparedManifestRecovery {
+				t.Fatalf("descriptor ok=%v chunked=%v prepared=%v, want a prepared-manifest route, not chunked",
+					ok, descriptor.Chunked, descriptor.PreparedManifestRecovery)
+			}
+			execute := func(descriptor CompleteRouteDescriptor) (*staticCompleteRouteHandler, *memoryEffectSink, error) {
+				claim, session := preparedWorkItemsSession(t, now, provider, "work-items")
+				handler, sink := &staticCompleteRouteHandler{}, &memoryEffectSink{}
+				var ledger EffectLedger = &memoryEffectLedger{}
+				if descriptor.Chunked {
+					ledger = NewInProcessChunkLedger(claim)
+				}
+				executor := preparedGitHubExecutor(now, handler, ledger, sink)
+				executor.Credentials.Repository = &trackingCompleteRouteCredentialRepository{provider: provider}
+				executor.Credentials.Decryptor = credentialDecryptor14570{}
+				executor.BudgetLimits = map[CostClass]int{claim.CostClass: 1}
+				_, err := executor.Execute(context.Background(), session, descriptor)
+				return handler, sink, err
+			}
+			if handler, _, err := execute(descriptor); handler.normalizedAt.IsZero() {
+				t.Fatalf("control: the registered descriptor never reached the handler (err=%v)", err)
+			}
+			descriptor.Chunked = true
+			handler, sink, err := execute(descriptor)
+			if !errors.Is(err, ErrInvalidConfiguration) || !handler.normalizedAt.IsZero() || len(sink.destinations) != 0 {
+				t.Errorf("chunked + prepared: err=%v handler reached=%v writes=%v, want ErrInvalidConfiguration before any I/O",
+					err, !handler.normalizedAt.IsZero(), sink.destinations)
+			}
+		})
+	}
+}
+
+type credentialDecryptor14570 struct{}
+
+func (credentialDecryptor14570) Decrypt(secrets.Value) ([]byte, error) {
+	return []byte(`{"token":"fixture-token","api_key":"fixture-key","email":"dev@example.invalid","base_url":"https://example.invalid"}`), nil
 }

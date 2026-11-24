@@ -180,7 +180,9 @@ func TestGitLabDeploymentsRouteMirrorsPythonBestEffortReleaseAndMRErrors(t *test
 		{body: gitLabRepositoryFixture},
 		{status: http.StatusNotFound, body: `{"message":"404 Not Found"}`},
 		{body: `[{"id":501,"iid":7,"status":"success","environment":{"name":"production"},"created_at":"2026-07-22T10:00:00Z","sha":"abc"}]`},
-		{status: http.StatusServiceUnavailable, body: `{"message":"temporary"}`},
+		// An answered 4xx on the MR lookup stays best effort; a failed lookup (5xx, rate limit) stops the unit
+		// (CHAOS-14578, TestDeploymentsLookupFailureHoldsTheWatermark).
+		{status: http.StatusNotFound, body: `{"message":"404 Not Found"}`},
 	}}
 	claim := nativeTestClaim("gitlab", "deployments")
 	batch, err := (GitLabDeploymentsRouteHandler{}).Collect(

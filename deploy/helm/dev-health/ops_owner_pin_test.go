@@ -5,20 +5,22 @@ import (
 	"testing"
 )
 
-// CHAOS-12614: migrations.hook.ownerRole pins the owner of the database and the ops schemas for the four ops migrator
+// CHAOS-12614: migrations.hook.ownerRole pins the owner of the database and the ops schemas for the five ops migrator
 // Jobs (MIGRATION_OWNER_ROLE); provisionRoles.migratorRole provisions that login; provisionRoles.externalSecretName
 // keeps provision-roles on the superuser DSN. Empty values render nothing.
 
 var opsPinJobs = map[string]string{
-	"a-dev-health-migrate":          "migrate",
-	"a-dev-health-open-units-index": "open-units-index",
-	"a-dev-health-streak-index":     "streak-index",
-	"a-dev-health-river-migrate":    "river-migrate",
+	"a-dev-health-migrate":               "migrate",
+	"a-dev-health-open-units-index":      "open-units-index",
+	"a-dev-health-finalize-outbox-index": "finalize-outbox-index",
+	"a-dev-health-streak-index":          "streak-index",
+	"a-dev-health-river-migrate":         "river-migrate",
 }
 
 func opsPinArgs(extra ...string) []string {
 	return queryAPIRoleArgs(riverHookSets, []string{
 		"--set", "migrations.hook.openUnitsIndex.enabled=true",
+		"--set", "migrations.hook.finalizeOutboxIndex.enabled=true",
 		"--set", "migrations.hook.streakIndex.enabled=true",
 	}, extra)
 }
@@ -81,7 +83,7 @@ func TestOpsOwnerPinKeepsExtraEnvOnTheIndexJobs(t *testing.T) {
 	args := opsPinArgs("--set", "migrations.hook.ownerRole=devhealth_migrator",
 		"--set-json", `migrations.hook.extraEnv=[{"name":"EXTRA_ONE","value":"1"}]`)
 	containers := opsPinContainers(t, args...)
-	for _, job := range []string{"a-dev-health-open-units-index", "a-dev-health-streak-index"} {
+	for _, job := range []string{"a-dev-health-open-units-index", "a-dev-health-finalize-outbox-index", "a-dev-health-streak-index"} {
 		if got, ok := envValue(containers[job], "EXTRA_ONE"); !ok || got != "1" {
 			t.Errorf("%s: extraEnv EXTRA_ONE = %q (present %v)", job, got, ok)
 		}

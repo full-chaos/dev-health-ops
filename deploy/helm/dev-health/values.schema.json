@@ -298,6 +298,19 @@
               "required": ["enabled"],
               "description": "The weight -2 pre-hook Job that builds ix_sync_run_units_open_run CONCURRENTLY before revision 0161."
             },
+            "finalizeOutboxIndex": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "activeDeadlineSeconds": { "type": "integer", "minimum": 60 },
+                "lockTimeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 60 },
+                "deadlineSeconds": { "type": "integer", "minimum": 60 },
+                "attempts": { "type": "integer", "minimum": 1 },
+                "retryDelaySeconds": { "type": "integer", "minimum": 0 }
+              },
+              "required": ["enabled"],
+              "description": "The weight -2 pre-hook Job that builds ix_worker_job_outbox_finalize_domain_id CONCURRENTLY before revision 0167."
+            },
             "classDecisionLiveSchemaDigest": {
               "type": "string",
               "pattern": "^(sha256:[0-9a-f]{64})?$",

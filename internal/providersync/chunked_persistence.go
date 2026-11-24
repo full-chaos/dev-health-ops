@@ -616,17 +616,27 @@ func splitEmission(
 	maxRows := min(policy.MaxEffectRows, policy.MaxSourceItems)
 	// Rows of their own chunks (effectOwnChunkRows) are split apart from the other rows of their destination.
 	regular, own := make([][]json.RawMessage, len(ordered)), make([][]json.RawMessage, len(ordered))
+	groups := make([][][]json.RawMessage, len(ordered))
 	for index, effect := range ordered {
 		regular[index], own[index] = effectOwnChunkRows(effect)
+		groups[index] = effectTieGroups(effect.Destination, regular[index])
 	}
+	// isolate moves each tie group larger than the row cap to a sub-chunk of its own, after the shared ones: taken only when the
+	// one-row split with the groups sharing ordinals does not fit, so a group that fits alone is stored, not refused.
+	isolate := false
 	for maxRows >= 1 {
 		shared, ownChunks := 1, 0
+		parts, solo := make([][][]json.RawMessage, len(ordered)), make([][][]json.RawMessage, len(ordered))
 		for index := range ordered {
-			if rows := (len(regular[index]) + maxRows - 1) / maxRows; rows > shared {
-				shared = rows
+			parts[index], solo[index] = packEffectRows(regular[index], groups[index], maxRows, isolate)
+			if len(parts[index]) > shared {
+				shared = len(parts[index])
 			}
 			if len(own[index]) > ownChunks {
 				ownChunks = len(own[index])
+			}
+			if len(solo[index]) > ownChunks {
+				ownChunks = len(solo[index])
 			}
 		}
 		count := shared + ownChunks
@@ -657,7 +667,19 @@ func splitEmission(
 				if end > len(rows) {
 					end = len(rows)
 				}
-				part, err := BuildEffectBatch(effect.Destination, effect.Recovery, rows[start:end])
+				rows = rows[start:end]
+				if ordinal < shared && !effectSplitsLast(effect.Destination) {
+					rows = nil
+					if ordinal < len(parts[index]) {
+						rows = parts[index][ordinal]
+					}
+				} else if solo[index] != nil && !effectSplitsLast(effect.Destination) {
+					rows = nil
+					if ordinal-shared < len(solo[index]) {
+						rows = solo[index][ordinal-shared]
+					}
+				}
+				part, err := BuildEffectBatch(effect.Destination, effect.Recovery, rows)
 				if err != nil {
 					return nil, err
 				}
@@ -718,6 +740,10 @@ func splitEmission(
 			return chunks, nil
 		}
 		if maxRows == 1 {
+			if !isolate && hasTieGroup(groups) {
+				isolate = true
+				continue
+			}
 			if storeRefusal != nil {
 				return nil, storeRefusal
 			}
@@ -726,6 +752,77 @@ func splitEmission(
 		maxRows = nextSplitCap(maxRows, policy)
 	}
 	return nil, ErrChunkPolicyExceeded
+}
+
+func hasTieGroup(groups [][][]json.RawMessage) bool {
+	for _, destination := range groups {
+		for _, group := range destination {
+			if len(group) > 1 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// effectTieGroups groups the work_item_transitions rows of one item at one stored millisecond, in the order of each group's first
+// row (nil for every other destination). The sink ranks the tie_ordinal of an instant's rows within one write call
+// (rankTransitionTies), so a group cut across two sub-chunks gives two rows ordinal 0 and one sorting key, and the table keeps one.
+func effectTieGroups(destination string, rows []json.RawMessage) [][]json.RawMessage {
+	if destination != "work_item_transitions" {
+		return nil
+	}
+	position := make(map[string]int, len(rows))
+	groups := make([][]json.RawMessage, 0, len(rows))
+	for index, row := range rows {
+		var instant struct {
+			OrgID      string    `json:"org_id"`
+			WorkItemID string    `json:"work_item_id"`
+			OccurredAt time.Time `json:"occurred_at"`
+		}
+		key := fmt.Sprintf("row %d", index)
+		if json.Unmarshal(row, &instant) == nil {
+			key = strings.Join([]string{
+				instant.OrgID, instant.WorkItemID, clickHouseMillis(instant.OccurredAt).Format(time.RFC3339Nano),
+			}, workItemKeySeparator)
+		}
+		if at, seen := position[key]; seen {
+			groups[at] = append(groups[at], row)
+			continue
+		}
+		position[key] = len(groups)
+		groups = append(groups, []json.RawMessage{row})
+	}
+	return groups
+}
+
+// packEffectRows cuts a destination's shared rows into sub-chunks of at most maxRows rows. With groups, a sub-chunk takes whole
+// groups only (a group larger than maxRows takes a sub-chunk of its own; with isolate it goes to solo, the sub-chunks after the shared
+// ones); with no group larger than one row it cuts as plain slicing.
+func packEffectRows(rows []json.RawMessage, groups [][]json.RawMessage, maxRows int, isolate bool) (parts, solo [][]json.RawMessage) {
+	parts = make([][]json.RawMessage, 0, (len(rows)+maxRows-1)/maxRows)
+	if groups == nil {
+		for start := 0; start < len(rows); start += maxRows {
+			parts = append(parts, rows[start:min(start+maxRows, len(rows))])
+		}
+		return parts, nil
+	}
+	var current []json.RawMessage
+	for _, group := range groups {
+		if isolate && len(group) > maxRows {
+			solo = append(solo, group)
+			continue
+		}
+		if len(current) > 0 && len(current)+len(group) > maxRows {
+			parts = append(parts, current)
+			current = nil
+		}
+		current = append(current, group...)
+	}
+	if len(current) > 0 {
+		parts = append(parts, current)
+	}
+	return parts, solo
 }
 
 // effectOwnChunkRows splits an effect's rows into the rows that share chunks with the other destinations' rows and the rows the

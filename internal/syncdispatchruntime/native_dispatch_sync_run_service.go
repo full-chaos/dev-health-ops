@@ -625,7 +625,8 @@ WHERE id = $1::uuid`,
 	slotsFreedInPass := pendingRollupBumps(ctx)
 	flushRollupBumpTally(ctx, service.metrics)
 	if slotsFreedInPass > 0 {
-		defer syncrunrollup.WakeDispatch(ctx, service.pool, run.id, service.nowUTC(), syncrunrollup.DispatchWakePathDispatchPass)
+		// CHAOS-14477: at this delivery's attempt, so a newer delivery made after this commit keeps its row.
+		defer syncrunrollup.WakeDispatchForDelivery(ctx, service.pool, run.id, service.nowUTC(), syncrunrollup.DispatchWakePathDispatchPass, args.Attempt())
 	}
 	// CHAOS-8880: this pass left free slots to older runs of a bucket; their next pass is due now, not at their
 	// back-off. After the commit, like the wake above, so the older pass sees this pass's claims.

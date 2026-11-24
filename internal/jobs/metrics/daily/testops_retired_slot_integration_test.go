@@ -748,7 +748,13 @@ func TestTestopsRetiredSlotReadsStayInTheirScans(t *testing.T) {
 			}
 			return err
 		}},
-		{"pooled", 1 + 6, 0, 0, 0, 0, func(ctx context.Context) error {
+		// One read of the repository's suite rows: the rule is computed over it by window functions. The day is stored without
+		// samples (written under no query id), so the raw arm reads.
+		{"pooled", 1, 0, 0, 0, 0, func(ctx context.Context) error {
+			if err := stack.conn.Exec(stack.ctx, `INSERT INTO testops_test_metrics_daily (repo_id, day, org_id, computed_at) VALUES (?, ?, ?, now())`,
+				repoID, start, org); err != nil {
+				return err
+			}
 			var count uint64
 			return stack.conn.QueryRow(ctx, "SELECT count() FROM "+testopspooled.SuiteRunsSource, clickhouse.Named("org_id", org),
 				clickhouse.Named("start_date", start.Format(time.DateOnly)), clickhouse.Named("end_date", end.Format(time.DateOnly))).Scan(&count)

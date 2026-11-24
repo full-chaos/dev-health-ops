@@ -36,18 +36,61 @@ const OpenUnitsIndexName = "ix_sync_run_units_open_run"
 const OpenUnitsIndexBody = OpenUnitsIndexName + ` ON public.sync_run_units (sync_run_id)
 WHERE status NOT IN ('success', 'failed')`
 
-// unitsIndex is one index of sync_run_units the build-index verb knows how to build. Each has its own build lock key, so
-// a run for one index never reads another index's run as the holder of its lock.
+// FinalizeOutboxIndexName is the partial expression index over the metrics.daily_finalize outbox rows. The
+// reconciler's stale-finalize survey (internal/joboutbox/stale_finalize_repair.go) probes the outbox once per run in
+// its base by `outbox.args #>> '{domain,id}' = run.id::text` under `outbox.job_kind = 'metrics.daily_finalize'`; with
+// no index each probe walks the whole outbox. Revision 0167 creates it; the build-index verb builds it first without
+// blocking outbox writes.
+const FinalizeOutboxIndexName = "ix_worker_job_outbox_finalize_domain_id"
+
+// FinalizeOutboxIndexBody is the definition shared by the verb and revision 0167
+// (TestFinalizeOutboxIndexDefinitionMatchesRevision0167 holds the two together). Its expression and predicate are the
+// survey's text, so the planner can prove the partial index.
+const FinalizeOutboxIndexBody = FinalizeOutboxIndexName + ` ON public.worker_job_outbox ((args #>> '{domain,id}'))
+WHERE job_kind = 'metrics.daily_finalize'`
+
+// unitsIndex is one index the build-index verb knows how to build, on its table. Each has its own build lock key, so a
+// run for one index never reads another index's run as the holder of its lock.
 type unitsIndex struct {
 	verb    string
 	name    string
 	body    string
+	table   indexTable
 	lockKey int64
 }
 
+// indexTable holds the statements the verb sends about one table. The tables are a closed list in this file: a table
+// name never comes from input, and it is spliced into the text as a literal, not bound, so the sync_run_units statements
+// stay the text they were before the list existed (TestSyncRunUnitsIndexStatementsAreUnchanged).
+type indexTable struct {
+	name      string
+	existsSQL string
+	lockSQL   string
+	infoSQL   string
+}
+
+func newIndexTable(name string) indexTable {
+	return indexTable{
+		name:      name,
+		existsSQL: "SELECT pg_catalog.to_regclass('public." + name + "') IS NOT NULL",
+		lockSQL:   "LOCK TABLE public." + name + " IN SHARE UPDATE EXCLUSIVE MODE",
+		infoSQL: `
+SELECT i.indisvalid, i.indisready
+FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_index i ON i.indexrelid = c.oid
+WHERE c.relnamespace = 'public'::regnamespace AND c.relname = $1 AND i.indrelid = 'public.` + name + `'::regclass`,
+	}
+}
+
+var (
+	syncRunUnitsTable    = newIndexTable("sync_run_units")
+	workerJobOutboxTable = newIndexTable("worker_job_outbox")
+)
+
 var unitsIndexes = []unitsIndex{
-	{verb: "failure-streak", name: FailureStreakIndexName, body: FailureStreakIndexBody, lockKey: buildIndexLockKey},
-	{verb: "open-units", name: OpenUnitsIndexName, body: OpenUnitsIndexBody, lockKey: openUnitsBuildIndexLockKey},
+	{verb: "failure-streak", name: FailureStreakIndexName, body: FailureStreakIndexBody, table: syncRunUnitsTable, lockKey: buildIndexLockKey},
+	{verb: "open-units", name: OpenUnitsIndexName, body: OpenUnitsIndexBody, table: syncRunUnitsTable, lockKey: openUnitsBuildIndexLockKey},
+	{verb: "finalize-outbox", name: FinalizeOutboxIndexName, body: FinalizeOutboxIndexBody, table: workerJobOutboxTable, lockKey: finalizeOutboxBuildIndexLockKey},
 }
 
 func unitsIndexByVerb(verb string) (unitsIndex, bool) {
@@ -71,6 +114,9 @@ const buildIndexLockKey int64 = 0x64686f5f6978
 
 // openUnitsBuildIndexLockKey is the same lock for the open-units index ("dho_iy"): the two indexes build independently.
 const openUnitsBuildIndexLockKey int64 = 0x64686f5f6979
+
+// finalizeOutboxBuildIndexLockKey is the same lock for the finalize-outbox index ("dho_iz").
+const finalizeOutboxBuildIndexLockKey int64 = 0x64686f5f697a
 
 // ErrBuildLockHeld is the refusal of a run that finds another build-index run holding the build lock while the index is not
 // valid. The run sends no DDL: an INVALID index then may be the other run's build in progress.
@@ -153,6 +199,11 @@ func BuildOpenUnitsIndex(ctx context.Context, conn *pgx.Conn, options IndexBuild
 	return buildUnitsIndex(ctx, conn, unitsIndexes[1], options, logger)
 }
 
+// BuildFinalizeOutboxIndex builds ix_worker_job_outbox_finalize_domain_id (see buildUnitsIndex).
+func BuildFinalizeOutboxIndex(ctx context.Context, conn *pgx.Conn, options IndexBuildOptions, logger *slog.Logger) (IndexBuildResult, error) {
+	return buildUnitsIndex(ctx, conn, unitsIndexes[2], options, logger)
+}
+
 // buildUnitsIndex builds the index with CREATE INDEX CONCURRENTLY, outside any transaction.
 //
 // The lock_timeout of the session caps every lock wait of a statement, and CREATE/DROP INDEX CONCURRENTLY wait for every
@@ -184,11 +235,11 @@ func buildUnitsIndex(ctx context.Context, conn *pgx.Conn, index unitsIndex, opti
 		return result, fmt.Errorf("set lock_timeout: %w", err)
 	}
 	var hasTable bool
-	if err := conn.QueryRow(ctx, "SELECT pg_catalog.to_regclass('public.sync_run_units') IS NOT NULL").Scan(&hasTable); err != nil {
-		return result, fmt.Errorf("look for sync_run_units: %w", err)
+	if err := conn.QueryRow(ctx, index.table.existsSQL).Scan(&hasTable); err != nil {
+		return result, fmt.Errorf("look for %s: %w", index.table.name, err)
 	}
 	if !hasTable {
-		return result, errors.New("public.sync_run_units does not exist: the database is not at the baseline")
+		return result, fmt.Errorf("public.%s does not exist: the database is not at the baseline", index.table.name)
 	}
 	var locked bool
 	var pid int32
@@ -196,7 +247,7 @@ func buildUnitsIndex(ctx context.Context, conn *pgx.Conn, index unitsIndex, opti
 		return result, fmt.Errorf("take the build lock: %w", err)
 	}
 	if !locked {
-		info, err := readIndexInfo(ctx, conn, index.name)
+		info, err := readIndexInfo(ctx, conn, index)
 		if err != nil {
 			return result, err
 		}
@@ -222,7 +273,7 @@ func buildUnderLock(ctx context.Context, session lockedSession, index unitsIndex
 	watch := startBlockerWatch(ctx, conn, options, logger)
 	defer watch.stop()
 
-	info, err := readIndexInfo(ctx, conn, index.name)
+	info, err := readIndexInfo(ctx, conn, index)
 	if err != nil {
 		return err
 	}
@@ -234,15 +285,22 @@ func buildUnderLock(ctx context.Context, session lockedSession, index unitsIndex
 	result.Action = "built"
 	var lastErr error
 	for attempt := 1; attempt <= options.Attempts; attempt++ {
-		result.Attempts = attempt
 		if attempt > 1 {
+			// The pause ends with the build window at the latest; a window spent by then ends the run with no further read.
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(options.RetryDelay):
+			case <-time.After(min(options.RetryDelay, time.Until(windowEnd))):
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if !time.Now().Before(windowEnd) {
+				lastErr = stopAtWindowEnd(logger, attempt, result.Attempts, lastErr)
+				break
 			}
 		}
-		if info, err = readIndexInfo(ctx, conn, index.name); err != nil {
+		if info, err = readIndexInfo(ctx, conn, index); err != nil {
 			return err
 		}
 		if attempt > 1 {
@@ -252,6 +310,11 @@ func buildUnderLock(ctx context.Context, session lockedSession, index unitsIndex
 			lastErr = nil
 			break
 		}
+		if attempt > 1 && !time.Now().Before(windowEnd) {
+			lastErr = stopAtWindowEnd(logger, attempt, result.Attempts, lastErr)
+			break
+		}
+		result.Attempts = attempt
 		stage, err := runBuildAttempt(ctx, session, index, result, windowEnd, options.LockTimeout)
 		if err == nil {
 			lastErr = nil
@@ -268,7 +331,7 @@ func buildUnderLock(ctx context.Context, session lockedSession, index unitsIndex
 			logger.Warn("build-index: attempt failed", "attempt", attempt, "stage", stage, "sqlstate", sqlState(err))
 		}
 		watch.logBlockers(stage, attempt)
-		if post, perr := readIndexInfo(context.WithoutCancel(ctx), conn, index.name); perr == nil {
+		if post, perr := readIndexInfo(context.WithoutCancel(ctx), conn, index); perr == nil {
 			logIndexInfo(logger, "after_failed_attempt", attempt, post)
 		}
 		if windowExpired(err, windowEnd) {
@@ -279,7 +342,7 @@ func buildUnderLock(ctx context.Context, session lockedSession, index unitsIndex
 		dropInvalidUnitsIndex(ctx, session, index, options, logger)
 		return fmt.Errorf("the index was not built after %d attempts: %w", result.Attempts, lastErr)
 	}
-	info, err = readIndexInfo(ctx, conn, index.name)
+	info, err = readIndexInfo(ctx, conn, index)
 	if err != nil {
 		return err
 	}
@@ -290,13 +353,19 @@ func buildUnderLock(ctx context.Context, session lockedSession, index unitsIndex
 	return nil
 }
 
+// stopAtWindowEnd ends the retries of a build whose window is spent; the error wraps the window end and the last attempt's error.
+func stopAtWindowEnd(logger *slog.Logger, attempt, attemptsRun int, lastErr error) error {
+	logger.Warn("build-index: the build window ended; no further attempt", "attempts", attemptsRun)
+	return fmt.Errorf("%w before attempt %d: %w", errWindowExpired, attempt, lastErr)
+}
+
 // runBuildAttempt runs one attempt: probe the table lock, read the state, drop an INVALID leftover, build. stage names
 // where it failed. The state is read after the probe: the probe can wait behind a builder that ends with a valid index.
 func runBuildAttempt(ctx context.Context, session lockedSession, index unitsIndex, result *IndexBuildResult, windowEnd time.Time, lock time.Duration) (stage string, err error) {
-	if err := probeTableLock(ctx, session.conn); err != nil {
+	if err := probeTableLock(ctx, session.conn, index); err != nil {
 		return "probe", err
 	}
-	info, err := readIndexInfo(ctx, session.conn, index.name)
+	info, err := readIndexInfo(ctx, session.conn, index)
 	if err != nil {
 		return "state", err
 	}
@@ -319,12 +388,12 @@ func runBuildAttempt(ctx context.Context, session lockedSession, index unitsInde
 // probeTableLock takes and releases SHARE UPDATE EXCLUSIVE on the table under the session lock_timeout. That is the lock
 // CREATE/DROP INDEX CONCURRENTLY hold: no writer conflicts with it, but a pending request that waits behind VACUUM or
 // DDL can queue other DDL, so its wait stays short.
-func probeTableLock(ctx context.Context, conn *pgx.Conn) error {
+func probeTableLock(ctx context.Context, conn *pgx.Conn, index unitsIndex) error {
 	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, "LOCK TABLE public.sync_run_units IN SHARE UPDATE EXCLUSIVE MODE"); err != nil {
+	if _, err := tx.Exec(ctx, index.table.lockSQL); err != nil {
 		_ = tx.Rollback(context.WithoutCancel(ctx))
 		return err
 	}
@@ -416,7 +485,7 @@ func dropInvalidUnitsIndex(ctx context.Context, session lockedSession, index uni
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget+statementTimeoutResetLimit)
 	defer cancel()
 	for attempt := 1; attempt <= unitsIndexDropAttempts; attempt++ {
-		info, err := readIndexInfo(ctx, session.conn, index.name)
+		info, err := readIndexInfo(ctx, session.conn, index)
 		if err != nil {
 			logger.Warn("build-index: invalid index left; the next run drops it", "stage", "state", "attempt", attempt, "sqlstate", sqlState(err), "index", index.name)
 			return
@@ -470,13 +539,8 @@ func logIndexInfo(logger *slog.Logger, when string, attempt int, i indexInfo) {
 }
 
 // readIndexInfo reads whether the index exists and its indisvalid and indisready flags.
-func readIndexInfo(ctx context.Context, conn *pgx.Conn, name string) (indexInfo, error) {
-	rows, err := conn.Query(ctx, `
-SELECT i.indisvalid, i.indisready
-FROM pg_catalog.pg_class c
-JOIN pg_catalog.pg_index i ON i.indexrelid = c.oid
-WHERE c.relnamespace = 'public'::regnamespace AND c.relname = $1 AND i.indrelid = 'public.sync_run_units'::regclass`,
-		name)
+func readIndexInfo(ctx context.Context, conn *pgx.Conn, index unitsIndex) (indexInfo, error) {
+	rows, err := conn.Query(ctx, index.table.infoSQL, index.name)
 	if err != nil {
 		return indexInfo{}, fmt.Errorf("read the index state: %w", err)
 	}
@@ -502,9 +566,10 @@ func buildIndex(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 	defaultUsage := flags.Usage
 	flags.Usage = func() {
 		defaultUsage()
-		fmt.Fprint(env.Stderr, "\nUsage: dho migrate postgres build-index failure-streak|open-units\n"+
-			"\nBuilds "+FailureStreakIndexName+" (failure-streak) or "+OpenUnitsIndexName+" (open-units) CONCURRENTLY\n"+
-			"(the upgrade revision that carries it, 0159 or 0161, then finds it and does nothing).\n"+
+		fmt.Fprint(env.Stderr, "\nUsage: dho migrate postgres build-index failure-streak|open-units|finalize-outbox\n"+
+			"\nBuilds "+FailureStreakIndexName+" (failure-streak), "+OpenUnitsIndexName+" (open-units) or\n"+
+			FinalizeOutboxIndexName+" (finalize-outbox) CONCURRENTLY\n"+
+			"(the upgrade revision that carries it, 0159, 0161 or 0167, then finds it and does nothing).\n"+
 			"Exit 0 only when the index is present and valid.\n"+
 			"A run that finds another run holding the build lock, while the index is not valid, exits non-zero (build_index_lock_held) with no DDL.\n"+
 			"\nEnvironment:\n"+
@@ -531,7 +596,7 @@ func buildIndex(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 		index, found = unitsIndexByVerb(positional[0])
 	}
 	if !found {
-		fmt.Fprintln(env.Stderr, "argument error: the index to build is named failure-streak or open-units")
+		fmt.Fprintln(env.Stderr, "argument error: the index to build is named failure-streak, open-units or finalize-outbox")
 		return cli.ExitUsage
 	}
 	if options.LockTimeout < time.Second || options.LockTimeout > time.Minute || options.Attempts < 1 || options.RetryDelay < 0 || options.Deadline < 10*time.Second || options.Deadline > 4*time.Hour {

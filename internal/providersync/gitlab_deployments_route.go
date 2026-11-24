@@ -132,6 +132,7 @@ func (handler GitLabDeploymentsRouteHandler) Collect(
 	}
 	mergeRequestsByDeploymentID := make(map[string][]map[string]any, len(deployments))
 	mergeRequestLookupFailed := make(map[string]bool, len(deployments))
+	inWindow := gitLabDeploymentsInWindow(claim, deployments)
 	pages := releasePages + deploymentPages
 	for _, deployment := range deployments {
 		sha := stringValue(deployment["sha"])
@@ -150,9 +151,14 @@ func (handler GitLabDeploymentsRouteHandler) Collect(
 			return CompleteRouteBatch{}, controlErr
 		}
 		if mergeRequestErr != nil {
-			// Python permits a failed MR lookup for one deployed SHA to leave
-			// only that deployment unattributed in this batch; the effects
-			// sink carries a stored attribution forward over it.
+			// A failed lookup (rate limited, 5xx, transport, an answered 401) of a deployment this batch keeps stops
+			// the unit, so the window is read again (Python kept the deployment unattributed and acknowledged the
+			// window). Every listed deployment is still looked up, as Python does; a failed lookup of one outside the
+			// window, or another answered 4xx, leaves only that deployment unattributed; the effects sink carries a
+			// stored attribution forward over it.
+			if verdict, _ := classifyLookupFailure(mergeRequestErr, nil); verdict == lookupFails && inWindow[stringValue(deployment["id"])] {
+				return CompleteRouteBatch{}, mergeRequestErr
+			}
 			slog.Warn("gitlab_deployments.merge_request_lookup_failed", logging.ProviderIDAttr("deployment_id", stringValue(deployment["id"])), "cause", mergeRequestErr.Error())
 			mergeRequestLookupFailed[stringValue(deployment["id"])] = true
 			continue
@@ -195,6 +201,26 @@ func (handler GitLabDeploymentsRouteHandler) Collect(
 	return gitLabDeploymentsBatch(
 		claim, fullName, parsedProjectID, normalizedAt, rows, requests, pages,
 	)
+}
+
+// gitLabDeploymentsInWindow is the set of deployment ids the batch keeps: the row loop's window rules on created_at
+// (newest first; it stops at the first deployment before since), read without normalizing a row.
+func gitLabDeploymentsInWindow(claim Claim, deployments []map[string]any) map[string]bool {
+	kept := make(map[string]bool, len(deployments))
+	for _, deployment := range deployments {
+		createdAt, id := parseGitLabDeploymentTime(deployment["created_at"]), stringValue(deployment["id"])
+		if createdAt == nil || id == "" {
+			continue
+		}
+		if claim.SinceAt != nil && createdAt.Before(claim.SinceAt.UTC()) {
+			break
+		}
+		if claim.BeforeAt != nil && createdAt.After(claim.BeforeAt.UTC()) {
+			continue
+		}
+		kept[id] = true
+	}
+	return kept
 }
 
 func gitLabDeploymentControlError(ctx context.Context, err error) error {

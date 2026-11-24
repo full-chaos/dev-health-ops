@@ -90,8 +90,9 @@ func TestGitHubRuntimeOptionsLockSkipsAnotherOrgsIntegration(t *testing.T) {
 	if got.err != nil {
 		t.Fatalf("PATCH: %v", got.err)
 	}
-	if got.status != 200 {
-		t.Errorf("the PATCH without the list answered %d %s, want main's 200 (the not-scoped path)", got.status, got.body)
+	if got.status != 422 || !strings.Contains(got.body, "the sync configuration has no integration") || strings.Contains(got.body, `"field"`) {
+		t.Errorf("the PATCH without the list answered %d %s, want the 422 \"the sync configuration has no integration\" with no field "+
+			"(the update's integration org check, CHAOS-14582)", got.status, got.body)
 	}
 	if text := v.integrationConfigText(other); !strings.Contains(text, `"ci-other-"`) {
 		t.Errorf("the other org's integration config changed: %s", text)

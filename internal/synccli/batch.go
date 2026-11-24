@@ -8,7 +8,6 @@ import (
 	"math/big"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
@@ -93,13 +92,8 @@ type batchFailure struct {
 
 func runBatch(ctx context.Context, deps InlineDeps, plan Plan, datasets []string, run providersync.InProcessRun, env cli.Env) error {
 	secretValues := batchSecrets(run)
-	redact := func(err error) string {
-		text := secrets.NewBoundary(plan.SinkURI).RedactText(err.Error())
-		for _, secret := range secretValues {
-			text = strings.ReplaceAll(text, secret, "<redacted>")
-		}
-		return text
-	}
+	boundary := secrets.Join(secrets.NewBoundary(plan.SinkURI), secrets.NewBoundaryWith("", secretValues...))
+	redact := func(err error) string { return boundary.RedactText(err.Error()) }
 	repos, err := deps.List(ctx, run, batchListing(plan))
 	if err != nil {
 		return fmt.Errorf("%s: list repositories: %s", plan.Provider, redact(err))

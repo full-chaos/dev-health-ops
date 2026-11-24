@@ -809,7 +809,7 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 				t.Fatal(err)
 			}
 			now := time.Now().UTC().Truncate(time.Microsecond)
-			var templateOutbox string
+			var templateOutbox, finalizeOutbox string
 			var templateJob int64
 			for index, shape := range shapes {
 				id := shape.seed(t, now)
@@ -817,6 +817,12 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 				if index == 0 {
 					templateOutbox, templateJob = outboxID, jobID
 				}
+				if shape.kind == jobcontract.KindDailyMetricsFinalize {
+					finalizeOutbox = outboxID
+				}
+			}
+			if templateOutbox == finalizeOutbox || finalizeOutbox == "" {
+				t.Fatal("the fixture needs a finalize delivery apart from the template delivery")
 			}
 			// The fixture has the shape production has: far more delivered outbox
 			// rows than River jobs, because River's cleaner removes a finished job
@@ -826,9 +832,14 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 			// one real job, each with its own domain id and key, so every
 			// constraint the two tables carry still holds. Copying through the row
 			// type keeps this independent of either table's column list.
+			// One filler in finalizeEvery is a finalize delivery, about production's share (49,014 of 473,084 rows,
+			// SIZING-14090-2): with no finalize rows besides the seeded one, the finalize partial index holds one entry
+			// and a walk of it looks cheaper than any probe.
 			const (
 				cleanedOutboxRows = 16000
 				liveRiverJobs     = 5000
+				finalizeEvery     = 10
+				finishedRuns      = 20000
 			)
 			if _, err := admin.Exec(ctx, `
 				INSERT INTO river.river_job
@@ -868,7 +879,25 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 						SELECT string_agg(md5(filler::text || ':' || part::text), '') AS text
 						FROM generate_series(1, 28) AS part
 					) AS pad
-				WHERE template.id = $1`, templateOutbox, cleanedOutboxRows); err != nil {
+				WHERE template.id = CASE WHEN filler % $4::int = 0 THEN $3 ELSE $1 END::uuid`,
+				templateOutbox, cleanedOutboxRows, finalizeOutbox, finalizeEvery); err != nil {
+				t.Fatal(err)
+			}
+			// Finished daily runs, two succeeded partitions each, about production's ratio (49,009 runs, 95,410
+			// partitions, SIZING-14090-2). With only the seeded runs the planner drives the finalize survey from a
+			// two-row runs table, probes the finalize index by run id and walks river_job end to end.
+			if _, err := admin.Exec(ctx, `
+				WITH filler AS (
+					INSERT INTO public.daily_metrics_runs
+						(id, org_id, target_day, generation, status, finalization_status, finalized_at, created_at, updated_at)
+					SELECT gen_random_uuid(), $1::uuid, DATE '2000-01-01' + n, 'filler-run:' || n, 'succeeded', 'succeeded',
+						$2, $2, $2
+					FROM generate_series(1, $3::int) AS n
+					RETURNING id)
+				INSERT INTO public.daily_metrics_partitions
+					(id, run_id, ordinal, repo_ids, status, attempt_count, completed_at, created_at, updated_at)
+				SELECT gen_random_uuid(), filler.id, ordinal, '[]'::json, 'succeeded', 1, $2, $2, $2
+				FROM filler, generate_series(0, 1) AS ordinal`, fixture.orgID, now.Add(-48*time.Hour), finishedRuns); err != nil {
 				t.Fatal(err)
 			}
 			var outboxRows int
@@ -886,6 +915,28 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 			}
 			if riverJobs != liveRiverJobs+len(shapes) {
 				t.Fatalf("river_job holds %d rows, want %d", riverJobs, liveRiverJobs+len(shapes))
+			}
+			// The fixture's own shape, so a later edit cannot quietly put the finalize plan back on a one-entry index
+			// or the River ids back below the cleaned ones.
+			var finalizeRows, runs int
+			var lowestJob, highestCleaned int64
+			if err := admin.QueryRow(ctx, `
+				SELECT (SELECT count(*) FROM public.worker_job_outbox
+				        WHERE status = 'delivered' AND job_kind = 'metrics.daily_finalize'),
+				       (SELECT count(*) FROM public.daily_metrics_runs),
+				       (SELECT min(id) FROM river.river_job),
+				       (SELECT max(river_job_id) FROM public.worker_job_outbox WHERE dedupe_key LIKE 'filler-row:%')`,
+			).Scan(&finalizeRows, &runs, &lowestJob, &highestCleaned); err != nil {
+				t.Fatal(err)
+			}
+			if runs <= finishedRuns {
+				t.Fatalf("daily_metrics_runs holds %d rows, want more than the %d finished fillers", runs, finishedRuns)
+			}
+			if want := cleanedOutboxRows/finalizeEvery + 1; finalizeRows != want {
+				t.Fatalf("the outbox holds %d delivered finalize rows, want %d", finalizeRows, want)
+			}
+			if lowestJob <= highestCleaned {
+				t.Fatalf("the lowest River id %d is not above every cleaned delivery's River id (%d)", lowestJob, highestCleaned)
 			}
 			// VACUUM, not only ANALYZE, on the two bulk-loaded tables. A GIN index
 			// keeps new entries in a pending list that every search must read in
@@ -940,6 +991,10 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 				return plan.String()
 			}
 			const outboxScan = "Seq Scan on worker_job_outbox"
+			// A keyed plan reads one or two rows per node here (one strand delivery per shape). A walk reads the finalize
+			// index (cleanedOutboxRows/finalizeEvery + 1 = 1601 entries) or river_job (liveRiverJobs = 5000 rows). The
+			// bound sits an order of magnitude from both.
+			const finalizeStrandWorkBound = 100
 			bindingPattern := regexp.MustCompile(`\n\t\tAND job\.args @> jsonb_build_object\('domain', jsonb_build_object\('id', \w+\.id::text\)\)`)
 			// One subtest per shape, so a failure names the survey it belongs to
 			// and the other shapes are still checked.
@@ -954,6 +1009,10 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 							t.Fatalf("the %s survey does not reach the outbox through its dedupe-key index:\n%s",
 								shape.name, plan)
 						}
+						return
+					}
+					if shape.name == "finalize" {
+						checkFinalizeStrandSurveyProbes(t, ctx, admin, shape.survey, now, finalizeStrandWorkBound)
 						return
 					}
 					// "No Seq Scan" alone is not the claim: a full walk of the
@@ -2793,9 +2852,10 @@ func TestStaleFinalizeLiveJobArmAnswersAsTheContainmentCheck(t *testing.T) {
 	}
 }
 
-// pm ruling on #6867 (3) and the recent-arm ruling: at a base of 1000 runs (500 with a live finalize job, 500 with
-// none, so both River arms are evaluated) the plans of statements A and B read river_job once each: no river_job node
-// runs more than once, and both River arms (live job, recent job) are hashed subplans.
+// At a base of 1000 runs (500 with a live finalize job, 500 with none, so both River arms are evaluated) the plans of
+// statements 0, A and B read river_job and daily_metrics_partitions once each: no node on either table runs more than
+// once, and every uncorrelated set is a hashed subplan (statement 0: the base's partitions set; A and B: live job,
+// recent job, partitions). The fixture is not ANALYZEd, as in the CI run that showed the per-run partitions scan.
 func TestStaleFinalizeSurveyReadsRiverJobOnceAtTheCap(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -2823,9 +2883,11 @@ FROM run WHERE run.target_day <= DATE '2020-01-01' + 500`, old); err != nil {
 	for _, statement := range []struct {
 		name, query string
 		args        []any
+		hashed      int
 	}{
-		{"statement A", fmt.Sprintf(staleFinalizeCandidatesSQLTemplate, jobTable), []any{cutoff, 100, nil, nil, nil}},
-		{"statement B", fmt.Sprintf(staleFinalizeLevelsSQLTemplate, jobTable), []any{cutoff, staleFinalizeLevelCap + 1}},
+		{"statement 0", staleFinalizeBaseExistsSQL, []any{cutoff}, 1},
+		{"statement A", fmt.Sprintf(staleFinalizeCandidatesSQLTemplate, jobTable), []any{cutoff, 100, nil, nil, nil}, 4},
+		{"statement B", fmt.Sprintf(staleFinalizeLevelsSQLTemplate, jobTable), []any{cutoff, staleFinalizeLevelCap + 1}, 4},
 	} {
 		tx, err := admin.Begin(ctx)
 		if err != nil {
@@ -2846,7 +2908,7 @@ FROM run WHERE run.target_day <= DATE '2020-01-01' + 500`, old); err != nil {
 		if err := json.Unmarshal(raw, &plans); err != nil || len(plans) != 1 {
 			t.Fatalf("EXPLAIN %s: %v", statement.name, err)
 		}
-		var riverNodes int
+		var riverNodes, partitionNodes int
 		var walk func(node explainNode)
 		walk = func(node explainNode) {
 			if node.RelationName == "river_job" {
@@ -2855,13 +2917,27 @@ FROM run WHERE run.target_day <= DATE '2020-01-01' + 500`, old); err != nil {
 					t.Fatalf("%s reads river_job %.0f times through %s (once per base run):\n%s", statement.name, node.ActualLoops, node.NodeType, raw)
 				}
 			}
+			childIndex := ""
+			if len(node.Plans) == 1 {
+				childIndex = node.Plans[0].IndexName
+			}
+			if node.RelationName == "worker_job_outbox" && node.ActualLoops > 1 && !outboxRunProbe(node.NodeType, node.IndexName, node.IndexCond, node.RecheckCond, childIndex) {
+				t.Fatalf("%s reads worker_job_outbox %.0f times through %s (once per base run):\n%s", statement.name, node.ActualLoops, node.NodeType, raw)
+			}
+			if node.RelationName == "daily_metrics_partitions" {
+				partitionNodes++
+				if node.ActualLoops > 1 && !partitionsRunProbe(node.NodeType, node.IndexCond) {
+					t.Fatalf("%s reads daily_metrics_partitions %.0f times through %s (once per base run):\n%s", statement.name, node.ActualLoops, node.NodeType, raw)
+				}
+			}
 			for _, child := range node.Plans {
 				walk(child)
 			}
 		}
 		walk(plans[0].Plan)
-		if riverNodes < 2 {
-			t.Fatalf("%s: %d river_job nodes, want both River arms in the plan:\n%s", statement.name, riverNodes, raw)
+		if (statement.name != "statement 0" && riverNodes < 2) || partitionNodes == 0 {
+			t.Fatalf("%s: %d river_job and %d daily_metrics_partitions nodes, want both River arms and the partitions set:\n%s",
+				statement.name, riverNodes, partitionNodes, raw)
 		}
 		// Both River arms are HASHED subplans: a set larger than work_mem x hash_mem_multiplier falls back to a per-row
 		// subplan, which this names before the loops count shows it.
@@ -2869,20 +2945,128 @@ FROM run WHERE run.target_day <= DATE '2020-01-01' + 500`, old); err != nil {
 		for _, name := range hashedSubPlan.FindAllString(string(raw), -1) {
 			hashed[name] = true
 		}
-		if len(hashed) < 2 {
-			t.Fatalf("%s: %d hashed subplans %v, want both River arms hashed:\n%s", statement.name, len(hashed), hashed, raw)
+		if len(hashed) < statement.hashed {
+			t.Fatalf("%s: %d hashed subplans %v, want %d:\n%s", statement.name, len(hashed), hashed, statement.hashed, raw)
 		}
 	}
 }
 
 var hashedSubPlan = regexp.MustCompile(`hashed SubPlan \d+`)
 
+// partitionsRunProbeCond is the no-partitions arm's lookup: an index-only probe keyed on the base run's id. Run once
+// per base run it costs one index descent each, not a read of the table, so it is the one per-run partitions node
+// allowed. The base check cannot pass as it: it reads updated_at, which no partitions index holds.
+var partitionsRunProbeCond = regexp.MustCompile(`^\((partition(_\d+)?\.)?run_id = run\.id\)$`)
+
+func partitionsRunProbe(nodeType, indexCond string) bool {
+	return nodeType == "Index Only Scan" && partitionsRunProbeCond.MatchString(indexCond)
+}
+
+// outboxRunProbe is the recent arm's outbox lookup: a probe of ix_worker_job_outbox_finalize_domain_id keyed on the
+// base run's id (an Index Scan with that Index Cond, or a Bitmap Heap Scan over that index with it as Recheck Cond). It
+// reads the run's own finalize rows only. A walk of another outbox index filtered by the run id is not it.
+// Either side order: a parameterized qual can print as "(run.id)::text = (args #>> ...)".
+var outboxRunProbeCond = regexp.MustCompile(`\((\w+\.)?args #>> '\{domain,id\}'::text\[\]\) = \(run\.id\)::text|\(run\.id\)::text = \((\w+\.)?args #>> '\{domain,id\}'::text\[\]\)`)
+
+func outboxRunProbe(nodeType, indexName, indexCond, recheckCond, childIndex string) bool {
+	keyed := outboxRunProbeCond.MatchString
+	switch nodeType {
+	case "Index Scan", "Index Only Scan":
+		return indexName == "ix_worker_job_outbox_finalize_domain_id" && keyed(indexCond)
+	case "Bitmap Heap Scan":
+		return childIndex == "ix_worker_job_outbox_finalize_domain_id" && keyed(recheckCond)
+	}
+	return false
+}
+
 // explainNode is one node of EXPLAIN (ANALYZE, FORMAT JSON).
 type explainNode struct {
-	NodeType     string        `json:"Node Type"`
-	RelationName string        `json:"Relation Name"`
-	ActualLoops  float64       `json:"Actual Loops"`
-	Plans        []explainNode `json:"Plans"`
+	NodeType         string        `json:"Node Type"`
+	RelationName     string        `json:"Relation Name"`
+	IndexName        string        `json:"Index Name"`
+	IndexCond        string        `json:"Index Cond"`
+	RecheckCond      string        `json:"Recheck Cond"`
+	ActualRows       float64       `json:"Actual Rows"`
+	ActualLoops      float64       `json:"Actual Loops"`
+	RemovedByFilter  float64       `json:"Rows Removed by Filter"`
+	RemovedByRecheck float64       `json:"Rows Removed by Index Recheck"`
+	Plans            []explainNode `json:"Plans"`
+}
+
+// checkFinalizeStrandSurveyProbes holds the finalize strand survey to keyed probes (pm ruling 2026-11-23, #6850): run
+// with real values, every node on worker_job_outbox or river_job carries a key condition and reads at most workBound
+// rows (rows + rows removed, times loops); the outbox is reached through ix_worker_job_outbox_finalize_domain_id. The
+// control plans it again with that index dropped in a rolled-back transaction: it must then lose the index and go back
+// to the River route (a river_job_id probe) or scan the outbox, so the index is what the plan rides on.
+func checkFinalizeStrandSurveyProbes(t *testing.T, ctx context.Context, admin *pgxpool.Pool, survey string, now time.Time, workBound float64) {
+	t.Helper()
+	tx, err := admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	explain := func() (string, explainNode) {
+		t.Helper()
+		var raw []byte
+		if err := tx.QueryRow(ctx, "EXPLAIN (ANALYZE, FORMAT JSON) "+survey, now.UTC(), 100).Scan(&raw); err != nil {
+			t.Fatalf("EXPLAIN the finalize survey: %v", err)
+		}
+		var plans []struct {
+			Plan explainNode `json:"Plan"`
+		}
+		if err := json.Unmarshal(raw, &plans); err != nil || len(plans) != 1 {
+			t.Fatalf("EXPLAIN the finalize survey: %v", err)
+		}
+		return string(raw), plans[0].Plan
+	}
+	raw, root := explain()
+	nodes := 0
+	var walk func(node explainNode)
+	walk = func(node explainNode) {
+		if node.RelationName == "worker_job_outbox" || node.RelationName == "river_job" {
+			nodes++
+			keyed := (node.NodeType == "Index Scan" || node.NodeType == "Index Only Scan") && node.IndexCond != "" ||
+				node.NodeType == "Bitmap Heap Scan" && node.RecheckCond != ""
+			if !keyed {
+				t.Fatalf("the finalize survey reads %s through an unkeyed %s:\n%s", node.RelationName, node.NodeType, raw)
+			}
+			read := (node.ActualRows + node.RemovedByFilter + node.RemovedByRecheck) * node.ActualLoops
+			t.Logf("INFO finalize survey %s %s: %.0f rows read over %.0f loops", node.NodeType, node.RelationName, read, node.ActualLoops)
+			if read > workBound {
+				t.Fatalf("the finalize survey reads %.0f rows of %s through %s, bound %.0f:\n%s", read, node.RelationName, node.NodeType, workBound, raw)
+			}
+		}
+		for _, child := range node.Plans {
+			walk(child)
+		}
+	}
+	walk(root)
+	if nodes < 2 {
+		t.Fatalf("the finalize survey has %d outbox/river_job nodes, want both tables read:\n%s", nodes, raw)
+	}
+	if !strings.Contains(raw, "ix_worker_job_outbox_finalize_domain_id") {
+		t.Fatalf("the finalize survey does not reach the outbox through ix_worker_job_outbox_finalize_domain_id:\n%s", raw)
+	}
+	if _, err := tx.Exec(ctx, "DROP INDEX public.ix_worker_job_outbox_finalize_domain_id"); err != nil {
+		t.Fatal(err)
+	}
+	control, controlRoot := explain()
+	riverRoute, outboxScan := false, false
+	var walkControl func(node explainNode)
+	walkControl = func(node explainNode) {
+		if node.RelationName == "worker_job_outbox" {
+			riverRoute = riverRoute || strings.Contains(node.IndexCond, "river_job_id = job.id")
+			outboxScan = outboxScan || node.NodeType == "Seq Scan"
+		}
+		for _, child := range node.Plans {
+			walkControl(child)
+		}
+	}
+	walkControl(controlRoot)
+	if strings.Contains(control, "ix_worker_job_outbox_finalize_domain_id") || !(riverRoute || outboxScan) {
+		t.Fatalf("CONTROL: with the finalize index dropped the survey does not go back to the River route or an "+
+			"outbox scan, so this cell cannot tell the index from the plan:\n%s", control)
+	}
 }
 
 // Recent-arm ruling (a): the River arm of the recent fragment, now an uncorrelated IN, answers as the old correlated
@@ -2971,5 +3155,349 @@ VALUES ($1::jsonb, 1, $2, $2, 'metrics.daily_partition', 4, '{}'::jsonb, 2, 'met
 	}
 	if survey.levels == nil || *survey.levels != (StaleFinalizeLevels{Recent: 1}) {
 		t.Fatalf("statement B levels %+v, want Recent 1 and nothing else", survey.levels)
+	}
+}
+
+// Outbox-arm ruling (b), pm 2026-11-24: the outbox arm of the live-job fragment (an unrelayed row: pending or
+// claimed), now an uncorrelated IN, answers as the old correlated EXISTS did for every run of a matrix: pending,
+// claimed, delivered, dead, created exactly at the cutoff, created after it, a pending row of another kind, no outbox
+// row. The outbox also holds pending and recent finalize rows with no domain id and with a JSON-null one; no answer is
+// NULL. Then both use sites: A's candidates and B's levels (the recent arm, still a keyed EXISTS, counts its run).
+func TestStaleFinalizeLiveOutboxArmAnswersAsTheCorrelatedCheck(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	admin := startStaleFinalizeAdmin(t, ctx, "sfoutbox")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	old := now.Add(-72 * time.Hour)
+	cutoff := now.Add(-StaleFinalizeHorizon)
+	const (
+		pending   = "00000000-0000-4000-8000-000000100001"
+		claimed   = "00000000-0000-4000-8000-000000100002"
+		delivered = "00000000-0000-4000-8000-000000100003"
+		dead      = "00000000-0000-4000-8000-000000100004"
+		atCutoff  = "00000000-0000-4000-8000-000000100005"
+		recent    = "00000000-0000-4000-8000-000000100006"
+		otherKind = "00000000-0000-4000-8000-000000100007"
+		noOutbox  = "00000000-0000-4000-8000-000000100008"
+	)
+	seedStaleFinalizeRuns(t, ctx, admin, old, pending, claimed, delivered, dead, atCutoff, recent, otherKind, noOutbox)
+	riverJob := int64(4000000)
+	outbox := func(key, kind, args, status string, created time.Time) {
+		t.Helper()
+		var claimToken, riverJobID any
+		var claimedAt, claimExpires, deliveredAt *time.Time
+		switch status {
+		case "claimed":
+			claimToken, claimedAt, claimExpires = "00000000-0000-4000-8000-0000001000ff", &old, &now
+		case "delivered":
+			riverJob++
+			riverJobID, deliveredAt = riverJob, &created
+		}
+		if _, err := admin.Exec(ctx, `
+INSERT INTO public.worker_job_outbox
+    (id, dedupe_key, job_kind, contract_version, args, payload_hash, queue, priority, max_attempts, scheduled_at,
+     status, claim_token, claimed_at, claim_expires_at, attempt_count, next_attempt_at, river_job_id, delivered_at,
+     created_at, updated_at)
+VALUES (gen_random_uuid(), $1, $2, 1, $3::json, 'sha256:' || repeat('0', 64), 'metrics', 2, 4, $4, $5, $6::uuid, $7, $8, 1, $4,
+        $9, $10, $4, $4)`,
+			key, kind, args, created, status, claimToken, claimedAt, claimExpires, riverJobID, deliveredAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	domain := func(id string) string {
+		return `{"contract_version": 1, "domain": {"type": "daily_metrics_run", "id": "` + id + `"}}`
+	}
+	const finalize = "metrics.daily_finalize"
+	outbox("outbox-arm:pending", finalize, domain(pending), "pending", old)
+	outbox("outbox-arm:claimed", finalize, domain(claimed), "claimed", old)
+	outbox("outbox-arm:delivered", finalize, domain(delivered), "delivered", old)
+	outbox("outbox-arm:dead", finalize, domain(dead), "dead", old)
+	outbox("outbox-arm:at-cutoff", finalize, domain(atCutoff), "delivered", cutoff)
+	outbox("outbox-arm:recent", finalize, domain(recent), "delivered", now.Add(-time.Hour))
+	outbox("outbox-arm:other-kind", "metrics.daily_partition", domain(otherKind), "pending", now.Add(-time.Hour))
+	noID := `{"contract_version": 1, "domain": {"type": "daily_metrics_run"}}`
+	nullID := `{"contract_version": 1, "domain": {"type": "daily_metrics_run", "id": null}}`
+	outbox("outbox-arm:pending-no-id", finalize, noID, "pending", old)
+	outbox("outbox-arm:pending-null-id", finalize, nullID, "pending", old)
+	outbox("outbox-arm:recent-no-id", finalize, noID, "delivered", now.Add(-time.Hour))
+	outbox("outbox-arm:recent-null-id", finalize, nullID, "delivered", now.Add(-time.Hour))
+
+	const oldLive = `EXISTS (
+		SELECT 1 FROM public.worker_job_outbox AS outbox
+		WHERE outbox.job_kind = 'metrics.daily_finalize'
+			AND outbox.args #>> '{domain,id}' = run.id::text
+			AND outbox.status IN ('pending', 'claimed')
+	)`
+	// The production outbox arm, cut out of its fragment: "(<River IN> OR <outbox IN>)".
+	jobTable := `"river"."river_job"`
+	live := strings.SplitN(fmt.Sprintf(staleFinalizeLiveJobSQL, jobTable), ") OR ", 2)
+	if len(live) != 2 {
+		t.Fatalf("the live fragment no longer has two arms: %q", live)
+	}
+	newLive := strings.TrimSuffix(strings.TrimSpace(live[1]), ")")
+	if !strings.HasPrefix(newLive, "run.id::text IN (") || !strings.Contains(newLive, "public.worker_job_outbox") {
+		t.Fatalf("the live fragment's outbox arm is not the uncorrelated set this cell compares: %q", newLive)
+	}
+	rows, err := admin.Query(ctx, `SELECT run.id::text, (`+oldLive+`), (`+newLive+`) FROM public.daily_metrics_runs AS run ORDER BY run.id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A Fatalf inside the loop must not leave the connection busy: the pool's Close in the cleanup would wait forever.
+	defer rows.Close()
+	wantLive := map[string]bool{pending: true, claimed: true}
+	seen := 0
+	for rows.Next() {
+		var runID string
+		var oldL, newL *bool
+		if err := rows.Scan(&runID, &oldL, &newL); err != nil {
+			t.Fatal(err)
+		}
+		seen++
+		if oldL == nil || newL == nil {
+			t.Fatalf("run %s: live old %v new %v, want two non-NULL answers", runID, oldL, newL)
+		}
+		if *oldL != *newL || *newL != wantLive[runID] {
+			t.Fatalf("run %s: live old %v new %v, want both %v", runID, *oldL, *newL, wantLive[runID])
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil || seen != 8 {
+		t.Fatalf("compared %d runs (err %v), want 8", seen, err)
+	}
+
+	survey := surveyStaleFinalize(ctx, admin.Begin, staleFinalizeBaseExistsSQL,
+		fmt.Sprintf(staleFinalizeCandidatesSQLTemplate, jobTable), fmt.Sprintf(staleFinalizeLevelsSQLTemplate, jobTable),
+		cutoff, 20, nil)
+	if len(survey.failures) != 0 {
+		t.Fatalf("survey failures %+v", survey.failures)
+	}
+	got := map[string]bool{}
+	for _, candidate := range survey.candidates {
+		got[candidate.runID] = true
+	}
+	// delivered, dead and at-cutoff rows point at River ids no river_job row has, so they are not the strand shape.
+	if want := map[string]bool{delivered: true, dead: true, atCutoff: true, otherKind: true, noOutbox: true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("statement A candidates %v, want %v", got, want)
+	}
+	if survey.levels == nil || *survey.levels != (StaleFinalizeLevels{Live: 2, Recent: 1}) {
+		t.Fatalf("statement B levels %+v, want Live 2 and Recent 1 and nothing else", survey.levels)
+	}
+}
+
+// Strand-shape ruling (a), pm 2026-11-24: the strand-shape fragment, now an uncorrelated IN over the delivered finalize
+// rows whose River job still exists, answers as the old correlated EXISTS did for every run of a matrix -- a delivered
+// finalize row with its River job; one whose River job is gone; a pending finalize row; a delivered row of another kind
+// with a River job; no outbox row -- and never answers NULL, though the outbox also holds delivered finalize rows with a
+// River job and no domain id or a JSON-null one. Then both use sites: A's candidates and B's levels.
+func TestStaleFinalizeStrandShapeArmAnswersAsTheCorrelatedCheck(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	admin := startStaleFinalizeAdmin(t, ctx, "sfstrand")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	old := now.Add(-72 * time.Hour)
+	cutoff := now.Add(-StaleFinalizeHorizon)
+	const (
+		strand       = "00000000-0000-4000-8000-0000000f0001"
+		riverGone    = "00000000-0000-4000-8000-0000000f0002"
+		notDelivered = "00000000-0000-4000-8000-0000000f0003"
+		otherKind    = "00000000-0000-4000-8000-0000000f0004"
+		noOutbox     = "00000000-0000-4000-8000-0000000f0005"
+	)
+	seedStaleFinalizeRuns(t, ctx, admin, old, strand, riverGone, notDelivered, otherKind, noOutbox)
+	job := func(args string) int64 {
+		t.Helper()
+		var id int64
+		if err := admin.QueryRow(ctx, `
+INSERT INTO river.river_job (args, attempt, created_at, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at)
+VALUES ($1::jsonb, 1, $2, $2, 'metrics.daily_finalize', 4, '{}'::jsonb, 2, 'metrics', 'completed', $2) RETURNING id`, args, old).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	outbox := func(key, kind, args, status string, riverJobID *int64) {
+		t.Helper()
+		var deliveredAt *time.Time
+		if status == "delivered" {
+			deliveredAt = &old
+		}
+		if _, err := admin.Exec(ctx, `
+INSERT INTO public.worker_job_outbox
+    (id, dedupe_key, job_kind, contract_version, args, payload_hash, queue, priority, max_attempts, scheduled_at,
+     status, attempt_count, next_attempt_at, river_job_id, delivered_at, created_at, updated_at)
+VALUES (gen_random_uuid(), $1, $2, 1, $3::json, 'sha256:' || repeat('0', 64), 'metrics', 2, 4, $4, $5, 1, $4, $6, $7, $4, $4)`,
+			key, kind, args, old, status, riverJobID, deliveredAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	domain := func(id string) string {
+		return `{"contract_version": 1, "domain": {"type": "daily_metrics_run", "id": "` + id + `"}}`
+	}
+	strandJob, otherJob := job(domain(strand)), job(`{"domain": {"type": "daily_metrics_run"}}`)
+	gone := int64(987654321)
+	outbox("strand-arm:strand", "metrics.daily_finalize", domain(strand), "delivered", &strandJob)
+	outbox("strand-arm:gone", "metrics.daily_finalize", domain(riverGone), "delivered", &gone)
+	outbox("strand-arm:pending", "metrics.daily_finalize", domain(notDelivered), "pending", nil)
+	outbox("strand-arm:other-kind", "metrics.daily_partition", domain(otherKind), "delivered", &otherJob)
+	noID, nullID := job(`{"domain": {"type": "daily_metrics_run"}}`), job(`{"domain": {"type": "daily_metrics_run"}}`)
+	outbox("strand-arm:no-id", "metrics.daily_finalize", `{"contract_version": 1, "domain": {"type": "daily_metrics_run"}}`, "delivered", &noID)
+	outbox("strand-arm:null-id", "metrics.daily_finalize", `{"contract_version": 1, "domain": {"type": "daily_metrics_run", "id": null}}`, "delivered", &nullID)
+
+	const oldArm = `EXISTS (
+		SELECT 1 FROM public.worker_job_outbox AS outbox
+		JOIN river.river_job AS job ON job.id = outbox.river_job_id
+		WHERE outbox.job_kind = 'metrics.daily_finalize'
+			AND outbox.status = 'delivered'
+			AND outbox.args #>> '{domain,id}' = run.id::text
+	)`
+	newArm := fmt.Sprintf(staleFinalizeStrandShapeSQL, `"river"."river_job"`)
+	if !strings.HasPrefix(newArm, "run.id::text IN (") {
+		t.Fatalf("the strand-shape fragment is not the uncorrelated set this cell compares: %q", newArm)
+	}
+	rows, err := admin.Query(ctx, `SELECT run.id::text, (`+oldArm+`), (`+newArm+`) FROM public.daily_metrics_runs AS run ORDER BY run.id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A Fatalf inside the loop must not leave the connection busy: the pool's Close in the cleanup would wait forever.
+	defer rows.Close()
+	seen := 0
+	for rows.Next() {
+		var runID string
+		var oldAnswer, newAnswer *bool
+		if err := rows.Scan(&runID, &oldAnswer, &newAnswer); err != nil {
+			t.Fatal(err)
+		}
+		seen++
+		if oldAnswer == nil || newAnswer == nil {
+			t.Fatalf("run %s: old %v new %v, want two non-NULL answers", runID, oldAnswer, newAnswer)
+		}
+		if want := runID == strand; *oldAnswer != *newAnswer || *newAnswer != want {
+			t.Fatalf("run %s: old %v new %v, want both %v", runID, *oldAnswer, *newAnswer, want)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil || seen != 5 {
+		t.Fatalf("compared %d runs (err %v), want 5", seen, err)
+	}
+
+	jobTable := `"river"."river_job"`
+	survey := surveyStaleFinalize(ctx, admin.Begin, staleFinalizeBaseExistsSQL,
+		fmt.Sprintf(staleFinalizeCandidatesSQLTemplate, jobTable), fmt.Sprintf(staleFinalizeLevelsSQLTemplate, jobTable),
+		cutoff, 20, nil)
+	if len(survey.failures) != 0 {
+		t.Fatalf("survey failures %+v", survey.failures)
+	}
+	got := map[string]bool{}
+	for _, candidate := range survey.candidates {
+		got[candidate.runID] = true
+	}
+	if want := map[string]bool{riverGone: true, otherKind: true, noOutbox: true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("statement A candidates %v, want %v (the strand run and the run with an unrelayed row are refused)", got, want)
+	}
+	if survey.levels == nil || *survey.levels != (StaleFinalizeLevels{Live: 1, StrandShape: 1}) {
+		t.Fatalf("statement B levels %+v, want Live 1 and StrandShape 1 and nothing else", survey.levels)
+	}
+}
+
+// The base fragment's partition check is an uncorrelated set, `run.id NOT IN (SELECT partition.run_id ... WHERE
+// status <> 'succeeded' OR updated_at > $1)`, read once per statement. It answers as the old correlated NOT EXISTS for
+// every run of a matrix -- every partition succeeded and old; one partition not succeeded; one updated exactly at the
+// cutoff; one updated after it; no partition; two partitions, one succeeded and old and one pending -- never NULL. Then
+// the use sites: statement 0, A's candidates and B's levels. The partition columns are NOT NULL, so the
+// `partition.run_id IS NOT NULL` guard in the set is an equivalent mutant today: no cell kills it.
+func TestStaleFinalizeBasePartitionArmAnswersAsTheCorrelatedCheck(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	admin := startStaleFinalizeAdmin(t, ctx, "sfbase")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	old := now.Add(-72 * time.Hour)
+	cutoff := now.Add(-StaleFinalizeHorizon)
+	const (
+		allOld        = "00000000-0000-4000-8000-0000000e0001"
+		notSucceeded  = "00000000-0000-4000-8000-0000000e0002"
+		atCutoff      = "00000000-0000-4000-8000-0000000e0003"
+		afterCutoff   = "00000000-0000-4000-8000-0000000e0004"
+		noPartition   = "00000000-0000-4000-8000-0000000e0005"
+		twoPartitions = "00000000-0000-4000-8000-0000000e0006"
+	)
+	for index, runID := range []string{allOld, notSucceeded, atCutoff, afterCutoff, noPartition, twoPartitions} {
+		if _, err := admin.Exec(ctx, `
+INSERT INTO public.daily_metrics_runs (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at)
+VALUES ($1::uuid, '00000000-0000-4000-8000-0000000e0000'::uuid, DATE '2025-06-01' + $3::int, 'base-arm:' || $1, 'running', 'pending', $2, $2)`,
+			runID, old, index); err != nil {
+			t.Fatal(err)
+		}
+	}
+	partition := func(runID string, ordinal int, status string, at time.Time) {
+		t.Helper()
+		if _, err := admin.Exec(ctx, `
+INSERT INTO public.daily_metrics_partitions (id, run_id, ordinal, repo_ids, status, attempt_count, completed_at, created_at, updated_at)
+VALUES (gen_random_uuid(), $1::uuid, $2, '[]'::jsonb, $3, 1, $4, $4, $4)`, runID, ordinal, status, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	partition(allOld, 0, "succeeded", old)
+	partition(notSucceeded, 0, "pending", old)
+	partition(atCutoff, 0, "succeeded", cutoff)
+	partition(afterCutoff, 0, "succeeded", now.Add(-time.Hour))
+	partition(twoPartitions, 0, "succeeded", old)
+	partition(twoPartitions, 1, "pending", old)
+
+	const oldArm = `NOT EXISTS (
+		SELECT 1 FROM public.daily_metrics_partitions AS partition
+		WHERE partition.run_id = run.id
+			AND (partition.status <> 'succeeded' OR partition.updated_at > $1)
+	)`
+	// The production partition check, cut out of the base fragment: "... AND run.updated_at <= $1\n\tAND <check>".
+	parts := strings.SplitN(staleFinalizeBaseSQL, "AND run.updated_at <= $1\n\tAND ", 2)
+	if len(parts) != 2 || !strings.HasPrefix(parts[1], "run.id NOT IN (") {
+		t.Fatalf("the base fragment does not end in the uncorrelated partition set this cell compares: %q", staleFinalizeBaseSQL)
+	}
+	newArm := parts[1]
+	rows, err := admin.Query(ctx, `SELECT run.id::text, (`+oldArm+`), (`+newArm+`) FROM public.daily_metrics_runs AS run ORDER BY run.id`, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	inBase := map[string]bool{allOld: true, atCutoff: true, noPartition: true}
+	seen := 0
+	for rows.Next() {
+		var runID string
+		var oldAnswer, newAnswer *bool
+		if err := rows.Scan(&runID, &oldAnswer, &newAnswer); err != nil {
+			t.Fatal(err)
+		}
+		seen++
+		if oldAnswer == nil || newAnswer == nil {
+			t.Fatalf("run %s: old %v new %v, want two non-NULL answers", runID, oldAnswer, newAnswer)
+		}
+		if *oldAnswer != *newAnswer || *newAnswer != inBase[runID] {
+			t.Fatalf("run %s: old %v new %v, want both %v", runID, *oldAnswer, *newAnswer, inBase[runID])
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil || seen != 6 {
+		t.Fatalf("compared %d runs (err %v), want 6", seen, err)
+	}
+
+	var exists bool
+	if err := admin.QueryRow(ctx, staleFinalizeBaseExistsSQL, cutoff).Scan(&exists); err != nil || !exists {
+		t.Fatalf("statement 0 = %v (err %v), want true: three runs are in the base", exists, err)
+	}
+	jobTable := `"river"."river_job"`
+	survey := surveyStaleFinalize(ctx, admin.Begin, staleFinalizeBaseExistsSQL,
+		fmt.Sprintf(staleFinalizeCandidatesSQLTemplate, jobTable), fmt.Sprintf(staleFinalizeLevelsSQLTemplate, jobTable),
+		cutoff, 20, nil)
+	if len(survey.failures) != 0 {
+		t.Fatalf("survey failures %+v", survey.failures)
+	}
+	got := map[string]bool{}
+	for _, candidate := range survey.candidates {
+		got[candidate.runID] = true
+	}
+	if want := map[string]bool{allOld: true, atCutoff: true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("statement A candidates %v, want %v", got, want)
+	}
+	if survey.levels == nil || *survey.levels != (StaleFinalizeLevels{NoPartitions: 1}) {
+		t.Fatalf("statement B levels %+v, want NoPartitions 1 and nothing else", survey.levels)
 	}
 }

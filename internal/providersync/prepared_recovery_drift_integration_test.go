@@ -273,7 +273,8 @@ func TestPreparedRecoveryReplaysTheCrashedPassAcrossProviderDrift(t *testing.T) 
 		{"github prs: review enrichment succeeds, then fails", githubPRs, reviewsOK, reviewsFailed},
 		{"gitlab deployments: merge request lookup fails, then succeeds", gitlabDeployments,
 			func() providerfoundation.HTTPDoer {
-				return gitlabDeploymentsDoer(gitLabDeploymentsResponse{status: http.StatusServiceUnavailable, body: `{"message":"temporary"}`})
+				// An answered 4xx (as the GitHub cells use): a 5xx stops the unit before any effect (CHAOS-14578).
+				return gitlabDeploymentsDoer(gitLabDeploymentsResponse{status: http.StatusNotFound, body: `{"message":"404 Not Found"}`})
 			},
 			func() providerfoundation.HTTPDoer {
 				return gitlabDeploymentsDoer(gitLabDeploymentsResponse{body: `[{"iid":45,"state":"merged","merged_at":"2026-07-21T10:00:00Z"}]`})

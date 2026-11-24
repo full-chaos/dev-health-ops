@@ -224,6 +224,12 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 			pulls, pullPages, _, pullErr := fetchGitHubDeploymentsPage[gitHubPullPayload](ctx, &counted, githubCommitPullsRoute, root+"/commits/"+url.PathEscape(*deployment.SHA)+"/pulls", 1)
 			enrichmentPages += pullPages
 			if pullErr != nil {
+				// A lookup that failed (rate limited, deadline, 5xx, transport, an answered 401) stops the unit, as a
+				// failed releases or deployments read does: the window is read again. Another answered 4xx keeps the
+				// deployment unattributed.
+				if verdict, _ := classifyLookupFailure(pullErr, nil); verdict == lookupFails {
+					return CompleteRouteBatch{}, pullErr
+				}
 				slog.Warn("github_deployments.pull_request_lookup_failed", logging.ProviderIDAttr("deployment_id", row.DeploymentID), "cause", pullErr.Error())
 				row.PullRequestLookupFailed = true
 			} else {

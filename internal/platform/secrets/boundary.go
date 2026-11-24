@@ -5,7 +5,10 @@ import (
 	"errors"
 	"net/url"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // RedactedMarker replaces every value a Boundary redacts.
@@ -47,51 +50,225 @@ func CredentialComponents(dsn string) []string {
 	if dsn == "" {
 		return nil
 	}
-	out := []string{dsn}
+	decoded, literal := credentialSplit(dsn)
+	return append(append([]string{dsn}, decoded...), literal...)
+}
+
+// credentialSplit separates the credential values of dsn the driver itself
+// decodes (userinfo, query, and a keyword-form DSN's unquoted values) from the
+// literal text fragments the keyword patterns cut out of a URL-form DSN: in a
+// URL, "password=a%40" in the query is the escaped spelling of "a@", not a
+// 4-character credential of its own.
+func credentialSplit(dsn string) (decoded, literal []string) {
+	urlForm := false
 	if u, err := url.Parse(dsn); err == nil {
+		urlForm = u.Scheme != ""
 		if u.User != nil {
 			if pw, ok := u.User.Password(); ok && pw != "" {
-				out = append(out, pw)
+				decoded = append(decoded, pw)
 			}
 			if name := u.User.Username(); name != "" {
-				out = append(out, name)
+				decoded = append(decoded, name)
 			}
 		}
 		// The drivers also take the login (clickhouse-go "username=", pgx
 		// "user=") and the password from the query, where they override the
 		// userinfo. The keys are the drivers' own, lower case: a differently
 		// cased key is ignored by the driver, so its value is not a credential.
-		// The values are the decoded ones the driver uses; the encoded spelling
-		// is covered by the DSN's own bytes.
+		// The values are the decoded ones the driver uses. The DSN's own bytes
+		// cover only the spelling the DSN had; a server that re-serializes the
+		// credential spells it again, which boundaryValues covers.
 		for key, values := range u.Query() {
 			if key == "user" || key == "username" || key == "password" {
 				for _, value := range values {
 					if value != "" {
-						out = append(out, value)
+						decoded = append(decoded, value)
 					}
 				}
 			}
 		}
 	}
+	var keyword []string
 	for _, m := range keywordPasswordPattern.FindAllStringSubmatch(dsn, -1) {
-		out = appendKeywordValue(out, m[1])
+		keyword = appendKeywordValue(keyword, m[1])
 	}
 	for _, m := range keywordUserPattern.FindAllStringSubmatch(dsn, -1) {
-		out = appendKeywordValue(out, m[1])
+		keyword = appendKeywordValue(keyword, m[1])
 	}
-	return out
+	if urlForm {
+		return decoded, keyword
+	}
+	return append(decoded, keyword...), nil
+}
+
+// minDerivedLen is the shortest credential value, in characters, that also gets
+// its escaped spellings redacted. A 1-2 character value ("a@") would turn its
+// escaped form ("a%40") into a pattern that matches ordinary text; the raw value
+// is redacted at any length, as before.
+const minDerivedLen = 3
+
+// credentialSpellings returns value and the other ways an error text can spell
+// it. plain are matched byte for byte: the value, strconv.Quote and JSON string
+// escapes (HTML escaping on and off, of the value and of its quoted form).
+// escaped are the URL query, path and userinfo escapes, matched with the hex
+// digits of every %XX read in either case. A spelling equal to one already
+// listed is dropped. A value shorter than minDerivedLen characters has only
+// itself.
+func credentialSpellings(value string) (plain, escaped []string) {
+	if value == "" {
+		return nil, nil
+	}
+	plain = []string{value}
+	if utf8.RuneCountInString(value) < minDerivedLen {
+		return plain, nil
+	}
+	quoted := strconv.Quote(value)
+	quoted = quoted[1 : len(quoted)-1]
+	userinfo := (&url.URL{User: url.UserPassword("", value)}).String()
+	userinfo = strings.TrimSuffix(strings.TrimPrefix(userinfo, "//:"), "@")
+	add := func(list *[]string, spelling string) {
+		if spelling != "" && !hasSpelling(plain, spelling) && !hasSpelling(escaped, spelling) {
+			*list = append(*list, spelling)
+		}
+	}
+	for _, spelling := range []string{
+		quoted,
+		jsonInner(value, true),
+		jsonInner(value, false),
+		jsonInner(quoted, true),
+		jsonInner(quoted, false),
+	} {
+		add(&plain, spelling)
+	}
+	for _, spelling := range []string{url.QueryEscape(value), url.PathEscape(value), userinfo} {
+		add(&escaped, spelling)
+	}
+	return plain, escaped
+}
+
+func hasSpelling(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+// boundaryValues is every string a Boundary redacts: the DSN's own bytes and
+// the literal keyword fragments of a URL DSN as they are, and each decoded
+// credential component and resolved value in all its spellings.
+func boundaryValues(dsn string, resolved ...string) (plain, escaped []string) {
+	var decoded, literal []string
+	if dsn != "" {
+		plain = append(plain, dsn)
+		decoded, literal = credentialSplit(dsn)
+	}
+	plain = append(plain, literal...)
+	for _, value := range append(decoded, resolved...) {
+		p, e := credentialSpellings(value)
+		plain = append(plain, p...)
+		escaped = append(escaped, e...)
+	}
+	return plain, escaped
 }
 
 // RedactValues returns s with every occurrence of each non-empty value
 // replaced by RedactedMarker.
 func RedactValues(s string, values ...string) string {
-	for _, v := range values {
-		if v == "" {
+	return redactSpans(s, values, nil)
+}
+
+// redactSpans replaces, by RedactedMarker, the union of every match of every
+// value, all found in the original s: a match that overlaps another (two values
+// that share bytes) becomes one marker, so no replacement can hide part of a
+// value and leave the rest. plain values match byte for byte; escaped values
+// match byte for byte except the hex digits of each %XX of the spelling.
+func redactSpans(s string, plain, escaped []string) string {
+	spans := matchSpans(nil, s, plain)
+	if len(escaped) > 0 {
+		spans = matchEscapedSpans(spans, s, escaped)
+	}
+	if len(spans) == 0 {
+		return s
+	}
+	sort.Slice(spans, func(i, j int) bool {
+		if spans[i][0] != spans[j][0] {
+			return spans[i][0] < spans[j][0]
+		}
+		return spans[i][1] > spans[j][1]
+	})
+	var out strings.Builder
+	pos, start, end := 0, spans[0][0], spans[0][1]
+	flush := func() {
+		out.WriteString(s[pos:start])
+		out.WriteString(RedactedMarker)
+		pos = end
+	}
+	for _, span := range spans[1:] {
+		if span[0] < end {
+			if span[1] > end {
+				end = span[1]
+			}
 			continue
 		}
-		s = strings.ReplaceAll(s, v, RedactedMarker)
+		flush()
+		start, end = span[0], span[1]
 	}
-	return s
+	flush()
+	out.WriteString(s[pos:])
+	return out.String()
+}
+
+func matchSpans(spans [][2]int, s string, values []string) [][2]int {
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		for from := 0; from < len(s); {
+			at := strings.Index(s[from:], value)
+			if at < 0 {
+				break
+			}
+			spans = append(spans, [2]int{from + at, from + at + len(value)})
+			from += at + 1
+		}
+	}
+	return spans
+}
+
+// matchEscapedSpans adds the span of every match of each escaped spelling in s.
+// A spelling matches byte for byte except the two hex digits after each '%' of
+// the spelling, which match in either case. s itself is never changed.
+func matchEscapedSpans(spans [][2]int, s string, values []string) [][2]int {
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		for from := 0; from+len(value) <= len(s); from++ {
+			if escapedMatchAt(s, from, value) {
+				spans = append(spans, [2]int{from, from + len(value)})
+			}
+		}
+	}
+	return spans
+}
+
+func escapedMatchAt(s string, at int, value string) bool {
+	for k := 0; k < len(value); k++ {
+		if s[at+k] == value[k] {
+			continue
+		}
+		afterPercent := k >= 1 && value[k-1] == '%' || k >= 2 && value[k-2] == '%'
+		if !afterPercent || !isHexDigit(value[k]) || !strings.EqualFold(s[at+k:at+k+1], value[k:k+1]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isHexDigit(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 }
 
 // Boundary is the LAST place a resolved DSN's bytes can still reach
@@ -103,6 +280,7 @@ func RedactValues(s string, values ...string) string {
 // how many layers wrapped it or which one actually dialled.
 type Boundary struct {
 	values     []string
+	escaped    []string
 	unparsable bool
 }
 
@@ -114,13 +292,15 @@ type Boundary struct {
 // keeps the DSN-only redaction: it filters whole log streams, which must stay
 // readable.
 func NewUnparsableBoundary(dsn string) Boundary {
-	return Boundary{values: CredentialComponents(dsn), unparsable: true}
+	plain, escaped := boundaryValues(dsn)
+	return Boundary{values: plain, escaped: escaped, unparsable: true}
 }
 
 // NewBoundary derives the substrings the returned Boundary redacts, from
 // the DSN this run actually resolved.
 func NewBoundary(dsn string) Boundary {
-	return Boundary{values: CredentialComponents(dsn)}
+	plain, escaped := boundaryValues(dsn)
+	return Boundary{values: plain, escaped: escaped}
 }
 
 // NewBoundaryWith is NewBoundary for a driver that resolves credentials from
@@ -129,13 +309,22 @@ func NewBoundary(dsn string) Boundary {
 // settled on, and they are redacted with the DSN's own components. A DSN alone
 // cannot name a credential the DSN does not carry.
 func NewBoundaryWith(dsn string, resolved ...string) Boundary {
-	values := CredentialComponents(dsn)
-	for _, value := range resolved {
-		if value != "" {
-			values = append(values, value)
-		}
+	plain, escaped := boundaryValues(dsn, resolved...)
+	return Boundary{values: plain, escaped: escaped}
+}
+
+// Join is one Boundary over the values of every part, so one union of matches
+// runs over a text instead of one Boundary after another: a spelling of one
+// part's credential cannot eat bytes of another part's. It is unparsable when
+// any part is (fail closed, as the chain of the parts was).
+func Join(parts ...Boundary) Boundary {
+	var joined Boundary
+	for _, part := range parts {
+		joined.values = append(joined.values, part.values...)
+		joined.escaped = append(joined.escaped, part.escaped...)
+		joined.unparsable = joined.unparsable || part.unparsable
 	}
-	return Boundary{values: values}
+	return joined
 }
 
 // Redact returns err with every occurrence of the boundary's values
@@ -151,11 +340,11 @@ func (b Boundary) Redact(err error) error {
 		}
 		return errors.New(UnparsableMarker)
 	}
-	if err == nil || len(b.values) == 0 {
+	if err == nil || len(b.values)+len(b.escaped) == 0 {
 		return err
 	}
 	msg := err.Error()
-	redacted := RedactValues(msg, b.values...)
+	redacted := redactSpans(msg, b.values, b.escaped)
 	if redacted == msg {
 		return err
 	}
@@ -165,10 +354,7 @@ func (b Boundary) Redact(err error) error {
 // RedactText returns text with every occurrence of the boundary's values replaced
 // by RedactedMarker: Redact for a message that is already a string.
 func (b Boundary) RedactText(text string) string {
-	if len(b.values) == 0 {
-		return text
-	}
-	return RedactValues(text, b.values...)
+	return redactSpans(text, b.values, b.escaped)
 }
 
 // redactedCauseError is a stable sentinel plus a driver cause whose text has
@@ -199,8 +385,8 @@ func WithRedactedCauseAlso(sentinel error, dsn string, cause error, resolved ...
 	if cause == nil {
 		return sentinel
 	}
-	values := append(CredentialComponents(dsn), resolved...)
-	return redactedCauseError{sentinel: sentinel, cause: RedactValues(cause.Error(), values...)}
+	plain, escaped := boundaryValues(dsn, resolved...)
+	return redactedCauseError{sentinel: sentinel, cause: redactSpans(cause.Error(), plain, escaped)}
 }
 
 // appendKeywordValue adds a conninfo value, unquoted (libpq's quoting:

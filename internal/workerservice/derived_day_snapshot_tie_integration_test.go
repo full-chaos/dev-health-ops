@@ -45,10 +45,27 @@ func seedListedRunOfRepositoryA(t *testing.T, ctx context.Context, rig *touchedR
 // from, with computed_at set to to.
 func copyRepositoryVersion(t *testing.T, ctx context.Context, conn driver.Conn, table, orgID string, day time.Time, repo uuid.UUID, from, to time.Time) {
 	t.Helper()
+	rowsAt := func(at time.Time) uint64 {
+		var rows uint64
+		if err := conn.QueryRow(ctx, `SELECT count() FROM `+table+`
+			WHERE org_id = ? AND day = ? AND toString(repo_id) = ? AND computed_at = toDateTime(?, 'UTC')`,
+			orgID, day, repo.String(), at.UTC().Format(tiedVersionStamp)).Scan(&rows); err != nil {
+			t.Fatalf("%s: %v", table, err)
+		}
+		return rows
+	}
+	copied, before := rowsAt(from), rowsAt(to)
 	if err := conn.Exec(ctx, `INSERT INTO `+table+` SELECT * REPLACE (toDateTime(?, 'UTC') AS computed_at) FROM `+table+`
 		WHERE org_id = ? AND day = ? AND toString(repo_id) = ? AND computed_at = toDateTime(?, 'UTC')`,
 		to.UTC().Format(tiedVersionStamp), orgID, day, repo.String(), from.UTC().Format(tiedVersionStamp)); err != nil {
 		t.Fatalf("%s: copy version: %v", table, err)
+	}
+	for polls := 0; rowsAt(to) < before+copied; polls++ {
+		if polls == 40 {
+			t.Fatalf("%s: the copied version is not readable after %d polls", table, polls)
+		}
+		time.Sleep(250 * time.Millisecond)
+		t.Logf("%s: copied version not readable yet (poll %d)", table, polls+1)
 	}
 }
 

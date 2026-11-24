@@ -248,14 +248,16 @@ var derivedDaySources = map[string]string{
 	"work_item_user_metrics_daily":    `work_item_user_metrics_daily FINAL WHERE org_id = ? AND day = ?`,
 	"work_item_state_durations_daily": `work_item_state_durations_daily FINAL WHERE org_id = ? AND day = ?`,
 	"estimate_coverage_metrics_daily": `estimate_coverage_metrics_daily FINAL WHERE org_id = ? AND day = ?`,
-	"issue_type_metrics_daily": `(SELECT * FROM issue_type_metrics_daily WHERE org_id = ? AND day = ?
-		ORDER BY computed_at DESC LIMIT 1 BY repo_id, provider, team_id, issue_type_norm)`,
-	"work_item_completion_daily": `(SELECT * FROM work_item_completion_daily WHERE org_id = ? AND day = ?
-		ORDER BY computed_at DESC LIMIT 1 BY repo_id, team_id)`,
+	"issue_type_metrics_daily": `(SELECT * EXCEPT (version_hash) FROM (SELECT *, ` + derivedRowHash + ` AS version_hash
+		FROM issue_type_metrics_daily WHERE org_id = ? AND day = ?
+		ORDER BY computed_at DESC, version_hash DESC LIMIT 1 BY repo_id, provider, team_id, issue_type_norm))`,
+	"work_item_completion_daily": `(SELECT * EXCEPT (version_hash) FROM (SELECT *, ` + derivedRowHash + ` AS version_hash
+		FROM work_item_completion_daily WHERE org_id = ? AND day = ?
+		ORDER BY computed_at DESC, version_hash DESC LIMIT 1 BY repo_id, team_id))`,
 }
 
-// derivedRowHash is the hash derivedDaySnapshot takes of one row.
-const derivedRowHash = `cityHash64(* EXCEPT (computed_at))`
+// derivedRowHash hashes the row text: a hash of the columns is NULL when one column is NULL.
+const derivedRowHash = `cityHash64(toString(tuple(* EXCEPT (computed_at))))`
 
 // derivedDaySnapshot is the newest row of every key of the work-item daily
 // tables for one day, without computed_at: a count and a hash for each table.

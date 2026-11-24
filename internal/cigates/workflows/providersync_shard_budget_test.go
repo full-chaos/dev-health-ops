@@ -643,7 +643,7 @@ func TestFreezeProviderWorldsCallFollowsTheJobBudget(t *testing.T) {
 		}
 		log := filepath.Join(dir, "go.log")
 		fake := "#!/bin/sh\necho \"$*\" >> " + log + "\nexit 0\n"
-		if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fake), 0o755); err != nil {
+		if err := writeExecFile(filepath.Join(bin, "go"), []byte(fake), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Symlink(filepath.Join(root, "ci"), filepath.Join(dir, "ci")); err != nil {

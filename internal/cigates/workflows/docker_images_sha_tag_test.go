@@ -310,7 +310,7 @@ func resolveStepViolations(t *testing.T, root string) []string {
 		t.Fatal(err)
 	}
 	stub := "#!/usr/bin/env bash\necho \"$*\" >> \"$GH_LOG\"\ncase \"$GH_MODE\" in\n  ok) echo \"$GH_OUT\" ;;\n  fail) exit 1 ;;\nesac\n"
-	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(stub), 0o755); err != nil {
+	if err := writeExecFile(filepath.Join(bin, "gh"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	script := filepath.Join(dir, "step.sh")

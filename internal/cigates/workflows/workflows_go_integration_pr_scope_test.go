@@ -132,14 +132,14 @@ func TestIntegrationShardsSelectionStepBehaviour(t *testing.T) {
 					t.Fatal(err)
 				}
 				for n, c := range stubs {
-					if err := os.WriteFile(filepath.Join(bin, n), []byte(c), 0o755); err != nil {
+					if err := writeExecFile(filepath.Join(bin, n), []byte(c), 0o755); err != nil {
 						t.Fatal(err)
 					}
 				}
 				path = bin + string(os.PathListSeparator) + path
 			}
 			for n, c := range files {
-				if err := os.WriteFile(filepath.Join(ci, n), []byte(c), 0o755); err != nil {
+				if err := writeExecFile(filepath.Join(ci, n), []byte(c), 0o755); err != nil {
 					t.Fatal(err)
 				}
 			}

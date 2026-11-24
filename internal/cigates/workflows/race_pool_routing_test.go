@@ -60,7 +60,7 @@ func TestRaceLegsRunHosted(t *testing.T) {
 func runAssertWithFakeDocker(t *testing.T, fakeDocker string) (string, error) {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/usr/bin/env bash\n"+fakeDocker+"\n"), 0o755); err != nil {
+	if err := writeExecFile(filepath.Join(dir, "docker"), []byte("#!/usr/bin/env bash\n"+fakeDocker+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", filepath.Join(authProofRoot(t), "ci", "assert_no_testcontainers.sh"))

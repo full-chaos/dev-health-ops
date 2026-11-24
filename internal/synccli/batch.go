@@ -92,11 +92,11 @@ type batchFailure struct {
 
 func runBatch(ctx context.Context, deps InlineDeps, plan Plan, datasets []string, run providersync.InProcessRun, env cli.Env) error {
 	secretValues := batchSecrets(run)
-	boundary := secrets.Join(secrets.NewBoundary(plan.SinkURI), secrets.NewBoundaryWith("", secretValues...))
+	boundary := secrets.Join(planBoundaryOf(plan), secrets.NewBoundaryWith("", secretValues...))
 	redact := func(err error) string { return boundary.RedactText(err.Error()) }
 	repos, err := deps.List(ctx, run, batchListing(plan))
 	if err != nil {
-		return fmt.Errorf("%s: list repositories: %s", plan.Provider, redact(err))
+		return redactedError{fmt.Sprintf("%s: list repositories: %s", plan.Provider, redact(err))}
 	}
 	if len(repos) == 0 {
 		writeLine(env.Stderr, fmt.Sprintf("dho sync %s: no repositories matched %q", plan.Target, plan.Search))

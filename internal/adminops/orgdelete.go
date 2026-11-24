@@ -86,18 +86,19 @@ func runOrgsDelete(ctx context.Context, env cli.Env) int {
 func deleteConfigFrom(env cli.Env, analyticsDB string) (admin.DeleteOrgConfig, func(error) error, bool) {
 	var deleteConfig admin.DeleteOrgConfig
 	var secretValues []string
+	var clickHouse []secrets.Boundary
 	fail := func(err error) (admin.DeleteOrgConfig, func(error) error, bool) {
 		fmt.Fprintf(env.Stderr, "configuration error: %v\n", err)
 		return deleteConfig, nil, false
 	}
 	if analyticsDB != "" {
 		deleteConfig.ClickHouseDSN = analyticsDB
-		secretValues = append(secretValues, analyticsDB)
+		clickHouse = append(clickHouse, secrets.NewBoundary(analyticsDB), secrets.NewBoundaryWith("", analyticsDB))
 	} else if dsn, configured, err := config.ResolveDSN(env.Lookup, "CLICKHOUSE_URI", config.ClickHouseSpec); err != nil {
 		return fail(err)
 	} else if configured {
 		deleteConfig.ClickHouseDSN = dsn.Reveal()
-		secretValues = append(secretValues, dsn.Reveal())
+		clickHouse = append(clickHouse, secrets.NewBoundary(dsn.Reveal()), secrets.NewBoundaryWith("", dsn.Reveal()))
 	}
 	decryptor, salted, err := settingsDecryptor(env)
 	if err != nil {
@@ -136,7 +137,7 @@ func deleteConfigFrom(env cli.Env, analyticsDB string) (admin.DeleteOrgConfig, f
 		if !resolved {
 			return errors.New("redacted")
 		}
-		return secrets.Join(database, secrets.NewBoundaryWith("", secretValues...)).Redact(err)
+		return secrets.Join(append([]secrets.Boundary{database, secrets.NewBoundaryWith("", secretValues...)}, clickHouse...)...).Redact(err)
 	}
 	return deleteConfig, redact, true
 }

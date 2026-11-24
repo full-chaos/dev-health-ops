@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
@@ -746,7 +747,12 @@ func runTarget(ctx context.Context, env cli.Env, target string, exec Executor, n
 		// boundary is built from the sink and the PostgreSQL URI this run
 		// resolved and applied here, so no layer under the executor has to
 		// remember which of its errors can carry them.
-		writeLine(env.Stderr, fmt.Sprintf("dho sync %s: %s", target, redact(err.Error())))
+		text := err.Error()
+		var done redactedError
+		if !errors.As(err, &done) || text != done.text {
+			text = secrets.Join(planBoundaryOf(plan), driverCredentials(err)).RedactText(text)
+		}
+		writeLine(env.Stderr, fmt.Sprintf("dho sync %s: %s", target, text))
 		if errors.Is(err, ErrNotAvailable) {
 			return cli.ExitRefused
 		}
@@ -943,12 +949,35 @@ func fillSynthetic(plan *Plan, v map[string]string, in Inputs) *Refusal {
 // planBoundary redacts the credential components of the ClickHouse sink URI and
 // of the PostgreSQL URI (resolved the way the driver resolves it) from a text.
 func planBoundary(plan Plan) func(string) string {
+	return planBoundaryOf(plan).RedactText
+}
+
+// planBoundaryOf is one Boundary over the sink URI and the PostgreSQL URI.
+func planBoundaryOf(plan Plan) secrets.Boundary {
 	boundary := secrets.NewBoundary(plan.SinkURI)
 	if plan.DB != nil && strings.TrimSpace(*plan.DB) != "" {
 		boundary = secrets.Join(boundary, pgstorage.Boundary(*plan.DB))
 	}
-	return boundary.RedactText
+	return boundary
 }
+
+// driverCredentials is the Boundary of the login and password the ClickHouse
+// driver settled on, which the store opener's error carries: the driver's DSN
+// parser takes forms the sink URI's net/url parse does not.
+func driverCredentials(err error) secrets.Boundary {
+	var raw clickhousestore.RawCauseError
+	if errors.As(err, &raw) {
+		return secrets.NewBoundaryWith("", raw.Resolved()...)
+	}
+	return secrets.Boundary{}
+}
+
+// redactedError is an error whose text a print path already redacted once with
+// its whole credential union: runTarget prints it as it is, not through the plan
+// boundary a second time.
+type redactedError struct{ text string }
+
+func (e redactedError) Error() string { return e.text }
 
 // redactProcessLogger makes every text the process logger is given pass through
 // redact until the returned function is called: the sinks and collectors under

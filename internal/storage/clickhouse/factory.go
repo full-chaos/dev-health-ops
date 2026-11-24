@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"time"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
@@ -31,6 +32,11 @@ type Config struct {
 	Settings map[string]any
 	// BatchWriteBound is the total bound of one batch (PrepareBatch to Send); zero = max(DefaultBatchWriteBound, ReadTimeout).
 	BatchWriteBound time.Duration
+	// RawCause makes an open failure carry the driver's cause text unredacted (a
+	// RawCauseError), for the two dho sync CLI openers that redact the original
+	// text once with a union wider than this DSN. Only they may set it; the
+	// opener census in internal/clicredentials holds that.
+	RawCause bool
 }
 
 func DefaultConfig(dsn string) Config {
@@ -117,19 +123,40 @@ func OpenWith(ctx context.Context, config Config, wait func(context.Context, fun
 	// The login and password the driver settled on (it parses the DSN itself, by
 	// its own rules) are redacted with the DSN's components.
 	resolved := []string{options.Auth.Username, options.Auth.Password}
+	failure := func(err error) error {
+		if config.RawCause {
+			return RawCauseError{cause: err, resolved: resolved}
+		}
+		return secrets.WithRedactedCauseAlso(ErrUnavailable, config.DSN, err, resolved...)
+	}
 	connection, err := clickhouse.Open(options)
 	if err != nil {
-		return nil, secrets.WithRedactedCauseAlso(ErrUnavailable, config.DSN, err, resolved...)
+		return nil, failure(err)
 	}
 	if err := wait(ctx, connection.Ping); err != nil {
 		_ = connection.Close()
-		return nil, secrets.WithRedactedCauseAlso(ErrUnavailable, config.DSN, err, resolved...)
+		return nil, failure(err)
 	}
 	if config.MaxIdleConns > 1 {
 		WarmPool(ctx, connection.Ping, config.MaxIdleConns)
 	}
 	return wrapConn(connection, batchWriteBound(config.BatchWriteBound, config.ReadTimeout)), nil
 }
+
+// RawCauseError is ErrUnavailable plus the driver's cause text as it came, and
+// the login and password the driver settled on (its own DSN parser accepts forms
+// net/url does not), so the caller's union can match them. Config.RawCause makes
+// OpenWith return it.
+type RawCauseError struct {
+	cause    error
+	resolved []string
+}
+
+func (e RawCauseError) Error() string { return ErrUnavailable.Error() + ": " + e.cause.Error() }
+func (e RawCauseError) Unwrap() error { return ErrUnavailable }
+
+// Resolved is the login and password the driver settled on.
+func (e RawCauseError) Resolved() []string { return slices.Clone(e.resolved) }
 
 func wrapConn(connection driver.Conn, batchWriteBound time.Duration) driver.Conn {
 	return newSpanConn(retryConn{detachedBatchConn{Conn: connection, bound: batchWriteBound}}, dbspan.NewEmitter(dbspan.SystemClickHouse, ""))

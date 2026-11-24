@@ -377,6 +377,26 @@ func jiraDeadlineSweep(t *testing.T) {
 			if len(d.order) > len(happy.doer.order) {
 				t.Errorf("k=%d strict=%v: %d requests, the happy run plans %d", k, strict, len(d.order), len(happy.doer.order))
 			}
+			// The failed request itself is not re-sent: after position k the run asks
+			// for its URI no more often than the happy run does after k (the live
+			// search is read twice by design, so a count over the whole run would
+			// let one retry pass).
+			if k <= len(d.order) && k <= len(happy.doer.order) {
+				resent, planned := 0, 0
+				for _, uri := range d.order[k:] {
+					if uri == d.failedURI {
+						resent++
+					}
+				}
+				for _, uri := range happy.doer.order[k:] {
+					if uri == d.failedURI {
+						planned++
+					}
+				}
+				if resent > planned {
+					t.Errorf("k=%d strict=%v: the failed request %s was sent again %d times after the 429, the happy run %d", k, strict, d.failedURI, resent, planned)
+				}
+			}
 			happyCount, runCount := map[string]int{}, map[string]int{}
 			for _, uri := range happy.doer.order {
 				happyCount[uri]++

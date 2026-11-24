@@ -599,6 +599,9 @@ func tcdlGLSweep(t *testing.T) {
 			// Bound (named limit, no gate): after the 429 the run sends no more
 			// than the planned requests and never repeats a request beyond what
 			// the happy run does.
+			if tcdlGLStrict && run.err != nil && run.writes > 0 {
+				t.Errorf("%s k=%d: strict run errored but wrote %d statements", name, k, run.writes)
+			}
 			if len(run.calls) > len(happy.calls) {
 				t.Errorf("%s k=%d: %d requests, the happy run plans %d", name, k, len(run.calls), len(happy.calls))
 			}

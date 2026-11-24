@@ -449,6 +449,13 @@ func tcdlLNSweep(t *testing.T) {
 					if need == run.failed {
 						t.Errorf("P1 strict=%v k=%d: %q closed though its read %q failed", strict, k, close, run.failed)
 					}
+					sent := false
+					for index, label := range run.labels {
+						sent = sent || (label == need && index != k-1)
+					}
+					if !sent {
+						t.Errorf("P1 strict=%v k=%d: %q closed though its read %q was never sent and answered", strict, k, close, need)
+					}
 				}
 				if tcdlLNNeeds(close) == nil {
 					t.Errorf("P1 strict=%v k=%d: close %q is not a close of the happy run", strict, k, close)

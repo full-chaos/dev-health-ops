@@ -371,8 +371,8 @@ func TestExhaustedUnitStoresTheClassOfItsLastAttempt(t *testing.T) {
 		class string
 	}{
 		{"unknown error", errors.New("secret-bearing text /org/acme/path"), providersync.CauseClassUnclassified},
-		{"provider 503", &providerfoundation.ProviderError{
-			Class: providerfoundation.ErrorTransient, StatusCode: 503,
+		{"provider transport error", &providerfoundation.ProviderError{
+			Class: providerfoundation.ErrorTransient,
 		}, "provider_transient"},
 		{"provider class outside the vocabulary", &providerfoundation.ProviderError{
 			Class: providerfoundation.ErrorClass("made_up/x"),

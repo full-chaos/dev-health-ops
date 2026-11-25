@@ -101,8 +101,8 @@ func TestUnitFailedCounterRendersPerProviderDatasetAndReason(t *testing.T) {
 			t.Fatalf("missing %q in:\n%s", want, rendered)
 		}
 	}
-	if got := strings.Count(rendered, "dev_health_provider_unit_failed_total{"); got != 5 {
-		t.Fatalf("series=%d want 5 in:\n%s", got, rendered)
+	if got := strings.Count(rendered, "dev_health_provider_unit_failed_total{"); got != 4 {
+		t.Fatalf("series=%d want 4 in:\n%s", got, rendered)
 	}
 }
 

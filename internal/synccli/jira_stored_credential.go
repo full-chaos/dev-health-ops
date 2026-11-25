@@ -11,6 +11,7 @@ import (
 	"atlassian/atlassian"
 
 	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
@@ -148,9 +149,13 @@ func resolveJiraStoredSettings(
 		auth := atlassian.BasicAPITokenAuth{Email: email.Reveal(), Token: token}
 		organizationID, err = atlassianteams.ResolveOrganizationID(ctx, newResolver(gatewayURL, auth), cloudID)
 		if err != nil {
-			return settings{}, fmt.Errorf(
+			failure := fmt.Errorf(
 				"the stored jira integration's config has no atlassian_organization_id, and resolving one failed: %w (set it on the integration, or set %s)",
 				err, OrganizationIDKey)
+			// The gateway's error text can echo the credential the discovery authenticated
+			// with, and runTeams prints this error before its own redaction boundary exists:
+			// redact it here.
+			return settings{}, redactCredentialError(failure, discoveryFailureValues(email.Reveal(), token, overrides)...)
 		}
 	}
 	return settings{
@@ -228,4 +233,31 @@ func jiraIntegrationCredentialID(ctx context.Context, pool *pgxpool.Pool, orgID 
 	}
 	return "", fmt.Errorf("the org has %d active jira integrations with different credentials (%s); this verb cannot choose one",
 		len(ids), strings.Join(shown, ", "))
+}
+
+// pairValues are the email, the token and the Basic payload spellings built from them: the
+// gateway can echo any of them, and no spelling of one half covers the payload.
+func pairValues(email, token string) []string {
+	return append([]string{email, token}, secrets.BasicAuthSpellings(email, token)...)
+}
+
+// discoveryFailureValues are the stored pair that authenticated the discovery and the pair the run
+// sends after the overrides (which holds the override values): the gateway can name any of them.
+func discoveryFailureValues(email, token string, overrides envOverrides) []string {
+	effectiveEmail, effectiveToken := email, token
+	if overrides.email != "" {
+		effectiveEmail = overrides.email
+	}
+	if overrides.token != "" {
+		effectiveToken = overrides.token
+	}
+	return append(pairValues(email, token), pairValues(effectiveEmail, effectiveToken)...)
+}
+
+// redactCredentialError is failure with every value (and its trimmed spelling, and the
+// escaped spellings a Boundary derives) removed from its text. The result is text only: no
+// later Unwrap reaches the unredacted failure.
+func redactCredentialError(failure error, values ...string) error {
+	boundary := secrets.NewBoundaryWith("", credentialSpellings(values...)...)
+	return redactedError{text: boundary.RedactText(failure.Error())}
 }

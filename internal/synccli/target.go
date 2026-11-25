@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"os"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -733,8 +734,9 @@ func runTarget(ctx context.Context, env cli.Env, target string, exec Executor, n
 	// Everything the run logs (the sinks under the executor log database
 	// errors through the process logger) passes through the same boundary as
 	// the error the verb prints.
-	redact := planBoundary(plan)
-	defer redactProcessLogger(redact)()
+	registrar := &credentialRegistrar{boundary: planBoundaryOf(plan)}
+	ctx = context.WithValue(ctx, credentialRegistrarKey{}, registrar)
+	defer redactProcessLogger(registrar.redact)()
 	if err := exec(ctx, plan, env); err != nil {
 		var refused *Refusal
 		if errors.As(err, &refused) {
@@ -750,7 +752,7 @@ func runTarget(ctx context.Context, env cli.Env, target string, exec Executor, n
 		text := err.Error()
 		var done redactedError
 		if !errors.As(err, &done) || text != done.text {
-			text = secrets.Join(planBoundaryOf(plan), driverCredentials(err)).RedactText(text)
+			text = secrets.Join(registrar.snapshot(), driverCredentials(err)).RedactText(text)
 		}
 		writeLine(env.Stderr, fmt.Sprintf("dho sync %s: %s", target, text))
 		if errors.Is(err, ErrNotAvailable) {
@@ -952,11 +954,16 @@ func planBoundary(plan Plan) func(string) string {
 	return planBoundaryOf(plan).RedactText
 }
 
-// planBoundaryOf is one Boundary over the sink URI and the PostgreSQL URI.
+// planBoundaryOf is one Boundary over the sink URI, the PostgreSQL URI and the
+// provider credential values the plan holds (the token, or the app's private key),
+// which a store-open or provider error can echo.
 func planBoundaryOf(plan Plan) secrets.Boundary {
 	boundary := secrets.Join(secrets.NewBoundary(plan.SinkURI), sinkResolvedCredentials(plan.SinkURI))
 	if plan.DB != nil && strings.TrimSpace(*plan.DB) != "" {
 		boundary = secrets.Join(boundary, pgstorage.Boundary(*plan.DB))
+	}
+	if values := planCredentialValues(plan); len(values) > 0 {
+		boundary = secrets.Join(boundary, secrets.NewBoundaryWith("", values...))
 	}
 	return boundary
 }
@@ -967,6 +974,70 @@ func planBoundaryOf(plan Plan) secrets.Boundary {
 // error after a good open can still name the login.
 func sinkResolvedCredentials(sinkURI string) secrets.Boundary {
 	return secrets.NewBoundaryWith("", clickhousestore.ResolvedCredentials(sinkURI)...)
+}
+
+// planCredentialValues are the provider credential values of the plan, each with
+// its terminal whitespace trimmed as a second spelling (an echo of a key often
+// drops the final line feed). The auth input itself is unchanged.
+func planCredentialValues(plan Plan) []string {
+	var raw []string
+	if creds := plan.GitHub; creds != nil && creds.Mode != CredentialDB {
+		raw = append(raw, creds.Token, creds.PrivateKey)
+	}
+	raw = append(raw, plan.GitLabToken)
+	return credentialSpellings(raw...)
+}
+
+// credentialSpellings is each non-empty value and, when it differs, the value with
+// its terminal whitespace trimmed.
+func credentialSpellings(values ...string) []string {
+	var out []string
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		out = append(out, value)
+		if trimmed := strings.TrimRightFunc(value, unicode.IsSpace); trimmed != "" && trimmed != value {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+// credentialRegistrar is the process logger's Boundary for one run. runTarget
+// builds it from the plan it was given; the executor adds the provider credential
+// values the database lookups resolved afterwards (registerCredentials), so the
+// logger and the print path hold them too.
+type credentialRegistrar struct {
+	mu       sync.RWMutex
+	boundary secrets.Boundary
+}
+
+func (r *credentialRegistrar) add(values ...string) {
+	if len(values) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.boundary = secrets.Join(r.boundary, secrets.NewBoundaryWith("", values...))
+}
+
+func (r *credentialRegistrar) snapshot() secrets.Boundary {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.boundary
+}
+
+func (r *credentialRegistrar) redact(text string) string { return r.snapshot().RedactText(text) }
+
+type credentialRegistrarKey struct{}
+
+// registerCredentials adds values to the registrar of ctx, if runTarget put one
+// there. Its one caller is the inline executor, after resolveDBLookups.
+func registerCredentials(ctx context.Context, values ...string) {
+	if r, ok := ctx.Value(credentialRegistrarKey{}).(*credentialRegistrar); ok {
+		r.add(values...)
+	}
 }
 
 // driverCredentials is the Boundary of the login and password the ClickHouse
@@ -983,9 +1054,13 @@ func driverCredentials(err error) secrets.Boundary {
 // redactedError is an error whose text a print path already redacted once with
 // its whole credential union: runTarget prints it as it is, not through the plan
 // boundary a second time.
-type redactedError struct{ text string }
+type redactedError struct {
+	text  string
+	cause error
+}
 
 func (e redactedError) Error() string { return e.text }
+func (e redactedError) Unwrap() error { return e.cause }
 
 // redactProcessLogger makes every text the process logger is given pass through
 // redact until the returned function is called: the sinks and collectors under

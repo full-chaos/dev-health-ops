@@ -9,6 +9,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 )
@@ -110,13 +111,16 @@ func InlineExecutor(deps InlineDeps) Executor {
 		if refusal != nil {
 			return refusal
 		}
+		registerCredentials(ctx, planCredentialValues(plan)...)
 		run, refusal := inlineRun(plan, deps.Now())
 		if refusal != nil {
 			return refusal
 		}
 		conn, err := deps.OpenStore(ctx, plan.SinkURI)
 		if err != nil {
-			return fmt.Errorf("open ClickHouse: %w", err)
+			// The plan holds the credentials the database lookups resolved by now: the
+			// store-open text is redacted once, here, with the whole union.
+			return redactedError{text: secrets.Join(planBoundaryOf(plan), driverCredentials(err)).RedactText("open ClickHouse: " + err.Error()), cause: err}
 		}
 		if closer, ok := conn.(interface{ Close() error }); ok {
 			defer func() { _ = closer.Close() }()

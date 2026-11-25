@@ -131,7 +131,7 @@ func TestBatchListErrorIsNotRedactedASecondTime(t *testing.T) {
 func TestWrappedRedactedErrorGetsItsOuterTextRedacted(t *testing.T) {
 	env := map[string]string{"CLICKHOUSE_URI": residualSink, "POSTGRES_URI": residualDB, "ORG_ID": "org-1"}
 	executor := func(context.Context, Plan, cli.Env) error {
-		return fmt.Errorf("outer A7kZ2 text: %w", redactedError{"inner [REDACTED] text"})
+		return fmt.Errorf("outer A7kZ2 text: %w", redactedError{text: "inner [REDACTED] text"})
 	}
 	_, _, stderr := runVerb(t, "git", executor, githubBatchArgs, env)
 	if !strings.Contains(stderr, "outer [REDACTED] text: inner [REDACTED] text") {

@@ -86,6 +86,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
@@ -213,8 +214,8 @@ type hotspotRow struct {
 // hotspots_backfill_inversion_integration_test.go for the INVERSION
 // (CHAOS-5447). Reducing the key to `computed_at` fails both; swapping it
 // to `(computed_at, day)` fails only the second.
-func fetchHotspotRows(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string, limit int) ([]hotspotRow, error) {
-	return queryHotspotRows(ctx, client, orgID, sinceDay, untilDay, repoIDs, fmt.Sprintf("\nORDER BY risk_score DESC NULLS LAST, repo_id, file_path\nLIMIT %d", limit))
+func fetchHotspotRows(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, scope readScope, limit int) ([]hotspotRow, error) {
+	return queryHotspotRows(ctx, client, orgID, sinceDay, untilDay, scope, fmt.Sprintf("\nORDER BY risk_score DESC NULLS LAST, repo_id, file_path\nLIMIT %d", limit))
 }
 
 // MaxRepoTopRows caps the per-repository top-file read at the same bound as
@@ -226,11 +227,19 @@ const MaxRepoTopRows = MaxRepoIDsBound
 // and differs only in the tail: the same ordering, then LIMIT 1 BY repo_id.
 // It is NOT bound by the row limit, so a repository whose files all rank
 // below the row cut still gets its own top file.
-func fetchRepoTopRows(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string) ([]hotspotRow, error) {
-	return queryHotspotRows(ctx, client, orgID, sinceDay, untilDay, repoIDs, fmt.Sprintf("\nORDER BY risk_score DESC NULLS LAST, repo_id, file_path\nLIMIT 1 BY repo_id\nLIMIT %d", MaxRepoTopRows))
+func fetchRepoTopRows(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, scope readScope) ([]hotspotRow, error) {
+	return queryHotspotRows(ctx, client, orgID, sinceDay, untilDay, scope, fmt.Sprintf("\nORDER BY risk_score DESC NULLS LAST, repo_id, file_path\nLIMIT 1 BY repo_id\nLIMIT %d", MaxRepoTopRows))
 }
 
-func queryHotspotRows(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string, tail string) ([]hotspotRow, error) {
+// readScope is the scope both file reads apply: the caller's repo ids and the team condition, rendered once per request
+// so the rows and the per-repository read resolve the same ownership.
+type readScope struct {
+	repoIDs       []string
+	teamCondition string
+	teamBindings  []clickhouse.Binding
+}
+
+func queryHotspotRows(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, scope readScope, tail string) ([]hotspotRow, error) {
 	query := `
         SELECT
             repo_id,
@@ -260,8 +269,8 @@ func queryHotspotRows(ctx context.Context, client QueryClient, orgID, sinceDay, 
 		{Name: "until_day", Value: untilDay},
 	}
 
-	if len(repoIDs) > 0 {
-		bounded := boundRepoIDs(repoIDs)
+	if len(scope.repoIDs) > 0 {
+		bounded := boundRepoIDs(scope.repoIDs)
 		query += `
               AND repo_id IN (
                   SELECT id FROM repos
@@ -269,6 +278,10 @@ func queryHotspotRows(ctx context.Context, client QueryClient, orgID, sinceDay, 
                     AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
               )`
 		bindings = append(bindings, clickhouse.Binding{Name: "repo_ids", Value: bounded})
+	}
+	if scope.teamCondition != "" {
+		query += "\n              AND " + scope.teamCondition
+		bindings = append(bindings, scope.teamBindings...)
 	}
 
 	query += "\n            GROUP BY repo_id, file_path\n        )"
@@ -357,6 +370,24 @@ func distinctRepoIDs(repoIDs []string) []string {
 // one org parameter, never a caller-supplied org id). limit is clamped
 // internally, same as Python -- callers must not pre-clamp.
 func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, untilUtc time.Time, repoIDs []string, limit *int) (*model.HotspotsResult, error) {
+	return ResolveScoped(ctx, client, orgID, sinceUtc, untilUtc, Scope{RepoIDs: repoIDs}, limit)
+}
+
+// Scope narrows the files to a set of repositories. Both fields are optional; when both are given BOTH apply (a file
+// must be on a listed repository AND on a repository a listed team owns). Team = repository OWNERSHIP
+// (teamscope.RepoCondition, from team_repo_ownership), never person membership.
+type Scope struct {
+	RepoIDs []string
+	// TeamIDs are team ids; blank ids are dropped, and no ids left means no team scope. A team that owns no
+	// repository matches no file.
+	TeamIDs []string
+	// AsOf is the one instant the ownership is read at; zero means the request's clock (timewindow.RequestToday).
+	AsOf time.Time
+}
+
+// ResolveScoped is Resolve with a Scope. With no team ids it issues the same statements and bindings as Resolve
+// always did (the frozen golden pins that).
+func ResolveScoped(ctx context.Context, client QueryClient, orgID string, sinceUtc, untilUtc time.Time, scope Scope, limit *int) (*model.HotspotsResult, error) {
 	if client == nil {
 		return nil, errors.New("hotspots: clickhouse client is required")
 	}
@@ -368,7 +399,14 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, un
 		return nil, err
 	}
 
-	rawRows, err := fetchHotspotRows(ctx, client, orgID, sinceDay, untilDay, repoIDs, effLimit)
+	asOf := scope.AsOf
+	if asOf.IsZero() {
+		asOf = timewindow.RequestToday(ctx, windowToday)
+	}
+	read := readScope{repoIDs: scope.RepoIDs}
+	read.teamCondition, read.teamBindings = teamscope.RepoCondition(orgID, "toString(repo_id)", scope.TeamIDs, asOf)
+
+	rawRows, err := fetchHotspotRows(ctx, client, orgID, sinceDay, untilDay, read, effLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -424,7 +462,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, un
 	// has no value (never a zero).
 	reposOut := []model.RepoHotspot{}
 	if len(rawRows) > 0 {
-		topRows, err := fetchRepoTopRows(ctx, client, orgID, sinceDay, untilDay, repoIDs)
+		topRows, err := fetchRepoTopRows(ctx, client, orgID, sinceDay, untilDay, read)
 		if err != nil {
 			return nil, err
 		}

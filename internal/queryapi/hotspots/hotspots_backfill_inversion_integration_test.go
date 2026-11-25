@@ -166,7 +166,7 @@ func TestFetchHotspotRows_BackfilledOlderDayDoesNotWinOverTheLatestDay(t *testin
 	}
 	defer func() { _ = client.Close() }()
 
-	rows, err := fetchHotspotRows(ctx, client, backfillOrgID, backfillSinceDay, backfillUntilDay, nil, 50)
+	rows, err := fetchHotspotRows(ctx, client, backfillOrgID, backfillSinceDay, backfillUntilDay, readScope{}, 50)
 	if err != nil {
 		t.Fatalf("fetchHotspotRows: %v", err)
 	}

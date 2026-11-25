@@ -45,6 +45,7 @@ func newBatchVenueIDs() batchVenueIDs {
 // gitlabListingFailure is the 400 detail for a failed group listing. Python
 // appends GitLab's message; Go keeps it out of the body (a named divergence),
 // so both planes are reduced to the fixed lead text.
+// A GitLab rate limit is not a case of this oracle: Go answers 429 with the fixed provider text (CHAOS-14615), Python the 400.
 var gitlabListingFailure = regexp.MustCompile(`"(Failed to list GitLab projects for group '[^']*')(?:: [^"]*)?"`)
 
 // gitlabListingLeadOnly matches the Go detail with no provider suffix.

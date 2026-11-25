@@ -59,6 +59,16 @@ func LegacyRepoDays(table string) string {
 	return `SELECT repo_id, day FROM ` + NewestStoredRows(table) + ` WHERE pooled_samples_stored != 1`
 }
 
+// LiveLegacyRepoDays is LegacyRepoDays without a day whose every row at its newest computed_at is a retraction. A
+// same-second tie of a live row and a retraction is ambiguous, so that day stays in, as at base.
+func LiveLegacyRepoDays(table string) string {
+	return LegacyRepoDays(table) + ` AND (repo_id, day) NOT IN (
+            SELECT repo_id, day FROM ` + table + `
+            WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date}
+            GROUP BY repo_id, day
+            HAVING tupleElement(max((computed_at, 1 - retracted)), 2) = 0)`
+}
+
 // LiveRepoDays is the live gate of a pooled source, over BOTH of its arms: the repository-days of the read window whose
 // NEWEST row of table is a measurement (package liverow). A retired repository-day (its newest row holds retracted = 1, a row
 // written with the column defaults, so pooled_samples_stored 0) is left out: the retracted flag wins over the pooled marker,
@@ -130,7 +140,7 @@ var SuiteRunsSource = `(
         SELECT org_id, repo_id, service_id, day, duration_sample
         FROM ` + suiteRawRowsRuled + `
         WHERE day >= {start_date:Date} AND day < {end_date:Date}
-          AND (repo_id, day) IN (` + LegacyRepoDays("testops_test_metrics_daily") + `)
+          AND (repo_id, day) IN (` + LiveLegacyRepoDays("testops_test_metrics_daily") + `)
           AND ((report_slot != '' AND run_attempt = newest_attempt AND retracted = 0 AND slot_retired = 0)
             OR (report_slot = '' AND NOT has(newest_legacy_ids, suite_id) AND NOT has(retired_legacy_ids, suite_id)))
     )
@@ -155,7 +165,7 @@ var suiteRawRowsRuled = `(
                     argMax(retracted, (run_attempt, last_synced, retracted)) OVER (PARTITION BY repo_id, run_id, report_slot) AS slot_retired
                 FROM test_suite_results FINAL
                 WHERE org_id = {org_id:String}
-                  AND repo_id IN (SELECT repo_id FROM (` + LegacyRepoDays("testops_test_metrics_daily") + `))
+                  AND repo_id IN (SELECT repo_id FROM (` + LiveLegacyRepoDays("testops_test_metrics_daily") + `))
             )
         )`
 

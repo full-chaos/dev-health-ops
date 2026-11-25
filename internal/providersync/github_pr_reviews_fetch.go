@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -216,7 +217,7 @@ func (fetcher GitHubPullRequestReviewFetcher) fetchPage(
 	}
 	response, err := client.DoRoute(ctx, http.MethodPost, graphQLRoute, gitHubGraphQLURL(client), bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, gitHubPullRequestReviewReadError{err: err}
 	}
 	result.Evidence.Pages++
 	defer response.Body.Close()
@@ -251,11 +252,33 @@ func (fetcher GitHubPullRequestReviewFetcher) fetchPage(
 	return connections, nil
 }
 
+// gitHubPullRequestReviewReadError marks an error of the GraphQL request itself (no usable answer arrived), as
+// distinct from an answer that could not be used.
+type gitHubPullRequestReviewReadError struct {
+	err error
+}
+
+func (e gitHubPullRequestReviewReadError) Error() string { return e.err.Error() }
+
+func (e gitHubPullRequestReviewReadError) Unwrap() error { return e.err }
+
+// finishFailure returns the error of a read that failed (rate limit, deadline, cancel, lost lease, and a request that
+// lookupReadFailed fails: a 5xx after retries, a transport error, a 401), so the unit does not acknowledge PRs whose
+// reviews were never read. An answered read that cannot be used, or another answered 4xx, degrades to Incomplete.
 func (fetcher GitHubPullRequestReviewFetcher) finishFailure(
 	result GitHubPullRequestReviewFetchResult, err error,
 ) (GitHubPullRequestReviewFetchResult, error) {
+	var read gitHubPullRequestReviewReadError
+	wire := errors.As(err, &read)
+	if wire {
+		err = read.err
+	}
 	if errors.Is(err, providerfoundation.ErrLeaseLost) || errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded) || isRateLimited(err) {
+		return result, err
+	}
+	if wire && lookupReadFailed(err) {
+		slog.Warn("github_pr_reviews.review_read_failed", "status_class", lookupStatusClass(err), "class", gitHubPullRequestReviewFailureCause(err))
 		return result, err
 	}
 	result.Rows = nil

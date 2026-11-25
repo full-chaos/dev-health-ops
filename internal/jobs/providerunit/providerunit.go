@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sort"
 	"time"
 
@@ -1201,6 +1202,9 @@ func (handler *Handler) Work(
 	var result providersync.CompleteRouteExecutionResult
 	workCtx, cancelWork := workContext(ctx, execution.Deadline)
 	defer cancelWork()
+	if descriptor.Chunked {
+		workCtx = providerfoundation.WithGatewayDeadlineClass(workCtx)
+	}
 	executor, err := handler.BuildExecutor(session)
 	if err == nil {
 		result, err = executor.Execute(workCtx, session, descriptor)
@@ -1327,6 +1331,47 @@ func (handler *Handler) Work(
 			handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
 			return jobruntime.Permanent(jobruntime.WithSafeCauseText(err,
 				safeCause(RateLimitCategory, session.Claim, execution, err)))
+		}
+	}
+	// A provider 5xx / gateway burst on a chunked walk is the provider being
+	// down, not the unit failing: defer it attempt-neutral so the unit keeps its
+	// chunk checkpoint, instead of spending five attempts in about 75 s and
+	// losing the checkpoint on the terminal failure (CHAOS-14696). A spent
+	// episode falls through to the ordinary arms below.
+	if gatewayBurstError(err) && descriptorIsChunked(session.Claim) {
+		if deferrer, supported := handler.Repository.(RateLimitDeferralRepository); supported {
+			episode, episodeErr := deferrer.RateLimitEpisode(context.WithoutCancel(ctx), session.Claim)
+			if episodeErr != nil {
+				return jobruntime.Retryable(jobruntime.WithSafeCauseText(episodeErr,
+					safeCause(retryCauseRateLimitEpisodeFailed, session.Claim, execution, episodeErr)))
+			}
+			step := providersync.RateLimitEpisodeStep{Mark: episode.Checkpoint}
+			planned := episode
+			if episode.Progressed() {
+				step.Restart = true
+				planned = providersync.RateLimitEpisode{}
+			}
+			if plan, granted := planGatewayBurstDeferral(planned, session.Claim.ID, completedAt); granted {
+				// No RateLimitObservation: a gateway burst must not feed the
+				// dispatch cooldown gate that a provider rate limit feeds.
+				if deferErr := deferrer.DeferForRateLimit(
+					context.WithoutCancel(ctx), session.Claim, plan.notBefore, completedAt,
+					providersync.RateLimitObservation{}, step,
+				); deferErr != nil {
+					return jobruntime.Retryable(jobruntime.WithSafeCauseText(deferErr,
+						safeCause(retryCauseRateLimitDeferFailed, session.Claim, execution, deferErr)))
+				}
+				if step.Restart {
+					handler.ProviderMetrics.RecordRateLimitEpisodeRestart(session.Claim.Provider, session.Claim.Dataset)
+					logRateLimitEpisodeRestart(ctx, execution, session.Claim, episode)
+				}
+				handler.ProviderMetrics.RecordUnitDeferred(session.Claim.Provider, session.Claim.Dataset, deferralReasonGatewayBurst)
+				handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
+				handler.logLifecycleWith(ctx, execution, session.Claim, "sync_provider_unit_finished", "deferred", err,
+					"deferral_reason", deferralReasonGatewayBurst, "deferrals", planned.Deferrals+1,
+					"delay_ms", plan.countdown.Milliseconds())
+				return jobruntime.RateLimited(err, plan.countdown)
+			}
 		}
 	}
 	// A healthy shared request bucket can be full when sibling provider units
@@ -1513,6 +1558,7 @@ const (
 	deferralReasonRateLimited       = "rate_limited"
 	deferralReasonChunkContinuation = "chunk_continuation"
 	deferralReasonProgressRefund    = "progress_refund"
+	deferralReasonGatewayBurst      = "gateway_burst"
 )
 
 // budgetContentionMaxBackoff caps the contention delay's growth (CHAOS-7434).
@@ -1592,3 +1638,23 @@ func (authoritativeClaim) Finish(context.Context, jobruntime.Completion) error {
 
 var _ jobruntime.Handler[jobruntime.ProviderUnitArgs] = (*Handler)(nil)
 var _ jobruntime.Idempotency = AuthoritativeIdempotency{}
+
+// gatewayBurstError reports a provider 5xx answer of the classes that mean the
+// provider is not serving. A transport error (no status) is not one: the same
+// transient class also carries store and credential failures.
+func gatewayBurstError(err error) bool {
+	var providerErr *providerfoundation.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorTransient || providerErr.AfterResponse() {
+		return false
+	}
+	switch providerErr.StatusCode {
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
+func descriptorIsChunked(claim providersync.Claim) bool {
+	descriptor, ok := providersync.Descriptor(claim.Provider, claim.Dataset)
+	return ok && descriptor.Chunked
+}

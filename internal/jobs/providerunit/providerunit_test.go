@@ -904,6 +904,9 @@ func (repository *memoryUnitRepository) DeferForRateLimit(
 		return providersync.ErrLeaseLost
 	}
 	repository.rateLimitObservations = append(repository.rateLimitObservations, observation)
+	if repository.attempt > 0 {
+		repository.attempt-- // deferForRateLimitSQL: attempts = GREATEST(attempts - 1, 0)
+	}
 	if step.Restart {
 		repository.rateLimitEpisodeRestarts++
 		repository.rateLimitDeferrals = 0

@@ -112,6 +112,7 @@ func TestUnitDeferredCounterRendersPerProviderDatasetAndReason(t *testing.T) {
 	metrics.RecordUnitDeferred("GitHub", "files", "budget_contention")
 	metrics.RecordUnitDeferred("github", "files", "budget_contention")
 	metrics.RecordUnitDeferred("github", "files", "rate_limited")
+	metrics.RecordUnitDeferred("github", "files", "gateway_burst")
 	metrics.RecordUnitDeferred("github", "files", "invented reason")
 	// The reason is trimmed and lower-cased like provider and dataset.
 	metrics.RecordUnitDeferred("github", "files", "  Budget_Contention ")
@@ -128,6 +129,7 @@ func TestUnitDeferredCounterRendersPerProviderDatasetAndReason(t *testing.T) {
 		"# TYPE dev_health_provider_unit_deferred_total counter",
 		`dev_health_provider_unit_deferred_total{provider="github",dataset="files",reason="budget_contention"} 3`,
 		`dev_health_provider_unit_deferred_total{provider="github",dataset="files",reason="rate_limited"} 1`,
+		`dev_health_provider_unit_deferred_total{provider="github",dataset="files",reason="gateway_burst"} 1`,
 		`dev_health_provider_unit_deferred_total{provider="github",dataset="files",reason="other"} 1`,
 		`dev_health_provider_unit_deferred_total{provider="github",dataset="other",reason="chunk_continuation"} 1`,
 	} {
@@ -135,7 +137,7 @@ func TestUnitDeferredCounterRendersPerProviderDatasetAndReason(t *testing.T) {
 			t.Fatalf("missing %q in:\n%s", want, rendered)
 		}
 	}
-	if got := strings.Count(rendered, "dev_health_provider_unit_deferred_total{"); got != 4 {
-		t.Fatalf("series=%d want 4 in:\n%s", got, rendered)
+	if got := strings.Count(rendered, "dev_health_provider_unit_deferred_total{"); got != 5 {
+		t.Fatalf("series=%d want 5 in:\n%s", got, rendered)
 	}
 }

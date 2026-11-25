@@ -197,10 +197,14 @@ func TestChunkSidecarReclaimStatementEndsOnTheServerWithTheStageBudget(t *testin
 // is still locked by a cut predecessor the server has not aborted yet, or the
 // tick lock is held) is a skipped tick: it charges nothing and is logged.
 func TestChunkSidecarReclaimDeadlineCutStatementsStayChargedAndThrottle(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	venue := startChunkReclaimBudgetVenue(t, ctx, false)
-	assertDeadlineCutStatementsStayChargedAndThrottle(t, ctx, venue)
+	for run := range 20 {
+		t.Run(fmt.Sprintf("run-%02d", run), func(t *testing.T) {
+			assertDeadlineCutStatementsStayChargedAndThrottle(t, ctx, venue)
+		})
+	}
 }
 
 func assertDeadlineCutStatementsStayChargedAndThrottle(t *testing.T, ctx context.Context, venue chunkReclaimBudgetVenue) {

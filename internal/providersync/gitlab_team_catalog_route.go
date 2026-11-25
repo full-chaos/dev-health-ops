@@ -560,7 +560,11 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		Complete:         !evidence.Truncated && len(evidence.MissingSelectedSources) == 0,
 	}
 	if selections.Members {
-		limit := &membershipRateLimit{}
+		// A strict run keeps every lookup: only the non-strict run stops on a rate limit, so only it records one.
+		var limit *membershipRateLimit
+		if !ref.Strict {
+			limit = &membershipRateLimit{}
+		}
 		rows.MembershipAbsence = &MembershipLookupBudget{
 			Inner: gitlabMembershipAbsence{client: client, groupByTeam: groupByTeam, limit: limit}, Left: membershipLookupBudget, Limit: limit,
 		}

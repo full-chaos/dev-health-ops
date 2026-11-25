@@ -293,7 +293,11 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 		}
 	}
 	if wantMembers {
-		limit := &membershipRateLimit{}
+		// A strict run keeps every lookup: only the non-strict run stops on a rate limit, so only it records one.
+		var limit *membershipRateLimit
+		if !collector.Strict {
+			limit = &membershipRateLimit{}
+		}
 		rows.MembershipAbsence = &MembershipLookupBudget{
 			Inner: githubMembershipAbsence{client: collector.Client, org: org, limit: limit}, Left: membershipLookupBudget, Limit: limit,
 		}

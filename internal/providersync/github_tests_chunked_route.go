@@ -1727,7 +1727,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	cursor.OpenSkipEvent = nil
 	configPrefixes, configPrefixesInvalid := githubTestsConfigExcludePrefixesChecked(claim)
 	if configPrefixesInvalid {
-		slog.Warn("sync configuration artifact exclude prefixes are not valid; only the built-in prefixes apply",
+		slog.Warn("sync configuration artifact exclude prefixes are not valid; no artifact name prefix applies",
 			"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID)
 	}
 	// invocationBaseRequests is the running total every PRIOR chunk
@@ -1743,9 +1743,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	rateFloor := &githubTestsRateFloorGate{}
 	counted.Doer = githubTestsChunkCountingDoer{delegate: client.Doer, attempts: &requests, observed: &rateObserved, floor: rateFloor}
 	client = &counted
-	// chunkPrefixSources / chunkPrefixCount are the prefix exclusions of the chunk being built, in memory only: never on the
-	// cursor or the prepared chunk, so a chunk's source set is never carried to a resume (CHAOS-14559).
-	chunkPrefixSources, chunkPrefixCount := 0, 0
+	// chunkPrefixCount is the prefix exclusions of the chunk being built, in memory only: never on the cursor or the
+	// prepared chunk, so it is never carried to a resume (CHAOS-14559).
+	chunkPrefixCount := 0
 	logChunkPrefixSources := func(cursor githubTestsChunkCursor) {
 		if chunkPrefixCount == 0 {
 			return
@@ -1754,9 +1754,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 			"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
 			"repository", logging.ProviderText(cursor.Repo),
 			"excluded_"+githubTestsExclusionReasonPrefix, chunkPrefixCount,
-			"excluded_"+githubTestsExclusionReasonPrefix+"_source", githubTestsPrefixExclusionSourceNames(chunkPrefixSources),
+			"excluded_"+githubTestsExclusionReasonPrefix+"_source_name", githubTestsPrefixExclusionSourceName,
 		)
-		chunkPrefixSources, chunkPrefixCount = 0, 0
+		chunkPrefixCount = 0
 	}
 	emitFinalMetadata := func(cursor githubTestsChunkCursor) error {
 		cursor.Phase = "done"
@@ -2751,13 +2751,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						if artifact.ID == "" {
 							return providerfoundation.ErrNormalizationInvalid
 						}
-						if selected, reason, source := githubTestsArtifactSelection(artifact.Name, configPrefixes); !selected {
+						if selected, reason := githubTestsArtifactSelectionSeam(artifact.Name, configPrefixes); !selected {
 							switch reason {
 							case githubTestsExclusionReasonSuffix:
 								cursor.ExcludedNonReportSuffix++
 							case githubTestsExclusionReasonPrefix:
 								cursor.ExcludedNonReportPrefix++
-								chunkPrefixSources |= githubTestsPrefixExclusionSourceBit(source)
 								chunkPrefixCount++
 							}
 							// Bounded the same way as GitHubTestsSkippedArtifact.Name

@@ -13,18 +13,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
 
 const githubTestsPrefixSourceChunkMessage = "github tests chunk excluded artifacts by name prefix"
 
-// githubTestsPrefixSourceChunkLines returns the source sets of the per-chunk prefix exclusion lines and checks each line's
-// shape: INFO, a count >= 1, a sorted value from the closed set {code, config}, and only the closed attribute keys.
-func githubTestsPrefixSourceChunkLines(t *testing.T, records []slog.Record) (sources [][]string, counts []int64) {
+// githubTestsPrefixSourceChunkLines returns the sources of the per-chunk prefix exclusion lines and checks each line's
+// shape: INFO, a count >= 1, the source as the string "config", and only the closed attribute keys (the earlier array key
+// is not emitted beside it).
+func githubTestsPrefixSourceChunkLines(t *testing.T, records []slog.Record) (sources []string, counts []int64) {
 	t.Helper()
-	keys := []string{"dataset", "excluded_non_report_artifact_prefix", "excluded_non_report_artifact_prefix_source", "provider", "repository", "unit"}
+	keys := []string{"dataset", "excluded_non_report_artifact_prefix", githubTestsPrefixSourceNameKey, "provider", "repository", "unit"}
 	for _, record := range records {
 		if record.Message != githubTestsPrefixSourceChunkMessage {
 			continue
@@ -45,14 +45,9 @@ func githubTestsPrefixSourceChunkLines(t *testing.T, records []slog.Record) (sou
 		if count < 1 {
 			t.Errorf("excluded_non_report_artifact_prefix = %v, want >= 1", attrs["excluded_non_report_artifact_prefix"])
 		}
-		source, ok := attrs["excluded_non_report_artifact_prefix_source"].([]string)
-		if !ok || len(source) == 0 || len(source) > 2 || !slices.IsSorted(source) || len(slices.Compact(slices.Clone(source))) != len(source) {
-			t.Errorf("excluded_non_report_artifact_prefix_source = %v (ok=%t), want a sorted set", attrs["excluded_non_report_artifact_prefix_source"], ok)
-		}
-		for _, value := range source {
-			if value != githubTestsPrefixExclusionSourceConfig && value != githubTestsPrefixExclusionSourceCode {
-				t.Errorf("source value %q is outside the closed set {code, config}", value)
-			}
+		source, ok := attrs[githubTestsPrefixSourceNameKey].(string)
+		if !ok || source != "config" {
+			t.Errorf("%s = %#v, want the string \"config\"", githubTestsPrefixSourceNameKey, attrs[githubTestsPrefixSourceNameKey])
 		}
 		sources = append(sources, source)
 		counts = append(counts, count)
@@ -60,64 +55,40 @@ func githubTestsPrefixSourceChunkLines(t *testing.T, records []slog.Record) (sou
 	return sources, counts
 }
 
-func githubTestsPrefixSourceUnion(sources [][]string) []string {
-	union := []string{}
-	for _, source := range sources {
-		for _, value := range source {
-			if !slices.Contains(union, value) {
-				union = append(union, value)
-			}
-		}
-	}
-	slices.Sort(union)
-	return union
-}
-
-// The per-chunk line names the list each prefix exclusion of that chunk came from (closed set config | code; the
-// configuration's list is checked first, on the full name). The skip summary line carries no source.
+// The per-chunk line names the source of each prefix exclusion of that chunk: the integration's list, on the full name. The
+// skip summary line carries no source. With no list there is no exclusion and no line.
 func TestGitHubTestsChunkLineNamesThePrefixExclusionSource(t *testing.T) {
 	report := githubTestsPrefixGuardArtifact{name: "test-results", members: map[string]string{
 		"junit.xml": "<testsuites>" + githubTestsPrefixGuardSuite("pkg/a", "TestA1", "TestA2") + "</testsuites>"}}
 	extra := githubTestsPrefixGuardArtifact{name: "ci-extra-1", members: map[string]string{
 		"x.xml": "<testsuites>" + githubTestsPrefixGuardSuite("pkg/x", "TestX") + "</testsuites>"}}
-	image := githubTestsPrefixGuardArtifact{name: "go-images-amd64-9-1", members: map[string]string{"images.tar": "not-a-report"}}
-	timings := githubTestsPrefixGuardArtifact{name: "go-test-timings-integration-packages-1", members: map[string]string{"t.tsv.gz": "pkg\t1.0"}}
-	codeList := []string{"go-images-", "go-test-timings-", "go-junit-part-"}
 	// A 40-byte configured prefix (Parse allows up to artifactexclude.MaxEntryBytes = 100): the sample cuts names at
-	// githubTestsMaxArtifactNameBytes (24), so the source is taken at match time on the full name.
+	// githubTestsMaxArtifactNameBytes (24), so the match is taken on the full name.
 	const longConfig = "ci-long-artifact-family-for-a-forty-byte"
 	long := githubTestsPrefixGuardArtifact{name: longConfig + "-1", members: map[string]string{"x.xml": "<testsuites>" + githubTestsPrefixGuardSuite("pkg/l", "TestL") + "</testsuites>"}}
-	// A 41-byte configured prefix that starts with a code prefix: both lists match, so it reports config (a cut name would
-	// match the code prefix only).
-	const longBoth = "go-images-amd64-for-a-long-config-prefix-"
-	longImage := githubTestsPrefixGuardArtifact{name: longBoth + "9-1", members: map[string]string{"images.tar": "not-a-report"}}
 	for _, cell := range []struct {
 		name           string
 		artifacts      []githubTestsPrefixGuardArtifact
 		configPrefixes []string
-		want           []string
+		wantLines      bool
 	}{
-		{name: "A: only the configuration's list matches", artifacts: []githubTestsPrefixGuardArtifact{extra, report}, configPrefixes: []string{"ci-extra-"}, want: []string{"config"}},
-		{name: "B: only the code list matches (a name cut at the sample bound too)", artifacts: []githubTestsPrefixGuardArtifact{image, timings, report}, want: []string{"code"}},
-		{name: "C: a prefix in both lists reports config", artifacts: []githubTestsPrefixGuardArtifact{image, report}, configPrefixes: []string{"GO-IMAGES-"}, want: []string{"config"}},
-		{name: "D: one exclusion from each list", artifacts: []githubTestsPrefixGuardArtifact{image, extra, report}, configPrefixes: []string{"ci-extra-"}, want: []string{"code", "config"}},
-		{name: "E: a 40-byte configured prefix", artifacts: []githubTestsPrefixGuardArtifact{long, report}, configPrefixes: []string{longConfig}, want: []string{"config"}},
-		// No code prefix is longer than 16 bytes ("go-test-timings-"); F is the longest code-only match: a 38-byte name.
-		{name: "F: a long name matched only by the code list", artifacts: []githubTestsPrefixGuardArtifact{timings, report}, want: []string{"code"}},
-		{name: "G: a 41-byte configured prefix that starts with a code prefix", artifacts: []githubTestsPrefixGuardArtifact{longImage, report}, configPrefixes: []string{longBoth}, want: []string{"config"}},
+		{name: "A: the configuration's list matches", artifacts: []githubTestsPrefixGuardArtifact{extra, report}, configPrefixes: []string{"ci-extra-"}, wantLines: true},
+		{name: "E: a 40-byte configured prefix", artifacts: []githubTestsPrefixGuardArtifact{long, report}, configPrefixes: []string{longConfig}, wantLines: true},
+		{name: "H: no list, no exclusion, no line", artifacts: []githubTestsPrefixGuardArtifact{extra, report}},
+		{name: "I: a list that matches nothing, no line", artifacts: []githubTestsPrefixGuardArtifact{extra, report}, configPrefixes: []string{"ci-other-"}},
 	} {
 		t.Run(cell.name, func(t *testing.T) {
 			records := captureMembershipLogs(t)
-			served, _ := githubTestsPrefixGuardRunWith(t, cell.artifacts, codeList, cell.configPrefixes)
-			if served.excludedPrefix == 0 {
-				t.Fatalf("premise: no prefix exclusion, got %+v", served)
-			}
+			served, _ := githubTestsPrefixGuardRunWith(t, cell.artifacts, cell.configPrefixes)
 			sources, _ := githubTestsPrefixSourceChunkLines(t, *records)
-			if len(sources) == 0 {
-				t.Fatalf("no per-chunk prefix exclusion line; records: %+v", *records)
+			if !cell.wantLines {
+				if served.excludedPrefix != 0 || len(sources) != 0 {
+					t.Errorf("excluded=%d chunk lines=%d, want 0 and 0", served.excludedPrefix, len(sources))
+				}
+				return
 			}
-			if got := githubTestsPrefixSourceUnion(sources); !slices.Equal(got, cell.want) {
-				t.Errorf("sources over the chunk lines = %v, want %v", got, cell.want)
+			if served.excludedPrefix == 0 || len(sources) == 0 {
+				t.Fatalf("premise: no prefix exclusion or no chunk line, got %+v, %d lines", served, len(sources))
 			}
 			summaries := 0
 			for _, record := range *records {
@@ -125,8 +96,11 @@ func TestGitHubTestsChunkLineNamesThePrefixExclusionSource(t *testing.T) {
 					continue
 				}
 				summaries++
-				if value, ok := membershipLogAttrs(record)["excluded_non_report_artifact_prefix_source"]; ok {
-					t.Errorf("the skip summary carries a source %v: it is per chunk only", value)
+				attrs := membershipLogAttrs(record)
+				for _, key := range []string{githubTestsPrefixSourceNameKey, "excluded_non_report_artifact_prefix_source"} {
+					if value, ok := attrs[key]; ok {
+						t.Errorf("the skip summary carries %s = %v: it is per chunk only", key, value)
+					}
 				}
 			}
 			if summaries == 0 {
@@ -178,11 +152,10 @@ func (doer *githubTestsPrefixSourceRunsDoer) Do(request *http.Request) (*http.Re
 	}
 }
 
-// Closed set per chunk: seven prefix exclusions from both lists over three runs (the middle run's are code-only), walked
-// once yielding after every emission (each chunk a new pass) and once in one pass. Each chunk line holds THAT chunk's
-// sorted set (at most the two values, never a set carried from an earlier chunk), at most one line per chunk with a
-// prefix exclusion, and the line counts add up to the unit's counter.
-func TestGitHubTestsChunkLinePrefixSourceIsAClosedSetPerChunk(t *testing.T) {
+// Seven prefix exclusions over three runs, walked once yielding after every emission (each chunk a new pass) and once in one
+// pass. At most one line per chunk with a prefix exclusion, each holding the string "config", and the line counts add up
+// to the unit's counter.
+func TestGitHubTestsChunkLinePrefixSourceIsPerChunk(t *testing.T) {
 	doer := &githubTestsPrefixSourceRunsDoer{t: t, runs: map[string][]int{}}
 	for run, names := range map[string][]string{
 		"1": {"go-images-a-1", "ci-extra-1"},
@@ -199,7 +172,7 @@ func TestGitHubTestsChunkLinePrefixSourceIsAClosedSetPerChunk(t *testing.T) {
 		}
 	}
 	claim := nativeTestClaim("github", "cicd")
-	claim.IntegrationConfig = map[string]any{"ci_artifact_exclude_prefixes": []any{"ci-extra-"}}
+	claim.IntegrationConfig = map[string]any{"ci_artifact_exclude_prefixes": []any{"ci-extra-", "go-images-", "go-test-timings-"}}
 	for _, yieldEach := range []bool{true, false} {
 		t.Run("yield after every emission "+strconv.FormatBool(yieldEach), func(t *testing.T) {
 			client := githubTestsClient(t, fakehttp.Client(doer))
@@ -246,13 +219,8 @@ func TestGitHubTestsChunkLinePrefixSourceIsAClosedSetPerChunk(t *testing.T) {
 				t.Fatalf("premise: 7 prefix exclusions in 3 chunks, got %d in %d", excluded, chunksWithExclusions)
 			}
 			sources, counts := githubTestsPrefixSourceChunkLines(t, *records)
-			got := make([]string, 0, len(sources))
-			for _, source := range sources {
-				got = append(got, strings.Join(source, " "))
-			}
-			slices.Sort(got)
-			if want := []string{"code", "code config", "code config"}; !slices.Equal(got, want) {
-				t.Errorf("chunk line sources = %v, want %v (one line per chunk with a prefix exclusion, its own set)", got, want)
+			if want := []string{"config", "config", "config"}; !slices.Equal(sources, want) {
+				t.Errorf("chunk line sources = %v, want %v (one line per chunk with a prefix exclusion)", sources, want)
 			}
 			total := int64(0)
 			for _, count := range counts {
@@ -260,47 +228,6 @@ func TestGitHubTestsChunkLinePrefixSourceIsAClosedSetPerChunk(t *testing.T) {
 			}
 			if total != int64(excluded) {
 				t.Errorf("chunk line counts add up to %d, want the unit's %d", total, excluded)
-			}
-		})
-	}
-}
-
-// The field name and the value exactly as the production JSON handler (logging.NewJSON) renders them on the chunk line:
-// a config-only unit, a code-only unit and a unit with both.
-func TestGitHubTestsChunkLineRendersThePrefixExclusionSourceLiterals(t *testing.T) {
-	report := githubTestsPrefixGuardArtifact{name: "test-results", members: map[string]string{
-		"junit.xml": "<testsuites>" + githubTestsPrefixGuardSuite("pkg/a", "TestA1") + "</testsuites>"}}
-	extra := githubTestsPrefixGuardArtifact{name: "ci-extra-1", members: map[string]string{
-		"x.xml": "<testsuites>" + githubTestsPrefixGuardSuite("pkg/x", "TestX") + "</testsuites>"}}
-	image := githubTestsPrefixGuardArtifact{name: "go-images-amd64-9-1", members: map[string]string{"images.tar": "not-a-report"}}
-	codeList := []string{"go-images-", "go-test-timings-", "go-junit-part-"}
-	for _, cell := range []struct {
-		name           string
-		artifacts      []githubTestsPrefixGuardArtifact
-		configPrefixes []string
-		literal        string
-	}{
-		{name: "config only", artifacts: []githubTestsPrefixGuardArtifact{image, report}, configPrefixes: codeList, literal: `"excluded_non_report_artifact_prefix_source":["config"]`},
-		{name: "code only", artifacts: []githubTestsPrefixGuardArtifact{image, report}, literal: `"excluded_non_report_artifact_prefix_source":["code"]`},
-		{name: "both", artifacts: []githubTestsPrefixGuardArtifact{image, extra, report}, configPrefixes: []string{"ci-extra-"}, literal: `"excluded_non_report_artifact_prefix_source":["code","config"]`},
-	} {
-		t.Run(cell.name, func(t *testing.T) {
-			var out bytes.Buffer
-			restore := logging.InstallDefault(logging.NewJSON(&out, slog.LevelDebug))
-			githubTestsPrefixGuardRunWith(t, cell.artifacts, codeList, cell.configPrefixes)
-			restore()
-			lines := 0
-			for _, line := range strings.Split(out.String(), "\n") {
-				if !strings.Contains(line, `"msg":"`+githubTestsPrefixSourceChunkMessage+`"`) {
-					continue
-				}
-				lines++
-				if !strings.Contains(line, `"level":"INFO"`) || !strings.Contains(line, cell.literal) {
-					t.Errorf("chunk line does not hold INFO and %s: %s", cell.literal, line)
-				}
-			}
-			if lines == 0 {
-				t.Fatalf("no chunk line in the JSON log: %s", out.String())
 			}
 		})
 	}

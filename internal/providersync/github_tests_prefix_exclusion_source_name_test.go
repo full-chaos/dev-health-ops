@@ -21,7 +21,7 @@ func TestGitHubTestsChunkLineCarriesThePrefixExclusionSourceAsAString(t *testing
 	artifacts := []githubTestsPrefixGuardArtifact{extra, report}
 
 	records := captureMembershipLogs(t)
-	githubTestsPrefixGuardRunWith(t, artifacts, nil, []string{"ci-extra-"})
+	githubTestsPrefixGuardRunWith(t, artifacts, []string{"ci-extra-"})
 	lines := 0
 	for _, record := range *records {
 		if record.Message != githubTestsPrefixSourceChunkMessage {
@@ -39,7 +39,7 @@ func TestGitHubTestsChunkLineCarriesThePrefixExclusionSourceAsAString(t *testing
 
 	var out bytes.Buffer
 	restore := logging.InstallDefault(logging.NewJSON(&out, slog.LevelDebug))
-	githubTestsPrefixGuardRunWith(t, artifacts, nil, []string{"ci-extra-"})
+	githubTestsPrefixGuardRunWith(t, artifacts, []string{"ci-extra-"})
 	restore()
 	jsonLines := 0
 	for _, line := range strings.Split(out.String(), "\n") {

@@ -248,7 +248,7 @@ func (artifact githubTestsArtifactPayload) listedSize() int64 {
 // ExcludedArtifactSample) purely for operator visibility and CHAOS-4591
 // (per-sync-config selectable artifact ingestion).
 //
-// githubTestsNonReportArtifactPrefixes holds no "digests-" by default
+// No prefix applies by default and "digests-" is not one
 // (codex review round 1, P1): "digests-*" artifacts (this repo's own
 // docker-images.yml uploads one empty touch-file per build target) ARE real,
 // valid, tiny zips that parse cleanly and contribute zero report rows --
@@ -264,14 +264,6 @@ func (artifact githubTestsArtifactPayload) listedSize() int64 {
 // ".spdx.json" are SBOM files: never reports, and 6 of them sit in every go.yml run.
 var githubTestsNonReportArtifactSuffixes = []string{".dockerbuild", ".spdx.json"}
 
-// githubTestsNonReportArtifactPrefixes is a named deployment exception: this repository's own CI artifact names (go.yml) in product
-// code. The seam joins it with the integration's ci_artifact_exclude_prefixes (one list per integration, it applies to every sync
-// config of this integration, CHAOS-14559); it goes once that list is written for every integration that syncs this repository. Content alone does not replace it (TestGitHubTestsArtifactNamePrefixesAreLoadBearing):
-// "go-images-": an image artifact keeps 1 day; an expired one has no content to inspect, so selected it reads reports_complete=false.
-// "go-test-timings-": timing tables, never reports; selected, all 17 of a run are downloaded and take per-run cap slots.
-// "go-junit-part-": JUnit parts beside their lossless merged report; githubTestsPlanRunReports keeps the parts and drops the aggregate, so case keys move, the merged rows are retracted and the run reads reports_complete=false.
-var githubTestsNonReportArtifactPrefixes = []string{"go-images-", "go-test-timings-", "go-junit-part-"}
-
 const (
 	githubTestsExclusionReasonSuffix = "non_report_artifact_suffix"
 	githubTestsExclusionReasonPrefix = "non_report_artifact_prefix"
@@ -284,72 +276,27 @@ const (
 // non-report noise crowds out real report artifacts exactly the way it did
 // before this fix.
 //
-// The suffix list is fixed; the prefixes are the code list joined with the
-// configuration's own list (configPrefixes, githubTestsConfigExcludePrefixes),
-// so a configuration can add names and never takes one of the code list away.
-// The (selected, reason) contract holds: `reason` is the closed vocabulary an
-// admin view would show next to each excluded artifact, never the prefix that
-// matched.
+// The suffix list is fixed; the only prefixes are the integration's own list
+// (configPrefixes, githubTestsConfigExcludePrefixes, CHAOS-14559): with no list,
+// no prefix excludes an artifact. The (selected, reason) contract holds:
+// `reason` is the closed vocabulary an admin view would show next to each
+// excluded artifact, never the prefix that matched.
 func githubTestsArtifactSelectionSeam(name string, configPrefixes []string) (selected bool, reason string) {
-	selected, reason, _ = githubTestsArtifactSelection(name, configPrefixes)
-	return selected, reason
-}
-
-// githubTestsArtifactSelection is the seam plus, for a prefix exclusion, the list whose prefix matched, taken at match
-// time on the full name (githubTestsPrefixExclusionSource).
-func githubTestsArtifactSelection(name string, configPrefixes []string) (selected bool, reason, source string) {
 	lower := strings.ToLower(name)
 	for _, suffix := range githubTestsNonReportArtifactSuffixes {
 		if strings.HasSuffix(lower, suffix) {
-			return false, githubTestsExclusionReasonSuffix, ""
+			return false, githubTestsExclusionReasonSuffix
 		}
 	}
-	if source := githubTestsPrefixExclusionSource(name, configPrefixes); source != "" {
-		return false, githubTestsExclusionReasonPrefix, source
-	}
-	return true, "", ""
-}
-
-// The list a prefix exclusion came from, a closed set for the per-chunk log line only (never stored or served).
-const (
-	githubTestsPrefixExclusionSourceConfig = "config"
-	githubTestsPrefixExclusionSourceCode   = "code"
-)
-
-// githubTestsPrefixExclusionSource names the list that excludes name: the configuration's list is checked first, so a
-// prefix in both lists reports "config"; "" when neither matches.
-func githubTestsPrefixExclusionSource(name string, configPrefixes []string) string {
-	lower := strings.ToLower(name)
 	if artifactexclude.Matches(lower, configPrefixes) {
-		return githubTestsPrefixExclusionSourceConfig
+		return false, githubTestsExclusionReasonPrefix
 	}
-	if artifactexclude.Matches(lower, githubTestsNonReportArtifactPrefixes) {
-		return githubTestsPrefixExclusionSourceCode
-	}
-	return ""
+	return true, ""
 }
 
-// githubTestsPrefixExclusionSourceBit is the bit of a source in a chunk's in-memory source set (never stored).
-func githubTestsPrefixExclusionSourceBit(source string) int {
-	switch source {
-	case githubTestsPrefixExclusionSourceConfig:
-		return 1
-	case githubTestsPrefixExclusionSourceCode:
-		return 2
-	}
-	return 0
-}
-
-// githubTestsPrefixExclusionSourceNames is the sorted list of the sources in the set: "code" before "config".
-func githubTestsPrefixExclusionSourceNames(sources int) []string {
-	var names []string
-	for _, source := range []string{githubTestsPrefixExclusionSourceCode, githubTestsPrefixExclusionSourceConfig} {
-		if sources&githubTestsPrefixExclusionSourceBit(source) != 0 {
-			names = append(names, source)
-		}
-	}
-	return names
-}
+// githubTestsPrefixExclusionSourceName is the value of the per-chunk log line's source attribute: the integration's list is the
+// only source of a prefix exclusion. A string, not a list: SigNoz groups a string attribute and does not index an array.
+const githubTestsPrefixExclusionSourceName = "config"
 
 type githubTestsRequiredPayload struct {
 	Contexts []any `json:"contexts"`

@@ -30,7 +30,7 @@ func TestGitHubTestsPrefixSourceLeavesTheResumeStateByteEqual(t *testing.T) {
 		artifacts = append(artifacts, githubTestsPrefixGuardArtifact{name: name, members: map[string]string{"x.bin": "not-a-report"}})
 	}
 	claim := nativeTestClaim("github", "cicd")
-	claim.IntegrationConfig = map[string]any{"ci_artifact_exclude_prefixes": []any{"ci-extra-"}}
+	claim.IntegrationConfig = map[string]any{"ci_artifact_exclude_prefixes": []any{"ci-extra-", "go-images-", "go-test-timings-"}}
 	normalizedAt := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	client := githubTestsClient(t, fakehttp.Client(&githubTestsPrefixGuardDoer{t: t, artifacts: artifacts}))
 	digest := sha256.New()

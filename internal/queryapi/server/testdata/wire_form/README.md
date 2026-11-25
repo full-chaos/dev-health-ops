@@ -67,3 +67,11 @@ without the other is what
 `hotspots.v1.graphql` is the wire form (`wireForm()` of `web/scripts/graphql-wire-parity.ts`) of web main's
 `HOTSPOTS_QUERY` before it asked for `repos`: sha256 of the trimmed text
 `6ccfcc785f38dc4a2d3ef5c9bdc2a00e76c02ccf58d11fd1198d2d321165e781`, the legacy `registeredHotspotsV1Document`.
+
+## cognitiveLoad (CHAOS-14628, dual accept)
+
+`cognitiveLoad.v1.graphql` is the text of web main's `COGNITIVE_LOAD_QUERY` (the document acr's catalogue carries too)
+before it asked for `developerState`: sha256 of the text
+`dcdfb2692addf52ed6117162963c698b628af37d01d08e4a8724f90388d8427d`, the legacy `registeredCognitiveLoadV1Document`. The
+current `registeredCognitiveLoadDocument` selects `developerState` after `reviewRequestLoad`
+(`d16e00aeeae95af56d88173fb817892002471985a4f11ae5f760e57fab79ed9c`).

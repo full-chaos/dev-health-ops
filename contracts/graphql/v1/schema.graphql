@@ -688,6 +688,10 @@ type CognitiveLoadSignal {
   prInterruptionLoad: Float!
   contextSpreadCount: Float!
   reviewRequestLoad: Float!
+  """
+  How the three developer fields of this day (prInterruptionLoad, contextSpreadCount, reviewRequestLoad) were read: MEASURED (at least one developer row that day, so a 0 is a measured 0) or NO_ROWS (the day has team rows only, so the 0 values are not a measurement). STALE is not used for this field: the day is the day of the row. See NewestDayState.
+  """
+  developerState: NewestDayState!
   afterHoursCommitRatio: Float
   weekendCommitRatio: Float
 }

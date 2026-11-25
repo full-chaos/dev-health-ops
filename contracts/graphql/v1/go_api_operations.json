@@ -121,7 +121,12 @@
   },
   {
     "operation": "cognitiveLoad",
-    "digest": "dcdfb2692addf52ed6117162963c698b628af37d01d08e4a8724f90388d8427d"
+    "digest": "d16e00aeeae95af56d88173fb817892002471985a4f11ae5f760e57fab79ed9c"
+  },
+  {
+    "operation": "cognitiveLoad",
+    "digest": "dcdfb2692addf52ed6117162963c698b628af37d01d08e4a8724f90388d8427d",
+    "legacy": true
   },
   {
     "operation": "complexityTimeseries",

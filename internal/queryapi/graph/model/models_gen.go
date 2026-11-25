@@ -620,12 +620,14 @@ type CognitiveLoadResult struct {
 }
 
 type CognitiveLoadSignal struct {
-	Day                   graphqldate.Date `json:"day"`
-	PrInterruptionLoad    float64          `json:"prInterruptionLoad"`
-	ContextSpreadCount    float64          `json:"contextSpreadCount"`
-	ReviewRequestLoad     float64          `json:"reviewRequestLoad"`
-	AfterHoursCommitRatio *float64         `json:"afterHoursCommitRatio,omitempty"`
-	WeekendCommitRatio    *float64         `json:"weekendCommitRatio,omitempty"`
+	Day                graphqldate.Date `json:"day"`
+	PrInterruptionLoad float64          `json:"prInterruptionLoad"`
+	ContextSpreadCount float64          `json:"contextSpreadCount"`
+	ReviewRequestLoad  float64          `json:"reviewRequestLoad"`
+	// How the three developer fields of this day (prInterruptionLoad, contextSpreadCount, reviewRequestLoad) were read: MEASURED (at least one developer row that day, so a 0 is a measured 0) or NO_ROWS (the day has team rows only, so the 0 values are not a measurement). STALE is not used for this field: the day is the day of the row. See NewestDayState.
+	DeveloperState        NewestDayState `json:"developerState"`
+	AfterHoursCommitRatio *float64       `json:"afterHoursCommitRatio,omitempty"`
+	WeekendCommitRatio    *float64       `json:"weekendCommitRatio,omitempty"`
 }
 
 type ComplexityPoint struct {

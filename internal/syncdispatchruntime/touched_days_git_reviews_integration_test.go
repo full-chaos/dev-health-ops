@@ -231,13 +231,13 @@ func TestRecordTouchedGitReadsEachTableOnceInThreeStatements(t *testing.T) {
 	if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 		t.Fatalf("the query log is not readable by this user: %v", err)
 	}
-	// The connection is idle between the two marks, so the statements of the call are
-	// the finished initial queries that are the INSERT, the clock read or a read of the record table.
+	// This test owns its ClickHouse container (newReadbackIntegrationConn starts one per test), so no
+	// other test writes to this server; the statements are the ones that name the record table or read the clock.
 	var statements, readRows uint64
-	if err := conn.QueryRow(ctx, `SELECT count(), sumIf(read_rows, query_kind = 'Insert') FROM system.query_log
+	if err := conn.QueryRow(ctx, `SELECT count(), sumIf(read_rows, position(query, 'INSERT INTO daily_metrics_touched_days') > 0) FROM system.query_log
 		WHERE type = 'QueryFinish' AND is_initial_query AND toUnixTimestamp64Micro(event_time_microseconds) >= ?
 		  AND position(query, 'system.query_log') = 0
-		  AND (query_kind = 'Insert' OR position(query, 'daily_metrics_touched_days') > 0 OR position(query, 'toUnixTimestamp64Milli(now64(3))') > 0)`,
+		  AND (position(query, 'daily_metrics_touched_days') > 0 OR position(query, 'toUnixTimestamp64Milli(now64(3))') > 0)`,
 		startMicros).Scan(&statements, &readRows); err != nil {
 		t.Fatalf("the query log has no row for the record: %v", err)
 	}

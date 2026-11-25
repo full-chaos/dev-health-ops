@@ -166,8 +166,8 @@ func TestGitHubPullRequestReviewFetcherMarksNonRateFailuresIncomplete(t *testing
 		body   string
 		cause  string
 	}{
-		{name: "transient HTTP", status: http.StatusServiceUnavailable, body: `{"message":"unavailable"}`, cause: "transient"},
 		{name: "graphql errors", body: `{"data":{"repository":{}},"errors":[{"message":"schema changed"}]}`, cause: "invalid_response"},
+		{name: "answered 404", status: http.StatusNotFound, body: `{"message":"Not Found"}`, cause: "not_found"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			doer := &gitHubPullRequestReviewFetchDoer{t: t, graphQLStatus: []int{test.status}, graphQLReply: []string{test.body}}
@@ -181,6 +181,21 @@ func TestGitHubPullRequestReviewFetcherMarksNonRateFailuresIncomplete(t *testing
 				t.Fatalf("result=%+v error=%v", result, err)
 			}
 		})
+	}
+}
+
+// A read that failed (a 5xx after the client's retries) returns its error: the route must not acknowledge PRs whose
+// reviews were never read.
+func TestGitHubPullRequestReviewFetcherReturnsFailedReadError(t *testing.T) {
+	doer := &gitHubPullRequestReviewFetchDoer{t: t, graphQLStatus: []int{http.StatusServiceUnavailable}, graphQLReply: []string{`{"message":"unavailable"}`}}
+	result, err := (GitHubPullRequestReviewFetcher{}).Fetch(
+		context.Background(), nativeTestClaim("github", "pr-reviews"),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"),
+		gitHubPullRequestReviewFetchRepoID, gitHubPullRequestReviewFetchTarget(), time.Now(),
+	)
+	var providerErr *providerfoundation.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.StatusCode != http.StatusServiceUnavailable || result.Incomplete != nil {
+		t.Fatalf("result=%+v error=%v", result, err)
 	}
 }
 

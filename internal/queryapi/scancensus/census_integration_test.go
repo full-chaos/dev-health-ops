@@ -1008,10 +1008,10 @@ internal/queryapi/sankey/queries.go|fetchExpenseCounts|*float64,*float64,*float6
 internal/queryapi/sankey/queries.go|fetchStateStatusCounts|*string,*float64|0ef755127f61|not-describable
 internal/queryapi/server/mcp_route.go|Scan|[]any|073743d6899c|variadic-destinations
 internal/queryapi/testopsrisk/testopsrisk.go|readDaily|**time.Time,**float64,**float64,**float64,**float64,**float64,**float64,**uint64,**float64|d5ba164a1f0e|not-describable
-internal/queryapi/throughputforecast/clickhouse.go|loadBacklog|*uint64,*uint64,*uint64,*time.Time|79caad338fa0|not-describable
-internal/queryapi/throughputforecast/clickhouse.go|loadStaleWIP|**float64,**float64,*uint64,*uint64,*time.Time|bcc98d8022ae|not-describable
-internal/queryapi/throughputforecast/clickhouse.go|loadThroughputHistory|*time.Time,*uint64|d7bdbe999ab7|not-describable
-internal/queryapi/throughputforecast/clickhouse.go|loadWorkItemOverlay|*float64,*uint64,*uint64,*time.Time|da3c300a51fd|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadBacklog|*uint64,*uint64,*uint64,*time.Time|53728f78dd4b|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadStaleWIP|**float64,**float64,*uint64,*uint64,*time.Time|b29281653aa5|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadThroughputHistory|*time.Time,*uint64|42e43e97bdd9|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadWorkItemOverlay|*float64,*uint64,*uint64,*time.Time|4c3134c2ff27|not-describable
 internal/queryapi/workgraph/edges.go|countMatchingEdges|*uint64|8d8175642fa2|not-describable
 internal/queryapi/workgraph/edges.go|fetchDedupedEdgeRows|*string,*string,*string,*string,*string,*string,*string,*string,*string,*float64,*string|9ec6525b760f|statement-not-static
 internal/queryapi/workgraph/edges.go|queryDependencyEdges|*string,*string,*string,*string,*string,*string,*string,*string,*string,*float64,*string|c998ded583fc|statement-not-static

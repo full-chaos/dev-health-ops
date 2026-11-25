@@ -1866,8 +1866,12 @@ type ThroughputForecast struct {
 	StaleWip                *ThroughputStaleWip         `json:"staleWip,omitempty"`
 	EstimateCoverage        *ThroughputEstimateCoverage `json:"estimateCoverage,omitempty"`
 	ReviewBottleneck        *ThroughputRiskOverlay      `json:"reviewBottleneck"`
-	IncidentLoad            *ThroughputRiskOverlay      `json:"incidentLoad"`
-	InsufficientHistory     bool                        `json:"insufficientHistory"`
+	// How the review latency of reviewBottleneck was read: MEASURED (at least one repository-day in the window carries a first-review latency) or NO_ROWS (none does, or no throughput history, so the value 0 is not a measurement). Never STALE: the read keeps no newest day (see NewestDayState).
+	ReviewBottleneckState NewestDayState         `json:"reviewBottleneckState"`
+	IncidentLoad          *ThroughputRiskOverlay `json:"incidentLoad"`
+	// How the incident rate of incidentLoad was read: MEASURED (at least one live repository-day in the window) or NO_ROWS (none, or no throughput history, so the value 0 is not a measurement). Never STALE: the read keeps no newest day (see NewestDayState).
+	IncidentLoadState   NewestDayState `json:"incidentLoadState"`
+	InsufficientHistory bool           `json:"insufficientHistory"`
 }
 
 type ThroughputForecastInput struct {

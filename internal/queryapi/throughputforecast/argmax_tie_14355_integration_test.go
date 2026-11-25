@@ -108,14 +108,14 @@ func TestArgMaxTieThroughputForecast14355(t *testing.T) {
 			read: func(t *testing.T) string {
 				v, err := loadReviewOverlay(ctx, client, org, weeks, today)
 				must(t, err)
-				return fmt.Sprint(v)
+				return fmt.Sprint(v.value)
 			}},
 		{name: "loadIncidentOverlay", table: "incident_metrics_daily", key: repoKey,
 			values: []string{"incidents_count", "mttr_p50_hours"}, retire: "retracted", filtered: true,
 			read: func(t *testing.T) string {
 				v, err := loadIncidentOverlay(ctx, client, org, weeks, today)
 				must(t, err)
-				return fmt.Sprintf("sum=%.6f", v*incidentWeeks(t))
+				return fmt.Sprintf("sum=%.6f", v.value*incidentWeeks(t))
 			}},
 	}
 	for _, c := range specs {
@@ -373,7 +373,7 @@ func TestArgMaxTieThroughputForecastAndOperatingReviewServeOneVersion14355(t *te
 				if err != nil {
 					t.Fatal(err)
 				}
-				return v
+				return v.value
 			}},
 		{"incident_metrics_daily", "incident_metrics_daily", "incidents_count",
 			func(k int, second bool) string {
@@ -393,7 +393,7 @@ func TestArgMaxTieThroughputForecastAndOperatingReviewServeOneVersion14355(t *te
 				if err := conn.QueryRow(ctx, `SELECT toFloat64(greatest(dateDiff('week', toDate('`+startDate(today, weeks)+`'), today()), 1))`).Scan(&w); err != nil {
 					t.Fatal(err)
 				}
-				return float64(int64(v*w + 0.5))
+				return float64(int64(v.value*w + 0.5))
 			}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

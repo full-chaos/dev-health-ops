@@ -181,6 +181,11 @@ VALUES (?, ?, ?, toDateTime(?, 'UTC'), 1, NULL, NULL)`, org, day1, repo, tieAt)
 		Scan(&wantP95, &wantP50); err != nil {
 		t.Fatal(err)
 	}
+	const unanimous, anyRetraction = "tupleElement(max((computed_at, 1 - retracted)), 2) = 0", "tupleElement(max((computed_at, retracted)), 2) = 1"
+	if strings.Count(live, unanimous) != 1 {
+		t.Fatalf("LiveLegacyRepoDays holds the unanimous-retraction term %d times, want 1", strings.Count(live, unanimous))
+	}
+	mutantLive := strings.Replace(live, unanimous, anyRetraction, 1)
 	disagreed := 0
 	for index, order := range []struct {
 		name   string
@@ -237,6 +242,13 @@ VALUES (?, ?, ?, toDateTime(?, 'UTC'), 1, NULL, NULL)`, org, day1, repo, tieAt)
 					arm.name, order.name, read, markerStored, markerRetracted, gateLive, admitted, baseAdmitted, str(headP95), str(headP50), str(baseP95), str(baseP50))
 				if admitted != baseAdmitted {
 					t.Errorf("%s %s read %d: the raw arm admits the day %d time(s), base %d: an ambiguous tie must behave as at base", arm.name, order.name, read, admitted, baseAdmitted)
+				}
+				// The mutant: any retraction at the newest stamp (not a unanimous one) retires the day.
+				if mutantAdmitted := count(`SELECT count() FROM (` + mutantLive + `)`); baseAdmitted == 1 {
+					t.Logf("MUTANT14595 unanimous-to-any %s %s read %d red=%v: admits %d, base %d", arm.name, order.name, read, mutantAdmitted != baseAdmitted, mutantAdmitted, baseAdmitted)
+					if mutantAdmitted == baseAdmitted {
+						t.Errorf("%s %s read %d: the unanimous-to-any mutant admits the day like base (%d): the tie cell does not see the rule", arm.name, order.name, read, mutantAdmitted)
+					}
 				}
 				if !same(headP95, baseP95) || !same(headP50, baseP50) {
 					t.Errorf("%s %s read %d: served p95 %s / median %s, base %s / %s", arm.name, order.name, read, str(headP95), str(headP50), str(baseP95), str(baseP50))

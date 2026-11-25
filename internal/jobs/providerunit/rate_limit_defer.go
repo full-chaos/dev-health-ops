@@ -119,8 +119,14 @@ func planGatewayBurstDeferral(
 	if delay > gatewayBurstMaxDelay {
 		delay = gatewayBurstMaxDelay
 	}
+	// Jitter first, then both caps: the snooze never passes 10 min and the wake
+	// never passes the episode's hour, and the fence is the same wake time.
+	delay += rateLimitJitter(unitID)
+	if delay > gatewayBurstMaxDelay {
+		delay = gatewayBurstMaxDelay
+	}
 	if remaining := gatewayBurstMaxTotalWait - elapsed; delay > remaining {
 		delay = remaining
 	}
-	return rateLimitDeferral{countdown: delay + rateLimitJitter(unitID), notBefore: now.Add(delay)}, true
+	return rateLimitDeferral{countdown: delay, notBefore: now.Add(delay)}, true
 }

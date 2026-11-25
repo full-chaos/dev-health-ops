@@ -27,6 +27,7 @@ func TestGatewayBurstPlanStaysInsideItsCapsWithJitter(t *testing.T) {
 					continue
 				}
 				granted++
+				//abstime:allow computed plan arithmetic on injected times, never wall time
 				if plan.countdown > gatewayBurstMaxDelay {
 					t.Fatalf("unit %s deferrals=%d elapsed=%s: snooze %s > %s", unitID, deferrals, elapsed, plan.countdown, gatewayBurstMaxDelay)
 				}

@@ -187,3 +187,53 @@ func TestGatewayBurstDeferLeavesUnchunkedAndTransportErrorsAlone(t *testing.T) {
 		})
 	}
 }
+
+// CONTROL: the gateway arm is chunked-only. launchdarkly/feature-flags is a
+// descriptor with Chunked=false, so a 5xx there keeps the ordinary retry and
+// cap: a 503 or 500 retries before try 5 and ends provider_unit_exhausted /
+// provider_transient on try 5. (TestExhaustedUnitStoresTheClassOfItsLastAttempt
+// and TestCappedClassRetriesBeforeItsCap... run on the chunked github/files
+// unit for the files inventory category, so they use a transport error.)
+func TestUnchunkedUnitFiveXXKeepsTheOrdinaryRetryAndCap(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	if descriptor, ok := providersync.Descriptor("launchdarkly", "feature-flags"); !ok || descriptor.Chunked {
+		t.Fatalf("launchdarkly/feature-flags chunked=%v ok=%v, want an unchunked descriptor", descriptor.Chunked, ok)
+	}
+	for _, status := range []int{http.StatusServiceUnavailable, http.StatusInternalServerError} {
+		for _, test := range []struct {
+			attempt    int
+			wantFailed bool
+		}{{4, false}, {5, true}} {
+			unit := providerUnit()
+			repository := &classRepository{memoryUnitRepository: newMemoryUnitRepository(unit)}
+			handler := &Handler{
+				Repository:    repository,
+				LeaseDuration: time.Minute,
+				Heartbeat:     10 * time.Second,
+				Now:           func() time.Time { return now },
+				BuildExecutor: func(*providersync.LeaseSession) (providersync.CompleteRouteExecutor, error) {
+					return providersync.CompleteRouteExecutor{}, &providerfoundation.ProviderError{
+						Class: providerfoundation.ErrorTransient, StatusCode: status,
+					}
+				},
+			}
+			execution := providerExecution(unit, now, test.attempt)
+			execution.Definition.MaxAttempts = 5
+			err := handler.Work(context.Background(), execution)
+			if err == nil {
+				t.Fatalf("status %d try %d: Work() = nil, want a retryable or exhausted error", status, test.attempt)
+			}
+			if _, snoozed := jobruntime.SnoozeDelay(err); snoozed || repository.rateLimitDeferrals != 0 {
+				t.Fatalf("status %d try %d: deferred on an unchunked unit", status, test.attempt)
+			}
+			if failed := repository.status == "failed"; failed != test.wantFailed {
+				t.Fatalf("status %d try %d: status=%q, want failed=%v", status, test.attempt, repository.status, test.wantFailed)
+			}
+			if test.wantFailed && (repository.lastFailCategory != "provider_unit_exhausted" || repository.causeClass != "provider_transient") {
+				t.Fatalf("status %d: category=%q class=%q, want provider_unit_exhausted/provider_transient",
+					status, repository.lastFailCategory, repository.causeClass)
+			}
+		}
+	}
+}

@@ -57,7 +57,7 @@ var pinnedTableFiles = map[string]censusPin{
 		"not a reader: natural key map; the newest-row source leaves out a retired day (live-row filter)"},
 	"internal/queryapi/analytics/validate.go": {"0b0cfd182fad9799e865319ce2f57a98498db8f99fcc99e3273c6c985fc001b1",
 		"not a reader: routes a measure to the table, the column rule lives elsewhere"},
-	"internal/queryapi/testopspooled/testopspooled.go": {"6533c0cc8a82e3b6a7579b2172427ca567cbf5a75206b14fc3766052832d5946",
+	"internal/queryapi/testopspooled/testopspooled.go": {"434c50e883a8cd22f31e45594440a4baea22a72d6808ff95c0ecb38fce6e292d",
 		"not a reader of pass_rate: the pooled sources read stored duration samples or raw rows; the live gate leaves a retired day out of both arms (CHAOS-14595 re-pin: the suite raw arm's legacy set leaves a retired day out; no pass-rate read changed)"},
 	"internal/queryapi/testopswindow/testopswindow.go": {"aacdf47f6643676d86e5e0261e2fca40da5e61e3b9c440661c9c5cd856d727c6",
 		"reader rule applied: newest-row subquery then the live-row filter, the outer query names the case counts and the report completeness counts (re-pin: only the repository filter of repoIds changed, no reader rule)"},

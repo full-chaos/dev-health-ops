@@ -982,7 +982,7 @@ internal/queryapi/home/queries_metrics.go|fetchRateDriverDelta|*string,**float64
 internal/queryapi/home/queries_signals.go|fetchRiskSignals|*string,*string,**float64,*string,*time.Time,**float64|06cb489933a0|not-describable
 internal/queryapi/home/queries_sync.go|FetchLatestSuccessfulSyncAt|**time.Time|9dfe899f0474|statement-not-static
 internal/queryapi/home/repolinked.go|readBasis|*string,*string,*uint8|ed45fd9e4470|spliced-select-list
-internal/queryapi/hotspots/hotspots.go|queryHotspotRows|*string,*string,*uint64,*uint32,*uint32,*float64,**float64,*float64|448efde8f6df|not-describable
+internal/queryapi/hotspots/hotspots.go|queryHotspotRows|*string,*string,*uint64,*uint32,*uint32,*float64,**float64,*float64|bbafe7980bce|not-describable
 internal/queryapi/investment/qualitystats.go|FetchInvestmentQualityStats|*uint64,*uint64,*float64,*float64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64|fa80d64b4a5b|not-describable
 internal/queryapi/investment/sunburst.go|FetchInvestmentSunburst|*string,*string,*string,*float64|9c36b6f1ad4c|spliced-select-list
 internal/queryapi/investmentexplain/reader.go|FetchInvestmentBreakdown|*string,*string,*float64|2283428d08a0|spliced-select-list

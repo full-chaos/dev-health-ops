@@ -100,6 +100,7 @@ func TestClassifyLookupFailurePermanentNeedsAnAnswered4xx(t *testing.T) {
 		{"answered 400", &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: http.StatusBadRequest}, lookupRecorded, "bad_request"},
 		{"answered 410", &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: http.StatusGone}, lookupRecorded, "other_4xx"},
 		{"no response", &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, Reason: providerfoundation.TransportReasonEgressRefused}, lookupFails, ""},
+		{"non-standard status 600", &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: 600}, lookupFails, ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if verdict, reason := classifyLookupFailure(test.err, nil); verdict != test.verdict || reason != test.reason {

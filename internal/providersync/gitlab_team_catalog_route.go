@@ -385,6 +385,12 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 				if ref.Strict {
 					return GitLabTeamCatalogBatch{}, memberErr
 				}
+				if isClassifiedRateLimit(memberErr) {
+					// A rate limit says nothing about this group's roster: end the walk before any catalog write so the
+					// caller can snooze and read the catalog again, as the GitHub catalog does. Every other class keeps
+					// the skip.
+					return GitLabTeamCatalogBatch{}, memberErr
+				}
 				evidence.SkippedTeamMemberships++
 				// TeamCatalogResult has no field for a partial outcome: a
 				// structured log line is the signal.

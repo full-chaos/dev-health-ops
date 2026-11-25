@@ -113,7 +113,7 @@ func TestOracleStripsOnlyDayFromImpactDaily(t *testing.T) {
 		rows, _ := c.Expected["daily"].([]any)
 		for _, r := range rows {
 			m, _ := r.(map[string]any)
-			if _, ok := m["day"]; ok && c.Fn == "resolve_ai_impact_summary" {
+			if _, ok := m["day"]; ok && (c.Fn == "resolve_ai_impact_summary" || c.Fn == "resolve_ai_review_load") {
 				t.Fatalf("case %s: the recorded Python answer has daily[].day; it is not Go-only", c.Name)
 			}
 		}

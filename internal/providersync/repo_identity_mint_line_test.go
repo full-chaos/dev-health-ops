@@ -16,7 +16,7 @@ import (
 // that feeds a mixed-case name without lowering it must differ from repositoryIdentity.
 const repoIdentityMintLineSHA256 = "df258190e8963109d225625f87d156a8083d1914be58e090d44f8bb5483fd2dc"
 
-const repoIdentityMintLine = ``
+const repoIdentityMintLine = `/usr/bin/shasum -a 256 | /usr/bin/cut -c1-32 | /usr/bin/sed -E 's/^(.{8})(.{4})(.{4})(.{4})(.{12})$/\1-\2-\3-\4-\5/'`
 
 const repoIdentityMintLineOpenSSL = `/usr/bin/openssl dgst -sha256 -r | /usr/bin/cut -c1-32 | /usr/bin/sed -E 's/^(.{8})(.{4})(.{4})(.{4})(.{12})$/\1-\2-\3-\4-\5/'`
 

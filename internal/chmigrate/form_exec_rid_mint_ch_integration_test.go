@@ -28,7 +28,37 @@ import (
 // expected name, per cut.
 const formExecRidMintCHSHA256 = "ecb152872603328d0f027faa28071e0659e62df0f7feab4c0187bdbbfc591ebb"
 
-const formExecRidMintCHSQL = ``
+const formExecRidMintCHSQL = `
+-- stmtR
+SELECT count() AS replicas FROM clusterAllReplicas('default', system.one);
+
+-- RID
+--
+--
+--
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('repos')) > 1000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('repos')) > 4294967296,
+    'STOP-COST-GATE')) AS cost_gate
+SELECT cut,
+       count()                                     AS rows,
+       countIf(toString(id) = minted)              AS stored_eq_minted,
+       countIf(startsWith(minted, cut))            AS minted_has_cut,
+       countIf(lower(trimBoth(repo)) = want_name)  AS name_eq
+FROM (
+    SELECT id, repo, substring(toString(id), 1, 8) AS cut,
+           lower(hex(SHA256(lower(trimBoth(repo))))) AS h,
+           concat(substring(h, 1, 8), '-', substring(h, 9, 4), '-', substring(h, 13, 4), '-', substring(h, 17, 4), '-', substring(h, 21, 12)) AS minted,
+           if(cut = 'b28bc582', 'fx/rewalk-mint-b', 'fx/rewalk-mint-a') AS want_name
+    FROM repos FINAL
+    WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0 AND provider = 'github'
+      AND (startsWith(toString(id), 'b28bc582') OR startsWith(toString(id), 'b07e2a0b'))
+)
+WHERE cost_gate = 0
+GROUP BY cut
+ORDER BY cut
+LIMIT 4;
+`
 
 type formExecRidMintCHResult struct {
 	columns []string

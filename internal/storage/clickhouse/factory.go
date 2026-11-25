@@ -161,3 +161,22 @@ func (e RawCauseError) Resolved() []string { return slices.Clone(e.resolved) }
 func wrapConn(connection driver.Conn, batchWriteBound time.Duration) driver.Conn {
 	return newSpanConn(retryConn{detachedBatchConn{Conn: connection, bound: batchWriteBound}}, dbspan.NewEmitter(dbspan.SystemClickHouse, ""))
 }
+
+// ResolvedCredentials is the login and password the ClickHouse driver's own DSN
+// parser settles on for dsn, or nil when it refuses the DSN. A caller that
+// redacts an error text with a union of its own (the dho sync print paths) adds
+// them: the driver accepts DSN forms net/url does not, so the credentials of such
+// a DSN are in no other part of the union.
+func ResolvedCredentials(dsn string) []string {
+	options, err := clickhouse.ParseDSN(dsn)
+	if err != nil {
+		return nil
+	}
+	var values []string
+	for _, value := range []string{options.Auth.Username, options.Auth.Password} {
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}

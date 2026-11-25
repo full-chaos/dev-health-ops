@@ -955,7 +955,7 @@ internal/queryapi/analytics/timeseries.go|ExecuteOrgTimeseries|**time.Time,**flo
 internal/queryapi/analytics/timeseries.go|ExecuteTimeseries|**time.Time,**string,**float64|d06318794cbb|statement-not-static
 internal/queryapi/capacityforecast/clickhouse.go|loadBacklog|*uint64,*uint64,*uint64,*time.Time|0122f460e38c|spliced-select-list
 internal/queryapi/capacityforecast/clickhouse.go|loadThroughput|*time.Time,*uint64|364edc17515f|not-describable
-internal/queryapi/cognitiveload/cognitiveload.go|fetchOwnershipCandidates|*string,*string,*uint8,*uint16|3dde681a6e0f|spliced-select-list
+internal/queryapi/cognitiveload/cognitiveload.go|fetchOwnershipCandidates|*string,*string,*uint8,*uint16|8fef6d5c5d9b|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchFileTimeseries|*time.Time,*string,*string,**uint32,**float64,**uint32,**uint32|69bcb13af3df|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchRepoTimeseries|*time.Time,*string,**uint64,**uint64,**float64,**uint64,**uint64|2d500256c88b|spliced-select-list
 internal/queryapi/compoundingrisk/read.go|latestDay|**time.Time|8f7b3f43c903|not-describable

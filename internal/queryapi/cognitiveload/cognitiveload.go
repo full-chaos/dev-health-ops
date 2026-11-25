@@ -768,6 +768,7 @@ var developerAuthorDaysQuery = `
               AND day >= {since_date:Date}
               AND day <= {until_date:Date}
             GROUP BY day
+            HAVING ` + liverow.NewestPredicate("team_cognitive_load_daily", "") + `
         )
         WHERE authors > 0
         ORDER BY developer_author_day`

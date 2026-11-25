@@ -202,7 +202,7 @@ type goldenClient struct {
 }
 
 func (c *goldenClient) Query(_ context.Context, statement string, bindings []clickhouse.Binding) (clickhouse.RowScanner, error) {
-	if strings.Contains(statement, "AS measured_teams") || strings.Contains(statement, "AS no_measured_row") || strings.Contains(statement, "AS no_measured_load_day") || strings.Contains(statement, "AS no_live_user_day") {
+	if strings.Contains(statement, "AS measured_teams") || strings.Contains(statement, "AS no_measured_row") || strings.Contains(statement, "AS no_measured_load_day") || strings.Contains(statement, "AS developer_author_day") || strings.Contains(statement, "AS no_live_user_day") {
 		// The four reads of the days that hold retraction rows only are
 		// Go-only (the Python reference has no such read) and are kept out of
 		// the pinned query sequence. The golden inputs hold no retraction

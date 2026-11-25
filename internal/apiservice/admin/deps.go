@@ -220,6 +220,8 @@ type handlers struct {
 	decryptor providerfoundation.FernetDecryptor
 	pagerDuty providerfoundation.PagerDutyRevokeConfig
 	httpDoer  providerfoundation.HTTPDoer
+	// pagerDutySleep replaces the PagerDuty services call's retry wait in tests; nil sleeps on a timer.
+	pagerDutySleep func(context.Context, time.Duration) error
 	// upstreamDoer is Deps.HTTPDoer as given: nil means the PagerDuty
 	// callback and credential-validation calls build their own client with
 	// the reference's timeout and redirect policy, which the defaulted

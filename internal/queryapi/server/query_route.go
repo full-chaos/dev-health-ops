@@ -214,7 +214,36 @@ const registeredReviewEdgesV1Document = `query ReviewEdges($input: ReviewEdgesIn
 // `CognitiveLoadInput!` -- same single-input-object shape as
 // registeredReviewEdgesDocument above, not featureFlags's individual
 // scalar args).
+//
+// The `developerState` selection (after `reviewRequestLoad`, CHAOS-14628) is NOT from the web file until the web
+// change that selects it lands; it is in the form urql prints. The previous text is
+// registeredCognitiveLoadV1Document.
 const registeredCognitiveLoadDocument = `query CognitiveLoad($input: CognitiveLoadInput!) {
+  cognitiveLoad(input: $input) {
+    orgId
+    teamId
+    totalDays
+    signals {
+      day
+      prInterruptionLoad
+      contextSpreadCount
+      reviewRequestLoad
+      developerState
+      afterHoursCommitRatio
+      weekendCommitRatio
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredCognitiveLoadV1Document is the text cognitiveLoad accepted BEFORE it asked which developer state a signal
+// has (developerState, CHAOS-14628): the text CHAOS-4369 Wave 3 registered, byte for byte from web's
+// COGNITIVE_LOAD_QUERY and the document acr's catalogue carries. It stays a legacy text (see legacyDigestsByOperation)
+// so a web or acr build still sending it keeps working while the new clients roll out; the operation's ONE current
+// document is registeredCognitiveLoadDocument above. Wire form, same provenance:
+// testdata/wire_form/cognitiveLoad.v1.graphql.
+const registeredCognitiveLoadV1Document = `query CognitiveLoad($input: CognitiveLoadInput!) {
   cognitiveLoad(input: $input) {
     orgId
     teamId
@@ -7790,6 +7819,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"aiWorkflowDrilldown":   {digestHex(registeredAiWorkflowDrilldownV1Document)},
 	"capacityForecast":      {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document), digestHex(registeredCapacityForecastV3Document)},
 	"capacityForecasts":     {digestHex(registeredCapacityForecastsV1Document)},
+	"cognitiveLoad":         {digestHex(registeredCognitiveLoadV1Document)},
 	"compoundingRisk":       {digestHex(registeredCompoundingRiskV1Document)},
 	"coverageScopeBaseline": {digestHex(registeredCoverageScopeBaselineV1Document)},
 	"hotspots":              {digestHex(registeredHotspotsV1Document)},

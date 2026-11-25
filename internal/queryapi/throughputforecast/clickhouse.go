@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/newestrow"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -588,17 +589,15 @@ func loadEstimateCoverage(
 
 // loadReviewOverlay ports _load_review_overlay.
 //
-// Org-scoped only: it carries NO team or work-scope predicate, because
-// repo_metrics_daily has neither column. Review latency is therefore an
-// org-wide signal even on a single-team forecast -- Python's behaviour, and
-// visible in the output as a team-scoped forecast whose review overlay does not
-// change when the team does.
+// repo_metrics_daily has no team or work-scope column, so a team scope reads the repositories the teams own
+// (overlayTeamClause); no team reads the org. A work scope does not narrow it: no work scope maps to repositories.
 // pr_first_review_p50_hours is Nullable(Float64) on repo_metrics_daily;
 // tuple-wrapped so argMax cannot skip the newest row when it carries
 // NULL.
 func loadReviewOverlay(
-	ctx context.Context, client QueryClient, orgID string, historyWeeks int, today time.Time,
+	ctx context.Context, client QueryClient, orgID string, teamIDs []string, historyWeeks int, today time.Time,
 ) (overlayRead, error) {
+	teamClause, teamBindings := overlayTeamClause(orgID, teamIDs, today)
 	query := `
         SELECT avg(pr_first_review_p50_hours) AS review_latency_hours, count() AS measured_rows
         FROM (
@@ -612,16 +611,16 @@ func loadReviewOverlay(
                 picked.1 AS pr_first_review_p50_hours,
                 picked.2 AS retracted
             FROM repo_metrics_daily
-            WHERE day >= {start_date:Date} AND org_id = {org_id:String}
+            WHERE day >= {start_date:Date} AND org_id = {org_id:String}` + teamClause + `
             GROUP BY repo_id, day
         ) AS newest
         WHERE pr_first_review_p50_hours IS NOT NULL
           AND ` + liverow.Predicate("repo_metrics_daily", "newest") + `
     `
-	bindings := []clickhouse.Binding{
+	bindings := append([]clickhouse.Binding{
 		{Name: "start_date", Value: startDate(today, historyWeeks)},
 		{Name: "org_id", Value: orgID},
-	}
+	}, teamBindings...)
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -742,17 +741,29 @@ func loadBacklog(
 	return read, nil
 }
 
+// overlayTeamClause is the team scope of the review and incident overlays: the repositories the teams own as of today
+// (teamscope.RepoCondition, team_repo_ownership). No team, or only blank team ids, is the org: an empty clause and no
+// binding, so the statement is the org statement byte for byte.
+func overlayTeamClause(orgID string, teamIDs []string, today time.Time) (string, []clickhouse.Binding) {
+	condition, bindings := teamscope.RepoCondition(orgID, "toString(repo_id)", teamIDs, today.UTC())
+	if condition == "" {
+		return "", nil
+	}
+	return "\n              AND " + condition, bindings
+}
+
 // loadIncidentOverlay ports _load_incident_overlay.
 //
 // The division is done IN ClickHouse, by the same expression Python sends, so
 // the rate is computed once and identically on both sides -- and greatest(...,
 // 1) is what stops a same-day window from dividing by zero.
 //
-// Org-scoped only, like the review overlay: incident_metrics_daily has no team
+// A team scope reads the repositories the teams own, as the review overlay does: incident_metrics_daily has no team
 // column.
 func loadIncidentOverlay(
-	ctx context.Context, client QueryClient, orgID string, historyWeeks int, today time.Time,
+	ctx context.Context, client QueryClient, orgID string, teamIDs []string, historyWeeks int, today time.Time,
 ) (overlayRead, error) {
+	teamClause, teamBindings := overlayTeamClause(orgID, teamIDs, today)
 	query := `
         SELECT
             sum(incidents_count) / greatest(dateDiff('week', {start_date:Date}, today()), 1) AS incident_count,
@@ -768,15 +779,15 @@ func loadIncidentOverlay(
                 picked.1 AS incidents_count,
                 picked.2 AS retracted
             FROM incident_metrics_daily
-            WHERE day >= {start_date:Date} AND org_id = {org_id:String}
+            WHERE day >= {start_date:Date} AND org_id = {org_id:String}` + teamClause + `
             GROUP BY repo_id, day
         ) AS newest
         WHERE ` + liverow.Predicate("incident_metrics_daily", "newest") + `
     `
-	bindings := []clickhouse.Binding{
+	bindings := append([]clickhouse.Binding{
 		{Name: "start_date", Value: startDate(today, historyWeeks)},
 		{Name: "org_id", Value: orgID},
-	}
+	}, teamBindings...)
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {

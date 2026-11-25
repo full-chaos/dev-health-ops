@@ -85,7 +85,13 @@ func prepareDiscoveryCredential(ctx context.Context, provider string, credential
 	return credential, nil
 }
 
+// keyPathRefusal is the one answer to a credential that names a key path, whatever that path is.
+const keyPathRefusal = "private_key_path is not supported: send the key as private_key"
+
 func prepareGitHubDiscovery(ctx context.Context, credential providerfoundation.Credential) (providerfoundation.Credential, error) {
+	if path, ok := credential.Secret("private_key_path"); ok && path.Configured() {
+		return providerfoundation.Credential{}, &discoveryStatusError{http.StatusBadRequest, keyPathRefusal}
+	}
 	if providerfoundation.ValidateCredentialShape(credential) != nil {
 		return providerfoundation.Credential{}, &discoveryStatusError{http.StatusBadRequest,
 			"GitHub credentials require either token or app_id + private_key + installation_id"}

@@ -311,10 +311,51 @@ var credentialKeyMap = map[string]map[string]string{
 	"atlassian": {"apiToken": "api_token", "cloudId": "cloud_id"},
 }
 
+// keyPathRefusal is the one answer to a credential that names a key path, whatever that path is.
+const keyPathRefusal = "private_key_path is not supported: send the key as private_key"
+
+// namesKeyPath reports a truthy key path in either spelling.
+func namesKeyPath(credentials *pyjson.Object) bool {
+	if credentials == nil {
+		return false
+	}
+	for _, key := range []string{"private_key_path", "privateKeyPath"} {
+		if value, ok := credentials.Get(key); ok && truthy(value) {
+			return true
+		}
+	}
+	return false
+}
+
+// withoutFalsyKeyPath drops a key-path field of either spelling whose value is falsy: a truthy one is refused before a
+// write, and nothing reads a falsy one, so no key-path field is stored.
+func withoutFalsyKeyPath(credentials *pyjson.Object) *pyjson.Object {
+	drop := false
+	for _, key := range []string{"private_key_path", "privateKeyPath"} {
+		if value, ok := credentials.Get(key); ok && !truthy(value) {
+			drop = true
+		}
+	}
+	if !drop {
+		return credentials
+	}
+	out := pyjson.NewObject()
+	for _, key := range credentials.Keys() {
+		value, _ := credentials.Get(key)
+		if (key == "private_key_path" || key == "privateKeyPath") && !truthy(value) {
+			continue
+		}
+		out.Set(key, value)
+	}
+	return out
+}
+
 // normalizeCredentialKeys is _normalize_credential_keys: camelCase keys of
 // the provider's map become snake_case, in the dict's own order (a later
-// duplicate overwrites the value and keeps the first position).
+// duplicate overwrites the value and keeps the first position). A falsy
+// key-path field is dropped first (withoutFalsyKeyPath).
 func normalizeCredentialKeys(provider string, credentials *pyjson.Object) *pyjson.Object {
+	credentials = withoutFalsyKeyPath(credentials)
 	keyMap := credentialKeyMap[pythonparity.Lower(provider)]
 	if len(keyMap) == 0 {
 		return credentials
@@ -376,6 +417,10 @@ func (h handlers) create(w http.ResponseWriter, r *http.Request) {
 			policy.WriteDetail(w, http.StatusBadRequest, detail, nil)
 			return
 		}
+	}
+	if namesKeyPath(credentials) {
+		policy.WriteDetail(w, http.StatusBadRequest, keyPathRefusal, nil)
+		return
 	}
 	var configArg *pyjson.Object
 	if hasConfig {
@@ -506,6 +551,10 @@ func (h handlers) update(w http.ResponseWriter, r *http.Request) {
 			policy.WriteDetail(w, http.StatusBadRequest, detail, nil)
 			return
 		}
+	}
+	if hasCredentials && namesKeyPath(credentials) {
+		policy.WriteDetail(w, http.StatusBadRequest, keyPathRefusal, nil)
+		return
 	}
 	ctx := r.Context()
 	orgID := orgIDOf(ctx)

@@ -13,13 +13,21 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/google/uuid"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/network"
+	"github.com/testcontainers/testcontainers-go/wait"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/chclient"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
@@ -728,64 +736,137 @@ FROM numbers(%d)`, big, org, history))
 		t.Errorf("MUTANT stmt0h no dimension term: the sync statement is still not counted")
 	}
 
-	// 2-REPLICA STAND-IN: cluster 'default' read as the SAME server twice (remote('127.0.0.{1,2}', ..), the server's own loopback). It proves
-	// the N grouping (one replica tag, one_rows 2) and the cost scaling (every count and the gate window count double); it does not prove
-	// routing to a second machine.
-	dsnOpts, err := stdclickhouse.ParseDSN(e.uri)
-	if err != nil {
+	// 2-REPLICA ARM: 2 ClickHouse servers chr1 / chr2 on one docker network, each with cluster 'default' = {chr1, chr2}. The form text runs
+	// as is on chr1 (clusterAllReplicas reaches chr2 over the network): it proves N = 2, one replica_tag per server, the totals over both
+	// replicas, remote routing, the org rule on both, and the gate's cost scaling (the window count is the total over both replicas).
+	r1, r2 := rbpoolStartReplicas(t, e.ctx)
+	conns := map[string]stdclickhouse.Conn{"r1": r1, "r2": r2}
+	tags := map[string]string{}
+	for name, c := range conns {
+		var tag uint64
+		if err := c.QueryRow(e.ctx, "SELECT cityHash64(hostName()) % 1000000").Scan(&tag); err != nil {
+			t.Fatal(err)
+		}
+		tags[name] = fmt.Sprint(tag)
+		for i := 0; i < 3; i++ {
+			if err := c.Exec(e.ctx, "SELECT 1"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if tags["r1"] == tags["r2"] {
+		t.Fatalf("2-REPLICA: both servers have replica_tag %s", tags["r1"])
+	}
+	if err := r1.Exec(e.ctx, "SELECT sleep(1.1)"); err != nil {
 		t.Fatal(err)
 	}
-	twice := func(text string) string {
-		for _, tbl := range []string{"system.query_log", "system.parts", "system.one"} {
-			text = strings.ReplaceAll(text, "clusterAllReplicas('default', "+tbl+")", fmt.Sprintf("remote('127.0.0.{1,2}', %s, '%s', '%s')", tbl, dsnOpts.Auth.Username, dsnOpts.Auth.Password))
-		}
-		if strings.Contains(text, "clusterAllReplicas") {
-			t.Fatal("twice: a clusterAllReplicas read is left")
-		}
-		return text
+	var rStart, rTok string
+	if err := r1.QueryRow(e.ctx, "SELECT toString(now(), 'UTC'), toString(now() + INTERVAL 6 HOUR, 'UTC')").Scan(&rStart, &rTok); err != nil {
+		t.Fatal(err)
 	}
-	if got, _, err := rbpoolRows(e.ctx, e.admin, twice(byLabel["stmtR"])); err != nil || len(got) != 1 || got[0]["one_rows"] != "2" || got[0]["replica_tag"] != strings.Join(stmtRHosts, ",") {
-		t.Errorf("TWICE stmtR: err %v rows %v, want 1 replica_tag row (the one host) with one_rows 2 (N = 2)", err, got)
-	} else {
-		t.Logf("TWICE stmtR: 1 replica_tag, one_rows 2 (N = 2)")
+	// The served-statement shapes, written straight to each server's query_log (no schema there): a pooled suite read that finishes, one
+	// refused with 158 (6M rows > 5M), and an analytics control statement; each holds the test org value in its text.
+	shapes := map[string]string{
+		"pass": "SELECT count() FROM (SELECT number FROM numbers(10)) AS testops_suite_runs WHERE '" + org + "' != '' SETTINGS max_execution_time = 30, max_rows_to_read = 5000000, read_overflow_mode = 'throw'",
+		"fail": "SELECT count() FROM (SELECT number FROM numbers(6000000)) AS testops_suite_runs WHERE '" + org + "' != '' SETTINGS max_execution_time = 30, max_rows_to_read = 5000000, read_overflow_mode = 'throw'",
+		"ctrl": "SELECT 1 AS dimension_value, '" + org + "' AS org SETTINGS max_execution_time = 30",
 	}
-	single := headOf("SINGLE stmtT", byLabel["stmtT"])
-	if got, _, err := rbpoolRows(e.ctx, e.admin, twice(byLabel["stmtT"])); err != nil || len(got) != 1 {
-		t.Errorf("TWICE stmtT: err %v rows %v, want 1 row", err, got)
-	} else {
-		var kp1, h1, kp2, h2 uint64
-		fmt.Sscan(single["head_rows_kp"], &kp1)
-		fmt.Sscan(single["head_rows_h"], &h1)
-		fmt.Sscan(got[0]["head_rows_kp"], &kp2)
-		fmt.Sscan(got[0]["head_rows_h"], &h2)
-		if kp1 == 0 || kp2 != 2*kp1 || h2 != 2*h1 {
-			t.Errorf("TWICE stmtT: %v vs single %v, want each head doubled", got[0], single)
-		} else {
-			t.Logf("TWICE stmtT: head_rows_kp %d = 2 x %d, head_rows_h %d = 2 x %d", kp2, kp1, h2, h1)
+	for name, c := range conns {
+		for shape, q := range shapes {
+			id := "rbpool-2r-" + name + "-" + shape + "-" + uuid.NewString()[:8]
+			ids[name+shape] = id
+			err := c.Exec(stdclickhouse.Context(e.ctx, stdclickhouse.WithQueryID(id)), q)
+			var ex *stdclickhouse.Exception
+			if shape == "fail" {
+				if !errors.As(err, &ex) || ex.Code != 158 {
+					t.Fatalf("2-REPLICA %s %s: err %v, want code 158", name, shape, err)
+				}
+			} else if err != nil {
+				t.Fatalf("2-REPLICA %s %s: %v", name, shape, err)
+			}
 		}
 	}
-	exact2 := one("TWICE EXACT stored", twice(only(byLabel["stmt0"], "stored")))
-	check("TWICE EXACT stored", exact2, want{analytics: 2 * stored.analytics, finished: 2 * stored.finished, failed: 2 * stored.failed, failed158: 2 * stored.failed158, maxRead: stored.maxRead})
-	if exact2["org_ids"] != "1" || exact2["replicas_with_rows"] != "1" {
-		t.Errorf("TWICE EXACT stored: org_ids %s replicas_with_rows %s, want 1 / 1 (one org, one host)", exact2["org_ids"], exact2["replicas_with_rows"])
+	for _, c := range conns {
+		if err := c.Exec(e.ctx, "SYSTEM FLUSH LOGS"); err != nil {
+			t.Fatal(err)
+		}
 	}
-	exactL2 := one("TWICE EXACT legacy", twice(only(byLabel["stmt0"], "legacy")))
-	check("TWICE EXACT legacy", exactL2, want{analytics: 2 * legacy.analytics, finished: 2 * legacy.finished, failed: 2 * legacy.failed, failed158: 2 * legacy.failed158})
-	// The cost scaling of the gate: the stmtT window cap set to the single-copy window count W (here both stmtT windows are the same 10 min,
-	// so W = head_rows_kp): the single read passes (W > W is false); the twice read counts 2 W > W and fires.
-	capped := strings.Replace(byLabel["stmtT"], "> 9000000,", "> "+single["head_rows_kp"]+",", 1)
-	if _, _, err := rbpoolRows(e.ctx, e.admin, capped); err != nil {
-		t.Errorf("CAP-W stmtT single: err %v, want a pass (W > W is false)", err)
+	if err := r1.Exec(e.ctx, "SELECT sleep(1.1)"); err != nil {
+		t.Fatal(err)
+	}
+	rRows := func(label, text string) []map[string]string {
+		t.Helper()
+		got, _, err := rbpoolRows(e.ctx, r1, text)
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		t.Logf("%s ROWS %v", label, got)
+		return got
+	}
+	byTag := func(rows []map[string]string) map[string]map[string]string {
+		m := map[string]map[string]string{}
+		for _, r := range rows {
+			m[r["replica_tag"]] = r
+		}
+		return m
+	}
+	f2 := func(l string) string { return fill(raw[l], rStart, rTok) }
+	if got := byTag(rRows("2-REPLICA stmtR", f2("stmtR"))); len(got) != 2 || got[tags["r1"]]["one_rows"] != "1" || got[tags["r2"]]["one_rows"] != "1" {
+		t.Errorf("2-REPLICA stmtR: %v, want 2 rows (the 2 server tags %v), one_rows 1 each (N = 2)", got, tags)
+	}
+	if got := byTag(rRows("2-REPLICA S0", f2("S0"))); len(got) != 2 || got[tags["r1"]]["head_day_kept"] != "1" || got[tags["r2"]]["head_day_kept"] != "1" {
+		t.Errorf("2-REPLICA S0: %v, want 1 row per server tag, head_day_kept 1", got)
+	}
+	headWant := map[string]uint64{}
+	var wTotal uint64
+	for name, c := range conns {
+		var n uint64
+		if err := c.QueryRow(e.ctx, "SELECT count() FROM system.query_log WHERE event_date >= toDate(toDateTime(?, 'UTC')) - 1 AND event_time >= toDateTime(?, 'UTC') - INTERVAL 10 MINUTE AND event_time < toDateTime(?, 'UTC')", rStart, rStart, rStart).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		headWant[tags[name]] = n
+		wTotal += n
+	}
+	if got := byTag(rRows("2-REPLICA stmtT", f2("stmtT"))); len(got) != 2 {
+		t.Errorf("2-REPLICA stmtT: %v, want 1 row per server tag", got)
 	} else {
-		t.Logf("CAP-W stmtT single (cap %s): passes", single["head_rows_kp"])
+		for tag, n := range headWant {
+			if n == 0 || got[tag]["head_rows_kp"] != fmt.Sprint(n) || got[tag]["head_rows_h"] != fmt.Sprint(n) {
+				t.Errorf("2-REPLICA stmtT tag %s: %v, want both heads = that server's own count %d (> 0)", tag, got[tag], n)
+			}
+		}
 	}
-	{
-		_, _, err := rbpoolRows(e.ctx, e.admin, twice(capped))
+	two := rRows("2-REPLICA EXACT stmt0", only(f2("stmt0"), "r1pass", "r1fail", "r1ctrl", "r2pass", "r2fail", "r2ctrl"))
+	if len(two) != 1 || two[0]["finished"] != "2" || two[0]["failed"] != "2" || two[0]["failed_158"] != "2" || two[0]["analytics_finished"] != "2" ||
+		two[0]["org_ids"] != "1" || two[0]["replicas_with_rows"] != "2" {
+		t.Errorf("2-REPLICA EXACT stmt0: %v, want finished 2, failed 2, failed_158 2, analytics_finished 2, org_ids 1, replicas_with_rows 2", two)
+	}
+	if got := rRows("2-REPLICA MUTANT org rule stmt0", only(fillOrg(raw["stmt0"], rStart, rTok, "e0e0e0e0"), "r1pass", "r1fail", "r1ctrl", "r2pass", "r2fail", "r2ctrl")); len(got) != 1 || got[0]["finished"] != "0" || got[0]["failed"] != "0" || got[0]["analytics_finished"] != "0" || got[0]["org_ids"] != "0" {
+		t.Errorf("2-REPLICA MUTANT org rule stmt0: %v, want all 0", got)
+	}
+	twoH := rRows("2-REPLICA EXACT stmt0h", only(f2("stmt0h"), "r1ctrl", "r2ctrl"))
+	if len(twoH) != 1 || twoH[0]["analytics_finished_6h"] != "2" || twoH[0]["org_ids_6h"] != "1" || twoH[0]["replicas_with_rows"] != "2" {
+		t.Errorf("2-REPLICA EXACT stmt0h: %v, want analytics_finished_6h 2, org_ids_6h 1, replicas_with_rows 2", twoH)
+	}
+	// The gate counts the window over BOTH replicas: cap = the total W passes, cap = W - 1 fires, cap = the larger single-server count fires.
+	var wMax uint64
+	for _, n := range headWant {
+		if n > wMax {
+			wMax = n
+		}
+	}
+	for _, cc := range []struct {
+		label string
+		capN  uint64
+		fire  bool
+	}{{"total W", wTotal, false}, {"total W - 1", wTotal - 1, true}, {"one server's W", wMax, true}} {
+		_, _, err := rbpoolRows(e.ctx, r1, strings.Replace(f2("stmtT"), "> 9000000,", fmt.Sprintf("> %d,", cc.capN), 1))
 		var ex *stdclickhouse.Exception
-		if err == nil || !errors.As(err, &ex) || ex.Code != 395 {
-			t.Errorf("CAP-W stmtT twice: err %v, want code 395 (the gate counts both replicas: 2 W > W)", err)
+		fired := err != nil && errors.As(err, &ex) && ex.Code == 395
+		if fired != cc.fire || (err != nil && !fired) {
+			t.Errorf("2-REPLICA CAP %s (%d of total %d): err %v, want fired = %v", cc.label, cc.capN, wTotal, err, cc.fire)
 		} else {
-			t.Logf("CAP-W stmtT twice (cap %s): fired code=%d", single["head_rows_kp"], ex.Code)
+			t.Logf("2-REPLICA CAP %s (%d of total %d): fired = %v", cc.label, cc.capN, wTotal, fired)
 		}
 	}
 
@@ -872,4 +953,80 @@ FROM numbers(%d)`, big, org, history))
 			t.Logf("GATE %s query_log types %v read_rows %d (Q + 2P + 1 = %d)", c, types, read, q+2*p+1)
 		}
 	}
+}
+
+// rbpoolClusterConfig lists both servers as the 2 replicas of cluster 'default' (the lane-form-14624 probe config form).
+const rbpoolClusterConfig = `<clickhouse>
+    <remote_servers>
+        <default replace="replace">
+            <shard>
+                <replica><host>chr1</host><port>9000</port><user>rbpool</user><password>rbpool-test-only-pw</password></replica>
+                <replica><host>chr2</host><port>9000</port><user>rbpool</user><password>rbpool-test-only-pw</password></replica>
+            </shard>
+        </default>
+    </remote_servers>
+</clickhouse>
+`
+
+// rbpoolStartReplicas starts 2 ClickHouse servers on one docker network, each with the 2-replica cluster 'default', and returns a
+// connection to each.
+func rbpoolStartReplicas(t *testing.T, ctx context.Context) (stdclickhouse.Conn, stdclickhouse.Conn) {
+	t.Helper()
+	nw, err := network.New(ctx)
+	if err != nil {
+		t.Fatalf("create docker network: %v", err)
+	}
+	t.Cleanup(func() { _ = nw.Remove(context.Background()) })
+	configPath := filepath.Join(t.TempDir(), "zz-rbpool-cluster.xml")
+	if err := os.WriteFile(configPath, []byte(rbpoolClusterConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var conns []stdclickhouse.Conn
+	for _, alias := range []string{"chr1", "chr2"} {
+		c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: testcontainers.ContainerRequest{
+			Image:          containers.ClickHouseImage,
+			ExposedPorts:   []string{"9000/tcp"},
+			Env:            map[string]string{"CLICKHOUSE_USER": "rbpool", "CLICKHOUSE_PASSWORD": "rbpool-test-only-pw", "CLICKHOUSE_DB": "default", "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT": "1"},
+			Networks:       []string{nw.Name},
+			NetworkAliases: map[string][]string{nw.Name: {alias}},
+			Files:          []testcontainers.ContainerFile{{HostFilePath: configPath, ContainerFilePath: "/etc/clickhouse-server/config.d/zz-rbpool-cluster.xml", FileMode: 0o644}},
+			WaitingFor:     wait.ForListeningPort("9000/tcp").WithStartupTimeout(2 * time.Minute),
+		}, Started: true})
+		if err != nil {
+			t.Fatalf("start %s: %v", alias, err)
+		}
+		t.Cleanup(func() { _ = c.Terminate(context.Background()) })
+		host, err := c.Host(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		port, err := c.MappedPort(ctx, "9000/tcp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn, err := stdclickhouse.Open(&stdclickhouse.Options{Addr: []string{host + ":" + port.Port()}, Auth: stdclickhouse.Auth{Database: "default", Username: "rbpool", Password: "rbpool-test-only-pw"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		deadline := time.Now().Add(90 * time.Second)
+		for {
+			if err = conn.Ping(ctx); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s not ready: %v", alias, err)
+			}
+			time.Sleep(time.Second)
+		}
+		conns = append(conns, conn)
+	}
+	// Both servers see the cluster: 2 replicas on each.
+	for i, c := range conns {
+		var n uint64
+		if err := c.QueryRow(ctx, "SELECT count() FROM system.clusters WHERE cluster = 'default'").Scan(&n); err != nil || n != 2 {
+			t.Fatalf("server %d: cluster 'default' has %d replicas (err %v), want 2", i+1, n, err)
+		}
+	}
+	return conns[0], conns[1]
 }

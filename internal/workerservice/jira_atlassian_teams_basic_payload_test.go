@@ -16,7 +16,7 @@ import (
 	"atlassian/atlassian"
 )
 
-// READ-AUTH-7046-2: the gateway can echo the Authorization header the leg sent, which holds
+// The gateway can echo the Authorization header the leg sent, which holds
 // base64(email:token) in no spelling of the token or the email. Every value is made up.
 func TestAtlassianLegErrorCarriesNoBasicPayloadWhenTheGatewayEchoesIt(t *testing.T) {
 	t.Logf("cell: TestAtlassianLegErrorCarriesNoBasicPayloadWhenTheGatewayEchoesIt")

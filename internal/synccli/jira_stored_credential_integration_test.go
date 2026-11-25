@@ -297,8 +297,8 @@ func TestResolveJiraStoredSettingsNamesTheFieldWhenResolutionFails(t *testing.T)
 	if !strings.Contains(err.Error(), "atlassian_organization_id") {
 		t.Errorf("error does not name the field: %v", err)
 	}
-	// Pin moved by the acp ruling READ-AUTH-7046-1 L3: the error is text only, so the cause is
-	// asserted by its text, and no credential spelling may be in it.
+	// The error is text only, so the cause is asserted by its text, and no credential spelling
+	// may be in it.
 	if !strings.Contains(err.Error(), atlassianteams.ErrOrganizationPermission.Error()) {
 		t.Errorf("error does not carry the permission text: %v", err)
 	}

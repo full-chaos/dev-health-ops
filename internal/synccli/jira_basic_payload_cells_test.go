@@ -12,7 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
-// Cells owed by READ-AUTH-7046-2. Every value is made up.
+// Cells for the Basic payload and the effective pair. Every value is made up.
 
 func basicPayloads(email, token string) []string {
 	raw := []byte(email + ":" + token)

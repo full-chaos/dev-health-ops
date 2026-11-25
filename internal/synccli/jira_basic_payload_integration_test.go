@@ -22,7 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// READ-AUTH-7046-2 cells that need the stored credential row. Every value is made up.
+// Cells that need the stored credential row. Every value is made up.
 
 type messageResolver struct{ message string }
 

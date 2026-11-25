@@ -188,13 +188,12 @@ func AttributedPrs(ctx context.Context, client QueryClient, orgID string, dr mod
 	var teamIDs []string
 	useIDs := false
 	if sc.teamID != "" {
-		ids, ok := teamRepoIDs(ctx, client, orgID, sc.teamID, "aiAttributedPrs")
-		if ok && len(ids) == 0 {
+		team := teamRepos{}
+		team.ids, team.ok = teamRepoIDs(ctx, client, orgID, sc.teamID, "aiAttributedPrs")
+		if !team.held() {
 			return empty, nil
 		}
-		if ok {
-			teamIDs, useIDs = ids, true
-		}
+		teamIDs, useIDs = team.ids, true
 	}
 	raw, err := loadAttributedPRs(ctx, client, orgID, dr.StartDate.Time(), dr.EndDate.Time(), sc.repoID, teamIDs, useIDs, sc.workType, pageSize+1, pageOffset)
 	if err != nil {
@@ -300,13 +299,12 @@ func AttributionOverview(ctx context.Context, client QueryClient, orgID string, 
 	var teamIDs []string
 	useIDs := false
 	if sc.teamID != "" {
-		ids, ok := teamRepoIDs(ctx, client, orgID, sc.teamID, "aiAttributionOverview")
-		if ok && len(ids) == 0 {
+		team := teamRepos{}
+		team.ids, team.ok = teamRepoIDs(ctx, client, orgID, sc.teamID, "aiAttributionOverview")
+		if !team.held() {
 			return empty, nil
 		}
-		if ok {
-			teamIDs, useIDs = ids, true
-		}
+		teamIDs, useIDs = team.ids, true
 	}
 	start, end := dr.StartDate.Time(), dr.EndDate.Time()
 

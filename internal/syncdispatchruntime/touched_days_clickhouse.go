@@ -316,15 +316,18 @@ FROM (
 }
 
 // recordTouchedGitSQL appends one 'touched' event for each (day, repository)
-// that a commit or a pull request written at or after the given time belongs to
-// (CHAOS-9169). A late or old row marks its own day however far the day lies
+// that a commit, a pull request or a pull request review written at or after
+// the given time belongs to (CHAOS-9169, CHAOS-14673). A late or old row marks its own day however far the day lies
 // from the window of its sync: no window of the sync's units is needed.
 //
 // The days are the ones the daily run reads the rows under, not every date the
 // row carries: a commit is read by its committer date (repouser, wellbeing), a
 // pull request by its creation day and, when merged, its merge day. The author
 // date of a rebased commit is not one of them, and a day no run reads the row
-// under would only start a run that computes nothing new.
+// under would only start a run that computes nothing new. A review is read by
+// its own submission day, not by the day of its pull request: a review of day D
+// on an older open pull request marks D, and the pull request row re-written
+// with it marks only its own days.
 const recordTouchedGitSQL = `
 INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
 SELECT ?, day, repo_id, 'touched', fromUnixTimestamp64Milli(toInt64(?), 'UTC')
@@ -339,11 +342,15 @@ FROM (
            ]))) AS day
     FROM git_pull_requests
     WHERE org_id = ? AND last_synced >= fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+    UNION ALL
+    SELECT repo_id, toDate(submitted_at, 'UTC') AS day
+    FROM git_pull_request_reviews
+    WHERE org_id = ? AND last_synced >= fromUnixTimestamp64Milli(toInt64(?), 'UTC')
 )
 GROUP BY day, repo_id`
 
-// RecordTouchedGit appends the 'touched' events of the commits and pull
-// requests whose last_synced is at or after since. It returns the number of
+// RecordTouchedGit appends the 'touched' events of the commits, pull requests
+// and pull request reviews whose last_synced is at or after since. It returns the number of
 // keys it appended.
 func (store *ClickHouseTouchedDaysStore) RecordTouchedGit(
 	ctx context.Context, organizationID string, since time.Time,
@@ -358,6 +365,7 @@ func (store *ClickHouseTouchedDaysStore) RecordTouchedGit(
 	sinceMillis := since.UTC().UnixMilli()
 	if err := store.conn.Exec(ctx, recordTouchedGitSQL,
 		organizationID, at.UnixMilli(),
+		organizationID, sinceMillis,
 		organizationID, sinceMillis,
 		organizationID, sinceMillis,
 	); err != nil {

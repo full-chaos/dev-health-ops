@@ -186,3 +186,24 @@ func TestCredentialPatchRefusesPrivateKeyPath(t *testing.T) {
 		})
 	}
 }
+
+func TestKeyPathPredicateReadsTruthiness(t *testing.T) {
+	cases := map[string]bool{
+		`{"private_key_path":"/k.pem"}`: true,
+		`{"privateKeyPath":"/k.pem"}`:   true,
+		`{"private_key_path":1}`:        true,
+		`{"private_key_path":""}`:       false,
+		`{"private_key_path":null}`:     false,
+		`{"private_key_path":false}`:    false,
+		`{"private_key":"pem"}`:         false,
+		`{}`:                            false,
+	}
+	for text, want := range cases {
+		if got := namesKeyPath(decodeObject(t, text)); got != want {
+			t.Errorf("namesKeyPath(%s) = %v, want %v", text, got, want)
+		}
+	}
+	if namesKeyPath(nil) {
+		t.Error("namesKeyPath(nil) = true, want false")
+	}
+}

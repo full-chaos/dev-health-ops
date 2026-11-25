@@ -203,6 +203,10 @@ func (h handlers) testConnection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if namesKeyPath(creds) {
+		policy.WriteDetail(w, http.StatusBadRequest, keyPathRefusal, nil)
+		return
+	}
 
 	success, details, probeErr := h.probe(ctx, provider, creds)
 	if errors.Is(probeErr, errPagerDutyNotServed) {

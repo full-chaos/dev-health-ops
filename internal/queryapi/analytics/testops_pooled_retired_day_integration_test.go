@@ -152,90 +152,17 @@ VALUES (?, ?, ?, now() + INTERVAL 2 HOUR, 1, NULL, NULL)`, retiredDayOrg, day2, 
 	}
 }
 
-// CHAOS-14595 r1: a retraction row (retracted 1, marker at its default 0) and a live legacy row (marker 0, retracted 0) of ONE
-// repository-day at the SAME computed_at, in both insert orders, each row in its own part (merges stopped). The raw arm's
-// legacy set (LiveLegacyRepoDays) and the live gate (LiveRepoDays) must pick the day the same way, and the served value must
-// equal the value the source gives with the legacy set of the base (LegacyRepoDays).
-func TestTestopsPooledSuiteRetiredDayTiedWithALiveLegacyRow(t *testing.T) {
-	e := startOwnersEnv(t)
-	e.exec(`SYSTEM STOP MERGES testops_test_metrics_daily`)
-	live, legacy := testopspooled.LiveLegacyRepoDays("testops_test_metrics_daily"), testopspooled.LegacyRepoDays("testops_test_metrics_daily")
-	baseSource := strings.ReplaceAll(testopspooled.SuiteRunsSource, live, legacy)
-	if baseSource == testopspooled.SuiteRunsSource {
-		t.Fatal("the base source equals the head source: the legacy set was not replaced")
-	}
-	const tieAt = "2026-01-08 00:00:00"
-	liveRow := func(org, repo string) {
-		e.exec(`INSERT INTO testops_test_metrics_daily (repo_id, day, org_id, computed_at) VALUES (?, ?, ?, toDateTime(?, 'UTC'))`, repo, day1, org, tieAt)
-	}
-	retraction := func(org, repo string) {
-		e.exec(`INSERT INTO testops_test_metrics_daily (org_id, day, repo_id, computed_at, retracted, team_id, service_id)
-VALUES (?, ?, ?, toDateTime(?, 'UTC'), 1, NULL, NULL)`, org, day1, repo, tieAt)
-	}
-	for _, order := range []struct {
-		name   string
-		org    string
-		repo   string
-		insert func(org, repo string)
-	}{
-		{"live row then retraction", "f0f0f0f0-0000-4000-8000-0000001459f1", "f0f0f0f0-0000-4000-8000-0000001459c1", func(org, repo string) { liveRow(org, repo); retraction(org, repo) }},
-		{"retraction then live row", "f0f0f0f0-0000-4000-8000-0000001459f2", "f0f0f0f0-0000-4000-8000-0000001459c2", func(org, repo string) { retraction(org, repo); liveRow(org, repo) }},
-	} {
-		t.Run(order.name, func(t *testing.T) {
-			e.repo(order.org, order.repo, "acme/tie")
-			e.owner(order.org, "team-t", order.repo, "acme/tie", 1, openFrom(), nil)
-			e.durations(order.org, order.repo, day1, 10, 20, 30)
-			order.insert(order.org, order.repo)
-			params := []any{stdclickhouse.Named("org_id", order.org), stdclickhouse.Named("start_date", "2026-01-01"), stdclickhouse.Named("end_date", "2026-01-07")}
-			var rows uint64
-			if err := e.admin.QueryRow(e.ctx, `SELECT count() FROM testops_test_metrics_daily WHERE org_id = ? AND repo_id = ? AND day = ? AND computed_at = toDateTime(?, 'UTC')`,
-				order.org, order.repo, day1, tieAt).Scan(&rows); err != nil {
-				t.Fatal(err)
-			}
-			if rows != 2 {
-				t.Fatalf("control: %d stored rows of the day at the tie, want 2 (the retraction and the live row)", rows)
-			}
-			pick := func(query string) uint64 {
-				t.Helper()
-				var n uint64
-				if err := e.admin.QueryRow(e.ctx, query, params...).Scan(&n); err != nil {
-					t.Fatalf("%v\n%s", err, query)
-				}
-				return n
-			}
-			for read := 0; read < 5; read++ {
-				inLegacySet := pick(`SELECT count() FROM (` + live + `)`)
-				inLiveGate := pick(`SELECT count() FROM (SELECT DISTINCT repo_id, day FROM testops_test_metrics_daily
-				WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date}) WHERE ` + testopspooled.LiveRepoDays("testops_test_metrics_daily"))
-				var head, base *float64
-				if err := e.admin.QueryRow(e.ctx, "SELECT "+testopspooled.P95+" FROM "+testopspooled.SuiteRunsSource, params...).Scan(&head); err != nil {
-					t.Fatal(err)
-				}
-				if err := e.admin.QueryRow(e.ctx, "SELECT "+testopspooled.P95+" FROM "+baseSource, params...).Scan(&base); err != nil {
-					t.Fatal(err)
-				}
-				t.Logf("CELL14595 tie %s read %d: LiveLegacyRepoDays %d, LiveRepoDays %d; served p95 head %s, base %s", order.name, read, inLegacySet, inLiveGate, str(head), str(base))
-				if inLegacySet != inLiveGate {
-					t.Errorf("%s read %d: LiveLegacyRepoDays picks the day %d time(s), LiveRepoDays %d: the two picks differ on the tie", order.name, read, inLegacySet, inLiveGate)
-				}
-				if !same(head, base) {
-					t.Errorf("%s read %d: served p95 %s, the base legacy set serves %s", order.name, read, str(head), str(base))
-				}
-			}
-		})
-	}
-}
-
 // tieArm is one live row type tied with a retraction row of the same repository-day at one computed_at.
 type tieArm struct {
 	name    string
 	liveRow string // INSERT of the live row; args: repo, day, org, computed_at
 }
 
-// checkTieArmAgainstTheLiveGate pins the ruling for a same-second tie of a live row and a retraction row: the served value
-// follows the live gate's pick (argMax(retracted, computed_at)). A day the gate serves is read (raw arm or stored samples),
-// a day it retires is not read, and the served P95 and median equal the base legacy set's.
-func checkTieArmAgainstTheLiveGate(t *testing.T, arm tieArm, orgs, repos [2]string) {
+// checkTieArmAsAtBase pins the ruling for a same-second mixed tie of a live row and a retraction row of one repository-day:
+// the tie is ambiguous, so the day behaves as at base. The raw arm admits the day exactly when the base legacy set
+// (LegacyRepoDays) does, and the served P95 and median equal the base source's. The marker pick and the live gate's pick are
+// logged; at least one insert order must make them disagree, or the cell proves nothing.
+func checkTieArmAsAtBase(t *testing.T, arm tieArm, orgs, repos [2]string) {
 	e := startOwnersEnv(t)
 	e.exec(`SYSTEM STOP MERGES testops_test_metrics_daily`)
 	live, legacy := testopspooled.LiveLegacyRepoDays("testops_test_metrics_daily"), testopspooled.LegacyRepoDays("testops_test_metrics_daily")
@@ -249,11 +176,7 @@ func checkTieArmAgainstTheLiveGate(t *testing.T, arm tieArm, orgs, repos [2]stri
 		e.exec(`INSERT INTO testops_test_metrics_daily (org_id, day, repo_id, computed_at, retracted, team_id, service_id)
 VALUES (?, ?, ?, toDateTime(?, 'UTC'), 1, NULL, NULL)`, org, day1, repo, tieAt)
 	}
-	var wantP95, wantP50 float64
-	if err := e.admin.QueryRow(e.ctx, `SELECT quantileExactInclusive(0.95)(x), quantileExactInclusive(0.5)(x) FROM (SELECT arrayJoin([10., 20., 30.]) AS x)`).
-		Scan(&wantP95, &wantP50); err != nil {
-		t.Fatal(err)
-	}
+	disagreed := 0
 	for index, order := range []struct {
 		name   string
 		insert func(org, repo string)
@@ -284,16 +207,20 @@ VALUES (?, ?, ?, toDateTime(?, 'UTC'), 1, NULL, NULL)`, org, day1, repo, tieAt)
 				}
 				return n
 			}
-			var markerStored uint8
-			var markerRetracted uint8
+			var markerStored, markerRetracted uint8
 			if err := e.admin.QueryRow(e.ctx, `SELECT pooled_samples_stored, retracted FROM `+testopspooled.NewestStoredRows("testops_test_metrics_daily", "retracted"), params...).
 				Scan(&markerStored, &markerRetracted); err != nil {
 				t.Fatal(err)
 			}
+			orderDisagreed := false
 			for read := 0; read < 5; read++ {
 				admitted := count(`SELECT count() FROM (` + live + `)`)
+				baseAdmitted := count(`SELECT count() FROM (` + legacy + `)`)
 				gateLive := count(`SELECT count() FROM (SELECT DISTINCT repo_id, day FROM testops_test_metrics_daily
 				WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date}) WHERE ` + testopspooled.LiveRepoDays("testops_test_metrics_daily"))
+				if (markerRetracted == 1) != (gateLive == 0) {
+					orderDisagreed = true
+				}
 				var headP95, headP50, baseP95, baseP50 *float64
 				if err := e.admin.QueryRow(e.ctx, "SELECT "+testopspooled.P95+", "+testopspooled.Median+" FROM "+testopspooled.SuiteRunsSource, params...).Scan(&headP95, &headP50); err != nil {
 					t.Fatal(err)
@@ -301,28 +228,37 @@ VALUES (?, ?, ?, toDateTime(?, 'UTC'), 1, NULL, NULL)`, org, day1, repo, tieAt)
 				if err := e.admin.QueryRow(e.ctx, "SELECT "+testopspooled.P95+", "+testopspooled.Median+" FROM "+baseSource, params...).Scan(&baseP95, &baseP50); err != nil {
 					t.Fatal(err)
 				}
-				t.Logf("CELL14595 tie %s %s read %d: marker row (stored %d, retracted %d); raw arm admits %d, live gate %d; served p95 %s / median %s, base %s / %s",
-					arm.name, order.name, read, markerStored, markerRetracted, admitted, gateLive, str(headP95), str(headP50), str(baseP95), str(baseP50))
-				if gateLive == 0 && (admitted != 0 || headP95 != nil || headP50 != nil) {
-					t.Errorf("%s %s read %d: the live gate retires the day, but the raw arm admits it %d time(s) and serves p95 %s / median %s",
-						arm.name, order.name, read, admitted, str(headP95), str(headP50))
-				}
-				if gateLive == 1 && (!same(headP95, &wantP95) || !same(headP50, &wantP50)) {
-					t.Errorf("%s %s read %d: the live gate serves the day, but the served p95 %s / median %s, want %v / %v (the day's samples)",
-						arm.name, order.name, read, str(headP95), str(headP50), wantP95, wantP50)
+				t.Logf("CELL14595 tie %s %s read %d: marker pick (stored %d, retracted %d), live gate pick live=%d; raw arm admits %d, base admits %d; served p95 %s / median %s, base %s / %s",
+					arm.name, order.name, read, markerStored, markerRetracted, gateLive, admitted, baseAdmitted, str(headP95), str(headP50), str(baseP95), str(baseP50))
+				if admitted != baseAdmitted {
+					t.Errorf("%s %s read %d: the raw arm admits the day %d time(s), base %d: an ambiguous tie must behave as at base", arm.name, order.name, read, admitted, baseAdmitted)
 				}
 				if !same(headP95, baseP95) || !same(headP50, baseP50) {
-					t.Errorf("%s %s read %d: served p95 %s / median %s, the base legacy set serves %s / %s",
-						arm.name, order.name, read, str(headP95), str(headP50), str(baseP95), str(baseP50))
+					t.Errorf("%s %s read %d: served p95 %s / median %s, base %s / %s", arm.name, order.name, read, str(headP95), str(headP50), str(baseP95), str(baseP50))
 				}
+			}
+			if orderDisagreed {
+				disagreed++
 			}
 		})
 	}
+	if disagreed == 0 {
+		t.Fatalf("%s: in no insert order did the marker pick and the live gate's pick disagree: the cell does not exercise the tie", arm.name)
+	}
+}
+
+// A live legacy row (pooled_samples_stored 0, written before the writer stored samples) tied with a retraction row.
+func TestTestopsPooledSuiteLegacyRowTiedWithARetraction(t *testing.T) {
+	checkTieArmAsAtBase(t, tieArm{
+		name:    "legacy",
+		liveRow: `INSERT INTO testops_test_metrics_daily (repo_id, day, org_id, computed_at) VALUES (?, ?, ?, toDateTime(?, 'UTC'))`,
+	}, [2]string{"f0f0f0f0-0000-4000-8000-0000001459f1", "f0f0f0f0-0000-4000-8000-0000001459f2"},
+		[2]string{"f0f0f0f0-0000-4000-8000-0000001459c1", "f0f0f0f0-0000-4000-8000-0000001459c2"})
 }
 
 // A live over-cap row (pooled_samples_stored 2: no stored samples, the raw arm reads the day) tied with a retraction row.
 func TestTestopsPooledSuiteOverCapRowTiedWithARetraction(t *testing.T) {
-	checkTieArmAgainstTheLiveGate(t, tieArm{
+	checkTieArmAsAtBase(t, tieArm{
 		name:    "over-cap",
 		liveRow: `INSERT INTO testops_test_metrics_daily (repo_id, day, org_id, computed_at, pooled_samples_stored) VALUES (?, ?, ?, toDateTime(?, 'UTC'), 2)`,
 	}, [2]string{"f0f0f0f0-0000-4000-8000-0000001459f3", "f0f0f0f0-0000-4000-8000-0000001459f4"},
@@ -331,7 +267,7 @@ func TestTestopsPooledSuiteOverCapRowTiedWithARetraction(t *testing.T) {
 
 // A live stored row (pooled_samples_stored 1 with the day's samples 10, 20, 30) tied with a retraction row.
 func TestTestopsPooledSuiteStoredRowTiedWithARetraction(t *testing.T) {
-	checkTieArmAgainstTheLiveGate(t, tieArm{
+	checkTieArmAsAtBase(t, tieArm{
 		name: "stored",
 		liveRow: `INSERT INTO testops_test_metrics_daily (repo_id, day, org_id, computed_at, pooled_service_ids, pooled_durations, pooled_samples_stored)
 VALUES (?, ?, ?, toDateTime(?, 'UTC'), [NULL, NULL, NULL], [10., 20., 30.], 1)`,

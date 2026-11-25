@@ -132,7 +132,7 @@ func repoFilterApplied(f Filters, metricScope string) *bool {
 	// A work-item metric is narrowed through the items linked to the
 	// repositories' pull requests (CHAOS-9094), a repository metric through
 	// its repo_id.
-	applied := metricScope == "repo" || metricScope == "team"
+	applied := (metricScope == "repo" || metricScope == "team") && !f.Scope.developerNamed()
 	return &applied
 }
 

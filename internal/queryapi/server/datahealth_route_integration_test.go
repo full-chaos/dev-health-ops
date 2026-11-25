@@ -58,7 +58,7 @@ func TestDataHealthRoute_OperatorGateThroughTheInternalIdentity(t *testing.T) {
 	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 
 	post := func(carrier func(*http.Request)) (int, string) {
-		rec := postGraphQLWithVariables(t, handler, registeredConnectorsDataHealthDocument, carrier, map[string]any{"teamId": "ALL"})
+		rec := postGraphQLWithVariables(t, handler, registeredConnectorsDataHealthDocument, carrier, map[string]any{})
 		return rec.Code, rec.Body.String()
 	}
 	valid := time.Now().Add(time.Hour)

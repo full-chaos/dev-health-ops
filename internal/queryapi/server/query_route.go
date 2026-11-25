@@ -6152,7 +6152,28 @@ const registeredAcrRepositoryScopesDocument = `query ACRRepositoryScopes($orgId:
 // testdata/wire_capture/data_health_connectors_captured.graphql and asserted equal by
 // TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures. Registration
 // serves it: the catalog switch reads no routing row (CHAOS-8702).
-const registeredConnectorsDataHealthDocument = `query GetConnectorsDataHealth($teamId: ID!) {
+const registeredConnectorsDataHealthDocument = `query GetConnectorsDataHealth {
+  dataHealth {
+    connectors {
+      provider
+      scope
+      lastSyncAt
+      rowsIngested
+      lastFailure {
+        occurredAt
+        message
+        stage
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredConnectorsDataHealthV1Document is the text the operation accepted BEFORE the CHAOS-14645 web build omitted the team (the document took a required
+// `team` variable). It stays a legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working.
+const registeredConnectorsDataHealthV1Document = `query GetConnectorsDataHealth($teamId: ID!) {
   dataHealth(team: $teamId) {
     connectors {
       provider
@@ -6176,7 +6197,38 @@ const registeredConnectorsDataHealthDocument = `query GetConnectorsDataHealth($t
 // testdata/wire_capture/data_health_identity_captured.graphql and asserted equal by
 // TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures. Registration
 // serves it: the catalog switch reads no routing row (CHAOS-8702).
-const registeredDataHealthIdentityDocument = `query DataHealthIdentity($team: ID!) {
+const registeredDataHealthIdentityDocument = `query DataHealthIdentity {
+  dataHealth {
+    identityMapping {
+      unmappedCount
+      unmappedIdentities {
+        provider
+        email
+        displayName
+        observedCount
+        __typename
+      }
+      suggestedAliases {
+        unmappedIdentity {
+          provider
+          email
+          displayName
+          __typename
+        }
+        suggestedCanonicalId
+        suggestedCanonicalName
+        confidence
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredDataHealthIdentityV2Document is the text the operation accepted BEFORE the CHAOS-14645 web build omitted the team (the document took a required
+// `team` variable). It stays a legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working.
+const registeredDataHealthIdentityV2Document = `query DataHealthIdentity($team: ID!) {
   dataHealth(team: $team) {
     identityMapping {
       unmappedCount
@@ -6236,12 +6288,32 @@ const registeredDataHealthIdentityV1Document = `query DataHealthIdentity($team: 
   }
 }`
 
-// registeredMetricLineageDocument is the registered document for the metric-lineage read the data-health popover issues under team ALL: the
+// registeredMetricLineageDocument is the registered document for the metric-lineage read the data-health popover issues with the team omitted: the
 // urql wire form of the web client's query, captured under
 // testdata/wire_capture/data_health_metric_lineage_captured.graphql and asserted equal by
 // TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures. Registration
 // serves it: the catalog switch reads no routing row (CHAOS-8702).
 const registeredMetricLineageDocument = `query MetricLineage($metricId: ID!) {
+  dataHealth {
+    metricLineage(metricId: $metricId) {
+      metricId
+      sourceTables
+      computeWindow {
+        kind
+        durationDays
+        __typename
+      }
+      computedAt
+      rowCount
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredMetricLineageV1Document is the text the operation accepted BEFORE the CHAOS-14645 web build omitted the team (the document took a required
+// `team` variable). It stays a legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working.
+const registeredMetricLineageV1Document = `query MetricLineage($metricId: ID!) {
   dataHealth(team: 
 "ALL") {
     metricLineage(metricId: $metricId) {
@@ -6265,7 +6337,30 @@ const registeredMetricLineageDocument = `query MetricLineage($metricId: ID!) {
 // testdata/wire_capture/data_health_mapping_coverage_captured.graphql and asserted equal by
 // TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures. Registration
 // serves it: the catalog switch reads no routing row (CHAOS-8702).
-const registeredMappingCoverageHealthDocument = `query GetMappingCoverageHealth($teamId: ID!) {
+const registeredMappingCoverageHealthDocument = `query GetMappingCoverageHealth {
+  dataHealth {
+    mappingCoverage {
+      deployments {
+        totalRepos
+        coveredRepos
+        coveragePct
+        __typename
+      }
+      workItems {
+        totalRepos
+        coveredRepos
+        coveragePct
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredMappingCoverageHealthV1Document is the text the operation accepted BEFORE the CHAOS-14645 web build omitted the team (the document took a required
+// `team` variable). It stays a legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working.
+const registeredMappingCoverageHealthV1Document = `query GetMappingCoverageHealth($teamId: ID!) {
   dataHealth(team: $teamId) {
     mappingCoverage {
       deployments {
@@ -7810,7 +7905,10 @@ var legacyDigestsByOperation = map[string][]string{
 	"testopsJobFailures":    {digestHex(registeredTestopsJobFailuresV1Document)},
 	"testopsTestWindow":     {digestHex(registeredTestopsTestWindowV1Document), digestHex(registeredTestopsTestWindowV2Document)},
 	"testopsRisk":           {digestHex(registeredTestopsRiskV1Document), digestHex(registeredTestopsRiskV2Document)},
-	"dataHealthIdentity":    {digestHex(registeredDataHealthIdentityV1Document)},
+	"dataHealthIdentity":    {digestHex(registeredDataHealthIdentityV1Document), digestHex(registeredDataHealthIdentityV2Document)},
+	"connectorsDataHealth":  {digestHex(registeredConnectorsDataHealthV1Document)},
+	"metricLineage":         {digestHex(registeredMetricLineageV1Document)},
+	"mappingCoverageHealth": {digestHex(registeredMappingCoverageHealthV1Document)},
 	"aiGovernanceSummary":   {digestHex(registeredAiGovernanceSummaryV1Document)},
 	"aiAttributionOverview": {digestHex(registeredAiAttributionOverviewV1Document)},
 	"aiAttributedPrs":       {digestHex(registeredAiAttributedPrsV1Document)},

@@ -445,7 +445,7 @@ func TestSourceHealthRoute_NoDataHealthFieldIsReachableThroughIt(t *testing.T) {
 
 	// The operator-only operation is refused as it was.
 	rec := postGraphQLWithVariables(t, handler, registeredConnectorsDataHealthDocument,
-		iaHeaders("org-1", "viewer", false, false), map[string]any{"teamId": "ALL"})
+		iaHeaders("org-1", "viewer", false, false), map[string]any{})
 	if !strings.Contains(rec.Body.String(), "Data health requires operator access") || strings.Contains(rec.Body.String(), "github") {
 		t.Fatalf("connectorsDataHealth must stay operator-only: %s", rec.Body.String())
 	}

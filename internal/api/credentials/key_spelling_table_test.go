@@ -198,7 +198,8 @@ func TestRepositoryListingStoredKeySpellingTable(t *testing.T) {
 	}
 }
 
-// The open counter itself: a direct read of its path is one open and yields the key, so a zero above is not a dead seam.
+// The open counter itself: a direct read of its path counts at least one open and yields exactly the key, so a zero
+// above is not a dead seam. A slow reader may be counted twice (see the server wait), so the bound is >= 1.
 func TestKeySpellingOpenCounterSeesARead(t *testing.T) {
 	key := testPrivateKey(t)
 	counter := newOpenCounter(t, key)
@@ -206,7 +207,7 @@ func TestKeySpellingOpenCounterSeesARead(t *testing.T) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
-	if got := counter.opens.Load(); got != 1 || string(content) != key {
-		t.Errorf("a direct read counted %d open(s) and read %d bytes; want 1 open and the key", got, len(content))
+	if got := counter.opens.Load(); got < 1 || string(content) != key {
+		t.Errorf("a direct read counted %d open(s) and read %d bytes; want at least 1 open and exactly the key", got, len(content))
 	}
 }

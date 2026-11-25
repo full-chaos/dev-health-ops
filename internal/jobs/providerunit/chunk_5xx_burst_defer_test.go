@@ -1,9 +1,14 @@
 package providerunit
 
 import (
+	"context"
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
 
 // A provider 5xx / gateway burst that outlasts the five ordinary attempts must
@@ -56,19 +61,27 @@ func TestChunkedUnitGatewayBurstFailsAfterTheDeferCap(t *testing.T) {
 		status: map[int]int{burstPage: http.StatusServiceUnavailable},
 		tries:  map[int]int{burstPage: 1000 * exhaustReproHTTPTries},
 	})
-	if walk.attempt != 1 || walk.failures != 1 {
-		t.Fatalf("River attempt=%d ordinary failures=%d, want the burst deferred attempt-neutral and one final failure on attempt 1", walk.attempt, walk.failures)
+	if !walk.terminal || walk.repository.lastFailCategory != "provider_unit_exhausted" {
+		t.Fatalf("unit ended %q category=%q, want a terminal failure once the defer cap is spent", walk.repository.status, walk.repository.lastFailCategory)
 	}
-	if !walk.terminal {
-		t.Fatalf("unit ended %q, want a terminal failure once the defer cap is spent", walk.repository.status)
+	if len(walk.runAgeAtFail) == 0 {
+		t.Fatal("no ordinary failure recorded")
+	}
+	// The first ordinary failure marks the end of the deferred window; the
+	// harness adds 30 minutes per ordinary failure after it.
+	deferred := walk.runAgeAtFail[0]
+	//abstime:allow simulated clock of the harness (the handler's Now), never wall time
+	if deferred > burstDeferCapMax {
+		t.Fatalf("first ordinary failure after %v of deferral, want the total snooze bounded by about %v", deferred, burstDeferCapMax)
 	}
 	//abstime:allow simulated clock of the harness (the handler's Now), never wall time
-	if walk.elapsed > burstDeferCapMax {
-		t.Fatalf("unit failed after %v of deferral, want the total snooze bounded by about %v", walk.elapsed, burstDeferCapMax)
+	if deferred < 25*time.Minute {
+		t.Fatalf("first ordinary failure after %v of deferral, want a defer of about 30-60 minutes", deferred)
 	}
-	//abstime:allow simulated clock of the harness (the handler's Now), never wall time
-	if walk.elapsed < 25*time.Minute {
-		t.Fatalf("unit failed after %v of deferral, want a defer of about 30-60 minutes", walk.elapsed)
+	for index, ordinal := range walk.ordinalAtFail {
+		if ordinal < burstPage {
+			t.Fatalf("checkpoint next_ordinal at failure %d = %d, want the checkpoint kept at %d or later", index+1, ordinal, burstPage)
+		}
 	}
 }
 
@@ -96,5 +109,81 @@ func TestChunkedUnitDeterministicErrorStillFailsOnAttemptsControl(t *testing.T) 
 	if !walk.terminal || walk.attempt != 1 || walk.failures != 1 {
 		t.Fatalf("control: terminal=%v attempt=%d failures=%d, want one terminal failure on attempt 1",
 			walk.terminal, walk.attempt, walk.failures)
+	}
+}
+
+func gatewayUnitHandler(unit providersync.Unit, now time.Time, failure error) (*Handler, *memoryUnitRepository) {
+	repository := newMemoryUnitRepository(unit)
+	return &Handler{
+		Repository:    repository,
+		LeaseDuration: time.Minute,
+		Heartbeat:     10 * time.Second,
+		Now:           func() time.Time { return now },
+		BuildExecutor: func(*providersync.LeaseSession) (providersync.CompleteRouteExecutor, error) {
+			return providersync.CompleteRouteExecutor{}, failure
+		},
+	}, repository
+}
+
+// PIN: a gateway burst defer feeds no provider rate-limit observation, so the
+// dispatch cooldown gate that a 429 feeds stays open for the provider's other
+// units, even when the error carries a rate-limit dimension.
+func TestGatewayBurstDeferWritesNoRateLimitObservation(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	unit := providerUnit()
+	unit.Provider, unit.Dataset = "github", "cicd"
+	failure := &providerfoundation.ProviderError{
+		Class: providerfoundation.ErrorTransient, StatusCode: http.StatusServiceUnavailable,
+		Dimension: "core", RetryAfter: time.Minute,
+	}
+	handler, repository := gatewayUnitHandler(unit, now, failure)
+	execution := providerExecution(unit, now, 1)
+	execution.Definition.MaxAttempts = 5
+
+	err := handler.Work(context.Background(), execution)
+	if _, snoozed := jobruntime.SnoozeDelay(err); !snoozed {
+		t.Fatalf("Work() = %v; want an attempt-neutral snooze", err)
+	}
+	if repository.rateLimitDeferrals != 1 || repository.failures != 0 || repository.releaseCalls != 0 {
+		t.Fatalf("deferrals=%d failures=%d releases=%d, want one defer and no attempt used",
+			repository.rateLimitDeferrals, repository.failures, repository.releaseCalls)
+	}
+	for _, observation := range repository.rateLimitObservations {
+		if observation.Dimension != "" {
+			t.Fatalf("gateway burst wrote a rate-limit observation %+v; it must not feed the cooldown gate", observation)
+		}
+	}
+}
+
+// CONTROL: a 503 on a unit that is not chunked, and a transport error (no
+// status) on a chunked one, keep the ordinary retry arm.
+func TestGatewayBurstDeferLeavesUnchunkedAndTransportErrorsAlone(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name          string
+		provider, set string
+		status        int
+	}{
+		{"unchunked 503", "launchdarkly", "feature-flags", http.StatusServiceUnavailable},
+		{"chunked transport error", "github", "cicd", 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			unit := providerUnit()
+			unit.Provider, unit.Dataset = test.provider, test.set
+			handler, repository := gatewayUnitHandler(unit, now, &providerfoundation.ProviderError{
+				Class: providerfoundation.ErrorTransient, StatusCode: test.status,
+			})
+			execution := providerExecution(unit, now, 1)
+			execution.Definition.MaxAttempts = 5
+			if _, snoozed := jobruntime.SnoozeDelay(handler.Work(context.Background(), execution)); snoozed {
+				t.Fatal("deferred; want the ordinary retry")
+			}
+			if repository.rateLimitDeferrals != 0 {
+				t.Fatalf("rate_limit_deferrals=%d, want 0", repository.rateLimitDeferrals)
+			}
+		})
 	}
 }

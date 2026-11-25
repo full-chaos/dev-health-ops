@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -507,8 +508,14 @@ func fetchGitLabMergeRequestReviews(
 		if controlErr := gitLabPullRequestControlError(ctx, err); controlErr != nil {
 			return result, controlErr
 		}
-		// Python treats approvals as optional enrichment; the notes stream is
-		// authoritative and still determines whether the MR is known.
+		// A read that failed (5xx after retries, transport, 401) stops the unit so the window is read again: an
+		// approval with no approval note is only in this read. An answered read (a 4xx other than 401, or a body
+		// that cannot be used) stays optional enrichment, as in Python.
+		if lookupReadFailed(err) {
+			statusClass := lookupStatusClass(err)
+			slog.Warn("gitlab_prs.approvals_read_failed", "status_class", statusClass)
+			return result, err
+		}
 		approvals = nil
 	}
 	notesPath := providerRelativePath(client, "api", "v4", "projects", projectID, "merge_requests", strconv.Itoa(iid), "notes")

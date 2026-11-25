@@ -346,11 +346,77 @@ func TestChunkedCicdRunJobsCutBody503Control(t *testing.T) {
 }
 
 // CONTROL (passes today): a whole 200 body that is not a run-jobs page
-// (body_decode) on every request is a deterministic bad page; it ends the unit.
+// (body_decode) on every request is a deterministic bad page; it ends the unit
+// exactly as today (unclassified, cap 2).
 func TestChunkedCicdRunJobsInvalidPageStillFailsControl(t *testing.T) {
 	walk := driveCutBodyWalk(t, cutBodyInvalidPage, map[int]int{cutBodyPagesAt[1]: 1000})
-	if !walk.terminal || walk.repository.lastFailCategory != "provider_unit_exhausted" {
-		t.Fatalf("control invalid page: unit ended %q category=%q cause_class=%q at attempt %d, want a terminal provider_unit_exhausted",
+	if !walk.terminal || walk.repository.lastFailCategory != "provider_unit_exhausted" ||
+		walk.repository.causeClass != providersync.CauseClassUnclassified || walk.attempt != 2 {
+		t.Fatalf("control invalid page: unit ended %q category=%q cause_class=%q at attempt %d, want a terminal provider_unit_exhausted / unclassified at attempt 2 (as today)",
 			walk.repository.status, walk.repository.lastFailCategory, walk.repository.causeClass, walk.attempt)
+	}
+}
+
+// BOUND: a cut at the same page on every request makes no checkpoint progress
+// after the first refund, so the unit still ends terminal within the registry
+// cap (no endless retry loop).
+func TestChunkedCicdRunJobsCutBodyAtOnePageEveryAttemptStillEnds(t *testing.T) {
+	page := cutBodyPagesAt[1]
+	walk := driveCutBodyWalk(t, cutBodyUnexpectedEOF, map[int]int{page: 1000})
+	if !walk.terminal || walk.repository.lastFailCategory != "provider_unit_exhausted" ||
+		walk.repository.causeClass != causeClassProviderTransient || walk.attempt != 5 || walk.failures != 5 {
+		t.Fatalf("bound: unit ended %q category=%q cause_class=%q at River attempt %d after %d failures, want terminal provider_unit_exhausted / provider_transient at attempt 5 after 5 failures",
+			walk.repository.status, walk.repository.lastFailCategory, walk.repository.causeClass, walk.attempt, walk.failures)
+	}
+	for index, ordinal := range walk.ordinalAtFail {
+		if ordinal != page {
+			t.Fatalf("bound: checkpoint next_ordinal at failure %d = %d, want %d (no progress past the cut page)", index+1, ordinal, page)
+		}
+	}
+}
+
+// PIN: the body_read class applies to chunked units only. An unchunked unit
+// keeps the unclassified class and its cap of 2; the chunked unit retries as
+// provider_transient at the same attempt.
+func TestBodyReadFailureIsTransientOnChunkedUnitsOnly(t *testing.T) {
+	now := time.Date(2026, 11, 23, 13, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		provider, dataset string
+		wantFailed        bool
+		wantClass         string
+	}{
+		{"launchdarkly", "feature-flags", true, providersync.CauseClassUnclassified},
+		{"github", "cicd", false, ""},
+	} {
+		t.Run(test.provider+"/"+test.dataset, func(t *testing.T) {
+			descriptor, ok := providersync.Descriptor(test.provider, test.dataset)
+			if !ok || descriptor.Chunked == test.wantFailed {
+				t.Fatalf("%s/%s chunked=%v ok=%v", test.provider, test.dataset, descriptor.Chunked, ok)
+			}
+			unit := providerUnit()
+			unit.Provider, unit.Dataset = test.provider, test.dataset
+			repository := &classRepository{memoryUnitRepository: newMemoryUnitRepository(unit)}
+			handler := &Handler{
+				Repository:    repository,
+				LeaseDuration: time.Minute,
+				Heartbeat:     10 * time.Second,
+				Now:           func() time.Time { return now },
+				BuildExecutor: func(*providersync.LeaseSession) (providersync.CompleteRouteExecutor, error) {
+					return providersync.CompleteRouteExecutor{}, providerfoundation.RouteFailure(
+						cutBodyRunsRoute, providerfoundation.ReasonBodyRead, providerfoundation.ErrPaginationInvalid)
+				},
+			}
+			execution := providerExecution(unit, now, 2)
+			execution.Definition.MaxAttempts = 5
+			if err := handler.Work(context.Background(), execution); err == nil {
+				t.Fatal("Work() = nil, want a failure")
+			}
+			if failed := repository.status == "failed"; failed != test.wantFailed {
+				t.Fatalf("status=%q class=%q, want failed=%v", repository.status, repository.causeClass, test.wantFailed)
+			}
+			if test.wantFailed && repository.causeClass != test.wantClass {
+				t.Fatalf("cause_class=%q, want %q", repository.causeClass, test.wantClass)
+			}
+		})
 	}
 }

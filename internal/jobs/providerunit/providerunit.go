@@ -244,6 +244,10 @@ func causeClass(err error, timedOut bool) string {
 	if errors.As(err, &sinkDropErr) {
 		return causeClassSinkConnectionDropped
 	}
+	var bodyRead chunkBodyReadError
+	if errors.As(err, &bodyRead) {
+		return causeClassProviderTransient
+	}
 	var providerErr *providerfoundation.ProviderError
 	if errors.As(err, &providerErr) && !providerErr.AfterResponse() {
 		if _, known := providerErrorClasses[providerErr.Class]; known {
@@ -1241,6 +1245,10 @@ func (handler *Handler) Work(
 		}
 	}
 	completedAt := handler.now()
+	// A body cut mid-read on a chunked walk retries as provider_transient; it still ends: a refund needs checkpoint progress, the transient cap counts the rest.
+	if descriptor.Chunked && chunkedBodyReadFailure(err) {
+		err = chunkBodyReadError{err: err}
+	}
 	// The job time limit ended this attempt: the work context's own deadline,
 	// set before the lease deadline, or the job's, which the work context
 	// inherits. An error that merely wraps DeadlineExceeded is not enough: a

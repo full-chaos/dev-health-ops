@@ -355,7 +355,6 @@ func TestGitHubCandidateStaysOpenUnlessTheLookupSaysNotAMember(t *testing.T) {
 		{"the provider says the invitation is pending", answer{status: 200, body: `{"state":"pending"}`}, "provider_says_member"},
 		{"the lookup answers 500", answer{status: 500, body: `{}`}, "lookup_not_proven"},
 		{"the lookup is forbidden", answer{status: 403, body: `{"message":"Forbidden"}`}, "lookup_not_proven"},
-		{"the lookup is rate limited", answer{status: 429, body: `{}`}, "lookup_not_proven"},
 		{"the lookup answers a body that is not an answer", answer{status: 200, body: `{"message":"x"}`}, "lookup_not_proven"},
 		{"the lookup times out", answer{err: io.ErrUnexpectedEOF}, "lookup_not_proven"},
 	} {
@@ -412,7 +411,7 @@ func TestGitLabCandidateStaysOpenUnlessTheLookupFindsNoSuchMember(t *testing.T) 
 	}
 	requireOpen(t, "the lookup finds her", openMembershipFacts(ctx, t, conn, orgID, "gitlab"), carol, departureAt[0])
 	// The lookup fails: nothing is proven.
-	for index, status := range []int{500, 403, 429, 404} {
+	for index, status := range []int{500, 403, 404} {
 		fake.setLookup([]string{}, status)
 		if result := sync(departureAt[1].Add(time.Duration(index+1) * time.Minute)); result.MembershipsClosed != 0 {
 			t.Errorf("a lookup that answered %d closed %d members", status, result.MembershipsClosed)

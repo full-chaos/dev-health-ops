@@ -437,12 +437,14 @@ never reads the rows as they are. Every `at` is the ClickHouse clock.
    wrote commits or pull requests (its dataset has the `git` or the `prs` legacy
    target, whichever the provider: `PostSyncPlan.Git`), one `INSERT ... SELECT`
    (`recordTouchedGitSQL`, `RecordTouchedGit`) appends a `touched` event for
-   each `(day, repository)` of the rows of `git_commits` and `git_pull_requests`
-   whose `last_synced` is at or after the same lower bound. The days are the
+   each `(day, repository)` of the rows of `git_commits`, `git_pull_requests` and
+   `git_pull_request_reviews` whose `last_synced` is at or after the same lower
+   bound. The days are the
    ones the daily run reads those rows under: the committer date of a commit
    (not its author date: a rebased commit keeps an old author date that no run
-   reads it under) and the creation day and, when merged, the merge day of a
-   pull request. A commit written late, or with an old date, marks its own day
+   reads it under), the creation day and, when merged, the merge day of a
+   pull request, and the submission day of a review (a review of day D on an
+   older open pull request marks D, CHAOS-14673). A commit written late, or with an old date, marks its own day
    however far it lies from the window of its sync; before this, the record held
    work items only and no run computed such a day. If a successful unit of the sync run
    wrote work items, one server-side `INSERT ... SELECT` appends a `touched`

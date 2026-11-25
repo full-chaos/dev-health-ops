@@ -210,10 +210,10 @@ func runCatalogTeams(ctx context.Context, env cli.Env, d deps, request catalogRe
 		return writeError(env.Stderr, cli.ExitFailure, "owner_required", "--owner is required for "+request.provider+" provider ("+spec.ownerNoun+").")
 	}
 	token := request.auth
-	if token == "" {
+	if isBlank(token) {
 		token, _ = env.Lookup(spec.tokenEnv)
 	}
-	if token == "" {
+	if isBlank(token) {
 		message := spec.tokenMissingMsg
 		if message == "" {
 			message = spec.label + " token required. Use --auth or set " + spec.tokenEnv + " env var."

@@ -64,8 +64,8 @@ func NewGitHubClient(credential Credential, doer HTTPDoer, retry RetryPolicy, le
 	if err := clientRefusal(credential, "github"); err != nil {
 		return nil, err
 	}
-	base := credentialBaseURL(credential, githubAPIBase)
 	if token, ok := credential.Secret("token"); ok && token.Configured() {
+		base := credentialBaseURL(credential, githubAPIBase)
 		auth := func(request *http.Request) error {
 			if err := TokenAuth("Authorization", "token ", token)(request); err != nil {
 				return err
@@ -76,6 +76,7 @@ func NewGitHubClient(credential Credential, doer HTTPDoer, retry RetryPolicy, le
 		}
 		return NewHTTPClient("github", base, doer, auth, retry, lease)
 	}
+	base := storedBaseURL(credential, githubAPIBase)
 	auth, err := NewGitHubAppAuth(credential, base, doer)
 	if err != nil {
 		return nil, err
@@ -523,4 +524,15 @@ func githubAppJWT(appID string, key secrets.Value, now time.Time) (string, error
 		return "", ErrCredentialInvalid
 	}
 	return signed + "." + base64.RawURLEncoding.EncodeToString(signature), nil
+}
+
+// storedBaseURL is credentialBaseURL without the config column. A GitHub App credential signs with a key the row's
+// config does not own, so only its stored base or the default API may receive the request.
+func storedBaseURL(credential Credential, fallback string) string {
+	for _, name := range []string{"base_url", "url", "gitlab_url"} {
+		if value, ok := credential.Secret(name); ok && value.Configured() {
+			return value.Reveal()
+		}
+	}
+	return fallback
 }

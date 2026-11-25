@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,7 +27,17 @@ import (
 // (revision 0167) and never with a Seq Scan; every outbox and river_job node runs, once, except the recent arm's keyed
 // finalize-index probe, which reads at most k x base rows; a node run once (a hashed subplan) reads at most the index's
 // entries; A returns the perClass candidates and the survey counts each class.
-// Timings are logged as INFO only (D6418: no wall-time assertion).
+// Statement 0 (the base alone, which runs at base 0 and at base) reads daily_metrics_runs and daily_metrics_partitions
+// and nothing else; the cell must catch the plan losing the shape that keeps that read once: the partition check
+// run once per base run (a per-run rescan of the partitions), a node on either table run more than once, or the
+// statement reading more of either table than its rows and pages. Its Seq Scan of daily_metrics_runs with a
+// SubPlan Seq Scan of daily_metrics_partitions (hashed or not: the planner's pick) is the plan the SQL asks for (no
+// index serves the base predicate), so
+// the bound is WORK from EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON), never the Execution Time (CHAOS-14698: 75.6 ms
+// against a 75 ms bound failed main on a plan that read each table once).
+// Timings are logged as INFO only (D6418: no wall-time assertion). The only time limit is explainRunawayTimeout, a
+// stop for a runaway plan: 30 s against the 150 to 400 ms statement timeouts of the survey, so no healthy run is near
+// it and a per-run rescan at prod sizes still ends.
 func TestStaleFinalizeSurveyPlanAtProdSizes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -125,9 +134,9 @@ FROM generate_series(1, $2::int) AS n`, old, riverRows)
 	candidatesSQL := fmt.Sprintf(staleFinalizeCandidatesSQLTemplate, jobTable)
 	levelsSQL := fmt.Sprintf(staleFinalizeLevelsSQLTemplate, jobTable)
 	cutoff := now.Add(-StaleFinalizeHorizon)
-	// explain runs EXPLAIN (ANALYZE, BUFFERS) with JIT off, as the survey and the redrive re-check run, and checks the
-	// statement's Execution Time against half of its server-side timeout (50 % margin).
-	explain := func(name, query string, bound float64, args ...any) string {
+	// explain runs EXPLAIN (ANALYZE, BUFFERS) with JIT off, as the survey and the redrive re-check run, logs the plan and
+	// its Execution Time as INFO, and returns the plan text. It asserts no time.
+	explain := func(name, query string, args ...any) string {
 		t.Helper()
 		tx, err := admin.Begin(ctx)
 		if err != nil {
@@ -135,6 +144,9 @@ FROM generate_series(1, $2::int) AS n`, old, riverRows)
 		}
 		defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 		if _, err := tx.Exec(ctx, staleFinalizeJITOff); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, explainRunawayTimeout); err != nil {
 			t.Fatal(err)
 		}
 		rows, err := tx.Query(ctx, "EXPLAIN (ANALYZE, BUFFERS) "+query, args...)
@@ -154,16 +166,8 @@ FROM generate_series(1, $2::int) AS n`, old, riverRows)
 			t.Fatalf("EXPLAIN %s: %v, %d bytes", name, err, plan.Len())
 		}
 		t.Logf("INFO plan of %s:\n%s", name, plan.String())
-		match := executionTime.FindStringSubmatch(plan.String())
-		if match == nil {
-			t.Fatalf("EXPLAIN %s: no Execution Time line", name)
-		}
-		executed, err := strconv.ParseFloat(match[1], 64)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if executed > bound {
-			t.Fatalf("%s executed in %.1f ms with JIT off, bound %.0f ms (half its statement timeout):\n%s", name, executed, bound, plan.String())
+		if match := executionTime.FindStringSubmatch(plan.String()); match != nil {
+			t.Logf("INFO %s executed in %s ms with JIT off", name, match[1])
 		}
 		return plan.String()
 	}
@@ -188,7 +192,8 @@ FROM generate_series(1, $2::int) AS n`, old, riverRows)
 	}
 
 	// Base 0.
-	explain("statement 0 at base 0", baseSQL, 75, cutoff)
+	explain("statement 0 at base 0", baseSQL, cutoff)
+	checkStatementZeroWork(t, ctx, admin, "statement 0 at base 0", baseSQL, cutoff)
 	if result := survey("base 0"); len(result.candidates) != 0 || result.levels == nil || *result.levels != (StaleFinalizeLevels{}) {
 		t.Fatalf("base 0: %+v, want no candidate and exact zero levels", result)
 	}
@@ -201,7 +206,15 @@ FROM generate_series(1, $2::int) AS n`, old, riverRows)
 	if err := admin.QueryRow(ctx, `SELECT count(*) FROM public.worker_job_outbox WHERE job_kind = 'metrics.daily_finalize'`).Scan(&finalizeEntries); err != nil {
 		t.Fatal(err)
 	}
-	explain("statement 0 at base", baseSQL, 75, cutoff)
+	explain("statement 0 at base", baseSQL, cutoff)
+	checkStatementZeroWork(t, ctx, admin, "statement 0 at base", baseSQL, cutoff)
+	t.Run("a per-run partition read in statement 0 is refused", func(t *testing.T) {
+		violations := statementZeroWorkViolations(t, ctx, admin, "planted statement 0", plantedPerRunPartitionsSQL, cutoff)
+		if len(violations) == 0 {
+			t.Fatal("the planted statement 0 (the partition check as a correlated subquery, run once per base run) passed the work bound")
+		}
+		t.Logf("INFO the planted per-run partition read is refused: %s", strings.Join(violations, "; "))
+	})
 	var recheckRun string
 	if err := admin.QueryRow(ctx, `SELECT id::text FROM public.daily_metrics_runs WHERE generation = 'plan-candidate:1'`).Scan(&recheckRun); err != nil {
 		t.Fatal(err)
@@ -209,16 +222,14 @@ FROM generate_series(1, $2::int) AS n`, old, riverRows)
 	for _, statement := range []struct {
 		name  string
 		query string
-		bound float64
 		args  []any
 	}{
-		{"statement A", candidatesSQL, 200, []any{cutoff, base, nil, nil, nil}},
-		{"statement B", levelsSQL, 125, []any{cutoff, staleFinalizeLevelCap + 1}},
-		// The redrive's re-check runs under the 200 ms per-run deadline.
-		{"redrive re-check", StaleFinalizeOutboxRecheckSQL, 100, []any{recheckRun, cutoff}},
+		{"statement A", candidatesSQL, []any{cutoff, base, nil, nil, nil}},
+		{"statement B", levelsSQL, []any{cutoff, staleFinalizeLevelCap + 1}},
+		{"redrive re-check", StaleFinalizeOutboxRecheckSQL, []any{recheckRun, cutoff}},
 	} {
 		name, query, args := statement.name, statement.query, statement.args
-		plan := explain(name+" at base", query, statement.bound, args...)
+		plan := explain(name+" at base", query, args...)
 		if strings.Contains(plan, "Seq Scan on worker_job_outbox") {
 			t.Fatalf("%s at base scans the whole outbox:\n%s", name, plan)
 		}
@@ -256,6 +267,19 @@ FROM generate_series(1, $2::int) AS n`, old, riverRows)
 
 var executionTime = regexp.MustCompile(`Execution Time: ([0-9.]+) ms`)
 
+// explainRunawayTimeout is the only time limit of the cell's EXPLAIN runs: a stop for a runaway plan, far above the
+// survey's own 150 to 400 ms statement timeouts, so it never decides a healthy run.
+const explainRunawayTimeout = "SET LOCAL statement_timeout = '30s'"
+
+// plantedPerRunPartitionsSQL is statement 0 with its partition check planted as a correlated subquery that the planner
+// must run once per base run (OFFSET 0), counting every base run so the EXISTS cannot stop at the first. It is the
+// defect the work bound must refuse; it is never run by the survey.
+const plantedPerRunPartitionsSQL = `
+SELECT count(*) FROM public.daily_metrics_runs AS run
+WHERE run.status = 'running' AND run.finalization_status = 'pending' AND run.updated_at <= $1
+	AND (SELECT count(*) FROM public.daily_metrics_partitions AS partition
+		WHERE partition.run_id = run.id AND (partition.status <> 'succeeded' OR partition.updated_at > $1) OFFSET 0) = 0`
+
 // jitProbeTx reads the session's jit setting inside the survey transaction just before statement A runs.
 type jitProbeTx struct {
 	pgx.Tx
@@ -285,7 +309,95 @@ type planNode struct {
 	ActualLoops      float64    `json:"Actual Loops"`
 	RemovedByFilter  float64    `json:"Rows Removed by Filter"`
 	RemovedByRecheck float64    `json:"Rows Removed by Index Recheck"`
+	ParentRelation   string     `json:"Parent Relationship"`
+	SubplanName      string     `json:"Subplan Name"`
+	SharedHit        float64    `json:"Shared Hit Blocks"`
+	SharedRead       float64    `json:"Shared Read Blocks"`
 	Plans            []planNode `json:"Plans"`
+}
+
+// checkStatementZeroWork fails the cell when statement 0's analyzed plan breaks the work bound of the header.
+func checkStatementZeroWork(t *testing.T, ctx context.Context, admin *pgxpool.Pool, name, query string, args ...any) {
+	t.Helper()
+	if violations := statementZeroWorkViolations(t, ctx, admin, name, query, args...); len(violations) > 0 {
+		t.Fatalf("%s breaks the work bound:\n- %s", name, strings.Join(violations, "\n- "))
+	}
+}
+
+// statementZeroWorkViolations runs EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) of the statement and returns each way its
+// plan reads more than once over the two tables it may read, with the bound it breaks:
+//   - a SubPlan that ran more than once (the partition check run per base run; a hashed SubPlan runs once, and one the
+//     planner leaves unhashed is harmless while it runs once or never, as at base 0);
+//   - a node on daily_metrics_runs or daily_metrics_partitions that ran more than once (a parallel scan's workers are
+//     its loops, so a Parallel node is checked on rows only);
+//   - a node that read more rows than the table holds (x 1.25 + 100: the JSON plan states the per-loop average of a
+//     parallel scan rounded);
+//   - a node on worker_job_outbox or river_job (statement 0 reads neither);
+//   - shared buffers hit + read above 2 x (pages of both tables) + 64: each table once, with the margin of the
+//     visibility-map and hint-bit pages and the planner's catalog reads. The rows and pages are the tables' exact
+//     counts and pg_relation_size, not statistics.
+func statementZeroWorkViolations(t *testing.T, ctx context.Context, admin *pgxpool.Pool, name, query string, args ...any) []string {
+	t.Helper()
+	var runsRows, partitionsRows, runsPages, partitionsPages float64
+	if err := admin.QueryRow(ctx, `
+SELECT (SELECT count(*) FROM public.daily_metrics_runs), (SELECT count(*) FROM public.daily_metrics_partitions),
+       pg_relation_size('public.daily_metrics_runs') / current_setting('block_size')::int,
+       pg_relation_size('public.daily_metrics_partitions') / current_setting('block_size')::int`).
+		Scan(&runsRows, &partitionsRows, &runsPages, &partitionsPages); err != nil {
+		t.Fatalf("%s: table sizes: %v", name, err)
+	}
+	tx, err := admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	for _, setting := range []string{staleFinalizeJITOff, explainRunawayTimeout} {
+		if _, err := tx.Exec(ctx, setting); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var raw []byte
+	if err := tx.QueryRow(ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+query, args...).Scan(&raw); err != nil {
+		t.Fatalf("EXPLAIN JSON %s: %v", name, err)
+	}
+	var plans []struct {
+		Plan planNode `json:"Plan"`
+	}
+	if err := json.Unmarshal(raw, &plans); err != nil || len(plans) != 1 {
+		t.Fatalf("EXPLAIN JSON %s: %v, %d plans", name, err, len(plans))
+	}
+	var violations []string
+	root := plans[0].Plan
+	bufferBound := 2*(runsPages+partitionsPages) + 64
+	if blocks := root.SharedHit + root.SharedRead; blocks > bufferBound {
+		violations = append(violations, fmt.Sprintf("shared buffers %.0f, bound %.0f (2 x (%.0f + %.0f pages) + 64)", blocks, bufferBound, runsPages, partitionsPages))
+	}
+	var walk func(node planNode)
+	walk = func(node planNode) {
+		if node.ParentRelation == "SubPlan" && node.ActualLoops > 1 {
+			violations = append(violations, fmt.Sprintf("%s ran %.0f times: it runs once per outer row", node.SubplanName, node.ActualLoops))
+		}
+		rows := map[string]float64{"daily_metrics_runs": runsRows, "daily_metrics_partitions": partitionsRows}
+		switch node.RelationName {
+		case "daily_metrics_runs", "daily_metrics_partitions":
+			if node.ActualLoops > 1 && !strings.HasPrefix(node.NodeType, "Parallel") {
+				violations = append(violations, fmt.Sprintf("the %s node on %s ran %.0f times, want once", node.NodeType, node.RelationName, node.ActualLoops))
+			}
+			read := (node.ActualRows + node.RemovedByFilter + node.RemovedByRecheck) * node.ActualLoops
+			if bound := rows[node.RelationName]*1.25 + 100; read > bound {
+				violations = append(violations, fmt.Sprintf("the %s node on %s read %.0f rows, bound %.0f (1.25 x %.0f + 100)", node.NodeType, node.RelationName, read, bound, rows[node.RelationName]))
+			}
+		case "worker_job_outbox", "river_job":
+			violations = append(violations, fmt.Sprintf("the %s node reads %s: statement 0 reads neither", node.NodeType, node.RelationName))
+		}
+		for _, child := range node.Plans {
+			walk(child)
+		}
+	}
+	walk(root)
+	t.Logf("INFO %s work: shared buffers %.0f of bound %.0f, runs %.0f rows %.0f pages, partitions %.0f rows %.0f pages, %d violation(s)",
+		name, root.SharedHit+root.SharedRead, bufferBound, runsRows, runsPages, partitionsRows, partitionsPages, len(violations))
+	return violations
 }
 
 // checkSubplanReads walks the analyzed plan of the statement. Every node on worker_job_outbox or river_job must have

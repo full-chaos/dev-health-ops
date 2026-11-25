@@ -1154,7 +1154,7 @@ type ComplexityRoot struct {
 		CompoundingRisk                   func(childComplexity int, orgID string, filter *model.CompoundingRiskFilterInput) int
 		CoverageBaselines                 func(childComplexity int, orgID string, endDate graphqldate.Date, repoIds []string, teamIds []string) int
 		CoverageScopeBaseline             func(childComplexity int, orgID string, endDate graphqldate.Date, repoIds []string, teamIds []string) int
-		DataHealth                        func(childComplexity int, team string) int
+		DataHealth                        func(childComplexity int, team *string) int
 		Experiments                       func(childComplexity int, orgID string, filters *model.FilterInput) int
 		FeatureFlagEvents                 func(childComplexity int, orgID string, flagKey *string, environment *string, limit int) int
 		FeatureFlags                      func(childComplexity int, orgID string, provider *string, project *string, includeArchived *bool, limit int) int
@@ -1743,7 +1743,7 @@ type QueryResolver interface {
 	CapacityForecasts(ctx context.Context, orgID string, filters *model.CapacityForecastFilterInput) (*model.CapacityForecastConnection, error)
 	ThroughputForecast(ctx context.Context, orgID string, input model.ThroughputForecastInput) (*model.ThroughputForecast, error)
 	OperatingReview(ctx context.Context, orgID string, input model.OperatingReviewInput) (*model.OperatingReview, error)
-	DataHealth(ctx context.Context, team string) (*model.DataHealth, error)
+	DataHealth(ctx context.Context, team *string) (*model.DataHealth, error)
 	SourceHealth(ctx context.Context, orgID string) ([]model.SourceHealth, error)
 	BusFactor(ctx context.Context, orgID string, scope *model.BusFactorScopeInput) (*model.BusFactor, error)
 	CompoundingRisk(ctx context.Context, orgID string, filter *model.CompoundingRiskFilterInput) (*model.CompoundingRiskResult, error)
@@ -7167,7 +7167,7 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 			return 0, false
 		}
 
-		return e.complexity.Query.DataHealth(childComplexity, args["team"].(string)), true
+		return e.complexity.Query.DataHealth(childComplexity, args["team"].(*string)), true
 
 	case "Query.experiments":
 		if e.complexity.Query.Experiments == nil {
@@ -11767,7 +11767,7 @@ type Query {
   operatingReview(orgId: String!, input: OperatingReviewInput!): OperatingReview!
 
   """Operator data-health and trust surface"""
-  dataHealth(team: ID!): DataHealth!
+  dataHealth(team: ID): DataHealth!
 
   """
   Source health of the caller's organization (CHAOS-8906): per sync configuration that is active or carries a failure newer than its last successful sync, provider (a platform provider, else ` + "`" + `` + "`" + `other` + "`" + `` + "`" + `), scope, last successful sync time, and the last failure as a time and a stage code. Served to every member of the organization; no error text.
@@ -14552,18 +14552,18 @@ func (ec *executionContext) field_Query_dataHealth_args(ctx context.Context, raw
 func (ec *executionContext) field_Query_dataHealth_argsTeam(
 	ctx context.Context,
 	rawArgs map[string]any,
-) (string, error) {
+) (*string, error) {
 	if _, ok := rawArgs["team"]; !ok {
-		var zeroVal string
+		var zeroVal *string
 		return zeroVal, nil
 	}
 
 	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("team"))
 	if tmp, ok := rawArgs["team"]; ok {
-		return ec.unmarshalNID2string(ctx, tmp)
+		return ec.unmarshalOID2ᚖstring(ctx, tmp)
 	}
 
-	var zeroVal string
+	var zeroVal *string
 	return zeroVal, nil
 }
 
@@ -51099,7 +51099,7 @@ func (ec *executionContext) _Query_dataHealth(ctx context.Context, field graphql
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Query().DataHealth(rctx, fc.Args["team"].(string))
+		return ec.resolvers.Query().DataHealth(rctx, fc.Args["team"].(*string))
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -90276,6 +90276,22 @@ func (ec *executionContext) unmarshalOHowFilterInput2ᚖgithubᚗcomᚋfullᚑch
 	}
 	res, err := ec.unmarshalInputHowFilterInput(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalOID2ᚖstring(ctx context.Context, v any) (*string, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := graphql.UnmarshalID(v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOID2ᚖstring(ctx context.Context, sel ast.SelectionSet, v *string) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	res := graphql.MarshalID(*v)
+	return res
 }
 
 func (ec *executionContext) unmarshalOInt2ᚖint(ctx context.Context, v any) (*int, error) {

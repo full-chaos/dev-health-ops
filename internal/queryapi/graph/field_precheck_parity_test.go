@@ -202,7 +202,7 @@ func resolverPassesItsPrecheck(ctx context.Context, key, org string) (passed boo
 	q, m := &queryResolver{&Resolver{}}, &mutationResolver{&Resolver{}}
 	switch key {
 	case "Query.dataHealth":
-		_, err = q.DataHealth(ctx, "t")
+		_, err = q.DataHealth(ctx, nil)
 	case "Query.productTelemetryPlatformDashboard":
 		_, err = q.ProductTelemetryPlatformDashboard(ctx, model.ProductTelemetryDashboardInput{})
 	case "Mutation.createSavedReport":

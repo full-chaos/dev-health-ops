@@ -933,6 +933,14 @@ const nullableIntoPlainSites = `
 //	read.go latestDay 818fa20627a4 -> 8f7b3f43c903
 //	read.go latestRowsLimit 484e5d4507e3 -> 9e94c37b431b
 //	read.go repoTrend e90c541be45a -> a72217e8d045
+//
+// CHAOS-14669: four throughputforecast pins re-pinned by hand, digests copied from the hosted TestScanTypeCensus failure
+// output (Go run 45657937091, job 139360810269, census_integration_test.go:338) and equal to siteKey's formula over
+// LoadSites at the head (the same formula gives the old pins at base): loadBacklog 53728f78dd4b -> 38f1bee4d08a,
+// loadStaleWIP b29281653aa5 -> 27d229821c06, loadThroughputHistory 42e43e97bdd9 -> 85ba11309681, loadWorkItemOverlay
+// 4c3134c2ff27 -> 4ad4b98a6a6e. None of the four changed: a site's digest covers every SQL string constant of its file,
+// and the review and incident overlay statements of the same file gained the team clause (overlayTeamClause). The four
+// stay not-describable for their old reason; select lists and scan targets are unchanged.
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|566971fe4c3c|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|e67003e26fc2|not-describable
@@ -1008,10 +1016,10 @@ internal/queryapi/sankey/queries.go|fetchExpenseCounts|*float64,*float64,*float6
 internal/queryapi/sankey/queries.go|fetchStateStatusCounts|*string,*float64|0ef755127f61|not-describable
 internal/queryapi/server/mcp_route.go|Scan|[]any|073743d6899c|variadic-destinations
 internal/queryapi/testopsrisk/testopsrisk.go|readDaily|**time.Time,**float64,**float64,**float64,**float64,**float64,**float64,**uint64,**float64|d5ba164a1f0e|not-describable
-internal/queryapi/throughputforecast/clickhouse.go|loadBacklog|*uint64,*uint64,*uint64,*time.Time|53728f78dd4b|not-describable
-internal/queryapi/throughputforecast/clickhouse.go|loadStaleWIP|**float64,**float64,*uint64,*uint64,*time.Time|b29281653aa5|not-describable
-internal/queryapi/throughputforecast/clickhouse.go|loadThroughputHistory|*time.Time,*uint64|42e43e97bdd9|not-describable
-internal/queryapi/throughputforecast/clickhouse.go|loadWorkItemOverlay|*float64,*uint64,*uint64,*time.Time|4c3134c2ff27|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadBacklog|*uint64,*uint64,*uint64,*time.Time|38f1bee4d08a|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadStaleWIP|**float64,**float64,*uint64,*uint64,*time.Time|27d229821c06|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadThroughputHistory|*time.Time,*uint64|85ba11309681|not-describable
+internal/queryapi/throughputforecast/clickhouse.go|loadWorkItemOverlay|*float64,*uint64,*uint64,*time.Time|4ad4b98a6a6e|not-describable
 internal/queryapi/workgraph/edges.go|countMatchingEdges|*uint64|8d8175642fa2|not-describable
 internal/queryapi/workgraph/edges.go|fetchDedupedEdgeRows|*string,*string,*string,*string,*string,*string,*string,*string,*string,*float64,*string|9ec6525b760f|statement-not-static
 internal/queryapi/workgraph/edges.go|queryDependencyEdges|*string,*string,*string,*string,*string,*string,*string,*string,*string,*float64,*string|c998ded583fc|statement-not-static

@@ -87,7 +87,7 @@ var rootClasses = map[string]rootClass{
 	"Query.featureFlagEvents":                 {classNarrowable, "feature_flag_event rows, keyed by repository"},
 	"Query.featureFlags":                      {classNarrowable, "feature_flag rows, keyed by repository"},
 	"Query.home":                              {classMixed, "home.BuildResponse reads work-item, recommendation and risk tables"},
-	"Query.hotspots":                          {classNarrowable, "file_hotspot_daily rows, keyed by repository"},
+	"Query.hotspots":                          {classMixed, "the team filter resolves teams"},
 	"Query.improveOpportunities":              {classMixed, "work_item_metrics_daily and teams have no repository key"},
 	"Query.operatingReview":                   {classMixed, "work-item tables, teams and unit membership have no repository key"},
 	"Query.pr":                                {classNarrowable, "pull request, review, commit and linked-issue rows, keyed by repository"},

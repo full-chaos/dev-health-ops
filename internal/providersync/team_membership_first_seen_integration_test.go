@@ -242,7 +242,8 @@ type gitlabMembersServer struct {
 	// when set, is the status every lookup answers; lookups counts them.
 	lookupMembers []string
 	lookupStatus  int
-	lookupNoEnd   bool // the lookup answer carries no end-of-list signal
+	lookupHeader  http.Header // headers of a lookup answered with lookupStatus
+	lookupNoEnd   bool        // the lookup answer carries no end-of-list signal
 	lookups       int
 }
 
@@ -265,6 +266,9 @@ func newGitLabMembersServer(t *testing.T, usernames ...string) *gitlabMembersSer
 			if query := r.URL.Query().Get("query"); query != "" {
 				fake.lookups++
 				if fake.lookupStatus != 0 {
+					for key, values := range fake.lookupHeader {
+						w.Header()[key] = values
+					}
 					http.Error(w, "{}", fake.lookupStatus)
 					return
 				}
@@ -325,6 +329,13 @@ func (fake *gitlabMembersServer) setLookup(members []string, status int) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	fake.lookupMembers, fake.lookupStatus = members, status
+}
+
+// setLookupHeader sets the headers of a lookup answered with the status of setLookup.
+func (fake *gitlabMembersServer) setLookupHeader(header http.Header) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.lookupHeader = header
 }
 
 // setLookupNoEnd makes the lookup answer leave GitLab's end-of-list signal off.

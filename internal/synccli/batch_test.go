@@ -405,6 +405,30 @@ func TestBatchRefusalsRunAndListNothing(t *testing.T) {
 	}
 }
 
+// The batch listing error is text only: an error that wraps ErrNotAvailable or a
+// *Refusal does not change the verb's exit code or what it prints (the listing is
+// provider data, not a dho refusal). Synthetic texts.
+func TestBatchListingErrorStaysTextOnly(t *testing.T) {
+	for name, listErr := range map[string]error{
+		"wraps ErrNotAvailable": fmt.Errorf("listing refused here: %w", ErrNotAvailable),
+		"wraps a Refusal":       fmt.Errorf("listing refused here: %w", &Refusal{Code: cli.ExitUsage, Message: "synthetic refusal text", Stage: "exit"}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := &batchHarness{listErr: listErr}
+			code, _, stderr := runVerb(t, "git", h.executor(), githubBatchArgs, inlineEnv)
+			if code != cli.ExitFailure {
+				t.Errorf("exit %d, want %d (the failure exit, as for any listing error): %q", code, cli.ExitFailure, stderr)
+			}
+			if !strings.Contains(stderr, "github: list repositories: listing refused here") {
+				t.Errorf("stderr is not the redacted listing text: %q", stderr)
+			}
+			if strings.Contains(stderr, "dho sync git: synthetic refusal text") {
+				t.Errorf("the verb printed the wrapped refusal instead of the listing text: %q", stderr)
+			}
+		})
+	}
+}
+
 func TestClampIntSaturatesInsteadOfWrapping(t *testing.T) {
 	huge, _ := new(big.Int).SetString("99999999999999999999999", 10)
 	if got := clampInt(huge); got != 1<<31-1 {

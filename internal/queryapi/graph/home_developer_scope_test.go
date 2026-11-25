@@ -113,3 +113,61 @@ func TestHomeKnownDeveloperServesNoOrganizationNumber(t *testing.T) {
 		t.Fatal("no metric value read was issued: the cell measures nothing")
 	}
 }
+
+type homeDevArm struct {
+	name  string
+	scope *model.ScopeFilterInput
+	what  *model.WhatFilterInput
+	known bool
+	want  string
+	reads int
+}
+
+// Every arm that names no developer, and a developer id the organization does not know, answer byte for byte the reads main
+// issued: the digests are of the sorted statements and bindings, dates masked, taken AT MAIN (5dd4758412f2) from this code.
+func TestHomeScopeArmsOtherThanAKnownDeveloperAreByteEqualToMain(t *testing.T) {
+	const orgDigest = "d206347a2a7bd828af06b2f69b06b0d16405a471abb13f3ac5889c7e47abef9f"
+	arms := []homeDevArm{
+		{"no filter", nil, nil, false, orgDigest, 40},
+		{"org", &model.ScopeFilterInput{Level: model.ScopeLevelInputOrg}, nil, false, orgDigest, 40},
+		{"team", &model.ScopeFilterInput{Level: model.ScopeLevelInputTeam, Ids: []string{"team-synthetic-a"}}, nil, false, "224f1786f71d061c586b5abe0a669b17b3ba050e8cab9a972e8cd55e6401cbcd", 40},
+		{"repo", &model.ScopeFilterInput{Level: model.ScopeLevelInputRepo, Ids: []string{"repo-synthetic-a"}}, nil, false, "e4bab9a9cfc7fd11b82850834ffc7949fa0e9d710574b7a4e9ca8606b0eb3b04", 30},
+		{"org with what.repos", &model.ScopeFilterInput{Level: model.ScopeLevelInputOrg}, &model.WhatFilterInput{Repos: []string{"repo-synthetic-a"}}, false, "d668ae210f92b0ebcdf1031cc5da3c76e65dce25a8ef660d1b430f3ea9576199", 39},
+		{"developer, no ids", &model.ScopeFilterInput{Level: model.ScopeLevelInputDeveloper}, nil, false, orgDigest, 40},
+		{"developer, unknown id", &model.ScopeFilterInput{Level: model.ScopeLevelInputDeveloper, Ids: []string{homeDevScopeID}}, nil, false, "75745f707794ce581d6be6bc6b9f76b31c4957e265fed6f6b4526e8af05f35b8", 40},
+	}
+	for _, arm := range arms {
+		t.Run(arm.name, func(t *testing.T) {
+			ch := &homeDevProbeClient{known: arm.known}
+			homeDevRun(t, ch, arm.scope, arm.what)
+			digest, reads := homeDevDigest(ch)
+			if digest != arm.want || reads != arm.reads {
+				t.Fatalf("reads changed: digest %s (%d reads), main %s (%d reads)", digest, reads, arm.want, arm.reads)
+			}
+		})
+	}
+}
+
+// A known developer id gets the same answer shape as an unknown one (no existence oracle): the same statements and bindings,
+// and every read is an organization-health read (the same text the organization scope issues) or carries the no-data filter.
+func TestHomeKnownDeveloperReadsTheSameAsAnUnknownOne(t *testing.T) {
+	scope := &model.ScopeFilterInput{Level: model.ScopeLevelInputDeveloper, Ids: []string{homeDevScopeID}}
+	known, unknown, org := &homeDevProbeClient{known: true}, &homeDevProbeClient{}, &homeDevProbeClient{}
+	homeDevRun(t, known, scope, nil)
+	homeDevRun(t, unknown, scope, nil)
+	homeDevRun(t, org, nil, nil)
+	kd, kn := homeDevDigest(known)
+	ud, un := homeDevDigest(unknown)
+	if kd != ud || kn != un {
+		t.Fatalf("a known developer reads %d statements (%s), an unknown one %d (%s)", kn, kd, un, ud)
+	}
+	orgStatements := map[string]bool{}
+	for _, s := range org.statements {
+		orgStatements[s] = true
+	}
+	for _, s := range known.statements {
+		if !orgStatements[s] && !strings.Contains(s, "SELECT hit FROM") && !strings.Contains(s, "1 = 0") {
+			t.Errorf("a developer-scope read that is neither an organization-health read nor under the no-data filter: %.120s", strings.Join(strings.Fields(s), " "))
+		}
+	}
+}

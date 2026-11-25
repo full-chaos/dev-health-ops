@@ -44,7 +44,7 @@ func fetchInvestmentThemeAllocation(ctx context.Context, client QueryClient, f F
 // coverage of the same units (Reader.FetchSizingCoverage, the filters of the theme read), so the tile says how
 // much of its share is sized work (CHAOS-9624).
 func fetchThemeAllocationIn(ctx context.Context, client QueryClient, f Filters, orgID string, startDay, endDay time.Time, asOf time.Time, measure string) ([]ReworkThemeAllocation, error) {
-	if f.Scope.unresolved {
+	if f.Scope.unresolved || f.Scope.developerNamed() {
 		return nil, nil
 	}
 	reader, err := investmentexplain.NewReader(client)

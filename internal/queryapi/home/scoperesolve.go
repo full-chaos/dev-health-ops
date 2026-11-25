@@ -8,6 +8,10 @@ import (
 
 // An unresolved scope filter answers EMPTY (CHAOS-6119, R335); what "known" means is in package scoperesolve.
 
+// developerNamed: the request scopes to developer ids. No metric of Home has a developer dimension, so such a scope answers
+// no data whether or not the ids are known.
+func (s ScopeFilter) developerNamed() bool { return s.Level == "developer" && len(s.IDs) > 0 }
+
 // Unresolved reports that the request names scope ids at a repository, service or developer level and none of them exists for the
 // organization. Only meaningful after ResolveScope.
 func (s ScopeFilter) Unresolved() bool { return s.unresolved }

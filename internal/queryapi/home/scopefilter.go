@@ -55,7 +55,7 @@ func resolveRepoIDs(ctx context.Context, client QueryClient, repoRefs []string, 
 // asOf is the response's own instant, so every metric in one response
 // resolves the same team membership.
 func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, repoColumn string, asOf time.Time) (string, []dhclickhouse.Binding, error) {
-	if f.Scope.unresolved {
+	if f.Scope.unresolved || f.Scope.developerNamed() {
 		return unresolvedScopeFilter, nil, nil
 	}
 	repoRefs := teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos)
@@ -139,7 +139,9 @@ func repoFilterApplied(f Filters, metricScope string) *bool {
 // scopeFilterForMetric ports scope_filter_for_metric (api/services/
 // filtering.py:129-147).
 func scopeFilterForMetric(ctx context.Context, client QueryClient, metricScope string, f Filters, orgID, teamColumn, repoColumn string, asOf time.Time) (string, []dhclickhouse.Binding, error) {
-	if f.Scope.unresolved {
+	if f.Scope.unresolved || f.Scope.developerNamed() {
+		// No metric of Home has a developer dimension here: a developer scope, known or not, answers no data, never the
+		// organization's numbers under a person's name.
 		return unresolvedScopeFilter, nil, nil
 	}
 	if metricScope == "team" && f.Scope.Level == "team" {

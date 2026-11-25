@@ -210,11 +210,36 @@ func TestTestopsPooledSuiteSourceServesTheRowsOfTheOrganizationWideRead(t *testi
 	if len(mixed.rows) == 0 {
 		t.Fatalf("control: the mixed window serves no row, so the cell compares nothing")
 	}
+	mutants := func(phase string, want served, cases []suiteSourceMutant) {
+		t.Helper()
+		for _, m := range cases {
+			if got := strings.Count(testopspooled.SuiteRunsSource, m.old); got != 1 {
+				t.Fatalf("MUTANT14595 %s: SuiteRunsSource holds %q %d times, want 1", m.rule, m.old, got)
+			}
+			mutated := serve(phase+" mutant "+m.rule, org, strings.Replace(testopspooled.SuiteRunsSource, m.old, m.new, 1))
+			red := !reflect.DeepEqual(mutated.rows, want.rows) || mutated.p95 != want.p95 || mutated.p50 != want.p50
+			t.Logf("MUTANT14595 %s %s red=%v: rows %d -> %d, p95 %s -> %s, median %s -> %s", phase, m.rule, red,
+				len(want.rows), len(mutated.rows), want.p95, mutated.p95, want.p50, mutated.p50)
+			if !red && m.mustBeRed {
+				t.Errorf("MUTANT14595 %s %s stayed green: the fixture does not exercise the rule", phase, m.rule)
+			}
+		}
+	}
+	mutants("mixed window", mixed, []suiteSourceMutant{
+		{"stored-arm-marker", "WHERE pooled_samples_stored = 1", "WHERE pooled_samples_stored = 0", true},
+	})
 	noSamples(org, dayBefore)
 	whole := compare("every day without samples")
 	if len(whole.rows) == 0 {
 		t.Fatalf("control: every day without samples serves no row")
 	}
+	mutants("every day without samples", whole, []suiteSourceMutant{
+		{"newest-attempt", "report_slot != '' AND run_attempt = newest_attempt AND", "report_slot != '' AND", true},
+		{"slot-retired", " AND slot_retired = 0)", ")", true},
+		{"retired-slot-legacy-ids", " AND NOT has(retired_legacy_ids, suite_id)", "", true},
+		{"newest-attempt-legacy-ids", "AND NOT has(newest_legacy_ids, suite_id) ", "", false},
+		{"suite-row-retracted", "AND retracted = 0 AND slot_retired", "AND slot_retired", false},
+	})
 	// The other organization's day without samples changes neither the first organization's rows nor its read.
 	noSamples(other, dayD)
 	if again := compare("after the other organization's day"); !reflect.DeepEqual(again.rows, whole.rows) || again.readRows != whole.readRows {
@@ -300,4 +325,11 @@ func copySuiteRows(t *testing.T, ctx context.Context, conn driver.Conn, where st
 	if err := batch.Send(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// suiteSourceMutant drops or flips one rule of testopspooled.SuiteRunsSource. mustBeRed is false for a rule the fixture is
+// not proven to exercise: its result is logged only.
+type suiteSourceMutant struct {
+	rule, old, new string
+	mustBeRed      bool
 }

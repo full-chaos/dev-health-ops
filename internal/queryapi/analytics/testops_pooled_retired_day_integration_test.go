@@ -4,6 +4,7 @@ package analytics
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,13 +57,13 @@ FROM numbers(%d)`, retiredDayRepoB, retiredDayOrg, historyB))
 	e.exec(`INSERT INTO testops_test_metrics_daily (repo_id, day, org_id, computed_at) VALUES (?, ?, ?, now() + INTERVAL 1 HOUR)`,
 		retiredDayRepoA, day1, retiredDayOrg)
 
-	read := func(phase string) uint64 {
+	read := func(phase, source string) uint64 {
 		t.Helper()
 		id := "c14595-" + phase + "-" + uuid.NewString()[:8]
 		ctx := stdclickhouse.Context(e.ctx, stdclickhouse.WithQueryID(id))
 		var p95 *float64
 		var samples uint64
-		if err := e.admin.QueryRow(ctx, "SELECT "+testopspooled.P95+", count() FROM "+testopspooled.SuiteRunsSource+" SETTINGS max_rows_to_read = 0",
+		if err := e.admin.QueryRow(ctx, "SELECT "+testopspooled.P95+", count() FROM "+source+" SETTINGS max_rows_to_read = 0",
 			stdclickhouse.Named("org_id", retiredDayOrg), stdclickhouse.Named("start_date", "2026-01-01"), stdclickhouse.Named("end_date", "2026-01-07")).
 			Scan(&p95, &samples); err != nil {
 			t.Fatalf("%s: %v", phase, err)
@@ -128,14 +129,25 @@ FROM numbers(%d)`, retiredDayRepoB, retiredDayOrg, historyB))
 		}
 	}
 
-	absent := read("retired-absent")
+	absent := read("retired-absent", testopspooled.SuiteRunsSource)
 	// B's day2 retired: the stale-key retraction row (writeStaleKeyZeroRows columns), newer than the stored row.
 	e.exec(`INSERT INTO testops_test_metrics_daily (org_id, day, repo_id, computed_at, retracted, team_id, service_id)
 VALUES (?, ?, ?, now() + INTERVAL 2 HOUR, 1, NULL, NULL)`, retiredDayOrg, day2, retiredDayRepoB)
-	present := read("retired-present")
+	present := read("retired-present", testopspooled.SuiteRunsSource)
 	served("retired-present")
 	if present > absent+1_000 {
 		t.Errorf("%s: with B's retired day the pooled suite read reads %d rows, without it %d; want at most %d more than %d (the retired day must not pull B's %d history rows into the raw arm)",
 			version, present, absent, 1_000, absent, historyB)
+	}
+	// The mutant: the raw arm's legacy set without the retracted term (LegacyRepoDays) reads B's history again.
+	live, legacy := testopspooled.LiveLegacyRepoDays("testops_test_metrics_daily"), testopspooled.LegacyRepoDays("testops_test_metrics_daily")
+	mutant := strings.ReplaceAll(testopspooled.SuiteRunsSource, live, legacy)
+	if mutant == testopspooled.SuiteRunsSource || strings.Count(testopspooled.SuiteRunsSource, live) != 2 {
+		t.Fatalf("the mutant changed nothing: SuiteRunsSource holds the live legacy set %d times, want 2", strings.Count(testopspooled.SuiteRunsSource, live))
+	}
+	if rows := read("retired-present-mutant-without-the-retracted-term", mutant); rows <= absent+1_000 {
+		t.Errorf("MUTANT14595 legacy-set-retracted-term red=false: the mutant reads %d rows, want more than %d", rows, absent+1_000)
+	} else {
+		t.Logf("MUTANT14595 legacy-set-retracted-term red=true: read_rows %d -> %d", present, rows)
 	}
 }

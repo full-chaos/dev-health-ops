@@ -293,8 +293,9 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 		}
 	}
 	if wantMembers {
+		limit := &membershipRateLimit{}
 		rows.MembershipAbsence = &MembershipLookupBudget{
-			Inner: githubMembershipAbsence{client: collector.Client, org: org}, Left: membershipLookupBudget,
+			Inner: githubMembershipAbsence{client: collector.Client, org: org, limit: limit}, Left: membershipLookupBudget, Limit: limit,
 		}
 	}
 	evidence.Complete = true

@@ -8,9 +8,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
+
+// teamRowCount is the number of team rows the provider holds for the org, after the merge.
+func teamRowCount(ctx context.Context, t *testing.T, conn driver.Conn, orgID, provider string) uint64 {
+	t.Helper()
+	var count uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM teams FINAL WHERE org_id = ? AND provider = ?`, orgID, provider).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
 
 // WANT: in the post-sync (non-strict) walk, a classified rate limit on the direct departure lookup of a member
 // ends the run with that error, so the caller can snooze and read the catalog again: a rate limit says nothing
@@ -34,6 +46,7 @@ func TestGitLabDepartureLookupRateLimitEndsTheRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.setMembers("alice")
+	teamsBefore := teamRowCount(ctx, t, conn, orgID, "gitlab")
 	for index, cell := range []struct {
 		name        string
 		status      int
@@ -59,6 +72,10 @@ func TestGitLabDepartureLookupRateLimitEndsTheRun(t *testing.T) {
 		}
 		requireOpen(t, cell.name, openMembershipFacts(ctx, t, conn, orgID, "gitlab"), carol, departureAt[0])
 	}
+	// The teams the limited runs wrote before the stop are rewritten, not duplicated, by the rerun.
+	if got := teamRowCount(ctx, t, conn, orgID, "gitlab"); got != teamsBefore {
+		t.Errorf("team rows after the limited runs = %d, want %d", got, teamsBefore)
+	}
 	fake.setLookup([]string{}, 0)
 	fake.setLookupHeader(nil)
 	result, err := sync(departureAt[3])
@@ -66,6 +83,9 @@ func TestGitLabDepartureLookupRateLimitEndsTheRun(t *testing.T) {
 		t.Errorf("lookup 200 without the member: err=%v closed=%d, want nil and 1", err, result.MembershipsClosed)
 	}
 	requireNotOpen(t, "lookup 200 without the member", openMembershipFacts(ctx, t, conn, orgID, "gitlab"), carol)
+	if got := teamRowCount(ctx, t, conn, orgID, "gitlab"); got != teamsBefore {
+		t.Errorf("team rows after the rerun = %d, want %d", got, teamsBefore)
+	}
 }
 
 // The same WANT for the GitHub direct lookup GET .../memberships/{login}.
@@ -103,6 +123,7 @@ func TestGitHubDepartureLookupRateLimitEndsTheRun(t *testing.T) {
 	if _, err := run(departureAt[0], both, answer{status: 200, body: `{"state":"active"}`}); err != nil {
 		t.Fatal(err)
 	}
+	teamsBefore := teamRowCount(ctx, t, conn, orgID, "github")
 	for index, cell := range []struct {
 		name        string
 		lookup      answer
@@ -125,9 +146,15 @@ func TestGitHubDepartureLookupRateLimitEndsTheRun(t *testing.T) {
 		}
 		requireOpen(t, cell.name, openMembershipFacts(ctx, t, conn, orgID, "github"), hubot, departureAt[0])
 	}
+	if got := teamRowCount(ctx, t, conn, orgID, "github"); got != teamsBefore {
+		t.Errorf("team rows after the limited runs = %d, want %d", got, teamsBefore)
+	}
 	result, err := run(departureAt[3], only, answer{status: 404, body: `{"message":"Not Found"}`})
 	if err != nil || result.MembershipsClosed != 1 {
 		t.Errorf("lookup 404: err=%v closed=%d, want nil and 1", err, result.MembershipsClosed)
 	}
 	requireNotOpen(t, "lookup 404", openMembershipFacts(ctx, t, conn, orgID, "github"), hubot)
+	if got := teamRowCount(ctx, t, conn, orgID, "github"); got != teamsBefore {
+		t.Errorf("team rows after the rerun = %d, want %d", got, teamsBefore)
+	}
 }

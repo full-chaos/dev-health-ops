@@ -206,7 +206,7 @@ FROM generate_series(1, $2::int) AS n`, old, riverRows)
 		t.Fatal(err)
 	}
 	explain("statement 0 at base", baseSQL, cutoff)
-	checkStatementZeroWork(t, ctx, admin, "statement 0 at base", baseSQL, cutoff)
+	checkStatementZeroWork(t, ctx, admin, "statement 0 at base", plantedPerRunPartitionsSQL, cutoff)
 	t.Run("a per-run partition read in statement 0 is refused", func(t *testing.T) {
 		violations := statementZeroWorkViolations(t, ctx, admin, "planted statement 0", plantedPerRunPartitionsSQL, cutoff)
 		if len(violations) == 0 {

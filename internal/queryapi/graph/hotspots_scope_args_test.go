@@ -87,3 +87,41 @@ func TestHotspots_PassesTheScopeArgumentsToTheRead(t *testing.T) {
 		})
 	}
 }
+
+// CHAOS-14642: a blank team id is no team scope (teamscope.RepoCondition drops it): teamIds [""] sends the same
+// statements and bindings as a request with no teamIds, so it reads the org's rows and never widens past them.
+func TestHotspots_BlankTeamIDIsTheOrgScope(t *testing.T) {
+	const query = `query($input: HotspotsInput!) { hotspots(input: $input) { rows { repoId } repos { repoId } } }`
+	run := func(t *testing.T, input map[string]any) *statementRecordingClient {
+		t.Helper()
+		ch := &statementRecordingClient{}
+		server := handler.NewDefaultServer(NewExecutableSchema(Config{Resolvers: &Resolver{ClickHouse: ch}}))
+		input["orgId"], input["sinceUtc"], input["untilUtc"] = "org-1", "2026-08-01T00:00:00Z", "2026-08-31T00:00:00Z"
+		body, _ := json.Marshal(map[string]any{"query": query, "variables": map[string]any{"input": input}})
+		req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+		rec := httptest.NewRecorder()
+		server.ServeHTTP(rec, req)
+		if strings.Contains(rec.Body.String(), `"errors"`) {
+			t.Fatalf("input %v: %s", input, rec.Body.String())
+		}
+		if len(ch.statements) == 0 {
+			t.Fatalf("input %v: no read", input)
+		}
+		return ch
+	}
+	reference := run(t, map[string]any{})
+	got := run(t, map[string]any{"teamIds": []string{""}})
+	if !reflect.DeepEqual(got.statements, reference.statements) {
+		t.Errorf("teamIds [\"\"] statements differ from the request with no teamIds:\n%v\nwant\n%v", got.statements, reference.statements)
+	}
+	if !reflect.DeepEqual(got.bindings, reference.bindings) {
+		t.Errorf("teamIds [\"\"] bindings differ from the request with no teamIds:\n%v\nwant\n%v", got.bindings, reference.bindings)
+	}
+	for i, s := range got.statements {
+		if strings.Contains(s, teamscope.Marker) {
+			t.Errorf("statement %d carries the team ownership condition for a blank team id", i)
+		}
+	}
+}

@@ -2,6 +2,7 @@ package datahealth
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
@@ -28,10 +29,19 @@ FROM (
 )
 GROUP BY provider, identity, display_name
 ORDER BY observed_count DESC
-LIMIT 100`
+LIMIT 50001`
 
-// observedGroupCeiling is the most observed (provider, identity) groups one request counts.
+// observedGroupCeiling is the most observed (provider, identity) groups one request counts. The statement reads
+// one more than that (LIMIT 50001) so a request over it is seen; the count of the first groups is then a lower bound.
 var observedGroupCeiling = 50000
+
+// orgPrefix is the first 8 characters of the org id: enough to find the org, never the whole id.
+func orgPrefix(orgID string) string {
+	if len(orgID) > 8 {
+		return orgID[:8]
+	}
+	return orgID
+}
 
 const mappedIdentitiesSQL = `
 SELECT canonical_id, email, display_name, provider_identities, team_ids
@@ -67,6 +77,11 @@ type unmapped struct {
 // that count as mapped to those without team scope or on that team.
 func (r *Reader) IdentityMapping(ctx context.Context, orgID, team string) *model.IdentityMappingHealth {
 	observed := r.observedIdentities(ctx, orgID)
+	if len(observed) > observedGroupCeiling {
+		observed = observed[:observedGroupCeiling]
+		slog.WarnContext(ctx, "query-api: data health identity count is a lower bound, observed groups passed the ceiling",
+			"operation", "dataHealth", "org_prefix", orgPrefix(orgID), "ceiling", observedGroupCeiling)
+	}
 	mapped := r.mappedIdentities(ctx, orgID, team)
 	keys := identityKeys(mapped)
 

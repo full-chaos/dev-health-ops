@@ -104,7 +104,8 @@ func TestIdentityUnmappedCountOverTheCeilingIsALowerBoundWithOneWarn(t *testing.
 		t.Fatalf("unmapped count = %d, want 5 (the first 5 groups: the ceiling)", got.UnmappedCount)
 	}
 	logged := buf.String()
-	if n := strings.Count(logged, "level=WARN"); n != 1 || !strings.Contains(logged, "org_prefix=c0ffee00") || strings.Contains(logged, "c0ffee00-aaaa") {
+	if n := strings.Count(logged, "level=WARN"); n != 1 || !strings.Contains(logged, "org_prefix=c0ffee00") || !strings.Contains(logged, "ceiling=5") ||
+		!strings.Contains(logged, `msg="query-api: data health identity count is a lower bound, observed groups passed the ceiling"`) || strings.Contains(logged, "c0ffee00-aaaa") {
 		t.Fatalf("want exactly one WARN carrying the org prefix only: %s", logged)
 	}
 }

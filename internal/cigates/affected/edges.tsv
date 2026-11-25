@@ -237,6 +237,7 @@ internal/providerfoundation	environment_proxy_test.go	unexpressed
 internal/providersync	census_load_test.go	unexpressed
 internal/providersync	item_route_ssa_test.go	unexpressed
 internal/providersync	project_id_test.go	unexpressed
+internal/providersync	repo_identity_mint_line_test.go	unexpressed
 internal/providersync	route_census_runtime_test.go	unexpressed
 internal/providersync	work_item_row_base_census_test.go	unexpressed
 internal/queryapi/pdp	headers_switch_census_test.go	unexpressed

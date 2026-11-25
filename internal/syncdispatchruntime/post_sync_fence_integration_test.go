@@ -88,7 +88,7 @@ func (store *countingTouchedDaysStore) RecordTouched(context.Context, string, ti
 	return 0, nil
 }
 
-func (store *countingTouchedDaysStore) RecordTouchedGit(context.Context, string, time.Time) (uint64, error) {
+func (store *countingTouchedDaysStore) RecordTouchedGit(context.Context, string, time.Time, bool) (uint64, error) {
 	store.calls++
 	return 0, nil
 }

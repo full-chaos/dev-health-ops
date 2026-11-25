@@ -58,6 +58,8 @@ type recordingTouchedDaysStore struct {
 	calls      int
 	tests      []time.Time
 	testsError error
+	// gitCommitStats is the commitStats argument of every RecordTouchedGit call.
+	gitCommitStats []bool
 }
 
 func (store *recordingTouchedDaysStore) RecordTouched(context.Context, string, time.Time, []time.Time) (uint64, error) {
@@ -65,8 +67,9 @@ func (store *recordingTouchedDaysStore) RecordTouched(context.Context, string, t
 	return 0, nil
 }
 
-func (store *recordingTouchedDaysStore) RecordTouchedGit(context.Context, string, time.Time) (uint64, error) {
+func (store *recordingTouchedDaysStore) RecordTouchedGit(_ context.Context, _ string, _ time.Time, commitStats bool) (uint64, error) {
 	store.calls++
+	store.gitCommitStats = append(store.gitCommitStats, commitStats)
 	return 0, nil
 }
 

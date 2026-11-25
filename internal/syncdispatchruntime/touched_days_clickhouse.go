@@ -316,8 +316,8 @@ FROM (
 }
 
 // recordTouchedGitSQL appends one 'touched' event for each (day, repository)
-// that a commit, a pull request, a pull request review or the stats of a commit
-// written at or after the given time belongs to (CHAOS-9169, CHAOS-14673). A late or old row marks its own day however far the day lies
+// that a commit, a pull request or a pull request review written at or after
+// the given time belongs to (CHAOS-9169, CHAOS-14673). A late or old row marks its own day however far the day lies
 // from the window of its sync: no window of the sync's units is needed.
 //
 // The days are the ones the daily run reads the rows under, not every date the
@@ -327,10 +327,7 @@ FROM (
 // under would only start a run that computes nothing new. A review is read by
 // its own submission day, not by the day of its pull request: a review of day D
 // on an older open pull request marks D, and the pull request row re-written
-// with it marks only its own days. The line counts of a commit are read under
-// the committer day of the commit, and a later sync can write them after the
-// commit: a stats row written in the run marks the committer day of its commit
-// (the commit row is looked up by the stats keys, whatever its own last_synced).
+// with it marks only its own days.
 const recordTouchedGitSQL = `
 INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
 SELECT ?, day, repo_id, 'touched', fromUnixTimestamp64Milli(toInt64(?), 'UTC')
@@ -349,7 +346,21 @@ FROM (
     SELECT repo_id, toDate(submitted_at, 'UTC') AS day
     FROM git_pull_request_reviews
     WHERE org_id = ? AND last_synced >= fromUnixTimestamp64Milli(toInt64(?), 'UTC')
-    UNION ALL
+)
+GROUP BY day, repo_id`
+
+// recordTouchedGitStatsSQL appends one 'touched' event for the committer day of
+// each commit whose git_commit_stats rows were written at or after the given time
+// (CHAOS-14673). The line counts of a commit are read under its committer day,
+// and a later sync can write them after the commit: the commit row is looked up
+// by the stats keys, whatever its own last_synced. It is its own statement and
+// RecordTouchedGit runs it only for a sync that wrote commit stats: the stats
+// table has no index or partition on last_synced, so the read covers every stats
+// row of the organization.
+const recordTouchedGitStatsSQL = `
+INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
+SELECT ?, day, repo_id, 'touched', fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+FROM (
     SELECT repo_id, toDate(committer_when, 'UTC') AS day
     FROM git_commits
     WHERE org_id = ? AND (repo_id, hash) IN (
@@ -360,11 +371,13 @@ FROM (
 )
 GROUP BY day, repo_id`
 
-// RecordTouchedGit appends the 'touched' events of the commits, pull requests,
-// pull request reviews and commit stats whose last_synced is at or after since. It returns the number of
-// keys it appended.
+// RecordTouchedGit appends the 'touched' events of the commits, pull requests
+// and pull request reviews whose last_synced is at or after since, and, when
+// commitStats is true (a unit of the sync wrote commit stats), the committer
+// days of the commits whose stats were written at or after since. It returns
+// the number of keys it appended.
 func (store *ClickHouseTouchedDaysStore) RecordTouchedGit(
-	ctx context.Context, organizationID string, since time.Time,
+	ctx context.Context, organizationID string, since time.Time, commitStats bool,
 ) (uint64, error) {
 	if store == nil || store.conn == nil || organizationID == "" || since.IsZero() {
 		return 0, ErrTouchedDaysUnavailable
@@ -379,9 +392,16 @@ func (store *ClickHouseTouchedDaysStore) RecordTouchedGit(
 		organizationID, sinceMillis,
 		organizationID, sinceMillis,
 		organizationID, sinceMillis,
-		organizationID, organizationID, sinceMillis,
 	); err != nil {
 		return 0, ErrTouchedDaysUnavailable
+	}
+	if commitStats {
+		if err := store.conn.Exec(ctx, recordTouchedGitStatsSQL,
+			organizationID, at.UnixMilli(),
+			organizationID, organizationID, sinceMillis,
+		); err != nil {
+			return 0, ErrTouchedDaysUnavailable
+		}
 	}
 	return store.recordedAt(ctx, organizationID, at)
 }

@@ -98,7 +98,7 @@ func TestTouchedDaysRecordHoldsTheSubmissionDayOfTheReviewsOfTheRun(t *testing.T
 		touchedTestKey(time.August, 21, touchedTestRepoB),
 	}
 	sort.Strings(want)
-	if _, err := store.RecordTouchedGit(ctx, touchedTestOrg, touchedTestSince); err != nil {
+	if _, err := store.RecordTouchedGit(ctx, touchedTestOrg, touchedTestSince, false); err != nil {
 		t.Fatal(err)
 	}
 	if got := pendingTouchedTestKeys(t, ctx, conn, touchedTestOrg); !reflect.DeepEqual(got, want) {
@@ -174,7 +174,14 @@ func TestTouchedDaysRecordHoldsTheCommitDayOfTheStatsOfTheRun(t *testing.T) {
 		touchedTestKey(time.July, 9, touchedTestRepoB),
 	}
 	sort.Strings(want)
-	if _, err := store.RecordTouchedGit(ctx, touchedTestOrg, touchedTestSince); err != nil {
+	// A sync that wrote no commit stats does not read the stats table: its stats rows mark nothing.
+	if _, err := store.RecordTouchedGit(ctx, touchedTestOrg, touchedTestSince, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := pendingTouchedTestKeys(t, ctx, conn, touchedTestOrg); len(got) != 0 {
+		t.Fatalf("a record without commit stats marked %v, want nothing (control)", got)
+	}
+	if _, err := store.RecordTouchedGit(ctx, touchedTestOrg, touchedTestSince, true); err != nil {
 		t.Fatal(err)
 	}
 	if got := pendingTouchedTestKeys(t, ctx, conn, touchedTestOrg); !reflect.DeepEqual(got, want) {
@@ -262,7 +269,7 @@ func TestTouchedDaysRecordWithoutLateStatsEqualsTheRecordAtMain(t *testing.T) {
 		t.Fatalf("the record at main holds %d keys, want 6 (control): %v", len(legacy), legacy)
 	}
 
-	if _, err := store.RecordTouchedGit(ctx, touchedTestOrg, touchedTestSince); err != nil {
+	if _, err := store.RecordTouchedGit(ctx, touchedTestOrg, touchedTestSince, true); err != nil {
 		t.Fatal(err)
 	}
 	got := recordedTouchedTestKeys(t, ctx, conn, touchedTestOrg)
@@ -272,12 +279,13 @@ func TestTouchedDaysRecordWithoutLateStatsEqualsTheRecordAtMain(t *testing.T) {
 }
 
 // CHAOS-14673 cost cell: on a synthetic set of 40 commits, 30 pull requests, 60
-// reviews and 50 commit stats rows (half of each written in the run), one record
-// call is exactly 3 statements (the clock, the INSERT ... SELECT, the key count)
-// and the INSERT ... SELECT reads no more rows than its arms can: each table once,
-// and the commit table a second time as the lookup of the commit day of the stats
-// (one pass, so no per-row lookup).
-func TestRecordTouchedGitReadsBoundedRowsInThreeStatements(t *testing.T) {
+// reviews and 50 commit stats rows (half of each written in the run), a record call
+// without commit stats is exactly 3 statements (the clock, the INSERT ... SELECT,
+// the key count) and reads at most the rows of the three git tables once; a call
+// with commit stats is exactly 4 statements (one more INSERT ... SELECT) and that
+// statement reads at most the stats rows and the commit rows once (one pass, so no
+// per-row lookup). The stats table is read by no statement of the first call.
+func TestRecordTouchedGitReadsBoundedRowsInThreeOrFourStatements(t *testing.T) {
 	ctx, conn := newReadbackIntegrationConn(t)
 	store, err := NewClickHouseTouchedDaysStore(conn)
 	if err != nil {
@@ -315,33 +323,57 @@ func TestRecordTouchedGitReadsBoundedRowsInThreeStatements(t *testing.T) {
 	}
 	insertTouchedTestStats(t, ctx, conn, statRows...)
 
-	var startMicros int64
 	var database string
-	if err := conn.QueryRow(ctx, `SELECT toUnixTimestamp64Micro(now64(6)), currentDatabase()`).Scan(&startMicros, &database); err != nil {
+	if err := conn.QueryRow(ctx, `SELECT currentDatabase()`).Scan(&database); err != nil {
 		t.Fatal(err)
-	}
-	if _, err := store.RecordTouchedGit(ctx, touchedTestOrg, touchedTestSince); err != nil {
-		t.Fatal(err)
-	}
-	if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
-		t.Fatalf("the query log is not readable by this user: %v", err)
 	}
 	// The harness may give every test a private scratch database on one shared server
 	// (containers/harness.go, paths 1 and 2): the filter names this connection's database.
-	var statements, readRows uint64
-	if err := conn.QueryRow(ctx, `SELECT count(), sumIf(read_rows, position(query, 'INSERT INTO daily_metrics_touched_days') > 0) FROM system.query_log
-		WHERE type = 'QueryFinish' AND is_initial_query AND current_database = ? AND toUnixTimestamp64Micro(event_time_microseconds) >= ?
-		  AND position(query, 'system.query_log') = 0
-		  AND (position(query, 'daily_metrics_touched_days') > 0 OR position(query, 'toUnixTimestamp64Milli(now64(3))') > 0)`,
-		database, startMicros).Scan(&statements, &readRows); err != nil {
-		t.Fatalf("the query log has no row for the record: %v", err)
+	measure := func(commitStats bool) (statements, readRows, statsRows uint64) {
+		t.Helper()
+		var startMicros int64
+		if err := conn.QueryRow(ctx, `SELECT toUnixTimestamp64Micro(now64(6))`).Scan(&startMicros); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.RecordTouchedGit(ctx, touchedTestOrg, touchedTestSince, commitStats); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
+			t.Fatalf("the query log is not readable by this user: %v", err)
+		}
+		if err := conn.QueryRow(ctx, `SELECT count(),
+			sumIf(read_rows, position(query, 'INSERT INTO daily_metrics_touched_days') > 0),
+			sumIf(read_rows, position(query, 'git_commit_stats') > 0)
+			FROM system.query_log
+			WHERE type = 'QueryFinish' AND is_initial_query AND current_database = ? AND toUnixTimestamp64Micro(event_time_microseconds) >= ?
+			  AND position(query, 'system.query_log') = 0
+			  AND (position(query, 'daily_metrics_touched_days') > 0 OR position(query, 'toUnixTimestamp64Milli(now64(3))') > 0)`,
+			database, startMicros).Scan(&statements, &readRows, &statsRows); err != nil {
+			t.Fatalf("the query log has no row for the record: %v", err)
+		}
+		return statements, readRows, statsRows
 	}
-	t.Logf("record of the git days: statements=%d insert_select_read_rows=%d (tables hold %d, commits counted twice)", statements, readRows, 2*commits+pullRequests+reviews+stats)
+	statements, readRows, statsRows := measure(false)
+	t.Logf("record without commit stats: statements=%d insert_select_read_rows=%d stats_statement_read_rows=%d", statements, readRows, statsRows)
 	if statements != 3 {
-		t.Fatalf("one record call ran %d statements, want 3", statements)
+		t.Fatalf("a record call without commit stats ran %d statements, want 3", statements)
 	}
-	if readRows == 0 || readRows > 2*commits+pullRequests+reviews+stats {
-		t.Fatalf("the INSERT ... SELECT read %d rows, want within (0, %d]: each table once, commits twice", readRows, 2*commits+pullRequests+reviews+stats)
+	if statsRows != 0 {
+		t.Fatalf("a record call without commit stats read %d rows through the stats table, want 0", statsRows)
+	}
+	if readRows == 0 || readRows > commits+pullRequests+reviews {
+		t.Fatalf("the INSERT ... SELECT read %d rows, want within (0, %d]: each git table once", readRows, commits+pullRequests+reviews)
+	}
+	statements, readRows, statsRows = measure(true)
+	t.Logf("record with commit stats: statements=%d insert_select_read_rows=%d stats_statement_read_rows=%d", statements, readRows, statsRows)
+	if statements != 4 {
+		t.Fatalf("a record call with commit stats ran %d statements, want 4", statements)
+	}
+	if statsRows == 0 || statsRows > stats+commits {
+		t.Fatalf("the stats statement read %d rows, want within (0, %d]: the stats once and the commits once", statsRows, stats+commits)
+	}
+	if readRows > commits+pullRequests+reviews+stats+commits {
+		t.Fatalf("the INSERT ... SELECT statements read %d rows, want at most %d", readRows, commits+pullRequests+reviews+stats+commits)
 	}
 	if got := recordedTouchedTestKeys(t, ctx, conn, touchedTestOrg); len(got) == 0 {
 		t.Fatal("the record appended no key (control)")

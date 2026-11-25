@@ -496,16 +496,11 @@ var pagerDutyRetryable = map[int]bool{429: true, 500: true, 502: true, 503: true
 func (h *handlers) pagerDutyGET(ctx context.Context, client providerfoundation.HTTPDoer, target string, auth pagerDutyRequestAuth) ([]byte, *servicesFailure) {
 	unavailable := servicesHTTPError(http.StatusBadGateway, "PagerDuty services are temporarily unavailable")
 	delay := pagerDutyInitialBackoff
-	sleep := func(d time.Duration) bool {
-		timer := time.NewTimer(d)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-			return true
-		case <-ctx.Done():
-			return false
-		}
+	sleepFor := h.pagerDutySleep
+	if sleepFor == nil {
+		sleepFor = sleepUntilTimerOrDone
 	}
+	sleep := func(d time.Duration) bool { return sleepFor(ctx, d) == nil }
 	for attempt := 0; attempt < pagerDutyMaxAttempts; attempt++ {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
@@ -543,6 +538,12 @@ func (h *handlers) pagerDutyGET(ctx context.Context, client providerfoundation.H
 		if pagerDutyRetryable[status] && attempt < pagerDutyMaxAttempts-1 {
 			wait := delay
 			if seconds, ok := resolveRetryAfter(response.Header, h.store.now().UTC()); ok && seconds > 0 {
+				// A provider wait that is not honoured ends the call at once with the terminal failure of this
+				// response (CHAOS-14621); the comparison is made in seconds so a huge value never reaches the
+				// Duration conversion.
+				if !pagerDutyWaitHonourable(ctx, seconds) {
+					return nil, classifyPagerDutyTerminal(status, response.Header, h.store.now().UTC())
+				}
 				wait = time.Duration(seconds * float64(time.Second))
 			}
 			if !sleep(wait) {
@@ -554,6 +555,36 @@ func (h *handlers) pagerDutyGET(ctx context.Context, client providerfoundation.H
 		return nil, classifyPagerDutyTerminal(status, response.Header, h.store.now().UTC())
 	}
 	return nil, unavailable
+}
+
+const (
+	// pagerDutyMaxHonouredWait is the longest provider wait one retry sleeps.
+	pagerDutyMaxHonouredWait = 5 * time.Second
+	// pagerDutyHonourMargin is what must remain of the request context after a provider wait, for one more request.
+	pagerDutyHonourMargin = 30 * time.Second
+)
+
+// pagerDutyWaitHonourable is whether a provider wait of seconds is slept: at most pagerDutyMaxHonouredWait and, when the
+// context has a deadline, short enough that pagerDutyHonourMargin is still left after it.
+func pagerDutyWaitHonourable(ctx context.Context, seconds float64) bool {
+	if seconds > pagerDutyMaxHonouredWait.Seconds() {
+		return false
+	}
+	if deadline, ok := ctx.Deadline(); ok && seconds >= (time.Until(deadline)-pagerDutyHonourMargin).Seconds() {
+		return false
+	}
+	return true
+}
+
+func sleepUntilTimerOrDone(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func minDuration(a, b time.Duration) time.Duration {

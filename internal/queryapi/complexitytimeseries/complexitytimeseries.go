@@ -229,10 +229,10 @@ func fetchRepoTimeseries(ctx context.Context, client QueryClient, orgID, sinceDa
 			query += "\n          AND " + read.teamCondition
 		}
 	} else {
-		// A team scope picks the top-N among the team's repositories, so it narrows the default selection itself.
+		// MUTANT (CHAOS-14674 kill proof, never merged): the team clause moved from the top-N subquery to the outer WHERE.
 		innerTeam := ""
 		if read.teamCondition != "" {
-			innerTeam = "\n                    AND " + read.teamCondition
+			query += "\n          AND " + read.teamCondition
 		}
 		query += `
           AND toString(repo_id) IN (

@@ -206,3 +206,17 @@ func TestHomeDeveloperScopeDoesNotReportTheRepoFilterAsApplied(t *testing.T) {
 		}
 	}
 }
+
+// A list of blank ids names no developer: the request reads what main read for a scope with no ids.
+func TestHomeDeveloperScopeOfBlankIDsIsTheNoIDsPath(t *testing.T) {
+	const noIDsDigest = "d206347a2a7bd828af06b2f69b06b0d16405a471abb13f3ac5889c7e47abef9f"
+	for name, ids := range map[string][]string{"one blank": {""}, "two blanks": {"", ""}} {
+		t.Run(name, func(t *testing.T) {
+			ch := &homeDevProbeClient{}
+			homeDevRun(t, ch, &model.ScopeFilterInput{Level: model.ScopeLevelInputDeveloper, Ids: ids}, nil)
+			if digest, reads := homeDevDigest(ch); digest != noIDsDigest || reads != 40 {
+				t.Fatalf("blank-only developer ids read digest %s (%d reads), the no-ids path reads %s (40 reads)", digest, reads, noIDsDigest)
+			}
+		})
+	}
+}

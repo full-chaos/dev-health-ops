@@ -188,7 +188,7 @@ VALUES (?, ?, ?, toDateTime(?, 'UTC'), 1, NULL, NULL)`, org, day1, repo, tieAt)
 		t.Fatalf("LiveLegacyRepoDays holds the unanimous-retraction term %d times, want 1", strings.Count(live, unanimous))
 	}
 	mutantLive := strings.Replace(live, unanimous, anyRetraction, 1)
-	disagreed := 0
+	disagreed, mutantChecks := 0, 0
 	for index, order := range []struct {
 		name   string
 		insert func(org, repo string)
@@ -247,6 +247,7 @@ VALUES (?, ?, ?, toDateTime(?, 'UTC'), 1, NULL, NULL)`, org, day1, repo, tieAt)
 				}
 				// The mutant: any retraction at the newest stamp (not a unanimous one) retires the day.
 				if mutantAdmitted := count(`SELECT count() FROM (` + mutantLive + `)`); baseAdmitted == 1 {
+					mutantChecks++
 					t.Logf("MUTANT14595 unanimous-to-any %s %s read %d red=%v: admits %d, base %d", arm.name, order.name, read, mutantAdmitted != baseAdmitted, mutantAdmitted, baseAdmitted)
 					if mutantAdmitted == baseAdmitted {
 						t.Errorf("%s %s read %d: the unanimous-to-any mutant admits the day like base (%d): the tie cell does not see the rule", arm.name, order.name, read, mutantAdmitted)
@@ -271,6 +272,10 @@ VALUES (?, ?, ?, toDateTime(?, 'UTC'), 1, NULL, NULL)`, org, day1, repo, tieAt)
 				disagreed++
 			}
 		})
+	}
+	t.Logf("MUTANT14595 unanimous-to-any %s: %d mutant checks", arm.name, mutantChecks)
+	if mutantChecks == 0 {
+		t.Fatalf("%s: the unanimous-to-any mutant never fired", arm.name)
 	}
 	if disagreed == 0 {
 		t.Fatalf("%s: in no insert order did the marker pick and the live gate's pick disagree: the cell does not exercise the tie", arm.name)

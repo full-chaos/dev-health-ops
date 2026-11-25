@@ -13,7 +13,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"io"
 	"log/slog"
 	"net/http"
@@ -329,32 +328,13 @@ type settings struct {
 	email          string
 	token          string
 	gatewayURL     string
-	// storedEmail and storedToken are the pair resolved before an ATLASSIAN_* override replaced
-	// email or token: the discovery already authenticated with it, so the run still redacts it.
-	storedEmail string
-	storedToken string
 }
 
 // boundary redacts the credential from an error text: the gateway can echo a
 // rejected request.
 func (s settings) boundary() secrets.Boundary {
-	// The token, the email and the Basic payload built from them (CHAOS-7132): the gateway can
-	// echo any of them into its error text. The pair resolved before an override is kept too.
-	values := append(basicCredentialValues(s.email, s.token), basicCredentialValues(s.storedEmail, s.storedToken)...)
-	return secrets.NewBoundaryWith("", credentialSpellings(values...)...)
-}
-
-// withCredentialOverrides applies the ATLASSIAN_EMAIL / ATLASSIAN_API_TOKEN overrides and keeps
-// the pair they replace.
-func (s settings) withCredentialOverrides(o envOverrides) settings {
-	s.storedEmail, s.storedToken = s.email, s.token
-	if o.email != "" {
-		s.email = o.email
-	}
-	if o.token != "" {
-		s.token = o.token
-	}
-	return s
+	// The token and the email (CHAOS-7132): the gateway can echo either into its error text.
+	return secrets.NewBoundaryWith("", s.token, s.email)
 }
 
 // envOverrides is what the ATLASSIAN_* environment carries for one run. Every
@@ -476,9 +456,7 @@ func resolveTeamsSettings(ctx context.Context, env cli.Env, d deps, orgID string
 		}
 		s, err = resolveJiraStoredSettings(ctx, pool, decryptor, d.doer, d.newOrganizationResolver, orgID, overrides)
 		if err != nil {
-			// The pool connects on its first query, so the connect failure surfaces here with
-			// the login in its text; openPostgresPool's redaction covered only pgxpool.New.
-			return settings{}, pgstorage.Boundary(pgDSNValue).Redact(err)
+			return settings{}, err
 		}
 	}
 	if overrides.organizationID != "" {
@@ -492,7 +470,12 @@ func resolveTeamsSettings(ctx context.Context, env cli.Env, d deps, orgID string
 	// env-configured offline path), not only the org/cloud id pair above --
 	// e.g. ATLASSIAN_API_TOKEN alone must override just the token, matching
 	// the stored credential's own email/base URL.
-	s = s.withCredentialOverrides(overrides)
+	if overrides.email != "" {
+		s.email = overrides.email
+	}
+	if overrides.token != "" {
+		s.token = overrides.token
+	}
 	if overrides.base != "" {
 		tenant, err := normalizeBase(overrides.base)
 		if err != nil {

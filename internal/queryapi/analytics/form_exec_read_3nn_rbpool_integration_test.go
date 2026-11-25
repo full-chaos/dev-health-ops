@@ -615,7 +615,7 @@ FROM numbers(%d)`, big, org, history))
 	// and their Settings hold no org value: query_log cannot be scoped by org.
 	for _, name := range []string{"stored", "legacy", "pipeline"} {
 		var rowsN, placeholder, inText, inSettings uint64
-		if err := e.admin.QueryRow(e.ctx, `SELECT count(), countIf(position(query, '{org_id:String}') > 0), countIf(position(query, ?) > 0),
+		if err := e.admin.QueryRow(e.ctx, `SELECT count(), countIf(position(query, concat('{org_id', ':String}')) > 0), countIf(position(query, ?) > 0),
 			countIf(position(arrayStringConcat(mapValues(Settings), ','), ?) > 0) FROM system.query_log WHERE query_id = ? AND type != 'QueryStart'`, org, org, ids[name]).Scan(&rowsN, &placeholder, &inText, &inSettings); err != nil {
 			t.Fatal(err)
 		}

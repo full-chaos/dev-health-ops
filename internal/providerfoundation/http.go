@@ -1057,10 +1057,16 @@ func rateLimitRetryAfter(provider string, headers http.Header, retryAfter time.D
 
 func ParseRetryAfter(raw string, now time.Time) time.Duration {
 	if seconds, err := strconv.ParseFloat(strings.TrimSpace(raw), 64); err == nil {
-		if seconds < 0 {
+		if seconds < 0 || math.IsNaN(seconds) {
 			return 0
 		}
-		return time.Duration(seconds * float64(time.Second))
+		// A float past the int64 range converts to an implementation-defined value (arm64 saturates, amd64 gives the
+		// most negative one), so the range is checked first and every caller caps the saturated delay itself.
+		nanoseconds := seconds * float64(time.Second)
+		if nanoseconds >= 9223372036854775808.0 {
+			return time.Duration(math.MaxInt64)
+		}
+		return time.Duration(nanoseconds)
 	}
 	if date, err := http.ParseTime(raw); err == nil && date.After(now) {
 		return date.Sub(now)

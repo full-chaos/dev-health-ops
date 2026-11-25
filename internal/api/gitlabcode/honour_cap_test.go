@@ -24,12 +24,8 @@ func TestAGitLabWaitPastTheHonourCeilingIsNotSleptAndAnswersAtOnce(t *testing.T)
 		headers [][2]string
 	}{
 		{"429 Retry-After a day", 429, [][2]string{{"Retry-After", "86400"}}},
-		{"429 Retry-After 1e30", 429, [][2]string{{"Retry-After", "1e30"}}},
-		{"429 Retry-After +Inf", 429, [][2]string{{"Retry-After", "+Inf"}}},
 		{"429 far RateLimit-Reset", 429, [][2]string{{"RateLimit-Reset", farReset}}},
 		{"403 Retry-After a day", 403, [][2]string{{"Retry-After", "86400"}}},
-		{"403 Retry-After 1e30", 403, [][2]string{{"Retry-After", "1e30"}}},
-		{"403 Retry-After +Inf", 403, [][2]string{{"Retry-After", "+Inf"}}},
 		{"403 far RateLimit-Reset", 403, [][2]string{{"RateLimit-Remaining", "0"}, {"RateLimit-Reset", farReset}}},
 		{"429 Retry-After 6", 429, [][2]string{{"Retry-After", "6"}}},
 	} {

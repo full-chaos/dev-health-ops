@@ -515,8 +515,8 @@ FROM numbers(%d)`, big, org, history))
 		if err != nil {
 			return "", err
 		}
-		if strings.Join(types, ",") != "UInt64,UInt64" {
-			t.Errorf("%s: types %v, want UInt64,UInt64", label, types)
+		if strings.Join(types, ",") != "UInt32,UInt64" {
+			t.Errorf("%s: types %v, want UInt32,UInt64", label, types)
 			return "", nil
 		}
 		n := 0
@@ -608,7 +608,7 @@ FROM numbers(%d)`, big, org, history))
 			ctx = stdclickhouse.Context(e.ctx, stdclickhouse.WithSettings(stdclickhouse.Settings{"log_comment": comment[0]}))
 		}
 		got, types, err := rbpoolRows(ctx, e.admin, text)
-		if err != nil || len(got) != 1 || strings.Join(types, ",") != "UInt64,UInt64,UInt64" || got[0]["replica_tag"] != strings.Join(stmtRHosts, ",") {
+		if err != nil || len(got) != 1 || strings.Join(types, ",") != "UInt32,UInt64,UInt64" || got[0]["replica_tag"] != strings.Join(stmtRHosts, ",") {
 			t.Fatalf("%s: err %v rows %v types %v (want 1 row per stmtR replica tag %v)", label, err, got, types, stmtRHosts)
 		}
 		t.Logf("%s ROW %v", label, got[0])
@@ -743,7 +743,7 @@ FROM numbers(%d)`, big, org, history))
 	conns := map[string]stdclickhouse.Conn{"r1": r1, "r2": r2}
 	tags := map[string]string{}
 	for name, c := range conns {
-		var tag uint64
+		var tag uint32
 		if err := c.QueryRow(e.ctx, "SELECT cityHash64(hostName()) % 1000000").Scan(&tag); err != nil {
 			t.Fatal(err)
 		}

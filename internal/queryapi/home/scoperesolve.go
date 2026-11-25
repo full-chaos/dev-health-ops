@@ -12,6 +12,9 @@ import (
 // no data whether or not the ids are known.
 func (s ScopeFilter) developerNamed() bool { return s.Level == "developer" && len(s.IDs) > 0 }
 
+// DeveloperNamed is developerNamed for the callers that build on Home.
+func (s ScopeFilter) DeveloperNamed() bool { return s.developerNamed() }
+
 // Unresolved reports that the request names scope ids at a repository, service or developer level and none of them exists for the
 // organization. Only meaningful after ResolveScope.
 func (s ScopeFilter) Unresolved() bool { return s.unresolved }

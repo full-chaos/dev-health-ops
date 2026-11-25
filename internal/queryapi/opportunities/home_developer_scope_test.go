@@ -81,8 +81,8 @@ func oppDevBuild(t *testing.T, c *oppDevClient, f home.Filters) *Response {
 	return resp
 }
 
-// Under a developer scope the Home half of opportunities answers no data: every metric value read carries the no-data filter,
-// and the answer has no card (as for an id the organization does not know).
+// Under a developer scope opportunities answer no card (the empty list an id the organization does not know gets) and read
+// no organization number: a metric value read, if one is issued, carries the no-data filter.
 func TestOpportunitiesUnderAKnownDeveloperScopeServeNoOrganizationNumber(t *testing.T) {
 	c := &oppDevClient{known: true}
 	resp := oppDevBuild(t, c, home.Filters{Scope: home.ScopeFilter{Level: "developer", IDs: []string{oppDevScopeID}}})
@@ -95,10 +95,10 @@ func TestOpportunitiesUnderAKnownDeveloperScopeServeNoOrganizationNumber(t *test
 			}
 		}
 	}
-	if values == 0 {
-		t.Fatal("no value read issued: the cell measures nothing")
+	t.Logf("value reads issued: %d", values)
+	if len(resp.Items) != 0 || resp.Items == nil {
+		t.Fatalf("%d cards under a developer scope, want an empty non-nil list (the answer an unknown id gets)", len(resp.Items))
 	}
-	t.Logf("cards=%d", len(resp.Items))
 }
 
 // The organization scope reads exactly what main read: the digest is taken at main (5dd4758412f2) from this code.

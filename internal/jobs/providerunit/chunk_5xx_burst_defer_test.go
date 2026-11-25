@@ -62,9 +62,11 @@ func TestChunkedUnitGatewayBurstFailsAfterTheDeferCap(t *testing.T) {
 	if !walk.terminal {
 		t.Fatalf("unit ended %q, want a terminal failure once the defer cap is spent", walk.repository.status)
 	}
+	//abstime:allow simulated clock of the harness (the handler's Now), never wall time
 	if walk.elapsed > burstDeferCapMax {
 		t.Fatalf("unit failed after %v of deferral, want the total snooze bounded by about %v", walk.elapsed, burstDeferCapMax)
 	}
+	//abstime:allow simulated clock of the harness (the handler's Now), never wall time
 	if walk.elapsed < 25*time.Minute {
 		t.Fatalf("unit failed after %v of deferral, want a defer of about 30-60 minutes", walk.elapsed)
 	}

@@ -17,16 +17,16 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 )
 
-// holdShareLock opens a transaction that holds SHARE on sync_run_units: it conflicts with the SHARE UPDATE EXCLUSIVE of
-// the table-lock probe, so every attempt fails at stage "probe" after LockTimeout and the retry path runs.
-func holdShareLock(t *testing.T, uri string) (release func()) {
+// holdShareLock opens a transaction that holds SHARE on the table the verb indexes: it conflicts with the SHARE UPDATE
+// EXCLUSIVE of the table-lock probe, so every attempt fails at stage "probe" after LockTimeout and the retry path runs.
+func holdShareLock(t *testing.T, uri, table string) (release func()) {
 	t.Helper()
 	conn := connect(t, uri)
 	tx, err := conn.Begin(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(context.Background(), "LOCK TABLE public.sync_run_units IN SHARE MODE"); err != nil {
+	if _, err := tx.Exec(context.Background(), "LOCK TABLE public."+table+" IN SHARE MODE"); err != nil {
 		t.Fatal(err)
 	}
 	var once sync.Once
@@ -37,14 +37,16 @@ func holdShareLock(t *testing.T, uri string) (release func()) {
 
 type retryWindowVerb struct {
 	revision string
+	table    string
 	body     string
 	build    func(context.Context, *pgx.Conn, pgmigrate.IndexBuildOptions, *slog.Logger) (pgmigrate.IndexBuildResult, error)
 }
 
 func retryWindowVerbs() map[string]retryWindowVerb {
 	return map[string]retryWindowVerb{
-		"failure-streak": {revision: "0159", body: pgmigrate.FailureStreakIndexBody, build: pgmigrate.BuildFailureStreakIndex},
-		"open-units":     {revision: "0161", body: pgmigrate.OpenUnitsIndexBody, build: pgmigrate.BuildOpenUnitsIndex},
+		"failure-streak":  {revision: "0159", table: "sync_run_units", body: pgmigrate.FailureStreakIndexBody, build: pgmigrate.BuildFailureStreakIndex},
+		"open-units":      {revision: "0161", table: "sync_run_units", body: pgmigrate.OpenUnitsIndexBody, build: pgmigrate.BuildOpenUnitsIndex},
+		"finalize-outbox": {revision: "0167", table: "worker_job_outbox", body: pgmigrate.FinalizeOutboxIndexBody, build: pgmigrate.BuildFinalizeOutboxIndex},
 	}
 }
 
@@ -65,7 +67,7 @@ func TestBuildIndexRetryPauseEndsWithTheBuildWindow(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			d := newDownInstance(t)
 			uri := d.withoutIndex(t, verb.revision)
-			release := holdShareLock(t, uri)
+			release := holdShareLock(t, uri, verb.table)
 			conn := connect(t, uri)
 			logs := &syncBuffer{}
 			// A failure-only guard: the window is 3 s and the cleanup budget 3 s; a pause of 30 min that does not end with
@@ -108,7 +110,7 @@ func TestBuildIndexRetriesWithZeroRetryDelay(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			d := newDownInstance(t)
 			uri := d.withoutIndex(t, verb.revision)
-			release := holdShareLock(t, uri)
+			release := holdShareLock(t, uri, verb.table)
 			conn := connect(t, uri)
 			logs := &syncBuffer{}
 			result, err := runBuildGuarded(t, 90*time.Second, "three probe failures must end", release,
@@ -151,7 +153,7 @@ func TestBuildIndexZeroRetryDelayBuildsOnTheNextAttempt(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			d := newDownInstance(t)
 			uri := d.withoutIndex(t, verb.revision)
-			release := holdShareLock(t, uri)
+			release := holdShareLock(t, uri, verb.table)
 			conn := connect(t, uri)
 			logs := &syncBuffer{}
 			go func() {
@@ -180,7 +182,7 @@ func TestBuildIndexCountsOnlyTheAttemptsThatRan(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			d := newDownInstance(t)
 			uri := d.withoutIndex(t, verb.revision)
-			release := holdShareLock(t, uri)
+			release := holdShareLock(t, uri, verb.table)
 			conn := connect(t, uri)
 			other := connect(t, uri)
 			logs := &syncBuffer{}

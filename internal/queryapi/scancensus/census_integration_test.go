@@ -933,6 +933,15 @@ const nullableIntoPlainSites = `
 //	read.go latestDay 818fa20627a4 -> 8f7b3f43c903
 //	read.go latestRowsLimit 484e5d4507e3 -> 9e94c37b431b
 //	read.go repoTrend e90c541be45a -> a72217e8d045
+//
+// CHAOS-14674: two complexitytimeseries pins re-pinned by hand. A team scope now splices the ownership condition
+// (teamscope.RepoCondition) into the WHERE of both reads (and into the default top-N subquery of the repository read);
+// the select lists did not change (the spliced day expression is still why both are spliced-select-list), and the scan
+// targets are unchanged. Digests computed with siteKey's formula over LoadSites, not copied from a census run; the same
+// formula gives the old pins at base:
+//
+//	complexitytimeseries.go fetchFileTimeseries 69bcb13af3df -> 4dff162101e5
+//	complexitytimeseries.go fetchRepoTimeseries 2d500256c88b -> 7f4adf295b79
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|566971fe4c3c|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string,*string,*uint32|e67003e26fc2|not-describable
@@ -956,8 +965,8 @@ internal/queryapi/analytics/timeseries.go|ExecuteTimeseries|**time.Time,**string
 internal/queryapi/capacityforecast/clickhouse.go|loadBacklog|*uint64,*uint64,*uint64,*time.Time|0122f460e38c|spliced-select-list
 internal/queryapi/capacityforecast/clickhouse.go|loadThroughput|*time.Time,*uint64|364edc17515f|not-describable
 internal/queryapi/cognitiveload/cognitiveload.go|fetchOwnershipCandidates|*string,*string,*uint8,*uint16|8fef6d5c5d9b|spliced-select-list
-internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchFileTimeseries|*time.Time,*string,*string,**uint32,**float64,**uint32,**uint32|69bcb13af3df|spliced-select-list
-internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchRepoTimeseries|*time.Time,*string,**uint64,**uint64,**float64,**uint64,**uint64|2d500256c88b|spliced-select-list
+internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchFileTimeseries|*time.Time,*string,*string,**uint32,**float64,**uint32,**uint32|4dff162101e5|spliced-select-list
+internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchRepoTimeseries|*time.Time,*string,**uint64,**uint64,**float64,**uint64,**uint64|7f4adf295b79|spliced-select-list
 internal/queryapi/compoundingrisk/read.go|latestDay|**time.Time|8f7b3f43c903|not-describable
 internal/queryapi/compoundingrisk/read.go|latestRowsLimit|*string,**float64,*string,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,**float64,*float64,*float64,*float64,*float64,*float64,*float64,*time.Time|9e94c37b431b|not-describable
 internal/queryapi/compoundingrisk/read.go|repoTrend|*time.Time,**float64|a72217e8d045|not-describable

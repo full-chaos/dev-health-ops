@@ -2,7 +2,9 @@ package graph
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -98,6 +100,49 @@ func TestComplexityTimeseriesTeamIdsReachTheRead(t *testing.T) {
 					t.Fatalf("no %s read in %d statements", complexityTimeseriesScopeTables[scope], len(ch.statements))
 				}
 			})
+		}
+	}
+}
+
+// complexityTimeseriesScopeStatementsAtMain are the sha256 digests (first 12 hex) of every statement of a request with no
+// teamIds, taken at main before the team scope reached the reads: no team keeps them byte for byte.
+var complexityTimeseriesScopeStatementsAtMain = map[string]string{
+	"REPO":              "c76a9fbc18fc",
+	"REPO/repositories": "1dd8996c31d5",
+	"FILE":              "da5224af08ff",
+	"FILE/repositories": "dd2c38d047a4",
+}
+
+func complexityTimeseriesScopeDigest(c *statementRecordingClient) string {
+	h := sha256.New()
+	for i, statement := range c.statements {
+		fmt.Fprintf(h, "%s\n%v\n", statement, c.bindings[i])
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))[:12]
+}
+
+// CHAOS-14674: the team scope only narrows. No teamIds sends main's statements and bindings; a blank team id is no team
+// scope (teamscope.RepoCondition drops it), as for hotspots (TestHotspots_BlankTeamIDIsTheOrgScope).
+func TestComplexityTimeseriesTeamScopeEqualitySweep(t *testing.T) {
+	for key, want := range complexityTimeseriesScopeStatementsAtMain {
+		scope, repos, _ := strings.Cut(key, "/")
+		extra := map[string]any{}
+		if repos != "" {
+			extra["repoIds"] = []string{"repo-synthetic-a"}
+		}
+		reference := complexityTimeseriesScopeRun(t, scope, extra)
+		if got := complexityTimeseriesScopeDigest(reference); got != want {
+			t.Errorf("%s, no teamIds: statements digest %s, want %s (main)", key, got, want)
+		}
+		for _, blank := range [][]string{{""}, {"", ""}} {
+			withBlank := map[string]any{"teamIds": blank}
+			for k, v := range extra {
+				withBlank[k] = v
+			}
+			got := complexityTimeseriesScopeRun(t, scope, withBlank)
+			if !reflect.DeepEqual(got.statements, reference.statements) || !reflect.DeepEqual(got.bindings, reference.bindings) {
+				t.Errorf("%s, teamIds %q: statements or bindings differ from the request with no teamIds", key, blank)
+			}
 		}
 	}
 }

@@ -151,3 +151,77 @@ VALUES (?, ?, ?, now() + INTERVAL 2 HOUR, 1, NULL, NULL)`, retiredDayOrg, day2, 
 		t.Logf("MUTANT14595 legacy-set-retracted-term red=true: read_rows %d -> %d", present, rows)
 	}
 }
+
+// CHAOS-14595 r1: a retraction row (retracted 1, marker at its default 0) and a live legacy row (marker 0, retracted 0) of ONE
+// repository-day at the SAME computed_at, in both insert orders, each row in its own part (merges stopped). The raw arm's
+// legacy set (LiveLegacyRepoDays) and the live gate (LiveRepoDays) must pick the day the same way, and the served value must
+// equal the value the source gives with the legacy set of the base (LegacyRepoDays).
+func TestTestopsPooledSuiteRetiredDayTiedWithALiveLegacyRow(t *testing.T) {
+	e := startOwnersEnv(t)
+	e.exec(`SYSTEM STOP MERGES testops_test_metrics_daily`)
+	live, legacy := testopspooled.LiveLegacyRepoDays("testops_test_metrics_daily"), testopspooled.LegacyRepoDays("testops_test_metrics_daily")
+	baseSource := strings.ReplaceAll(testopspooled.SuiteRunsSource, live, legacy)
+	if baseSource == testopspooled.SuiteRunsSource {
+		t.Fatal("the base source equals the head source: the legacy set was not replaced")
+	}
+	const tieAt = "2026-01-08 00:00:00"
+	liveRow := func(org, repo string) {
+		e.exec(`INSERT INTO testops_test_metrics_daily (repo_id, day, org_id, computed_at) VALUES (?, ?, ?, toDateTime(?, 'UTC'))`, repo, day1, org, tieAt)
+	}
+	retraction := func(org, repo string) {
+		e.exec(`INSERT INTO testops_test_metrics_daily (org_id, day, repo_id, computed_at, retracted, team_id, service_id)
+VALUES (?, ?, ?, toDateTime(?, 'UTC'), 1, NULL, NULL)`, org, day1, repo, tieAt)
+	}
+	for _, order := range []struct {
+		name   string
+		org    string
+		repo   string
+		insert func(org, repo string)
+	}{
+		{"live row then retraction", "f0f0f0f0-0000-4000-8000-0000001459f1", "f0f0f0f0-0000-4000-8000-0000001459c1", func(org, repo string) { liveRow(org, repo); retraction(org, repo) }},
+		{"retraction then live row", "f0f0f0f0-0000-4000-8000-0000001459f2", "f0f0f0f0-0000-4000-8000-0000001459c2", func(org, repo string) { retraction(org, repo); liveRow(org, repo) }},
+	} {
+		t.Run(order.name, func(t *testing.T) {
+			e.repo(order.org, order.repo, "acme/tie")
+			e.owner(order.org, "team-t", order.repo, "acme/tie", 1, openFrom(), nil)
+			e.durations(order.org, order.repo, day1, 10, 20, 30)
+			order.insert(order.org, order.repo)
+			params := []any{stdclickhouse.Named("org_id", order.org), stdclickhouse.Named("start_date", "2026-01-01"), stdclickhouse.Named("end_date", "2026-01-07")}
+			var rows uint64
+			if err := e.admin.QueryRow(e.ctx, `SELECT count() FROM testops_test_metrics_daily WHERE org_id = ? AND repo_id = ? AND day = ? AND computed_at = toDateTime(?, 'UTC')`,
+				order.org, order.repo, day1, tieAt).Scan(&rows); err != nil {
+				t.Fatal(err)
+			}
+			if rows != 2 {
+				t.Fatalf("control: %d stored rows of the day at the tie, want 2 (the retraction and the live row)", rows)
+			}
+			pick := func(query string) uint64 {
+				t.Helper()
+				var n uint64
+				if err := e.admin.QueryRow(e.ctx, query, params...).Scan(&n); err != nil {
+					t.Fatalf("%v\n%s", err, query)
+				}
+				return n
+			}
+			for read := 0; read < 5; read++ {
+				inLegacySet := pick(`SELECT count() FROM (` + live + `)`)
+				inLiveGate := pick(`SELECT count() FROM (SELECT DISTINCT repo_id, day FROM testops_test_metrics_daily
+				WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date}) WHERE ` + testopspooled.LiveRepoDays("testops_test_metrics_daily"))
+				var head, base *float64
+				if err := e.admin.QueryRow(e.ctx, "SELECT "+testopspooled.P95+" FROM "+testopspooled.SuiteRunsSource, params...).Scan(&head); err != nil {
+					t.Fatal(err)
+				}
+				if err := e.admin.QueryRow(e.ctx, "SELECT "+testopspooled.P95+" FROM "+baseSource, params...).Scan(&base); err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("CELL14595 tie %s read %d: LiveLegacyRepoDays %d, LiveRepoDays %d; served p95 head %s, base %s", order.name, read, inLegacySet, inLiveGate, str(head), str(base))
+				if inLegacySet != inLiveGate {
+					t.Errorf("%s read %d: LiveLegacyRepoDays picks the day %d time(s), LiveRepoDays %d: the two picks differ on the tie", order.name, read, inLegacySet, inLiveGate)
+				}
+				if !same(head, base) {
+					t.Errorf("%s read %d: served p95 %s, the base legacy set serves %s", order.name, read, str(head), str(base))
+				}
+			}
+		})
+	}
+}

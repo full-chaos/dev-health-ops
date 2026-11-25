@@ -81,7 +81,7 @@ func TestTestopsPooledSuiteP95ReadStaysUnderTheRowBoundAtThreeTimesProductionSiz
 	if sum := sha256.Sum256([]byte(suiteRunsSourceLive)); hex.EncodeToString(sum[:]) != suiteRunsSourceLiveSHA256 {
 		t.Fatalf("the live source text changed: sha256 %x", sum)
 	}
-	repoFilter := "AND repo_id IN (SELECT repo_id FROM (" + testopspooled.LegacyRepoDays("testops_test_metrics_daily") + "))"
+	repoFilter := "AND repo_id IN (SELECT repo_id FROM (" + testopspooled.LiveLegacyRepoDays("testops_test_metrics_daily") + "))"
 	if got := strings.Count(testopspooled.SuiteRunsSource, repoFilter); got != 1 {
 		t.Fatalf("SuiteRunsSource holds the repository filter %d times, want 1", got)
 	}

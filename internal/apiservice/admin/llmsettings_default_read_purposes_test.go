@@ -100,4 +100,6 @@ VALUES ($1, 'llmlist-admin@example.com', true, true, false, 0, now(), now())`, [
 	if purposes["categorize"] == nil {
 		t.Errorf("GET default purposes has no categorize override that PUT stored and GET purpose=categorize serves: purposes=%v", purposes)
 	}
+
+	venueoracle.WriteGoOnlyProof(t, "default read lists the saved categorize override: Python has no purposes")
 }

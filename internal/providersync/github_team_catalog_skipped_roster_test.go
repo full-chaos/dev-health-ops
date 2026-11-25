@@ -14,15 +14,19 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
 
-type skippedRosterDoer struct{}
+// rosterStatus is the answer to the platform roster; zero is 429.
+type skippedRosterDoer struct{ rosterStatus int }
 
-func (skippedRosterDoer) Do(request *http.Request) (*http.Response, error) {
+func (d skippedRosterDoer) Do(request *http.Request) (*http.Response, error) {
 	status, body := http.StatusOK, `[]`
 	switch request.URL.Path {
 	case "/orgs/acme/teams":
 		body = `[{"slug":"platform","name":"Platform"},{"slug":"ops","name":"Operations"}]`
 	case "/orgs/acme/teams/platform/members":
 		status, body = http.StatusTooManyRequests, `{"message":"limited"}`
+		if d.rosterStatus != 0 {
+			status = d.rosterStatus
+		}
 	case "/orgs/acme/teams/ops/members":
 		body = `[{"login":"octocat"}]`
 	}
@@ -32,13 +36,14 @@ func (skippedRosterDoer) Do(request *http.Request) (*http.Response, error) {
 	}, nil
 }
 
-// A team whose roster read is skipped (here an exhausted 429) closes no
-// membership of that team: it is not in the observed set, so nothing of it is
-// retired, and the other team is written.
+// A team whose roster read is skipped (here a 500; trigger moved from a 429 by the
+// CHAOS-14602 Want: a rate-limited roster now ends the run) closes no membership of
+// that team: it is not in the observed set, so nothing of it is retired, and the
+// other team is written.
 func TestGitHubTeamCatalogSkippedRosterClosesNoMembershipOfThatTeam(t *testing.T) {
 	t.Parallel()
 	collector := GitHubTeamCatalogRouteHandler{
-		Client: githubTeamCatalogTestClient(t, fakehttp.Client(skippedRosterDoer{})), OrgName: "acme",
+		Client: githubTeamCatalogTestClient(t, fakehttp.Client(skippedRosterDoer{rosterStatus: http.StatusInternalServerError})), OrgName: "acme",
 		Now: func() time.Time { return time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC) },
 	}
 	rows, evidence, err := collector.Collect(context.Background(), "org-1", true, true)
@@ -56,9 +61,8 @@ func TestGitHubTeamCatalogSkippedRosterClosesNoMembershipOfThatTeam(t *testing.T
 }
 
 // With the production gate armed, a 429 whose wait is longer than the time left
-// skips that roster (the route's non-fatal arm) and arms the gate; the next
-// required request is refused by the gate, so the run ends in a rate_limited
-// error and returns no rows: nothing is observed, written or closed.
+// arms the gate and, the roster being rate limited, ends the run in a rate_limited
+// error that returns no rows: nothing is observed, written or closed.
 func TestGitHubTeamCatalogDeadlineShortenedRosterWithTheGateClosesNothing(t *testing.T) {
 	t.Parallel()
 	client := sweepClient(t, "github", "https://api.github.com", skippedRosterRetryAfterDoer{}, 25*time.Second)

@@ -54,6 +54,14 @@ func newDiscoveryOpenCounter(t *testing.T, content string) *discoveryOpenCounter
 			c.opens.Add(1)
 			_, _ = f.WriteString(content)
 			f.Close()
+			// A reader that still holds the pipe would pair with the next writer open at once (Linux) and be served
+			// again: give it time to read EOF and close. A slow reader is then counted twice (a false red), and a new
+			// reader waits in its own open until the next writer open, so no open is missed.
+			select {
+			case <-c.done:
+				return
+			case <-time.After(200 * time.Millisecond):
+			}
 		}
 	}()
 	t.Cleanup(func() {

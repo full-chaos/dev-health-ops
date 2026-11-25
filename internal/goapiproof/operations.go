@@ -611,16 +611,22 @@ var operationSpecs = map[string]OperationSpec{
 			return map[string]any{"orgId": orgID}
 		},
 	},
-	// The four documents that select `dataHealth`. None sends a team (CHAOS-14644:
-	// no team reads org-wide), and the lineage document sends the metric. The
-	// lineage document reads one metric's source tables,
+	// CHAOS-14644: the current dataHealth documents declare no team variable, and the frozen venue oracles measure each
+	// operation on its OLDEST legacy text, which does; the variables below are the legacy texts' and stay, so the frozen
+	// request bodies stay byte for byte. A current document ignores the undeclared variable.
+	// The four documents that select `dataHealth`. All send the team as a
+	// document variable except the lineage document, which fixes team ALL and
+	// sends the metric. The identity read is the only one the team changes
+	// (it narrows which identities count as mapped), so its base request asks
+	// for team ALL and a variant asks for the empty team, which takes the
+	// unscoped branch. The lineage document reads one metric's source tables,
 	// and the metrics of one table share every code path, so the base request
 	// asks for one metric per table and a variant asks for a metric no table
 	// holds.
 	"connectorsDataHealth": {
 		ResponseRoot: "dataHealth",
 		Variables: func(orgID string, _ Window) map[string]any {
-			return map[string]any{}
+			return map[string]any{"teamId": "ALL"}
 		},
 		Parity: Options{BaselineDefects: []BaselineDefect{{
 			Ticket:             "CHAOS-6090",
@@ -633,13 +639,19 @@ var operationSpecs = map[string]OperationSpec{
 	"dataHealthIdentity": {
 		ResponseRoot: "dataHealth",
 		Variables: func(orgID string, _ Window) map[string]any {
-			return map[string]any{}
+			return map[string]any{"team": "ALL"}
 		},
+		Variants: []Variant{{
+			Name: "EMPTY_TEAM",
+			Variables: func(orgID string, _ Window) map[string]any {
+				return map[string]any{"team": ""}
+			},
+		}},
 	},
 	"mappingCoverageHealth": {
 		ResponseRoot: "dataHealth",
 		Variables: func(orgID string, _ Window) map[string]any {
-			return map[string]any{}
+			return map[string]any{"teamId": "ALL"}
 		},
 	},
 	"metricLineage": {

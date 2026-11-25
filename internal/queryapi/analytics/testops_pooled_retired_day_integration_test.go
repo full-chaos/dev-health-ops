@@ -176,6 +176,11 @@ func checkTieArmAsAtBase(t *testing.T, arm tieArm, orgs, repos [2]string) {
 		e.exec(`INSERT INTO testops_test_metrics_daily (org_id, day, repo_id, computed_at, retracted, team_id, service_id)
 VALUES (?, ?, ?, toDateTime(?, 'UTC'), 1, NULL, NULL)`, org, day1, repo, tieAt)
 	}
+	var wantP95, wantP50 float64
+	if err := e.admin.QueryRow(e.ctx, `SELECT quantileExactInclusive(0.95)(x), quantileExactInclusive(0.5)(x) FROM (SELECT arrayJoin([10., 20., 30.]) AS x)`).
+		Scan(&wantP95, &wantP50); err != nil {
+		t.Fatal(err)
+	}
 	disagreed := 0
 	for index, order := range []struct {
 		name   string
@@ -235,6 +240,10 @@ VALUES (?, ?, ?, toDateTime(?, 'UTC'), 1, NULL, NULL)`, org, day1, repo, tieAt)
 				}
 				if !same(headP95, baseP95) || !same(headP50, baseP50) {
 					t.Errorf("%s %s read %d: served p95 %s / median %s, base %s / %s", arm.name, order.name, read, str(headP95), str(headP50), str(baseP95), str(baseP50))
+				}
+				// A served day is the pool of its samples 10, 20, 30, read once: a read through both arms moves p95 29 -> 30.
+				if headP95 != nil && (!same(headP95, &wantP95) || !same(headP50, &wantP50)) {
+					t.Errorf("%s %s read %d: served p95 %s / median %s, want %v / %v (the day's samples read once)", arm.name, order.name, read, str(headP95), str(headP50), wantP95, wantP50)
 				}
 			}
 			if orderDisagreed {

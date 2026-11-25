@@ -617,11 +617,21 @@ func classifyPagerDutyTerminal(status int, header http.Header, now time.Time) *s
 	case http.StatusTooManyRequests:
 		failure := servicesHTTPError(http.StatusTooManyRequests, "PagerDuty rate limit exceeded")
 		if seconds, ok := resolveRetryAfter(header, now); ok {
-			failure.header = http.Header{"Retry-After": {strconv.FormatInt(int64(math.Max(0, math.Ceil(seconds))), 10)}}
+			failure.header = http.Header{"Retry-After": {strconv.FormatInt(retryAfterHeaderSeconds(seconds), 10)}}
 		}
 		return failure
 	}
 	return servicesHTTPError(http.StatusBadGateway, "PagerDuty services are temporarily unavailable")
+}
+
+// retryAfterHeaderSeconds is the whole seconds of a Retry-After header: rounded up, never negative, and saturated at the
+// largest int64 for a value (or +Inf) the conversion cannot hold, the same on every architecture.
+func retryAfterHeaderSeconds(seconds float64) int64 {
+	rounded := math.Ceil(math.Max(0, seconds))
+	if rounded >= 1<<63 {
+		return math.MaxInt64
+	}
+	return int64(rounded)
 }
 
 // resolveRetryAfter is resolve_retry_after_seconds with PagerDuty's reset

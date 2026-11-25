@@ -512,7 +512,8 @@ func fetchGitLabMergeRequestReviews(
 		// approval with no approval note is only in this read. An answered read (a 4xx other than 401, or a body
 		// that cannot be used) stays optional enrichment, as in Python.
 		if lookupReadFailed(err) {
-			slog.Warn("gitlab_prs.approvals_read_failed", "status_class", lookupStatusClass(err))
+			statusClass := lookupStatusClass(err)
+			slog.Warn("gitlab_prs.approvals_read_failed", "status_class", statusClass)
 			return result, err
 		}
 		approvals = nil

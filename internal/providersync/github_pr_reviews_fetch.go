@@ -278,7 +278,8 @@ func (fetcher GitHubPullRequestReviewFetcher) finishFailure(
 		return result, err
 	}
 	if wire && lookupReadFailed(err) {
-		slog.Warn("github_pr_reviews.review_read_failed", "status_class", lookupStatusClass(err), "class", gitHubPullRequestReviewFailureCause(err))
+		statusClass, class := lookupStatusClass(err), gitHubPullRequestReviewFailureCause(err)
+		slog.Warn("github_pr_reviews.review_read_failed", "status_class", statusClass, "class", class)
 		return result, err
 	}
 	result.Rows = nil

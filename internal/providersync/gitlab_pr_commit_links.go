@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/url"
 	"strconv"
 	"strings"
@@ -57,9 +58,11 @@ type gitLabMergeRequestCommitPayload struct {
 // fetchGitLabMergeRequestCommitLinks lists the commits of one merge request
 // (one request per page of perPage commits) and returns one native link per
 // commit. An ordinary failure of the listing leaves the merge request without
-// links for this pass, as does a malformed listing item (the commit-stats
-// route treats a malformed detail payload the same way); control-plane failures (lease, budget, cancellation)
-// still fail the unit.
+// links for this pass only when the provider answered (an answered 4xx or an
+// unusable body), as does a malformed listing item (the commit-stats route
+// treats a malformed detail payload the same way). A failed listing (5xx after
+// retries, transport, 401) and control-plane failures (lease, budget,
+// cancellation) fail the unit.
 func fetchGitLabMergeRequestCommitLinks(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
@@ -78,6 +81,14 @@ func fetchGitLabMergeRequestCommitLinks(
 		}
 		if controlErr := gitLabPullRequestControlError(ctx, err); controlErr != nil {
 			return nil, pages, controlErr
+		}
+		// A listing that failed (5xx after retries, transport, 401) stops the unit so the window is read again: the
+		// merge request is listed again only when it is updated again. An answered 4xx or an unusable body leaves
+		// it without links for this pass.
+		if lookupReadFailed(err) {
+			statusClass := lookupStatusClass(err)
+			slog.Warn("gitlab_prs.commit_listing_failed", "status_class", statusClass)
+			return nil, pages, err
 		}
 		return nil, pages, nil
 	}

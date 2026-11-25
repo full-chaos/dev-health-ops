@@ -99,3 +99,69 @@ func TestResolveNoHistoryAnswerReadsNoCurrentWIP(t *testing.T) {
 		t.Fatalf("estimateCoverage state %s asOf %v, want MEASURED with a day", got.EstimateCoverage.State, got.EstimateCoverage.AsOfDay)
 	}
 }
+
+// CHAOS-14629: the review and incident overlays say how their input was found from the row count of the read. A sum or
+// an average over no row is 0, the same value as stored rows that measure 0.
+func TestNewOverlayReadStates(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		value     float64
+		rows      uint64
+		wantState model.NewestDayState
+	}{
+		{"no row: the sum of nothing is 0", 0, 0, model.NewestDayStateNoRows},
+		{"rows that measure 0", 0, 3, model.NewestDayStateMeasured},
+		{"rows that measure a value", 2.5, 1, model.NewestDayStateMeasured},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := newOverlayRead(tc.value, tc.rows)
+			if got.value != tc.value || got.state != tc.wantState {
+				t.Fatalf("got %v %s, want %v %s", got.value, got.state, tc.value, tc.wantState)
+			}
+		})
+	}
+}
+
+// CHAOS-14629: Resolve serves the state of each overlay read beside the overlay, and the no-history answer serves
+// NO_ROWS for both because no overlay read ran. Order of the reads: history, backlog, coverage, overlay, stale wip,
+// review, incident.
+func TestResolveServesTheOverlayStates(t *testing.T) {
+	today := mustDay(t, "2026-09-01")
+
+	responses := fullResponseSet(t, 120, 7)
+	responses[5] = oneRow(nil, uint64(0)) // review: every row filtered out
+	responses[6] = oneRow(0.0, uint64(0)) // incident: a sum over no row
+	got, err := Resolve(context.Background(), &fakeClient{responses: responses}, "org-1",
+		model.ThroughputForecastInput{HistoryWeeks: 12}, today)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got.ReviewBottleneckState != model.NewestDayStateNoRows || got.IncidentLoadState != model.NewestDayStateNoRows {
+		t.Fatalf("no row: states %s %s, want NO_ROWS NO_ROWS", got.ReviewBottleneckState, got.IncidentLoadState)
+	}
+	if got.ReviewBottleneck.Value != 0 || got.IncidentLoad.Value != 0 || got.ReviewBottleneck.Active || got.IncidentLoad.Active {
+		t.Fatalf("no row: overlays %+v %+v, want value 0 and inactive (the value is not retyped)", got.ReviewBottleneck, got.IncidentLoad)
+	}
+
+	responses = fullResponseSet(t, 120, 7)
+	responses[5] = oneRow(0.0, uint64(2)) // review: rows that measure 0 hours
+	responses[6] = oneRow(0.0, uint64(2)) // incident: rows that count 0 incidents
+	got, err = Resolve(context.Background(), &fakeClient{responses: responses}, "org-1",
+		model.ThroughputForecastInput{HistoryWeeks: 12}, today)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got.ReviewBottleneckState != model.NewestDayStateMeasured || got.IncidentLoadState != model.NewestDayStateMeasured {
+		t.Fatalf("measured zero: states %s %s, want MEASURED MEASURED", got.ReviewBottleneckState, got.IncidentLoadState)
+	}
+
+	got, err = Resolve(context.Background(), &fakeClient{responses: []*fakeRowScanner{
+		historyRows(t, 0, 0), backlogRow(0), coverageRow(0, 0, 0, 0),
+	}}, "org-1", model.ThroughputForecastInput{HistoryWeeks: 12}, today)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got.ReviewBottleneckState != model.NewestDayStateNoRows || got.IncidentLoadState != model.NewestDayStateNoRows {
+		t.Fatalf("no history: states %s %s, want NO_ROWS NO_ROWS", got.ReviewBottleneckState, got.IncidentLoadState)
+	}
+}

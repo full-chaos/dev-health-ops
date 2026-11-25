@@ -190,10 +190,21 @@ func TestChunkSidecarReclaimStatementEndsOnTheServerWithTheStageBudget(t *testin
 // reclaim after wantDeadlineCutsPerWindow budget-long ticks. At
 // origin/main the cut statement was refunded: the next tick re-ran it for the
 // whole budget, every tick, and the cap never engaged.
+//
+// The cell counts the work the limiter is charged (CHAOS-14617): the clock is
+// frozen, so the window never slides, and ticks run until the first throttled
+// tick, bounded by a tick count. A tick that does nothing (the candidate row
+// is still locked by a cut predecessor the server has not aborted yet, or the
+// tick lock is held) is a skipped tick: it charges nothing and is logged.
 func TestChunkSidecarReclaimDeadlineCutStatementsStayChargedAndThrottle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	venue := startChunkReclaimBudgetVenue(t, ctx, false)
+	assertDeadlineCutStatementsStayChargedAndThrottle(t, ctx, venue)
+}
+
+func assertDeadlineCutStatementsStayChargedAndThrottle(t *testing.T, ctx context.Context, venue chunkReclaimBudgetVenue) {
+	t.Helper()
 	now := time.Date(2026, 11, 20, 14, 0, 0, 0, time.UTC)
 	units := seedChunkReclaimBudgetUnits(t, ctx, venue.direct, now, 1)
 	holdFirstChunkRows(t, ctx, venue.direct, units)
@@ -202,27 +213,52 @@ func TestChunkSidecarReclaimDeadlineCutStatementsStayChargedAndThrottle(t *testi
 		t.Fatal(err)
 	}
 	config := DefaultChunkSidecarReclaimConfig()
+	reclaim.clock = func() time.Time { return now }
 	reclaim.limiter = newChunkReclaimLimiter(config.BytesPerMinute)
 	budget := DefaultStageBudgets()[StageChunkSidecarReclaim]
-	const ticks = 10
-	cut, throttled := 0, 0
-	for tick := range ticks {
+	charge := config.BytesPerMinute / wantDeadlineCutsPerWindow
+	const maxTicks = 4 * wantDeadlineCutsPerWindow
+	cut, skipped := 0, 0
+	throttledAt := -1
+	for tick := 0; tick < maxTicks && throttledAt < 0; tick++ {
 		stageCtx, stageCancel := context.WithTimeout(ctx, budget)
 		result, stepErr := reclaim.Step(stageCtx, now, 100)
 		stageCancel()
-		if errors.Is(stepErr, context.DeadlineExceeded) && result.Bytes == 0 {
+		outcome := ""
+		switch {
+		case stepErr == nil && result.Throttled && result.Statements == 0:
+			outcome = "throttled"
+			throttledAt = tick
+		case errors.Is(stepErr, context.DeadlineExceeded) && result.Statements == 0 && result.Bytes == 0:
+			outcome = "cut"
 			cut++
+		case stepErr == nil && !result.Throttled && result.Statements == 0 && result.Bytes == 0:
+			outcome = "skipped"
+			skipped++
+		default:
+			t.Fatalf("tick %d: unexpected outcome %+v (%v)", tick, result, stepErr)
 		}
-		if result.Throttled {
-			throttled++
-		}
-		t.Logf("tick %d: throttled=%t (%v); limiter available %d bytes", tick, result.Throttled, stepErr,
-			reclaim.limiter.available(time.Now()))
+		t.Logf("tick %d: %s (lock_skipped=%t, lock_skipped_ticks=%d, err=%v); limiter available %d bytes", tick, outcome,
+			result.LockSkipped, reclaim.LockSkippedTicks(), stepErr, reclaim.limiter.available(now))
 	}
-	if cut > wantDeadlineCutsPerWindow || throttled == 0 || cut+throttled != ticks {
-		t.Errorf("%d of %d ticks were cut by the %s budget with nothing deleted and %d were throttled; want at most %d cut "+
-			"ticks in the window and every later tick throttled (a cut statement stays charged)",
-			cut, ticks, budget, throttled, wantDeadlineCutsPerWindow)
+	t.Logf("%d cut ticks, %d skipped ticks, first throttled tick %d", cut, skipped, throttledAt)
+	if throttledAt < 0 {
+		t.Fatalf("no tick was throttled in %d ticks (%d cut, %d skipped): the cap never engaged (a cut statement stays charged)",
+			maxTicks, cut, skipped)
+	}
+	if cut != wantDeadlineCutsPerWindow {
+		t.Errorf("the first throttled tick came after %d cut ticks, want %d (each cut statement is charged %d bytes of %d)",
+			cut, wantDeadlineCutsPerWindow, charge, config.BytesPerMinute)
+	}
+	if want, got := config.BytesPerMinute-int64(cut)*charge, reclaim.limiter.available(now); got != want || got >= maxChunkPayloadBytes {
+		t.Errorf("limiter available at the first throttle = %d bytes, want %d (only the cut ticks are charged; skipped ticks charge nothing) and below one row (%d)",
+			got, want, maxChunkPayloadBytes)
+	}
+	for later := range 3 {
+		result, stepErr := reclaim.Step(ctx, now, 100)
+		if stepErr != nil || !result.Throttled || result.Statements != 0 {
+			t.Errorf("tick %d after the first throttle: %+v (%v), want throttled with nothing run", later, result, stepErr)
+		}
 	}
 }
 

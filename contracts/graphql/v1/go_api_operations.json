@@ -475,7 +475,7 @@
   },
   {
     "operation": "throughputForecast",
-    "digest": "9ace3bd179910a7c79ec8dade33c8f93c7244fc45fe455d4f844a5838eb6a18f"
+    "digest": "ebb9f0f86922d5aab9e9ae182cbd633b495f8037d46a69f0f7ed7c7ea7324dd0"
   },
   {
     "operation": "throughputForecast",
@@ -490,6 +490,11 @@
   {
     "operation": "throughputForecast",
     "digest": "a265a9550e4cdab2bc77395257777ec366ac554b19c617af094de47c7a9e2b03",
+    "legacy": true
+  },
+  {
+    "operation": "throughputForecast",
+    "digest": "9ace3bd179910a7c79ec8dade33c8f93c7244fc45fe455d4f844a5838eb6a18f",
     "legacy": true
   },
   {

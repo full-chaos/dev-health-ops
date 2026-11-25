@@ -598,9 +598,9 @@ func loadEstimateCoverage(
 // NULL.
 func loadReviewOverlay(
 	ctx context.Context, client QueryClient, orgID string, historyWeeks int, today time.Time,
-) (float64, error) {
+) (overlayRead, error) {
 	query := `
-        SELECT avg(pr_first_review_p50_hours) AS review_latency_hours
+        SELECT avg(pr_first_review_p50_hours) AS review_latency_hours, count() AS measured_rows
         FROM (
             SELECT
                 repo_id,
@@ -625,27 +625,28 @@ func loadReviewOverlay(
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
-		return 0, fmt.Errorf("throughputForecast: review overlay query: %w", err)
+		return overlayRead{}, fmt.Errorf("throughputForecast: review overlay query: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	var latency *float64
+	var measuredRows uint64
 	if rows.Next() {
-		if scanErr := rows.Scan(&latency); scanErr != nil {
-			return 0, fmt.Errorf("throughputForecast: review overlay scan: %w", scanErr)
+		if scanErr := rows.Scan(&latency, &measuredRows); scanErr != nil {
+			return overlayRead{}, fmt.Errorf("throughputForecast: review overlay scan: %w", scanErr)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("throughputForecast: review overlay rows: %w", err)
+		return overlayRead{}, fmt.Errorf("throughputForecast: review overlay rows: %w", err)
 	}
 	// `float(... or 0.0)`: a NULL average -- every row filtered out by the
 	// IS NOT NULL predicate -- reads as zero latency, which is INACTIVE rather
 	// than unknown. Python's behaviour; a port that surfaced "unknown" would
-	// change the overlay set.
+	// change the overlay set, so the value stays 0 and the state (CHAOS-14629) says there was no row.
 	if latency == nil {
-		return 0, nil
+		return overlayRead{state: model.NewestDayStateNoRows}, nil
 	}
-	return *latency, nil
+	return newOverlayRead(*latency, measuredRows), nil
 }
 
 // backlogRead is the backlog of a scope and how it was found (CHAOS-8167): the newest day of a key can be long before
@@ -655,6 +656,21 @@ type backlogRead struct {
 	state model.ThroughputBacklogState
 	// asOfDay is the oldest newest day of the measured keys; nil for NO_ROWS and SUPPLIED.
 	asOfDay *time.Time
+}
+
+// overlayRead is an overlay's input value and how it was found (CHAOS-14629): a sum or an average over no row is 0,
+// the same answer as stored rows that measure 0.
+type overlayRead struct {
+	value float64
+	state model.NewestDayState
+}
+
+// newOverlayRead is NO_ROWS when the read counted no row, else MEASURED. Never STALE: neither read keeps a newest day.
+func newOverlayRead(value float64, measuredRows uint64) overlayRead {
+	if measuredRows == 0 {
+		return overlayRead{value: value, state: model.NewestDayStateNoRows}
+	}
+	return overlayRead{value: value, state: model.NewestDayStateMeasured}
 }
 
 // loadBacklog ports _load_backlog and says how fresh the sum is. A measured key whose newest day is before the window
@@ -736,9 +752,11 @@ func loadBacklog(
 // column.
 func loadIncidentOverlay(
 	ctx context.Context, client QueryClient, orgID string, historyWeeks int, today time.Time,
-) (float64, error) {
+) (overlayRead, error) {
 	query := `
-        SELECT sum(incidents_count) / greatest(dateDiff('week', {start_date:Date}, today()), 1) AS incident_count
+        SELECT
+            sum(incidents_count) / greatest(dateDiff('week', {start_date:Date}, today()), 1) AS incident_count,
+            count() AS measured_rows
         FROM (
             SELECT
                 repo_id,
@@ -762,18 +780,19 @@ func loadIncidentOverlay(
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
-		return 0, fmt.Errorf("throughputForecast: incident overlay query: %w", err)
+		return overlayRead{}, fmt.Errorf("throughputForecast: incident overlay query: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	var incidents float64
+	var measuredRows uint64
 	if rows.Next() {
-		if scanErr := rows.Scan(&incidents); scanErr != nil {
-			return 0, fmt.Errorf("throughputForecast: incident overlay scan: %w", scanErr)
+		if scanErr := rows.Scan(&incidents, &measuredRows); scanErr != nil {
+			return overlayRead{}, fmt.Errorf("throughputForecast: incident overlay scan: %w", scanErr)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("throughputForecast: incident overlay rows: %w", err)
+		return overlayRead{}, fmt.Errorf("throughputForecast: incident overlay rows: %w", err)
 	}
-	return incidents, nil
+	return newOverlayRead(incidents, measuredRows), nil
 }

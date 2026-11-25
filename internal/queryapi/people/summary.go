@@ -470,9 +470,13 @@ func fetchPersonWorkMix(ctx context.Context, client QueryClient, identities []st
 // scalar avg() with NO GROUP BY -- the same "always exactly one row,
 // possibly NULL over zero matching rows" shape personMetricValueQuery's
 // own doc comment documents (a person idle in this window, or whose
-// items never carry lead_time_hours, is unexceptional) -- so both
-// branches are wrapped `coalesce(toFloat64(...), 0)`, not just
-// toFloat64.
+// items never carry lead_time_hours, is unexceptional). An average over
+// no rows is unknown, not 0 hours (CHAOS-14625): HAVING count() > 0
+// leaves a stage whose window holds no stored input out of the answer.
+// The coalesce stays only to keep the column Float64 for the scan; a
+// branch that passes HAVING always has an average.
+// Waiting reads a subset of Active's rows, so an item with a cycle time
+// and no lead time leaves Active served and Waiting omitted.
 func fetchPersonFlowBreakdown(ctx context.Context, client QueryClient, identities []string, startDay, endDay time.Time, orgID string) ([]FlowStageItem, error) {
 	query := fmt.Sprintf(`
         SELECT
@@ -484,6 +488,7 @@ func fetchPersonFlowBreakdown(ctx context.Context, client QueryClient, identitie
           AND assignee IN {identities:Array(String)}
           AND org_id = {org_id:String}
           AND cycle_time_hours IS NOT NULL
+        HAVING count() > 0
 
         UNION ALL
 
@@ -497,6 +502,7 @@ func fetchPersonFlowBreakdown(ctx context.Context, client QueryClient, identitie
           AND org_id = {org_id:String}
           AND lead_time_hours IS NOT NULL
           AND cycle_time_hours IS NOT NULL
+        HAVING count() > 0
         %s
     `, settingsMaxExecutionTime())
 	rows, err := client.Query(ctx, query, []dhclickhouse.Binding{

@@ -39,6 +39,42 @@ func TestThroughputForecastV3Document_MatchesItsWireFormFixture(t *testing.T) {
 	}
 }
 
+func TestThroughputForecastV4Document_MatchesItsWireFormFixture(t *testing.T) {
+	fixture := readWireFormFile(t, "throughputForecast.v4.graphql")
+	if got, want := digestHex(registeredThroughputForecastV4Document), digestHex(fixture); got != want {
+		t.Fatalf("registeredThroughputForecastV4Document digests to %s, its fixture to %s", got, want)
+	}
+	if !strings.Contains(fixture, "__typename") {
+		t.Fatal("the V4 fixture carries no __typename: it is the raw web source, not a wire form")
+	}
+}
+
+// CHAOS-14629: take the two overlay state selections out of the current text and the V4 text is left, byte for byte.
+func TestThroughputForecastCurrentAndV4_DifferByTheOverlayStates(t *testing.T) {
+	without := withoutOverlayStates(t, registeredThroughputForecastDocument)
+	for _, field := range []string{"reviewBottleneckState", "incidentLoadState"} {
+		if strings.Contains(registeredThroughputForecastV4Document, field) {
+			t.Fatalf("the legacy V4 throughputForecast document asks for %q: it is not the old text", field)
+		}
+	}
+	if without != registeredThroughputForecastV4Document {
+		t.Fatalf("the current document less the overlay states is not the V4 text:\n%s", without)
+	}
+}
+
+// withoutOverlayStates is the current throughputForecast text less the two selections CHAOS-14629 added. Each must be
+// in the text exactly once.
+func withoutOverlayStates(t *testing.T, document string) string {
+	t.Helper()
+	for _, line := range []string{"    reviewBottleneckState\n", "    incidentLoadState\n"} {
+		if strings.Count(document, line) != 1 {
+			t.Fatalf("the current throughputForecast document does not hold %q exactly once", line)
+		}
+		document = strings.Replace(document, line, "", 1)
+	}
+	return document
+}
+
 // withoutNewestDayFields is the current throughputForecast text less the selections CHAOS-7508 added: the three
 // wipCongestion fields, state, asOfDay and grainCount of staleWip, state and asOfDay of estimateCoverage. Each segment
 // must be in the text exactly once.
@@ -64,8 +100,8 @@ func TestThroughputForecastCurrentAndV3_DifferByTheNewestDayFields(t *testing.T)
 			t.Fatalf("the legacy V3 throughputForecast document asks for %q: it is not the old text", field)
 		}
 	}
-	if without := withoutNewestDayFields(t, registeredThroughputForecastDocument); without != registeredThroughputForecastV3Document {
-		t.Fatalf("the current document less the newest-day fields is not the V3 text:\n%s", without)
+	if without := withoutNewestDayFields(t, registeredThroughputForecastV4Document); without != registeredThroughputForecastV3Document {
+		t.Fatalf("the V4 document less the newest-day fields is not the V3 text:\n%s", without)
 	}
 }
 
@@ -79,7 +115,7 @@ func TestThroughputForecastCurrentAndV2_DifferByTheDegradedReason(t *testing.T) 
 	if strings.Contains(registeredThroughputForecastV2Document, "degradedReason") {
 		t.Fatal("the legacy V2 throughputForecast document asks for degradedReason: it is not the old text")
 	}
-	if without := strings.ReplaceAll(withoutNewestDayFields(t, registeredThroughputForecastDocument), line, ""); without != registeredThroughputForecastV2Document {
+	if without := strings.ReplaceAll(withoutNewestDayFields(t, registeredThroughputForecastV4Document), line, ""); without != registeredThroughputForecastV2Document {
 		t.Fatalf("the current document less degradedReason is not the V2 text:\n%s", without)
 	}
 }
@@ -87,7 +123,7 @@ func TestThroughputForecastCurrentAndV2_DifferByTheDegradedReason(t *testing.T) 
 // Take the newest-day selections and the four selections after V1 out of the current text and the V1 text is left,
 // byte for byte.
 func TestThroughputForecastCurrentAndV1_DifferByTheBacklogStateTheDegradedReasonAndTheGrainCount(t *testing.T) {
-	current := withoutNewestDayFields(t, registeredThroughputForecastDocument)
+	current := withoutNewestDayFields(t, registeredThroughputForecastV4Document)
 	without := current
 	for _, line := range []string{"    backlogState\n", "    backlogAsOfDay\n", "    degradedReason\n", "      grainCount\n"} {
 		field := strings.TrimSpace(line)
@@ -106,11 +142,12 @@ func TestThroughputForecastCurrentAndV1_DifferByTheBacklogStateTheDegradedReason
 
 func TestThroughputForecast_BothTextsResolveToTheOneOperation(t *testing.T) {
 	legacy := legacyDigestsByOperation["throughputForecast"]
-	if len(legacy) != 3 ||
+	if len(legacy) != 4 ||
 		legacy[0] != digestHex(registeredThroughputForecastV1Document) ||
 		legacy[1] != digestHex(registeredThroughputForecastV2Document) ||
-		legacy[2] != digestHex(registeredThroughputForecastV3Document) {
-		t.Fatalf("legacyDigestsByOperation[throughputForecast] = %v, want exactly the V1, V2 and V3 digests", legacy)
+		legacy[2] != digestHex(registeredThroughputForecastV3Document) ||
+		legacy[3] != digestHex(registeredThroughputForecastV4Document) {
+		t.Fatalf("legacyDigestsByOperation[throughputForecast] = %v, want exactly the V1, V2, V3 and V4 digests", legacy)
 	}
 	byDigest, err := buildOperationByDigest(
 		map[string]string{"throughputForecast": digestHex(registeredThroughputForecastDocument)},
@@ -119,7 +156,7 @@ func TestThroughputForecast_BothTextsResolveToTheOneOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"throughputForecast.graphql", "throughputForecast.v1.graphql", "throughputForecast.v2.graphql", "throughputForecast.v3.graphql"} {
+	for _, name := range []string{"throughputForecast.graphql", "throughputForecast.v1.graphql", "throughputForecast.v2.graphql", "throughputForecast.v3.graphql", "throughputForecast.v4.graphql"} {
 		operation, ok := operationForDocument(readWireFormFile(t, name), byDigest)
 		if !ok || operation != "throughputForecast" {
 			t.Errorf("%s resolves to %q, %v; want throughputForecast, true", name, operation, ok)

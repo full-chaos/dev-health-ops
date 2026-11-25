@@ -205,10 +205,11 @@ func TestPreparedRecoveryReplaysTheCrashedPassAcrossProviderDrift(t *testing.T) 
 	reviewsOK := func() providerfoundation.HTTPDoer {
 		return &gitHubPullRequestReviewRouteDoer{t: t, restBodies: defaultGitHubPullRequestFixtures(), graphQLReply: reviewReply}
 	}
+	// An answered review read that cannot be used degrades (a 5xx fails the unit instead).
 	reviewsFailed := func() providerfoundation.HTTPDoer {
 		return &gitHubPullRequestReviewRouteDoer{
 			t: t, restBodies: defaultGitHubPullRequestFixtures(),
-			graphQLStatus: http.StatusServiceUnavailable, graphQLReply: `{"message":"temporarily unavailable"}`,
+			graphQLReply: `{"data":{"repository":{}},"errors":[{"message":"schema changed"}]}`,
 		}
 	}
 	githubPRs := driftRoute{

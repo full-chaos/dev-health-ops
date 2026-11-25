@@ -61,7 +61,7 @@ func TestAtlassianProjectLinkWarningHidesATokenAtTheCapEdge(t *testing.T) {
 	}
 	// The stored form keeps the first 500 bytes of the detail: the same text, cut at the same place.
 	failure := errors.New("read connected projects of a team: upstream rejected [" + echo + "]")
-	leg := degradedProjectLinksLeg(atlassianteams.Rows{ProjectLinkFailure: failure, ProjectLinks: atlassianteams.ProjectLinkCounts{FailedTeamReads: 1}})
+	leg := degradedProjectLinksLeg(atlassianteams.Rows{ProjectLinkFailure: failure, ProjectLinks: atlassianteams.ProjectLinkCounts{FailedTeamReads: 1}}, legCredentialValues(capEdgeToken, "sync@example.test"))
 	stored := syncdispatchruntime.DegradedLegsPayload([]providersync.DegradedLeg{*leg})
 	for _, partial := range []string{capEdgeToken[:8], capEdgeToken[len(capEdgeToken)-8:]} {
 		if strings.Contains(logged, partial) {

@@ -199,9 +199,9 @@ func TestChunkSidecarReclaimStatementEndsOnTheServerWithTheStageBudget(t *testin
 func TestChunkSidecarReclaimDeadlineCutStatementsStayChargedAndThrottle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
-	venue := startChunkReclaimBudgetVenue(t, ctx, false)
 	for run := range 20 {
 		t.Run(fmt.Sprintf("run-%02d", run), func(t *testing.T) {
+			venue := startChunkReclaimBudgetVenue(t, ctx, false)
 			assertDeadlineCutStatementsStayChargedAndThrottle(t, ctx, venue)
 		})
 	}

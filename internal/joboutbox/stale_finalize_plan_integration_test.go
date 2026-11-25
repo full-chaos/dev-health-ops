@@ -28,10 +28,11 @@ import (
 // finalize-index probe, which reads at most k x base rows; a node run once (a hashed subplan) reads at most the index's
 // entries; A returns the perClass candidates and the survey counts each class.
 // Statement 0 (the base alone, which runs at base 0 and at base) reads daily_metrics_runs and daily_metrics_partitions
-// and nothing else; the cell must catch the plan losing the shape that keeps that read once: the partition check no
-// longer a hashed SubPlan (a per-run rescan of the partitions), a node on either table run more than once, or the
-// statement reading more of either table than its rows and pages. Its Seq Scan of daily_metrics_runs with a hashed
-// SubPlan Seq Scan of daily_metrics_partitions is the plan the SQL asks for (no index serves the base predicate), so
+// and nothing else; the cell must catch the plan losing the shape that keeps that read once: the partition check
+// run once per base run (a per-run rescan of the partitions), a node on either table run more than once, or the
+// statement reading more of either table than its rows and pages. Its Seq Scan of daily_metrics_runs with a
+// SubPlan Seq Scan of daily_metrics_partitions (hashed or not: the planner's pick) is the plan the SQL asks for (no
+// index serves the base predicate), so
 // the bound is WORK from EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON), never the Execution Time (CHAOS-14698: 75.6 ms
 // against a 75 ms bound failed main on a plan that read each table once).
 // Timings are logged as INFO only (D6418: no wall-time assertion). The only time limit is explainRunawayTimeout, a
@@ -325,7 +326,8 @@ func checkStatementZeroWork(t *testing.T, ctx context.Context, admin *pgxpool.Po
 
 // statementZeroWorkViolations runs EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) of the statement and returns each way its
 // plan reads more than once over the two tables it may read, with the bound it breaks:
-//   - a SubPlan that is not a hashed SubPlan (the partition check, run per base run);
+//   - a SubPlan that ran more than once (the partition check run per base run; a hashed SubPlan runs once, and one the
+//     planner leaves unhashed is harmless while it runs once or never, as at base 0);
 //   - a node on daily_metrics_runs or daily_metrics_partitions that ran more than once (a parallel scan's workers are
 //     its loops, so a Parallel node is checked on rows only);
 //   - a node that read more rows than the table holds (x 1.25 + 100: the JSON plan states the per-loop average of a
@@ -372,8 +374,8 @@ SELECT (SELECT count(*) FROM public.daily_metrics_runs), (SELECT count(*) FROM p
 	}
 	var walk func(node planNode)
 	walk = func(node planNode) {
-		if node.ParentRelation == "SubPlan" && !strings.HasPrefix(node.SubplanName, "hashed SubPlan") {
-			violations = append(violations, fmt.Sprintf("%s is not a hashed SubPlan: it runs once per outer row", node.SubplanName))
+		if node.ParentRelation == "SubPlan" && node.ActualLoops > 1 {
+			violations = append(violations, fmt.Sprintf("%s ran %.0f times: it runs once per outer row", node.SubplanName, node.ActualLoops))
 		}
 		rows := map[string]float64{"daily_metrics_runs": runsRows, "daily_metrics_partitions": partitionsRows}
 		switch node.RelationName {

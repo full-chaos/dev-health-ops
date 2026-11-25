@@ -533,7 +533,7 @@ func (c *HTTPClient) doRequest(ctx context.Context, probe *requestProbe, method,
 		// Only a rate limit ends early: it is the provider scheduling the retry, and
 		// the unit defers it without using an attempt. Any other class keeps the
 		// slept-out wait and its context error, so no caller's fallback changes.
-		if classification.Class == ErrorRateLimited && deadlineWithin(ctx, retryDelay) {
+		if (classification.Class == ErrorRateLimited || gatewayClassKeptOnDeadline(ctx, classification)) && deadlineWithin(ctx, retryDelay) {
 			if classification.RetryAfter <= 0 {
 				classification.RetryAfter = retryDelay
 			}
@@ -824,6 +824,32 @@ func (c *HTTPClient) awaitGate(ctx context.Context, probe *requestProbe) error {
 			return err
 		}
 	}
+}
+
+type gatewayDeadlineClassKey struct{}
+
+// WithGatewayDeadlineClass marks ctx so that a 500/502/503/504 answer whose retry
+// wait does not fit the time left ends the try at once with the class kept beside
+// the deadline error, as a rate limit does. Only the provider unit handler sets it,
+// for a chunked unit, so it can defer the burst and keep the chunk checkpoint
+// (CHAOS-14696); every other caller keeps the slept-out wait and its plain
+// deadline error.
+func WithGatewayDeadlineClass(ctx context.Context) context.Context {
+	return context.WithValue(ctx, gatewayDeadlineClassKey{}, true)
+}
+
+func gatewayClassKeptOnDeadline(ctx context.Context, classification *ProviderError) bool {
+	if classification.Class != ErrorTransient {
+		return false
+	}
+	if marked, _ := ctx.Value(gatewayDeadlineClassKey{}).(bool); !marked {
+		return false
+	}
+	switch classification.StatusCode {
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	}
+	return false
 }
 
 // deadlineWithin reports whether the context deadline falls inside the wait: the

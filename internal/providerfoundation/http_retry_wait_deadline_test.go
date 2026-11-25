@@ -167,3 +167,36 @@ func TestTransportFailureNearTheDeadlineStaysADeadlineError(t *testing.T) {
 		t.Fatalf("err = %v, want the transport arm's deadline error, unchanged", err)
 	}
 }
+
+// CHAOS-14696: a context marked by the chunked provider unit keeps the class of
+// a 500/502/503/504 answer beside the deadline error; an unmarked context (every
+// other caller, see TestRetryWaitDeadlineTransientStillSleepsToTheDeadline) and
+// a marked context with a status outside the four keep the slept-out wait.
+func TestRetryWaitDeadlineMarkedContextKeepsTheGatewayClass(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		status    int
+		wantClass bool
+	}{
+		{http.StatusInternalServerError, true}, {http.StatusBadGateway, true},
+		{http.StatusServiceUnavailable, true}, {http.StatusGatewayTimeout, true},
+		{http.StatusNotImplemented, false},
+	} {
+		var requests int
+		policy := RetryPolicy{MaxAttempts: 3, InitialWait: 5 * time.Second, MaxWait: 5 * time.Second}
+		client := retryDeadlineClient(t, test.status, nil, &requests, policy)
+		ctx, cancel := context.WithTimeout(WithGatewayDeadlineClass(context.Background()), 300*time.Millisecond)
+		_, err := client.Do(ctx, http.MethodGet, "/items", nil)
+		liveContext := ctx.Err() == nil
+		cancel()
+		var providerErr *ProviderError
+		gotClass := errors.As(err, &providerErr) && providerErr.Class == ErrorTransient && providerErr.StatusCode == test.status
+		if !errors.Is(err, context.DeadlineExceeded) || gotClass != test.wantClass || requests != 1 {
+			t.Fatalf("status %d: err = %v requests=%d classKept=%v, want classKept=%v, a deadline error and one request",
+				test.status, err, requests, gotClass, test.wantClass)
+		}
+		if test.wantClass && !liveContext {
+			t.Fatalf("status %d: the context died before Client.Do returned, want the try ended at once", test.status)
+		}
+	}
+}

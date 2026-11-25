@@ -1202,6 +1202,9 @@ func (handler *Handler) Work(
 	var result providersync.CompleteRouteExecutionResult
 	workCtx, cancelWork := workContext(ctx, execution.Deadline)
 	defer cancelWork()
+	if descriptor.Chunked {
+		workCtx = providerfoundation.WithGatewayDeadlineClass(workCtx)
+	}
 	executor, err := handler.BuildExecutor(session)
 	if err == nil {
 		result, err = executor.Execute(workCtx, session, descriptor)

@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 )
@@ -222,16 +221,24 @@ func TestRecordTouchedGitReadsEachTableOnceInThreeStatements(t *testing.T) {
 	}
 	insertTouchedTestReviews(t, ctx, conn, reviewRows...)
 
-	comment := fmt.Sprintf("chaos14673-%d", time.Now().UnixNano())
-	if _, err := store.RecordTouchedGit(clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"log_comment": comment})), touchedTestOrg, touchedTestSince); err != nil {
+	var startMicros int64
+	if err := conn.QueryRow(ctx, `SELECT toUnixTimestamp64Micro(now64(6))`).Scan(&startMicros); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RecordTouchedGit(ctx, touchedTestOrg, touchedTestSince); err != nil {
 		t.Fatal(err)
 	}
 	if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 		t.Fatalf("the query log is not readable by this user: %v", err)
 	}
+	// The connection is idle between the two marks, so the statements of the call are
+	// the finished initial queries that are the INSERT, the clock read or a read of the record table.
 	var statements, readRows uint64
 	if err := conn.QueryRow(ctx, `SELECT count(), sumIf(read_rows, query_kind = 'Insert') FROM system.query_log
-		WHERE log_comment = ? AND type = 'QueryFinish' AND is_initial_query`, comment).Scan(&statements, &readRows); err != nil {
+		WHERE type = 'QueryFinish' AND is_initial_query AND toUnixTimestamp64Micro(event_time_microseconds) >= ?
+		  AND position(query, 'system.query_log') = 0
+		  AND (query_kind = 'Insert' OR position(query, 'daily_metrics_touched_days') > 0 OR position(query, 'toUnixTimestamp64Milli(now64(3))') > 0)`,
+		startMicros).Scan(&statements, &readRows); err != nil {
 		t.Fatalf("the query log has no row for the record: %v", err)
 	}
 	t.Logf("record of the git days: statements=%d insert_select_read_rows=%d (tables hold %d)", statements, readRows, commits+pullRequests+reviews)

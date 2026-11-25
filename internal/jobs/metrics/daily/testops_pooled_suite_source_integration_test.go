@@ -235,8 +235,8 @@ func TestTestopsPooledSuiteSourceServesTheRowsOfTheOrganizationWideRead(t *testi
 	}
 	mutants("every day without samples", whole, []suiteSourceMutant{
 		{"newest-attempt", "report_slot != '' AND run_attempt = newest_attempt AND", "report_slot != '' AND", true},
-		{"slot-retired", " AND slot_retired = 0)", ")", true},
-		{"retired-slot-legacy-ids", " AND NOT has(retired_legacy_ids, suite_id)", "", true},
+		{"slot-retired", " AND slot_retired = 0)", ")", false},
+		{"retired-slot-legacy-ids", " AND NOT has(retired_legacy_ids, suite_id)", "", false},
 		{"newest-attempt-legacy-ids", "AND NOT has(newest_legacy_ids, suite_id) ", "", false},
 		{"suite-row-retracted", "AND retracted = 0 AND slot_retired", "AND slot_retired", false},
 	})

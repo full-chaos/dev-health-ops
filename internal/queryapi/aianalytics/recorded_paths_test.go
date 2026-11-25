@@ -594,8 +594,8 @@ func answerA(t *testing.T, c oracleCase, ds dataset) map[string]any {
 		t.Fatalf("%s: %v", c.Name, err)
 	}
 	answer := jsonMap(t, got)
-	if c.Fn == "resolve_ai_impact_summary" {
-		// The Go-only daily row field (CHAOS-7774) is not part of the recorded Python answer.
+	if c.Fn == "resolve_ai_impact_summary" || c.Fn == "resolve_ai_review_load" {
+		// The Go-only daily row field (CHAOS-7774, CHAOS-14638) is not part of the recorded Python answer.
 		stripGoOnlyImpactDailyRowFields(answer)
 	}
 	return answer

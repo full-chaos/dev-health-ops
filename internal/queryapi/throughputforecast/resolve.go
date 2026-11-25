@@ -153,11 +153,11 @@ func Resolve(
 	if err != nil {
 		return nil, err
 	}
-	review, err := loadReviewOverlay(ctx, client, orgID, input.HistoryWeeks, now)
+	review, err := loadReviewOverlay(ctx, client, orgID, input.TeamIds, input.HistoryWeeks, now)
 	if err != nil {
 		return nil, err
 	}
-	incident, err := loadIncidentOverlay(ctx, client, orgID, input.HistoryWeeks, now)
+	incident, err := loadIncidentOverlay(ctx, client, orgID, input.TeamIds, input.HistoryWeeks, now)
 	if err != nil {
 		return nil, err
 	}

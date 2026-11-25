@@ -738,12 +738,13 @@ public.memberships stay the authority), refuses AUTH_ORGS_OWNED in every extraEn
 */}}
 {{- define "dev-health.authPhase" -}}
 {{- $v := .Values -}}
-{{- /* goApi.authProxy keeps two keys: orgProvisioning (CHAOS-11858, CHAOS-10988), the go-api switch AUTH_PROXY_ORG_PROVISIONING, and impersonation (CHAOS-12914), the go-api switch AUTH_PROXY_IMPERSONATION. Every other key is a routing flag authService.phase owns. */ -}}
+{{- /* goApi.authProxy keeps three keys: orgProvisioning (CHAOS-11858, CHAOS-10988), the go-api switch AUTH_PROXY_ORG_PROVISIONING, impersonation (CHAOS-12914), the go-api switch AUTH_PROXY_IMPERSONATION, and serviceAccountKeys (CHAOS-14689), the go-api switch AUTH_PROXY_SERVICE_ACCOUNT_KEYS. Every other key is a routing flag authService.phase owns. */ -}}
 {{- if hasKey $v.goApi "authProxy" }}
 {{- if or (not (kindIs "map" $v.goApi.authProxy)) (eq (len $v.goApi.authProxy) 0) }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end }}
-{{- range $key, $_ := $v.goApi.authProxy }}{{- if not (has $key (list "orgProvisioning" "impersonation")) }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end }}{{- end }}
+{{- range $key, $_ := $v.goApi.authProxy }}{{- if not (has $key (list "orgProvisioning" "impersonation" "serviceAccountKeys")) }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end }}{{- end }}
 {{- if and (hasKey $v.goApi.authProxy "orgProvisioning") (not (kindIs "bool" $v.goApi.authProxy.orgProvisioning)) }}{{- fail "goApi.authProxy.orgProvisioning must be true or false" }}{{- end }}
 {{- if and (hasKey $v.goApi.authProxy "impersonation") (not (kindIs "bool" $v.goApi.authProxy.impersonation)) }}{{- fail "goApi.authProxy.impersonation must be true or false" }}{{- end }}
+{{- if and (hasKey $v.goApi.authProxy "serviceAccountKeys") (not (kindIs "bool" $v.goApi.authProxy.serviceAccountKeys)) }}{{- fail "goApi.authProxy.serviceAccountKeys must be true or false" }}{{- end }}
 {{- end -}}
 {{- if hasKey $v.authService "enabled" }}{{- fail "authService.enabled is replaced by authService.phase: enabled=true is phase 1 and enabled=false is phase 0; remove authService.enabled and set authService.phase" }}{{- end -}}
 {{- if hasKey $v.authService "usersOwned" }}{{- fail "authService.usersOwned is replaced by authService.phase: users owned is phase 4; remove authService.usersOwned" }}{{- end -}}
@@ -755,6 +756,13 @@ public.memberships stay the authority), refuses AUTH_ORGS_OWNED in every extraEn
 {{- /* CHAOS-12914: go-api only logs the switch without sessions (one ERROR line, devhealth_api_auth_proxy_impersonation_config_invalid=1, every start 503; D6465 no fail-start), so the render refuses it. */ -}}
 {{- if and (eq (default false (default dict $v.goApi.authProxy).impersonation) true) (not $v.goApi.enabled) }}{{- fail "goApi.authProxy.impersonation needs goApi.enabled: the switch is an env entry of the go-api Deployment, and without go-api it would be accepted and absent" }}{{- end -}}
 {{- if and (eq (default false (default dict $v.goApi.authProxy).impersonation) true) (lt (int $p) 2) }}{{- fail "goApi.authProxy.impersonation needs authService.phase 2 or higher: go-api starts the admin impersonation session at auth-service only while auth-service owns sessions (AUTH_PROXY_SESSIONS); without it every impersonation start answers 503" }}{{- end -}}
+{{- /* CHAOS-14689: go-api fails start with the switch on and no AUTH_PROXY_URL, which renders only from phase 2. */ -}}
+{{- if and (eq (default false (default dict $v.goApi.authProxy).serviceAccountKeys) true) (not $v.goApi.enabled) }}{{- fail "goApi.authProxy.serviceAccountKeys needs goApi.enabled: the switch is an env entry of the go-api Deployment, and without go-api it would be accepted and absent" }}{{- end -}}
+{{- if and (eq (default false (default dict $v.goApi.authProxy).serviceAccountKeys) true) (lt (int $p) 2) }}{{- fail "goApi.authProxy.serviceAccountKeys needs authService.phase 2 or higher: the chart renders AUTH_PROXY_URL only from phase 2, and go-api does not start with the switch on and no AUTH_PROXY_URL" }}{{- end -}}
+{{- if eq (default false (default dict $v.goApi.authProxy).serviceAccountKeys) true }}
+{{- $routes := false }}{{- range ($v.authService.extraEnv | default list) }}{{- if eq (toString .name) "AUTH_MEMBERSHIP_ROUTES" }}{{- $routes = eq (toString .value) "true" }}{{- end }}{{- end }}
+{{- if not $routes }}{{- fail "goApi.authProxy.serviceAccountKeys needs authService.extraEnv AUTH_MEMBERSHIP_ROUTES=true (the exact name; the last entry with that name must be \"true\"): go-api calls auth-service's service account key routes, which auth-service mounts only with that setting" }}{{- end }}
+{{- end -}}
 {{- if eq (default false (default dict $v.goApi.authProxy).orgProvisioning) true }}
 {{- $routes := false }}{{- range ($v.authService.extraEnv | default list) }}{{- if eq (toString .name) "AUTH_MEMBERSHIP_ROUTES" }}{{- $routes = eq (toString .value) "true" }}{{- end }}{{- end }}
 {{- if not $routes }}{{- fail "goApi.authProxy.orgProvisioning needs authService.extraEnv AUTH_MEMBERSHIP_ROUTES=true (the exact name; the last entry with that name must be \"true\"): go-api calls auth-service's provisioning routes, which auth-service mounts only with that setting" }}{{- end }}
@@ -790,7 +798,7 @@ Every env name the chart renders for the go-api container, as a JSON list. goApi
 any case, for the same reason as dev-health.authServiceEnvNames. auth_phase_test.go walks the rendered names. The DSN name is appended, not listed, so the worker DSN list keeps the only listed spelling (a chartgates planted defect edits it).
 */}}
 {{- define "dev-health.goApiEnvNames" -}}
-{{- $names := list "AUTH_DATABASE_SCHEMA" "HIDE_MIGRATED_CHILD_CONFIGS" "SYNC_WATERMARK_OVERLAP" "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS" "AUTH_PLATFORM_ROLES_OWNED" "GO_API_AUTHZ_ENFORCE" "AUTH_PROXY_URL" "AUTH_PROXY_SESSIONS" "AUTH_PROXY_LOCAL_LOGIN" "AUTH_PROXY_CREDENTIALS" "AUTH_PROXY_SOCIAL" "AUTH_PROXY_OIDC" "AUTH_PROXY_SAML" "AUTH_PROXY_ORG_PROVISIONING" "AUTH_SESSION_ISSUE_CREDENTIAL" "AUTH_USERS_OWNED" "AUTH_ACCESS_TOKEN_ISSUER" "TRUSTED_PROXIES_NETWORK_FENCED" -}}
+{{- $names := list "AUTH_DATABASE_SCHEMA" "HIDE_MIGRATED_CHILD_CONFIGS" "SYNC_WATERMARK_OVERLAP" "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS" "AUTH_PLATFORM_ROLES_OWNED" "GO_API_AUTHZ_ENFORCE" "AUTH_PROXY_URL" "AUTH_PROXY_SESSIONS" "AUTH_PROXY_LOCAL_LOGIN" "AUTH_PROXY_CREDENTIALS" "AUTH_PROXY_SOCIAL" "AUTH_PROXY_OIDC" "AUTH_PROXY_SAML" "AUTH_PROXY_ORG_PROVISIONING" "AUTH_PROXY_SERVICE_ACCOUNT_KEYS" "AUTH_SESSION_ISSUE_CREDENTIAL" "AUTH_USERS_OWNED" "AUTH_ACCESS_TOKEN_ISSUER" "TRUSTED_PROXIES_NETWORK_FENCED" -}}
 {{- $names = (append $names "API_DATABASE_URI") }}{{- toJson $names -}}
 {{- end -}}
 

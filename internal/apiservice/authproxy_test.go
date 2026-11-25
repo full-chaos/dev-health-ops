@@ -905,12 +905,23 @@ func TestConfigureLogsTheAuthProxyRouting(t *testing.T) {
 			host: "auth-service.internal:8095",
 			on:   map[string]bool{string(AuthSessions): true, string(AuthSAML): true},
 		},
+		"sessions, service account keys explicit false": {
+			env:  map[string]string{EnvAuthProxyURL: "http://auth-service.internal:8095/", AuthProxyFlagEnv(AuthSessions): "true", EnvAuthProxyServiceAccountKeys: "false"},
+			host: "auth-service.internal:8095",
+			on:   map[string]bool{string(AuthSessions): true},
+		},
+		"sessions and service account keys": {
+			env:  map[string]string{EnvAuthProxyURL: "http://auth-service.internal:8095/", AuthProxyFlagEnv(AuthSessions): "true", EnvAuthProxyServiceAccountKeys: "true"},
+			host: "auth-service.internal:8095",
+			on:   map[string]bool{string(AuthSessions): true, "service_account_keys": true},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			for _, aggregate := range AuthAggregates {
 				t.Setenv(AuthProxyFlagEnv(aggregate), testCase.env[AuthProxyFlagEnv(aggregate)])
 			}
 			t.Setenv(EnvAuthProxyURL, testCase.env[EnvAuthProxyURL])
+			t.Setenv(EnvAuthProxyServiceAccountKeys, testCase.env[EnvAuthProxyServiceAccountKeys])
 			for k, v := range workloadEnv(t, nil) {
 				t.Setenv(k, v)
 			}
@@ -943,6 +954,9 @@ func TestConfigureLogsTheAuthProxyRouting(t *testing.T) {
 				if got := record[string(aggregate)]; got != testCase.on[string(aggregate)] {
 					t.Errorf("routing line %s=%v, want %v", aggregate, got, testCase.on[string(aggregate)])
 				}
+			}
+			if got := record["service_account_keys"]; got != testCase.on["service_account_keys"] {
+				t.Errorf("routing line service_account_keys=%v, want %v", got, testCase.on["service_account_keys"])
 			}
 		})
 	}

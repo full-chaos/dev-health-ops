@@ -54,7 +54,12 @@
   },
   {
     "operation": "aiReviewLoad",
-    "digest": "4a160089d82bb30f486e81dcc4fb0ef20b97efac29166f0d04e8b03cf06a1697"
+    "digest": "3c0b56d86d8d3fe263849885ef5a652aba7948e2fc5fb1bba22b6f9bc95eca41"
+  },
+  {
+    "operation": "aiReviewLoad",
+    "digest": "4a160089d82bb30f486e81dcc4fb0ef20b97efac29166f0d04e8b03cf06a1697",
+    "legacy": true
   },
   {
     "operation": "aiRiskBreakdown",
@@ -138,7 +143,12 @@
   },
   {
     "operation": "connectorsDataHealth",
-    "digest": "0e43d67d571539081b2006ae8b2148dd4ea31c959be22be1db9e927083060baa"
+    "digest": "d2a289f6419d0f6f9826ca978ce37d6f90e629934d2f49782d4a1ce2c874a136"
+  },
+  {
+    "operation": "connectorsDataHealth",
+    "digest": "0e43d67d571539081b2006ae8b2148dd4ea31c959be22be1db9e927083060baa",
+    "legacy": true
   },
   {
     "operation": "coverageBaselines",
@@ -160,11 +170,16 @@
   },
   {
     "operation": "dataHealthIdentity",
-    "digest": "3a6f9e0676663b447d633872098e14e387f07b95b90b88d6255263d3a339362d"
+    "digest": "04a822b0357f0a0195867c8eb5343d9bf878d26b674d8bbd849ef9c6d1d6c2b5"
   },
   {
     "operation": "dataHealthIdentity",
     "digest": "a31987266aad8c1e9eb7cb1b572cc45aecc417f566773e9b5ba6e1bf10ec1a94",
+    "legacy": true
+  },
+  {
+    "operation": "dataHealthIdentity",
+    "digest": "3a6f9e0676663b447d633872098e14e387f07b95b90b88d6255263d3a339362d",
     "legacy": true
   },
   {
@@ -316,11 +331,21 @@
   },
   {
     "operation": "mappingCoverageHealth",
-    "digest": "f87ebae2df502280d389cfd3bf6452e2e1ef8ed6965280f5ba809350ac6a0d01"
+    "digest": "08ddf1a9d01ae058ddb7ab25052aadccfe2bf9bc3424bdb0bdb4da9f77207dcc"
+  },
+  {
+    "operation": "mappingCoverageHealth",
+    "digest": "f87ebae2df502280d389cfd3bf6452e2e1ef8ed6965280f5ba809350ac6a0d01",
+    "legacy": true
   },
   {
     "operation": "metricLineage",
-    "digest": "4d93b59c335d6b8e5709f60bf4186030aa1b6b454c438e73c9177c675ccd705d"
+    "digest": "717b35c73431903150f79b061642065b33191d8a9472bf76b17f3d4e325b4f95"
+  },
+  {
+    "operation": "metricLineage",
+    "digest": "4d93b59c335d6b8e5709f60bf4186030aa1b6b454c438e73c9177c675ccd705d",
+    "legacy": true
   },
   {
     "operation": "operatingReview",

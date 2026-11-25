@@ -1,5 +1,5 @@
-query DataHealthIdentity($team: ID!) {
-  dataHealth(team: $team) {
+query DataHealthIdentity {
+  dataHealth {
     identityMapping {
       unmappedCount
       unmappedIdentities {

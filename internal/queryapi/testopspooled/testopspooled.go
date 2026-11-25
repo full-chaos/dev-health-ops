@@ -73,13 +73,16 @@ func LiveLegacyRepoDays(table string) string {
 // NEWEST row of table is a measurement (package liverow). A retired repository-day (its newest row holds retracted = 1, a row
 // written with the column defaults, so pooled_samples_stored 0) is left out: the retracted flag wins over the pooled marker,
 // so neither the older row's stored samples nor a raw row synced after the retraction is a sample. The rule is applied to
-// the newest row of a key, after the GROUP BY of the key. A table with no rule panics (liverow.NewestPredicate).
+// the newest row of a key, after the GROUP BY of the key. A same-second tie of a live row and a retraction row at the newest
+// computed_at keeps the day: it is left out only when every row at the newest stamp is a retraction, the same rule as
+// LiveLegacyRepoDays, so every read of the same rows gives the same answer (CHAOS-14616). A table with no Retracted column
+// panics (liverow.NewestAnyLivePredicate).
 func LiveRepoDays(table string) string {
 	return `(repo_id, day) IN (
         SELECT repo_id, day FROM ` + table + `
         WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date}
         GROUP BY repo_id, day
-        HAVING ` + liverow.NewestPredicate(table, "") + `)`
+        HAVING ` + liverow.NewestAnyLivePredicate(table, "") + `)`
 }
 
 // The pooled sources. Neither carries a team column: a TestOps team is the owner of the repository at the request. A

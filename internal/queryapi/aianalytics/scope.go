@@ -8,8 +8,12 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aiimpact"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
@@ -107,8 +111,7 @@ func teamRepoIDs(ctx context.Context, client QueryClient, orgID, teamID, operati
 	}
 	repos, err := loadRepoNames(ctx, client, orgID)
 	if err != nil {
-		slog.WarnContext(ctx, "query_api.ai_analytics.team_repos_unavailable",
-			"operation", operation, "error", err.Error())
+		reportTeamReposUnavailable(ctx, operation, "repos", err)
 		return nil, false
 	}
 	all := make([]string, 0, len(repos))
@@ -117,11 +120,28 @@ func teamRepoIDs(ctx context.Context, client QueryClient, orgID, teamID, operati
 	}
 	held, err := teamscope.HeldRepoIDs(ctx, client, orgID, all, []string{teamID}, time.Now().UTC())
 	if err != nil {
-		slog.WarnContext(ctx, "query_api.ai_analytics.team_repos_unavailable",
-			"operation", operation, "error", err.Error())
+		reportTeamReposUnavailable(ctx, operation, "ownership", err)
 		return nil, false
 	}
 	return held, true
+}
+
+var teamReposUnavailableCounter = func() metric.Int64Counter {
+	name := "devhealth_query_api_ai_analytics_team_repos_unavailable_total"
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/queryapi/aianalytics").Int64Counter(name,
+		metric.WithDescription("team-scoped AI analytics reads whose team ownership could not be read (the read answers no data), by operation and failed read"))
+	if err != nil {
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(name)
+	}
+	return counter
+}()
+
+// reportTeamReposUnavailable logs the error class only (CHAOS-7933): a driver or wrapper message can quote a statement and its
+// org, team or repository ids. read is "repos" or "ownership".
+func reportTeamReposUnavailable(ctx context.Context, operation, read string, err error) {
+	teamReposUnavailableCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("operation", operation), attribute.String("read", read)))
+	slog.WarnContext(ctx, "query_api.ai_analytics.team_repos_unavailable",
+		"operation", operation, "read", read, logging.ErrorAttr(err))
 }
 
 // teamRepos is a team scope resolved by teamRepoIDs: the repositories the team owns, and ok=false when the

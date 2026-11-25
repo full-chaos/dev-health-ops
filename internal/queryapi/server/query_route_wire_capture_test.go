@@ -260,6 +260,7 @@ func TestRegisteredCapturedDocuments_MatchCapturedWireFixtures(t *testing.T) {
 		{"testdata/wire_capture/aiimpactsummary_captured.graphql", registeredAiImpactSummaryDocument},
 		{"testdata/wire_capture/aiimpactsummary_v1_captured.graphql", registeredAiImpactSummaryV1Document},
 		{"testdata/wire_capture/aicomparison_captured.graphql", registeredAiComparisonDocument},
+		{"testdata/wire_capture/aireviewload_v1_captured.graphql", registeredAiReviewLoadV1Document},
 		{"testdata/wire_capture/aireviewload_captured.graphql", registeredAiReviewLoadDocument},
 		{"testdata/wire_capture/compoundingrisk_captured.graphql", registeredCompoundingRiskDocument},
 		{"testdata/wire_capture/compoundingrisk_v1_captured.graphql", registeredCompoundingRiskV1Document},
@@ -335,6 +336,10 @@ func TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures(t *testing.T) {
 		{"testdata/wire_capture/data_health_identity_v1_captured.graphql", registeredDataHealthIdentityV1Document},
 		{"testdata/wire_capture/data_health_metric_lineage_captured.graphql", registeredMetricLineageDocument},
 		{"testdata/wire_capture/data_health_mapping_coverage_captured.graphql", registeredMappingCoverageHealthDocument},
+		{"testdata/wire_capture/data_health_connectors_v1_captured.graphql", registeredConnectorsDataHealthV1Document},
+		{"testdata/wire_capture/data_health_identity_v2_captured.graphql", registeredDataHealthIdentityV2Document},
+		{"testdata/wire_capture/data_health_metric_lineage_v1_captured.graphql", registeredMetricLineageV1Document},
+		{"testdata/wire_capture/data_health_mapping_coverage_v1_captured.graphql", registeredMappingCoverageHealthV1Document},
 	}
 	for _, tc := range cases {
 		captured, err := os.ReadFile(tc.fixture)

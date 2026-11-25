@@ -103,7 +103,7 @@ func TestLoadReviewOverlayReturnsZeroNotStaleValueWhenNewestIsNull(t *testing.T)
 		t.Fatalf("insert newer NULL row: %v", err)
 	}
 
-	latency, err := loadReviewOverlay(ctx, client, "org-4547", 8, today)
+	latency, err := loadReviewOverlay(ctx, client, "org-4547", nil, 8, today)
 	if err != nil {
 		t.Fatalf("loadReviewOverlay: %v", err)
 	}

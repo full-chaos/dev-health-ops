@@ -269,6 +269,7 @@ type AIReviewLoadRow struct {
 	PostFirstReviewPushesPerPr *float64 `json:"postFirstReviewPushesPerPr,omitempty"`
 	PickupLatencyHours         *float64 `json:"pickupLatencyHours,omitempty"`
 	ReviewCommentsPerLoc       *float64 `json:"reviewCommentsPerLoc,omitempty"`
+	Day                        *string  `json:"day,omitempty"`
 }
 
 type AIReviewerConcentrationSummary struct {

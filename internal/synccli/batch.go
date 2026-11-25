@@ -190,7 +190,7 @@ func repoLabel(repo providersync.ListedRepository) string {
 func batchSecrets(run providersync.InProcessRun) []string {
 	var values []string
 	for _, key := range []string{"token", "private_key"} {
-		if value := run.Credential[key]; value != "" {
+		if value := run.Credential[key]; !isBlank(value) {
 			values = append(values, value)
 		}
 	}

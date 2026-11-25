@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -42,21 +43,29 @@ func NewBuilder(client home.QueryClient) Builder {
 	}
 }
 
-// FiltersFrom reads the scope of a request filter. An absent filter or scope
-// is the org scope with no ids.
+// FiltersFrom reads the scope, the repositories and the work categories of a request filter, the way home reads
+// them. An absent filter or scope is the org scope with no ids.
 func FiltersFrom(in *model.FilterInput) home.Filters {
 	f := home.Filters{
 		Time:  home.TimeFilter{RangeDays: defaultRangeDays, CompareDays: defaultCompareDays},
 		Scope: home.ScopeFilter{Level: "org", IDs: []string{}},
 	}
-	if in == nil || in.Scope == nil {
+	if in == nil {
 		return f
 	}
-	if level := strings.ToLower(string(in.Scope.Level)); level != "" {
-		f.Scope.Level = level
+	if in.Scope != nil {
+		if level := strings.ToLower(string(in.Scope.Level)); level != "" {
+			f.Scope.Level = level
+		}
+		if len(in.Scope.Ids) > 0 {
+			f.Scope.IDs = append([]string{}, in.Scope.Ids...)
+		}
 	}
-	if len(in.Scope.Ids) > 0 {
-		f.Scope.IDs = append([]string{}, in.Scope.Ids...)
+	if in.What != nil {
+		f.What.Repos = slices.Clone(in.What.Repos)
+	}
+	if in.Why != nil {
+		f.Why.WorkCategory = slices.Clone(in.Why.WorkCategory)
 	}
 	return f
 }

@@ -361,6 +361,11 @@ spec:
             - name: AUTH_PROXY_IMPERSONATION
               value: "true"
             {{- end }}
+            {{- /* CHAOS-14689: rendered only when on; the render refuses it below phase 2 and without AUTH_MEMBERSHIP_ROUTES. */}}
+            {{- if eq (default false (default dict .Values.goApi.authProxy).serviceAccountKeys) true }}
+            - name: AUTH_PROXY_SERVICE_ACCOUNT_KEYS
+              value: "true"
+            {{- end }}
             {{- if and $sessionsOn $wb }}
             - name: AUTH_SESSION_ISSUE_CREDENTIAL
               value: "workload"

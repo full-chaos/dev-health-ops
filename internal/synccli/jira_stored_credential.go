@@ -2,6 +2,7 @@ package synccli
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -155,7 +156,7 @@ func resolveJiraStoredSettings(
 			// The gateway's error text can echo the credential the discovery authenticated
 			// with, and runTeams prints this error before its own redaction boundary exists:
 			// redact it here, with the token and the email, and keep the chain.
-			return settings{}, redactCredentialError(failure, token, email.Reveal())
+			return settings{}, redactCredentialError(failure, basicCredentialValues(email.Reveal(), token)...)
 		}
 	}
 	return settings{
@@ -233,6 +234,20 @@ func jiraIntegrationCredentialID(ctx context.Context, pool *pgxpool.Pool, orgID 
 	}
 	return "", fmt.Errorf("the org has %d active jira integrations with different credentials (%s); this verb cannot choose one",
 		len(ids), strings.Join(shown, ", "))
+}
+
+// basicCredentialValues are the email, the token and the Basic payload base64(email:token) in the
+// standard and URL alphabets, padded and not: the Authorization header the gateway can echo carries
+// the payload, which no single value's own spellings cover.
+func basicCredentialValues(email, token string) []string {
+	values := []string{email, token}
+	if email == "" || token == "" {
+		return values
+	}
+	raw := []byte(email + ":" + token)
+	return append(values,
+		base64.StdEncoding.EncodeToString(raw), base64.RawStdEncoding.EncodeToString(raw),
+		base64.URLEncoding.EncodeToString(raw), base64.RawURLEncoding.EncodeToString(raw))
 }
 
 // redactCredentialError is failure with every value (and its trimmed spelling, and the

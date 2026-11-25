@@ -200,6 +200,35 @@ func TestGitHubTestsArtifactExcludeUsesOnlyTheConfigList(t *testing.T) {
 	}
 }
 
+// A list that holds only SOME of this repository's own CI names excludes only those: the other names are selected, read, and
+// take their slots; no name is excluded because it was once in a built-in list.
+func TestGitHubTestsConfigListWithSomeOfTheOwnNamesExcludesOnlyThose(t *testing.T) {
+	suite := githubTestsPrefixGuardSuite("pkg/a", "TestA1", "TestA2")
+	artifacts := []githubTestsPrefixGuardArtifact{
+		{name: "go-images-amd64-9-1", members: map[string]string{"images.tar": "not-a-report"}},
+		{name: "go-test-timings-integration-packages-1", members: map[string]string{"timings.tsv.gz": "pkg\t1.0"}},
+		{name: "go-junit-part-packages-1", members: map[string]string{"a.xml": "<testsuites>" + suite + "</testsuites>"}},
+		{name: "test-results", members: map[string]string{"junit.xml": "<testsuites>" + suite + "</testsuites>"}},
+	}
+	for _, cell := range []struct {
+		name           string
+		configPrefixes []string
+		wantExcluded   int
+		wantDownloads  int
+	}{
+		{name: "only go-images-", configPrefixes: []string{"go-images-"}, wantExcluded: 1, wantDownloads: 3},
+		{name: "only go-test-timings-", configPrefixes: []string{"go-test-timings-"}, wantExcluded: 1, wantDownloads: 3},
+		{name: "go-images- and go-junit-part-", configPrefixes: []string{"go-images-", "go-junit-part-"}, wantExcluded: 2, wantDownloads: 2},
+		{name: "all three", configPrefixes: githubTestsOwnCIPrefixes, wantExcluded: 3, wantDownloads: 1},
+	} {
+		served, _ := githubTestsPrefixGuardRunWith(t, artifacts, cell.configPrefixes)
+		if served.excludedPrefix != cell.wantExcluded || served.downloads != cell.wantDownloads {
+			t.Errorf("%s: excluded=%d downloads=%d, want %d and %d (only the listed names are excluded; the others are selected)",
+				cell.name, served.excludedPrefix, served.downloads, cell.wantExcluded, cell.wantDownloads)
+		}
+	}
+}
+
 // The prefix exclusion is counted and sampled under the fixed reason token only: no result key, counter name or sample
 // reason carries a configured prefix.
 func TestGitHubTestsConfiguredPrefixNeverLabelsTheExclusionCounter(t *testing.T) {

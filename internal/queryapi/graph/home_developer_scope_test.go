@@ -182,3 +182,27 @@ func TestHomeUnknownDeveloperWithNamedReposReadsTheNoDataStatements(t *testing.T
 		t.Fatalf("reads: digest %s (%d reads), want the unknown-developer statements %s (40 reads)", digest, reads, unknownDeveloperDigest)
 	}
 }
+
+func homeDevResult(t *testing.T, scope *model.ScopeFilterInput, what *model.WhatFilterInput) *model.HomeResult {
+	t.Helper()
+	r := &Resolver{ClickHouse: &homeDevProbeClient{}, Postgres: pgNoRows{&recordingHomePGClient{}}}
+	ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-synthetic-1"})
+	res, err := r.Query().Home(ctx, "org-synthetic-1", &model.FilterInput{Scope: scope, What: what}, nil)
+	if err != nil {
+		t.Fatalf("home: %v", err)
+	}
+	return res
+}
+
+// A repository filter the developer no-data guard short-circuits is not reported as applied.
+func TestHomeDeveloperScopeDoesNotReportTheRepoFilterAsApplied(t *testing.T) {
+	res := homeDevResult(t, &model.ScopeFilterInput{Level: model.ScopeLevelInputDeveloper, Ids: []string{homeDevScopeID}}, &model.WhatFilterInput{Repos: []string{"repo-synthetic-a"}})
+	if len(res.Deltas) == 0 {
+		t.Fatal("no delta in the response: the cell measures nothing")
+	}
+	for _, delta := range res.Deltas {
+		if delta.RepoFilterApplied != nil && *delta.RepoFilterApplied {
+			t.Errorf("metric %s reports repoFilterApplied=true while its read carries the no-data filter", delta.Metric)
+		}
+	}
+}

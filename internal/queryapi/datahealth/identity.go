@@ -30,6 +30,9 @@ GROUP BY provider, identity, display_name
 ORDER BY observed_count DESC
 LIMIT 100`
 
+// observedGroupCeiling is the most observed (provider, identity) groups one request counts.
+var observedGroupCeiling = 50000
+
 const mappedIdentitiesSQL = `
 SELECT canonical_id, email, display_name, provider_identities, team_ids
 FROM identities FINAL

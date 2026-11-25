@@ -1554,12 +1554,14 @@ type ComplexityRoot struct {
 		ForecastID              func(childComplexity int) int
 		HistoryWeeks            func(childComplexity int) int
 		IncidentLoad            func(childComplexity int) int
+		IncidentLoadState       func(childComplexity int) int
 		InsufficientHistory     func(childComplexity int) int
 		P50Weeks                func(childComplexity int) int
 		P75Weeks                func(childComplexity int) int
 		P90Weeks                func(childComplexity int) int
 		PrimaryRisk             func(childComplexity int) int
 		ReviewBottleneck        func(childComplexity int) int
+		ReviewBottleneckState   func(childComplexity int) int
 		RollingWindows          func(childComplexity int) int
 		StaleWip                func(childComplexity int) int
 		TeamID                  func(childComplexity int) int
@@ -9127,6 +9129,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ThroughputForecast.IncidentLoad(childComplexity), true
 
+	case "ThroughputForecast.incidentLoadState":
+		if e.complexity.ThroughputForecast.IncidentLoadState == nil {
+			break
+		}
+
+		return e.complexity.ThroughputForecast.IncidentLoadState(childComplexity), true
+
 	case "ThroughputForecast.insufficientHistory":
 		if e.complexity.ThroughputForecast.InsufficientHistory == nil {
 			break
@@ -9168,6 +9177,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.ThroughputForecast.ReviewBottleneck(childComplexity), true
+
+	case "ThroughputForecast.reviewBottleneckState":
+		if e.complexity.ThroughputForecast.ReviewBottleneckState == nil {
+			break
+		}
+
+		return e.complexity.ThroughputForecast.ReviewBottleneckState(childComplexity), true
 
 	case "ThroughputForecast.rollingWindows":
 		if e.complexity.ThroughputForecast.RollingWindows == nil {
@@ -12429,7 +12445,11 @@ type ThroughputForecast {
   staleWip: ThroughputStaleWip
   estimateCoverage: ThroughputEstimateCoverage
   reviewBottleneck: ThroughputRiskOverlay!
+  "How the review latency of reviewBottleneck was read: MEASURED (at least one repository-day in the window carries a first-review latency) or NO_ROWS (none does, or no throughput history, so the value 0 is not a measurement). Never STALE: the read keeps no newest day (see NewestDayState)."
+  reviewBottleneckState: NewestDayState!
   incidentLoad: ThroughputRiskOverlay!
+  "How the incident rate of incidentLoad was read: MEASURED (at least one live repository-day in the window) or NO_ROWS (none, or no throughput history, so the value 0 is not a measurement). Never STALE: the read keeps no newest day (see NewestDayState)."
+  incidentLoadState: NewestDayState!
   insufficientHistory: Boolean!
 }
 
@@ -50856,8 +50876,12 @@ func (ec *executionContext) fieldContext_Query_throughputForecast(ctx context.Co
 				return ec.fieldContext_ThroughputForecast_estimateCoverage(ctx, field)
 			case "reviewBottleneck":
 				return ec.fieldContext_ThroughputForecast_reviewBottleneck(ctx, field)
+			case "reviewBottleneckState":
+				return ec.fieldContext_ThroughputForecast_reviewBottleneckState(ctx, field)
 			case "incidentLoad":
 				return ec.fieldContext_ThroughputForecast_incidentLoad(ctx, field)
+			case "incidentLoadState":
+				return ec.fieldContext_ThroughputForecast_incidentLoadState(ctx, field)
 			case "insufficientHistory":
 				return ec.fieldContext_ThroughputForecast_insufficientHistory(ctx, field)
 			}
@@ -63899,6 +63923,50 @@ func (ec *executionContext) fieldContext_ThroughputForecast_reviewBottleneck(_ c
 	return fc, nil
 }
 
+func (ec *executionContext) _ThroughputForecast_reviewBottleneckState(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputForecast) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ThroughputForecast_reviewBottleneckState(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ReviewBottleneckState, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.NewestDayState)
+	fc.Result = res
+	return ec.marshalNNewestDayState2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐNewestDayState(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ThroughputForecast_reviewBottleneckState(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ThroughputForecast",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type NewestDayState does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ThroughputForecast_incidentLoad(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputForecast) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_ThroughputForecast_incidentLoad(ctx, field)
 	if err != nil {
@@ -63952,6 +64020,50 @@ func (ec *executionContext) fieldContext_ThroughputForecast_incidentLoad(_ conte
 				return ec.fieldContext_ThroughputRiskOverlay_active(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ThroughputRiskOverlay", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ThroughputForecast_incidentLoadState(ctx context.Context, field graphql.CollectedField, obj *model.ThroughputForecast) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ThroughputForecast_incidentLoadState(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.IncidentLoadState, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.NewestDayState)
+	fc.Result = res
+	return ec.marshalNNewestDayState2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐNewestDayState(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ThroughputForecast_incidentLoadState(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ThroughputForecast",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type NewestDayState does not have child fields")
 		},
 	}
 	return fc, nil
@@ -82380,8 +82492,18 @@ func (ec *executionContext) _ThroughputForecast(ctx context.Context, sel ast.Sel
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "reviewBottleneckState":
+			out.Values[i] = ec._ThroughputForecast_reviewBottleneckState(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "incidentLoad":
 			out.Values[i] = ec._ThroughputForecast_incidentLoad(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "incidentLoadState":
+			out.Values[i] = ec._ThroughputForecast_incidentLoadState(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

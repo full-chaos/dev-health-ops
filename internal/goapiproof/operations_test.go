@@ -86,6 +86,10 @@ func TestSpecForRefusesAnUnknownOperation(t *testing.T) {
 
 // Every spec must actually build variables -- a nil Variables func would
 // panic at request time, deep inside a run, instead of failing here.
+// declaresNoVariables are the operations whose registered document declares no variable (CHAOS-14644: dataHealth is read
+// with no team), so their request carries an empty variables object.
+var declaresNoVariables = map[string]bool{"connectorsDataHealth": true, "dataHealthIdentity": true, "mappingCoverageHealth": true}
+
 func TestEverySpecBuildsVariables(t *testing.T) {
 	window := DefaultWindow()
 	for _, operation := range KnownOperations() {
@@ -97,7 +101,7 @@ func TestEverySpecBuildsVariables(t *testing.T) {
 			t.Fatalf("%s has no Variables builder", operation)
 		}
 		variables := spec.Variables("70d529e0", window)
-		if len(variables) == 0 {
+		if len(variables) == 0 && !declaresNoVariables[operation] {
 			t.Fatalf("%s built an empty variables object", operation)
 		}
 		if _, err := json.Marshal(variables); err != nil {

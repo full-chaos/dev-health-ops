@@ -1,0 +1,17 @@
+query CognitiveLoad($input: CognitiveLoadInput!) {
+  cognitiveLoad(input: $input) {
+    orgId
+    teamId
+    totalDays
+    signals {
+      day
+      prInterruptionLoad
+      contextSpreadCount
+      reviewRequestLoad
+      afterHoursCommitRatio
+      weekendCommitRatio
+      __typename
+    }
+    __typename
+  }
+}

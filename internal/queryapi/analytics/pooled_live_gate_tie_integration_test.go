@@ -43,36 +43,44 @@ func TestPooledLiveGateSameSecondTieIsDeterministic(t *testing.T) {
 	for _, table := range tieGateTables {
 		e.exec("SYSTEM STOP MERGES " + table)
 	}
+	// Every table is ReplacingMergeTree(computed_at) ORDER BY (org_id, repo_id, day): rows of one key in ONE insert block are
+	// collapsed at insert, so a tie of two rows needs two inserts (two parts). Merges are stopped, so the parts stay.
 	groups := []struct {
 		name string
 		want uint64 // the repository-days the gate keeps, on every read
-		// stamps is the number of distinct computed_at values of the group's rows; low and high the retracted values present.
-		stamps    uint64
-		low, high uint8
-		insert    func(table, org string)
+		// perKey is the stored rows of a key; newest the rows of a key at its newest computed_at (a tie when 2); stamps the
+		// distinct computed_at values of the group's rows; low and high the retracted values present.
+		perKey, newest, stamps uint64
+		low, high              uint8
+		insert                 func(table, org string)
 	}{
-		{"mixed tie, live row first", tieGateKeys, 1, 0, 1, func(table, org string) {
+		{"mixed tie, live row first", tieGateKeys, 2, 2, 1, 0, 1, func(table, org string) {
 			tieGateInsert(e, table, org, 0, tieGateStamp)
 			tieGateInsert(e, table, org, 1, tieGateStamp)
 		}},
-		{"mixed tie, retraction first", tieGateKeys, 1, 0, 1, func(table, org string) {
+		{"mixed tie, retraction first", tieGateKeys, 2, 2, 1, 0, 1, func(table, org string) {
 			tieGateInsert(e, table, org, 1, tieGateStamp)
 			tieGateInsert(e, table, org, 0, tieGateStamp)
 		}},
-		{"unanimous retraction at one stamp, two parts", 0, 1, 1, 1, func(table, org string) {
+		{"unanimous retraction at one stamp", 0, 2, 2, 1, 1, 1, func(table, org string) {
 			tieGateInsert(e, table, org, 1, tieGateStamp)
 			tieGateInsert(e, table, org, 1, tieGateStamp)
 		}},
-		{"unanimous retraction at one stamp, one part", 0, 1, 1, 1, func(table, org string) {
-			e.exec(fmt.Sprintf(`INSERT INTO %s (org_id, repo_id, day, computed_at, retracted)
-SELECT ?, toUUID(concat('f0f0f0f0-0000-4000-8000-', lpad(hex(number %% %d), 12, '0'))), toDate('2026-01-02'), toDateTime(?, 'UTC'), 1
-FROM numbers(%d)`, table, tieGateKeys, 2*tieGateKeys), org, tieGateStamp)
+		{"unanimous retraction at the newest stamp, older live row first", 0, 3, 2, 2, 0, 1, func(table, org string) {
+			tieGateInsert(e, table, org, 0, tieGateStamp)
+			tieGateInsert(e, table, org, 1, tieGateLater)
+			tieGateInsert(e, table, org, 1, tieGateLater)
 		}},
-		{"live row newer than a retraction", tieGateKeys, 2, 0, 1, func(table, org string) {
+		{"unanimous retraction at the newest stamp, older live row between the parts", 0, 3, 2, 2, 0, 1, func(table, org string) {
+			tieGateInsert(e, table, org, 1, tieGateLater)
+			tieGateInsert(e, table, org, 0, tieGateStamp)
+			tieGateInsert(e, table, org, 1, tieGateLater)
+		}},
+		{"live row newer than a retraction", tieGateKeys, 2, 1, 2, 0, 1, func(table, org string) {
 			tieGateInsert(e, table, org, 1, tieGateStamp)
 			tieGateInsert(e, table, org, 0, tieGateLater)
 		}},
-		{"retraction newer than a live row", 0, 2, 0, 1, func(table, org string) {
+		{"retraction newer than a live row", 0, 2, 1, 2, 0, 1, func(table, org string) {
 			tieGateInsert(e, table, org, 0, tieGateStamp)
 			tieGateInsert(e, table, org, 1, tieGateLater)
 		}},
@@ -88,9 +96,14 @@ FROM numbers(%d)`, table, tieGateKeys, 2*tieGateKeys), org, tieGateStamp)
 					Scan(&rows, &stamps, &low, &high); err != nil {
 					t.Fatal(err)
 				}
-				if rows != 2*tieGateKeys || stamps != group.stamps || low != group.low || high != group.high {
-					t.Fatalf("control %s: %d rows at %d stamp(s), retracted %d..%d; want %d rows at %d stamp(s), retracted %d..%d",
-						group.name, rows, stamps, low, high, 2*tieGateKeys, group.stamps, group.low, group.high)
+				var atNewest uint64
+				if err := e.admin.QueryRow(e.ctx, `SELECT count() FROM `+table+` WHERE org_id = ? AND computed_at = (SELECT max(computed_at) FROM `+table+` WHERE org_id = ?)`, org, org).
+					Scan(&atNewest); err != nil {
+					t.Fatal(err)
+				}
+				if rows != group.perKey*tieGateKeys || atNewest != group.newest*tieGateKeys || stamps != group.stamps || low != group.low || high != group.high {
+					t.Fatalf("control %s: %d rows (%d at the newest stamp) at %d stamp(s), retracted %d..%d; want %d rows (%d at the newest stamp) at %d stamp(s), retracted %d..%d",
+						group.name, rows, atNewest, stamps, low, high, group.perKey*tieGateKeys, group.newest*tieGateKeys, group.stamps, group.low, group.high)
 				}
 				params := []any{stdclickhouse.Named("org_id", org), stdclickhouse.Named("start_date", "2026-01-01"), stdclickhouse.Named("end_date", "2026-01-08")}
 				query := `SELECT count() FROM (SELECT DISTINCT repo_id, day FROM ` + table + `

@@ -993,7 +993,7 @@ internal/queryapi/people/metricqueries.go|fetchPersonBreakdown|*string,*float64|
 internal/queryapi/people/metricqueries.go|fetchPersonMetricSeries|*time.Time,*float64|aaa0e43ef5ee|spliced-select-list
 internal/queryapi/people/metricqueries.go|fetchPersonMetricValue|*uint64,*float64|44f613075ca4|spliced-select-list
 internal/queryapi/people/search.go|BuildSearchResponse|*string,*time.Time|afd45e38cfbd|not-describable
-internal/queryapi/people/summary.go|fetchPersonCollaboration|*string,*string,*float64|be7c30414391|not-describable
+internal/queryapi/people/summary.go|fetchPersonCollaboration|*string,*string,*float64|87d6d48642ba|not-describable
 internal/queryapi/pooledmttr/pooledmttr.go|scorecard|*string,**string,**float64|3a0c54cda9e6|spliced-select-list
 internal/queryapi/producttelemetry/platform.go|LoadOrgNames|*string,*string,*string|64c4ca805d17|not-describable
 internal/queryapi/quadrant/quadrant.go|scanMetricRows|**time.Time,**string,**string,**float64|9b55a7ceff60|statement-not-static

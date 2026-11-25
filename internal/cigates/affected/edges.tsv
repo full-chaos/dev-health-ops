@@ -235,6 +235,7 @@ internal/platform/shell	stop_bound_test.go	unexpressed
 internal/platform/tracing	environment_proxy_test.go	unexpressed
 internal/providerfoundation	environment_proxy_test.go	unexpressed
 internal/providersync	census_load_test.go	unexpressed
+internal/providersync	form_exec_rewalk_pg_integration_test.go	unexpressed
 internal/providersync	item_route_ssa_test.go	unexpressed
 internal/providersync	project_id_test.go	unexpressed
 internal/providersync	route_census_runtime_test.go	unexpressed

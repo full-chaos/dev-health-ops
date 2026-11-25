@@ -64,24 +64,33 @@ const (
 	openPEMBody = "-----BEGIN PRIVATE KEY-----\nzz9-synthetic-key-aaaa\n-----END PRIVATE KEY-----"
 )
 
+// The final line feed is the common case; every whitespace kind the plan's key can
+// end in (unicode.IsSpace) is covered.
 func TestAppPrivateKeyEchoedWithoutItsFinalLineFeedIsHidden(t *testing.T) {
-	executor := dbCredentialExecutor(&GitHubCredentials{Mode: CredentialApp, Name: "database", AppID: "1", PrivateKey: openPEMBody + "\n", InstallationID: "2"},
-		func(context.Context, string) (driver.Conn, error) {
-			return nil, errors.New("handshake echoed " + openPEMBody + " end")
-		}, nil)
-	code, stdout, stderr := runVerb(t, "prs", executor, []string{"--provider", "github", "--owner", "acme", "--repo", "api"}, dbCredentialEnv())
-	if code == 0 || !strings.Contains(stderr, "handshake echoed") {
-		t.Fatalf("exit %d: the open failure never reached the printing path (or lost the server's text): %q", code, stderr)
-	}
-	if strings.Contains(stdout+stderr, "zz9-synthetic-key-aaaa") {
-		t.Errorf("the private key printed: %q", stderr)
+	// The key the plan holds ends in whitespace of several kinds; an echo drops it all.
+	for name, suffix := range map[string]string{
+		"final line feed":       "\n",
+		"carriage return":       "\r\n",
+		"blank line with space": "\n \n",
+		"no-break space":        "\n\u00a0\n",
+		"tab and line feeds":    "\n\t\n\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			executor := dbCredentialExecutor(&GitHubCredentials{Mode: CredentialApp, Name: "database", AppID: "1", PrivateKey: openPEMBody + suffix, InstallationID: "2"},
+				func(context.Context, string) (driver.Conn, error) {
+					return nil, errors.New("handshake echoed " + openPEMBody + " end")
+				}, nil)
+			code, stdout, stderr := runVerb(t, "prs", executor, []string{"--provider", "github", "--owner", "acme", "--repo", "api"}, dbCredentialEnv())
+			if code == 0 || !strings.Contains(stderr, "handshake echoed") {
+				t.Fatalf("exit %d: the open failure never reached the printing path (or lost the server's text): %q", code, stderr)
+			}
+			if strings.Contains(stdout+stderr, "zz9-synthetic-key-aaaa") {
+				t.Errorf("the private key printed: %q", stderr)
+			}
+		})
 	}
 }
 
-// The credentials the database lookups resolved join the process logger's
-// boundary right after the lookup, before the store open (the first thing that can
-// log), and stay for every run of a batch: the logger reads the one registrar for
-// the whole verb.
 func TestDatabaseResolvedProviderTokenIsHiddenInEveryLogLineOfABatch(t *testing.T) {
 	var logs bytes.Buffer
 	previous := slog.Default()

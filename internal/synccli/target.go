@@ -997,7 +997,7 @@ func credentialSpellings(values ...string) []string {
 			continue
 		}
 		out = append(out, value)
-		if trimmed := strings.TrimRight(value, " \t\r\n"); trimmed != "" && trimmed != value {
+		if trimmed := strings.TrimRightFunc(value, unicode.IsSpace); trimmed != "" && trimmed != value {
 			out = append(out, trimmed)
 		}
 	}

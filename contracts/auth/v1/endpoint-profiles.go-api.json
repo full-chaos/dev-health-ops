@@ -7634,7 +7634,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/credentials/credentials.go#handlers.update; internal/api/credentials/credentials.go:221); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/credentials/credentials.go#handlers.update, route internal/api/credentials/credentials.go:72; internal/api/credentials/credentials.go:221); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:222)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/admin/credentials/{provider}/{name} [dev-health-ops-api @api]",

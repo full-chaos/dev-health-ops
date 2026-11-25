@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/testopspooled"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // CHAOS-14595: a retired repository-day (its newest testops_test_metrics_daily row is a stale-key retraction: retracted 1,
@@ -159,11 +160,10 @@ type tieArm struct {
 }
 
 // checkTieArmAsAtBase pins the ruling for a same-second mixed tie of a live row and a retraction row of one repository-day:
-// the tie is ambiguous, so the day behaves as at base. The raw arm admits the day exactly when the base legacy set
-// (LegacyRepoDays) does. The outer gate (LiveRepoDays, base code) picks a tied row arbitrarily per query, so the head and the
-// base statement may each serve the day or not: each serves nil or the day's samples read once, never a third value. The
-// marker pick and the live gate's pick are logged; at least one insert order must make them disagree, or the cell proves
-// nothing.
+// the tie is not unanimous, so the day stays live. The raw arm admits the day exactly when the base legacy set
+// (LegacyRepoDays) does. The outer gate (LiveRepoDays, CHAOS-14616) keeps the day on every read, in both insert orders: each
+// read serves nil or the day's samples read once, never a third value. The marker pick and the live gate's pick are logged.
+// The cell proves the tie exists before it asserts: two stored rows at one stamp, one live and one retraction.
 func checkTieArmAsAtBase(t *testing.T, arm tieArm, orgs, repos [2]string) {
 	e := startOwnersEnv(t)
 	e.exec(`SYSTEM STOP MERGES testops_test_metrics_daily`)
@@ -188,7 +188,13 @@ VALUES (?, ?, ?, toDateTime(?, 'UTC'), 1, NULL, NULL)`, org, day1, repo, tieAt)
 		t.Fatalf("LiveLegacyRepoDays holds the unanimous-retraction term %d times, want 1", strings.Count(live, unanimous))
 	}
 	mutantLive := strings.Replace(live, unanimous, anyRetraction, 1)
-	disagreed, mutantChecks := 0, 0
+	mutantChecks, gateMutantChecks, gateMutantRed := 0, 0, 0
+	// The gate mutant: the argMax pick of one tied row, the text of LiveRepoDays before CHAOS-14616.
+	gateText := testopspooled.LiveRepoDays("testops_test_metrics_daily")
+	if strings.Count(gateText, liverow.NewestAnyLivePredicate("testops_test_metrics_daily", "")) != 1 {
+		t.Fatalf("LiveRepoDays holds the tie-safe term %d times, want 1", strings.Count(gateText, liverow.NewestAnyLivePredicate("testops_test_metrics_daily", "")))
+	}
+	mutantGate := strings.Replace(gateText, liverow.NewestAnyLivePredicate("testops_test_metrics_daily", ""), liverow.NewestPredicate("testops_test_metrics_daily", ""), 1)
 	for index, order := range []struct {
 		name   string
 		insert func(org, repo string)
@@ -211,6 +217,15 @@ VALUES (?, ?, ?, toDateTime(?, 'UTC'), 1, NULL, NULL)`, org, day1, repo, tieAt)
 			if rows != 2 {
 				t.Fatalf("control: %d stored rows of the day at the tie, want 2 (the retraction and the live row)", rows)
 			}
+			var lowest, highest uint8
+			var stamps uint64
+			if err := e.admin.QueryRow(e.ctx, `SELECT min(retracted), max(retracted), uniqExact(computed_at) FROM testops_test_metrics_daily WHERE org_id = ? AND repo_id = ? AND day = ?`,
+				org, repo, day1).Scan(&lowest, &highest, &stamps); err != nil {
+				t.Fatal(err)
+			}
+			if lowest != 0 || highest != 1 || stamps != 1 {
+				t.Fatalf("control: the day's rows hold retracted %d..%d at %d stamp(s), want one live and one retraction row at one stamp", lowest, highest, stamps)
+			}
 			count := func(query string) uint64 {
 				t.Helper()
 				var n uint64
@@ -224,14 +239,20 @@ VALUES (?, ?, ?, toDateTime(?, 'UTC'), 1, NULL, NULL)`, org, day1, repo, tieAt)
 				Scan(&markerStored, &markerRetracted); err != nil {
 				t.Fatal(err)
 			}
-			orderDisagreed := false
 			for read := 0; read < 5; read++ {
 				admitted := count(`SELECT count() FROM (` + live + `)`)
 				baseAdmitted := count(`SELECT count() FROM (` + legacy + `)`)
 				gateLive := count(`SELECT count() FROM (SELECT DISTINCT repo_id, day FROM testops_test_metrics_daily
 				WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date}) WHERE ` + testopspooled.LiveRepoDays("testops_test_metrics_daily"))
-				if (markerRetracted == 1) != (gateLive == 0) {
-					orderDisagreed = true
+				if gateLive != 1 {
+					t.Errorf("%s %s read %d: the live gate admits the day %d time(s), want 1: a mixed same-second tie keeps the day live", arm.name, order.name, read, gateLive)
+				}
+				mutantGateLive := count(`SELECT count() FROM (SELECT DISTINCT repo_id, day FROM testops_test_metrics_daily
+				WHERE org_id = {org_id:String} AND day >= {start_date:Date} AND day < {end_date:Date}) WHERE ` + mutantGate)
+				gateMutantChecks++
+				if mutantGateLive != 1 {
+					gateMutantRed++
+					t.Logf("MUTANT14616 argmax-gate %s %s read %d red=true: the mutant gate admits %d, want 1", arm.name, order.name, read, mutantGateLive)
 				}
 				var headP95, headP50, baseP95, baseP50 *float64
 				if err := e.admin.QueryRow(e.ctx, "SELECT "+testopspooled.P95+", "+testopspooled.Median+" FROM "+testopspooled.SuiteRunsSource, params...).Scan(&headP95, &headP50); err != nil {
@@ -268,17 +289,18 @@ VALUES (?, ?, ?, toDateTime(?, 'UTC'), 1, NULL, NULL)`, org, day1, repo, tieAt)
 					}
 				}
 			}
-			if orderDisagreed {
-				disagreed++
-			}
 		})
 	}
 	t.Logf("MUTANT14595 unanimous-to-any %s: %d mutant checks", arm.name, mutantChecks)
 	if mutantChecks == 0 {
 		t.Fatalf("%s: the unanimous-to-any mutant never fired", arm.name)
 	}
-	if disagreed == 0 {
-		t.Fatalf("%s: in no insert order did the marker pick and the live gate's pick disagree: the cell does not exercise the tie", arm.name)
+	t.Logf("MUTANT14616 argmax-gate %s: %d mutant reads, red in %d", arm.name, gateMutantChecks, gateMutantRed)
+	if gateMutantChecks == 0 {
+		t.Fatalf("%s: the argmax-gate mutant never ran", arm.name)
+	}
+	if gateMutantRed == 0 {
+		t.Errorf("%s: the argmax-gate mutant was green on every read in both insert orders: the gate assertion does not see the tie", arm.name)
 	}
 }
 

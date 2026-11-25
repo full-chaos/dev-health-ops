@@ -1250,7 +1250,7 @@ func (r *queryResolver) Hotspots(ctx context.Context, input model.HotspotsInput)
 		}
 	}
 
-	result, err := hotspots.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.SinceUtc, input.UntilUtc, input.RepoIds, input.Limit)
+	result, err := hotspots.ResolveScoped(spanCtx, r.ClickHouse, claims.OrgID, input.SinceUtc, input.UntilUtc, hotspots.Scope{RepoIDs: input.RepoIds, TeamIDs: input.TeamIds}, input.Limit)
 	if err != nil {
 		finish("error")
 		return nil, fmt.Errorf("hotspots: %w", err)

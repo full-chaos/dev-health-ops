@@ -161,7 +161,7 @@ func TestGitLabMemberReadEndings(t *testing.T) {
 		{name: "404", pages: map[string]answer{"1": {404, `{"message":"404 Group Not Found"}`, nil, false}}},
 		{name: "401", pages: map[string]answer{"1": {401, `{"message":"401 Unauthorized"}`, nil, false}}},
 		{name: "500", pages: map[string]answer{"1": {500, `{}`, nil, false}}},
-		{name: "429", pages: map[string]answer{"1": {429, `{}`, nil, false}}},
+		{name: "429", pages: map[string]answer{"1": {429, `{}`, nil, false}}, wantErr: true},
 		{name: "X-Next-Page garbage", pages: map[string]answer{"1": {200, `[{"username":"a"}]`, map[string][]string{"X-Next-Page": {"abc"}}, false}}, wantObserved: true, wantRows: 1},
 		{name: "empty X-Next-Page but Link next (keyset)", pages: map[string]answer{"1": {200, `[{"username":"a"}]`, map[string][]string{"X-Next-Page": {""}, "Link": {`<http://x/next>; rel="next"`}}, false}}, wantObserved: true, wantRows: 1},
 		{name: "two X-Next-Page headers", pages: map[string]answer{"1": {200, `[{"username":"a"}]`, map[string][]string{"X-Next-Page": {"", ""}}, false}}, wantObserved: true, wantRows: 1},

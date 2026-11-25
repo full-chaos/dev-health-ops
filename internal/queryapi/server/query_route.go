@@ -5197,9 +5197,100 @@ const registeredAiComparisonDocument = `query AIComparison($orgId: String!, $dat
   }
 }`
 
+// registeredAiReviewLoadV1Document is the text of `aiReviewLoad` BEFORE the trend asked for `daily.day` (CHAOS-14638):
+// a web build still on the old text keeps working while the new one rolls out. Listed in legacyDigestsByOperation;
+// remove it with the cleanup ticket once no client sends it (testdata/wire_capture/aireviewload_v1_captured.graphql).
+const registeredAiReviewLoadV1Document = `query AIReviewLoad($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput) {
+  aiReviewLoad(orgId: $orgId, dateRange: $dateRange, scope: $scope) {
+    orgId
+    startDate
+    endDate
+    dataAvailable
+    byBucket {
+      bucket
+      prsTotal
+      reviewsTotal
+      reviewsPerPr
+      changesRequestedPerPr
+      reviewAmplification
+      postFirstReviewPushesCount
+      postFirstReviewPushesPerPr
+      pickupLatencyHours
+      reviewCommentsPerLoc
+      __typename
+    }
+    daily {
+      bucket
+      prsTotal
+      reviewsTotal
+      reviewsPerPr
+      changesRequestedPerPr
+      reviewAmplification
+      postFirstReviewPushesCount
+      postFirstReviewPushesPerPr
+      pickupLatencyHours
+      reviewCommentsPerLoc
+      __typename
+    }
+    reviewerConcentration {
+      dataAvailable
+      reviewerCount
+      reviewerGini
+      __typename
+    }
+    missingStates {
+      key
+      title
+      guidance
+      __typename
+    }
+    __typename
+  }
+  aiComparison(orgId: $orgId, dateRange: $dateRange, scope: $scope) {
+    orgId
+    startDate
+    endDate
+    dataAvailable
+    aiSide {
+      bucket
+      prsTotal
+      prsMerged
+      cycleTimeAvgHours
+      reviewsPerPr
+      reworkRate
+      revertRate
+      testGapRate
+      incidentRate
+      __typename
+    }
+    baselineSide {
+      bucket
+      prsTotal
+      prsMerged
+      cycleTimeAvgHours
+      reviewsPerPr
+      reworkRate
+      revertRate
+      testGapRate
+      incidentRate
+      __typename
+    }
+    delta {
+      cycleTimeDeltaHours
+      reviewsPerPrDelta
+      reworkRateDelta
+      revertRateDelta
+      testGapRateDelta
+      incidentRateDelta
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredAiReviewLoadDocument is the registered document for the
 // `aiReviewLoad` operation, the exact wire-form text a real web client sends
-// (testdata/wire_capture/aireviewload_captured.graphql).
+// (testdata/wire_capture/aireviewload_captured.graphql); it selects `daily.day` (CHAOS-14638).
 const registeredAiReviewLoadDocument = `query AIReviewLoad($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput) {
   aiReviewLoad(orgId: $orgId, dateRange: $dateRange, scope: $scope) {
     orgId
@@ -5230,6 +5321,7 @@ const registeredAiReviewLoadDocument = `query AIReviewLoad($orgId: String!, $dat
       postFirstReviewPushesPerPr
       pickupLatencyHours
       reviewCommentsPerLoc
+      day
       __typename
     }
     reviewerConcentration {
@@ -7913,6 +8005,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"aiAttributionOverview": {digestHex(registeredAiAttributionOverviewV1Document)},
 	"aiAttributedPrs":       {digestHex(registeredAiAttributedPrsV1Document)},
 	"aiImpactSummary":       {digestHex(registeredAiImpactSummaryV1Document)},
+	"aiReviewLoad":          {digestHex(registeredAiReviewLoadV1Document)},
 	"aiOpportunities":       {digestHex(registeredAiOpportunitiesV1Document)},
 	"aiWorkflowDrilldown":   {digestHex(registeredAiWorkflowDrilldownV1Document)},
 	"capacityForecast":      {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document), digestHex(registeredCapacityForecastV3Document)},

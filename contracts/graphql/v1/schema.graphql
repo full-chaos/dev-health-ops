@@ -294,6 +294,7 @@ type AIReviewLoadRow {
   postFirstReviewPushesPerPr: Float
   pickupLatencyHours: Float
   reviewCommentsPerLoc: Float
+  day: String
 }
 
 type AIReviewerConcentrationSummary {

@@ -54,7 +54,12 @@
   },
   {
     "operation": "aiReviewLoad",
-    "digest": "4a160089d82bb30f486e81dcc4fb0ef20b97efac29166f0d04e8b03cf06a1697"
+    "digest": "3c0b56d86d8d3fe263849885ef5a652aba7948e2fc5fb1bba22b6f9bc95eca41"
+  },
+  {
+    "operation": "aiReviewLoad",
+    "digest": "4a160089d82bb30f486e81dcc4fb0ef20b97efac29166f0d04e8b03cf06a1697",
+    "legacy": true
   },
   {
     "operation": "aiRiskBreakdown",

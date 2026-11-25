@@ -2,6 +2,7 @@ package home
 
 import (
 	"context"
+	"slices"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/scoperesolve"
 )
@@ -10,7 +11,9 @@ import (
 
 // developerNamed: the request scopes to developer ids. No metric of Home has a developer dimension, so such a scope answers
 // no data whether or not the ids are known.
-func (s ScopeFilter) developerNamed() bool { return s.Level == "developer" && len(s.IDs) > 0 }
+func (s ScopeFilter) developerNamed() bool {
+	return s.Level == "developer" && slices.ContainsFunc(s.IDs, func(id string) bool { return id != "" })
+}
 
 // DeveloperNamed is developerNamed for the callers that build on Home.
 func (s ScopeFilter) DeveloperNamed() bool { return s.developerNamed() }

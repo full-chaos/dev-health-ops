@@ -158,3 +158,70 @@ func TestGitHubDepartureLookupRateLimitEndsTheRun(t *testing.T) {
 		t.Errorf("team rows after the rerun = %d, want %d", got, teamsBefore)
 	}
 }
+
+// A strict run keeps every lookup: a rate limit on the first lookup does not suppress the later ones, and the
+// answer of a later lookup is used (a pin of the behaviour before the non-strict stop).
+func TestStrictDepartureLookupsAreAllSentAfterARateLimit(t *testing.T) {
+	t.Run("gitlab", func(t *testing.T) {
+		ctx, conn := newWorkItemEffectsConn(t)
+		const orgID = "org-departure-strict-gitlab"
+		fake := newGitLabMembersServer(t, "alice", "carol", "dave")
+		credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+		sync := func(at time.Time) (TeamCatalogResult, error) {
+			collector := GitLabTeamCatalogCollector{Sink: GitLabTeamCatalogClickHouseEffects{
+				Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+			}, ScopeCensus: staticScopeCensus{}}
+			return collector.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: "integration-a", Strict: true},
+				credential, gitlabTeamCatalogTestClient(t, fake.URL), TeamCatalogSelections{Teams: true, Members: true}, at)
+		}
+		if _, err := sync(departureAt[0]); err != nil {
+			t.Fatal(err)
+		}
+		fake.setMembers("alice")
+		fake.setLookup([]string{}, 0)
+		fake.setLookupFailFirst(1)
+		result, err := sync(departureAt[3])
+		t.Logf("CELL strict gitlab: err=%v closed=%d lookups=%d", err, result.MembershipsClosed, fake.lookupCount())
+		if err != nil || result.MembershipsClosed != 1 || fake.lookupCount() != 2 {
+			t.Errorf("err=%v closed=%d lookups=%d, want nil, 1 and 2: the second lookup is sent and its answer used", err, result.MembershipsClosed, fake.lookupCount())
+		}
+	})
+	t.Run("github", func(t *testing.T) {
+		ctx, conn := newWorkItemEffectsConn(t)
+		const orgID = "org-departure-strict-github"
+		credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
+		lookups := 0
+		run := func(at time.Time, members string) (TeamCatalogResult, error) {
+			doer := funcDoer(func(request *http.Request) (*http.Response, error) {
+				switch request.URL.Path {
+				case "/orgs/acme/teams":
+					return jsonResponse(request, 200, `[{"slug":"platform","name":"Platform"}]`, nil), nil
+				case "/orgs/acme/teams/platform/repos":
+					return jsonResponse(request, 200, `[]`, nil), nil
+				case "/orgs/acme/teams/platform/members":
+					return jsonResponse(request, 200, members, nil), nil
+				case "/orgs/acme/teams/platform/memberships/hubot", "/orgs/acme/teams/platform/memberships/mona":
+					lookups++
+					if lookups == 1 {
+						return jsonResponse(request, 429, `{}`, nil), nil
+					}
+					return jsonResponse(request, 404, `{"message":"Not Found"}`, nil), nil
+				}
+				t.Fatalf("unexpected request %s", request.URL)
+				return nil, nil
+			})
+			adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}, ScopeCensus: staticScopeCensus{}}
+			return adapter.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: "integration-a", Strict: true},
+				credential, githubTeamCatalogAdapterClient(t, fakehttp.Client(doer)), TeamCatalogSelections{Teams: true, Members: true}, at)
+		}
+		if _, err := run(departureAt[0], `[{"login":"octocat"},{"login":"hubot"},{"login":"mona"}]`); err != nil {
+			t.Fatal(err)
+		}
+		lookups = 0
+		result, err := run(departureAt[3], `[{"login":"octocat"}]`)
+		t.Logf("CELL strict github: err=%v closed=%d lookups=%d", err, result.MembershipsClosed, lookups)
+		if err != nil || result.MembershipsClosed != 1 || lookups != 2 {
+			t.Errorf("err=%v closed=%d lookups=%d, want nil, 1 and 2: the second lookup is sent and its answer used", err, result.MembershipsClosed, lookups)
+		}
+	})
+}

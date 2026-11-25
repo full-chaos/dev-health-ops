@@ -240,11 +240,12 @@ type gitlabMembersServer struct {
 	// A direct lookup (GET /groups/org%2Fteam-a/members?query=<username>) is answered
 	// from the provider's truth: lookupMembers (the list when nil). lookupStatus,
 	// when set, is the status every lookup answers; lookups counts them.
-	lookupMembers []string
-	lookupStatus  int
-	lookupHeader  http.Header // headers of a lookup answered with lookupStatus
-	lookupNoEnd   bool        // the lookup answer carries no end-of-list signal
-	lookups       int
+	lookupMembers   []string
+	lookupStatus    int
+	lookupFailFirst int         // the first N lookups answer 429
+	lookupHeader    http.Header // headers of a lookup answered with lookupStatus
+	lookupNoEnd     bool        // the lookup answer carries no end-of-list signal
+	lookups         int
 }
 
 func newGitLabMembersServer(t *testing.T, usernames ...string) *gitlabMembersServer {
@@ -265,6 +266,10 @@ func newGitLabMembersServer(t *testing.T, usernames ...string) *gitlabMembersSer
 		case "/api/v4/groups/org%2Fteam-a/members":
 			if query := r.URL.Query().Get("query"); query != "" {
 				fake.lookups++
+				if fake.lookups <= fake.lookupFailFirst {
+					http.Error(w, "{}", http.StatusTooManyRequests)
+					return
+				}
 				if fake.lookupStatus != 0 {
 					for key, values := range fake.lookupHeader {
 						w.Header()[key] = values
@@ -329,6 +334,13 @@ func (fake *gitlabMembersServer) setLookup(members []string, status int) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	fake.lookupMembers, fake.lookupStatus = members, status
+}
+
+// setLookupFailFirst makes the first n lookups answer 429.
+func (fake *gitlabMembersServer) setLookupFailFirst(n int) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.lookupFailFirst = n
 }
 
 // setLookupHeader sets the headers of a lookup answered with the status of setLookup.

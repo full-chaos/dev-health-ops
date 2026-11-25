@@ -43,6 +43,9 @@ func TestChunkedUnitGatewayBurstDefersAndKeepsItsCheckpoint(t *testing.T) {
 			if walk.snoozes < burstAttempts {
 				t.Fatalf("snoozes=%d, want at least %d (one per burst attempt)", walk.snoozes, burstAttempts)
 			}
+			if len(walk.ordinalAtSnooze) < burstAttempts {
+				t.Fatalf("checkpoint read after %d snoozes, want at least %d (one per burst attempt)", len(walk.ordinalAtSnooze), burstAttempts)
+			}
 			for index, ordinal := range walk.ordinalAtSnooze {
 				if ordinal < burstPage {
 					t.Fatalf("checkpoint next_ordinal after snooze %d = %d, want the checkpoint kept at %d or later", index+1, ordinal, burstPage)

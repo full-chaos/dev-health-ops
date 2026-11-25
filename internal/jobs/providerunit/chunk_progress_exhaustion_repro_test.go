@@ -243,9 +243,13 @@ func driveFlakyWalk(t *testing.T, shape flakyWalk) exhaustWalk {
 				walk.accounting = append(walk.accounting, "continuation: attempts "+strconv.Itoa(before)+" -> "+strconv.Itoa(got)+", want net 0 over claim + continuation")
 			}
 			if walk.ledger != nil {
+				// A load error records -1, so a cell that reads the checkpoint after a
+				// snooze fails on it instead of skipping the step.
+				ordinal := -1
 				if checkpoint, loadErr := walk.ledger.LoadChunkCheckpoint(context.Background(), walk.ledgerClaim, now); loadErr == nil {
-					walk.ordinalAtSnooze = append(walk.ordinalAtSnooze, checkpoint.NextOrdinal)
+					ordinal = checkpoint.NextOrdinal
 				}
+				walk.ordinalAtSnooze = append(walk.ordinalAtSnooze, ordinal)
 			}
 			now = walk.repository.availableAt
 			continue

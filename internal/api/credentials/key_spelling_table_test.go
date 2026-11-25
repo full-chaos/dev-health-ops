@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
@@ -53,10 +54,21 @@ func newOpenCounter(t *testing.T, content string) *openCounter {
 	}()
 	t.Cleanup(func() {
 		close(c.done)
-		if f, err := os.OpenFile(c.path, os.O_RDONLY|syscall.O_NONBLOCK, 0); err == nil {
-			f.Close()
+		// The server may not have reached its blocking open yet: keep opening a reader until it has seen done.
+		for deadline := time.Now().Add(10 * time.Second); ; {
+			if f, err := os.OpenFile(c.path, os.O_RDONLY|syscall.O_NONBLOCK, 0); err == nil {
+				f.Close()
+			}
+			select {
+			case <-served:
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+			if time.Now().After(deadline) {
+				t.Error("the open counter did not stop")
+				return
+			}
 		}
-		<-served
 	})
 	return c
 }

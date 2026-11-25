@@ -518,6 +518,7 @@ func ReviewLoad(ctx context.Context, client QueryClient, orgID string, dr model.
 	for _, r := range rows {
 		row := model.AIReviewLoadRow{
 			Bucket:                     r.Bucket,
+			Day:                        &r.Day,
 			PrsTotal:                   r.PrsTotal,
 			ReviewsTotal:               reviewTotalForRow(r),
 			ReviewsPerPr:               r.ReviewsPerPr,

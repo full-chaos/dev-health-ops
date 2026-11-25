@@ -327,10 +327,35 @@ func namesKeyPath(credentials *pyjson.Object) bool {
 	return false
 }
 
+// withoutFalsyKeyPath drops a key-path field of either spelling whose value is falsy: a truthy one is refused before a
+// write, and nothing reads a falsy one, so no key-path field is stored.
+func withoutFalsyKeyPath(credentials *pyjson.Object) *pyjson.Object {
+	drop := false
+	for _, key := range []string{"private_key_path", "privateKeyPath"} {
+		if value, ok := credentials.Get(key); ok && !truthy(value) {
+			drop = true
+		}
+	}
+	if !drop {
+		return credentials
+	}
+	out := pyjson.NewObject()
+	for _, key := range credentials.Keys() {
+		value, _ := credentials.Get(key)
+		if (key == "private_key_path" || key == "privateKeyPath") && !truthy(value) {
+			continue
+		}
+		out.Set(key, value)
+	}
+	return out
+}
+
 // normalizeCredentialKeys is _normalize_credential_keys: camelCase keys of
 // the provider's map become snake_case, in the dict's own order (a later
-// duplicate overwrites the value and keeps the first position).
+// duplicate overwrites the value and keeps the first position). A falsy
+// key-path field is dropped first (withoutFalsyKeyPath).
 func normalizeCredentialKeys(provider string, credentials *pyjson.Object) *pyjson.Object {
+	credentials = withoutFalsyKeyPath(credentials)
 	keyMap := credentialKeyMap[pythonparity.Lower(provider)]
 	if len(keyMap) == 0 {
 		return credentials

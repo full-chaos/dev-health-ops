@@ -11,6 +11,7 @@ package restcore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
@@ -34,6 +35,12 @@ const (
 	DefaultMaxBackoff     = 60 * time.Second
 	// DefaultTimeout is _DEFAULT_TIMEOUT_SECONDS.
 	DefaultTimeout = 30 * time.Second
+	// MaxHonouredWait is the longest provider wait one retry sleeps: a longer one is answered at once as the rate-limit
+	// error (the callers hold a request, and on two routes a transaction and a lock, while the core sleeps).
+	MaxHonouredWait = 5 * time.Second
+	// HonourMargin is what must remain of the context after a provider wait for one more request: the round trip's own
+	// timeout (DefaultTimeout).
+	HonourMargin = DefaultTimeout
 )
 
 // Error is a Python exception the core raises: Class names it
@@ -41,6 +48,9 @@ const (
 type Error struct {
 	Class   string
 	Message string
+	// RetryAfter is the wait the provider asked for when the core refused to sleep it (MaxHonouredWait, or no room left in
+	// the context); zero otherwise. It is data for a caller: it is never part of Message.
+	RetryAfter time.Duration
 }
 
 func (e *Error) Error() string { return e.Message }
@@ -143,7 +153,7 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
 			// The text of a URL error quotes the whole target, query included (CHAOS-7935).
-			return Response{}, &Error{"APIException", fmt.Sprintf("%s request failed on %s: invalid request URL", c.Provider, operation)}
+			return Response{}, &Error{Class: "APIException", Message: fmt.Sprintf("%s request failed on %s: invalid request URL", c.Provider, operation)}
 		}
 		for name, value := range c.Headers {
 			request.Header.Set(name, value)
@@ -158,7 +168,7 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 		if err != nil && witness.seen.Load() && isLocationParseFailure(err) {
 			// net/http refused the redirect itself and its error text quotes the whole Location (CHAOS-7927): say that
 			// the redirect was refused, not where to.
-			return Response{}, &Error{"APIException", fmt.Sprintf("%s unexpected redirect on %s: the Location header is not a valid URL (%s); the instrumented core does not follow redirects", c.Provider, operation, redirectUnparsable)}
+			return Response{}, &Error{Class: "APIException", Message: fmt.Sprintf("%s unexpected redirect on %s: the Location header is not a valid URL (%s); the instrumented core does not follow redirects", c.Provider, operation, redirectUnparsable)}
 		}
 		if err != nil {
 			// Only a timeout and a connection failure are retried
@@ -191,10 +201,18 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 			if location, present := got.HeaderText("Location"); present {
 				target = RedirectTarget(location)
 			}
-			return Response{}, &Error{"APIException", fmt.Sprintf("%s unexpected redirect on %s: HTTP %d -> %s; the instrumented core does not follow redirects (pass raw_redirect=True to receive the redirect response and handle Location manually)", c.Provider, operation, got.Status, target)}
+			return Response{}, &Error{Class: "APIException", Message: fmt.Sprintf("%s unexpected redirect on %s: HTTP %d -> %s; the instrumented core does not follow redirects (pass raw_redirect=True to receive the redirect response and handle Location manually)", c.Provider, operation, got.Status, target)}
 		}
 		if retryable(got) && attempt < retries-1 {
 			wait := c.RetryAfter(got)
+			if wait > 0 && !honourable(ctx, wait) {
+				refusal := c.raise(got, operation)
+				var typed *Error
+				if errors.As(refusal, &typed) {
+					typed.RetryAfter = wait
+				}
+				return Response{}, refusal
+			}
 			if wait <= 0 {
 				wait = delay
 			}
@@ -206,7 +224,7 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 		}
 		return Response{}, c.raise(got, operation)
 	}
-	return Response{}, &Error{"APIException", fmt.Sprintf("%s request failed on %s: unknown error", c.Provider, operation)}
+	return Response{}, &Error{Class: "APIException", Message: fmt.Sprintf("%s request failed on %s: unknown error", c.Provider, operation)}
 }
 
 const (
@@ -242,23 +260,35 @@ func (c Core) raise(r Response, operation string) error {
 	}
 	switch {
 	case r.Status == 401:
-		return &Error{"AuthenticationException", c.Provider + " authentication failed on " + operation}
+		return &Error{Class: "AuthenticationException", Message: c.Provider + " authentication failed on " + operation}
 	case r.Status == 403:
-		return &Error{"AuthenticationException", fmt.Sprintf("%s forbidden on %s: %s", c.Provider, operation, r.Text())}
+		return &Error{Class: "AuthenticationException", Message: fmt.Sprintf("%s forbidden on %s: %s", c.Provider, operation, r.Text())}
 	case r.Status == 404:
-		return &Error{"NotFoundException", fmt.Sprintf("%s resource not found on %s: %s", c.Provider, operation, redactRequestURL(r.URL))}
+		return &Error{Class: "NotFoundException", Message: fmt.Sprintf("%s resource not found on %s: %s", c.Provider, operation, redactRequestURL(r.URL))}
 	case r.Status == 429:
-		return &Error{"RateLimitException", fmt.Sprintf("%s rate limit exceeded on %s", c.Provider, operation)}
+		return &Error{Class: "RateLimitException", Message: fmt.Sprintf("%s rate limit exceeded on %s", c.Provider, operation)}
 	case r.Status >= 500:
-		return &Error{"APIException", fmt.Sprintf("%s server error on %s: %d - %s", c.Provider, operation, r.Status, r.Text())}
+		return &Error{Class: "APIException", Message: fmt.Sprintf("%s server error on %s: %d - %s", c.Provider, operation, r.Status, r.Text())}
 	}
-	return &Error{"APIException", fmt.Sprintf("%s API error on %s: %d - %s", c.Provider, operation, r.Status, r.Text())}
+	return &Error{Class: "APIException", Message: fmt.Sprintf("%s API error on %s: %d - %s", c.Provider, operation, r.Status, r.Text())}
 }
 
 // retryableTransport is `except (httpx.TimeoutException, httpx.ConnectError)`:
 // a timeout of any phase, or a failure to connect (a refused connection, an
 // unreachable host, a name that does not resolve).
 func retryableTransport(err error) bool { return logging.RetryableTransport(err) }
+
+// honourable is whether a provider wait is slept: at most MaxHonouredWait, and, when the context has a deadline, short
+// enough that HonourMargin is still left after it.
+func honourable(ctx context.Context, wait time.Duration) bool {
+	if wait > MaxHonouredWait {
+		return false
+	}
+	if deadline, ok := ctx.Deadline(); ok && wait >= time.Until(deadline)-HonourMargin {
+		return false
+	}
+	return true
+}
 
 func sleepContext(ctx context.Context, wait time.Duration) error {
 	timer := time.NewTimer(wait)

@@ -611,6 +611,10 @@ func (h *handlers) resolveGitLabProjects(ctx context.Context, tx pgx.Tx, org str
 				h.logger.ErrorContext(ctx, "GitLab batch create: failed to list projects for group",
 					slog.String("group", group), slog.String("class", clientErr.Class),
 					slog.String("request_id", httpapi.RequestIDFrom(ctx)), slog.String("error", clientErr.Message))
+				// Named difference from Python's 400: a rate limit is a 429 with the fixed provider text (CHAOS-14615).
+				if failure := policy.ProviderFailure(clientErr.Class, err); failure != nil && clientErr.Class == "RateLimitException" {
+					return nil, "", refuse(failure.Status, failure.Message)
+				}
 				return nil, "", refuse(http.StatusBadRequest, fmt.Sprintf("Failed to list GitLab projects for group '%s'", group))
 			}
 			if len(named) > 0 {

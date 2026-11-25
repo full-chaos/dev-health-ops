@@ -5,7 +5,6 @@ package synccli
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -298,8 +297,15 @@ func TestResolveJiraStoredSettingsNamesTheFieldWhenResolutionFails(t *testing.T)
 	if !strings.Contains(err.Error(), "atlassian_organization_id") {
 		t.Errorf("error does not name the field: %v", err)
 	}
-	if !errors.Is(err, atlassianteams.ErrOrganizationPermission) {
-		t.Errorf("error does not wrap ErrOrganizationPermission: %v", err)
+	// Pin moved by the acp ruling READ-AUTH-7046-1 L3: the error is text only, so the cause is
+	// asserted by its text, and no credential spelling may be in it.
+	if !strings.Contains(err.Error(), atlassianteams.ErrOrganizationPermission.Error()) {
+		t.Errorf("error does not carry the permission text: %v", err)
+	}
+	for _, secret := range append([]string{"s3cr3t-token", "sync@example.test"}, basicPayloads("sync@example.test", "s3cr3t-token")...) {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("%q survives in %q", secret, err.Error())
+		}
 	}
 }
 

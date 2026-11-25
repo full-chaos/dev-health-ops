@@ -251,9 +251,9 @@ func basicCredentialValues(email, token string) []string {
 }
 
 // redactCredentialError is failure with every value (and its trimmed spelling, and the
-// escaped spellings a Boundary derives) removed from its text. The chain stays: errors.Is
-// and errors.As reach failure's own chain.
+// escaped spellings a Boundary derives) removed from its text. The result is text only: no
+// later Unwrap reaches the unredacted failure.
 func redactCredentialError(failure error, values ...string) error {
 	boundary := secrets.NewBoundaryWith("", credentialSpellings(values...)...)
-	return redactedError{text: boundary.RedactText(failure.Error()), cause: failure}
+	return redactedError{text: boundary.RedactText(failure.Error())}
 }

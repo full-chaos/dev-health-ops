@@ -137,8 +137,10 @@ func Resolve(
 		// estimate_coverage into _result_to_output here, so the field is absent
 		// rather than merely empty.
 		// No current WIP is read on this path either: the overlay is computed from zeros, so it is NO_ROWS.
+		// Nor is a review or incident read: those two are NO_ROWS as well.
 		return toModel(noHistoryForecastID, now, empty, backlog, newestDayRead{state: model.NewestDayStateNoRows},
-			nil, nil, newestDayRead{}, coverage), nil
+			nil, nil, newestDayRead{}, coverage,
+			overlayRead{state: model.NewestDayStateNoRows}, overlayRead{state: model.NewestDayStateNoRows}), nil
 	}
 
 	currentWIP, averageWIP, current, err := loadWorkItemOverlay(
@@ -151,18 +153,18 @@ func Resolve(
 	if err != nil {
 		return nil, err
 	}
-	reviewLatencyHours, err := loadReviewOverlay(ctx, client, orgID, input.HistoryWeeks, now)
+	review, err := loadReviewOverlay(ctx, client, orgID, input.HistoryWeeks, now)
 	if err != nil {
 		return nil, err
 	}
-	incidentCount, err := loadIncidentOverlay(ctx, client, orgID, input.HistoryWeeks, now)
+	incident, err := loadIncidentOverlay(ctx, client, orgID, input.HistoryWeeks, now)
 	if err != nil {
 		return nil, err
 	}
 
 	result, err := forecastThroughputCapacity(
 		history, backlogSize, resultTeamID, input.WorkScopeID, input.HistoryWeeks,
-		currentWIP, averageWIP, reviewLatencyHours, incidentCount,
+		currentWIP, averageWIP, review.value, incident.value,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("throughputForecast: %w", err)
@@ -200,7 +202,7 @@ func Resolve(
 		"duration_ms", time.Since(started).Milliseconds(),
 	)
 
-	return toModel(uuid.NewString(), now, result, backlog, current, staleP50, staleP90, stale, coverage), nil
+	return toModel(uuid.NewString(), now, result, backlog, current, staleP50, staleP90, stale, coverage, review, incident), nil
 }
 
 // distinctTeamIDs is a team selection as a set: each id once, in the order of its first use.
@@ -250,6 +252,7 @@ func toModel(
 	staleP50, staleP90 *float64,
 	stale newestDayRead,
 	coverage *estimateCoverage,
+	review, incident overlayRead,
 ) *model.ThroughputForecast {
 	windows := make([]model.ThroughputRollingWindow, 0, len(result.rollingWindows))
 	for _, window := range result.rollingWindows {
@@ -281,7 +284,9 @@ func toModel(
 		WipCongestionAsOfDay:    dateOrNil(current.asOfDay),
 		WipCongestionGrainCount: current.grains,
 		ReviewBottleneck:        overlayToModel(result.reviewBottleneck),
+		ReviewBottleneckState:   review.state,
 		IncidentLoad:            overlayToModel(result.incidentLoad),
+		IncidentLoadState:       incident.state,
 		InsufficientHistory:     result.insufficientHistory,
 	}
 

@@ -15,7 +15,13 @@ import (
 )
 
 func providerClassError(class providerfoundation.ErrorClass) error {
-	return &providerfoundation.ProviderError{Class: class, StatusCode: 500}
+	// A transient answer carries no status: a 500 on a chunked unit is a gateway
+	// burst and defers (CHAOS-14696), a transport error keeps the ordinary retry.
+	status := 500
+	if class == providerfoundation.ErrorTransient {
+		status = 0
+	}
+	return &providerfoundation.ProviderError{Class: class, StatusCode: status}
 }
 
 // Every class of the closed vocabulary has a stated try cap; 0 = registry ceiling.

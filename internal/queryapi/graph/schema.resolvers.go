@@ -1220,7 +1220,7 @@ func (r *queryResolver) ComplexityTimeseries(ctx context.Context, input model.Co
 		}
 	}
 
-	result, err := complexitytimeseries.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.SinceUtc, input.UntilUtc, input.Granularity, input.Scope, input.RepoIds, input.Limit)
+	result, err := complexitytimeseries.ResolveScoped(spanCtx, r.ClickHouse, claims.OrgID, input.SinceUtc, input.UntilUtc, input.Granularity, input.Scope, complexitytimeseries.Scope{RepoIDs: input.RepoIds, TeamIDs: input.TeamIds}, input.Limit)
 	if err != nil {
 		finish("error")
 		return nil, fmt.Errorf("complexityTimeseries: %w", err)

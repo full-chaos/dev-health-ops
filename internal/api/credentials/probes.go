@@ -11,11 +11,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/externalurl"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -247,8 +245,8 @@ type githubCredentials struct {
 }
 
 // githubFromMapping is github_credentials_from_mapping: nil where Python
-// returns None (no token and no complete App triple, both at once, or a
-// private key path that cannot be read).
+// returns None (no token and no complete App triple, or both at once), and nil
+// for any credential that names a key path: the key is sent inline only.
 func githubFromMapping(creds *pyjson.Object) *githubCredentials {
 	aliases := map[string]string{"appId": "app_id", "baseUrl": "base_url", "installationId": "installation_id", "privateKey": "private_key", "privateKeyPath": "private_key_path"}
 	mapped := map[string]pyjson.Value{}
@@ -265,14 +263,8 @@ func githubFromMapping(creds *pyjson.Object) *githubCredentials {
 	if len(mapped) == 0 {
 		return nil
 	}
-	if _, present := mapped["private_key"]; !present {
-		if path, ok := mapped["private_key_path"]; ok && truthy(path) {
-			content, err := os.ReadFile(pyStr(path))
-			if err != nil || !utf8.Valid(content) {
-				return nil
-			}
-			mapped["private_key"] = string(content)
-		}
+	if path, ok := mapped["private_key_path"]; ok && truthy(path) {
+		return nil
 	}
 	get := func(key string) pyjson.Value { return mapped[key] }
 	hasToken := truthy(get("token"))

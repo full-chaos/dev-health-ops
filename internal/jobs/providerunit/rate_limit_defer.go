@@ -83,3 +83,50 @@ func rateLimitJitter(unitID string) time.Duration {
 	digest := sha256.Sum256([]byte("rate-limit:" + unitID))
 	return time.Duration(binary.BigEndian.Uint64(digest[:8])%uint64(rateLimitMaxJitter/time.Millisecond)) * time.Millisecond
 }
+
+const (
+	gatewayBurstMaxDeferrals = 12
+	gatewayBurstMaxTotalWait = time.Hour
+	gatewayBurstFirstDelay   = 60 * time.Second
+	gatewayBurstMaxDelay     = 10 * time.Minute
+)
+
+// planGatewayBurstDeferral is the 5xx / gateway burst twin of
+// planRateLimitDeferral: 60 s doubling to 10 min per snooze, bounded by 12
+// deferrals and one hour since the episode's first deferral (CHAOS-14696). It
+// returns ok=false once the budget is spent, and the caller falls through to the
+// ordinary retry arms.
+func planGatewayBurstDeferral(
+	episode providersync.RateLimitEpisode,
+	unitID string,
+	now time.Time,
+) (rateLimitDeferral, bool) {
+	firstSeen := now
+	if episode.FirstSeenAt != nil && !episode.FirstSeenAt.IsZero() {
+		firstSeen = *episode.FirstSeenAt
+	}
+	elapsed := now.Sub(firstSeen)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	if episode.Deferrals >= gatewayBurstMaxDeferrals || elapsed >= gatewayBurstMaxTotalWait {
+		return rateLimitDeferral{}, false
+	}
+	delay := gatewayBurstFirstDelay
+	for step := 0; step < episode.Deferrals && delay < gatewayBurstMaxDelay; step++ {
+		delay *= 2
+	}
+	if delay > gatewayBurstMaxDelay {
+		delay = gatewayBurstMaxDelay
+	}
+	// Jitter first, then both caps: the snooze never passes 10 min and the wake
+	// never passes the episode's hour, and the fence is the same wake time.
+	delay += rateLimitJitter(unitID)
+	if delay > gatewayBurstMaxDelay {
+		delay = gatewayBurstMaxDelay
+	}
+	if remaining := gatewayBurstMaxTotalWait - elapsed; delay > remaining {
+		delay = remaining
+	}
+	return rateLimitDeferral{countdown: delay, notBefore: now.Add(delay)}, true
+}

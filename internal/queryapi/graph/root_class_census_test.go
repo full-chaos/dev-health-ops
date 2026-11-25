@@ -78,7 +78,7 @@ var rootClasses = map[string]rootClass{
 	"Query.capacityForecasts":                 {classMixed, "capacity_forecasts and teams have no repository key"},
 	"Query.catalog":                           {classMixed, "dimension values list teams and unit membership"},
 	"Query.cognitiveLoad":                     {classMixed, "team_cognitive_load_daily and teams have no repository key"},
-	"Query.complexityTimeseries":              {classNarrowable, "file and repository complexity rows, keyed by repository"},
+	"Query.complexityTimeseries":              {classMixed, "the team filter resolves teams"},
 	"Query.compoundingRisk":                   {classMixed, "compounding_risk_daily and teams have no repository key"},
 	"Query.coverageBaselines":                 {classMixed, "the team filter resolves teams"},
 	"Query.coverageScopeBaseline":             {classMixed, "the team filter resolves teams"},

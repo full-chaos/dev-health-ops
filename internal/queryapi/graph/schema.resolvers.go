@@ -6,6 +6,7 @@ package graph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -1019,7 +1020,7 @@ func (r *queryResolver) OperatingReview(ctx context.Context, orgID string, input
 // role, read from the verified envelope; a request without them is refused
 // before any read. The org read is the authorized org; the field takes no orgId
 // argument.
-func (r *queryResolver) DataHealth(ctx context.Context, team string) (*model.DataHealth, error) {
+func (r *queryResolver) DataHealth(ctx context.Context, team *string) (*model.DataHealth, error) {
 	spanCtx, finish := startDataHealthSpan(ctx, "dataHealth")
 
 	claims, ok := authctx.FromContext(ctx)
@@ -1049,7 +1050,26 @@ func (r *queryResolver) DataHealth(ctx context.Context, team string) (*model.Dat
 	}
 
 	reader := &datahealth.Reader{ClickHouse: r.ClickHouse, Postgres: r.Postgres}
-	result, err := reader.Resolve(spanCtx, claims.OrgID, team)
+	resolvedTeam, legacyKind, err := reader.ResolveTeam(spanCtx, claims.OrgID, team)
+	if errors.Is(err, datahealth.ErrUnknownTeam) {
+		finish("denied", attribute.String("denial_reason", "unknown_team"))
+		return nil, &gqlerror.Error{
+			Message: "dataHealth: team is not a team of this organization",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code":  "BAD_USER_INPUT",
+				"field": "team",
+			},
+		}
+	}
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("dataHealth: %w", err)
+	}
+	if legacyKind != "" {
+		countLegacyPseudoTeam(spanCtx, legacyKind)
+	}
+	result, err := reader.Resolve(spanCtx, claims.OrgID, resolvedTeam)
 	if err != nil {
 		finish("error")
 		return nil, fmt.Errorf("dataHealth: %w", err)

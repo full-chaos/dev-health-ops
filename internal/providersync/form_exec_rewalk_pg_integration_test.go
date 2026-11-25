@@ -26,7 +26,76 @@ import (
 // -A -F"|" prints it (grep from the runner's PATH, so the card's BRE back reference is executed as written).
 const formExecRewalkPGSHA256 = "5f33d8759123904de5a60dbfffbd5315b96a4f60316513ac46f25c047b28f28a"
 
-const formExecRewalkPGSQL = ``
+const formExecRewalkPGSQL = `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+--
+--
+--
+--
+--
+-- G0
+WITH orgs AS (SELECT count(*) AS n FROM public.organizations o WHERE starts_with(o.id::text, 'f0f0f0f0')),
+rel AS (SELECT c.relname, c.reltuples::bigint AS reltuples,
+               pg_catalog.pg_relation_size(c.oid) AS heap_bytes,
+               CASE WHEN c.reltoastrelid = 0 THEN 0 ELSE pg_catalog.pg_relation_size(c.reltoastrelid) END AS toast_bytes
+        FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind = 'r'
+          AND c.relname IN ('organizations', 'sync_runs', 'sync_run_units'))
+SELECT CASE WHEN (SELECT n FROM orgs) = 1
+             AND (SELECT count(*) FROM rel) = 3
+             AND (SELECT heap_bytes + toast_bytes FROM rel WHERE relname = 'organizations') <= 67108864
+             AND (SELECT heap_bytes + toast_bytes FROM rel WHERE relname = 'sync_runs') <= 1073741824
+             AND (SELECT heap_bytes + toast_bytes FROM rel WHERE relname = 'sync_run_units') <= 4294967296
+            THEN 0
+            ELSE ('STOP-G0 orgs=' || (SELECT n FROM orgs)
+                  || ' tables=' || (SELECT count(*) FROM rel)
+                  || ' bytes=' || COALESCE((SELECT string_agg(relname || ':' || heap_bytes || '+' || toast_bytes, ',' ORDER BY relname) FROM rel), 'none')
+                  || ' reltuples=' || COALESCE((SELECT string_agg(relname || ':' || reltuples, ',' ORDER BY relname) FROM rel), 'none'))::int
+       END AS cost_gate_ok,
+       (SELECT n FROM orgs) AS orgs,
+       (SELECT heap_bytes + toast_bytes FROM rel WHERE relname = 'sync_runs') AS runs_bytes,
+       (SELECT heap_bytes + toast_bytes FROM rel WHERE relname = 'sync_run_units') AS units_bytes;
+-- stmt0
+SELECT count(*) AS orgs
+FROM public.organizations o
+WHERE starts_with(o.id::text, 'f0f0f0f0');
+-- stmt1
+--
+SELECT (SELECT count(*) FROM public.sync_run_units u
+        WHERE starts_with(u.org_id, 'f0f0f0f0') AND starts_with(u.source_id::text, '0c0c0c0c')
+          AND u.status NOT IN ('success', 'failed')) AS open_units,
+       (SELECT count(*) FROM public.sync_runs r
+        WHERE starts_with(r.org_id, 'f0f0f0f0') AND r.triggered_by = 'backfill'
+          AND r.status NOT IN ('success', 'partial_failed', 'failed')) AS open_backfill_runs_org;
+-- stmt2
+--
+--
+SELECT count(DISTINCT r.id) AS runs,
+       count(DISTINCT r.id) FILTER (WHERE r.status NOT IN ('success', 'partial_failed', 'failed')) AS runs_open,
+       count(DISTINCT r.id) FILTER (WHERE r.status = 'success') AS runs_success,
+       count(DISTINCT r.id) FILTER (WHERE r.status = 'partial_failed') AS runs_partial_failed,
+       count(DISTINCT r.id) FILTER (WHERE r.status = 'failed') AS runs_failed,
+       count(u.id) AS units,
+       count(u.id) FILTER (WHERE u.status NOT IN ('success', 'failed')) AS units_open,
+       count(u.id) FILTER (WHERE u.status = 'success') AS units_success,
+       count(u.id) FILTER (WHERE u.status = 'failed') AS units_failed,
+       count(u.id) FILTER (WHERE u.dataset_key = 'cicd') AS cicd_units,
+       min(u.since_at) AS first_since,
+       max(u.before_at) AS last_before,
+       max(r.completed_at) AS last_completed_at
+FROM public.sync_runs r
+JOIN public.sync_run_units u
+  ON u.sync_run_id = r.id AND u.org_id = r.org_id AND starts_with(u.org_id, 'f0f0f0f0')
+WHERE starts_with(r.org_id, 'f0f0f0f0') AND r.triggered_by = 'backfill'
+  AND r.created_at >= TIMESTAMPTZ '2026-03-16 00:00:00+00'
+  AND starts_with(u.source_id::text, '0c0c0c0c')
+  AND u.since_at < TIMESTAMPTZ '2026-03-10 00:00:00+00' AND u.before_at > TIMESTAMPTZ '2026-03-09 00:00:00+00';
+-- stmt3
+SELECT count(*) AS org_runs
+FROM public.sync_runs r
+WHERE starts_with(r.org_id, 'f0f0f0f0');
+ROLLBACK;
+`
 
 const (
 	formExecRewalkPGOrg      = "f0f0f0f0-0000-4000-8000-000000000001"

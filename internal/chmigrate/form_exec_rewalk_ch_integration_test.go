@@ -28,7 +28,327 @@ import (
 // after it and after the recompute. Every cost gate cap is fired once.
 const formExecRewalkCHSHA256 = "0f663a9dfd6997ee30db86eceb924af8b208905dd597e9e731660f7eaa466915"
 
-const formExecRewalkCHSQL = ``
+const formExecRewalkCHSQL = `--
+--
+--
+--
+--
+--
+
+-- stmtR
+SELECT count() AS replicas FROM clusterAllReplicas('default', system.one);
+
+-- Q1
+--
+--
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('repos', 'test_suite_results')) > 1600000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('repos', 'test_suite_results')) > 4294967296,
+    'STOP-COST-GATE')) AS cost_gate,
+gh AS (
+    SELECT id FROM repos FINAL WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0 AND provider = 'github'
+      AND startsWith(toString(id), 'a1a1a1a1')
+),
+sa AS (
+    SELECT repo_id, run_id, report_slot AS slot, run_attempt AS att, last_synced AS ls,
+           toDate(coalesce(started_at, finished_at), 'UTC') AS sday,
+           cityHash64(concat(suite_name, '|', ifNull(framework, '~'), '|', ifNull(environment, '~'), '|',
+               toString(total_count), '|', toString(passed_count), '|', toString(failed_count), '|',
+               toString(skipped_count), '|', toString(error_count), '|', toString(quarantined_count), '|',
+               toString(retried_count), '|', ifNull(toString(duration_seconds), '~'), '|',
+               ifNull(toString(started_at), '~'), '|', ifNull(toString(finished_at), '~'), '|',
+               ifNull(team_id, '~'), '|', ifNull(service_id, '~'), '|', toString(run_attempt))) AS hk
+    FROM test_suite_results FINAL
+    WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0 AND report_slot != '' AND repo_id IN (SELECT id FROM gh)
+),
+nw AS (
+    SELECT repo_id, run_id, slot, max(att) AS att FROM sa GROUP BY repo_id, run_id, slot
+),
+hk_slot AS (
+    SELECT repo_id, run_id, slot, att, hk, count() AS n FROM sa GROUP BY repo_id, run_id, slot, att, hk
+),
+hk_run AS (
+    SELECT repo_id, run_id, att, hk, count() AS n FROM sa GROUP BY repo_id, run_id, att, hk
+),
+uslots AS (
+    SELECT k.repo_id AS repo_id, k.run_id AS run_id, k.slot AS slot, k.att AS att
+    FROM hk_slot AS k
+    INNER JOIN hk_run AS r ON r.repo_id = k.repo_id AND r.run_id = k.run_id AND r.att = k.att AND r.hk = k.hk
+    WHERE (k.repo_id, k.run_id, k.slot, k.att) IN (SELECT repo_id, run_id, slot, att FROM nw)
+    GROUP BY k.repo_id, k.run_id, k.slot, k.att
+    HAVING min(r.n >= 2 * k.n) = 1
+),
+slot_day AS (
+    SELECT repo_id, run_id, slot, att, min(sday) AS sday, max(ls) AS ls FROM sa GROUP BY repo_id, run_id, slot, att
+)
+SELECT kind, day, runs, slots, slots_before_fix_commit, repo_cuts
+FROM (
+    SELECT 'day' AS kind, toString(d.sday) AS day, uniqExact(u.repo_id, u.run_id) AS runs, count() AS slots,
+           countIf(d.ls < toDateTime64('2026-03-11 02:45:39', 3, 'UTC')) AS slots_before_fix_commit,
+           arraySort(groupUniqArray(substring(toString(u.repo_id), 1, 8))) AS repo_cuts
+    FROM uslots AS u
+    INNER JOIN slot_day AS d ON d.repo_id = u.repo_id AND d.run_id = u.run_id AND d.slot = u.slot AND d.att = u.att
+    WHERE cost_gate = 0
+    GROUP BY d.sday
+    UNION ALL
+    SELECT 'control' AS kind, '' AS day, (SELECT count() FROM gh) AS runs, (SELECT count() FROM nw) AS slots,
+           toUInt64(0) AS slots_before_fix_commit, CAST([], 'Array(String)') AS repo_cuts
+)
+WHERE cost_gate = 0
+ORDER BY kind, day;
+
+-- K2A
+--
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('repos', 'test_suite_results')) > 1600000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('repos', 'test_suite_results')) > 4294967296,
+    'STOP-COST-GATE')) AS cost_gate,
+gh AS (
+    SELECT id FROM repos FINAL WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0 AND provider = 'github'
+      AND startsWith(toString(id), 'b2b2b2b2')
+),
+sa AS (
+    SELECT repo_id, run_id, report_slot AS slot, run_attempt AS att, last_synced AS ls,
+           toDate(coalesce(started_at, finished_at), 'UTC') AS sday,
+           cityHash64(concat(suite_name, '|', ifNull(framework, '~'), '|', ifNull(environment, '~'), '|',
+               toString(total_count), '|', toString(passed_count), '|', toString(failed_count), '|',
+               toString(skipped_count), '|', toString(error_count), '|', toString(quarantined_count), '|',
+               toString(retried_count), '|', ifNull(toString(duration_seconds), '~'), '|',
+               ifNull(toString(started_at), '~'), '|', ifNull(toString(finished_at), '~'), '|',
+               ifNull(team_id, '~'), '|', ifNull(service_id, '~'), '|', toString(run_attempt))) AS hk
+    FROM test_suite_results FINAL
+    WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0 AND report_slot != '' AND repo_id IN (SELECT id FROM gh)
+),
+nw AS (
+    SELECT repo_id, run_id, slot, max(att) AS att FROM sa GROUP BY repo_id, run_id, slot
+),
+hk_slot AS (
+    SELECT repo_id, run_id, slot, att, hk, count() AS n FROM sa GROUP BY repo_id, run_id, slot, att, hk
+),
+hk_run AS (
+    SELECT repo_id, run_id, att, hk, count() AS n FROM sa GROUP BY repo_id, run_id, att, hk
+),
+uslots AS (
+    SELECT k.repo_id AS repo_id, k.run_id AS run_id, k.slot AS slot, k.att AS att
+    FROM hk_slot AS k
+    INNER JOIN hk_run AS r ON r.repo_id = k.repo_id AND r.run_id = k.run_id AND r.att = k.att AND r.hk = k.hk
+    WHERE (k.repo_id, k.run_id, k.slot, k.att) IN (SELECT repo_id, run_id, slot, att FROM nw)
+    GROUP BY k.repo_id, k.run_id, k.slot, k.att
+    HAVING min(r.n >= 2 * k.n) = 1
+),
+slot_day AS (
+    SELECT repo_id, run_id, slot, att, min(sday) AS sday, max(ls) AS ls FROM sa GROUP BY repo_id, run_id, slot, att
+)
+SELECT kind, day, runs, slots, slots_before_fix_commit, repo_cuts
+FROM (
+    SELECT 'day' AS kind, toString(d.sday) AS day, uniqExact(u.repo_id, u.run_id) AS runs, count() AS slots,
+           countIf(d.ls < toDateTime64('2026-03-11 02:45:39', 3, 'UTC')) AS slots_before_fix_commit,
+           arraySort(groupUniqArray(substring(toString(u.repo_id), 1, 8))) AS repo_cuts
+    FROM uslots AS u
+    INNER JOIN slot_day AS d ON d.repo_id = u.repo_id AND d.run_id = u.run_id AND d.slot = u.slot AND d.att = u.att
+    WHERE cost_gate = 0
+    GROUP BY d.sday
+    UNION ALL
+    SELECT 'control' AS kind, '' AS day, (SELECT count() FROM gh) AS runs, (SELECT count() FROM nw) AS slots,
+           toUInt64(0) AS slots_before_fix_commit, CAST([], 'Array(String)') AS repo_cuts
+)
+WHERE cost_gate = 0
+ORDER BY kind, day;
+
+-- K3A
+--
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('test_suite_results')) > 6000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('test_suite_results')) > 4294967296,
+    'STOP-COST-GATE')) AS cost_gate
+SELECT count()                                                                    AS newest_keys,
+       countIf(retracted = 1)                                                     AS retracted_keys,
+       countIf(retracted = 1 AND day = toDate('2026-03-09'))                      AS retracted_keys_day,
+       uniqExactIf(run_id, retracted = 1 AND day = toDate('2026-03-09'))          AS retracted_runs_day,
+       toString(maxIf(last_synced, retracted = 1))                                AS last_retraction_stamp
+FROM (
+    SELECT run_id, retracted, last_synced, toDate(coalesce(started_at, finished_at), 'UTC') AS day
+    FROM test_suite_results FINAL
+    WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0 AND startsWith(toString(repo_id), 'b2b2b2b2')
+)
+WHERE cost_gate = 0;
+
+-- K1
+--
+--
+--
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('daily_metrics_touched_days', 'test_suite_results', 'testops_test_metrics_daily')) > 6000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('daily_metrics_touched_days', 'test_suite_results', 'testops_test_metrics_daily')) > 4294967296,
+    'STOP-COST-GATE')) AS cost_gate
+SELECT substring(toString(repo_id), 1, 8)                                                  AS repo_cut,
+       toString(day)                                                                       AS day,
+       cls,
+       toString(rday_min)                                                                  AS run_day_min,
+       toString(rday_max)                                                                  AS run_day_max,
+       toUInt8(rday_min < toDate('2026-03-09') OR rday_max > toDate('2026-03-10'))        AS run_outside_window
+FROM (
+SELECT k.repo_id AS repo_id, k.day AS day, k.rday_min AS rday_min, k.rday_max AS rday_max, c.last_compute AS last_compute,
+       if(empty(m.mats), toDateTime64(0, 3, 'UTC'), arrayMax(m.mats)) AS mark_at,
+       multiIf(last_compute = toDateTime(0, 'UTC'), 'norow',
+               k.no_record = 1 OR (mark_at > toDateTime64(0, 3, 'UTC') AND mark_at < k.landed), 'missing_mark',
+               mark_at > toDateTime64(0, 3, 'UTC') AND toDateTime64(last_compute, 3, 'UTC') >= mark_at + toIntervalSecond(300), 'fresh',
+               mark_at > toDateTime64(0, 3, 'UTC'), 'pending',
+               'unmarked') AS cls
+FROM (
+    SELECT repo_id, addDays(base_day, o) AS day, max(run_landed) AS landed, min(run_rday_min) AS rday_min, max(run_rday_max) AS rday_max,
+           max(run_no_record) AS no_record
+    FROM (
+        SELECT repo_id, groupArray(base_day) AS days, any(landed) AS run_landed, any(rday_min) AS run_rday_min, any(rday_max) AS run_rday_max,
+               1 - min(has_rec) AS run_no_record,
+               if(min(has_rec) = 1, toDate(min(rec_at), 'UTC'), toDate(now64(3), 'UTC')) AS cut_day
+        FROM (
+            SELECT b.repo_id AS repo_id, b.run_id AS run_id, b.base_day AS base_day, b.landed AS landed,
+                   b.rday_min AS rday_min, b.rday_max AS rday_max,
+                   arrayFilter(a -> a >= b.landed - toIntervalSecond(300), t.tats) AS tf,
+                   toUInt8(notEmpty(tf)) AS has_rec,
+                   if(empty(tf), toDateTime64(0, 3, 'UTC'), arrayMin(tf)) AS rec_at
+            FROM (
+                SELECT DISTINCT s.repo_id AS repo_id, s.run_id AS run_id, toDate(coalesce(s.started_at, s.finished_at), 'UTC') AS base_day,
+                       r.landed AS landed, r.rday_min AS rday_min, r.rday_max AS rday_max
+                FROM test_suite_results AS s
+                INNER JOIN (
+                    SELECT repo_id, run_id, max(last_synced) AS landed,
+                           min(toDate(coalesce(started_at, finished_at), 'UTC')) AS rday_min,
+                           max(toDate(coalesce(started_at, finished_at), 'UTC')) AS rday_max
+                    FROM (SELECT repo_id, run_id, retracted, last_synced, started_at, finished_at FROM test_suite_results FINAL
+                          WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0)
+                    WHERE retracted = 1 AND cost_gate = 0
+                    GROUP BY repo_id, run_id
+                ) AS r ON r.repo_id = s.repo_id AND r.run_id = s.run_id
+                WHERE startsWith(s.org_id, 'f0f0f0f0') AND cost_gate = 0 AND coalesce(s.started_at, s.finished_at) IS NOT NULL
+            ) AS b
+            LEFT JOIN (
+                SELECT repo_id, day, groupArray(at) AS tats
+                FROM daily_metrics_touched_days
+                WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0 AND kind = 'touched'
+                GROUP BY repo_id, day
+            ) AS t ON t.repo_id = b.repo_id AND t.day = b.base_day
+            WHERE cost_gate = 0
+        )
+        GROUP BY repo_id, run_id
+    )
+    ARRAY JOIN days AS base_day
+    ARRAY JOIN range(0, 30) AS o
+    WHERE addDays(base_day, o) <= cut_day AND cost_gate = 0
+    GROUP BY repo_id, day
+) AS k
+LEFT JOIN (
+    SELECT repo_id, day, groupArray(at) AS mats
+    FROM daily_metrics_touched_days
+    WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0 AND kind IN ('touched', 'touched_testops_window')
+    GROUP BY repo_id, day
+) AS m ON m.repo_id = k.repo_id AND m.day = k.day
+LEFT JOIN (
+    SELECT repo_id, day, max(computed_at) AS last_compute
+    FROM testops_test_metrics_daily
+    WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0
+    GROUP BY repo_id, day
+) AS c ON c.repo_id = k.repo_id AND c.day = k.day
+WHERE cost_gate = 0
+)
+WHERE cost_gate = 0 AND cls IN ('missing_mark', 'pending', 'unmarked')
+ORDER BY repo_cut, day
+LIMIT 50;
+
+-- K1b
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('daily_metrics_touched_days', 'test_suite_results', 'testops_release_confidence')) > 6000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('daily_metrics_touched_days', 'test_suite_results', 'testops_release_confidence')) > 4294967296,
+    'STOP-COST-GATE')) AS cost_gate
+SELECT substring(toString(repo_id), 1, 8)                                                  AS repo_cut,
+       toString(day)                                                                       AS day,
+       cls,
+       toString(rday_min)                                                                  AS run_day_min,
+       toString(rday_max)                                                                  AS run_day_max,
+       toUInt8(rday_min < toDate('2026-03-09') OR rday_max > toDate('2026-03-10'))        AS run_outside_window
+FROM (
+SELECT k.repo_id AS repo_id, k.day AS day, k.rday_min AS rday_min, k.rday_max AS rday_max, c.last_compute AS last_compute,
+       if(empty(m.mats), toDateTime64(0, 3, 'UTC'), arrayMax(m.mats)) AS mark_at,
+       multiIf(last_compute = toDateTime(0, 'UTC'), 'norow',
+               k.no_record = 1 OR (mark_at > toDateTime64(0, 3, 'UTC') AND mark_at < k.landed), 'missing_mark',
+               mark_at > toDateTime64(0, 3, 'UTC') AND toDateTime64(last_compute, 3, 'UTC') >= mark_at + toIntervalSecond(300), 'fresh',
+               mark_at > toDateTime64(0, 3, 'UTC'), 'pending',
+               'unmarked') AS cls
+FROM (
+    SELECT repo_id, addDays(base_day, o) AS day, max(run_landed) AS landed, min(run_rday_min) AS rday_min, max(run_rday_max) AS rday_max,
+           max(run_no_record) AS no_record
+    FROM (
+        SELECT repo_id, groupArray(base_day) AS days, any(landed) AS run_landed, any(rday_min) AS run_rday_min, any(rday_max) AS run_rday_max,
+               1 - min(has_rec) AS run_no_record,
+               if(min(has_rec) = 1, toDate(min(rec_at), 'UTC'), toDate(now64(3), 'UTC')) AS cut_day
+        FROM (
+            SELECT b.repo_id AS repo_id, b.run_id AS run_id, b.base_day AS base_day, b.landed AS landed,
+                   b.rday_min AS rday_min, b.rday_max AS rday_max,
+                   arrayFilter(a -> a >= b.landed - toIntervalSecond(300), t.tats) AS tf,
+                   toUInt8(notEmpty(tf)) AS has_rec,
+                   if(empty(tf), toDateTime64(0, 3, 'UTC'), arrayMin(tf)) AS rec_at
+            FROM (
+                SELECT DISTINCT s.repo_id AS repo_id, s.run_id AS run_id, toDate(coalesce(s.started_at, s.finished_at), 'UTC') AS base_day,
+                       r.landed AS landed, r.rday_min AS rday_min, r.rday_max AS rday_max
+                FROM test_suite_results AS s
+                INNER JOIN (
+                    SELECT repo_id, run_id, max(last_synced) AS landed,
+                           min(toDate(coalesce(started_at, finished_at), 'UTC')) AS rday_min,
+                           max(toDate(coalesce(started_at, finished_at), 'UTC')) AS rday_max
+                    FROM (SELECT repo_id, run_id, retracted, last_synced, started_at, finished_at FROM test_suite_results FINAL
+                          WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0)
+                    WHERE retracted = 1 AND cost_gate = 0
+                    GROUP BY repo_id, run_id
+                ) AS r ON r.repo_id = s.repo_id AND r.run_id = s.run_id
+                WHERE startsWith(s.org_id, 'f0f0f0f0') AND cost_gate = 0 AND coalesce(s.started_at, s.finished_at) IS NOT NULL
+            ) AS b
+            LEFT JOIN (
+                SELECT repo_id, day, groupArray(at) AS tats
+                FROM daily_metrics_touched_days
+                WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0 AND kind = 'touched'
+                GROUP BY repo_id, day
+            ) AS t ON t.repo_id = b.repo_id AND t.day = b.base_day
+            WHERE cost_gate = 0
+        )
+        GROUP BY repo_id, run_id
+    )
+    ARRAY JOIN days AS base_day
+    ARRAY JOIN range(0, 30) AS o
+    WHERE addDays(base_day, o) <= cut_day AND cost_gate = 0
+    GROUP BY repo_id, day
+) AS k
+LEFT JOIN (
+    SELECT repo_id, day, groupArray(at) AS mats
+    FROM daily_metrics_touched_days
+    WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0 AND kind IN ('touched', 'touched_testops_window')
+    GROUP BY repo_id, day
+) AS m ON m.repo_id = k.repo_id AND m.day = k.day
+LEFT JOIN (
+    SELECT repo_id, day, max(computed_at) AS last_compute
+    FROM testops_release_confidence
+    WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0
+    GROUP BY repo_id, day
+) AS c ON c.repo_id = k.repo_id AND c.day = k.day
+WHERE cost_gate = 0
+)
+WHERE cost_gate = 0 AND cls IN ('missing_mark', 'pending', 'unmarked')
+ORDER BY repo_cut, day
+LIMIT 50;
+
+-- RID
+--
+--
+WITH (SELECT throwIf(
+    (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('repos')) > 1000000
+    OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table IN ('repos')) > 4294967296,
+    'STOP-COST-GATE')) AS cost_gate
+SELECT toString(id) AS repo_id
+FROM repos FINAL
+WHERE startsWith(org_id, 'f0f0f0f0') AND cost_gate = 0 AND provider = 'github' AND startsWith(toString(id), 'a1a1a1a1')
+ORDER BY repo_id
+LIMIT 2;
+`
 
 type formExecRewalkCHResult struct {
 	columns []string

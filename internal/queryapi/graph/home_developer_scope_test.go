@@ -171,3 +171,14 @@ func TestHomeKnownDeveloperReadsTheSameAsAnUnknownOne(t *testing.T) {
 		}
 	}
 }
+
+// An unknown developer id with repositories named reads what an unknown developer id reads with none named (main read 30
+// repository-narrowed statements instead): no repository-narrowed organization number is served under a person's name.
+func TestHomeUnknownDeveloperWithNamedReposReadsTheNoDataStatements(t *testing.T) {
+	const unknownDeveloperDigest = "75745f707794ce581d6be6bc6b9f76b31c4957e265fed6f6b4526e8af05f35b8"
+	ch := &homeDevProbeClient{}
+	homeDevRun(t, ch, &model.ScopeFilterInput{Level: model.ScopeLevelInputDeveloper, Ids: []string{homeDevScopeID}}, &model.WhatFilterInput{Repos: []string{"repo-synthetic-a"}})
+	if digest, reads := homeDevDigest(ch); digest != unknownDeveloperDigest || reads != 40 {
+		t.Fatalf("reads: digest %s (%d reads), want the unknown-developer statements %s (40 reads)", digest, reads, unknownDeveloperDigest)
+	}
+}

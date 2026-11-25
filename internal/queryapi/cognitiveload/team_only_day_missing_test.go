@@ -1,24 +1,15 @@
 package cognitiveload
 
 import (
-	"fmt"
-	"reflect"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 )
 
 // Missing is not healthy: a day with team commit-timing rows but no per-developer row has no developer load to serve.
 // The three developer fields stay Float! and stay 0 (the contract is additive), so a signal carries one state for them:
 // MEASURED when developer rows exist that day, NO_ROWS when the day is team-only. A day whose developer rows sum to 0
-// is a measured 0 and says MEASURED. The state is read by name so the cell compiles before the field exists.
-func developerStateOf(t *testing.T, signal any) string {
-	t.Helper()
-	field := reflect.ValueOf(signal).FieldByName("DeveloperState")
-	if !field.IsValid() {
-		return "<no DeveloperState field>"
-	}
-	return fmt.Sprint(field.Interface())
-}
-
+// is a measured 0 and says MEASURED.
 func TestCognitiveLoadSignalSaysWhetherDevelopersWereMeasuredThatDay(t *testing.T) {
 	signals := mergeUserAndTeamRows(
 		[]userLoadRow{
@@ -36,7 +27,7 @@ func TestCognitiveLoadSignalSaysWhetherDevelopersWereMeasuredThatDay(t *testing.
 	if control.PrInterruptionLoad != 4 || control.ContextSpreadCount != 2 || control.ReviewRequestLoad != 1 {
 		t.Errorf("control, day with a developer row: values = %v %v %v, want 4 2 1", control.PrInterruptionLoad, control.ContextSpreadCount, control.ReviewRequestLoad)
 	}
-	if got := developerStateOf(t, control); got != "MEASURED" {
+	if got := control.DeveloperState; got != model.NewestDayStateMeasured {
 		t.Errorf("day with a developer row: developerState = %s, want MEASURED", got)
 	}
 
@@ -48,13 +39,13 @@ func TestCognitiveLoadSignalSaysWhetherDevelopersWereMeasuredThatDay(t *testing.
 	if teamOnly.PrInterruptionLoad != 0 || teamOnly.ContextSpreadCount != 0 || teamOnly.ReviewRequestLoad != 0 {
 		t.Errorf("team-only day: values = %v %v %v, want 0 0 0 (Float! stays)", teamOnly.PrInterruptionLoad, teamOnly.ContextSpreadCount, teamOnly.ReviewRequestLoad)
 	}
-	if got := developerStateOf(t, teamOnly); got != "NO_ROWS" {
+	if got := teamOnly.DeveloperState; got != model.NewestDayStateNoRows {
 		t.Errorf("team-only day: developerState = %s, want NO_ROWS (no developer row that day: unknown, not 0)", got)
 	}
 
 	// A day whose developer rows sum to 0 is a measured 0.
 	measuredZero := signals[2]
-	if got := developerStateOf(t, measuredZero); got != "MEASURED" {
+	if got := measuredZero.DeveloperState; got != model.NewestDayStateMeasured {
 		t.Errorf("day whose developer rows sum to 0: developerState = %s, want MEASURED (a measured 0)", got)
 	}
 }

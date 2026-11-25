@@ -1833,7 +1833,8 @@ var peopleSummaryCollaborationOrderInsensitiveLists = []OrderInsensitiveList{
 //   - data.sections.flow_breakdown.value (summary.go's
 //     fetchPersonFlowBreakdown): coalesce(toFloat64(avg(cycle_time_hours)
 //     ),0) / avg(lead_time_hours-cycle_time_hours) -- genuine avg()
-//     aggregates over Float64 columns.
+//     aggregates over Float64 columns (a stage with no input is omitted
+//     by HAVING count() > 0, so no served value is a coalesced 0).
 var peopleSummaryNumericFloats = map[string]string{
 	"data.freshness.coverage.repos_covered_pct":            "fetchCoverage's covered/total ratio *100 (summary.go) -- a genuine ratio.",
 	"data.freshness.coverage.prs_linked_to_issues_pct":     "fetchCoverage's linked/total ratio *100 -- a genuine ratio.",

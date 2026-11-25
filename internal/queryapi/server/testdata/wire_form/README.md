@@ -42,7 +42,8 @@ document text is readable in the tree, so a reviewer can see the
 | `capacityForecast` (legacy V1, `capacityForecast.v1.graphql`, dual accept CHAOS-7994) | `b4fb8f075aba9954714f10f7f4451242d969548d6392d778dae1177759f80780` |
 | `capacityForecasts` | `976b1a117d82f699eef98bcee1a1fc5cec44086026706fd501eddc4f2ba6fd77` |
 | `capacityForecasts` (legacy V1, `capacityForecasts.v1.graphql`, dual accept CHAOS-7508) | `43890adbbf75ac3ad71c29f728a82e35d035c3f2c701f0ced116559fa28b6c20` |
-| `throughputForecast` | `9ace3bd179910a7c79ec8dade33c8f93c7244fc45fe455d4f844a5838eb6a18f` |
+| `throughputForecast` | `ebb9f0f86922d5aab9e9ae182cbd633b495f8037d46a69f0f7ed7c7ea7324dd0` |
+| `throughputForecast` (legacy V4, `throughputForecast.v4.graphql`, dual accept CHAOS-14629) | `9ace3bd179910a7c79ec8dade33c8f93c7244fc45fe455d4f844a5838eb6a18f` |
 | `throughputForecast` (legacy V3, `throughputForecast.v3.graphql`, dual accept CHAOS-7508) | `a265a9550e4cdab2bc77395257777ec366ac554b19c617af094de47c7a9e2b03` |
 | `throughputForecast` (legacy V2, `throughputForecast.v2.graphql`, dual accept CHAOS-14142) | `933efa3840bb7afb600135bc4470d6523842a908f0ffb949a35439e15a76e09d` |
 | `throughputForecast` (legacy V1, `throughputForecast.v1.graphql`, dual accept CHAOS-8167) | `fc08dea094ec832290b4f528141eacb5bbc463beea45794cf205fe43952379f9` |

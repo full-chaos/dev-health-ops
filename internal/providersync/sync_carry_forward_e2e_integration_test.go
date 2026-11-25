@@ -94,7 +94,8 @@ func TestGitHubPullRequestSocialCarriesReviewsForwardFromRouteToClickHouse(t *te
 	first := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	write(collect(first))
 
-	doer.graphQLStatus, doer.graphQLReply = http.StatusServiceUnavailable, `{"message":"temporarily unavailable"}`
+	// An answered review read that cannot be used degrades (a 5xx fails the unit instead).
+	doer.graphQLStatus, doer.graphQLReply = http.StatusOK, `{"data":{"repository":{}},"errors":[{"message":"schema changed"}]}`
 	second := first.Add(time.Hour)
 	write(collect(second))
 

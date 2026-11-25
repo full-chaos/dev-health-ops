@@ -3818,8 +3818,98 @@ const registeredCapacityForecastsV1Document = `query CapacityForecasts($orgId: S
 // selection (after `backlogAsOfDay`, CHAOS-14142) is in the same state: the previous text is
 // registeredThroughputForecastV2Document. So are the newest-day selections of CHAOS-7508 (`wipCongestionState`,
 // `wipCongestionAsOfDay`, `wipCongestionGrainCount` after wipCongestion; `state`, `asOfDay`, `grainCount` of staleWip;
-// `state`, `asOfDay` of estimateCoverage): the previous text is registeredThroughputForecastV3Document.
+// `state`, `asOfDay` of estimateCoverage): the previous text is registeredThroughputForecastV3Document. So are the two state selections of CHAOS-14629 (`reviewBottleneckState`, `incidentLoadState`): the previous text is registeredThroughputForecastV4Document.
 const registeredThroughputForecastDocument = `query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {
+  throughputForecast(orgId: $orgId, input: $input) {
+    forecastId
+    computedAt
+    teamId
+    workScopeId
+    backlogSize
+    backlogState
+    backlogAsOfDay
+    degradedReason
+    historyWeeks
+    p50Weeks
+    p75Weeks
+    p90Weeks
+    insufficientHistory
+    rollingWindows {
+      windowWeeks
+      meanWeeklyThroughput
+      sampleCount
+      insufficientHistory
+      __typename
+    }
+    primaryRisk {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    wipCongestion {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    wipCongestionState
+    wipCongestionAsOfDay
+    wipCongestionGrainCount
+    staleWip {
+      p50AgeHours
+      p90AgeHours
+      state
+      asOfDay
+      grainCount
+      __typename
+    }
+    estimateCoverage {
+      ratio
+      estimatedCount
+      unestimatedCount
+      backlogSize
+      grainCount
+      state
+      asOfDay
+      __typename
+    }
+    reviewBottleneck {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    reviewBottleneckState
+    incidentLoad {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    incidentLoadState
+    __typename
+  }
+}`
+
+// registeredThroughputForecastV4Document is the text throughputForecast accepted BEFORE it asked how the review latency of
+// reviewBottleneck and the incident rate of incidentLoad were read (CHAOS-14629): the text CHAOS-7508 registered. It stays a
+// legacy text (see legacyDigestsByOperation) so a web or acr build still sending it keeps working while the new clients roll
+// out; it reads the same answer less the two state fields. The operation's ONE current document is
+// registeredThroughputForecastDocument. Wire form, same provenance: testdata/wire_form/throughputForecast.v4.graphql.
+const registeredThroughputForecastV4Document = `query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {
   throughputForecast(orgId: $orgId, input: $input) {
     forecastId
     computedAt
@@ -7739,7 +7829,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"reviewEdges":           {digestHex(registeredReviewEdgesV1Document)},
 	"investmentFull":        {digestHex(registeredInvestmentFullV1Document)},
 	"investmentBreakdown":   {digestHex(registeredInvestmentBreakdownV1Document)},
-	"throughputForecast":    {digestHex(registeredThroughputForecastV1Document), digestHex(registeredThroughputForecastV2Document), digestHex(registeredThroughputForecastV3Document)},
+	"throughputForecast":    {digestHex(registeredThroughputForecastV1Document), digestHex(registeredThroughputForecastV2Document), digestHex(registeredThroughputForecastV3Document), digestHex(registeredThroughputForecastV4Document)},
 }
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's

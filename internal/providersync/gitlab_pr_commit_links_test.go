@@ -83,13 +83,14 @@ func TestGitLabCommitListingControlFailuresFailTheUnitAndOrdinaryOnesDoNot(t *te
 		{"budget_unavailable", func(client *providerfoundation.HTTPClient, inner *gitLabPullRequestDoer) {
 			client.Budget = gitLabCommitListingBudget{inner: inner, failure: providerfoundation.ErrBudgetUnavailable}
 		}, providerfoundation.ErrBudgetUnavailable},
-		{"ordinary_transport_error", nil, nil},
+		{"answered_404", nil, nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			inner := &gitLabPullRequestDoer{t: t, responses: gitLabOneMergeRequestResponses()}
 			var doer providerfoundation.HTTPDoer = inner
 			if test.inject == nil {
-				doer = gitLabCommitListingTransportFailureDoer{inner: inner, failure: errors.New("connection reset")}
+				// A failed listing (5xx, transport) fails the unit: TestGitLabCommitListingFailureHoldsTheWatermark.
+				inner.responses = append(inner.responses, gitLabPullRequestResponse{status: http.StatusNotFound, body: `{"message":"404 Not found"}`})
 			}
 			client := gitLabRepositoryClient(t, fakehttp.Client(doer), "https://gitlab.example")
 			if test.inject != nil {
@@ -105,7 +106,7 @@ func TestGitLabCommitListingControlFailuresFailTheUnitAndOrdinaryOnesDoNot(t *te
 				return
 			}
 			if err != nil || len(batch.Effects) != 4 || len(batch.Effects[3].Rows) != 0 {
-				t.Fatalf("err=%v effects=%d: an ordinary listing failure leaves the merge request without links and the unit completes", err, len(batch.Effects))
+				t.Fatalf("err=%v effects=%d: an answered listing failure leaves the merge request without links and the unit completes", err, len(batch.Effects))
 			}
 		})
 	}

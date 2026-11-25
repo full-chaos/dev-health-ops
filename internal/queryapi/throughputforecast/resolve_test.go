@@ -144,8 +144,8 @@ func fullResponseSet(t *testing.T, days int, perDay uint64) []*fakeRowScanner {
 		coverageRow(40, 60, 100, 3),                      // 3 estimate coverage
 		overlayRow(12.5, 20),                             // 4 work item overlay
 		staleRow(floatPointer(30.0), floatPointer(90.0)), // 5 stale wip
-		oneRow(floatPointer(12.0)),                       // 6 review overlay
-		oneRow(2.5),                                      // 7 incident overlay
+		oneRow(floatPointer(12.0), uint64(1)),            // 6 review overlay: the average, one measured row
+		oneRow(2.5, uint64(1)),                           // 7 incident overlay: the rate, one live row
 	}
 }
 
@@ -677,7 +677,7 @@ func TestToModelRendersComputedAtAsRFC3339(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			got := toModel("forecast-1", testCase.moment, forecastResult{}, backlogRead{}, newestDayRead{}, nil, nil, newestDayRead{}, nil)
+			got := toModel("forecast-1", testCase.moment, forecastResult{}, backlogRead{}, newestDayRead{}, nil, nil, newestDayRead{}, nil, overlayRead{}, overlayRead{})
 			if got.ComputedAt != testCase.want {
 				t.Errorf("computedAt: got %q, want %q", got.ComputedAt, testCase.want)
 			}

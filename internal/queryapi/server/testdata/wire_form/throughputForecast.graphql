@@ -68,6 +68,7 @@ query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {
       active
       __typename
     }
+    reviewBottleneckState
     incidentLoad {
       kind
       score
@@ -77,6 +78,7 @@ query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {
       active
       __typename
     }
+    incidentLoadState
     __typename
   }
 }

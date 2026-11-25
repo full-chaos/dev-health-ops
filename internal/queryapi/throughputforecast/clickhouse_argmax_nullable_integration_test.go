@@ -10,6 +10,7 @@ import (
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -110,9 +111,12 @@ func TestLoadReviewOverlayReturnsZeroNotStaleValueWhenNewestIsNull(t *testing.T)
 	// is genuinely NULL, and the "no rows" branch reports 0.0 (INACTIVE, not
 	// unknown -- see loadReviewOverlay's doc comment). Before the fix,
 	// argMax skipped the NULL and the group survived with the stale value.
-	if latency != 0 {
+	if latency.value != 0 {
 		t.Fatalf("latency = %v, want 0 (newest row's NULL dropped the group) -- argMax skipped the NULL and returned the stale %v instead",
-			latency, staleHours)
+			latency.value, staleHours)
+	}
+	if latency.state != model.NewestDayStateNoRows {
+		t.Fatalf("state = %s, want NO_ROWS: the only group's newest row is NULL, so no row measures a latency", latency.state)
 	}
 }
 

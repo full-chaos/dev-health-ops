@@ -355,7 +355,7 @@ func BuildPlan(target string, args []string, in Inputs) (plan Plan, help bool, e
 		}
 		plan.GitHub = creds
 	case "gitlab":
-		token := firstNonEmpty(v["auth"], in.envOr("GITLAB_TOKEN"))
+		token := firstNonBlank(v["auth"], in.envOr("GITLAB_TOKEN"))
 		if token == "" {
 			return Plan{}, false, exitRefusal("Missing GitLab token (pass --auth or set GITLAB_TOKEN).")
 		}
@@ -417,6 +417,20 @@ func dbValue(v map[string]string, in Inputs) *string {
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
 		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// isBlank reports a value that is empty or only white space: no provider issues such a
+// token, so it counts as not given (Python treats a whitespace-only token as given).
+func isBlank(value string) bool { return strings.TrimSpace(value) == "" }
+
+// firstNonBlank is firstNonEmpty for a token: a blank value does not win.
+func firstNonBlank(values ...string) string {
+	for _, v := range values {
+		if !isBlank(v) {
 			return v
 		}
 	}
@@ -646,7 +660,7 @@ func githubCredentials(v map[string]string, plan Plan, in Inputs) (*GitHubCreden
 }
 
 func githubModeCredentials(token, appID, keyPath, installationID string, base *string, name string, in Inputs) (*GitHubCredentials, *Refusal) {
-	hasToken := token != ""
+	hasToken := !isBlank(token)
 	hasAny := appID != "" || keyPath != "" || installationID != ""
 	hasAll := appID != "" && keyPath != "" && installationID != ""
 	if hasToken && hasAny {

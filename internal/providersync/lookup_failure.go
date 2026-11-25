@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -115,4 +116,28 @@ func serveLookupFailure(
 		return nil
 	}
 	return err
+}
+
+// lookupStatusClass names a failed lookup's HTTP status class for a log line: "5xx", "4xx", "transport" (no HTTP
+// answer) or "none" (the request was never sent, e.g. a refused budget).
+func lookupStatusClass(err error) string {
+	var providerErr *providerfoundation.ProviderError
+	if !errors.As(err, &providerErr) || providerErr == nil {
+		return "none"
+	}
+	if providerErr.StatusCode == 0 {
+		return "transport"
+	}
+	return strconv.Itoa(providerErr.StatusCode/100) + "xx"
+}
+
+// lookupReadFailed reports whether a lookup failed before it got a usable answer: classifyLookupFailure fails it and
+// it is not an answered response that could not be used (a body the caller could not read or decode).
+func lookupReadFailed(err error) bool {
+	var providerErr *providerfoundation.ProviderError
+	if errors.As(err, &providerErr) && providerErr.AfterResponse() {
+		return false
+	}
+	verdict, _ := classifyLookupFailure(err, nil)
+	return verdict == lookupFails
 }

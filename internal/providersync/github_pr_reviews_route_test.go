@@ -177,9 +177,11 @@ func TestGitHubPullRequestSocialEffectsAcceptEveryAliasClaim(t *testing.T) {
 
 func TestGitHubPullRequestReviewRoutePreservesBaseRowOnOptionalReviewFailure(t *testing.T) {
 	t.Parallel()
+	// An answered read that cannot be used (GraphQL errors) degrades; a failed read (5xx, transport) fails the unit
+	// (TestGitHubPullRequestReviewsLookupFailureHoldsTheWatermark).
 	doer := &gitHubPullRequestReviewRouteDoer{
-		t: t, restBodies: defaultGitHubPullRequestFixtures(), graphQLStatus: http.StatusServiceUnavailable,
-		graphQLReply: `{"message":"temporarily unavailable"}`,
+		t: t, restBodies: defaultGitHubPullRequestFixtures(),
+		graphQLReply: `{"data":{"repository":{}},"errors":[{"message":"schema changed"}]}`,
 	}
 	claim := nativeTestClaim("github", "pr-reviews")
 	batch, err := (GitHubPullRequestReviewRouteHandler{}).Collect(
@@ -194,7 +196,7 @@ func TestGitHubPullRequestReviewRoutePreservesBaseRowOnOptionalReviewFailure(t *
 		t.Fatal(err)
 	}
 	if pull.FirstReviewAt != nil || pull.ReviewsCount != 0 || pull.ChangesRequestedCount != 0 ||
-		len(batch.Effects[1].Rows) != 0 || batch.Result["pr_reviews_incomplete"] != "transient" {
+		len(batch.Effects[1].Rows) != 0 || batch.Result["pr_reviews_incomplete"] != "invalid_response" {
 		t.Fatalf("batch=%+v pull=%+v", batch, pull)
 	}
 	if !pull.ReviewsLookupFailed {

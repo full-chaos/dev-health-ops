@@ -126,7 +126,7 @@ func TestCatalogTeamsTakesTheTurnBeforeItReadsAndReleasesItAfter(t *testing.T) {
 	d.doer = &http.Client{Transport: refusingTransport{calls: new(int)}}
 	var stderr strings.Builder
 	runTeams(context.Background(), cli.Env{
-		Args:   []string{"--provider", "github", "--owner", "acme", "--org", catalogTurnOrg, "--auth", "t", "--db", "postgres://pg-user:pg-pass-value@127.0.0.1:1/db"},
+		Args:   []string{"--provider", "github", "--owner", "acme", "--org", catalogTurnOrg, "--auth", "zz9-catalog-token", "--db", "postgres://pg-user:pg-pass-value@127.0.0.1:1/db"},
 		Lookup: lookup(map[string]string{"CLICKHOUSE_URI": dsnValue}), Stdout: io.Discard, Stderr: &stderr,
 	}, d)
 
@@ -204,7 +204,7 @@ func TestCatalogTeamsRunWhoseTurnIsTakenOverIsEndedAndWritesNothing(t *testing.T
 	defer stop()
 	var stderr strings.Builder
 	code := runTeams(bounded, cli.Env{
-		Args:   []string{"--provider", "github", "--owner", "acme", "--org", catalogTurnOrg, "--auth", "t", "--db", "postgres://pg-user:pg-pass-value@127.0.0.1:1/db"},
+		Args:   []string{"--provider", "github", "--owner", "acme", "--org", catalogTurnOrg, "--auth", "zz9-catalog-token", "--db", "postgres://pg-user:pg-pass-value@127.0.0.1:1/db"},
 		Lookup: lookup(map[string]string{"CLICKHOUSE_URI": dsnValue}), Stdout: io.Discard, Stderr: &stderr,
 	}, d)
 

@@ -1,8 +1,10 @@
 package synccli
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -33,5 +35,28 @@ func TestCatalogStoreOpenErrorKeepsTheProviderTokenHidden(t *testing.T) {
 				t.Errorf("the provider token printed: %q", stderr)
 			}
 		})
+	}
+}
+
+// What the catalog run logs (a sink warning, the store opener) goes through the
+// process logger: it holds the provider token from the moment the token is known.
+func TestCatalogProcessLogHidesTheProviderToken(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	env := validEnv()
+	env["CLICKHOUSE_URI"] = "clickhouse://zz9-cat-login:zz9-cat-pass@127.0.0.1:9000/d"
+	d := defaultDeps()
+	d.openStore = func(context.Context, string) (driver.Conn, error) {
+		slog.Error("store open failed", "error", errors.New(openServer))
+		return nil, errors.New(openServer)
+	}
+	run(t, env, d, "--provider", "github", "--owner", "acme", "--org", "o", "--auth", openCredential, "--structure")
+	if !strings.Contains(logs.String(), "handshake echoed") {
+		t.Fatalf("the run logged nothing the cell can check: %q", logs.String())
+	}
+	if strings.Contains(logs.String(), openCredential) {
+		t.Errorf("the provider token was logged: %q", logs.String())
 	}
 }

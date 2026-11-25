@@ -198,7 +198,7 @@ func runCatalogTeams(ctx context.Context, env cli.Env, d deps, request catalogRe
 	redact := func(err error) string { return secrets.Join(boundary, driverCredentials(err)).Redact(err).Error() }
 	// What the collector logs (the roster-preservation warnings carry the
 	// driver's error) is redacted with the same boundary.
-	defer redactProcessLogger(boundary.RedactText)()
+	defer redactProcessLogger(func(text string) string { return boundary.RedactText(text) })()
 	spec, ok := catalogProviderSpecs[request.provider]
 	if !ok {
 		return writeError(env.Stderr, cli.ExitUsage, "unsupported_provider", "provider "+request.provider+" has no team catalog verb")
@@ -220,6 +220,10 @@ func runCatalogTeams(ctx context.Context, env cli.Env, d deps, request catalogRe
 		}
 		return writeError(env.Stderr, cli.ExitFailure, "token_required", message)
 	}
+
+	// The provider token joins the print union and the process logger before the
+	// store open: its failure text can echo it.
+	boundary = secrets.Join(boundary, secrets.NewBoundaryWith("", credentialSpellings(token)...))
 
 	conn, err := d.openStore(ctx, request.dsn)
 	if err != nil {

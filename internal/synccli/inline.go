@@ -111,6 +111,7 @@ func InlineExecutor(deps InlineDeps) Executor {
 		if refusal != nil {
 			return refusal
 		}
+		registerCredentials(ctx, planCredentialValues(plan)...)
 		run, refusal := inlineRun(plan, deps.Now())
 		if refusal != nil {
 			return refusal

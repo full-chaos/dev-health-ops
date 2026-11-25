@@ -56,8 +56,9 @@ func TestStoreOpenErrorKeepsTheProviderTokenHidden(t *testing.T) {
 }
 
 // A credential the database lookup resolved (no --auth) is held by the executor's
-// plan only: the store-open text is redacted there with it. The process logger,
-// given the same token in a log line, hides it too.
+// plan after resolveDBLookups, not by runTarget's: the store-open text is redacted
+// there with it. The cells of plan_credential_union_cells_test.go cover the
+// non-open errors and the process logger for the same credential.
 func TestStoreOpenErrorKeepsADatabaseResolvedProviderTokenHidden(t *testing.T) {
 	executor := InlineExecutor(InlineDeps{
 		OpenStore: func(context.Context, string) (driver.Conn, error) { return nil, errors.New(openServer) },

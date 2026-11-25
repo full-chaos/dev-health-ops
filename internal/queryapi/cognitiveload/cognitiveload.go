@@ -139,6 +139,7 @@ func resolve(ctx context.Context, client QueryClient, orgID string, sinceDate, u
 				PrInterruptionLoad:    row.prInterruptionLoad,
 				ContextSpreadCount:    row.contextSpreadCount,
 				ReviewRequestLoad:     row.reviewRequestLoad,
+				DeveloperState:        teamRollupDeveloperState(row),
 				AfterHoursCommitRatio: row.afterHoursCommitRatio,
 				WeekendCommitRatio:    row.weekendCommitRatio,
 			})
@@ -639,6 +640,8 @@ type fullDayRow struct {
 	reviewRequestLoad     float64
 	afterHoursCommitRatio *float64
 	weekendCommitRatio    *float64
+	// developerMeasured is true when developer rows fed the day's rollup row (CHAOS-14628).
+	developerMeasured bool
 }
 
 // fetchTeamCognitiveLoad ports _fetch_team_cognitive_load (CHAOS-4365 item
@@ -730,19 +733,73 @@ func fetchTeamCognitiveLoad(ctx context.Context, client QueryClient, orgID, team
 	if err != nil {
 		return nil, err
 	}
-	if len(retracted) == 0 {
-		return result, nil
-	}
-	kept := result[:0]
-	for _, row := range result {
-		if !retracted[row.day.UTC()] {
-			kept = append(kept, row)
+	kept := result
+	if len(retracted) > 0 {
+		kept = result[:0]
+		for _, row := range result {
+			if !retracted[row.day.UTC()] {
+				kept = append(kept, row)
+			}
+		}
+		if len(kept) == 0 {
+			return nil, nil
 		}
 	}
-	if len(kept) == 0 {
-		return nil, nil
+	authorDays, err := fetchDeveloperAuthorDays(ctx, client, bindings)
+	if err != nil {
+		return nil, err
+	}
+	for i := range kept {
+		kept[i].developerMeasured = authorDays[kept[i].day.UTC()]
 	}
 	return kept, nil
+}
+
+// developerAuthorDaysQuery returns the days of one team whose newest row of team_cognitive_load_daily rolled up at
+// least one author: sample_author_count counts the distinct authors of the developer rows of the day, and a commit-timing
+// row adds none (CHAOS-14628). It is a Go-only read: the pinned statement above does not read the count.
+var developerAuthorDaysQuery = `
+        SELECT day AS developer_author_day
+        FROM (
+            SELECT day, argMax(sample_author_count, computed_at) AS authors
+            FROM team_cognitive_load_daily
+            WHERE org_id = {org_id:String}
+              AND team_id = {team_id:String}
+              AND day >= {since_date:Date}
+              AND day <= {until_date:Date}
+            GROUP BY day
+        )
+        WHERE authors > 0
+        ORDER BY developer_author_day`
+
+func fetchDeveloperAuthorDays(ctx context.Context, client QueryClient, bindings []clickhouse.Binding) (map[time.Time]bool, error) {
+	rows, err := client.Query(ctx, developerAuthorDaysQuery, bindings)
+	if err != nil {
+		return nil, fmt.Errorf("developer author days query: %w", err)
+	}
+	defer rows.Close()
+	days := map[time.Time]bool{}
+	for rows.Next() {
+		var day time.Time
+		if scanErr := rows.Scan(&day); scanErr != nil {
+			return nil, fmt.Errorf("developer author days scan: %w", scanErr)
+		}
+		days[day.UTC()] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("developer author days rows: %w", err)
+	}
+	return days, nil
+}
+
+// teamRollupDeveloperState is the developer state of a day read from its rollup row: MEASURED when developer rows fed
+// the row (an author was counted) or any developer load is not 0 (a load came from a developer row whose author the
+// producer does not count, an empty email), NO_ROWS for a day of commit-timing rows only. STALE is not used.
+func teamRollupDeveloperState(row fullDayRow) model.NewestDayState {
+	if row.developerMeasured || row.prInterruptionLoad != 0 || row.contextSpreadCount != 0 || row.reviewRequestLoad != 0 {
+		return model.NewestDayStateMeasured
+	}
+	return model.NewestDayStateNoRows
 }
 
 // retractedLoadDaysQuery returns the days of one team whose newest row of

@@ -121,17 +121,18 @@ func TestResolve_SingleTeamPath_ReadsTeamCognitiveLoadDailyDirectly(t *testing.T
 			{rows: [][]any{
 				{day("2026-08-20"), 4.0, 2.0, 1.0, 0.25, nil},
 			}},
-			{rows: nil}, // days whose newest row is a retraction row: none
+			{rows: nil},                          // days whose newest row is a retraction row: none
+			{rows: [][]any{{day("2026-08-20")}}}, // days whose newest row rolled up an author: the day
 		},
-		errs: []error{nil, nil},
+		errs: []error{nil, nil, nil},
 	}
 
 	result, err := Resolve(context.Background(), client, "org-1", mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), strPtr("team-a"), nil)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if client.calls != 2 {
-		t.Fatalf("calls = %d, want 2 (the single dedup read, no merge; and the read of its retraction days)", client.calls)
+	if client.calls != 3 {
+		t.Fatalf("calls = %d, want 3 (the single dedup read, no merge; the read of its retraction days; the read of its author days)", client.calls)
 	}
 	if !strings.Contains(client.statements[0], "team_cognitive_load_daily") {
 		t.Errorf("expected query against team_cognitive_load_daily, got: %s", client.statements[0])
@@ -149,8 +150,42 @@ func TestResolve_SingleTeamPath_ReadsTeamCognitiveLoadDailyDirectly(t *testing.T
 	if sig.WeekendCommitRatio != nil {
 		t.Errorf("WeekendCommitRatio = %v, want nil (genuinely unmeasured)", *sig.WeekendCommitRatio)
 	}
+	if sig.DeveloperState != model.NewestDayStateMeasured {
+		t.Errorf("DeveloperState = %q, want MEASURED (the rollup row counted an author)", sig.DeveloperState)
+	}
 	if result.TeamID == nil || *result.TeamID != "team-a" {
 		t.Errorf("TeamID = %v, want team-a", result.TeamID)
+	}
+}
+
+// TestResolve_SingleTeamPath_DeveloperStateFollowsTheRolledUpAuthors: a day of commit-timing rows only has no author
+// and no load, so its 0 loads are not a measurement (NO_ROWS); a day with an author and loads of 0 is a measured 0
+// (MEASURED); a day with a load and no counted author (a developer row with an empty email) is MEASURED too.
+func TestResolve_SingleTeamPath_DeveloperStateFollowsTheRolledUpAuthors(t *testing.T) {
+	client := &fakeClient{
+		responses: []*fakeRowScanner{
+			{rows: [][]any{
+				{day("2026-08-20"), 0.0, 0.0, 0.0, 0.5, 0.0},
+				{day("2026-08-21"), 0.0, 0.0, 0.0, 0.25, 0.125},
+				{day("2026-08-22"), 3.0, 1.0, 0.0, nil, nil},
+			}},
+			{rows: nil},
+			{rows: [][]any{{day("2026-08-20")}}},
+		},
+		errs: []error{nil, nil, nil},
+	}
+	result, err := Resolve(context.Background(), client, "org-1", mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), strPtr("team-a"), nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	want := []model.NewestDayState{model.NewestDayStateMeasured, model.NewestDayStateNoRows, model.NewestDayStateMeasured}
+	if len(result.Signals) != len(want) {
+		t.Fatalf("signals = %+v, want %d", result.Signals, len(want))
+	}
+	for i, state := range want {
+		if result.Signals[i].DeveloperState != state {
+			t.Errorf("signal %d DeveloperState = %q, want %s", i, result.Signals[i].DeveloperState, state)
+		}
 	}
 }
 
@@ -167,8 +202,9 @@ func TestResolve_SingleTeamPath_NullRatiosStayNull(t *testing.T) {
 			// The day is a measured day with no load: the read of the
 			// retraction days does not name it, so it stays.
 			{rows: nil},
+			{rows: nil},
 		},
-		errs: []error{nil, nil},
+		errs: []error{nil, nil, nil},
 	}
 	result, err := Resolve(context.Background(), client, "org-1", mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), strPtr("team-a"), nil)
 	if err != nil {

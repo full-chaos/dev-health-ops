@@ -32,7 +32,7 @@ func TestMergeAndSubtractIntervalsMatchCoverageContract(t *testing.T) {
 // CHAOS-4393: mergeIntervals unions SourceIDs across ANY time-adjacent
 // interval, so fusing two different sources' gaps with it blends a real
 // gap on one source onto a fully-covered sibling source. Mirrors the exact
-// live-prod repro (org c6a38355..., dataset "blame"): source A has an
+// reported repro (org f0f0f0f0..., dataset "blame"): source A has an
 // open gap (unit still RUNNING), source B is 100% covered for the same
 // window with zero gap of its own.
 func TestMergeIntervalsBySourceScopeKeepsSourceScopedGapsSeparate(t *testing.T) {
@@ -89,8 +89,8 @@ func TestBuildDatasetCoverageKeepsPerSourceGapsSeparate(t *testing.T) {
 		// source-b's own gap is unrelated (a different, independently-closed
 		// slice) but time-overlaps source-a's still-open gap. Plain
 		// mergeIntervals fuses the two into one interval naming BOTH
-		// sources -- the exact live-prod shape (org c6a38355..., dataset
-		// "blame": source 0b7b5241 has a real open gap, source 8e7c37bc is
+		// sources -- the exact reported shape (org f0f0f0f0..., dataset
+		// "blame": source aaaaaaaa has a real open gap, source bbbbbbbb is
 		// 100% covered elsewhere but its own gap interval still overlaps).
 		{
 			SourceID:   "source-b",

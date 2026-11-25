@@ -79,21 +79,12 @@ func (served githubTestsPrefixGuardServed) clean() bool {
 	return len(served.skipped) == 0 && served.incomplete == 0 && served.reportsDone == true
 }
 
-func githubTestsPrefixGuardRun(t *testing.T, artifacts []githubTestsPrefixGuardArtifact, prefixes []string) githubTestsPrefixGuardServed {
-	t.Helper()
-	served, _ := githubTestsPrefixGuardRunWith(t, artifacts, prefixes, nil)
-	return served
-}
-
-// githubTestsPrefixGuardRunWith runs the shape with the code list set to prefixes and the sync configuration's own list
-// (the integration config the unit carries) set to configPrefixes; nil leaves the key out.
+// githubTestsPrefixGuardRunWith runs the shape with the sync configuration's own list (the integration config the unit
+// carries) set to configPrefixes; nil leaves the key out.
 func githubTestsPrefixGuardRunWith(
-	t *testing.T, artifacts []githubTestsPrefixGuardArtifact, prefixes, configPrefixes []string,
+	t *testing.T, artifacts []githubTestsPrefixGuardArtifact, configPrefixes []string,
 ) (githubTestsPrefixGuardServed, githubTestsWalk) {
 	t.Helper()
-	saved := githubTestsNonReportArtifactPrefixes
-	githubTestsNonReportArtifactPrefixes = prefixes
-	defer func() { githubTestsNonReportArtifactPrefixes = saved }()
 	claim := nativeTestClaim("github", "cicd")
 	if configPrefixes != nil {
 		items := make([]any, len(configPrefixes))
@@ -131,62 +122,57 @@ func githubTestsPrefixGuardSuite(name string, cases ...string) string {
 	return body.String()
 }
 
-// The content rules do not replace githubTestsNonReportArtifactPrefixes. Each shape runs the chunked route with the list as
-// it is and with it emptied: an expired image artifact and JUnit parts beside their merged report serve a false incompleteness
-// or moved case keys without the list; a live image tarball and a timings table serve the same rows and cost one download each.
-func TestGitHubTestsArtifactNamePrefixesAreLoadBearing(t *testing.T) {
+// githubTestsOwnCIPrefixes are this repository's own CI artifact names (go.yml), the one list the configured integration carries.
+var githubTestsOwnCIPrefixes = []string{"go-images-", "go-test-timings-", "go-junit-part-"}
+
+// The 5 shapes of CHAOS-14559. With the integration's list alone (the built-in list is gone) each shape serves what the
+// built-in list served: the answer of the former built-in list at 6789819776167b684f1e585a3d8279ecc7666605 (excluded by name, 4 clean case rows);
+// an integration with no list, or an invalid one, excludes no prefix.
+func TestGitHubTestsConfigListAloneServesTheFiveShapes(t *testing.T) {
 	suiteA := githubTestsPrefixGuardSuite("pkg/a", "TestA1", "TestA2")
 	suiteB := githubTestsPrefixGuardSuite("pkg/b", "TestB1", "TestB2")
 	merged := githubTestsPrefixGuardArtifact{name: "go-test-junit-integration", members: map[string]string{"junit.xml": "<testsuites>" + suiteA + suiteB + "</testsuites>"}}
-	type shape struct {
-		name       string
-		artifacts  []githubTestsPrefixGuardArtifact
-		loadedRows bool
-	}
-	shapes := []shape{
-		{name: "image tarball", artifacts: []githubTestsPrefixGuardArtifact{{name: "go-images-amd64-9-1", members: map[string]string{"images.tar": "not-a-report"}}, merged}},
-		{name: "expired image tarball", loadedRows: true, artifacts: []githubTestsPrefixGuardArtifact{{name: "go-images-amd64-9-1", expired: true}, merged}},
-		{name: "timings table", artifacts: []githubTestsPrefixGuardArtifact{{name: "go-test-timings-integration-packages-1", members: map[string]string{"timings.tsv.gz": "pkg\t1.0"}}, merged}},
-		{name: "JUnit parts beside their merged report", loadedRows: true, artifacts: []githubTestsPrefixGuardArtifact{
+	for _, shape := range []struct {
+		name          string
+		artifacts     []githubTestsPrefixGuardArtifact
+		wantExcluded  int
+		wantDownloads int
+		loadedRows    bool
+	}{
+		{name: "image tarball", wantExcluded: 1, wantDownloads: 1, artifacts: []githubTestsPrefixGuardArtifact{{name: "go-images-amd64-9-1", members: map[string]string{"images.tar": "not-a-report"}}, merged}},
+		{name: "expired image tarball", loadedRows: true, wantExcluded: 1, wantDownloads: 1, artifacts: []githubTestsPrefixGuardArtifact{{name: "go-images-amd64-9-1", expired: true}, merged}},
+		{name: "timings table", wantExcluded: 1, wantDownloads: 1, artifacts: []githubTestsPrefixGuardArtifact{{name: "go-test-timings-integration-packages-1", members: map[string]string{"timings.tsv.gz": "pkg\t1.0"}}, merged}},
+		{name: "JUnit parts beside their merged report", loadedRows: true, wantExcluded: 2, wantDownloads: 1, artifacts: []githubTestsPrefixGuardArtifact{
 			{name: "go-junit-part-packages-1", members: map[string]string{"a.xml": "<testsuites>" + suiteA + "</testsuites>"}},
 			{name: "go-junit-part-packages-2", members: map[string]string{"b.xml": "<testsuites>" + suiteB + "</testsuites>"}},
 			merged,
 		}},
-		{name: "expired JUnit parts beside their merged report", loadedRows: true, artifacts: []githubTestsPrefixGuardArtifact{
+		{name: "expired JUnit parts beside their merged report", loadedRows: true, wantExcluded: 2, wantDownloads: 1, artifacts: []githubTestsPrefixGuardArtifact{
 			{name: "go-junit-part-packages-1", expired: true}, {name: "go-junit-part-packages-2", expired: true}, merged,
 		}},
-	}
-	for _, shape := range shapes {
-		withList := githubTestsPrefixGuardRun(t, shape.artifacts, githubTestsNonReportArtifactPrefixes)
-		emptied := githubTestsPrefixGuardRun(t, shape.artifacts, nil)
-		if withList.excludedPrefix == 0 || !withList.clean() || len(withList.caseKeys) != 4 {
-			t.Errorf("the prefix list is load-bearing: %s: with the list the run must exclude it by name and serve 4 clean case rows, got %+v",
-				shape.name, withList)
-			continue
+	} {
+		byConfig, _ := githubTestsPrefixGuardRunWith(t, shape.artifacts, githubTestsOwnCIPrefixes)
+		if byConfig.excludedPrefix != shape.wantExcluded || byConfig.downloads != shape.wantDownloads || !byConfig.clean() || len(byConfig.caseKeys) != 4 {
+			t.Errorf("%s: the integration's list alone must exclude %d by name, download %d and serve 4 clean case rows, got %+v",
+				shape.name, shape.wantExcluded, shape.wantDownloads, byConfig)
 		}
-		// The configuration's own list alone, with the code list emptied, carries the same load (CHAOS-14559).
-		byConfig, _ := githubTestsPrefixGuardRunWith(t, shape.artifacts, nil, []string{"go-images-", "go-test-timings-", "go-junit-part-"})
-		if byConfig.excludedPrefix != withList.excludedPrefix || !byConfig.clean() || !byConfig.sameRows(withList) || byConfig.downloads != withList.downloads {
-			t.Errorf("the prefix list is load-bearing: %s: the sync configuration's list must serve what the code list serves, with=%+v config=%+v",
-				shape.name, withList, byConfig)
-		}
-		if shape.loadedRows {
-			if emptied.clean() && emptied.sameRows(withList) {
-				t.Errorf("the prefix list is load-bearing: %s: with the list emptied the run should show a false incompleteness or moved case keys, got the same rows %+v",
-					shape.name, emptied)
+		for _, noList := range [][]string{nil, {""}} {
+			bare, _ := githubTestsPrefixGuardRunWith(t, shape.artifacts, noList)
+			if bare.excludedPrefix != 0 {
+				t.Errorf("%s: an integration with list %q excluded %d by prefix, want 0", shape.name, noList, bare.excludedPrefix)
 			}
-			continue
-		}
-		if !emptied.sameRows(withList) || emptied.downloads != withList.downloads+1 {
-			t.Errorf("the prefix list is load-bearing: %s: with the list emptied the content rule should serve the same rows at one more download, with=%+v emptied=%+v",
-				shape.name, withList, emptied)
+			if shape.loadedRows && bare.clean() && bare.sameRows(byConfig) {
+				t.Errorf("%s: without a list the run should show a false incompleteness or moved case keys, got the same rows %+v", shape.name, bare)
+			}
+			if !shape.loadedRows && (!bare.sameRows(byConfig) || bare.downloads != byConfig.downloads+shape.wantExcluded) {
+				t.Errorf("%s: without a list the content rule should serve the same rows at %d more download, list=%+v bare=%+v", shape.name, shape.wantExcluded, byConfig, bare)
+			}
 		}
 	}
 }
 
-// The seam joins the code list with the sync configuration's list: each excludes its own names, and a configuration never
-// takes a code name away.
-func TestGitHubTestsArtifactExcludeJoinsTheCodeListWithTheConfigList(t *testing.T) {
+// Each list excludes its own names: no list excludes none, a configured list excludes its names and matches without case.
+func TestGitHubTestsArtifactExcludeUsesOnlyTheConfigList(t *testing.T) {
 	suite := githubTestsPrefixGuardSuite("pkg/a", "TestA1", "TestA2")
 	artifacts := []githubTestsPrefixGuardArtifact{
 		{name: "go-images-amd64-9-1", members: map[string]string{"images.tar": "not-a-report"}},
@@ -200,15 +186,45 @@ func TestGitHubTestsArtifactExcludeJoinsTheCodeListWithTheConfigList(t *testing.
 		wantDownloads  int
 		wantCases      int
 	}{
-		{name: "code list only", wantExcluded: 1, wantDownloads: 2, wantCases: 3},
-		{name: "code list and a configured prefix", configPrefixes: []string{"ci-extra-"}, wantExcluded: 2, wantDownloads: 1, wantCases: 2},
-		{name: "a configured list without the code names keeps them", configPrefixes: []string{"CI-EXTRA-"}, wantExcluded: 2, wantDownloads: 1, wantCases: 2},
-		{name: "an invalid configured value excludes nothing more", configPrefixes: []string{""}, wantExcluded: 1, wantDownloads: 2, wantCases: 3},
+		{name: "no list excludes no prefix", wantExcluded: 0, wantDownloads: 3, wantCases: 3},
+		{name: "a configured prefix", configPrefixes: []string{"ci-extra-"}, wantExcluded: 1, wantDownloads: 2, wantCases: 2},
+		{name: "a configured prefix matches without case", configPrefixes: []string{"CI-EXTRA-"}, wantExcluded: 1, wantDownloads: 2, wantCases: 2},
+		{name: "two configured prefixes", configPrefixes: []string{"ci-extra-", "go-images-"}, wantExcluded: 2, wantDownloads: 1, wantCases: 2},
+		{name: "an invalid configured value excludes nothing", configPrefixes: []string{""}, wantExcluded: 0, wantDownloads: 3, wantCases: 3},
 	} {
-		served, _ := githubTestsPrefixGuardRunWith(t, artifacts, githubTestsNonReportArtifactPrefixes, cell.configPrefixes)
+		served, _ := githubTestsPrefixGuardRunWith(t, artifacts, cell.configPrefixes)
 		if served.excludedPrefix != cell.wantExcluded || served.downloads != cell.wantDownloads || len(served.caseKeys) != cell.wantCases {
-			t.Errorf("%s: excluded=%d downloads=%d cases=%d, want %d, %d, %d (the code list and the configuration's list both apply)",
+			t.Errorf("%s: excluded=%d downloads=%d cases=%d, want %d, %d, %d",
 				cell.name, served.excludedPrefix, served.downloads, len(served.caseKeys), cell.wantExcluded, cell.wantDownloads, cell.wantCases)
+		}
+	}
+}
+
+// A list that holds only SOME of this repository's own CI names excludes only those: the other names are selected, read, and
+// take their slots; no name is excluded because it was once in a built-in list.
+func TestGitHubTestsConfigListWithSomeOfTheOwnNamesExcludesOnlyThose(t *testing.T) {
+	suite := githubTestsPrefixGuardSuite("pkg/a", "TestA1", "TestA2")
+	artifacts := []githubTestsPrefixGuardArtifact{
+		{name: "go-images-amd64-9-1", members: map[string]string{"images.tar": "not-a-report"}},
+		{name: "go-test-timings-integration-packages-1", members: map[string]string{"timings.tsv.gz": "pkg\t1.0"}},
+		{name: "go-junit-part-packages-1", members: map[string]string{"a.xml": "<testsuites>" + suite + "</testsuites>"}},
+		{name: "test-results", members: map[string]string{"junit.xml": "<testsuites>" + suite + "</testsuites>"}},
+	}
+	for _, cell := range []struct {
+		name           string
+		configPrefixes []string
+		wantExcluded   int
+		wantDownloads  int
+	}{
+		{name: "only go-images-", configPrefixes: []string{"go-images-"}, wantExcluded: 1, wantDownloads: 3},
+		{name: "only go-test-timings-", configPrefixes: []string{"go-test-timings-"}, wantExcluded: 1, wantDownloads: 3},
+		{name: "go-images- and go-junit-part-", configPrefixes: []string{"go-images-", "go-junit-part-"}, wantExcluded: 2, wantDownloads: 2},
+		{name: "all three", configPrefixes: githubTestsOwnCIPrefixes, wantExcluded: 3, wantDownloads: 1},
+	} {
+		served, _ := githubTestsPrefixGuardRunWith(t, artifacts, cell.configPrefixes)
+		if served.excludedPrefix != cell.wantExcluded || served.downloads != cell.wantDownloads {
+			t.Errorf("%s: excluded=%d downloads=%d, want %d and %d (only the listed names are excluded; the others are selected)",
+				cell.name, served.excludedPrefix, served.downloads, cell.wantExcluded, cell.wantDownloads)
 		}
 	}
 }
@@ -221,7 +237,7 @@ func TestGitHubTestsConfiguredPrefixNeverLabelsTheExclusionCounter(t *testing.T)
 		{name: configured + "1", members: map[string]string{"x.xml": "<testsuites>" + githubTestsPrefixGuardSuite("pkg/x", "TestX") + "</testsuites>"}},
 		{name: "test-results", members: map[string]string{"junit.xml": "<testsuites>" + githubTestsPrefixGuardSuite("pkg/a", "TestA") + "</testsuites>"}},
 	}
-	served, walk := githubTestsPrefixGuardRunWith(t, artifacts, githubTestsNonReportArtifactPrefixes, []string{configured})
+	served, walk := githubTestsPrefixGuardRunWith(t, artifacts, []string{configured})
 	if served.excludedPrefix != 1 || walk.final.Result["excluded_non_report_prefix"] != 1 {
 		t.Fatalf("excluded cursor=%d result=%v, want 1 and 1", served.excludedPrefix, walk.final.Result["excluded_non_report_prefix"])
 	}

@@ -218,6 +218,7 @@ func cutDedupRuns(updated time.Time) []listingRun {
 
 func cutDedupClaim(backfill bool) Claim {
 	claim := listingClaim(cutDedupSince, cutDedupBefore)
+	claim.IntegrationConfig = map[string]any{"ci_artifact_exclude_prefixes": []any{"go-images-", "go-test-timings-", "go-junit-part-"}}
 	if backfill {
 		// The last chunk of its backfill (no next window): it reads every run updated after its own since.
 		claim.Mode, claim.BackfillNext = "backfill", &BackfillNextWindow{}

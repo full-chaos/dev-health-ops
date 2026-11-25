@@ -6,7 +6,7 @@ import (
 
 // githubTestsConfigExcludePrefixes is the sync configuration's own artifact name prefixes, from the integration config
 // the unit carries (artifactexclude.Key, written by the admin API and the dho verb). A value the validator refuses
-// excludes nothing and is reported as invalid, so the caller can log that once; the code list still applies.
+// excludes nothing and is reported as invalid, so the caller can log that once. This list is the only source of a prefix exclusion.
 func githubTestsConfigExcludePrefixes(claim Claim) []string {
 	prefixes, _ := githubTestsConfigExcludePrefixesChecked(claim)
 	return prefixes

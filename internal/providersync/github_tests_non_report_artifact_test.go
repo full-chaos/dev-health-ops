@@ -206,10 +206,10 @@ func TestGitHubTestsDockerBuildArtifactExclusionBookkeeping(t *testing.T) {
 // parse cleanly and contribute zero report rows -- unlike ".dockerbuild",
 // excluding them is a bandwidth optimization, not a correctness fix, and
 // "digests-" is a plausible prefix a real report artifact could organically
-// collide with on some other repository. githubTestsNonReportArtifactPrefixes
-// holds only this deployment's named exception (go-images-, go-test-timings-,
-// go-junit-part-; see its doc); this test pins that "digests-" is not in it, so a
-// new global prefix default fails loudly and waits for a per-config exclude.
+// collide with on some other repository. No prefix applies without an
+// integration list (the built-in list is gone); this test pins that "digests-"
+// is not excluded by default, so a new global prefix default fails loudly and
+// waits for a per-config exclude.
 func TestGitHubTestsDigestArtifactsAreNotExcludedByDefault(t *testing.T) {
 	if selected, reason := githubTestsArtifactSelectionSeam("digests-api-3", nil); !selected {
 		t.Fatalf(
@@ -225,7 +225,7 @@ func TestGitHubTestsDigestArtifactsAreNotExcludedByDefault(t *testing.T) {
 // candidates; go-test-* artifacts carry the JUnit XML and must stay selected.
 func TestGitHubTestsGoImagesArtifactsExcludedGoTestSelected(t *testing.T) {
 	for _, name := range []string{"go-images-api", "go-images-worker-3", "GO-IMAGES-x"} {
-		if selected, _ := githubTestsArtifactSelectionSeam(name, nil); selected {
+		if selected, _ := githubTestsArtifactSelectionSeam(name, githubTestsOwnCIPrefixes); selected {
 			t.Fatalf("%s was selected, want excluded: image tarballs are not report candidates", name)
 		}
 	}
@@ -361,7 +361,7 @@ func TestGitHubTestsShardTimingJUnitPartAndSBOMArtifactsExcluded(t *testing.T) {
 		"go-junit-part-packages-3", "go-junit-part-daily-1", "go-junit-part-race-2-of-16", "GO-JUNIT-PART-test-1-of-13",
 		"go-auth-service-sbom.spdx.json", "go-migrate-sbom.spdx.json", "X.SPDX.JSON",
 	} {
-		if selected, _ := githubTestsArtifactSelectionSeam(name, nil); selected {
+		if selected, _ := githubTestsArtifactSelectionSeam(name, githubTestsOwnCIPrefixes); selected {
 			t.Fatalf("%s was selected, want excluded: not a test report candidate", name)
 		}
 	}

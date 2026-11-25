@@ -151,7 +151,7 @@ func TestGitHubTestsExpiredArtifactClassesBothRoutes(t *testing.T) {
 				doer := &githubTestsExpiredClassDoer{t: t, runs: cell.runs, artifacts: cell.artifacts, archive: githubTestsHealthyArchive(t)}
 				client := githubTestsClient(t, fakehttp.Client(doer))
 				client.Metrics = providerfoundation.NewMetrics()
-				claim := nativeTestClaim("github", dataset)
+				claim := githubTestsExpiredClaim(dataset)
 				walk := walkGitHubTestsChunks(t, GitHubTestsRouteHandler{}, claim, client, 4)
 				githubTestsCheckExpiredCell(t, cell, claim, walk.final, client.Metrics)
 			})
@@ -159,7 +159,7 @@ func TestGitHubTestsExpiredArtifactClassesBothRoutes(t *testing.T) {
 				doer := &githubTestsExpiredClassDoer{t: t, runs: cell.runs, artifacts: cell.artifacts, archive: githubTestsHealthyArchive(t)}
 				client := githubTestsClient(t, fakehttp.Client(doer))
 				client.Metrics = providerfoundation.NewMetrics()
-				claim := nativeTestClaim("github", dataset)
+				claim := githubTestsExpiredClaim(dataset)
 				batch, err := (GitHubTestsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt)
 				if err != nil {
 					t.Fatalf("Collect: %v", err)
@@ -204,7 +204,7 @@ func TestGitHubTestsExpiredRevisitWithFullSampleOvercounts(t *testing.T) {
 			doer := &githubTestsExpiredClassDoer{t: t, runs: githubTestsDuplicateRunFixture(), artifacts: githubTestsExpiredArtifactsJSON(entries...), archive: githubTestsHealthyArchive(t)}
 			client := githubTestsClient(t, fakehttp.Client(doer))
 			client.Metrics = providerfoundation.NewMetrics()
-			claim := nativeTestClaim("github", "cicd")
+			claim := githubTestsExpiredClaim("cicd")
 			if route == "chunked" {
 				check(t, claim, walkGitHubTestsChunks(t, GitHubTestsRouteHandler{}, claim, client, 4).final,
 					// the first visit counts every artifact; the revisit dedups those with a marker and recounts the one whose marker was dropped
@@ -219,4 +219,11 @@ func TestGitHubTestsExpiredRevisitWithFullSampleOvercounts(t *testing.T) {
 			check(t, claim, batch, distinct)
 		})
 	}
+}
+
+// githubTestsExpiredClaim is a unit of the integration that carries this repository's own CI artifact names as its exclude list.
+func githubTestsExpiredClaim(dataset string) Claim {
+	claim := nativeTestClaim("github", dataset)
+	claim.IntegrationConfig = map[string]any{"ci_artifact_exclude_prefixes": []any{"go-images-", "go-test-timings-", "go-junit-part-"}}
+	return claim
 }

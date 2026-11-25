@@ -19,13 +19,20 @@ import (
 
 // The nightly fan-out of 01:00 UTC computes its own calendar day, so it sees
 // only the first hour of that day. These cases trace which later run brings the
-// rest of the day into its rows, and which full-organization run of the day is
-// the one a marker sync would read (run_marker.go markerSync: the newest
-// full_org run of the day by created_at).
+// rest of the day into its rows, and what the day's run marker says after each
+// step. Each step ends its runs the way a finalize commit does and then runs
+// markerSync (BackfillRunMarkers, the function CompleteFinalize calls), with the
+// real ClickHouse marker store wired, so dispatch claims append 'reopened' too.
 func TestDailyDayDRecomputedAfterFirstHour(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	rig := newTouchedRig(t, ctx)
+	markers, err := daily.NewClickHouseRunMarkerStore(rig.conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.store.SetRunMarkerWriter(markers)
+	rig.store.SetRunMarkerReader(markers)
 	day := time.Date(2026, 3, 10, 0, 0, 0, 0, time.UTC)
 	next := day.AddDate(0, 0, 1)
 	dayKey, nextKey := day.Format("2006-01-02"), next.Format("2006-01-02")
@@ -34,52 +41,75 @@ func TestDailyDayDRecomputedAfterFirstHour(t *testing.T) {
 		orgID := uuid.NewString()
 		repo := uuid.New()
 		insertTouchedRepo(t, ctx, rig.conn, orgID, repo, "acme/api", "github")
+		dev := func(n uint64) map[string]uint64 { return map[string]uint64{"dev-a@example.com": n} }
 
+		// Step a: a commit of 00:30, then the fan-out due 01:00 of the day.
 		insertDayCommit(t, ctx, rig.conn, orgID, repo, "c1", day.Add(30*time.Minute))
 		first := rig.scheduledFanoutRun(t, ctx, orgID, day.Add(time.Hour))
 		if got := rig.runTargetDay(t, ctx, first.ID); got != dayKey {
-			t.Fatalf("the fan-out due %s 01:00 computes %s, want %s", dayKey, got, dayKey)
+			t.Fatalf("step a: the fan-out due %s 01:00 computes %s, want %s", dayKey, got, dayKey)
 		}
-		assertDayCommits(t, ctx, rig.conn, orgID, day, map[string]uint64{"dev-a@example.com": 1}, "after the fan-out of the day")
-		if got := rig.newestFullOrgGeneration(t, ctx, orgID, day); got != first.Generation {
-			t.Fatalf("newest full-org run of the day = %q, want the fan-out %q", got, first.Generation)
+		markerA := rig.endStep(t, ctx, orgID, day, "a")
+		assertDayCommits(t, ctx, rig.conn, orgID, day, dev(1), "after step a (the fan-out of the day)")
+		if markerA.state != "succeeded" || markerA.generation != first.Generation {
+			t.Fatalf("step a: marker of the day = %+v, want succeeded by the fan-out %q", markerA, first.Generation)
 		}
 
+		// Step b: a commit of 14:00, then the fan-out due 01:00 of the next day.
 		insertDayCommit(t, ctx, rig.conn, orgID, repo, "c2", day.Add(14*time.Hour))
 		second := rig.scheduledFanoutRun(t, ctx, orgID, next.Add(time.Hour))
 		if got := rig.runTargetDay(t, ctx, second.ID); got != nextKey {
-			t.Fatalf("the fan-out due %s 01:00 computes %s, want %s", nextKey, got, nextKey)
+			t.Fatalf("step b: the fan-out due %s 01:00 computes %s, want %s", nextKey, got, nextKey)
 		}
-		assertDayCommits(t, ctx, rig.conn, orgID, day, map[string]uint64{"dev-a@example.com": 1},
-			"after the next day's fan-out: it does not recompute the day before")
+		markerB := rig.endStep(t, ctx, orgID, day, "b")
+		assertDayCommits(t, ctx, rig.conn, orgID, day, dev(1), "after step b (the next day's fan-out does not recompute the day)")
+		if markerB != markerA {
+			t.Fatalf("step b: marker of the day moved: %+v, before %+v", markerB, markerA)
+		}
 
-		// A sync whose unit window ends inside the day: its post-sync run of
-		// every repository recomputes the day.
+		// Step c: a sync whose unit window ends inside the day. Its post-sync
+		// run of every repository recomputes the day.
 		inDay := rig.seedSyncWindow(t, ctx, orgID, "commits", day.Add(13*time.Hour), day.Add(15*time.Hour))
 		runs := rig.fanoutAndRun(t, ctx, rig.service(t, rig.touched, nil), orgID, inDay)
 		if got := touchedRunDays(runs); !reflect.DeepEqual(got, []string{dayKey}) || !runs[dayKey].fullOrg {
-			t.Fatalf("post-sync runs of the in-day sync = %+v, want one full-org run of %s", runs, dayKey)
+			t.Fatalf("step c: post-sync runs = %+v, want one full-org run of %s", runs, dayKey)
 		}
-		assertDayCommits(t, ctx, rig.conn, orgID, day, map[string]uint64{"dev-a@example.com": 2}, "after the in-day sync")
-		if got := rig.newestFullOrgGeneration(t, ctx, orgID, day); got != "post-sync:"+inDay.SyncRunID() {
-			t.Fatalf("newest full-org run of the day = %q, want the post-sync run of the in-day sync", got)
+		markerC := rig.endStep(t, ctx, orgID, day, "c")
+		assertDayCommits(t, ctx, rig.conn, orgID, day, dev(2), "after step c (the in-day sync)")
+		if markerC.state != "succeeded" || markerC.generation != "post-sync:"+inDay.SyncRunID() || markerC.version <= markerA.version {
+			t.Fatalf("step c: marker of the day = %+v, want succeeded by the in-day sync's run, newer than %+v", markerC, markerA)
 		}
 
-		// A commit of 23:30 synced at 00:30 the next day by a unit with no
-		// end: the post-sync window run computes the next day, and the record
-		// of touched days starts a run of the listed repository for the day.
+		// Step d: a commit of 23:30 synced at 00:30 the next day by a unit with
+		// no end: the window run is the next day; the day gets a run of its
+		// touched repository.
 		insertDayCommit(t, ctx, rig.conn, orgID, repo, "c3", day.Add(23*time.Hour+30*time.Minute))
 		overnight := rig.seedOpenEndedSync(t, ctx, orgID, "commits", next, next.Add(30*time.Minute))
 		runs = rig.fanoutAndRun(t, ctx, rig.service(t, rig.touched, nil), orgID, overnight)
 		if got := touchedRunDays(runs); !reflect.DeepEqual(got, []string{dayKey, nextKey}) {
-			t.Fatalf("post-sync runs of the overnight sync = %v, want %s (touched) and %s (window)", got, dayKey, nextKey)
+			t.Fatalf("step d: post-sync runs = %v, want %s (touched) and %s (window)", got, dayKey, nextKey)
 		}
 		if runs[dayKey].fullOrg || runs[dayKey].repos != repo.String() || !runs[nextKey].fullOrg {
-			t.Fatalf("overnight runs = %+v: the touched day is a run of its repository, the window day a full-org run", runs)
+			t.Fatalf("step d: runs = %+v, want a run of the touched repository for the day and a full-org run of the next day", runs)
 		}
-		assertDayCommits(t, ctx, rig.conn, orgID, day, map[string]uint64{"dev-a@example.com": 3}, "after the overnight sync")
-		if got := rig.newestFullOrgGeneration(t, ctx, orgID, day); got != "post-sync:"+inDay.SyncRunID() {
-			t.Fatalf("newest full-org run of the day = %q, want still the in-day sync's run: a run of listed repositories is not full-org", got)
+		markerD := rig.endStep(t, ctx, orgID, day, "d")
+		assertDayCommits(t, ctx, rig.conn, orgID, day, dev(3), "after step d (the overnight sync)")
+
+		// Step e: a commit of 22:00 synced at 03:00 the next day, after the
+		// next day's fan-out; no later full-org run of the day follows.
+		insertDayCommit(t, ctx, rig.conn, orgID, repo, "c4", day.Add(22*time.Hour))
+		late := rig.seedOpenEndedSync(t, ctx, orgID, "commits", next.Add(2*time.Hour), next.Add(3*time.Hour))
+		runs = rig.fanoutAndRun(t, ctx, rig.service(t, rig.touched, nil), orgID, late)
+		if got := touchedRunDays(runs); !reflect.DeepEqual(got, []string{dayKey, nextKey}) || runs[dayKey].fullOrg {
+			t.Fatalf("step e: post-sync runs = %+v, want a run of the touched repository for %s and the window run of %s", runs, dayKey, nextKey)
+		}
+		markerE := rig.endStep(t, ctx, orgID, day, "e")
+		assertDayCommits(t, ctx, rig.conn, orgID, day, dev(4), "after step e (the sync after the next day's fan-out)")
+
+		// G1: the runs of listed repositories in steps d and e recomputed the
+		// day; the marker is the one step c wrote, field for field.
+		if markerD != markerC || markerE != markerC {
+			t.Fatalf("G1: marker of the day after d %+v / e %+v, after c %+v", markerD, markerE, markerC)
 		}
 	})
 
@@ -88,14 +118,56 @@ func TestDailyDayDRecomputedAfterFirstHour(t *testing.T) {
 		repo := uuid.New()
 		insertTouchedRepo(t, ctx, rig.conn, orgID, repo, "acme/web", "github")
 		rig.scheduledFanoutRun(t, ctx, orgID, day.Add(time.Hour))
+		rig.endStep(t, ctx, orgID, day, "g2-a")
 		assertDayReviews(t, ctx, rig.conn, orgID, day, map[string]uint64{}, "after the fan-out of the day")
 
 		insertOpenPullRequest(t, ctx, rig.conn, orgID, repo, 7, day.AddDate(0, 0, -3).Add(10*time.Hour))
 		insertReview(t, ctx, rig.conn, orgID, repo, 7, "r1", "dev-a@example.com", day.Add(16*time.Hour))
 		overnight := rig.seedOpenEndedSync(t, ctx, orgID, "commits", next, next.Add(30*time.Minute))
-		rig.fanoutAndRun(t, ctx, rig.service(t, rig.touched, nil), orgID, overnight)
+		runs := rig.fanoutAndRun(t, ctx, rig.service(t, rig.touched, nil), orgID, overnight)
+		t.Logf("g2: post-sync runs by day = %v", touchedRunDays(runs))
+		rig.endStep(t, ctx, orgID, day, "g2-b")
 		assertDayReviews(t, ctx, rig.conn, orgID, day, map[string]uint64{"dev-a@example.com": 1}, "after the overnight sync")
 	})
+}
+
+// dayMarker is the winning daily_metrics_run_marker row of one org-day under
+// the documented reader rule (argMax by (version, state = 'reopened')).
+type dayMarker struct {
+	state       string
+	generation  string
+	finalizedAt time.Time
+	version     uint64
+	rows        uint64
+}
+
+// endStep ends every open daily run of the organization as a finalize commit
+// does, runs markerSync for the day and the next day, logs the day's marker and
+// returns it.
+func (rig *touchedRig) endStep(t *testing.T, ctx context.Context, orgID string, day time.Time, step string) dayMarker {
+	t.Helper()
+	if _, err := rig.pool.Exec(ctx, `
+UPDATE public.daily_metrics_runs
+SET status = 'succeeded', finalization_status = 'succeeded', finalized_at = clock_timestamp(), updated_at = clock_timestamp()
+WHERE org_id = $1::uuid AND status IN ('pending', 'running')`, orgID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rig.store.BackfillRunMarkers(ctx, orgID, day, day.AddDate(0, 0, 1), false); err != nil {
+		t.Fatalf("step %s: marker sync: %v", step, err)
+	}
+	var marker dayMarker
+	if err := rig.conn.QueryRow(ctx, `
+SELECT argMax(state, (version, state = 'reopened')), argMax(generation, (version, state = 'reopened')),
+       argMax(finalized_at, (version, state = 'reopened')), max(version), count()
+FROM daily_metrics_run_marker WHERE org_id = ? AND target_day = ?`, orgID, day).
+		Scan(&marker.state, &marker.generation, &marker.finalizedAt, &marker.version, &marker.rows); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("step %s: day %s marker state=%s generation=%s version=%d finalized_at=%s marker_rows=%d after_day_end=%t",
+		step, day.Format("2006-01-02"), marker.state, marker.generation, marker.version,
+		marker.finalizedAt.UTC().Format(time.RFC3339Nano), marker.rows, !marker.finalizedAt.Before(day.AddDate(0, 0, 1)))
+	marker.rows = 0
+	return marker
 }
 
 func (rig *touchedRig) scheduledFanoutRun(t *testing.T, ctx context.Context, orgID string, due time.Time) daily.Run {
@@ -139,22 +211,6 @@ func (rig *touchedRig) runTargetDay(t *testing.T, ctx context.Context, runID str
 		t.Fatal(err)
 	}
 	return day
-}
-
-// newestFullOrgGeneration is the run markerSync reads for the day
-// (run_marker.go, the SELECT of the latest full_org run by created_at).
-func (rig *touchedRig) newestFullOrgGeneration(t *testing.T, ctx context.Context, orgID string, day time.Time) string {
-	t.Helper()
-	var generation string
-	if err := rig.pool.QueryRow(ctx, `
-SELECT run.generation
-FROM public.daily_metrics_runs AS run
-WHERE run.org_id = $1::uuid AND run.target_day = $2::date AND run.full_org
-ORDER BY run.created_at DESC, run.id
-LIMIT 1`, orgID, day.Format("2006-01-02")).Scan(&generation); err != nil {
-		t.Fatal(err)
-	}
-	return generation
 }
 
 func insertDayCommit(t *testing.T, ctx context.Context, conn driver.Conn, orgID string, repo uuid.UUID, hash string, at time.Time) {

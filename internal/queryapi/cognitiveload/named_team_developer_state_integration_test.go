@@ -15,7 +15,9 @@ import (
 // CHAOS-14628: a named team with no repository reads team_cognitive_load_daily (Path 1). The rollup counts the
 // distinct authors whose developer rows fed a day (sample_author_count), so a day whose only inputs were commit-timing
 // rows (no author) has no developer measurement: its 0 loads are not a measured 0 and the state says NO_ROWS. A day
-// whose developer rows sum to 0 is a measured 0 and says MEASURED. The values and ratios are served as stored.
+// whose developer rows sum to 0 is a measured 0 and says MEASURED. The values and ratios are served as stored. A day
+// computed again reads its NEWEST row for the state as for the values: the older row held authors, the newer one (a
+// commit-timing-only recompute) holds none, so the day is NO_ROWS with the newer row's values.
 func TestNamedTeamSignalSaysWhetherDevelopersWereMeasuredThatDay(t *testing.T) {
 	ctx := context.Background()
 	admin, client := crossorg.Start(ctx, t)
@@ -33,7 +35,14 @@ func TestNamedTeamSignalSaysWhetherDevelopersWereMeasuredThatDay(t *testing.T) {
 		{0, [3]float64{4, 2, 1}, 3, 0.5, 0, model.NewestDayStateMeasured},
 		{1, [3]float64{0, 0, 0}, 0, 0.25, 0.125, model.NewestDayStateNoRows},
 		{2, [3]float64{0, 0, 0}, 2, 0.125, 0, model.NewestDayStateMeasured},
+		{3, [3]float64{0, 0, 0}, 0, 0.0625, 0, model.NewestDayStateNoRows},
 	}
+	// The older row of day 3: developer rows fed it (authors, loads), before the day was computed again.
+	crossorg.Exec(ctx, t, admin, `
+        INSERT INTO team_cognitive_load_daily (org_id, team_id, day, pr_interruption_load, context_spread_count, review_request_load,
+            after_hours_commit_ratio, weekend_commit_ratio, contributing_repo_count, sample_author_count, computed_at)
+        VALUES (?, ?, ?, 9, 8, 7, 0.5, 0.5, 1, 4, now() - INTERVAL 1 HOUR)`,
+		f.OrgA, teamID, first.AddDate(0, 0, 3))
 	for _, d := range days {
 		day := first.AddDate(0, 0, d.offset)
 		crossorg.Exec(ctx, t, admin, `
@@ -43,7 +52,7 @@ func TestNamedTeamSignalSaysWhetherDevelopersWereMeasuredThatDay(t *testing.T) {
 			f.OrgA, teamID, day, d.load[0], d.load[1], d.load[2], d.afterHours, d.weekend, d.authors)
 	}
 	team := teamID
-	result, err := Resolve(ctx, client, f.OrgA, graphqldate.New(first), graphqldate.New(first.AddDate(0, 0, 2)), &team, nil)
+	result, err := Resolve(ctx, client, f.OrgA, graphqldate.New(first), graphqldate.New(first.AddDate(0, 0, 3)), &team, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

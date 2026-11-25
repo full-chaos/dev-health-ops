@@ -77,3 +77,51 @@ func TestAppPrivateKeyEchoedWithoutItsFinalLineFeedIsHidden(t *testing.T) {
 		t.Errorf("the private key printed: %q", stderr)
 	}
 }
+
+// The credentials the database lookups resolved join the process logger's
+// boundary right after the lookup, before the store open (the first thing that can
+// log), and stay for every run of a batch: the logger reads the one registrar for
+// the whole verb.
+func TestDatabaseResolvedProviderTokenIsHiddenInEveryLogLineOfABatch(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	executor := InlineExecutor(InlineDeps{
+		OpenStore: func(context.Context, string) (driver.Conn, error) {
+			slog.Warn("store opened", "note", openServer)
+			return fakeStore{}, nil
+		},
+		List: func(context.Context, providersync.InProcessRun, providersync.InProcessListing) ([]providersync.ListedRepository, error) {
+			return githubRepos("acme/api", "acme/web", "acme/docs"), nil
+		},
+		Run: func(_ context.Context, run providersync.InProcessRun) (providersync.CompleteRouteExecutionResult, error) {
+			slog.Error("provider write failed", "repo", run.SourceExternalID, "error", errors.New(openServer))
+			return providersync.CompleteRouteExecutionResult{}, nil
+		},
+		GitHubCredential: func(context.Context, string, string, cli.Env) (*GitHubCredentials, error) {
+			return &GitHubCredentials{Mode: CredentialPAT, Name: "database", Token: openCredential}, nil
+		},
+	})
+	code, _, stderr := runVerb(t, "git", executor, []string{"--provider", "github", "-s", "acme/*"}, dbCredentialEnv())
+	if code != 0 {
+		t.Fatalf("exit %d: %q", code, stderr)
+	}
+	// 1 store-open line + 3 repositories x 2 datasets' lines at least: every one must be there, none with the token.
+	if got := strings.Count(logs.String(), "handshake echoed"); got < 4 {
+		t.Fatalf("the batch logged %d lines the cell can check, want at least 4: %q", got, logs.String())
+	}
+	if strings.Contains(logs.String(), openCredential) {
+		t.Errorf("the provider token was logged: %q", logs.String())
+	}
+}
+
+// Registering a second value never drops the first (no reset between runs).
+func TestCredentialRegistrarKeepsEveryRegisteredValue(t *testing.T) {
+	registrar := &credentialRegistrar{}
+	registrar.add("zz9-first-credential")
+	registrar.add("zz9-second-credential")
+	if got := registrar.redact("a zz9-first-credential b zz9-second-credential c"); got != "a [REDACTED] b [REDACTED] c" {
+		t.Errorf("got %q", got)
+	}
+}

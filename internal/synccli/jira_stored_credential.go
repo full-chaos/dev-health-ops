@@ -11,6 +11,7 @@ import (
 	"atlassian/atlassian"
 
 	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
@@ -148,9 +149,13 @@ func resolveJiraStoredSettings(
 		auth := atlassian.BasicAPITokenAuth{Email: email.Reveal(), Token: token}
 		organizationID, err = atlassianteams.ResolveOrganizationID(ctx, newResolver(gatewayURL, auth), cloudID)
 		if err != nil {
-			return settings{}, fmt.Errorf(
+			failure := fmt.Errorf(
 				"the stored jira integration's config has no atlassian_organization_id, and resolving one failed: %w (set it on the integration, or set %s)",
 				err, OrganizationIDKey)
+			// The gateway's error text can echo the credential the discovery authenticated
+			// with, and runTeams prints this error before its own redaction boundary exists:
+			// redact it here, with the token and the email, and keep the chain.
+			return settings{}, redactCredentialError(failure, token, email.Reveal())
 		}
 	}
 	return settings{
@@ -228,4 +233,12 @@ func jiraIntegrationCredentialID(ctx context.Context, pool *pgxpool.Pool, orgID 
 	}
 	return "", fmt.Errorf("the org has %d active jira integrations with different credentials (%s); this verb cannot choose one",
 		len(ids), strings.Join(shown, ", "))
+}
+
+// redactCredentialError is failure with every value (and its trimmed spelling, and the
+// escaped spellings a Boundary derives) removed from its text. The chain stays: errors.Is
+// and errors.As reach failure's own chain.
+func redactCredentialError(failure error, values ...string) error {
+	boundary := secrets.NewBoundaryWith("", credentialSpellings(values...)...)
+	return redactedError{text: boundary.RedactText(failure.Error()), cause: failure}
 }

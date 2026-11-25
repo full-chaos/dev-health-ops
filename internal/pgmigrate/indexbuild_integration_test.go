@@ -89,11 +89,12 @@ func (d downInstance) archivedHead(t *testing.T) string {
 	return uri
 }
 
-// withoutIndex is a scratch database at the head with the index of revision 0159 (failure streak) or 0161 (open units)
-// dropped: the state before that revision, which the build-index verb exists for. Both revisions are in the baseline.
+// withoutIndex is a scratch database at the head with the index of revision 0159 (failure streak), 0161 (open units) or
+// 0167 (finalize outbox) dropped: the state before that revision, which the build-index verb exists for. 0159 and 0161
+// are in the baseline; 0167 is a chain revision whose index the head holds.
 func (d downInstance) withoutIndex(t *testing.T, revision string) string {
 	t.Helper()
-	index := map[string]string{"0159": pgmigrate.FailureStreakIndexName, "0161": pgmigrate.OpenUnitsIndexName}[revision]
+	index := map[string]string{"0159": pgmigrate.FailureStreakIndexName, "0161": pgmigrate.OpenUnitsIndexName, "0167": pgmigrate.FinalizeOutboxIndexName}[revision]
 	if index == "" {
 		t.Fatalf("no build-index revision %s", revision)
 	}

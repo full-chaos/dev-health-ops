@@ -242,6 +242,11 @@ type redactedLegError struct {
 func (e *redactedLegError) Error() string { return e.text }
 func (e *redactedLegError) Unwrap() error { return e.cause }
 
+// legCredentialValues are the token, the email and the Basic payload spellings the leg authenticates with.
+func legCredentialValues(token, email string) []string {
+	return append([]string{token, email}, secrets.BasicAuthSpellings(email, token)...)
+}
+
 func redactLegError(err error, values ...string) error {
 	if err == nil {
 		return nil
@@ -293,9 +298,7 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 		return atlassianteams.Result{}, nil, providersync.ErrInvalidConfiguration
 	}
 	// From here on any error can carry what the gateway echoes back: strip the credential at the source.
-	defer func() {
-		err = redactLegError(err, append([]string{token, email.Reveal()}, secrets.BasicAuthSpellings(email.Reveal(), token)...)...)
-	}()
+	defer func() { err = redactLegError(err, legCredentialValues(token, email.Reveal())...) }()
 	gatewayURL := tenant.String() + "/gateway/api"
 	auth := atlassian.BasicAPITokenAuth{Email: email.Reveal(), Token: token}
 
@@ -353,7 +356,7 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	if atlassianSelections.Projects {
 		if leg := degradedProjectLinksLeg(rows); leg != nil {
 			// The redaction of the deferred func covers the returned error only: the detail is cleaned here.
-			leg.Detail = secrets.NewBoundaryWith("", token, email.Reveal()).RedactText(leg.Detail)
+			leg.Detail = secrets.NewBoundaryWith("", legCredentialValues(token, email.Reveal())...).RedactText(leg.Detail)
 			slog.Default().WarnContext(ctx, atlassianProjectLinksDegradedAt, "org_id", ref.OrgID, "sync_run_id", ref.SyncRunID,
 				"reason", leg.Reason, "error", leg.Detail, "failed_team_reads", links.FailedTeamReads, "links_seen", links.Seen,
 				"unknown_type", links.SkippedUnknownType, "no_native_id", links.SkippedNoNativeID, "no_project_key", links.SkippedNoProjectKey,

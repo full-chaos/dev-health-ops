@@ -52,3 +52,26 @@ func TestSettingsBoundaryKeepsTheStoredPairAfterAnOverride(t *testing.T) {
 		}
 	}
 }
+
+// The discovery failure also hides the overrides and the payload of the pair the run will send.
+func TestDiscoveryFailureValuesCoverTheOverridesAndTheEffectivePair(t *testing.T) {
+	const storedEmail, storedToken = "stored@example.test", "zz9tok-stored-aaaaaaaa"
+	const overrideEmail, overrideToken = "override@example.test", "zz9tok-override-bbbbbbbb"
+	for name, c := range map[string]struct {
+		overrides                      envOverrides
+		effectiveEmail, effectiveToken string
+	}{
+		"email only": {envOverrides{email: overrideEmail}, overrideEmail, storedToken},
+		"token only": {envOverrides{token: overrideToken}, storedEmail, overrideToken},
+		"both":       {envOverrides{email: overrideEmail, token: overrideToken}, overrideEmail, overrideToken},
+	} {
+		leaks := append([]string{c.overrides.email, c.overrides.token, storedEmail, storedToken}, basicPayloads(c.effectiveEmail, c.effectiveToken)...)
+		failure := errors.New("rejected: " + strings.Join(leaks, " | "))
+		got := redactCredentialError(failure, discoveryFailureValues(storedEmail, storedToken, c.overrides)...).Error()
+		for _, leak := range leaks {
+			if leak != "" && strings.Contains(got, leak) {
+				t.Errorf("%s: %q survives in %q", name, leak, got)
+			}
+		}
+	}
+}

@@ -154,8 +154,8 @@ func resolveJiraStoredSettings(
 				err, OrganizationIDKey)
 			// The gateway's error text can echo the credential the discovery authenticated
 			// with, and runTeams prints this error before its own redaction boundary exists:
-			// redact it here, with the token and the email, and keep the chain.
-			return settings{}, redactCredentialError(failure, pairValues(email.Reveal(), token)...)
+			// redact it here.
+			return settings{}, redactCredentialError(failure, discoveryFailureValues(email.Reveal(), token, overrides)...)
 		}
 	}
 	return settings{
@@ -239,6 +239,19 @@ func jiraIntegrationCredentialID(ctx context.Context, pool *pgxpool.Pool, orgID 
 // gateway can echo any of them, and no spelling of one half covers the payload.
 func pairValues(email, token string) []string {
 	return append([]string{email, token}, secrets.BasicAuthSpellings(email, token)...)
+}
+
+// discoveryFailureValues are the stored pair that authenticated the discovery and the pair the run
+// sends after the overrides (which holds the override values): the gateway can name any of them.
+func discoveryFailureValues(email, token string, overrides envOverrides) []string {
+	effectiveEmail, effectiveToken := email, token
+	if overrides.email != "" {
+		effectiveEmail = overrides.email
+	}
+	if overrides.token != "" {
+		effectiveToken = overrides.token
+	}
+	return append(pairValues(email, token), pairValues(effectiveEmail, effectiveToken)...)
 }
 
 // redactCredentialError is failure with every value (and its trimmed spelling, and the

@@ -13,7 +13,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"io"
 	"log/slog"
 	"net/http"
@@ -37,6 +36,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // Environment variable NAMES the verb reads; their values are never logged.

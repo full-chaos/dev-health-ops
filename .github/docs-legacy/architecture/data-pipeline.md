@@ -437,9 +437,9 @@ never reads the rows as they are. Every `at` is the ClickHouse clock.
    wrote commits or pull requests (its dataset has the `git` or the `prs` legacy
    target, whichever the provider: `PostSyncPlan.Git`), one `INSERT ... SELECT`
    (`recordTouchedGitSQL`, `RecordTouchedGit`) appends a `touched` event for
-   each `(day, repository)` of the rows of `git_commits`, `git_pull_requests` and
-   `git_pull_request_reviews` whose `last_synced` is at or after the same lower
-   bound. The days are the
+   each `(day, repository)` of the rows of `git_commits`, `git_pull_requests`,
+   `git_pull_request_reviews` and `git_commit_stats` whose `last_synced` is at or after the same lower
+   bound (the stats of a commit mark the committer day of the commit, whenever the commit row was written). The days are the
    ones the daily run reads those rows under: the committer date of a commit
    (not its author date: a rebased commit keeps an old author date that no run
    reads it under), the creation day and, when merged, the merge day of a

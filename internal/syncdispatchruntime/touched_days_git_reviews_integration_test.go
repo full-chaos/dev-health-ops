@@ -109,8 +109,84 @@ func TestTouchedDaysRecordHoldsTheSubmissionDayOfTheReviewsOfTheRun(t *testing.T
 	}
 }
 
+type touchedTestStat struct {
+	org    string
+	repo   uuid.UUID
+	hash   string
+	file   string
+	synced time.Time
+}
+
+func insertTouchedTestStats(t *testing.T, ctx context.Context, conn driver.Conn, stats ...touchedTestStat) {
+	t.Helper()
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO git_commit_stats (
+		repo_id, commit_hash, file_path, additions, deletions, org_id, last_synced)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stat := range stats {
+		if err := batch.Append(stat.repo, stat.hash, stat.file, int32(3), int32(1), stat.org, stat.synced); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// CHAOS-14673: the stats of a commit written in the run mark the COMMITTER day of
+// their commit, however old the commit row is: the commit row's own last_synced
+// is no part of the read. Stats written before the lower bound, stats of another
+// organization (even for the same repository and hash), and stats whose commit
+// is not in the organization's commit table mark nothing; several files of one
+// commit mark its day once.
+func TestTouchedDaysRecordHoldsTheCommitDayOfTheStatsOfTheRun(t *testing.T) {
+	ctx, conn := newReadbackIntegrationConn(t)
+	store, err := NewClickHouseTouchedDaysStore(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inRun := touchedTestSince.Add(time.Hour)
+	beforeRun := touchedTestSince.Add(-time.Millisecond)
+	longAgo := touchedTestSince.Add(-48 * time.Hour)
+	insertTouchedTestCommits(t, ctx, conn,
+		// Old commit rows (written long before the run): only their stats are written in the run.
+		touchedTestCommit{org: touchedTestOrg, repo: touchedTestRepoA, hash: "c-in-run", author: touchedTestDay(time.July, 5), committer: touchedTestDay(time.July, 5), synced: longAgo},
+		touchedTestCommit{org: touchedTestOrg, repo: touchedTestRepoB, hash: "c-at-bound", author: touchedTestDay(time.July, 6), committer: touchedTestDay(time.July, 6), synced: longAgo},
+		touchedTestCommit{org: touchedTestOrg, repo: touchedTestRepoA, hash: "c-stats-old", author: touchedTestDay(time.July, 7), committer: touchedTestDay(time.July, 7), synced: longAgo},
+		touchedTestCommit{org: touchedTestOrg, repo: touchedTestRepoA, hash: "c-other-org-stats", author: touchedTestDay(time.July, 8), committer: touchedTestDay(time.July, 8), synced: longAgo},
+		// Rebased: the stats mark the committer day, never the author day.
+		touchedTestCommit{org: touchedTestOrg, repo: touchedTestRepoB, hash: "c-rebased", author: touchedTestDay(time.January, 2), committer: touchedTestDay(time.July, 9), synced: longAgo},
+	)
+	insertTouchedTestStats(t, ctx, conn,
+		touchedTestStat{org: touchedTestOrg, repo: touchedTestRepoA, hash: "c-in-run", file: "a.go", synced: inRun},
+		touchedTestStat{org: touchedTestOrg, repo: touchedTestRepoA, hash: "c-in-run", file: "b.go", synced: inRun},
+		touchedTestStat{org: touchedTestOrg, repo: touchedTestRepoB, hash: "c-at-bound", file: "a.go", synced: touchedTestSince},
+		touchedTestStat{org: touchedTestOrg, repo: touchedTestRepoA, hash: "c-stats-old", file: "a.go", synced: beforeRun},
+		touchedTestStat{org: touchedTestOtherOrg, repo: touchedTestRepoA, hash: "c-other-org-stats", file: "a.go", synced: inRun},
+		touchedTestStat{org: touchedTestOrg, repo: touchedTestRepoB, hash: "c-rebased", file: "a.go", synced: inRun},
+		// Stats of a commit that is not in the organization's commit table.
+		touchedTestStat{org: touchedTestOrg, repo: touchedTestRepoA, hash: "c-unknown", file: "a.go", synced: inRun},
+	)
+	want := []string{
+		touchedTestKey(time.July, 5, touchedTestRepoA),
+		touchedTestKey(time.July, 6, touchedTestRepoB),
+		touchedTestKey(time.July, 9, touchedTestRepoB),
+	}
+	sort.Strings(want)
+	if _, err := store.RecordTouchedGit(ctx, touchedTestOrg, touchedTestSince); err != nil {
+		t.Fatal(err)
+	}
+	if got := pendingTouchedTestKeys(t, ctx, conn, touchedTestOrg); !reflect.DeepEqual(got, want) {
+		t.Fatalf("pending keys\n got %v\nwant %v", got, want)
+	}
+	if got := pendingTouchedTestKeys(t, ctx, conn, touchedTestOtherOrg); len(got) != 0 {
+		t.Fatalf("the other organization has no commit row, so it has no key; got %v", got)
+	}
+}
+
 // recordTouchedGitSelectAtMain is the SELECT of recordTouchedGitSQL at ops
-// 5dd4758412f2, before the review arm.
+// 57ac6d4a5613, before the commit stats arm (commits, pull requests, reviews).
 const recordTouchedGitSelectAtMain = `
 SELECT day, repo_id
 FROM (
@@ -124,14 +200,20 @@ FROM (
            ]))) AS day
     FROM git_pull_requests
     WHERE org_id = ? AND last_synced >= fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+    UNION ALL
+    SELECT repo_id, toDate(submitted_at, 'UTC') AS day
+    FROM git_pull_request_reviews
+    WHERE org_id = ? AND last_synced >= fromUnixTimestamp64Milli(toInt64(?), 'UTC')
 )
 GROUP BY day, repo_id`
 
-// CHAOS-14673 equality control: a sync that wrote commits and pull requests but
-// no review at or after the bound records the same days as the record at main,
-// byte for byte, although the store holds older reviews and the reviews of
-// another organization written in the run.
-func TestTouchedDaysRecordWithoutALateReviewEqualsTheRecordAtMain(t *testing.T) {
+// CHAOS-14673 equality control: a sync that wrote commits, pull requests and
+// reviews but no commit stats at or after the bound records the same days as the
+// record at main, byte for byte, although the store holds older stats and the
+// stats of another organization written in the run (for the hash of a commit of
+// this organization: a stats lookup that is not scoped by organization would
+// mark its day).
+func TestTouchedDaysRecordWithoutLateStatsEqualsTheRecordAtMain(t *testing.T) {
 	ctx, conn := newReadbackIntegrationConn(t)
 	store, err := NewClickHouseTouchedDaysStore(conn)
 	if err != nil {
@@ -143,6 +225,7 @@ func TestTouchedDaysRecordWithoutALateReviewEqualsTheRecordAtMain(t *testing.T) 
 	insertTouchedTestCommits(t, ctx, conn,
 		touchedTestCommit{org: touchedTestOrg, repo: touchedTestRepoA, hash: "late", author: touchedTestDay(time.May, 3), committer: touchedTestDay(time.May, 3), synced: inRun},
 		touchedTestCommit{org: touchedTestOrg, repo: touchedTestRepoA, hash: "rebased", author: touchedTestDay(time.March, 1), committer: touchedTestDay(time.May, 4), synced: inRun},
+		touchedTestCommit{org: touchedTestOrg, repo: touchedTestRepoA, hash: "older", author: touchedTestDay(time.May, 9), committer: touchedTestDay(time.May, 9), synced: beforeRun},
 	)
 	insertTouchedTestPullRequests(t, ctx, conn,
 		touchedTestPullRequest{org: touchedTestOrg, repo: touchedTestRepoB, number: 7, created: touchedTestDay(time.June, 2), merged: &merged, synced: inRun},
@@ -150,11 +233,16 @@ func TestTouchedDaysRecordWithoutALateReviewEqualsTheRecordAtMain(t *testing.T) 
 	)
 	insertTouchedTestReviews(t, ctx, conn,
 		touchedTestReview{org: touchedTestOrg, repo: touchedTestRepoB, number: 7, id: "old", reviewer: "dev-a@example.com", at: touchedTestDay(time.June, 10), synced: beforeRun},
+		touchedTestReview{org: touchedTestOrg, repo: touchedTestRepoB, number: 7, id: "late", reviewer: "dev-a@example.com", at: touchedTestDay(time.June, 12), synced: inRun},
 		touchedTestReview{org: touchedTestOtherOrg, repo: touchedTestRepoB, number: 7, id: "other", reviewer: "dev-a@example.com", at: touchedTestDay(time.June, 11), synced: inRun},
+	)
+	insertTouchedTestStats(t, ctx, conn,
+		touchedTestStat{org: touchedTestOrg, repo: touchedTestRepoA, hash: "older", file: "a.go", synced: beforeRun},
+		touchedTestStat{org: touchedTestOtherOrg, repo: touchedTestRepoA, hash: "older", file: "a.go", synced: inRun},
 	)
 
 	legacy := []string{}
-	rows, err := conn.Query(ctx, `SELECT toString(day), toString(repo_id) FROM (`+recordTouchedGitSelectAtMain+`)`, touchedTestOrg, touchedTestSince.UnixMilli(), touchedTestOrg, touchedTestSince.UnixMilli())
+	rows, err := conn.Query(ctx, `SELECT toString(day), toString(repo_id) FROM (`+recordTouchedGitSelectAtMain+`)`, touchedTestOrg, touchedTestSince.UnixMilli(), touchedTestOrg, touchedTestSince.UnixMilli(), touchedTestOrg, touchedTestSince.UnixMilli())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,8 +258,8 @@ func TestTouchedDaysRecordWithoutALateReviewEqualsTheRecordAtMain(t *testing.T) 
 	}
 	rows.Close()
 	sort.Strings(legacy)
-	if len(legacy) != 5 {
-		t.Fatalf("the record at main holds %d keys, want 5 (control): %v", len(legacy), legacy)
+	if len(legacy) != 6 {
+		t.Fatalf("the record at main holds %d keys, want 6 (control): %v", len(legacy), legacy)
 	}
 
 	if _, err := store.RecordTouchedGit(ctx, touchedTestOrg, touchedTestSince); err != nil {
@@ -179,22 +267,23 @@ func TestTouchedDaysRecordWithoutALateReviewEqualsTheRecordAtMain(t *testing.T) 
 	}
 	got := recordedTouchedTestKeys(t, ctx, conn, touchedTestOrg)
 	if gotSum, wantSum := sha256.Sum256([]byte(strings.Join(got, "\n"))), sha256.Sum256([]byte(strings.Join(legacy, "\n"))); gotSum != wantSum {
-		t.Fatalf("the record without a late review differs from the record at main\n got %v\nwant %v", got, legacy)
+		t.Fatalf("the record without late stats differs from the record at main\n got %v\nwant %v", got, legacy)
 	}
 }
 
-// CHAOS-14673 cost cell: on a synthetic set of 40 commits, 30 pull requests and
-// 60 reviews (half of each written in the run), one record call is exactly 3
-// statements (the clock, the INSERT ... SELECT, the key count) and the
-// INSERT ... SELECT reads each of the three tables once: no more rows than the
-// three tables hold, so the review arm adds no per-pull-request lookup.
-func TestRecordTouchedGitReadsEachTableOnceInThreeStatements(t *testing.T) {
+// CHAOS-14673 cost cell: on a synthetic set of 40 commits, 30 pull requests, 60
+// reviews and 50 commit stats rows (half of each written in the run), one record
+// call is exactly 3 statements (the clock, the INSERT ... SELECT, the key count)
+// and the INSERT ... SELECT reads no more rows than its arms can: each table once,
+// and the commit table a second time as the lookup of the commit day of the stats
+// (one pass, so no per-row lookup).
+func TestRecordTouchedGitReadsBoundedRowsInThreeStatements(t *testing.T) {
 	ctx, conn := newReadbackIntegrationConn(t)
 	store, err := NewClickHouseTouchedDaysStore(conn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	const commits, pullRequests, reviews = 40, 30, 60
+	const commits, pullRequests, reviews, stats = 40, 30, 60, 50
 	inRun := touchedTestSince.Add(time.Hour)
 	beforeRun := touchedTestSince.Add(-time.Hour)
 	synced := func(i int) time.Time {
@@ -220,6 +309,11 @@ func TestRecordTouchedGitReadsEachTableOnceInThreeStatements(t *testing.T) {
 			reviewer: "dev-a@example.com", at: touchedTestDay(time.July, 1+i%25), synced: synced(i)})
 	}
 	insertTouchedTestReviews(t, ctx, conn, reviewRows...)
+	var statRows []touchedTestStat
+	for i := 0; i < stats; i++ {
+		statRows = append(statRows, touchedTestStat{org: touchedTestOrg, repo: touchedTestRepoA, hash: fmt.Sprintf("c%03d", i%commits), file: fmt.Sprintf("f%d.go", i), synced: synced(i)})
+	}
+	insertTouchedTestStats(t, ctx, conn, statRows...)
 
 	var startMicros int64
 	var database string
@@ -242,12 +336,12 @@ func TestRecordTouchedGitReadsEachTableOnceInThreeStatements(t *testing.T) {
 		database, startMicros).Scan(&statements, &readRows); err != nil {
 		t.Fatalf("the query log has no row for the record: %v", err)
 	}
-	t.Logf("record of the git days: statements=%d insert_select_read_rows=%d (tables hold %d)", statements, readRows, commits+pullRequests+reviews)
+	t.Logf("record of the git days: statements=%d insert_select_read_rows=%d (tables hold %d, commits counted twice)", statements, readRows, 2*commits+pullRequests+reviews+stats)
 	if statements != 3 {
 		t.Fatalf("one record call ran %d statements, want 3", statements)
 	}
-	if readRows == 0 || readRows > commits+pullRequests+reviews {
-		t.Fatalf("the INSERT ... SELECT read %d rows, want within (0, %d]: each table once", readRows, commits+pullRequests+reviews)
+	if readRows == 0 || readRows > 2*commits+pullRequests+reviews+stats {
+		t.Fatalf("the INSERT ... SELECT read %d rows, want within (0, %d]: each table once, commits twice", readRows, 2*commits+pullRequests+reviews+stats)
 	}
 	if got := recordedTouchedTestKeys(t, ctx, conn, touchedTestOrg); len(got) == 0 {
 		t.Fatal("the record appended no key (control)")

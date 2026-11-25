@@ -20,7 +20,6 @@ var nameFieldOperations = []struct {
 }{
 	{"aiAttributionOverview", registeredAiAttributionOverviewDocument, registeredAiAttributionOverviewV1Document, "aiattributionoverview_v1_captured.graphql", []string{"repoName", "teamName", "subjectTitle"}, 1},
 	{"aiGovernanceSummary", registeredAiGovernanceSummaryDocument, registeredAiGovernanceSummaryV1Document, "aigovernancesummary_v1_captured.graphql", []string{"repoName", "teamName", "subjectTitle", "ruleName"}, 1},
-	{"dataHealthIdentity", registeredDataHealthIdentityDocument, registeredDataHealthIdentityV1Document, "data_health_identity_v1_captured.graphql", []string{"suggestedCanonicalName"}, 1},
 	{"improveOpportunities", registeredImproveOpportunitiesDocument, registeredImproveOpportunitiesV2Document, "improveopportunities_v2_captured.graphql", []string{"entityDisplayName"}, 2},
 }
 

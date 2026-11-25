@@ -385,6 +385,12 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 				if ref.Strict {
 					return GitLabTeamCatalogBatch{}, memberErr
 				}
+				if isClassifiedRateLimit(memberErr) {
+					// A rate limit says nothing about this group's roster: end the walk before any catalog write so the
+					// caller can snooze and read the catalog again, as the GitHub catalog does. Every other class keeps
+					// the skip.
+					return GitLabTeamCatalogBatch{}, memberErr
+				}
 				evidence.SkippedTeamMemberships++
 				// TeamCatalogResult has no field for a partial outcome: a
 				// structured log line is the signal.
@@ -554,8 +560,13 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		Complete:         !evidence.Truncated && len(evidence.MissingSelectedSources) == 0,
 	}
 	if selections.Members {
+		// A strict run keeps every lookup: only the non-strict run stops on a rate limit, so only it records one.
+		var limit *membershipRateLimit
+		if !ref.Strict {
+			limit = &membershipRateLimit{}
+		}
 		rows.MembershipAbsence = &MembershipLookupBudget{
-			Inner: gitlabMembershipAbsence{client: client, groupByTeam: groupByTeam}, Left: membershipLookupBudget,
+			Inner: gitlabMembershipAbsence{client: client, groupByTeam: groupByTeam, limit: limit}, Left: membershipLookupBudget, Limit: limit,
 		}
 	}
 	evidence.Requests = requests
@@ -743,6 +754,11 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 			decision.membershipProver(batch.Rows.MembershipAbsence), decision.membershipSnapshot(GitLabTeamMembershipKind))
 		if reuseErr != nil {
 			return result, reuseErr
+		}
+		// A classified rate limit on a departure lookup says nothing about the member: end the run before the
+		// membership write so the caller can snooze and read the catalog again. Strict keeps the unproven answer.
+		if limited := membershipRateLimitStop(batch.Rows.MembershipAbsence); limited != nil && !ref.Strict {
+			return result, limited
 		}
 		ReportSnapshotPlan(ctx, gitlabTeamCatalogProvider, ref.OrgID, membershipOutcome.Plan)
 		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)

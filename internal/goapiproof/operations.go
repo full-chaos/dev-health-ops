@@ -611,6 +611,9 @@ var operationSpecs = map[string]OperationSpec{
 			return map[string]any{"orgId": orgID}
 		},
 	},
+	// CHAOS-14644: the current dataHealth documents declare no team variable, and the frozen venue oracles measure each
+	// operation on its OLDEST legacy text, which does; the variables below are the legacy texts' and stay, so the frozen
+	// request bodies stay byte for byte. A current document ignores the undeclared variable.
 	// The four documents that select `dataHealth`. All send the team as a
 	// document variable except the lineage document, which fixes team ALL and
 	// sends the metric. The identity read is the only one the team changes

@@ -51,7 +51,7 @@ func TestDataHealth_OperatorGateAndOrgDecisionTable(t *testing.T) {
 			if tc.claims != nil {
 				ctx = authctx.WithClaims(ctx, *tc.claims)
 			}
-			res, err := r.Query().DataHealth(ctx, "team-a")
+			res, err := r.Query().DataHealth(ctx, nil)
 			if tc.wantMsg != "" {
 				gqlErr := asAuthorizationError(t, err)
 				if gqlErr.Message != tc.wantMsg {
@@ -65,8 +65,8 @@ func TestDataHealth_OperatorGateAndOrgDecisionTable(t *testing.T) {
 			if err != nil || res == nil {
 				t.Fatalf("res=%v err=%v", res, err)
 			}
-			if res.Team != "team-a" || ch.org != tc.claims.OrgID {
-				t.Fatalf("team=%q org queried=%q, want team-a / %q", res.Team, ch.org, tc.claims.OrgID)
+			if res.Team != "" || ch.org != tc.claims.OrgID {
+				t.Fatalf("team=%q org queried=%q, want org-wide / %q", res.Team, ch.org, tc.claims.OrgID)
 			}
 		})
 	}

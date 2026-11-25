@@ -306,7 +306,8 @@ func logAuthProxyRouting(ctx context.Context, logger *slog.Logger, cfg AuthProxy
 	for _, aggregate := range AuthAggregates {
 		attrs = append(attrs, slog.Bool(string(aggregate), cfg.Enabled(aggregate)))
 	}
-	attrs = append(attrs, slog.Bool("org_provisioning", cfg.OrgProvisioningOn()), slog.Bool("client_addr_proof", cfg.ClientAddrKey != nil))
+	attrs = append(attrs, slog.Bool("org_provisioning", cfg.OrgProvisioningOn()), slog.Bool("service_account_keys", cfg.ServiceAccountKeysOn()),
+		slog.Bool("client_addr_proof", cfg.ClientAddrKey != nil))
 	logger.LogAttrs(ctx, slog.LevelInfo, "auth proxy routing", attrs...)
 }
 

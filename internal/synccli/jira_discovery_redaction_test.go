@@ -1,6 +1,7 @@
 package synccli
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -8,6 +9,9 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
+	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
 // The discovery error is redacted with the stored token and the email before it
@@ -70,6 +74,34 @@ func TestSettingsBoundaryHidesThePayloadAndTheTokenOverriddenByTheEnvironment(t 
 	for _, text := range texts {
 		if got := s.boundary().RedactText("search failed: " + text); strings.Contains(got, text) {
 			t.Errorf("%q survives in %q", text, got)
+		}
+	}
+}
+
+type unusedDecryptor struct{}
+
+func (unusedDecryptor) Decrypt(secrets.Value) ([]byte, error) { return nil, errors.New("unused") }
+
+// The pool connects on its first query: the connect failure of the stored-credential read
+// reaches runTeams with the database login in its text unless resolveTeamsSettings redacts it.
+func TestResolveTeamsSettingsHidesTheDatabaseLoginOfALazyConnectFailure(t *testing.T) {
+	const login, password = "zz9login-synthetic", "zz9pw-synthetic-aaaaaaaa"
+	dsn := "postgresql://" + login + ":" + password + "@127.0.0.1:1/synthdb?connect_timeout=2"
+	env := cli.Env{Lookup: func(key string) (string, bool) {
+		if key == PostgresURIKey {
+			return dsn, true
+		}
+		return "", false
+	}}
+	d := defaultDeps()
+	d.decryptor = func(cli.Env) (providerfoundation.CredentialDecryptor, error) { return unusedDecryptor{}, nil }
+	_, err := resolveTeamsSettings(context.Background(), env, d, "org-under-test", "")
+	if err == nil {
+		t.Fatal("expected the connect failure")
+	}
+	for _, secret := range []string{login, password} {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("%q survives in %q", secret, err.Error())
 		}
 	}
 }

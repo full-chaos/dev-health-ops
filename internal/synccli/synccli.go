@@ -13,6 +13,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"io"
 	"log/slog"
 	"net/http"
@@ -475,7 +476,9 @@ func resolveTeamsSettings(ctx context.Context, env cli.Env, d deps, orgID string
 		}
 		s, err = resolveJiraStoredSettings(ctx, pool, decryptor, d.doer, d.newOrganizationResolver, orgID, overrides)
 		if err != nil {
-			return settings{}, err
+			// The pool connects on its first query, so the connect failure surfaces here with
+			// the login in its text; openPostgresPool's redaction covered only pgxpool.New.
+			return settings{}, pgstorage.Boundary(pgDSNValue).Redact(err)
 		}
 	}
 	if overrides.organizationID != "" {

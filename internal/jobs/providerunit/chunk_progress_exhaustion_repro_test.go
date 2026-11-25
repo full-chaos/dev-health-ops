@@ -105,6 +105,8 @@ type exhaustWalk struct {
 	accounting      []string // violations of the attempts arithmetic
 	terminal        bool
 	lastReturnPerm  bool
+	elapsed         time.Duration // simulated time from the first attempt to the last step
+	ordinalAtSnooze []int         // checkpoint next_ordinal after each snooze
 }
 
 func driveTransientPageWalk(t *testing.T, pages int, flakyPages ...int) exhaustWalk {
@@ -208,7 +210,9 @@ func driveFlakyWalk(t *testing.T, shape flakyWalk) exhaustWalk {
 			}, nil
 		},
 	}
+	start := now
 	for step := 0; step < 20*pages; step++ {
+		walk.elapsed = now.Sub(start)
 		before, releasesBefore := walk.repository.attempt, walk.repository.releases
 		refundsBefore := walk.repository.progressRefunds
 		execution := providerExecution(unit, now, walk.attempt)
@@ -228,6 +232,11 @@ func driveFlakyWalk(t *testing.T, shape flakyWalk) exhaustWalk {
 			}
 			if got := walk.repository.attempt; got != before {
 				walk.accounting = append(walk.accounting, "continuation: attempts "+strconv.Itoa(before)+" -> "+strconv.Itoa(got)+", want net 0 over claim + continuation")
+			}
+			if walk.ledger != nil {
+				if checkpoint, loadErr := walk.ledger.LoadChunkCheckpoint(context.Background(), walk.ledgerClaim, now); loadErr == nil {
+					walk.ordinalAtSnooze = append(walk.ordinalAtSnooze, checkpoint.NextOrdinal)
+				}
 			}
 			now = walk.repository.availableAt
 			continue

@@ -88,7 +88,7 @@ func TestTheProjectLinkLegNamesWhyItIsNotComplete(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			leg := degradedProjectLinksLeg(tc.rows)
+			leg := degradedProjectLinksLeg(tc.rows, nil)
 			if leg == nil {
 				t.Fatal("no degraded leg for a snapshot that is not complete")
 			}
@@ -100,7 +100,7 @@ func TestTheProjectLinkLegNamesWhyItIsNotComplete(t *testing.T) {
 			}
 		})
 	}
-	if leg := degradedProjectLinksLeg(atlassianteams.Rows{ProjectLinksComplete: true}); leg != nil {
+	if leg := degradedProjectLinksLeg(atlassianteams.Rows{ProjectLinksComplete: true}, nil); leg != nil {
 		t.Errorf("a complete snapshot has a degraded leg: %+v", *leg)
 	}
 }

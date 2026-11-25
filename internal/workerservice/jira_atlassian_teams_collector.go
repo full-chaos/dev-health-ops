@@ -183,16 +183,21 @@ const (
 // the provider: a refused opt-in, a failed page, the page bound and a link type this code does not know all end
 // here, with the reason, and close no row. A Jira project link that got no row (no readable id, no key) ends here
 // too: it closes no row of its team.
-func degradedProjectLinksLeg(rows atlassianteams.Rows) *providersync.DegradedLeg {
+func degradedProjectLinksLeg(rows atlassianteams.Rows, credentialValues []string) *providersync.DegradedLeg {
 	if rows.EveryProjectLinkWritten() {
 		return nil
 	}
 	leg := providersync.DegradedLeg{Dataset: "teams", Leg: atlassianProjectLinksLeg, Outcome: "failed"}
+	// The credential values come out first: the sanitizer cuts the text at its cap, and a value that
+	// straddles the cut would no longer match.
+	detail := func(failure error) string {
+		return syncdispatchruntime.SanitizeErrorText(secrets.NewBoundaryWith("", credentialValues...).RedactText(failure.Error()))
+	}
 	switch failure := rows.ProjectLinkFailure; {
 	case failure != nil && errors.Is(failure, graph.ErrTeamConnectedContainersBound):
-		leg.Reason, leg.Detail = atlassianLegLinkPageBound, syncdispatchruntime.SanitizeErrorText(failure.Error())
+		leg.Reason, leg.Detail = atlassianLegLinkPageBound, detail(failure)
 	case failure != nil:
-		leg.Reason, leg.Detail = atlassianLegLinkReadFailed, syncdispatchruntime.SanitizeErrorText(failure.Error())
+		leg.Reason, leg.Detail = atlassianLegLinkReadFailed, detail(failure)
 	case rows.ProjectLinks.SkippedUnknownType > 0:
 		leg.Reason = atlassianLegLinkUnknownType
 	case len(rows.UnreadableProjectLinkTeams) > 0:
@@ -354,7 +359,7 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 		}}, nil
 	}
 	if atlassianSelections.Projects {
-		if leg := degradedProjectLinksLeg(rows); leg != nil {
+		if leg := degradedProjectLinksLeg(rows, legCredentialValues(token, email.Reveal())); leg != nil {
 			// The redaction of the deferred func covers the returned error only: the detail is cleaned here.
 			leg.Detail = secrets.NewBoundaryWith("", legCredentialValues(token, email.Reveal())...).RedactText(leg.Detail)
 			slog.Default().WarnContext(ctx, atlassianProjectLinksDegradedAt, "org_id", ref.OrgID, "sync_run_id", ref.SyncRunID,

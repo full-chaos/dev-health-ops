@@ -208,7 +208,7 @@ func TestFetchHotspotRows_TieOnComputedAt_ReturnsLatestDay_RealClickHouse(t *tes
 
 	assertReturnsRowB := func(t *testing.T, orgID string) {
 		t.Helper()
-		rows, err := fetchHotspotRows(ctx, client, orgID, "2025-01-01", "2026-12-31", nil, 10)
+		rows, err := fetchHotspotRows(ctx, client, orgID, "2025-01-01", "2026-12-31", readScope{}, 10)
 		if err != nil {
 			t.Fatalf("fetchHotspotRows: %v", err)
 		}
@@ -331,7 +331,7 @@ func TestFetchHotspotRows_LatestDayNullBlameConcentration_DoesNotBorrowFromEarli
 	seedTiedRows(t, ctx, conn, orgID, repoID, filePath,
 		time.Date(2026, 3, 20, 9, 0, 0, 0, time.UTC), []tiebreakSeedRow{rowB})
 
-	rows, err := fetchHotspotRows(ctx, client, orgID, "2025-01-01", "2026-12-31", nil, 10)
+	rows, err := fetchHotspotRows(ctx, client, orgID, "2025-01-01", "2026-12-31", readScope{}, 10)
 	if err != nil {
 		t.Fatalf("fetchHotspotRows: %v", err)
 	}

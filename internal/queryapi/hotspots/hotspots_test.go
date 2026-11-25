@@ -3,10 +3,13 @@ package hotspots
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 type fakeRowScanner struct {
@@ -440,5 +443,48 @@ func TestResolve_ReposCarryEachRepositorysTopFileBeyondTheRowLimit(t *testing.T)
 	}
 	if _, ok := topB["repo_ids"]; !ok {
 		t.Fatal("repo top-file query lost the repo_ids scope")
+	}
+}
+
+// CHAOS-14642: a team scope narrows BOTH file reads (the rows and the per-repository top files) with the one ownership
+// condition at one instant, beside the repo_ids filter.
+func TestResolveScoped_TeamScopeNarrowsBothFileReads(t *testing.T) {
+	client := &fakeClient{
+		responses: []*fakeRowScanner{
+			{rows: [][]any{{"repo-a", "a/hot.go", uint64(1), uint32(1), uint32(1), 1.0, nil, 3.0}}},
+			{rows: [][]any{{"repo-a", "acme/a"}}},
+			{rows: [][]any{{"repo-a", "a/hot.go", uint64(1), uint32(1), uint32(1), 1.0, nil, 3.0}}},
+		},
+	}
+	asOf := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	_, err := ResolveScoped(context.Background(), client, "org-1",
+		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-31T23:59:59Z"),
+		Scope{RepoIDs: []string{"acme/a"}, TeamIDs: []string{"team-a"}, AsOf: asOf}, nil)
+	if err != nil {
+		t.Fatalf("ResolveScoped: %v", err)
+	}
+	if client.calls != 3 {
+		t.Fatalf("calls = %d, want 3 (rows, labels, repo top files)", client.calls)
+	}
+	condition, want := teamscope.RepoCondition("org-1", "toString(repo_id)", []string{"team-a"}, asOf)
+	for _, i := range []int{0, 2} {
+		if !contains(client.statements[i], condition) {
+			t.Errorf("statement %d does not carry the team ownership condition:\n%s", i, client.statements[i])
+		}
+		if !contains(client.statements[i], "{repo_ids:Array(String)}") {
+			t.Errorf("statement %d lost the repo_ids filter", i)
+		}
+		got := map[string]any{}
+		for _, b := range client.bindings[i] {
+			got[b.Name] = b.Value
+		}
+		for _, b := range want {
+			if !reflect.DeepEqual(got[b.Name], b.Value) {
+				t.Errorf("statement %d binding %s = %v, want %v", i, b.Name, got[b.Name], b.Value)
+			}
+		}
+	}
+	if contains(client.statements[1], teamscope.Marker) {
+		t.Error("the label read carries the team condition: it reads only the repositories already narrowed")
 	}
 }

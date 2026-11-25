@@ -86,6 +86,10 @@ func classifyLookupFailure(err error, featureOff []string) (lookupVerdict, strin
 		}
 		return lookupRecorded, "forbidden"
 	case providerfoundation.ErrorPermanent:
+		// A permanent error with no 4xx status got no answer (a dial-time egress refusal): the lookup failed.
+		if providerErr.StatusCode < 400 || providerErr.StatusCode > 499 {
+			return lookupFails, ""
+		}
 		if providerErr.StatusCode == http.StatusBadRequest || providerErr.StatusCode == http.StatusUnprocessableEntity {
 			return lookupRecorded, "bad_request"
 		}
@@ -119,10 +123,11 @@ func serveLookupFailure(
 }
 
 // lookupStatusClass names a failed lookup's HTTP status class for a log line: "5xx", "4xx", "transport" (no HTTP
-// answer) or "none" (the request was never sent, e.g. a refused budget).
+// answer) or "none" (the request was never sent, e.g. a refused budget or a failed token refresh).
 func lookupStatusClass(err error) string {
 	var providerErr *providerfoundation.ProviderError
-	if !errors.As(err, &providerErr) || providerErr == nil {
+	var authStep *providerfoundation.AuthStepError
+	if errors.As(err, &authStep) || !errors.As(err, &providerErr) || providerErr == nil {
 		return "none"
 	}
 	if providerErr.StatusCode == 0 {

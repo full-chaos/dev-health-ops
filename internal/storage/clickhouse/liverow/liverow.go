@@ -155,6 +155,28 @@ func NewestPredicate(table, qualifier string) string {
 	return "(" + mustTable(table).LiveHaving(prefix) + ")"
 }
 
+// NewestAnyLivePredicate is the rule for a reader that must give ONE answer for a key whose newest computed_at holds more
+// than one row (a live row and a retraction row written in the same second): the key is a measurement when ANY row at its
+// newest computed_at is a measurement, and is left out only when EVERY row there is a retraction. NewestPredicate picks one
+// of the tied rows (argMax), and the pick can differ between two queries over the same data. It belongs in the HAVING of a
+// GROUP BY of the key, like NewestPredicate; qualifier is as for Predicate.
+//
+// Only a table with a Retracted column has this rule; it panics for any other table, as Predicate does for a table with no
+// rule. The tuple max takes the newest computed_at first and then the largest 1 - retracted of the rows at that stamp.
+func NewestAnyLivePredicate(table, qualifier string) string {
+	prefix := qualifierPrefix(table, qualifier)
+	column, own := ownWriterRetracted[table]
+	if !own {
+		if declared, registered := teamkeytables.ByTable(table); registered {
+			column = declared.Retracted
+		}
+	}
+	if column == "" {
+		panic("liverow: no retraction column for table " + table)
+	}
+	return "(tupleElement(max((" + prefix + "computed_at, 1 - " + prefix + column + ")), 2) = 1)"
+}
+
 // Columns returns the columns of table that the rule reads, in the order of
 // the predicate. A reader that checks at startup whether the deployed schema
 // holds every column its statements name takes them from here: the predicate

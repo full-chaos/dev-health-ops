@@ -59,9 +59,14 @@ func TestPooledLiveGateSameSecondTieIsDeterministic(t *testing.T) {
 			tieGateInsert(e, table, org, 1, tieGateStamp)
 			tieGateInsert(e, table, org, 0, tieGateStamp)
 		}},
-		{"unanimous retraction at one stamp", 0, 1, 1, 1, func(table, org string) {
+		{"unanimous retraction at one stamp, two parts", 0, 1, 1, 1, func(table, org string) {
 			tieGateInsert(e, table, org, 1, tieGateStamp)
 			tieGateInsert(e, table, org, 1, tieGateStamp)
+		}},
+		{"unanimous retraction at one stamp, one part", 0, 1, 1, 1, func(table, org string) {
+			e.exec(fmt.Sprintf(`INSERT INTO %s (org_id, repo_id, day, computed_at, retracted)
+SELECT ?, toUUID(concat('f0f0f0f0-0000-4000-8000-', lpad(hex(number %% %d), 12, '0'))), toDate('2026-01-02'), toDateTime(?, 'UTC'), 1
+FROM numbers(%d)`, table, tieGateKeys, 2*tieGateKeys), org, tieGateStamp)
 		}},
 		{"live row newer than a retraction", tieGateKeys, 2, 0, 1, func(table, org string) {
 			tieGateInsert(e, table, org, 1, tieGateStamp)

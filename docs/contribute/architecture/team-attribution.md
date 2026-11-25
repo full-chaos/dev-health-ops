@@ -2348,7 +2348,9 @@ measured row stays live.
 - Only the partition that computes a repository retires its day: the end of a run of the whole organization does not
   retire these keys of a repository that is in no partition (`runScopeOnlyTables` in the census).
 - Every pooled report and tile source takes one live gate over both of its arms (`testopspooled.LiveRepoDays`): a
-  retired day is neither read from its stored samples nor from its raw rows, whatever its `pooled_samples_stored`.
+  retired day is neither read from its stored samples nor from its raw rows, whatever its `pooled_samples_stored`. A
+  same-second tie of a live row and a retraction row keeps the day: it is left out only when every row at its newest
+  stamp is a retraction (`liverow.NewestAnyLivePredicate`), so every read of the same rows gives the same answer.
 - Roll order: the migration first, then query-api and the report job, then the workers.
 
 The census `TestEveryReadOfARegisteredTableAppliesTheRule` (package `liverow`) reads the source and fails for a read

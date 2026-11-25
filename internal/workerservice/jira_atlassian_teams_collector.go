@@ -293,7 +293,9 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 		return atlassianteams.Result{}, nil, providersync.ErrInvalidConfiguration
 	}
 	// From here on any error can carry what the gateway echoes back: strip the credential at the source.
-	defer func() { err = redactLegError(err, token, email.Reveal()) }()
+	defer func() {
+		err = redactLegError(err, append([]string{token, email.Reveal()}, secrets.BasicAuthSpellings(email.Reveal(), token)...)...)
+	}()
 	gatewayURL := tenant.String() + "/gateway/api"
 	auth := atlassian.BasicAPITokenAuth{Email: email.Reveal(), Token: token}
 

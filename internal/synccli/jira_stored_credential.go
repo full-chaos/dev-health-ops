@@ -155,7 +155,7 @@ func resolveJiraStoredSettings(
 			// The gateway's error text can echo the credential the discovery authenticated
 			// with, and runTeams prints this error before its own redaction boundary exists:
 			// redact it here, with the token and the email, and keep the chain.
-			return settings{}, redactCredentialError(failure, token, email.Reveal())
+			return settings{}, redactCredentialError(failure, pairValues(email.Reveal(), token)...)
 		}
 	}
 	return settings{
@@ -235,10 +235,16 @@ func jiraIntegrationCredentialID(ctx context.Context, pool *pgxpool.Pool, orgID 
 		len(ids), strings.Join(shown, ", "))
 }
 
+// pairValues are the email, the token and the Basic payload spellings built from them: the
+// gateway can echo any of them, and no spelling of one half covers the payload.
+func pairValues(email, token string) []string {
+	return append([]string{email, token}, secrets.BasicAuthSpellings(email, token)...)
+}
+
 // redactCredentialError is failure with every value (and its trimmed spelling, and the
-// escaped spellings a Boundary derives) removed from its text. The chain stays: errors.Is
-// and errors.As reach failure's own chain.
+// escaped spellings a Boundary derives) removed from its text. The result is text only: no
+// later Unwrap reaches the unredacted failure.
 func redactCredentialError(failure error, values ...string) error {
 	boundary := secrets.NewBoundaryWith("", credentialSpellings(values...)...)
-	return redactedError{text: boundary.RedactText(failure.Error()), cause: failure}
+	return redactedError{text: boundary.RedactText(failure.Error())}
 }

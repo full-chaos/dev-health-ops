@@ -92,6 +92,16 @@ type MembershipAbsenceProver interface {
 type MembershipLookupBudget struct {
 	Inner MembershipAbsenceProver
 	Left  int
+	// Limit is the first classified rate limit the inner prover met (nil: the prover records none).
+	Limit *membershipRateLimit
+}
+
+// membershipRateLimitStop is the classified rate limit a run's departure lookups met, nil when none.
+func membershipRateLimitStop(prove MembershipAbsenceProver) error {
+	if budget, ok := prove.(*MembershipLookupBudget); ok && budget != nil && budget.Limit != nil {
+		return budget.Limit.err
+	}
+	return nil
 }
 
 // Absence asks the inner prover while the budget lasts.

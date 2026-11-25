@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 )
 
@@ -230,7 +231,10 @@ func TestResolve_OrgWide_MergesOnUnionOfDays(t *testing.T) {
 		t.Errorf("day1 AfterHoursCommitRatio = %v, want nil (no team row that day)", *first.AfterHoursCommitRatio)
 	}
 	if second.PrInterruptionLoad != 0.0 {
-		t.Errorf("day2 PrInterruptionLoad = %v, want 0.0 (no user row that day)", second.PrInterruptionLoad)
+		t.Errorf("day2 PrInterruptionLoad = %v, want 0.0 (no user row that day; Float! stays, DeveloperState says NO_ROWS)", second.PrInterruptionLoad)
+	}
+	if first.DeveloperState != model.NewestDayStateMeasured || second.DeveloperState != model.NewestDayStateNoRows {
+		t.Errorf("DeveloperState = %s then %s, want MEASURED then NO_ROWS", first.DeveloperState, second.DeveloperState)
 	}
 	if second.AfterHoursCommitRatio == nil || *second.AfterHoursCommitRatio != 0.5 {
 		t.Errorf("day2 AfterHoursCommitRatio = %v, want 0.5", second.AfterHoursCommitRatio)

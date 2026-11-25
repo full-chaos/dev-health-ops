@@ -209,7 +209,10 @@ func resolve(ctx context.Context, client QueryClient, orgID string, sinceDate, u
 // mergeUserAndTeamRows outer-joins userRows/teamRows on day into signals,
 // porting resolve_cognitive_load's inline merge exactly: a day present in
 // only one side is still emitted, with zero/nil for the missing side's
-// fields.
+// fields. DeveloperState says which developer side that is: MEASURED when a
+// developer row exists that day (a 0 is a measured 0), NO_ROWS for a team-only
+// day (CHAOS-14628: its 0 values are not a measurement). The day is the day of
+// the row, so STALE is never set.
 func mergeUserAndTeamRows(userRows []userLoadRow, teamRows []teamRatioRow) []model.CognitiveLoadSignal {
 	userByDay := make(map[time.Time]userLoadRow, len(userRows))
 	for _, row := range userRows {
@@ -235,11 +238,12 @@ func mergeUserAndTeamRows(userRows []userLoadRow, teamRows []teamRatioRow) []mod
 
 	signals := make([]model.CognitiveLoadSignal, 0, len(days))
 	for _, d := range days {
-		sig := model.CognitiveLoadSignal{Day: graphqldate.New(d)}
+		sig := model.CognitiveLoadSignal{Day: graphqldate.New(d), DeveloperState: model.NewestDayStateNoRows}
 		if u, ok := userByDay[d]; ok {
 			sig.PrInterruptionLoad = u.prInterruptionLoad
 			sig.ContextSpreadCount = u.contextSpreadCount
 			sig.ReviewRequestLoad = u.reviewRequestLoad
+			sig.DeveloperState = model.NewestDayStateMeasured
 		}
 		if t, ok := teamByDay[d]; ok {
 			afterHours := t.afterHoursCommitRatio

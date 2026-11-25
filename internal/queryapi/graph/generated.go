@@ -524,6 +524,7 @@ type ComplexityRoot struct {
 		AfterHoursCommitRatio func(childComplexity int) int
 		ContextSpreadCount    func(childComplexity int) int
 		Day                   func(childComplexity int) int
+		DeveloperState        func(childComplexity int) int
 		PrInterruptionLoad    func(childComplexity int) int
 		ReviewRequestLoad     func(childComplexity int) int
 		WeekendCommitRatio    func(childComplexity int) int
@@ -4087,6 +4088,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.CognitiveLoadSignal.Day(childComplexity), true
+
+	case "CognitiveLoadSignal.developerState":
+		if e.complexity.CognitiveLoadSignal.DeveloperState == nil {
+			break
+		}
+
+		return e.complexity.CognitiveLoadSignal.DeveloperState(childComplexity), true
 
 	case "CognitiveLoadSignal.prInterruptionLoad":
 		if e.complexity.CognitiveLoadSignal.PrInterruptionLoad == nil {
@@ -10665,6 +10673,10 @@ type CognitiveLoadSignal {
   prInterruptionLoad: Float!
   contextSpreadCount: Float!
   reviewRequestLoad: Float!
+  """
+  How the three developer fields of this day (prInterruptionLoad, contextSpreadCount, reviewRequestLoad) were read: MEASURED (at least one developer row that day, so a 0 is a measured 0) or NO_ROWS (the day has team rows only, so the 0 values are not a measurement). STALE is not used for this field: the day is the day of the row. See NewestDayState.
+  """
+  developerState: NewestDayState!
   afterHoursCommitRatio: Float
   weekendCommitRatio: Float
 }
@@ -30872,6 +30884,8 @@ func (ec *executionContext) fieldContext_CognitiveLoadResult_signals(_ context.C
 				return ec.fieldContext_CognitiveLoadSignal_contextSpreadCount(ctx, field)
 			case "reviewRequestLoad":
 				return ec.fieldContext_CognitiveLoadSignal_reviewRequestLoad(ctx, field)
+			case "developerState":
+				return ec.fieldContext_CognitiveLoadSignal_developerState(ctx, field)
 			case "afterHoursCommitRatio":
 				return ec.fieldContext_CognitiveLoadSignal_afterHoursCommitRatio(ctx, field)
 			case "weekendCommitRatio":
@@ -31098,6 +31112,50 @@ func (ec *executionContext) fieldContext_CognitiveLoadSignal_reviewRequestLoad(_
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CognitiveLoadSignal_developerState(ctx context.Context, field graphql.CollectedField, obj *model.CognitiveLoadSignal) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CognitiveLoadSignal_developerState(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.DeveloperState, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.NewestDayState)
+	fc.Result = res
+	return ec.marshalNNewestDayState2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐNewestDayState(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CognitiveLoadSignal_developerState(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CognitiveLoadSignal",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type NewestDayState does not have child fields")
 		},
 	}
 	return fc, nil
@@ -74704,6 +74762,11 @@ func (ec *executionContext) _CognitiveLoadSignal(ctx context.Context, sel ast.Se
 			}
 		case "reviewRequestLoad":
 			out.Values[i] = ec._CognitiveLoadSignal_reviewRequestLoad(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "developerState":
+			out.Values[i] = ec._CognitiveLoadSignal_developerState(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

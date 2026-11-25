@@ -26,7 +26,7 @@ func (r *rateLimitedTransport) RoundTrip(request *http.Request) (*http.Response,
 	return &http.Response{StatusCode: r.status, Header: r.headers.Clone(), Body: io.NopCloser(strings.NewReader(`{"message":"planted provider text"}`)), Request: request}, nil
 }
 
-func rateLimitedRepos(t *testing.T, provider string, transport *rateLimitedTransport) *httptest.ResponseRecorder {
+func rateLimitedRepos(t *testing.T, provider string, transport *rateLimitedTransport) (*httptest.ResponseRecorder, string) {
 	t.Helper()
 	logs := &bytes.Buffer{}
 	h := newHandlers(Deps{HTTPClient: &http.Client{Transport: transport}, Logger: slog.New(slog.NewTextHandler(logs, nil)),
@@ -47,13 +47,13 @@ func rateLimitedRepos(t *testing.T, provider string, transport *rateLimitedTrans
 	} else {
 		h.listGitHubRepos(recorder, request, credential, "acme", "", nil)
 	}
-	return recorder
+	return recorder, logs.String()
 }
 
 func TestARateLimitWaitPastTheCeilingAnswers429AtOnceOnTheRepoBrowse(t *testing.T) {
 	for _, provider := range []string{"gitlab", "github"} {
 		transport := &rateLimitedTransport{status: 429, headers: http.Header{"Retry-After": {"86400"}}}
-		recorder := rateLimitedRepos(t, provider, transport)
+		recorder, _ := rateLimitedRepos(t, provider, transport)
 		if recorder.Code != http.StatusTooManyRequests {
 			t.Fatalf("%s: status %d, WANT 429: %s", provider, recorder.Code, recorder.Body.String())
 		}
@@ -62,6 +62,25 @@ func TestARateLimitWaitPastTheCeilingAnswers429AtOnceOnTheRepoBrowse(t *testing.
 		}
 		if transport.calls != 1 {
 			t.Fatalf("%s: %d requests, WANT 1", provider, transport.calls)
+		}
+	}
+}
+
+func TestARefusedWaitOnARetryable503KeepsTheMappingOfItsClassOnTheRepoBrowse(t *testing.T) {
+	for _, row := range []struct {
+		provider string
+		status   int
+	}{{"github", http.StatusBadGateway}, {"gitlab", http.StatusInternalServerError}} {
+		transport := &rateLimitedTransport{status: 503, headers: http.Header{"Retry-After": {"60"}}}
+		recorder, logs := rateLimitedRepos(t, row.provider, transport)
+		if recorder.Code != row.status {
+			t.Fatalf("%s: status %d, want %d: %s", row.provider, recorder.Code, row.status, recorder.Body.String())
+		}
+		if transport.calls != 1 {
+			t.Fatalf("%s: %d requests, want 1", row.provider, transport.calls)
+		}
+		if !strings.Contains(logs, "503") || strings.Contains(logs, "deadline exceeded") {
+			t.Fatalf("%s: the failure is not the refused 503 (a slept wait ends as a context error): %s", row.provider, logs)
 		}
 	}
 }

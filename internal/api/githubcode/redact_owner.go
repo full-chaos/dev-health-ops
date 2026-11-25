@@ -20,5 +20,7 @@ func RedactOwner(err error, owner string) error {
 	for _, form := range []string{owner, pythonparity.Quote(owner, ""), url.PathEscape(owner)} {
 		message = strings.ReplaceAll(message, form, "{login}")
 	}
-	return &Error{Class: typed.Class, Message: message}
+	redacted := *typed
+	redacted.Message = message
+	return &redacted
 }

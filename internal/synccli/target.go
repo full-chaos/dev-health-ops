@@ -1002,12 +1002,12 @@ func planCredentialValues(plan Plan) []string {
 	return credentialSpellings(raw...)
 }
 
-// credentialSpellings is each non-empty value and, when it differs, the value with
+// credentialSpellings is each non-blank value and, when it differs, the value with
 // its terminal whitespace trimmed.
 func credentialSpellings(values ...string) []string {
 	var out []string
 	for _, value := range values {
-		if value == "" {
+		if isBlank(value) {
 			continue
 		}
 		out = append(out, value)

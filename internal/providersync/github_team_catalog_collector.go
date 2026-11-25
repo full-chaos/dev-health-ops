@@ -277,6 +277,11 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		if snapshotErr != nil {
 			return result, snapshotErr
 		}
+		// A classified rate limit on a departure lookup says nothing about the member: end the run before the
+		// membership write so the caller can snooze and read the catalog again. Strict keeps the unproven answer.
+		if limited := membershipRateLimitStop(rows.MembershipAbsence); limited != nil && !ref.Strict {
+			return result, limited
+		}
 		ReportSnapshotPlan(ctx, githubTeamCatalogProvider, ref.OrgID, membershipOutcome.Plan)
 		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
 		result.MembershipsClosed = membershipOutcome.Closed

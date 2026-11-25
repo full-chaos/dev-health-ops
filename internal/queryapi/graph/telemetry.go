@@ -10,11 +10,14 @@ package graph
 
 import (
 	"context"
+	"log/slog"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/datahealth"
 )
 
 var (
@@ -48,6 +51,7 @@ var (
 	catalogOutcomeCounter              = mustCounter("devhealth_query_api_catalog_outcome_total", "catalog resolver outcomes, by result")
 	dataHealthCallCounter              = mustCounter("devhealth_query_api_data_health_calls_total", "dataHealth resolver invocations")
 	dataHealthOutcomeCounter           = mustCounter("devhealth_query_api_data_health_outcome_total", "dataHealth resolver outcomes, by result")
+	dataHealthLegacyPseudoTeamCounter  = mustCounter("devhealth_query_api_data_health_legacy_pseudo_team_total", "dataHealth requests that sent a legacy pseudo team and read org-wide, by kind")
 	experimentsCallCounter             = mustCounter("devhealth_query_api_experiments_calls_total", "experiments resolver invocations")
 	experimentsOutcomeCounter          = mustCounter("devhealth_query_api_experiments_outcome_total", "experiments resolver outcomes, by result")
 	productTelemetryCallCounter        = mustCounter("devhealth_query_api_product_telemetry_calls_total", "productTelemetry dashboard resolver invocations")
@@ -530,6 +534,15 @@ func startCatalogSpan(ctx context.Context) (context.Context, func(outcome string
 		span.End()
 		catalogOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 	}
+}
+
+// countLegacyPseudoTeam counts and logs one dataHealth request that sent a legacy pseudo team (ALL,
+// default or the org id) and read org-wide. The value itself is never logged, only its kind.
+func countLegacyPseudoTeam(ctx context.Context, kind string) {
+	dataHealthLegacyPseudoTeamCounter.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("reason", datahealth.LegacyPseudoTeamReason), attribute.String("kind", kind)))
+	slog.InfoContext(ctx, "query-api: dataHealth read org-wide for a legacy pseudo team",
+		"operation", "dataHealth", "reason", datahealth.LegacyPseudoTeamReason, "kind", kind)
 }
 
 // startDataHealthSpan counts the call and starts the span before the

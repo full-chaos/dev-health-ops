@@ -1,0 +1,18 @@
+query MetricLineage($metricId: ID!) {
+  dataHealth(team: 
+"ALL") {
+    metricLineage(metricId: $metricId) {
+      metricId
+      sourceTables
+      computeWindow {
+        kind
+        durationDays
+        __typename
+      }
+      computedAt
+      rowCount
+      __typename
+    }
+    __typename
+  }
+}

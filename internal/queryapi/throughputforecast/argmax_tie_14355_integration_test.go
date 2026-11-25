@@ -106,14 +106,14 @@ func TestArgMaxTieThroughputForecast14355(t *testing.T) {
 			values:   []string{"pr_first_review_p50_hours", "prs_merged", "mttr_hours"},
 			nullable: "pr_first_review_p50_hours", retire: "retracted", filtered: true,
 			read: func(t *testing.T) string {
-				v, err := loadReviewOverlay(ctx, client, org, weeks, today)
+				v, err := loadReviewOverlay(ctx, client, org, nil, weeks, today)
 				must(t, err)
 				return fmt.Sprint(v.value)
 			}},
 		{name: "loadIncidentOverlay", table: "incident_metrics_daily", key: repoKey,
 			values: []string{"incidents_count", "mttr_p50_hours"}, retire: "retracted", filtered: true,
 			read: func(t *testing.T) string {
-				v, err := loadIncidentOverlay(ctx, client, org, weeks, today)
+				v, err := loadIncidentOverlay(ctx, client, org, nil, weeks, today)
 				must(t, err)
 				return fmt.Sprintf("sum=%.6f", v.value*incidentWeeks(t))
 			}},
@@ -369,7 +369,7 @@ func TestArgMaxTieThroughputForecastAndOperatingReviewServeOneVersion14355(t *te
                     SELECT '%s', toDate('2026-08-01'), %s, %d, '%s', %s`, repo, latency, merged, org, at)
 			},
 			func() float64 {
-				v, err := loadReviewOverlay(ctx, client, org, weeks, today)
+				v, err := loadReviewOverlay(ctx, client, org, nil, weeks, today)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -385,7 +385,7 @@ func TestArgMaxTieThroughputForecastAndOperatingReviewServeOneVersion14355(t *te
                     SELECT '%s', toDate('2026-08-01'), %d, %s, '%s', %s`, repo, count, mttr, org, at)
 			},
 			func() float64 {
-				v, err := loadIncidentOverlay(ctx, client, org, weeks, today)
+				v, err := loadIncidentOverlay(ctx, client, org, nil, weeks, today)
 				if err != nil {
 					t.Fatal(err)
 				}

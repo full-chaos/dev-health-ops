@@ -199,10 +199,23 @@ emits, and the fixture keeps it byte for byte.
 
 | fixture | sha256(wire form) |
 | --- | --- |
-| `data_health_connectors_captured.graphql` | `0e43d67d571539081b2006ae8b2148dd4ea31c959be22be1db9e927083060baa` |
-| `data_health_identity_captured.graphql` | `a31987266aad8c1e9eb7cb1b572cc45aecc417f566773e9b5ba6e1bf10ec1a94` |
-| `data_health_metric_lineage_captured.graphql` | `4d93b59c335d6b8e5709f60bf4186030aa1b6b454c438e73c9177c675ccd705d` |
-| `data_health_mapping_coverage_captured.graphql` | `f87ebae2df502280d389cfd3bf6452e2e1ef8ed6965280f5ba809350ac6a0d01` |
+| `data_health_connectors_captured.graphql` | `d2a289f6419d0f6f9826ca978ce37d6f90e629934d2f49782d4a1ce2c874a136` |
+| `data_health_identity_captured.graphql` | `04a822b0357f0a0195867c8eb5343d9bf878d26b674d8bbd849ef9c6d1d6c2b5` |
+| `data_health_metric_lineage_captured.graphql` | `717b35c73431903150f79b061642065b33191d8a9472bf76b17f3d4e325b4f95` |
+| `data_health_mapping_coverage_captured.graphql` | `08ddf1a9d01ae058ddb7ab25052aadccfe2bf9bc3424bdb0bdb4da9f77207dcc` |
+
+CHAOS-14644 / CHAOS-14645: the four current documents omit the `team` argument (no variable, no literal), so
+`dataHealth` reads org-wide. The wire form was computed with the web repo's pinned `@urql/core` (`createRequest`,
+`formatDocument`, `stringifyDocument`) over the four edited web `.graphql` sources. The texts the web sent before stay
+registered as legacy texts, so a deployed web build keeps working:
+
+| legacy fixture | sha256(wire form) |
+| --- | --- |
+| `data_health_connectors_v1_captured.graphql` | `0e43d67d571539081b2006ae8b2148dd4ea31c959be22be1db9e927083060baa` |
+| `data_health_identity_v1_captured.graphql` (before the name fields) | `a31987266aad8c1e9eb7cb1b572cc45aecc417f566773e9b5ba6e1bf10ec1a94` |
+| `data_health_identity_v2_captured.graphql` | `3a6f9e0676663b447d633872098e14e387f07b95b90b88d6255263d3a339362d` |
+| `data_health_metric_lineage_v1_captured.graphql` (fixed `team: "ALL"`) | `4d93b59c335d6b8e5709f60bf4186030aa1b6b454c438e73c9177c675ccd705d` |
+| `data_health_mapping_coverage_v1_captured.graphql` | `f87ebae2df502280d389cfd3bf6452e2e1ef8ed6965280f5ba809350ac6a0d01` |
 
 # experiments wire-capture fixture
 

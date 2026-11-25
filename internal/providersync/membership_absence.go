@@ -31,6 +31,24 @@ func (prover linearInactiveAbsence) Absence(_ context.Context, teamID, memberID 
 	return AbsenceNotAsked
 }
 
+// membershipRateLimit holds the first classified rate limit a run's departure lookups met. A rate limit says
+// nothing about the member, so the run ends with it before the membership write (the non-strict caller snoozes
+// and reads the catalog again). The lookups after it are not sent.
+type membershipRateLimit struct{ err error }
+
+// note keeps the first classified rate limit in err and reports whether err is one.
+func (limit *membershipRateLimit) note(err error) bool {
+	if limit == nil || !isClassifiedRateLimit(err) {
+		return false
+	}
+	if limit.err == nil {
+		limit.err = err
+	}
+	return true
+}
+
+func (limit *membershipRateLimit) hit() bool { return limit != nil && limit.err != nil }
+
 // maxMembershipLookupBody bounds the body of one lookup answer.
 const maxMembershipLookupBody = 1 << 20
 
@@ -40,17 +58,21 @@ const maxMembershipLookupBody = 1 << 20
 type githubMembershipAbsence struct {
 	client *providerfoundation.HTTPClient
 	org    string
+	limit  *membershipRateLimit
 }
 
 func (prover githubMembershipAbsence) Absence(ctx context.Context, teamID, memberID string) MembershipAbsence {
 	slug, okTeam := strings.CutPrefix(teamID, "gh:")
 	login, okMember := strings.CutPrefix(memberID, "gh:")
-	if !okTeam || !okMember || strings.TrimSpace(slug) == "" || strings.TrimSpace(login) == "" || prover.client == nil {
+	if !okTeam || !okMember || strings.TrimSpace(slug) == "" || strings.TrimSpace(login) == "" || prover.client == nil || prover.limit.hit() {
 		return AbsenceUnproven
 	}
 	response, err := prover.client.DoRoute(ctx, http.MethodGet, "/orgs/{org}/teams/{slug}/memberships/{login}",
 		"/orgs/"+url.PathEscape(prover.org)+"/teams/"+url.PathEscape(slug)+"/memberships/"+url.PathEscape(login), nil)
 	if err != nil {
+		if prover.limit.note(err) {
+			return AbsenceUnproven
+		}
 		var providerErr *providerfoundation.ProviderError
 		if errors.As(err, &providerErr) && providerErr.Class == providerfoundation.ErrorNotFound && providerErr.StatusCode == http.StatusNotFound {
 			return AbsenceProven
@@ -82,17 +104,19 @@ func (prover githubMembershipAbsence) Absence(ctx context.Context, teamID, membe
 type gitlabMembershipAbsence struct {
 	client      *providerfoundation.HTTPClient
 	groupByTeam map[string]string // team id -> the group's relative API path
+	limit       *membershipRateLimit
 }
 
 func (prover gitlabMembershipAbsence) Absence(ctx context.Context, teamID, memberID string) MembershipAbsence {
 	username, okMember := strings.CutPrefix(memberID, "gl:")
 	groupPath, okTeam := prover.groupByTeam[teamID]
-	if !okMember || !okTeam || strings.TrimSpace(username) == "" || prover.client == nil {
+	if !okMember || !okTeam || strings.TrimSpace(username) == "" || prover.client == nil || prover.limit.hit() {
 		return AbsenceUnproven
 	}
 	response, err := prover.client.DoRoute(ctx, http.MethodGet, "/groups/{group}/members",
 		groupPath+"/members?per_page=100&query="+url.QueryEscape(username), nil)
 	if err != nil {
+		prover.limit.note(err)
 		return AbsenceUnproven
 	}
 	defer response.Body.Close()

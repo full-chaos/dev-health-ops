@@ -1,5 +1,5 @@
-query GetMappingCoverageHealth($teamId: ID!) {
-  dataHealth(team: $teamId) {
+query GetMappingCoverageHealth {
+  dataHealth {
     mappingCoverage {
       deployments {
         totalRepos

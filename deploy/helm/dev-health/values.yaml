@@ -61,6 +61,13 @@ goApi:
   #    nothing (docs/reference/auth/configuration.md).
   #    authProxy:
   #      impersonation: true
+  # -- CHAOS-14689: the third goApi.authProxy key. serviceAccountKeys=true renders AUTH_PROXY_SERVICE_ACCOUNT_KEYS=true:
+  #    go-api sends the admin service account key routes (list, issue, rotate, revoke) and lifecycle routes to
+  #    auth-service with its workload token. Needs authService.phase 2 or higher (AUTH_PROXY_URL) and auth-service's
+  #    AUTH_MEMBERSHIP_ROUTES on (authService.extraEnv, value "true"): the render refuses the switch without them.
+  #    Absent or false renders nothing (docs/reference/auth/configuration.md).
+  #    authProxy:
+  #      serviceAccountKeys: true
   # -- The api listener (requests). The Service targets this port.
   port: 8000
   # -- The operator listener: /healthz, /readyz and /metrics. Probes use it.

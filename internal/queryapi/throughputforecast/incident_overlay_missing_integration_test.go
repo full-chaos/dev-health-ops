@@ -19,7 +19,7 @@ func TestIncidentOverlayTellsNoIncidentDataFromAMeasuredZero(t *testing.T) {
 	const weeks = 4
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 
-	noRows, err := loadIncidentOverlay(ctx, client, org, weeks, today)
+	noRows, err := loadIncidentOverlay(ctx, client, org, nil, weeks, today)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestIncidentOverlayTellsNoIncidentDataFromAMeasuredZero(t *testing.T) {
         VALUES (?, toUUID('7a000000-0000-4000-8000-000000000001'), ?, 0, now())`, org, today.AddDate(0, 0, -3)); err != nil {
 		t.Fatal(err)
 	}
-	measuredZero, err := loadIncidentOverlay(ctx, client, org, weeks, today)
+	measuredZero, err := loadIncidentOverlay(ctx, client, org, nil, weeks, today)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestIncidentOverlayTellsNoIncidentDataFromAMeasuredZero(t *testing.T) {
         VALUES (?, toUUID('7a000000-0000-4000-8000-000000000003'), ?, 8, now())`, org, today.AddDate(0, 0, -2)); err != nil {
 		t.Fatal(err)
 	}
-	populated, err := loadIncidentOverlay(ctx, client, org, weeks, today)
+	populated, err := loadIncidentOverlay(ctx, client, org, nil, weeks, today)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestReviewOverlayTellsNoReviewDataFromAMeasuredZero(t *testing.T) {
 	const weeks = 4
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 
-	noRows, err := loadReviewOverlay(ctx, client, org, weeks, today)
+	noRows, err := loadReviewOverlay(ctx, client, org, nil, weeks, today)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestReviewOverlayTellsNoReviewDataFromAMeasuredZero(t *testing.T) {
         VALUES (toUUID('7a000000-0000-4000-8000-000000000002'), ?, 0, ?, now())`, today.AddDate(0, 0, -3), org); err != nil {
 		t.Fatal(err)
 	}
-	measuredZero, err := loadReviewOverlay(ctx, client, org, weeks, today)
+	measuredZero, err := loadReviewOverlay(ctx, client, org, nil, weeks, today)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestReviewOverlayTellsNoReviewDataFromAMeasuredZero(t *testing.T) {
         VALUES (toUUID('7a000000-0000-4000-8000-000000000004'), ?, 6, ?, now())`, today.AddDate(0, 0, -2), org); err != nil {
 		t.Fatal(err)
 	}
-	populated, err := loadReviewOverlay(ctx, client, org, weeks, today)
+	populated, err := loadReviewOverlay(ctx, client, org, nil, weeks, today)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -283,8 +283,9 @@ func (h handlers) listGitHubRepos(w http.ResponseWriter, r *http.Request, creden
 		return
 	}
 	// {**decrypted, "base_url": decrypted.get("base_url") or config.get("base_url")}
+	// An App credential signs with a key its row config does not own: only its stored base or the default API takes it.
 	base, _ := stored.Get("base_url")
-	if !pyjson.Truthy(base) {
+	if gc := githubFromMapping(stored); !pyjson.Truthy(base) && (gc == nil || !gc.app) {
 		var err error
 		if base, err = credential.configGet("base_url"); err != nil {
 			fail(err)

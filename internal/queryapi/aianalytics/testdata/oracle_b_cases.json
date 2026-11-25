@@ -4548,14 +4548,7 @@
    ]
   },
   {
-   "calls": {
-    "prs": {
-     "limit": 51,
-     "offset": 0,
-     "repo_id": null,
-     "repo_ids": null
-    }
-   },
+   "calls": {},
    "complexity": [],
    "daily": [],
    "evidence": [],
@@ -6792,16 +6785,7 @@
    ]
   },
   {
-   "calls": {
-    "evidence": {
-     "limit": 51,
-     "offset": 0
-    },
-    "mix": {
-     "kinds": null,
-     "repo_ids": null
-    }
-   },
+   "calls": {},
    "complexity": [],
    "daily": [],
    "evidence": [
@@ -6855,30 +6839,14 @@
     }
    ],
    "expected": {
-    "dataAvailable": true,
+    "dataAvailable": false,
     "endDate": "2026-08-03",
     "hasMore": false,
-    "mix": [
-     {
-      "count": 6,
-      "kind": "ai_assisted",
-      "share": 0.6
-     },
-     {
-      "count": 3,
-      "kind": "human",
-      "share": 0.3
-     },
-     {
-      "count": 1,
-      "kind": "unknown",
-      "share": 0.1
-     }
-    ],
+    "mix": [],
     "orgId": "org-1",
     "rows": [],
     "startDate": "2026-08-01",
-    "totalAttributed": 10
+    "totalAttributed": 0
    },
    "fail": "teams",
    "fn": "resolve_ai_attribution_overview",

@@ -104,6 +104,7 @@ dev_health_metric_labels_dropped_total	instrument,label	the allowlist drop count
 devhealth_operational_webhook_ignored_total	event_type,provider	code: internal/jobs/operational/telemetry.go
 dev_health_project_catalog_ensure_total	outcome,provider	code: internal/providersync/project_catalog_ensure_skip.go
 dev_health_work_item_done_without_completed_at_total	provider	code: internal/providersync/work_item_done_without_completed_at.go
+devhealth_query_api_ai_analytics_team_repos_unavailable_total	operation,read	code: internal/queryapi/aianalytics/scope.go
 devhealth_query_api_analytics_calls_total		code: internal/queryapi/graph/telemetry.go
 devhealth_query_api_analytics_client_cancelled_total	phase	code: internal/queryapi/analytics/clientcancel.go
 devhealth_query_api_analytics_degraded_total	phase	code: internal/queryapi/analytics/telemetry.go

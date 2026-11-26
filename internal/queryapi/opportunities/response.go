@@ -316,7 +316,7 @@ func BuildResponse(ctx context.Context, chClient home.QueryClient, orgID string,
 	if err != nil {
 		return nil, err
 	}
-	if f.Scope.Unresolved() {
+	if f.Scope.Unresolved() || f.Scope.DeveloperNamed() {
 		return &Response{Items: []Card{}}, nil
 	}
 	h, err := home.BuildResponse(ctx, chClient, nil, orgID, f, now)

@@ -2,11 +2,21 @@ package home
 
 import (
 	"context"
+	"slices"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/scoperesolve"
 )
 
 // An unresolved scope filter answers EMPTY (CHAOS-6119, R335); what "known" means is in package scoperesolve.
+
+// developerNamed: the request scopes to developer ids. No metric of Home has a developer dimension, so such a scope answers
+// no data whether or not the ids are known.
+func (s ScopeFilter) developerNamed() bool {
+	return s.Level == "developer" && slices.ContainsFunc(s.IDs, func(id string) bool { return id != "" })
+}
+
+// DeveloperNamed is developerNamed for the callers that build on Home.
+func (s ScopeFilter) DeveloperNamed() bool { return s.developerNamed() }
 
 // Unresolved reports that the request names scope ids at a repository, service or developer level and none of them exists for the
 // organization. Only meaningful after ResolveScope.

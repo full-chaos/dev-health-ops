@@ -46,7 +46,7 @@ func sparkPoints(rows []dayValueRow, transform func(float64) float64) []SparkPoi
 // computeMetricDelta ports _metric_deltas' own _compute_one closure
 // (services/home.py:873-948).
 func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec, startDay, endDay, compareStart, compareEnd time.Time, f Filters, orgID string, asOf time.Time) (MetricDelta, error) {
-	if repoLinkedMetrics[spec.Metric] && repoFilterRequested(f) {
+	if repoLinkedMetrics[spec.Metric] && repoFilterRequested(f) && !f.Scope.developerNamed() {
 		return computeRepoLinkedDelta(ctx, client, spec, startDay, endDay, compareStart, compareEnd, f, orgID, asOf)
 	}
 	scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, client, spec.Scope, f, orgID, "team_id", "repo_id", asOf)

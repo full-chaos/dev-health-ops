@@ -349,11 +349,35 @@ FROM (
 )
 GROUP BY day, repo_id`
 
+// recordTouchedGitStatsSQL appends one 'touched' event for the committer day of
+// each commit whose git_commit_stats rows were written at or after the given time
+// (CHAOS-14673). The line counts of a commit are read under its committer day,
+// and a later sync can write them after the commit: the commit row is looked up
+// by the stats keys, whatever its own last_synced. It is its own statement and
+// RecordTouchedGit runs it only for a sync that wrote commit stats: the stats
+// table has no index or partition on last_synced, so the read covers every stats
+// row of the organization.
+const recordTouchedGitStatsSQL = `
+INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
+SELECT ?, day, repo_id, 'touched', fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+FROM (
+    SELECT repo_id, toDate(committer_when, 'UTC') AS day
+    FROM git_commits
+    WHERE org_id = ? AND (repo_id, hash) IN (
+        SELECT repo_id, commit_hash
+        FROM git_commit_stats
+        WHERE org_id = ? AND last_synced >= fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+    )
+)
+GROUP BY day, repo_id`
+
 // RecordTouchedGit appends the 'touched' events of the commits, pull requests
-// and pull request reviews whose last_synced is at or after since. It returns the number of
-// keys it appended.
+// and pull request reviews whose last_synced is at or after since, and, when
+// commitStats is true (a unit of the sync wrote commit stats), the committer
+// days of the commits whose stats were written at or after since. It returns
+// the number of keys it appended.
 func (store *ClickHouseTouchedDaysStore) RecordTouchedGit(
-	ctx context.Context, organizationID string, since time.Time,
+	ctx context.Context, organizationID string, since time.Time, commitStats bool,
 ) (uint64, error) {
 	if store == nil || store.conn == nil || organizationID == "" || since.IsZero() {
 		return 0, ErrTouchedDaysUnavailable
@@ -370,6 +394,14 @@ func (store *ClickHouseTouchedDaysStore) RecordTouchedGit(
 		organizationID, sinceMillis,
 	); err != nil {
 		return 0, ErrTouchedDaysUnavailable
+	}
+	if commitStats {
+		if err := store.conn.Exec(ctx, recordTouchedGitStatsSQL,
+			organizationID, at.UnixMilli(),
+			organizationID, organizationID, sinceMillis,
+		); err != nil {
+			return 0, ErrTouchedDaysUnavailable
+		}
 	}
 	return store.recordedAt(ctx, organizationID, at)
 }

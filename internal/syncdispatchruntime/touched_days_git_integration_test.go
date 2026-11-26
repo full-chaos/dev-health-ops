@@ -106,7 +106,7 @@ func TestTouchedDaysRecordHoldsTheDaysOfTheCommitsAndPullRequestsOfTheRun(t *tes
 	}
 	sort.Strings(want)
 
-	recorded, err := store.RecordTouchedGit(ctx, touchedTestOrg, touchedTestSince)
+	recorded, err := store.RecordTouchedGit(ctx, touchedTestOrg, touchedTestSince, false)
 	if err != nil {
 		t.Fatal(err)
 	}

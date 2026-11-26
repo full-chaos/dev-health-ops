@@ -43,6 +43,12 @@ type PostSyncPlan struct {
 	// days those rows touched (CHAOS-9169): a commit written for a day outside
 	// every window of the run marks its own day.
 	Git bool
+	// CommitStats is true when a successful unit of the sync run is the
+	// commit-stats dataset. Only then does the git record also read the stats
+	// table for the committer days of the commits whose stats the run wrote
+	// (CHAOS-14673): that table has no index on last_synced, so a sync that wrote
+	// none does not scan it.
+	CommitStats bool
 	// TestReports is true when a successful unit of the sync run wrote test
 	// suite rows (the cicd or tests target). Only then does the fan-out record
 	// the days of the suites of the runs it wrote, the older attempts' days
@@ -735,6 +741,7 @@ ORDER BY id`, args.SyncRunID())
 		unboundedFrom  bool
 		unboundedTo    bool
 		successfulUnit bool
+		commitStats    bool
 	)
 	for rows.Next() {
 		var provider, dataset string
@@ -747,6 +754,9 @@ ORDER BY id`, args.SyncRunID())
 			continue
 		}
 		successfulUnit = true
+		if dataset == "commit-stats" {
+			commitStats = true
+		}
 		for _, target := range capability.LegacyTargets {
 			targets[target] = struct{}{}
 			if target == "work-items" {
@@ -834,7 +844,7 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 		}
 	}
 	return &PostSyncPlan{
-		WorkItems: hasWorkItems, Git: git, TestReports: writesTestReportRows(targets), RunStartedAt: startedAt,
+		WorkItems: hasWorkItems, Git: git, CommitStats: git && commitStats, TestReports: writesTestReportRows(targets), RunStartedAt: startedAt,
 		WorkItemWindowDays: workItemWindowDays,
 		OrganizationID:     orgID, SyncRunID: args.SyncRunID(), TargetDay: targetDay,
 		BackfillDays: backfillDays, From: from, To: to,

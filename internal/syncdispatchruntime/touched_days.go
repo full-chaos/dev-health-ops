@@ -161,9 +161,11 @@ type TouchedDaysStore interface {
 	// since and, for every repository a work item was written of at or after
 	// since, each of windowDays.
 	RecordTouched(ctx context.Context, organizationID string, since time.Time, windowDays []time.Time) (uint64, error)
-	// RecordTouchedGit records the days of the commits and pull requests
-	// written at or after since (CHAOS-9169), each under its own repository.
-	RecordTouchedGit(ctx context.Context, organizationID string, since time.Time) (uint64, error)
+	// RecordTouchedGit records the days of the commits, pull requests and pull
+	// request reviews written at or after since (CHAOS-9169), each under its own
+	// repository, and, when commitStats is true, the committer days of the
+	// commits whose stats were written at or after since (CHAOS-14673).
+	RecordTouchedGit(ctx context.Context, organizationID string, since time.Time, commitStats bool) (uint64, error)
 	// RecordTouchedTests records the day of every test suite row of each
 	// workflow run that had a suite row written at or after since: every
 	// attempt, slot and legacy row of the run, so a re-run that moves the
@@ -454,7 +456,7 @@ func recordPlanTouchedDays(ctx context.Context, touched TouchedDaysStore, plan *
 		take.recorded += recorded
 	}
 	if plan.Git {
-		recorded, err := touched.RecordTouchedGit(ctx, plan.OrganizationID, since)
+		recorded, err := touched.RecordTouchedGit(ctx, plan.OrganizationID, since, plan.CommitStats)
 		if err != nil {
 			return err
 		}

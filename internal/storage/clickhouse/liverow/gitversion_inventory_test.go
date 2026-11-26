@@ -130,6 +130,7 @@ var gitTableSites = map[string]gitTableSite{
 	"streamhandlers/external_stored_version.go:externalUnstoredFields":                                                    {1, "NAMES", "reason text"},
 	"streamhandlers/stored_version.go:StoredVersionSpecs":                                                                 {2, "NAMES", "writer spec keys"},
 	"syncdispatchruntime/touched_days_clickhouse.go:recordTouchedGitSQL":                                                  {1, "SAFE", "raw; GROUP BY day, repo_id; it reads the versions synced since a time on purpose, an old version's day is one more day to recompute"},
+	"syncdispatchruntime/touched_days_clickhouse.go:recordTouchedGitStatsSQL":                                             {1, "SAFE", "raw; GROUP BY day, repo_id; the commit row is looked up by the keys of the stats written since a time, only to read its committer day: an old version of the row names the same or one more day to recompute"},
 }
 
 type gitTableSite struct {

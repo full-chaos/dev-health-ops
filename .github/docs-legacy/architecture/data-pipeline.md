@@ -439,7 +439,12 @@ never reads the rows as they are. Every `at` is the ClickHouse clock.
    (`recordTouchedGitSQL`, `RecordTouchedGit`) appends a `touched` event for
    each `(day, repository)` of the rows of `git_commits`, `git_pull_requests` and
    `git_pull_request_reviews` whose `last_synced` is at or after the same lower
-   bound. The days are the
+   bound. When a successful unit of the sync run is the `commit-stats` dataset
+   (`PostSyncPlan.CommitStats`), a second statement (`recordTouchedGitStatsSQL`)
+   also marks the committer day of each commit whose `git_commit_stats` rows
+   were written at or after the bound, whenever the commit row itself was written:
+   the stats table has no index on `last_synced`, so a sync that wrote no stats
+   does not scan it. The days are the
    ones the daily run reads those rows under: the committer date of a commit
    (not its author date: a rebased commit keeps an old author date that no run
    reads it under), the creation day and, when merged, the merge day of a

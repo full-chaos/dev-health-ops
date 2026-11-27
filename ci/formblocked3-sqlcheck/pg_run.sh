@@ -85,13 +85,13 @@ grep -q '|run_inventory:page_budget_exhausted:1|' "$work/inv.out" && echo "PASS 
 grep -q '|run_artifacts:page_budget_exhausted:2,run_reports:per_run_cap:9|' "$work/mixed.out" && echo "PASS mixed: the stmt2 row carries both entries" || fail "mixed: entry text"
 grep -q '^a1000001|00000000|.*|report_member:malformed:6,run_reports:per_run_cap:141|.*|7|100|3|2|5|11|abc$' "$work/adv.out" && echo "PASS adv: the stmt3 row = the advancing-only unit with its checkpoint counters" || fail "adv: stmt3 row text"
 # mutant: a pair list without run_reports:per_run_cap -> the advancing-only unit moves back to stmt2 (the list is the gate)
-python3 -I - "$S3" "$work/m_nopair.sql" <<'PY'
+python3 -I - "$S3" "$work/m_nopair.src.sql" <<'PY'
 import sys
 s = open(sys.argv[1]).read(); old = "        ('run_reports', 'per_run_cap'),\n"
 assert s.count(old) == 2, s.count(old)
 open(sys.argv[2], "w").write(s.replace(old, ""))
 PY
-run m_nopair "$work/m_nopair.sql" a1a1a1a1; expect m_nopair 1 0 1
+run m_nopair "$work/m_nopair.src.sql" a1a1a1a1; expect m_nopair 1 0 1
 after=$(psql_fx -Atc "SELECT (SELECT count(*) FROM public.sync_runs) || '/' || (SELECT count(*) FROM public.sync_run_units)")
 if [ "$after" = "$before" ]; then echo "PASS read-only: row counts $after unchanged"; else fail "row counts changed: $before -> $after"; fi
 docker rm -f pg >/dev/null

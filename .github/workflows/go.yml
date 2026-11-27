@@ -387,7 +387,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
@@ -500,7 +500,7 @@ jobs:
 
       - name: Set up Go
         id: setup-go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
@@ -642,7 +642,7 @@ jobs:
 
       - name: Set up Go
         id: setup-go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
@@ -813,7 +813,7 @@ jobs:
       - name: Set up Go
         id: setup-go
         if: steps.select.outputs.rows != '0'
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
@@ -1233,7 +1233,7 @@ jobs:
       - name: Warm the syft tool cache (attempt 1)
         id: syft-download-1
         continue-on-error: true
-        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        uses: anchore/sbom-action/download-syft@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
         with:
           syft-version: v1.42.3
 
@@ -1241,7 +1241,7 @@ jobs:
         id: syft-download-2
         if: steps.syft-download-1.outcome == 'failure'
         continue-on-error: true
-        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        uses: anchore/sbom-action/download-syft@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
         with:
           syft-version: v1.42.3
 
@@ -1249,13 +1249,13 @@ jobs:
         id: syft-download-3
         if: steps.syft-download-2.outcome == 'failure'
         continue-on-error: true
-        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        uses: anchore/sbom-action/download-syft@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
         with:
           syft-version: v1.42.3
 
       - name: Generate operator SBOM
         if: ${{ !cancelled() && steps.load.outcome == 'success' }}
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
         with:
           image: dev-health-go-operator:ci
           format: spdx-json
@@ -1283,7 +1283,7 @@ jobs:
 
       - name: Generate contractcheck SBOM
         if: ${{ !cancelled() && steps.load.outcome == 'success' }}
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
         with:
           image: dev-health-go-contractcheck:ci
           format: spdx-json
@@ -1311,7 +1311,7 @@ jobs:
 
       - name: Generate migrate SBOM
         if: ${{ !cancelled() && steps.load.outcome == 'success' }}
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
         with:
           image: dev-health-go-migrate:ci
           format: spdx-json
@@ -1339,7 +1339,7 @@ jobs:
 
       - name: Generate dho SBOM
         if: ${{ !cancelled() && steps.load.outcome == 'success' }}
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
         with:
           image: dev-health-go-dho:ci
           format: spdx-json
@@ -1367,7 +1367,7 @@ jobs:
 
       - name: Generate auth-service SBOM
         if: ${{ !cancelled() && steps.load.outcome == 'success' }}
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
         with:
           image: dev-health-go-auth-service:ci
           format: spdx-json
@@ -1395,7 +1395,7 @@ jobs:
 
       - name: Generate auth-migrate SBOM
         if: ${{ !cancelled() && steps.load.outcome == 'success' }}
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
         with:
           image: dev-health-go-auth-migrate:ci
           format: spdx-json
@@ -1725,7 +1725,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'

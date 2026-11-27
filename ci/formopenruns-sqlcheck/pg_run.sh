@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Throwaway (never merged): executes OPENRUNS-14297-1.pg.sql (the W2 driver -7 open-runs WAIT read) on PostgreSQL with the real
+# Throwaway (never merged): executes OPENRUNS-14297-2.pg.sql (the W2 driver -7 open-runs WAIT read) on PostgreSQL with the real
 # public.organizations / sync_runs / sync_run_units DDL + the ix_sync_run_units_run_status index from internal/pgmigrate/baseline/head.json
 # AT THE WORKERS PIN, a synthetic fixture (seed.sql), the driver's psql flags (W2-DRIVER-7 psql_read: -X -q -A -F"|" -v ON_ERROR_STOP=1
 # -f -) and the driver's col awk (byte copy below). Every gate is fired once (named STOP, rc != 0 = the driver's WAIT).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 PIN=7555c48d4ce67ba6402ae2e41ac966524fc130eb
-SQL_SHA12=972cd7785012
+SQL_SHA12=1c5e7d000e0d
 ORG8=f0f0f0f0
 work=$(mktemp -d)
 status=0
 fail() { echo "FAIL: $*"; status=1; }
-[ "$(sha256sum "$here/OPENRUNS-14297-1.pg.sql" | cut -c1-12)" = "$SQL_SHA12" ] || { echo "FAIL: sql sha12 differs"; exit 1; }
-echo "OPENRUNS-14297-1.pg.sql sha256 $(sha256sum "$here/OPENRUNS-14297-1.pg.sql" | cut -c1-64)"
+[ "$(sha256sum "$here/OPENRUNS-14297-2.pg.sql" | cut -c1-12)" = "$SQL_SHA12" ] || { echo "FAIL: sql sha12 differs"; exit 1; }
+echo "OPENRUNS-14297-2.pg.sql sha256 $(sha256sum "$here/OPENRUNS-14297-2.pg.sql" | cut -c1-64)"
 : "${PG_IMAGE:?PG_IMAGE is required}"
 docker run -d --name pg -e POSTGRES_PASSWORD=ci "$PG_IMAGE" >/dev/null
 for _ in $(seq 1 60); do
@@ -63,14 +63,14 @@ expect_stop() { # <label> <stop text>
   if [ "$RC" != 0 ] && grep -q "$2" "$work/$1.out" && ! grep -q '^open_runs|' "$work/$1.out"; then echo "PASS $1: $2 fires, rc $RC, no later statement ran (the driver WAITs on rc != 0)"
   else fail "$1: no $2 (rc $RC)"; fi
 }
-mut() { python3 -I - "$here/OPENRUNS-14297-1.pg.sql" "$work/$1.src.sql" "$2" "$3" <<'PY'
+mut() { python3 -I - "$here/OPENRUNS-14297-2.pg.sql" "$work/$1.src.sql" "$2" "$3" <<'PY'
 import sys
 s = open(sys.argv[1]).read(); old, new = sys.argv[3], sys.argv[4]
 assert s.count(old) >= 1, old
 open(sys.argv[2], "w").write(s.replace(old, new))
 PY
 }
-S="$here/OPENRUNS-14297-1.pg.sql"
+S="$here/OPENRUNS-14297-2.pg.sql"
 run open "$S" "$ORG8"; expect open 2 3 'a1a1a1a1,b2b2b2b2'
 run g0_org "$S" eeeeeeee; expect_stop g0_org 'STOP-G0 orgs=0'
 mut c_bytes '1073741824::bigint' '0::bigint'; run c_bytes "$work/c_bytes.src.sql" "$ORG8"; expect_stop c_bytes 'STOP-G0 orgs=1 rels=2 runs_bytes='
@@ -79,7 +79,7 @@ import sys
 p = sys.argv[1]; s = open(p).read(); assert s.count("<= 1000") == 1; open(p, "w").write(s.replace("<= 1000", "<= 1"))
 PY
 run c_s1 "$work/c_s1.src.sql" "$ORG8"
-if [ "$RC" != 0 ] && grep -q 'STOP-S1 open_runs>1000' "$work/c_s1.out"; then echo "PASS c_s1: the S1 cap fires (cap 1 < 2 open runs), rc $RC"; else fail "c_s1: no STOP-S1"; fi
+if [ "$RC" != 0 ] && grep -q 'STOP-S1 open_runs=2"' "$work/c_s1.out" && ! grep -q '^open_runs|' "$work/c_s1.out"; then echo "PASS c_s1: the S1 cap fires and names open_runs=2 (cap 1 < 2 open runs), rc $RC"; else fail "c_s1: no STOP-S1 open_runs=2"; fi
 psql_fx -q -c "UPDATE public.sync_runs SET status = 'success' WHERE id IN ('a1a1a1a1-0000-4000-8000-0000000000a1', 'b2b2b2b2-0000-4000-8000-0000000000b2')"
 run closed "$S" "$ORG8"; expect closed 0 0 '-'
 psql_fx -q -c "UPDATE public.sync_runs SET status = 'dispatching' WHERE id = 'a1a1a1a1-0000-4000-8000-0000000000a1'"

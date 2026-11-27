@@ -1,4 +1,4 @@
--- OPENRUNS-14297-1.pg (acp-train43, 2026-11-27; CHAOS-14297 wave 2, driver W2-DRIVER-7): the org's OPEN backfill runs, ANY prefix. Read by
+-- OPENRUNS-14297-2.pg (acp-train43, 2026-11-27; = -1 972cd7785012 with the S1 ELSE built from a subquery value: a constant ::int cast folds at plan time, CI #7110 run 46041176048; CHAOS-14297 wave 2, driver W2-DRIVER-7): the org's OPEN backfill runs, ANY prefix. Read by
 -- the driver after a START with an unknown outcome (rc != 0 or no run prefix printed): it WAITs until stmt1 open_runs = 0, then writes
 -- RETRY kind=start. Form = FORM-TEMPLATE-5 (b) (7fb32b16d35d): one transaction, REPEATABLE READ READ ONLY .. ROLLBACK, no SET, a G0
 -- catalog gate that reads no data table, the org prefix on every FROM with org_id, counts / 8-char prefixes only.
@@ -40,7 +40,7 @@ WITH openr AS MATERIALIZED (
     AND r.status NOT IN ('success', 'partial_failed', 'failed')
   LIMIT 1001)
 SELECT CASE WHEN (SELECT count(*) FROM openr) <= 1000 THEN (SELECT count(*) FROM openr)
-            ELSE ('STOP-S1 open_runs>1000')::int END AS open_runs,
+            ELSE ('STOP-S1 open_runs=' || (SELECT count(*) FROM openr))::int END AS open_runs,
        (SELECT count(*) FROM public.sync_run_units AS u JOIN openr AS o ON u.sync_run_id = o.id AND u.org_id = o.org_id
         WHERE starts_with(u.org_id::text, '{{ORG_PREFIX}}') AND u.status NOT IN ('success', 'failed')) AS open_units,
        coalesce((SELECT string_agg(left(z.id::text, 8), ',' ORDER BY z.id) FROM (SELECT id FROM openr ORDER BY id LIMIT 20) AS z), '-')

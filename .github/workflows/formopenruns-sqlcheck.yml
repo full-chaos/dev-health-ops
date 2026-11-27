@@ -1,4 +1,4 @@
-# Throwaway (never merged): executes OPENRUNS-14297-1.pg.sql (W2 driver -7 open-runs WAIT read, synthetic fixture) in CI. Delete with the draft PR.
+# Throwaway (never merged): executes OPENRUNS-14297-2.pg.sql (W2 driver -7 open-runs WAIT read, synthetic fixture) in CI. Delete with the draft PR.
 name: formopenruns-sqlcheck
 
 on:

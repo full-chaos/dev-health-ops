@@ -180,7 +180,7 @@ jobs:
       # bytes that (when publishing) were also just pushed under the sha tag
       # in that same build, so there is no separate build to diverge from.
       - name: Set up Go (for the in-image CGO check only)
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           # CHAOS-5157: this step's ONLY use of Go is `go env GOROOT` (to

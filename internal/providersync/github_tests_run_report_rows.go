@@ -77,11 +77,14 @@ func (budget *githubTestsReportBudget) admit(rows, suiteBytes, caseBytes, covera
 	budget.coverageBytes += coverageBytes
 }
 
-// githubTestsMaxHeldReportRowsPerRun bounds the rows a run holds parsed while it decides which artifacts to keep: twice the
-// effect contract's rows, so the duplicate test below can see a whole aggregate next to its parts (acr: about 72,900 rows parsed,
-// 36,500 kept). An artifact that would take the held rows past it is skipped whole under per_run_cap, before it is held. It is
-// not derived from the admitted bound: that bound's retraction reserve (CHAOS-14259) must not refuse a report before planning.
-const githubTestsMaxHeldReportRowsPerRun = 2 * maxEffectRows
+// githubTestsMaxHeldReportRowsPerRun bounds the rows a run holds parsed while it decides which artifacts to keep, so the duplicate
+// test below can see an aggregate next to its parts (acr: about 72,900 rows parsed, 36,500 kept). An artifact that would take the
+// held rows past it is skipped whole under per_run_cap, before it is held. It is pinned to the value it had before the effect
+// contract raise (CHAOS-14723): the held rows are the peak memory of a tests unit, sized against the 768Mi sync-provider limit
+// (Nov 2026 worst case), and it stays at or above the admitted bound (githubTestsMaxReportRowsPerRun, 199,975) so a run under
+// that bound is never refused before planning. It is not derived from the admitted bound: that bound's retraction reserve
+// (CHAOS-14259) must not refuse a report before planning.
+const githubTestsMaxHeldReportRowsPerRun = 200_000
 
 // githubTestsParsedReport is one artifact's parsed rows, held until the run's artifacts are decided together.
 type githubTestsParsedReport struct {

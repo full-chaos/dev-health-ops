@@ -353,29 +353,29 @@ func TestGitHubTestsMinimalRetractionRowsAlwaysFitTheEffectContract(t *testing.T
 	}
 }
 
-// The bound on the rows a run holds before planning stays 2 x 200,000 = 400,000: the retraction reserve of the admitted
-// bound (CHAOS-14259) must not refuse a report the planner would keep after deduplication.
+// The bound on the rows a run holds before planning stays at its value before the effect contract raise, 200,000 (CHAOS-14723):
+// the retraction reserve of the admitted bound (CHAOS-14259) must not refuse a report the planner would keep after deduplication.
 func TestGitHubTestsHeldRowBoundKeepsItsBaseValue(t *testing.T) {
 	copyOf := func(prefix string, cases int) string { return fxJUnit(part(prefix, 1, cases)) }
-	// 399,951 held: three exact copies of 99,988 rows and an independent report of 99,987. After deduplication 199,975 are
-	// admitted, the run bound exactly.
-	copies := copyOf("copy", 99_987)
+	// 199,951 held: three exact copies of 49,988 rows and an independent report of 49,987. After deduplication 99,975 are
+	// admitted.
+	copies := copyOf("copy", 49_987)
 	walk, _, _ := rowsWalk(t, 1, rowsArtifact{id: "81", size: 10, body: copies}, rowsArtifact{id: "82", size: 11, body: copies},
-		rowsArtifact{id: "83", size: 12, body: copies}, rowsArtifact{id: "84", size: 13, body: copyOf("independent", 99_986)})
-	if got := committedReportRows(walk); got != 199_975 || observed(walk, githubTestsPerRunCapCause) != 0 {
-		t.Errorf("399,951 held rows: committed %d, per_run_cap %d; want 199,975 and none (the independent report kept)",
+		rowsArtifact{id: "83", size: 12, body: copies}, rowsArtifact{id: "84", size: 13, body: copyOf("independent", 49_986)})
+	if got := committedReportRows(walk); got != 99_975 || observed(walk, githubTestsPerRunCapCause) != 0 {
+		t.Errorf("199,951 held rows: committed %d, per_run_cap %d; want 99,975 and none (the independent report kept)",
 			got, observed(walk, githubTestsPerRunCapCause))
 	}
-	// 400,000 held: four exact copies of 100,000 rows deduplicate to one.
-	copies = copyOf("four", 99_999)
+	// 200,000 held: four exact copies of 50,000 rows deduplicate to one.
+	copies = copyOf("four", 49_999)
 	walk, _, _ = rowsWalk(t, 1, rowsArtifact{id: "91", size: 10, body: copies}, rowsArtifact{id: "92", size: 11, body: copies},
 		rowsArtifact{id: "93", size: 12, body: copies}, rowsArtifact{id: "94", size: 13, body: copies})
-	if got := committedReportRows(walk); got != 100_000 || observed(walk, githubTestsPerRunCapCause) != 0 {
-		t.Errorf("400,000 held rows: committed %d, per_run_cap %d; want 100,000 and none (all four deduplicated)",
+	if got := committedReportRows(walk); got != 50_000 || observed(walk, githubTestsPerRunCapCause) != 0 {
+		t.Errorf("200,000 held rows: committed %d, per_run_cap %d; want 50,000 and none (all four deduplicated)",
 			got, observed(walk, githubTestsPerRunCapCause))
 	}
-	if githubTestsMaxHeldReportRowsPerRun != 400_000 {
-		t.Errorf("held-row bound %d, want 2 x maxEffectRows = 400,000", githubTestsMaxHeldReportRowsPerRun)
+	if githubTestsMaxHeldReportRowsPerRun != 200_000 || githubTestsMaxHeldReportRowsPerRun < githubTestsMaxReportRowsPerRun {
+		t.Errorf("held-row bound %d, want 200,000, at or above the admitted bound %d", githubTestsMaxHeldReportRowsPerRun, githubTestsMaxReportRowsPerRun)
 	}
 }
 
@@ -524,75 +524,58 @@ func TestGitHubTestsMinimalRetractionRowsTakeTheirOwnChunk(t *testing.T) {
 	}
 }
 
-// retiredLargeMatrix is a run whose dropped aggregate is large: two parts of 50,001 cases each and their exact aggregate
-// (100,002 cases). The admitted rows (2 suites, 100,002 cases) fit the run bound; the case retraction rows (100,002 more) would
-// take the case batch past maxEffectRows (200,004 rows), so the run takes the "suite_rows_only" fallback.
-const retiredLargeMatrixPartCases = maxEffectRows/4 + 1
-
-func retiredLargeMatrix() []rowsArtifact {
-	suite := func(name string) retiredFxSuite {
-		out := retiredFxSuite{name: name, time: "3.0"}
-		for index := 0; index < retiredLargeMatrixPartCases; index++ {
-			out.cases = append(out.cases, retiredFxCase{name + "-" + strconv.Itoa(index), "", "0.01"})
-		}
-		return out
-	}
-	left, right := suite("left"), suite("right")
-	return []rowsArtifact{
-		{id: "1", size: 10, body: retiredFxJUnit(left)}, {id: "2", size: 11, body: retiredFxJUnit(right)},
-		{id: "3", size: 20, body: retiredFxJUnit(left, right)},
-	}
-}
-
 // The "suite_rows_only" fallback: when the case retraction rows do not fit the case batch, the suite rows alone are written
-// (the slot is retired for the readers; an old reader after a rollback still sees the slot's stale cases), with the counter
-// and a Warn line that name the reason.
-func TestGitHubTestsRouteWritesSuiteRowsOnlyWhenTheCaseRowsDoNotFit(t *testing.T) {
-	records := captureMembershipLogs(t)
-	suites, cases, metrics := retiredWalkWith(t, GitHubTestsRouteHandler{}, retiredLargeMatrix()...)
-	retractedSuites, retractedCases := 0, 0
-	for _, row := range suites {
-		if row["retracted"] == true {
-			retractedSuites++
-		}
+// (the slot is retired for the readers; an old reader after a rollback still sees the slot's stale cases). With the held bound at
+// 200,000 rows (CHAOS-14723) a walk cannot reach it on rows (a dropped aggregate and its admitted parts are at most 200,000 held,
+// so admitted cases plus their retraction rows stay inside maxEffectRows), so the cell drives the effects step: 100,000 admitted
+// cases and a dropped report of 100,001 cases take the case batch to 200,001 rows. The counter and the Warn line of a limited run
+// are the route's one emission site for every reason (TestGitHubTestsRouteRetiresTheSlotWithOneRowWhenTheSuiteRowsDoNotFit).
+func TestGitHubTestsRunReportEffectsWriteSuiteRowsOnlyWhenTheCaseRowsDoNotFit(t *testing.T) {
+	at := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	repo := "00000000-0000-4000-8000-000000000001"
+	kept := testSuiteResultRow{OrgID: "org", RepoID: repo, RunID: "1", SuiteID: "kept", SuiteName: "kept", LastSynced: at, ReportSlot: "kept", RunAttempt: 1}
+	admitted := make([]testCaseResultRow, maxEffectRows/2)
+	for index := range admitted {
+		admitted[index] = testCaseResultRow{OrgID: "org", RepoID: repo, RunID: "1", SuiteID: "kept", CaseID: fmt.Sprintf("k%06d", index),
+			CaseName: fmt.Sprintf("k%06d", index), Status: "passed", LastSynced: at}
 	}
-	for _, row := range cases {
-		if row["retracted"] == true {
-			retractedCases++
-		}
+	suiteID := githubTestsSuiteID("1", githubTestsReportSlot{Name: "dropped", Attempt: 1}.scope(), "agg", 0)
+	dropped := testSuiteResultRow{OrgID: "org", RepoID: repo, RunID: "1", SuiteID: suiteID, SuiteName: "agg", LastSynced: at, ReportSlot: "dropped", RunAttempt: 1}
+	droppedCases := make([]testCaseResultRow, maxEffectRows/2+1)
+	for index := range droppedCases {
+		name := fmt.Sprintf("d%06d", index)
+		droppedCases[index] = testCaseResultRow{OrgID: "org", RepoID: repo, RunID: "1", SuiteID: suiteID, CaseID: githubTestsCaseID(suiteID, name, 0),
+			CaseName: name, Status: "passed", LastSynced: at}
 	}
-	if retractedSuites != 2 || retractedCases != 0 || len(cases) != 2*retiredLargeMatrixPartCases {
-		t.Fatalf("retraction rows: %d suite, %d case; %d case rows; want the aggregate's 2 suites, no case row, the parts' 100,002 cases",
-			retractedSuites, retractedCases, len(cases))
+	retirement := githubTestsRetirement{
+		parsed:  []githubTestsParsedReport{{Suites: []testSuiteResultRow{kept}, Cases: admitted}, {Suites: []testSuiteResultRow{dropped}, Cases: droppedCases}},
+		dropped: []githubTestsReportDrop{{Index: 1, Cause: githubTestsAggregateOfPartsCause}},
 	}
-	if want := `dev_health_provider_report_retraction_limited_total{provider="github",reason="suite_rows_only"} 1`; !strings.Contains(metrics, want) {
-		t.Errorf("want %q in the metrics", want)
+	if rows := githubTestsCaseRetractionRows(retirement); len(rows) != len(droppedCases) || len(admitted)+len(rows) <= maxEffectRows {
+		t.Fatalf("%d case retraction rows next to %d admitted cases, want %d and past %d", len(rows), len(admitted), len(droppedCases), maxEffectRows)
 	}
-	warned := 0
-	for _, record := range *records {
-		if record.Message != "dropped report retraction rows limited to fit the run's batch" {
-			continue
+	effects, limited, err := githubTestsRunReportEffects(githubTestsRetractionRoom{}, retirement, []testSuiteResultRow{kept}, admitted, nil, nil)
+	if err != nil || limited != "suite_rows_only" {
+		t.Fatalf("limited %q (%v), want suite_rows_only", limited, err)
+	}
+	for _, effect := range effects {
+		retracted := 0
+		for _, row := range effect.Rows {
+			if strings.Contains(string(row), `"retracted":true`) {
+				retracted++
+			}
 		}
-		warned++
-		attrs := membershipLogAttrs(record)
-		if record.Level != slog.LevelWarn || attrs["reason"] != "suite_rows_only" || attrs["slots"] != int64(1) {
-			t.Errorf("limit line level %s attrs %v, want WARN, reason suite_rows_only, 1 slot", record.Level, attrs)
-		}
-		for key, value := range attrs {
-			if _, isError := value.(error); isError {
-				t.Errorf("limit line carries an error operand %s", key)
+		switch effect.Destination {
+		case "test_suite_results":
+			if len(effect.Rows) != 2 || retracted != 1 {
+				t.Errorf("suite batch %d rows, %d retracted; want the kept suite and the dropped suite's retraction row", len(effect.Rows), retracted)
+			}
+		case "test_case_results":
+			if len(effect.Rows) != len(admitted) || retracted != 0 {
+				t.Errorf("case batch %d rows, %d retracted; want the %d admitted cases and no retraction row", len(effect.Rows), retracted, len(admitted))
 			}
 		}
 	}
-	if warned != 1 {
-		t.Errorf("%d limit lines, want 1", warned)
-	}
-	row, err := json.Marshal(testCaseResultRow{RepoID: strings.Repeat("r", 36), RunID: strings.Repeat("9", 11), SuiteID: strings.Repeat("a", 64),
-		CaseID: strings.Repeat("b", 64), OrgID: strings.Repeat("o", 36), LastSynced: time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC), Retracted: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("one case retraction row is %d bytes", len(row))
 }
 
 // CHAOS-14555: a minimal retraction row lists the legacy ids of every suite of the dropped report (deduplicated, in parse

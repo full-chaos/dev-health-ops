@@ -1072,9 +1072,10 @@ VALUES (?, ?, 'drift-run', ?, 'drift', ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, 1, ?)`, org
 	}
 }
 
-// The "suite_rows_only" fallback serves CONTROL through the new readers: a run whose dropped aggregate is large (two parts of
-// 25,001 cases, their exact aggregate) gets the suite retraction rows and no case retraction row, and the stale run serves
-// what the run synced once serves.
+// The "suite_rows_only" fallback serves CONTROL through the new readers: a run at attempt 2 whose dropped aggregate is large (two
+// parts of 33,334 cases, their exact aggregate) gets the suite retraction rows and no case retraction row (66,668 admitted cases
+// plus 2 x 66,668 case retraction rows, labels 1 and 2, pass the 200,000-row case batch; at attempt 1 a run under the 200,000
+// held rows cannot pass it), and the stale run serves what the run synced once serves.
 func TestTestopsRetiredSlotSuiteRowsOnlyServesTheSyncedOnceNumbers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -1082,10 +1083,15 @@ func TestTestopsRetiredSlotSuiteRowsOnlyServesTheSyncedOnceNumbers(t *testing.T)
 	stack := env.stack
 	suite := func(name string) matrixTotalsSuite {
 		out := matrixTotalsSuite{name: name, time: "3.0"}
-		for index := 0; index < 25_001; index++ {
+		for index := 0; index < 33_334; index++ {
 			out.cases = append(out.cases, matrixTotalsCase{name + "-" + strconv.Itoa(index), "", "0.01"})
 		}
 		return out
+	}
+	atAttempt2 := func(later bool, artifacts []attemptsArtifact) attemptsRunState {
+		state := retiredState(later, artifacts)
+		state.attempt = 2
+		return state
 	}
 	left, right := suite("left"), suite("right")
 	const made, timestamp = "2026-07-22T10:20:00Z", "2026-07-22T10:02:00"
@@ -1096,9 +1102,9 @@ func TestTestopsRetiredSlotSuiteRowsOnlyServesTheSyncedOnceNumbers(t *testing.T)
 		total,
 	}
 	controlOrg, staleOrg := "org-chaos14259-suite-only-control-"+uuid.NewString()[:8], "org-chaos14259-suite-only-stale-"+uuid.NewString()[:8]
-	stack.pass(t, controlOrg, retiredRunID, retiredDay().Add(11*time.Hour), retiredState(true, all))
-	stack.pass(t, staleOrg, retiredRunID, retiredDay().Add(10*time.Hour), retiredState(false, []attemptsArtifact{total}))
-	stack.pass(t, staleOrg, retiredRunID, retiredDay().Add(11*time.Hour), retiredState(true, all))
+	stack.pass(t, controlOrg, retiredRunID, retiredDay().Add(11*time.Hour), atAttempt2(true, all))
+	stack.pass(t, staleOrg, retiredRunID, retiredDay().Add(10*time.Hour), atAttempt2(false, []attemptsArtifact{total}))
+	stack.pass(t, staleOrg, retiredRunID, retiredDay().Add(11*time.Hour), atAttempt2(true, all))
 	for _, org := range []string{controlOrg, staleOrg} {
 		var suites, cases uint64
 		if err := stack.conn.QueryRow(ctx, `SELECT (SELECT countIf(retracted = 1) FROM test_suite_results FINAL WHERE org_id = ?),
@@ -1111,8 +1117,8 @@ func TestTestopsRetiredSlotSuiteRowsOnlyServesTheSyncedOnceNumbers(t *testing.T)
 	}
 	control, stale := retiredMetricOf(t, stack, controlOrg, retiredDay()), retiredMetricOf(t, stack, staleOrg, retiredDay())
 	t.Logf("CONTROL %+v, stale %+v", control, stale)
-	if control.total != 50_002 || control.suites != 2 || stale != control {
-		t.Errorf("stale run serves %+v, want CONTROL %+v (50,002 cases, 2 suites)", stale, control)
+	if control.total != 66_668 || control.suites != 2 || stale != control {
+		t.Errorf("stale run serves %+v, want CONTROL %+v (66,668 cases, 2 suites)", stale, control)
 	}
 }
 
@@ -1290,15 +1296,15 @@ VALUES (?, ?, ?, ?, 'pre-slot-case', ?, 'failed', 0, ?)`, org, repoID, runID, su
 }
 
 // retiredLargeTwoAttemptRun is K4's shape at the size that takes the "suite_rows_only" fallback: total-b alone at attempt 1
-// (two suites of 25,001 cases, case left-0 failing), then at attempt 2 leg B's two parts and their exact aggregate, all passing.
-// Admitted 50,002 cases plus 2 x 50,002 case retraction rows (labels 1 and 2) pass the 100,000-row case batch.
+// (two suites of 33,334 cases, case left-0 failing), then at attempt 2 leg B's two parts and their exact aggregate, all passing.
+// Admitted 66,668 cases plus 2 x 66,668 case retraction rows (labels 1 and 2) pass the 200,000-row case batch.
 func retiredLargeTwoAttemptRun(t *testing.T, stack attemptsStack, org, runID string, day time.Time) {
 	t.Helper()
 	date := day.Format(time.DateOnly)
 	stamp := func(clock string) string { return date + "T" + clock + "Z" }
 	suite := func(name, failing string) matrixTotalsSuite {
 		out := matrixTotalsSuite{name: name, time: "3.0"}
-		for index := 0; index < 25_001; index++ {
+		for index := 0; index < 33_334; index++ {
 			caseName, status := name+"-"+strconv.Itoa(index), ""
 			if caseName == failing {
 				status = "failed"
@@ -1360,17 +1366,17 @@ VALUES (?, ?, ?, '~retired-pin', '', 0, 0, 0, 0, 0, 0, ?, ?, 'total-b', 1, 1)`, 
 	})
 
 	// suite_rows_only, old reader: K4 and K5 at the size that takes the fallback (no case retraction row). The old reader sees
-	// the slot's stale attempt-1 failure of left-0: flake 1 of 50,002 names (CONTROL, the new readers: 0), and a recurrence of
+	// the slot's stale attempt-1 failure of left-0: flake 1 of 66,668 names (CONTROL, the new readers: 0), and a recurrence of
 	// today's failure of left-0, 1 of 1 (CONTROL: 0 of 1).
 	t.Run("suite_rows_only old reader", func(t *testing.T) {
 		flakeOrg := newOrg("suite-only-flake")
 		retiredLargeTwoAttemptRun(t, stack, flakeOrg, "43600014271", retiredDay())
 		flake, distinct, _, _ := retiredOldReaderCaseMeasures(t, stack, flakeOrg, retiredDay())
-		if flake != 1 || distinct != 50_002 {
-			t.Errorf("old reader serves flake %d of %d names; pinned 1 of 50,002 (CONTROL 0)", flake, distinct)
+		if flake != 1 || distinct != 66_668 {
+			t.Errorf("old reader serves flake %d of %d names; pinned 1 of 66,668 (CONTROL 0)", flake, distinct)
 		}
-		if got := retiredMetricOf(t, stack, flakeOrg, retiredDay()); got.flake != 0 || got.distinct != 50_002 {
-			t.Errorf("new readers serve flake %d of %d names, want CONTROL 0 of 50,002", got.flake, got.distinct)
+		if got := retiredMetricOf(t, stack, flakeOrg, retiredDay()); got.flake != 0 || got.distinct != 66_668 {
+			t.Errorf("new readers serve flake %d of %d names, want CONTROL 0 of 66,668", got.flake, got.distinct)
 		}
 		historyOrg := newOrg("suite-only-history")
 		retiredLargeTwoAttemptRun(t, stack, historyOrg, "43600014272", retiredDay().AddDate(0, 0, -1))
@@ -1497,9 +1503,9 @@ func TestTestopsRetiredSlotOldReaderHidesThePreSlotCaseKey(t *testing.T) {
 	}
 }
 
-// CHAOS-14555: above 33,333 admitted cases at attempt 1 the pre-slot case retraction rows do not fit the case batch beside the
-// slot-label ones (the counter reason legacy_case_rows_skipped); the run keeps today's rows, and the new readers serve CONTROL.
-// Two parts of 16,667 cases and their exact aggregate (33,334 cases); the stale run stored the aggregate first.
+// CHAOS-14555: above 66,666 admitted cases at attempt 1 the pre-slot case retraction rows do not fit the 200,000-row case batch
+// beside the slot-label ones (the counter reason legacy_case_rows_skipped); the run keeps today's rows, and the new readers serve
+// CONTROL. Two parts of 33,334 cases and their exact aggregate (66,668 cases); the stale run stored the aggregate first.
 func TestTestopsRetiredSlotLegacyCaseRowsSkippedServesTheSyncedOnceNumbers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -1507,7 +1513,7 @@ func TestTestopsRetiredSlotLegacyCaseRowsSkippedServesTheSyncedOnceNumbers(t *te
 	stack := env.stack
 	suite := func(name string) matrixTotalsSuite {
 		out := matrixTotalsSuite{name: name, time: "3.0"}
-		for index := 0; index < 16_667; index++ {
+		for index := 0; index < 33_334; index++ {
 			out.cases = append(out.cases, matrixTotalsCase{name + "-" + strconv.Itoa(index), "", "0.01"})
 		}
 		return out
@@ -1534,15 +1540,15 @@ func TestTestopsRetiredSlotLegacyCaseRowsSkippedServesTheSyncedOnceNumbers(t *te
      SELECT suite_id FROM test_suite_results FINAL WHERE org_id = ? AND retracted = 1))`, org, org, org, org, org).Scan(&suites, &slotCases, &legacyCases); err != nil {
 			t.Fatal(err)
 		}
-		if suites != 2 || slotCases != 33_334 || legacyCases != 0 {
-			t.Fatalf("%s: %d suite, %d slot-label case and %d pre-slot case retraction rows; want the legacy_case_rows_skipped arm: 2, 33,334, 0",
+		if suites != 2 || slotCases != 66_668 || legacyCases != 0 {
+			t.Fatalf("%s: %d suite, %d slot-label case and %d pre-slot case retraction rows; want the legacy_case_rows_skipped arm: 2, 66,668, 0",
 				org, suites, slotCases, legacyCases)
 		}
 	}
 	control, stale := retiredMetricOf(t, stack, controlOrg, retiredDay()), retiredMetricOf(t, stack, staleOrg, retiredDay())
 	t.Logf("CONTROL %+v, stale %+v", control, stale)
-	if control.total != 33_334 || control.suites != 2 || stale != control {
-		t.Errorf("stale run serves %+v, want CONTROL %+v (33,334 cases, 2 suites)", stale, control)
+	if control.total != 66_668 || control.suites != 2 || stale != control {
+		t.Errorf("stale run serves %+v, want CONTROL %+v (66,668 cases, 2 suites)", stale, control)
 	}
 }
 

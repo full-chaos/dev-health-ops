@@ -16,7 +16,7 @@ func TestBuildEffectBatchSizeBoundsReportTheTypedError(t *testing.T) {
 	for index := range rows {
 		rows[index] = small
 	}
-	big := json.RawMessage(`{"a":"` + strings.Repeat("x", 22<<20) + `"}`)
+	big := json.RawMessage(`{"a":"` + strings.Repeat("x", maxEffectPayloadBytes/3+1) + `"}`)
 	cases := []struct {
 		name      string
 		rows      []json.RawMessage

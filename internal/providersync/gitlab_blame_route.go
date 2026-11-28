@@ -49,8 +49,8 @@ type GitLabBlameRouteHandler struct {
 	writeLimits *gitLabBlameLimits
 }
 
-// gitLabBlameLimits bound the rows one unit hands to the write step: the write
-// contract (maxEffectRows / maxEffectPayloadBytes) with 10% payload headroom,
+// gitLabBlameLimits bound the rows one unit hands to the write step:
+// gitLabBlameMaxRows / gitLabBlameMaxPayloadBytes with 10% payload headroom,
 // the same as GitHub blame. Below them a run stops BEFORE a file that would
 // cross a bound; the unblamed paths stay out of the coverage and the next run
 // selects them (CHAOS-8829).
@@ -63,8 +63,15 @@ type gitLabBlameLimits struct {
 	rowsMaterialised *int
 }
 
+// gitLabBlameMaxRows and gitLabBlameMaxPayloadBytes keep the write contract's
+// values from before its raise (CHAOS-14723), so a blame run is sized as before.
+const (
+	gitLabBlameMaxRows         = 100_000
+	gitLabBlameMaxPayloadBytes = 64 << 20
+)
+
 func defaultGitLabBlameLimits() gitLabBlameLimits {
-	return gitLabBlameLimits{maxRows: maxEffectRows, maxPayloadBytes: maxEffectPayloadBytes / 10 * 9}
+	return gitLabBlameLimits{maxRows: gitLabBlameMaxRows, maxPayloadBytes: gitLabBlameMaxPayloadBytes / 10 * 9}
 }
 
 // GitLabBlameResult is the concrete result contract for this provider pair.

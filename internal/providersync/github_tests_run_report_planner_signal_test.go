@@ -93,8 +93,8 @@ func TestGitHubTestsPlannerSignalsPartitionBoundExhausted(t *testing.T) {
 
 func TestGitHubTestsPlannerSignalsDropUndoneByAdmission(t *testing.T) {
 	reports := []githubTestsParsedReport{
-		boundReport("1", boundSuite{"a", 60_000, 0}), boundReport("2", boundSuite{"b", 45_000, 0}),
-		boundReport("3", boundSuite{"a", 60_000, 0}, boundSuite{"b", 45_000, 0}),
+		boundReport("1", boundSuite{"a", 120_000, 0}), boundReport("2", boundSuite{"b", 90_000, 0}),
+		boundReport("3", boundSuite{"a", 120_000, 0}, boundSuite{"b", 90_000, 0}),
 	}
 	plan := mustPlanRunReports(t, reports...)
 	if !reflect.DeepEqual(plan.UndoneByAdmission, []int{2}) || len(plan.Dropped) != 0 {

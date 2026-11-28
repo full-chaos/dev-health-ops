@@ -128,17 +128,22 @@ func TestGitHubTestsRunReportRowsAdmitEveryArtifactThatFits(t *testing.T) {
 	}
 }
 
-// The route honours the plan end to end, in ONE walk of about 100,000 rows (the bound is fixed, so a walk that reaches it costs
+// The route honours the plan end to end, in ONE walk of about 200,000 rows (the bound is fixed, so a walk that reaches it costs
 // that many parsed rows; the exact bound and the order rules are checked at plan level in github_tests_run_report_plan_test.go).
-// Listed largest declared size first: artifact 1 (99,954 rows, size 10) is admitted, artifacts 3, 4 and 5 (22 rows each) are
-// skipped whole, and artifact 6 (4 rows, size 50) after them is admitted: no break at the overflow. The run records ONE
-// per_run_cap and each skipped artifact has ONE marker.
+// Listed largest declared size first: artifact 1 (199,966 rows, size 10) is admitted, artifacts 3, 4 and 5 (10 rows each) are
+// skipped whole, and artifact 6 (4 rows, size 50) after them is admitted: no break at the overflow. All five are held: 200,000
+// rows, the held bound exactly, so the plan (not the held bound) skips 3, 4 and 5. The run records ONE per_run_cap and each
+// skipped artifact has ONE marker.
 func TestGitHubTestsRunReportRowsRouteHonoursThePlan(t *testing.T) {
+	first := githubTestsMaxReportRowsPerRun - 9
+	if first+3*10+4 != githubTestsMaxHeldReportRowsPerRun {
+		t.Fatalf("fixture holds %d rows, want the held bound %d", first+34, githubTestsMaxHeldReportRowsPerRun)
+	}
 	walk, doer, rendered := rowsWalk(t, 1,
-		rowsArtifact{id: "6", size: 50, rows: 4}, rowsArtifact{id: "5", size: 40, rows: 22}, rowsArtifact{id: "4", size: 30, rows: 22},
-		rowsArtifact{id: "3", size: 20, rows: 22}, rowsArtifact{id: "1", size: 10, rows: 99_954})
-	if got := committedReportRows(walk); got != 99_958 {
-		t.Fatalf("committed %d rows, want 99,958 (artifacts 1 and 6)", got)
+		rowsArtifact{id: "6", size: 50, rows: 4}, rowsArtifact{id: "5", size: 40, rows: 10}, rowsArtifact{id: "4", size: 30, rows: 10},
+		rowsArtifact{id: "3", size: 20, rows: 10}, rowsArtifact{id: "1", size: 10, rows: first})
+	if got := committedReportRows(walk); got != first+4 {
+		t.Fatalf("committed %d rows, want 199,970 (artifacts 1 and 6)", got)
 	}
 	if ids := skippedArtifactIDs(walk); strings.Join(ids, ",") != "3,4,5" {
 		t.Fatalf("skipped markers %v, want one each for 3, 4 and 5", ids)
@@ -162,7 +167,7 @@ func TestGitHubTestsRunReportRowsRouteHonoursThePlan(t *testing.T) {
 	assertFinalizedAndAdvanced(t, walk)
 }
 
-// (6) The payload bound is judged on json bytes per destination, below the 64 MiB effect ceiling.
+// (6) The payload bound is judged on json bytes per destination, below the 128 MiB effect ceiling.
 func TestGitHubTestsReportBudgetPayloadBound(t *testing.T) {
 	var budget githubTestsReportBudget
 	if !budget.fits(1, 1, githubTestsMaxReportPayloadBytesPerDestination, 0) {

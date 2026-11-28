@@ -75,7 +75,7 @@ func TestGitHubWorkItemsIncompletePolicyWithholdsWatermarkAfterSnapshotJSONRound
 func TestGitHubWorkItemsIncompletePolicyFailsClosedOnMalformedOrBlockingEvidence(t *testing.T) {
 	t.Parallel()
 	var typedNil *[]GitHubWorkItemsIncomplete
-	tooMany := make([]GitHubWorkItemsIncomplete, maxEffectRows+1)
+	tooMany := make([]GitHubWorkItemsIncomplete, githubWorkItemsMaxIncomplete+1)
 	for index := range tooMany {
 		tooMany[index] = GitHubWorkItemsIncomplete{Component: "milestones", Cause: "transient"}
 	}

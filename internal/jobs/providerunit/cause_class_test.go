@@ -249,7 +249,7 @@ func realBoundExceededError(t *testing.T, rows int) error {
 
 func TestResultAboveTheWriteContractIsTerminalOnTheFirstAttemptWithItsClass(t *testing.T) {
 	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
-	boundErr := realBoundExceededError(t, 100_001)
+	boundErr := realBoundExceededError(t, 200_001)
 	if !errors.Is(boundErr, providersync.ErrEffectRecoveryUnsafe) {
 		t.Fatalf("real producer returned %v, want the recovery-unsafe sentinel", boundErr)
 	}
@@ -277,11 +277,11 @@ func TestResultAboveTheWriteContractIsTerminalOnTheFirstAttemptWithItsClass(t *t
 			repository.lastFailCategory, repository.causeClass)
 	}
 	assertOneSafeWarning(t, logs.String(), ResultTooLargeCategory)
-	want := providersync.CauseDetail{Limit: "rows", Table: "work_items", Rows: 100_001}
+	want := providersync.CauseDetail{Limit: "rows", Table: "work_items", Rows: 200_001}
 	if repository.detail == nil || *repository.detail != want {
 		t.Fatalf("stored detail=%+v, want %+v", repository.detail, want)
 	}
-	for _, field := range []string{"limit=rows", "table=work_items", "rows=100001", "bytes=0"} {
+	for _, field := range []string{"limit=rows", "table=work_items", "rows=200001", "bytes=0"} {
 		if !strings.Contains(logs.String(), field) {
 			t.Fatalf("terminal WARN misses %s: %s", field, logs.String())
 		}
@@ -444,7 +444,7 @@ func TestCauseClassVocabularyIsClosedAndWrapSafe(t *testing.T) {
 		want     string
 	}{
 		{"cap", wrap(&providerfoundation.ObjectTooLargeError{CapBytes: 1, ContentLength: -1}), false, ResponseTooLargeCategory},
-		{"bound", wrap(realBoundExceededError(t, 100_001)), false, ResultTooLargeCategory},
+		{"bound", wrap(realBoundExceededError(t, 200_001)), false, ResultTooLargeCategory},
 		{"deadline", context.DeadlineExceeded, true, TimeLimitCategory},
 		{"auth", &providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication}, false, AuthCategory},
 		{"rate limited", &providerfoundation.ProviderError{Class: providerfoundation.ErrorRateLimited}, false, "provider_rate_limited"},

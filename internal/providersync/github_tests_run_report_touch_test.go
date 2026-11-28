@@ -232,8 +232,8 @@ func matrixJobLog() string {
 }
 
 // CHAOS-14045 round 1 P2(1): the run's report rows are admitted on the final kept set, after the drops. Dropping leg B's exact
-// total frees budget, which an unrelated report of 99,966 rows then fills; leg A's mismatched total (it carries a large test log,
-// so it sorts last) no longer fits and is refused with per_run_cap, the committed rows stay within the run bound (99,982 held),
+// total frees budget, which an unrelated report of 199,966 rows then fills; leg A's mismatched total (it carries a large test log,
+// so it sorts last) no longer fits and is refused with per_run_cap, the committed rows stay within the run bound (199,982 held),
 // and the watermark is withheld.
 func TestGitHubTestsRunReportsAdmitOnTheFinalKeptSet(t *testing.T) {
 	artifacts, late, goodTotal := matrixLegs(matrixLegsLayout{shards: 2}, true, false)
@@ -242,7 +242,7 @@ func TestGitHubTestsRunReportsAdmitOnTheFinalKeptSet(t *testing.T) {
 			artifacts[index].extra = map[string]string{"test.log": matrixJobLog()}
 		}
 	}
-	artifacts = append(artifacts, rowsArtifact{id: "7", body: githubTestsNamedMultiSuiteJUnit("unrelated-", 49_983)})
+	artifacts = append(artifacts, rowsArtifact{id: "7", body: githubTestsNamedMultiSuiteJUnit("unrelated-", (githubTestsMaxReportRowsPerRun-9)/2)})
 	walk, got := matrixRoleWalk(t, []string{"1", "2", "3", "4", "5", "6", "7"}, artifacts)
 	var lateCauses []string
 	for _, marker := range walk.cursor.SkippedArtifacts {

@@ -25,7 +25,7 @@ func mustPlanRunReports(t *testing.T, reports ...githubTestsParsedReport) github
 	return plan
 }
 
-// The bound is exact: githubTestsMaxReportRowsPerRun rows (99,975: maxEffectRows less one retraction row per listed artifact,
+// The bound is exact: githubTestsMaxReportRowsPerRun rows (199,975: maxEffectRows less one retraction row per listed artifact,
 // CHAOS-14259) are admitted, one more is not.
 func TestGitHubTestsPlanRunReportsBoundaryIsExact(t *testing.T) {
 	at := mustPlanRunReports(t, planRunReportCases("a", 60_000), planRunReportCases("b", githubTestsMaxReportRowsPerRun-60_000))
@@ -38,9 +38,9 @@ func TestGitHubTestsPlanRunReportsBoundaryIsExact(t *testing.T) {
 	}
 }
 
-// Artifacts of 60k, 30k and 60k rows in admission order (smallest declared size first): the first two fit, the last does not.
+// Artifacts of 120k, 60k and 120k rows in admission order (smallest declared size first): the first two fit, the last does not.
 func TestGitHubTestsPlanRunReportsAdmitsInOrderUntilTheBound(t *testing.T) {
-	plan := mustPlanRunReports(t, planRunReportCases("small", 60_000), planRunReportCases("middle", 30_000), planRunReportCases("big", 60_000))
+	plan := mustPlanRunReports(t, planRunReportCases("small", 120_000), planRunReportCases("middle", 60_000), planRunReportCases("big", 120_000))
 	if !slices.Equal(plan.Admitted, []int{0, 1}) || !slices.Equal(plan.OverBound, []int{2}) {
 		t.Fatalf("admitted %v over %v, want [0 1] and [2]", plan.Admitted, plan.OverBound)
 	}
@@ -54,16 +54,16 @@ func TestGitHubTestsPlanRunReportsSkipsAnArtifactThatAloneExceedsTheBound(t *tes
 	}
 }
 
-// The budget is per run: the plan is one run's decision, so two runs of 51,000 rows each (102,000 over the unit) are both admitted
+// The budget is per run: the plan is one run's decision, so two runs of 101,000 rows each (202,000 over the unit) are both admitted
 // by two plans, while the same two artifacts in ONE run are not.
 func TestGitHubTestsPlanRunReportsBudgetIsPerRun(t *testing.T) {
 	for run := 0; run < 2; run++ {
-		plan := mustPlanRunReports(t, planRunReportCases("r"+strconv.Itoa(run), 51_000))
+		plan := mustPlanRunReports(t, planRunReportCases("r"+strconv.Itoa(run), 101_000))
 		if !slices.Equal(plan.Admitted, []int{0}) || len(plan.OverBound) != 0 {
 			t.Fatalf("run %d: admitted %v over %v, want its one artifact admitted", run, plan.Admitted, plan.OverBound)
 		}
 	}
-	same := mustPlanRunReports(t, planRunReportCases("a", 51_000), planRunReportCases("b", 51_000))
+	same := mustPlanRunReports(t, planRunReportCases("a", 101_000), planRunReportCases("b", 101_000))
 	if !slices.Equal(same.Admitted, []int{0}) || !slices.Equal(same.OverBound, []int{1}) {
 		t.Fatalf("one run: admitted %v over %v, want [0] and [1]", same.Admitted, same.OverBound)
 	}

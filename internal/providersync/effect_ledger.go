@@ -18,8 +18,8 @@ import (
 const (
 	effectLedgerResultKey     = "go_effect_ledger_v1"
 	maxEffectDestinations     = 32
-	maxEffectRows             = 100_000
-	maxEffectPayloadBytes     = 64 << 20
+	maxEffectRows             = 200_000
+	maxEffectPayloadBytes     = 128 << 20
 	maxEffectLedgerStateBytes = 32 << 10
 )
 

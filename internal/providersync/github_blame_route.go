@@ -34,12 +34,17 @@ func (doer gitHubBlameCountingDoer) Do(request *http.Request) (*http.Response, e
 const gitHubBlameMaxFiles = 500
 
 // Per-run ceilings that keep one blame unit inside the limits of a unit: the
-// write contract (maxEffectRows / maxEffectPayloadBytes per destination) and
-// the 15-minute job deadline. A file list that needs more than one run keeps
-// going through remaining_paths on the next run.
+// write bounds (gitHubBlameMaxRows / gitHubBlameMaxPayloadBytes per
+// destination, under the write contract maxEffectRows / maxEffectPayloadBytes)
+// and the 15-minute job deadline. A file list that needs more than one run
+// keeps going through remaining_paths on the next run. The write bounds keep
+// the contract's values from before its raise (CHAOS-14723), so a blame run is
+// sized as before.
 const (
-	gitHubBlameSoftBudget     = 12 * time.Minute
-	gitHubBlameDeadlineMargin = 2 * time.Minute
+	gitHubBlameMaxRows         = 100_000
+	gitHubBlameMaxPayloadBytes = 64 << 20
+	gitHubBlameSoftBudget      = 12 * time.Minute
+	gitHubBlameDeadlineMargin  = 2 * time.Minute
 )
 
 type gitHubBlameLimits struct {
@@ -56,7 +61,7 @@ type gitHubBlameLimits struct {
 func defaultGitHubBlameLimits() gitHubBlameLimits {
 	return gitHubBlameLimits{
 		// 10% headroom: row sizes are estimated from the first line of each range.
-		maxRows: maxEffectRows, maxPayloadBytes: maxEffectPayloadBytes / 10 * 9,
+		maxRows: gitHubBlameMaxRows, maxPayloadBytes: gitHubBlameMaxPayloadBytes / 10 * 9,
 		softBudget: gitHubBlameSoftBudget, deadlineMargin: gitHubBlameDeadlineMargin,
 		now: time.Now,
 	}
@@ -461,16 +466,16 @@ func collectGitHubBlame(
 					overBound = true
 					break
 				}
-			} else if int64(len(rows))+fileLines > maxEffectRows || usedBytes+fileBytes > maxEffectPayloadBytes {
-				// A replayed file the write contract would refuse anyway: fail
-				// with the write step's own class before any row is allocated.
+			} else if int64(len(rows))+fileLines > gitHubBlameMaxRows || usedBytes+fileBytes > gitHubBlameMaxPayloadBytes {
+				// A replayed file above the blame write bounds: fail with the
+				// write step's own class before any row is allocated.
 				return CompleteRouteBatch{}, ErrEffectRecoveryUnsafe
 			}
 		}
 		// Second guard, independent of the per-range checks above: no file
 		// above the row bound ever reaches the allocation below, whatever
 		// the loop above did. Same outcome as the checks it backs up.
-		if fileLines > maxEffectRows {
+		if fileLines > gitHubBlameMaxRows {
 			if recoveryGeneration != "" {
 				return CompleteRouteBatch{}, ErrEffectRecoveryUnsafe
 			}

@@ -235,7 +235,7 @@ func TestGitHubTestsRouteRetractsOnlyAPlannerDrop(t *testing.T) {
 	if len(suites) != 4 {
 		t.Errorf("suite rows %d, want leg A's 2 parts and total-a's 2 suites, all live", len(suites))
 	}
-	first, second := part("ob1", 1, 60_000), part("ob2", 1, 60_000)
+	first, second := part("ob1", 1, githubTestsMaxReportRowsPerRun/2+1), part("ob2", 1, githubTestsMaxReportRowsPerRun/2+1)
 	walk, _, _ := rowsWalk(t, 1, rowsArtifact{id: "71", size: 10, body: fxJUnit(first)}, rowsArtifact{id: "72", size: 20, body: fxJUnit(second)})
 	if observed(walk, githubTestsPerRunCapCause) != 1 {
 		t.Fatalf("observations %+v, want artifact 72 over the run bound", walk.cursor.Incomplete)
@@ -353,29 +353,29 @@ func TestGitHubTestsMinimalRetractionRowsAlwaysFitTheEffectContract(t *testing.T
 	}
 }
 
-// The bound on the rows a run holds before planning stays 2 x 100,000 = 200,000: the retraction reserve of the admitted
+// The bound on the rows a run holds before planning stays 2 x 200,000 = 400,000: the retraction reserve of the admitted
 // bound (CHAOS-14259) must not refuse a report the planner would keep after deduplication.
 func TestGitHubTestsHeldRowBoundKeepsItsBaseValue(t *testing.T) {
 	copyOf := func(prefix string, cases int) string { return fxJUnit(part(prefix, 1, cases)) }
-	// 199,951 held: three exact copies of 49,988 rows and an independent report of 49,987. After deduplication 99,975 are
+	// 399,951 held: three exact copies of 99,988 rows and an independent report of 99,987. After deduplication 199,975 are
 	// admitted, the run bound exactly.
-	copies := copyOf("copy", 49_987)
+	copies := copyOf("copy", 99_987)
 	walk, _, _ := rowsWalk(t, 1, rowsArtifact{id: "81", size: 10, body: copies}, rowsArtifact{id: "82", size: 11, body: copies},
-		rowsArtifact{id: "83", size: 12, body: copies}, rowsArtifact{id: "84", size: 13, body: copyOf("independent", 49_986)})
-	if got := committedReportRows(walk); got != 99_975 || observed(walk, githubTestsPerRunCapCause) != 0 {
-		t.Errorf("199,951 held rows: committed %d, per_run_cap %d; want 99,975 and none (the independent report kept)",
+		rowsArtifact{id: "83", size: 12, body: copies}, rowsArtifact{id: "84", size: 13, body: copyOf("independent", 99_986)})
+	if got := committedReportRows(walk); got != 199_975 || observed(walk, githubTestsPerRunCapCause) != 0 {
+		t.Errorf("399,951 held rows: committed %d, per_run_cap %d; want 199,975 and none (the independent report kept)",
 			got, observed(walk, githubTestsPerRunCapCause))
 	}
-	// 200,000 held: four exact copies of 50,000 rows deduplicate to one.
-	copies = copyOf("four", 49_999)
+	// 400,000 held: four exact copies of 100,000 rows deduplicate to one.
+	copies = copyOf("four", 99_999)
 	walk, _, _ = rowsWalk(t, 1, rowsArtifact{id: "91", size: 10, body: copies}, rowsArtifact{id: "92", size: 11, body: copies},
 		rowsArtifact{id: "93", size: 12, body: copies}, rowsArtifact{id: "94", size: 13, body: copies})
-	if got := committedReportRows(walk); got != 50_000 || observed(walk, githubTestsPerRunCapCause) != 0 {
-		t.Errorf("200,000 held rows: committed %d, per_run_cap %d; want 50,000 and none (all four deduplicated)",
+	if got := committedReportRows(walk); got != 100_000 || observed(walk, githubTestsPerRunCapCause) != 0 {
+		t.Errorf("400,000 held rows: committed %d, per_run_cap %d; want 100,000 and none (all four deduplicated)",
 			got, observed(walk, githubTestsPerRunCapCause))
 	}
-	if githubTestsMaxHeldReportRowsPerRun != 2*maxEffectRows {
-		t.Errorf("held-row bound %d, want 2 x maxEffectRows = %d", githubTestsMaxHeldReportRowsPerRun, 2*maxEffectRows)
+	if githubTestsMaxHeldReportRowsPerRun != 400_000 {
+		t.Errorf("held-row bound %d, want 2 x maxEffectRows = 400,000", githubTestsMaxHeldReportRowsPerRun)
 	}
 }
 
@@ -524,13 +524,15 @@ func TestGitHubTestsMinimalRetractionRowsTakeTheirOwnChunk(t *testing.T) {
 	}
 }
 
-// retiredLargeMatrix is a run whose dropped aggregate is large: two parts of 25,001 cases each and their exact aggregate
-// (50,002 cases). The admitted rows (2 suites, 50,002 cases) fit the run bound; the case retraction rows (50,002 more) would take
-// the case batch past maxEffectRows (100,004 rows), so the run takes the "suite_rows_only" fallback.
+// retiredLargeMatrix is a run whose dropped aggregate is large: two parts of 50,001 cases each and their exact aggregate
+// (100,002 cases). The admitted rows (2 suites, 100,002 cases) fit the run bound; the case retraction rows (100,002 more) would
+// take the case batch past maxEffectRows (200,004 rows), so the run takes the "suite_rows_only" fallback.
+const retiredLargeMatrixPartCases = maxEffectRows/4 + 1
+
 func retiredLargeMatrix() []rowsArtifact {
 	suite := func(name string) retiredFxSuite {
 		out := retiredFxSuite{name: name, time: "3.0"}
-		for index := 0; index < 25_001; index++ {
+		for index := 0; index < retiredLargeMatrixPartCases; index++ {
 			out.cases = append(out.cases, retiredFxCase{name + "-" + strconv.Itoa(index), "", "0.01"})
 		}
 		return out
@@ -559,8 +561,8 @@ func TestGitHubTestsRouteWritesSuiteRowsOnlyWhenTheCaseRowsDoNotFit(t *testing.T
 			retractedCases++
 		}
 	}
-	if retractedSuites != 2 || retractedCases != 0 || len(cases) != 50_002 {
-		t.Fatalf("retraction rows: %d suite, %d case; %d case rows; want the aggregate's 2 suites, no case row, the parts' 50,002 cases",
+	if retractedSuites != 2 || retractedCases != 0 || len(cases) != 2*retiredLargeMatrixPartCases {
+		t.Fatalf("retraction rows: %d suite, %d case; %d case rows; want the aggregate's 2 suites, no case row, the parts' 100,002 cases",
 			retractedSuites, retractedCases, len(cases))
 	}
 	if want := `dev_health_provider_report_retraction_limited_total{provider="github",reason="suite_rows_only"} 1`; !strings.Contains(metrics, want) {
@@ -676,9 +678,9 @@ func TestGitHubTestsCaseRetractionRowsCoverThePreSlotKeys(t *testing.T) {
 	}
 }
 
-// The case batch holds the slot-label and pre-slot case retraction rows up to 33,333 admitted cases (3 x 33,333 = 99,999 rows);
-// at 33,334 the pre-slot rows are skipped (counter and Warn reason legacy_case_rows_skipped) and the slot-label rows stay.
-func TestGitHubTestsLegacyCaseRowsFitUpTo33333Cases(t *testing.T) {
+// The case batch holds the slot-label and pre-slot case retraction rows up to 66,666 admitted cases (3 x 66,666 = 199,998 rows);
+// at 66,667 the pre-slot rows are skipped (counter and Warn reason legacy_case_rows_skipped) and the slot-label rows stay.
+func TestGitHubTestsLegacyCaseRowsFitUpTo66666Cases(t *testing.T) {
 	matrix := func(left, right int) []rowsArtifact {
 		suite := func(name string, count int) retiredFxSuite {
 			out := retiredFxSuite{name: name, time: "3.0"}
@@ -693,7 +695,7 @@ func TestGitHubTestsLegacyCaseRowsFitUpTo33333Cases(t *testing.T) {
 	for _, cell := range []struct {
 		left, right, slotRows, legacyRows int
 		limited                           bool
-	}{{16_666, 16_667, 33_333, 33_333, false}, {16_667, 16_667, 33_334, 0, true}} {
+	}{{33_333, 33_333, 66_666, 66_666, false}, {33_333, 33_334, 66_667, 0, true}} {
 		suites, cases, metrics := retiredWalkWith(t, GitHubTestsRouteHandler{}, matrix(cell.left, cell.right)...)
 		retracted := map[any]bool{}
 		for _, row := range suites {
@@ -720,13 +722,13 @@ func TestGitHubTestsLegacyCaseRowsFitUpTo33333Cases(t *testing.T) {
 	}
 }
 
-// When even the minimal rows with every legacy id do not fit the suite batch (the effect contract's 64 MiB), the slot is retired
+// When even the minimal rows with every legacy id do not fit the suite batch (the effect contract's 128 MiB), the slot is retired
 // by today's minimal row (the first suite's legacy ids), counted as legacy_ids_capped.
 func TestGitHubTestsRunReportEffectsCapsTheMinimalLegacyIDs(t *testing.T) {
 	at := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	base := testSuiteResultRow{OrgID: "org", RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", RunID: "1", LastSynced: at, ReportSlot: "kept", RunAttempt: 1}
 	live := base
-	live.SuiteID, live.SuiteName = "live", retiredLetters(60<<20)
+	live.SuiteID, live.SuiteName = "live", retiredLetters(maxEffectPayloadBytes-5<<20)
 	dropped := make([]testSuiteResultRow, 100_000)
 	for index := range dropped {
 		dropped[index] = base

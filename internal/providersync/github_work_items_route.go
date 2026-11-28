@@ -539,7 +539,7 @@ func validateGitHubWorkItemsProjectResult(
 		result.Usage.RequestCount != result.Evidence.Requests ||
 		len(result.Rows.Dependencies) != 0 || len(result.Rows.ReopenEvents) != 0 ||
 		len(result.Rows.Interactions) != 0 || len(result.Rows.Sprints) != 0 ||
-		len(result.Rows.AIAttributions) != 0 || len(result.Incomplete) > maxEffectRows {
+		len(result.Rows.AIAttributions) != 0 || len(result.Incomplete) > githubWorkItemsMaxIncomplete {
 		return ErrInvalidConfiguration
 	}
 	for _, partial := range result.Incomplete {

@@ -142,11 +142,11 @@ const githubTestsMaxJobsPerRun = 500
 // githubTestsMaxReportPayloadBytesPerDestination the JSON bytes of any one destination's rows (CHAOS-13794). They sit under the
 // effect contract that one run's rows go through as ONE batch per destination before the split into chunks (maxEffectRows,
 // maxEffectPayloadBytes): a run over either is a failing unit, not a truncated one, so the bound is the contract ceiling, not a
-// guess. Sized from prod: the largest run is 71,896 rows (7b9583ee), the web run with vitest is about 17,300. The payload bound
-// keeps the same 9/10 headroom as the blame route.
+// guess. Sizes: 199,975 rows (200,000 less 25) and 115 MiB, the same 9/10 headroom under 128 MiB as before the raise (CHAOS-14723);
+// the largest prod run seen is 142,951 rows, Nov 2026.
 const (
 	githubTestsMaxReportRowsPerRun                 = maxEffectRows - githubTestsMaxArtifacts
-	githubTestsMaxReportPayloadBytesPerDestination = 57 << 20
+	githubTestsMaxReportPayloadBytesPerDestination = 115 << 20
 )
 
 // githubTestsPerRunPerPage is the per_page this route asks for on its per-run

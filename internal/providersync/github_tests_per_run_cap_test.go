@@ -408,10 +408,10 @@ func TestGitHubTestsPerRunArtifactsUnderCapIsUntouched(t *testing.T) {
 }
 
 // CHAOS-13794: a run whose report rows cross the run bound (githubTestsMaxReportRowsPerRun) keeps the artifacts that fit, skips the
-// one that does not whole, and still finalizes with the watermark advanced. Two artifacts of 60,000 rows each: the first fits
-// (60,000), the second would reach 120,000.
+// one that does not whole, and still finalizes with the watermark advanced. Two artifacts of 119,984 rows each: the first fits
+// (119,984), the second would reach 239,968.
 func TestGitHubTestsPerRunReportRowsCapTruncatesAndAdvances(t *testing.T) {
-	suitesPer := githubTestsMaxReportRowsPerRun * 3 / 10 // each artifact: 30,000 suites + 30,000 cases
+	suitesPer := githubTestsMaxReportRowsPerRun * 3 / 10 // each artifact: 59,992 suites + 59,992 cases
 	doer := &githubTestsOversizedRunDoer{
 		t: t, jobs: 1, artifacts: 2, reportSuitesPerArtifact: suitesPer,
 	}
@@ -554,7 +554,7 @@ func TestGitHubTestsNestedJobPageBudgetWithholdsTheWatermark(t *testing.T) {
 // CHAOS-13794 (was: stay within max(cap, first artifact)). The bound is now a flat one: the admitted rows never exceed
 // githubTestsMaxReportRowsPerRun, and an artifact that alone exceeds it is skipped whole, not kept.
 func TestGitHubTestsReportRowsStayWithinTheDocumentedBound(t *testing.T) {
-	// Three artifacts of 40,000 rows: two fit (80,000), the third would reach 120,000.
+	// Three artifacts of 79,990 rows: two fit (159,980), the third would reach 239,970.
 	suitesPer := githubTestsMaxReportRowsPerRun / 5
 	doer := &githubTestsOversizedRunDoer{
 		t: t, jobs: 1, artifacts: 3, reportSuitesPerArtifact: suitesPer,
@@ -581,9 +581,9 @@ func TestGitHubTestsReportRowsStayWithinTheDocumentedBound(t *testing.T) {
 }
 
 // The discriminating case for the row bound: artifacts that each fit under it but not two together. Appending an artifact before
-// measuring it lands 120,000 rows against the 99,975-row run bound here; admitting whole-or-not keeps exactly one.
+// measuring it lands 239,968 rows against the 199,975-row run bound here; admitting whole-or-not keeps exactly one.
 func TestGitHubTestsReportRowsDoNotCreepPastTheCapAcrossArtifacts(t *testing.T) {
-	suitesPer := githubTestsMaxReportRowsPerRun * 3 / 10 // 60,000 rows per artifact, three artifacts
+	suitesPer := githubTestsMaxReportRowsPerRun * 3 / 10 // 119,984 rows per artifact, three artifacts
 	doer := &githubTestsOversizedRunDoer{
 		t: t, jobs: 1, artifacts: 3, reportSuitesPerArtifact: suitesPer,
 	}

@@ -9,6 +9,11 @@ import (
 
 const githubWorkItemsIncompleteResultKey = "incomplete"
 
+// githubWorkItemsMaxIncomplete bounds the incomplete evidence entries of one
+// work-items result. It keeps the write contract's row value from before its
+// raise (CHAOS-14723), so a result is refused at the same count as before.
+const githubWorkItemsMaxIncomplete = 100_000
+
 // applyGitHubWorkItemsIncompletePolicy is the single reader for D17's durable
 // optional-enrichment evidence. It accepts both the live typed slice emitted
 // by GitHubWorkItemsRouteHandler and the []any/map[string]any shape produced
@@ -44,7 +49,7 @@ func applyGitHubWorkItemsIncompletePolicy(
 	if err := decoder.Decode(&incomplete); err != nil {
 		return nil, nil, ErrInvalidConfiguration
 	}
-	if len(incomplete) > maxEffectRows {
+	if len(incomplete) > githubWorkItemsMaxIncomplete {
 		return nil, nil, ErrInvalidConfiguration
 	}
 	for _, partial := range incomplete {

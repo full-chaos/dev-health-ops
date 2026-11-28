@@ -943,7 +943,7 @@ func resolveWindow(
 // like a HEAVY one.
 //
 // A work-items unit is one in-memory batch per destination table, bounded at
-// 100,000 rows and 64 MiB a table and at the job time limit, and its size is
+// 200,000 rows and 128 MiB a table and at the job time limit, and its size is
 // linear in the window span exactly as a HEAVY unit's is. A first sync or a
 // long catch-up planned as ONE window can exceed those bounds for a large
 // source; it is then refused after the whole fetch, no watermark is stamped,

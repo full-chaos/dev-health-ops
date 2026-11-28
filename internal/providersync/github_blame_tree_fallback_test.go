@@ -342,7 +342,7 @@ func TestGitHubBlameRouteTakesNoFallbackForANormalTree(t *testing.T) {
 	}
 }
 
-// The write step refuses a unit above 100,000 rows. A 500-file unit of
+// A blame unit stops at gitHubBlameMaxRows (100,000) rows. A 500-file unit of
 // 300-line files is 150,000 rows: the unit must stop below the bound and the
 // rest continues next run.
 func TestGitHubBlameRouteStopsBelowTheWriteBoundAndContinues(t *testing.T) {
@@ -353,11 +353,11 @@ func TestGitHubBlameRouteStopsBelowTheWriteBoundAndContinues(t *testing.T) {
 		t.Fatalf("a unit above the bound must stop early, not fail: %v", err)
 	}
 	rows := len(first.Effects[1].Rows)
-	if rows > maxEffectRows || rows != 333*300 {
-		t.Fatalf("rows=%d, want 333 files x 300 lines = %d, at most %d", rows, 333*300, maxEffectRows)
+	if rows > gitHubBlameMaxRows || rows != 333*300 {
+		t.Fatalf("rows=%d, want 333 files x 300 lines = %d, at most %d", rows, 333*300, gitHubBlameMaxRows)
 	}
-	if first.Effects[1].PayloadBytes > maxEffectPayloadBytes {
-		t.Fatalf("payload=%d above %d", first.Effects[1].PayloadBytes, maxEffectPayloadBytes)
+	if first.Effects[1].PayloadBytes > gitHubBlameMaxPayloadBytes {
+		t.Fatalf("payload=%d above %d", first.Effects[1].PayloadBytes, gitHubBlameMaxPayloadBytes)
 	}
 	if first.Result["remaining_paths"] != 1000-333 || first.Result["inventory_status"] != "partial" {
 		t.Fatalf("result=%v", first.Result)
@@ -524,7 +524,7 @@ func TestGitHubBlameRecoveryReplaysEveryInFlightPathWithoutTheRunBounds(t *testi
 // builds no row at all, and every malformed range has a defined outcome.
 func TestGitHubBlameRouteRefusesAnOversizeRangeBeforeExpandingIt(t *testing.T) {
 	blameCaptureSlog(t)
-	for _, lines := range []int{maxEffectRows + 1} {
+	for _, lines := range []int{gitHubBlameMaxRows + 1} {
 		doer := &gitHubBigTreeDoer{
 			t: t, dirs: 1, filesPerDir: 3, linesPerFile: 2, bigDir: -1, truncatedDir: -1,
 			linesByPath: map[string]int{bigTreePath(0, 1): lines},
@@ -545,7 +545,7 @@ func TestGitHubBlameRouteRefusesAnOversizeRangeBeforeExpandingIt(t *testing.T) {
 	// The same file first in the unit: rotated as a retryable path, nothing built.
 	doer := &gitHubBigTreeDoer{
 		t: t, dirs: 1, filesPerDir: 1, bigDir: -1, truncatedDir: -1,
-		linesByPath: map[string]int{bigTreePath(0, 0): maxEffectRows + 1},
+		linesByPath: map[string]int{bigTreePath(0, 0): gitHubBlameMaxRows + 1},
 	}
 	built := 0
 	limits := defaultGitHubBlameLimits()
@@ -612,7 +612,7 @@ func TestGitHubBlameRouteRefusesAFileAboveTheWriteBoundWhateverTheRunLimitsAre(t
 	limits.maxPayloadBytes = 1 << 40
 	limits.rowsBuilt = &built
 	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubFixedRangeDoer{
-		t: t, ranges: fmt.Sprintf(`[{"startingLine":1,"endingLine":%d,"commit":{"oid":"a"}}]`, maxEffectRows+1),
+		t: t, ranges: fmt.Sprintf(`[{"startingLine":1,"endingLine":%d,"commit":{"oid":"a"}}]`, gitHubBlameMaxRows+1),
 	}), "https://api.github.com")
 	batch, err := (GitHubBlameRouteHandler{Coverage: staticGitHubBlameCoverage{}, limits: &limits}).Collect(
 		context.Background(), nativeTestClaim("github", "blame"), providerfoundation.Credential{}, client,
@@ -694,7 +694,7 @@ func TestGitHubBlameRecoveryAcceptsAFileExactlyAtTheWriteBound(t *testing.T) {
 	blameCaptureSlog(t)
 	claim := nativeTestClaim("github", "blame")
 	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubFixedRangeDoer{
-		t: t, ranges: fmt.Sprintf(`[{"startingLine":1,"endingLine":%d,"commit":{"oid":"a"}}]`, maxEffectRows),
+		t: t, ranges: fmt.Sprintf(`[{"startingLine":1,"endingLine":%d,"commit":{"oid":"a"}}]`, gitHubBlameMaxRows),
 	}), "https://api.github.com")
 	batch, err := collectGitHubBlame(
 		context.Background(), claim, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
@@ -703,7 +703,7 @@ func TestGitHubBlameRecoveryAcceptsAFileExactlyAtTheWriteBound(t *testing.T) {
 		}}},
 		nil, gitHubBlameMaxFiles, false, claim.GenerationKey(), defaultGitHubBlameLimits(),
 	)
-	if err != nil || len(batch.Effects[1].Rows) != maxEffectRows {
-		t.Fatalf("err=%v, want exactly %d rows accepted", err, maxEffectRows)
+	if err != nil || len(batch.Effects[1].Rows) != gitHubBlameMaxRows {
+		t.Fatalf("err=%v, want exactly %d rows accepted", err, gitHubBlameMaxRows)
 	}
 }
